@@ -212,10 +212,10 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 }
 
 type MessageFilter struct {
-	InboxID, ThreadID, From, To string
-	Unread, HasAttachment       *bool
-	Before                      string
-	Limit                       int
+	InboxID, ThreadID, From, To, Direction string
+	Unread, HasAttachment                  *bool
+	Before                                 string
+	Limit                                  int
 }
 
 func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
@@ -240,6 +240,10 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 	if f.ThreadID != "" {
 		q += ` AND m.thread_id=?`
 		args = append(args, f.ThreadID)
+	}
+	if f.Direction != "" {
+		q += ` AND m.direction=?`
+		args = append(args, f.Direction)
 	}
 	if f.From != "" {
 		q += ` AND m.from_address LIKE ?`
@@ -289,7 +293,7 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 }
 
 func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
-	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0`
+	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0 AND direction='inbound'`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
