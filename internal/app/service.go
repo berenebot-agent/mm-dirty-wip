@@ -150,8 +150,12 @@ func firstNonEmpty(vs ...string) string {
 }
 
 func (s *Service) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider string, cfg any) (store.OutboundCredential, error) {
-	if _, ok := transport.LookupOutbound(provider); !ok {
+	t, ok := transport.LookupOutbound(provider)
+	if !ok {
 		return store.OutboundCredential{}, fmt.Errorf("unknown outbound provider %q", provider)
+	}
+	if strings.TrimSpace(name) == "" {
+		name = t.Description()
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {

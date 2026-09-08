@@ -5,6 +5,8 @@
   }
   var sel = document.getElementById('provider-select');
   var form = dlg.querySelector('form');
+  var nameInput = form.querySelector('[name=name]');
+  var lastDefault = '';
 
   function sync() {
     document.querySelectorAll('.provider-fields').forEach(function (fs) {
@@ -16,10 +18,24 @@
     });
   }
 
+  function providerDescription() {
+    var opt = sel.options[sel.selectedIndex];
+    return opt ? opt.text : '';
+  }
+
+  function applyDefaultName() {
+    var desc = providerDescription();
+    if (nameInput.value === '' || nameInput.value === lastDefault) {
+      nameInput.value = desc;
+    }
+    lastDefault = desc;
+  }
+
   function open() {
     form.reset();
     form.querySelector('[name=id]').value = '';
-    form.querySelector('[name=name]').value = 'Primary';
+    lastDefault = '';
+    applyDefaultName();
     sync();
     dlg.showModal();
   }
@@ -27,8 +43,9 @@
   function openEdit(btn) {
     form.reset();
     form.querySelector('[name=id]').value = btn.dataset.id;
-    form.querySelector('[name=name]').value = btn.dataset.name;
     sel.value = btn.dataset.provider;
+    nameInput.value = btn.dataset.name;
+    lastDefault = providerDescription();
     var cfg = {};
     try {
       cfg = JSON.parse(btn.dataset.config || '{}');
@@ -47,7 +64,10 @@
     dlg.showModal();
   }
 
-  sel.addEventListener('change', sync);
+  sel.addEventListener('change', function () {
+    sync();
+    applyDefaultName();
+  });
   var add = document.getElementById('add-provider');
   if (add) {
     add.addEventListener('click', open);
