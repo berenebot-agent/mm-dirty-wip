@@ -17,10 +17,10 @@ import (
 
 const inboxPageSize = 50
 
-const inboxBody = `<div class="toolbar"><a href="/dashboard">← Dashboard</a><a class="btn secondary" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a></div>
-<h1>{{.Inbox.Address}}</h1><p class="muted">{{.Inbox.DisplayName}}{{if .UnreadCount}} · <b>{{.UnreadCount}} unread</b>{{end}}</p>
+const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1>{{if .UnreadCount}}<span class="pill unread-pill">{{.UnreadCount}} unread</span>{{end}}</div>
+<div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="btn secondary" href="/dashboard">← Dashboard</a></div>
 {{if not .OutboundReady}}<div class="banner warn">No outbound provider is configured. <a href="/dashboard">Add one</a> before sending.</div>{{end}}
-<section class="card">{{if .Messages}}<table class="msglist"><thead><tr><th></th><th>From / To</th><th>Subject</th><th>Date</th></tr></thead><tbody>{{range .Messages}}<tr class="{{if not .Read}}unread{{end}}"><td>{{if not .Read}}<span class="dot"></span>{{end}}</td><td>{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</td><td><a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{if .HasAttachments}} <span class="pill">attach</span>{{end}}</td><td class="muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td></tr>{{end}}</tbody></table>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
+<section class="card">{{if .Messages}}<div class="mailheader"><span></span><span>From / To</span><span>Subject</span><span>Date</span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{.CreatedAt.Format "01-02 15:04"}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><input type="hidden" name="next" value="inbox"><button class="rowbtn">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
 
 const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="row"><button>Send</button><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a></div></form></section>`
 
@@ -272,12 +272,21 @@ func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
 	read := r.Form.Get("read") == "1"
-	if err := s.Service.Store.UpdateMessageState(r.Context(), p, r.PathValue("id"), &read, nil); err != nil {
+	if err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read, nil); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	http.Redirect(w, r, "/ui/messages/"+r.PathValue("id"), 303)
+	if r.Form.Get("next") == "message" {
+		http.Redirect(w, r, "/ui/messages/"+m.ID, 303)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+m.InboxID, 303)
 }
 
 func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
