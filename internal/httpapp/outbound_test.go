@@ -112,9 +112,33 @@ func TestDashboardRendersOutboundProviderFields(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.render(rr, dashboardBody, data)
 	body := rr.Body.String()
-	for _, want := range []string{"Add outbound provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "Set active", "data-config="} {
+	for _, want := range []string{"Add outbound provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "Set active", "data-config=", `src="/assets/app.js"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "onclick=") {
+		t.Fatal("inline event handlers are blocked by CSP and must not be used")
+	}
+}
+
+func TestCSPAllowsSelfScripts(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/healthz", nil))
+	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
+		t.Fatalf("csp must allow same-origin scripts: %q", csp)
+	}
+}
+
+func TestAppJSServed(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/assets/app.js", nil))
+	if rr.Code != 200 || !strings.Contains(rr.Header().Get("Content-Type"), "javascript") {
+		t.Fatalf("asset %d %q", rr.Code, rr.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rr.Body.String(), "provider-dialog") {
+		t.Fatal("asset missing dialog wiring")
 	}
 }

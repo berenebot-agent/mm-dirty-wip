@@ -3,6 +3,7 @@ package httpapp
 import (
 	"context"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,9 @@ import (
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
+
+//go:embed assets/app.js
+var appJS []byte
 
 type Server struct {
 	Service      *app.Service
@@ -47,6 +51,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
+	m.HandleFunc("GET /assets/app.js", s.asset)
 	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 	m.HandleFunc("POST /relay/enroll", s.Relay.Enroll)
@@ -150,9 +155,15 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(appJS)
 }
 
 func principal(r *http.Request) model.Principal {
