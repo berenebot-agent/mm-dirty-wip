@@ -23,11 +23,11 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Open Agent Inbox", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "send", "hermes-relay"}})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	guide := "# Open Agent Inbox\n\n" +
+	guide := "# Gatehouse Email\n\n" +
 		"Authenticate with `Authorization: Bearer <key>`.\n\n" +
 		"Start with `GET /v1/bootstrap` to discover accessible inboxes and mailbox roles.\n\n" +
 		"Core operations:\n" +
@@ -44,14 +44,14 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) pythonExample(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "import requests\nBASE=%q\nKEY='oain_...'\nh={'Authorization':f'Bearer {KEY}'}\nprint(requests.get(BASE+'/v1/messages',headers=h).json())\n", s.Service.Config.BaseURL)
+	fmt.Fprintf(w, "import requests\nBASE=%q\nKEY='ghm_...'\nh={'Authorization':f'Bearer {KEY}'}\nprint(requests.get(BASE+'/v1/messages',headers=h).json())\n", s.Service.Config.BaseURL)
 }
 func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "curl -H 'Authorization: Bearer oain_...' %s/v1/bootstrap\n", s.Service.Config.BaseURL)
+	fmt.Fprintf(w, "curl -H 'Authorization: Bearer ghm_...' %s/v1/bootstrap\n", s.Service.Config.BaseURL)
 }
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Open Agent Inbox", "version": "v1"}, "servers": []map[string]string{{"url": s.Service.Config.BaseURL}}, "paths": map[string]any{"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities"}}, "/v1/inboxes": map[string]any{"get": map[string]any{"summary": "List inboxes"}}, "/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages"}}, "/v1/search": map[string]any{"get": map[string]any{"summary": "Search messages"}}, "/v1/events/stream": map[string]any{"get": map[string]any{"summary": "Replay and stream events"}}, "/v1/send": map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields."}}}})
+	writeJSON(w, 200, map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Gatehouse Email", "version": "v1"}, "servers": []map[string]string{{"url": s.Service.Config.BaseURL}}, "paths": map[string]any{"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities"}}, "/v1/inboxes": map[string]any{"get": map[string]any{"summary": "List inboxes"}}, "/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages"}}, "/v1/search": map[string]any{"get": map[string]any{"summary": "Search messages"}}, "/v1/events/stream": map[string]any{"get": map[string]any{"summary": "Replay and stream events"}}, "/v1/send": map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields."}}}})
 }
 
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {

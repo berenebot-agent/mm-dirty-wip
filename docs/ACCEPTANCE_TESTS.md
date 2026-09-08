@@ -1,4 +1,4 @@
-# Open Agent Inbox — V1 Acceptance Tests
+# Gatehouse Email — V1 Acceptance Tests
 
 ## A. Account and authorization
 

@@ -1,11 +1,11 @@
 # Cloudflare Email Routing inbound
 
 This guide sets up Cloudflare Email Routing so incoming mail reaches your
-Open Agent Inbox instance over the generic inbound webhook.
+Gatehouse Email instance over the generic inbound webhook.
 
 Email Routing cannot POST directly to an arbitrary URL - it delivers each
 message to a Cloudflare Worker. The Worker below receives the message, wraps
-the raw MIME in JSON, and forwards it to Open Agent Inbox.
+the raw MIME in JSON, and forwards it to Gatehouse Email.
 
 Flow:
 
@@ -85,8 +85,8 @@ Walk through the Cloudflare navigation:
 1. Still under **Email Routing**, open the **Routing rules** tab.
 2. Click **Create rule**.
 3. Choose **Send to a Worker**.
-4. Give the rule a **Custom email address** that matches an inbox in Open
-   Agent Inbox (e.g. `hermes@example.com`).
+4. Give the rule a **Custom email address** that matches an inbox in Gatehouse
+   Email (e.g. `hermes@example.com`).
 5. For **Action**, select your Worker name (e.g. `oa-gatehouse`) from the
    "Send to a Worker" dropdown.
 6. Click **Save**.

@@ -1,11 +1,11 @@
-# Open Agent Inbox — V1 Product Specification
+# Gatehouse Email — V1 Product Specification
 
 **Status:** Implementation-ready V1  
 **Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, free hosted or self-hosted.
 
 ## 1. Pitch
 
-Open Agent Inbox is an API-native email inbox platform for autonomous agents.
+Gatehouse Email is an API-native email inbox platform for autonomous agents.
 
 It gives agents persistent email identities, searchable mail history, attachments, scoped access, realtime delivery, and outbound sending through user-provided credentials.
 
@@ -221,7 +221,7 @@ Provide a lightweight interface for:
 Expose:
 
 ```text
-/.well-known/agent-inbox
+/.well-known/gatehouse
 /agent
 /api/v1/bootstrap
 /openapi.json
@@ -260,8 +260,8 @@ Target deployment:
 
 ```yaml
 services:
-  agent-inbox:
-    image: ghcr.io/<org>/agent-inbox:latest
+  gatehouse-mail:
+    image: ghcr.io/<org>/gatehouse-mail:latest
     restart: unless-stopped
     volumes:
       - ./data:/data
@@ -287,7 +287,7 @@ Internet SMTP
     ↓
 Mailgun
     ↓ HTTPS webhook
-Open Agent Inbox
+Gatehouse Email
 ```
 
 One catch-all transport route can serve many logical inbox identities.
@@ -329,7 +329,7 @@ The canonical API uses straightforward REST resources for:
 
 Where openagent.email endpoint semantics map naturally to the data model, preserve compatible paths/fields so integrations can migrate with minimal changes.
 
-Open Agent Inbox extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
+Gatehouse Email extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
 
 ## 9. Data and backup
 

@@ -1,4 +1,4 @@
-# Open Agent Inbox — V1 API Contract
+# Gatehouse Email — V1 API Contract
 
 This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
 
@@ -39,13 +39,13 @@ Example authorization result:
 
 ## 2. Discovery
 
-### `GET /.well-known/agent-inbox`
+### `GET /.well-known/gatehouse`
 
 Returns a compact discovery document:
 
 ```json
 {
-  "name": "Open Agent Inbox",
+  "name": "Gatehouse Email",
   "api_version": "v1",
   "api_base": "/v1",
   "agent_guide": "/agent",
@@ -295,6 +295,6 @@ Where semantics align naturally, support familiar compatibility operations such 
 
 Compatibility should translate into the canonical model.
 
-Open Agent Inbox native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
+Gatehouse Email native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
 
 Compatibility behaviour requires explicit contract tests.

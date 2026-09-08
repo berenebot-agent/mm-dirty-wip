@@ -97,7 +97,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
 
 	// Discovery.
-	m.HandleFunc("GET /.well-known/agent-inbox", s.discovery)
+	m.HandleFunc("GET /.well-known/gatehouse", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /openapi.json", s.openapi)
 	m.HandleFunc("GET /examples/python", s.pythonExample)
@@ -208,18 +208,18 @@ func principal(r *http.Request) model.Principal {
 func csrf(r *http.Request) string { v, _ := r.Context().Value(csrfKey).(string); return v }
 
 func (s *Server) setPreAuthCSRF(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie("oai_csrf"); err == nil && len(c.Value) >= 20 {
+	if c, err := r.Cookie("ghm_csrf"); err == nil && len(c.Value) >= 20 {
 		return c.Value
 	}
 	tok, err := auth.RandomToken(24)
 	if err != nil {
 		return ""
 	}
-	http.SetCookie(w, &http.Cookie{Name: "oai_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: "ghm_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
 	return tok
 }
 func preAuthCSRF(r *http.Request) string {
-	c, err := r.Cookie("oai_csrf")
+	c, err := r.Cookie("ghm_csrf")
 	if err != nil {
 		return ""
 	}
@@ -256,7 +256,7 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("oai_session")
+		c, err := r.Cookie("ghm_session")
 		if err != nil {
 			redirectLogin(w, r)
 			return
@@ -288,10 +288,10 @@ func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{Name: "oai_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: "ghm_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
 }
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: "oai_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "ghm_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
 }
 
 // cookieSecure marks cookies Secure only when the deployment is HTTPS

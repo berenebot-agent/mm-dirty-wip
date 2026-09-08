@@ -1,4 +1,4 @@
-# Open Agent Inbox — V1 Architecture
+# Gatehouse Email — V1 Architecture
 
 ## 1. Runtime topology
 
@@ -11,7 +11,7 @@
                          HTTPS webhook
                                ▼
                   ┌────────────────────────┐
-                  │   Open Agent Inbox     │
+                  │   Gatehouse Email      │
                   │                        │
                   │ Go HTTP server         │
                   │ auth                   │

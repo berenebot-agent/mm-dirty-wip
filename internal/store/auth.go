@@ -113,7 +113,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 	if err != nil {
 		return model.APIKey{}, "", err
 	}
-	plain = "oain_" + plain
+	plain = "ghm_" + plain
 	id := idgen.New("key")
 	prefix := plain
 	if len(prefix) > 14 {
@@ -232,7 +232,7 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 	if err != nil {
 		return "", err
 	}
-	plain = "oain_" + plain
+	plain = "ghm_" + plain
 	prefix := plain
 	if len(prefix) > 14 {
 		prefix = prefix[:14]

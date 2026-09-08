@@ -313,7 +313,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 			_ = w.Flush()
 			return b.Bytes(), nil
 		}
-		boundary := "=_oai_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		boundary := "=_ghm_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
 		fmt.Fprintf(w, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 		fmt.Fprintf(w, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
 		qw := quotedprintable.NewWriter(w)
@@ -327,7 +327,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		_ = w.Flush()
 		return b.Bytes(), nil
 	}
-	outerBoundary := "=_oai_mix_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+	outerBoundary := "=_ghm_mix_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
 	fmt.Fprintf(w, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", outerBoundary)
 	if err := w.Flush(); err != nil {
 		return nil, err
@@ -337,7 +337,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		return nil, err
 	}
 	if html != "" {
-		altBoundary := "=_oai_alt_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		altBoundary := "=_ghm_alt_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
 		h := textproto.MIMEHeader{}
 		h.Set("Content-Type", fmt.Sprintf("multipart/alternative; boundary=%q", altBoundary))
 		part, err := outer.CreatePart(h)

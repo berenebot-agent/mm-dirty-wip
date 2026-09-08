@@ -1,4 +1,4 @@
-# Open Agent Inbox — V1 Decision Register
+# Gatehouse Email — V1 Decision Register
 
 This file records architectural decisions the implementation should treat as settled unless a concrete requirement justifies revision.
 
@@ -92,7 +92,7 @@ An account may hold multiple outbound credentials but selects exactly one **acti
 
 **Reason:** Familiar integration and easier migration.
 
-**Boundary:** Native Open Agent Inbox models remain authoritative for richer features.
+**Boundary:** Native Gatehouse Email models remain authoritative for richer features.
 
 ## D012 — Lightweight web UI
 

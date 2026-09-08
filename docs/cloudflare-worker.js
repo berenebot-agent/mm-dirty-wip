@@ -1,4 +1,4 @@
-// Cloudflare Worker: forward Email Routing messages to Open Agent Inbox.
+// Cloudflare Worker: forward Email Routing messages to Gatehouse Email.
 //
 // Deployment steps and dashboard navigation are in docs/CLOUDFLARE_INBOUND.md.
 //

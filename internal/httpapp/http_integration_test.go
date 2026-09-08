@@ -70,7 +70,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 	var csrfCookie *http.Cookie
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "oai_csrf" {
+		if c.Name == "ghm_csrf" {
 			csrfCookie = c
 		}
 	}
@@ -97,7 +97,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 	var session *http.Cookie
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "oai_session" {
+		if c.Name == "ghm_session" {
 			session = c
 		}
 	}
@@ -138,7 +138,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 			t.Fatalf("setup get %d", rr.Code)
 		}
 		for _, c := range rr.Result().Cookies() {
-			if c.Name == "oai_csrf" {
+			if c.Name == "ghm_csrf" {
 				return c
 			}
 		}
@@ -165,7 +165,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		t.Fatalf("plain http setup with csrf=%d body=%s", rr.Code, rr.Body.String())
 	}
 	for _, sc := range rr.Result().Cookies() {
-		if sc.Name == "oai_session" && sc.Secure {
+		if sc.Name == "ghm_session" && sc.Secure {
 			t.Fatal("session cookie must not be Secure over direct plain HTTP")
 		}
 	}

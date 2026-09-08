@@ -50,7 +50,7 @@ func main() {
 		}
 		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
 		go func() {
-			log.Info("Open Agent Inbox listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
+			log.Info("Gatehouse Email listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error("HTTP server failed", "listener", name, "error", err)
 				os.Exit(1)

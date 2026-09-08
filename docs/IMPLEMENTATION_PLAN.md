@@ -1,4 +1,4 @@
-# Open Agent Inbox — V1 Implementation Plan
+# Gatehouse Email — V1 Implementation Plan
 
 Each phase should leave the application runnable and tested.
 
@@ -203,7 +203,7 @@ The Hermes host uses its outbound Relay connection for both directions.
 
 ### Deliverables
 
-- `/.well-known/agent-inbox`
+- `/.well-known/gatehouse`
 - `/agent`
 - `/v1/bootstrap`
 - `/openapi.json`

@@ -230,7 +230,7 @@ func descriptor() map[string]any {
 	return map[string]any{
 		"type": "descriptor",
 		"descriptor": map[string]any{
-			"contract_version": 1, "platform": "email", "label": "Open Agent Inbox", "emoji": "✉️",
+			"contract_version": 1, "platform": "email", "label": "Gatehouse Email", "emoji": "✉️",
 			"platform_hint": "Email", "max_message_length": 100000, "supports_draft_streaming": false,
 			"supports_edit": false, "supports_threads": true, "markdown_dialect": "plain", "len_unit": "chars",
 			"supported_ops": []string{"send", "typing"},

@@ -1,4 +1,4 @@
-# Open Agent Inbox
+# Gatehouse Email
 
 Open email infrastructure for AI agents: lightweight inbox identities, searchable message history, replayable realtime events, scoped mailbox roles, BYO outbound delivery, and Hermes Relay.
 
@@ -24,7 +24,7 @@ Persistent state is stored in `./data`.
 https://your-host.example/internal/ingest/mailgun
 ```
 
-Open Agent Inbox resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts.
+Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts.
 
 ## Cloudflare Email Routing inbound
 
@@ -106,7 +106,7 @@ Use the object above in an `attachments` array. The application translates attac
 Give an agent the base URL and an API key. Discovery starts at:
 
 ```text
-/.well-known/agent-inbox
+/.well-known/gatehouse
 /agent
 /v1/bootstrap
 /openapi.json

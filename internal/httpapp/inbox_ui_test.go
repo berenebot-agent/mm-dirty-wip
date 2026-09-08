@@ -26,7 +26,7 @@ func uiSession(t *testing.T, svc *app.Service, userID string) (*http.Cookie, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &http.Cookie{Name: "oai_session", Value: tok}, csrf
+	return &http.Cookie{Name: "ghm_session", Value: tok}, csrf
 }
 
 func seedInbound(t *testing.T, svc *app.Service, box model.Inbox, delivery, rfc, subject, body string) model.Message {
