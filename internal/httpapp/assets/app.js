@@ -369,3 +369,45 @@
     });
   }
 })();
+
+(function () {
+  var form = document.getElementById('bulk-form');
+  if (!form) {
+    return;
+  }
+  var all = document.getElementById('select-all');
+  var boxes = document.querySelectorAll('input[name=ids][form=bulk-form]');
+  function refreshAll() {
+    if (!all) {
+      return;
+    }
+    var n = 0;
+    boxes.forEach(function (box) {
+      if (box.checked) {
+        n++;
+      }
+    });
+    all.checked = n > 0 && n === boxes.length;
+    all.indeterminate = n > 0 && n < boxes.length;
+  }
+  if (all) {
+    all.addEventListener('change', function () {
+      boxes.forEach(function (box) {
+        box.checked = all.checked;
+      });
+    });
+  }
+  boxes.forEach(function (box) {
+    box.addEventListener('change', refreshAll);
+  });
+})();
+
+(function () {
+  document.querySelectorAll('button[data-confirm]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      if (!window.confirm(btn.getAttribute('data-confirm'))) {
+        e.preventDefault();
+      }
+    });
+  });
+})();

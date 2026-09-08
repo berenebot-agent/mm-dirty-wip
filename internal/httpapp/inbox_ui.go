@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,8 +21,9 @@ const inboxPageSize = 50
 const inboxBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard">← Dashboard</a></div>
 <div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1>{{if .UnreadCount}}<span class="pill unread-pill">{{.UnreadCount}} unread</span>{{end}}</div>
 <div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a></div>
+{{if .Notice}}<div class="ok">{{.Notice}}</div>{{end}}
 {{if not .OutboundReady}}<div class="banner warn">No outbound provider is configured. <a href="/dashboard">Add one</a> before sending.</div>{{end}}
-<section class="card">{{if .Messages}}<div class="mailheader"><span></span><span>From / To</span><span>Subject</span><span>Date</span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{.CreatedAt.Format "01-02 15:04"}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><input type="hidden" name="next" value="inbox"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
+<section class="card">{{if .Messages}}<form id="bulk-form" class="mailtoolbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button name="action" value="read" class="secondary btn-sm">Mark read</button><button name="action" value="unread" class="secondary btn-sm">Mark unread</button><button name="action" value="delete" class="secondary btn-sm danger" data-confirm="Delete selected messages permanently?">Delete</button></form><div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>From / To</span><span>Subject</span><span>Date</span><span>Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><input type="hidden" name="next" value="inbox"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
 
 const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button>Send</button></div></form></section>`
 
@@ -121,7 +123,63 @@ func (s *Server) uiInbox(w http.ResponseWriter, r *http.Request) {
 		Before:        cursor,
 		UnreadCount:   unread[id],
 		OutboundReady: acc.ActiveOutboundCredentialID != "",
+		Notice:        r.URL.Query().Get("notice"),
 	})
+}
+
+func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	action := r.Form.Get("action")
+	ids := r.Form["ids"]
+	count := 0
+	for _, id := range ids {
+		m, err := s.Service.Store.GetMessage(r.Context(), p, id)
+		if err != nil || m.InboxID != box.ID {
+			continue
+		}
+		switch action {
+		case "read", "unread":
+			read := action == "read"
+			if err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read, nil); err == nil {
+				count++
+			}
+		case "delete":
+			path, _, ev, err := s.Service.Store.DeleteMessage(r.Context(), p, m.ID)
+			if err != nil {
+				continue
+			}
+			if path != "" {
+				_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+			}
+			s.Service.Hub.Publish(ev)
+			count++
+		default:
+			http.Error(w, "unknown action", 400)
+			return
+		}
+	}
+	notice := fmt.Sprintf("%d message", count)
+	if count != 1 {
+		notice += "s"
+	}
+	switch action {
+	case "read":
+		notice += " marked read"
+	case "unread":
+		notice += " marked unread"
+	case "delete":
+		notice += " deleted"
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"?notice="+url.QueryEscape(notice), 303)
 }
 
 func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {

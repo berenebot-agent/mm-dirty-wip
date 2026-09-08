@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/compose", s.withSession(s.uiCompose))
 	m.HandleFunc("POST /ui/inboxes/{id}/send", s.withSession(s.withCSRF(s.uiComposeSend)))
+	m.HandleFunc("POST /ui/inboxes/{id}/bulk", s.withSession(s.withCSRF(s.uiBulk)))
 	m.HandleFunc("GET /ui/messages/{id}/reply", s.withSession(s.uiReplyForm))
 	m.HandleFunc("POST /ui/messages/{id}/reply", s.withSession(s.withCSRF(s.uiReplySend)))
 	m.HandleFunc("GET /ui/messages/{id}/forward", s.withSession(s.uiForwardForm))
