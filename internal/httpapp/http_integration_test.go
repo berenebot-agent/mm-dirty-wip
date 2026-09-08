@@ -114,6 +114,79 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 }
 
+func TestSecureCookieFollowsActualConnection(t *testing.T) {
+	newHandler := func(t *testing.T, baseURL string, trustProxy bool) http.Handler {
+		t.Helper()
+		dir := t.TempDir()
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", TrustProxyHeaders: trustProxy, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, RelayEnrollTTL: time.Minute, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+		svc, err := app.New(cfg, st, events.NewHub())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return New(svc, nil).Handler()
+	}
+	csrfCookie := func(t *testing.T, h http.Handler, req *http.Request) *http.Cookie {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("setup get %d", rr.Code)
+		}
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == "oai_csrf" {
+				return c
+			}
+		}
+		t.Fatal("missing preauth csrf cookie")
+		return nil
+	}
+	newSetup := func(value string, cookie *http.Cookie) *http.Request {
+		form := url.Values{"account": {"A"}, "email": {"admin@example.com"}, "password": {"correct horse battery staple"}, "_csrf": {value}}
+		req := httptest.NewRequest("POST", "/setup", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		return req
+	}
+	// Direct plain HTTP with an https BaseURL: cookies must not be Secure,
+	// otherwise browsers drop them and setup fails with "invalid CSRF token".
+	h := newHandler(t, "https://mail.example.test", false)
+	c := csrfCookie(t, h, httptest.NewRequest("GET", "/setup", nil))
+	if c.Secure {
+		t.Fatal("csrf cookie must not be Secure over direct plain HTTP")
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, newSetup(c.Value, c))
+	if rr.Code != 303 {
+		t.Fatalf("plain http setup with csrf=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, sc := range rr.Result().Cookies() {
+		if sc.Name == "oai_session" && sc.Secure {
+			t.Fatal("session cookie must not be Secure over direct plain HTTP")
+		}
+	}
+	// Trusted proxy reporting https: cookies keep the Secure flag.
+	h = newHandler(t, "https://mail.example.test", true)
+	req := httptest.NewRequest("GET", "/setup", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	c = csrfCookie(t, h, req)
+	if !c.Secure {
+		t.Fatal("csrf cookie must be Secure behind trusted https proxy")
+	}
+	// An untrusted X-Forwarded-Proto header must not enable Secure.
+	h = newHandler(t, "https://mail.example.test", false)
+	req = httptest.NewRequest("GET", "/setup", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	c = csrfCookie(t, h, req)
+	if c.Secure {
+		t.Fatal("untrusted proxy header must not set Secure cookies")
+	}
+}
+
 func signedMGRequest(t *testing.T, key, token, recipient, raw string) *http.Request {
 	t.Helper()
 	var body bytes.Buffer

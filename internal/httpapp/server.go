@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
 	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
+	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 	m.HandleFunc("POST /relay/enroll", s.Relay.Enroll)
 	m.HandleFunc("GET /relay", s.Relay.ServeWebSocket)
 
@@ -166,8 +167,7 @@ func (s *Server) setPreAuthCSRF(w http.ResponseWriter, r *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	secure := strings.HasPrefix(strings.ToLower(s.Service.Config.BaseURL), "https://")
-	http.SetCookie(w, &http.Cookie{Name: "oai_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: "oai_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
 	return tok
 }
 func preAuthCSRF(r *http.Request) string {
@@ -240,11 +240,30 @@ func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	secure := strings.HasPrefix(strings.ToLower(s.Service.Config.BaseURL), "https://")
-	http.SetCookie(w, &http.Cookie{Name: "oai_session", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: "oai_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
 }
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: "oai_session", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: "oai_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
+}
+
+// cookieSecure marks cookies Secure only when the deployment is HTTPS
+// (BaseURL) and the current connection actually arrived over TLS, directly
+// or via a trusted proxy. This keeps direct plain-HTTP access (self-hosted
+// LAN, healthchecks) working: browsers drop Secure cookies set over HTTP,
+// which previously broke setup/login CSRF validation entirely.
+func (s *Server) cookieSecure(r *http.Request) bool {
+	if !strings.HasPrefix(strings.ToLower(s.Service.Config.BaseURL), "https://") {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	if s.Service.Config.TrustProxyHeaders {
+		if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); strings.EqualFold(proto, "https") {
+			return true
+		}
+	}
+	return false
 }
 func redirectLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)

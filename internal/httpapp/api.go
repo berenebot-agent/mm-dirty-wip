@@ -19,6 +19,7 @@ import (
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
+	"gatehouse-mail/internal/transport"
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
@@ -949,13 +950,30 @@ func (s *Server) apiHermesDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mailgunIngest(w http.ResponseWriter, r *http.Request) {
-	m, dup, err := s.Service.IngestMailgun(r.Context(), r)
+	// Compat: the legacy Mailgun route predates the generic inbound path.
+	s.ingestProvider(w, r, "mailgun")
+}
+
+func (s *Server) ingestInbound(w http.ResponseWriter, r *http.Request) {
+	s.ingestProvider(w, r, r.PathValue("provider"))
+}
+
+func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider string) {
+	m, dup, err := s.Service.IngestInbound(r.Context(), provider, r)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "recipient rejected", http.StatusNotAcceptable)
 			return
 		}
-		s.Log.Warn("mailgun ingest failed", "error", err)
+		if errors.Is(err, transport.ErrUnknownProvider) {
+			http.Error(w, "unknown inbound provider", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, transport.ErrInboundUnauthorized) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		s.Log.Warn("inbound ingest failed", "provider", provider, "error", err)
 		http.Error(w, "ingest failed", http.StatusInternalServerError)
 		return
 	}

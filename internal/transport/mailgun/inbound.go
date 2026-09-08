@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gatehouse-mail/internal/transport"
 )
 
 type InboundForm struct {
@@ -25,6 +27,39 @@ type InboundForm struct {
 	ProviderMessageID string
 	RawPath           string
 	Size              int64
+}
+
+// Transport adapts Mailgun HTTPS webhooks to the generic inbound boundary.
+type Transport struct{}
+
+func init() { transport.RegisterInbound(Transport{}) }
+
+func (Transport) Name() string { return "mailgun" }
+
+func (Transport) Parse(r *http.Request, tmpPath string, maxBytes int64) (transport.InboundMessage, error) {
+	form, err := ParseInboundRequest(r, tmpPath, maxBytes)
+	if err != nil {
+		return transport.InboundMessage{}, err
+	}
+	return transport.InboundMessage{
+		Provider:          "mailgun",
+		Recipient:         form.Recipient,
+		EnvelopeFrom:      form.Sender,
+		RawPath:           form.RawPath,
+		Size:              form.Size,
+		DeliveryID:        form.Token,
+		ProviderMessageID: form.ProviderMessageID,
+		Timestamp:         form.Timestamp,
+		Token:             form.Token,
+		Signature:         form.Signature,
+	}, nil
+}
+
+func (Transport) Verify(_ *http.Request, msg transport.InboundMessage, secret string) error {
+	if !VerifySignature(secret, msg.Timestamp, msg.Token, msg.Signature) {
+		return transport.ErrInboundUnauthorized
+	}
+	return nil
 }
 
 func VerifySignature(signingKey, timestamp, token, signature string) bool {

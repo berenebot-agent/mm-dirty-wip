@@ -19,6 +19,9 @@ import (
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
+	"gatehouse-mail/internal/transport"
+	_ "gatehouse-mail/internal/transport/cloudflare"
+	_ "gatehouse-mail/internal/transport/mailgun"
 	mg "gatehouse-mail/internal/transport/mailgun"
 	smtpt "gatehouse-mail/internal/transport/smtp"
 )
@@ -46,27 +49,53 @@ func (s *Service) messagePath() string {
 	return filepath.Join(s.Config.DataDir, "messages", id[4:6], id[6:8], id+".eml")
 }
 
-func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Message, bool, error) {
-	if s.Config.MailgunSigningKey == "" {
-		return model.Message{}, false, fmt.Errorf("MAILGUN_SIGNING_KEY is not configured")
+func (s *Service) inboundSecret(provider string) (string, error) {
+	switch provider {
+	case "mailgun":
+		if s.Config.MailgunSigningKey == "" {
+			return "", fmt.Errorf("MAILGUN_SIGNING_KEY is not configured")
+		}
+		return s.Config.MailgunSigningKey, nil
+	case "cloudflare":
+		if s.Config.CloudflareSecret == "" {
+			return "", fmt.Errorf("CLOUDFLARE_WEBHOOK_SECRET is not configured")
+		}
+		return s.Config.CloudflareSecret, nil
+	default:
+		return "", fmt.Errorf("%w: %s", transport.ErrUnknownProvider, provider)
 	}
-	tmp := filepath.Join(s.Config.DataDir, "messages", ".tmp", idgen.New("in")+".eml")
-	defer os.Remove(tmp)
-	form, err := mg.ParseInboundRequest(r, tmp, s.Config.MaxMessageBytes)
+}
+
+// IngestInbound runs the shared provider-neutral ingest pipeline for any
+// registered inbound transport: parse the provider webhook, verify
+// authenticity with the provider scheme, resolve the recipient, parse the
+// staged MIME, commit transactionally, then publish the realtime event.
+func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Request) (model.Message, bool, error) {
+	t, ok := transport.LookupInbound(provider)
+	if !ok {
+		return model.Message{}, false, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, provider)
+	}
+	secret, err := s.inboundSecret(provider)
 	if err != nil {
 		return model.Message{}, false, err
 	}
-	if !mg.VerifySignature(s.Config.MailgunSigningKey, form.Timestamp, form.Token, form.Signature) {
-		return model.Message{}, false, fmt.Errorf("invalid mailgun signature")
+	tmp := filepath.Join(s.Config.DataDir, "messages", ".tmp", idgen.New("in")+".eml")
+	defer os.Remove(tmp)
+	msg, err := t.Parse(r, tmp, s.Config.MaxMessageBytes)
+	if err != nil {
+		return model.Message{}, false, err
 	}
-	recipient := form.Recipient
+	if err = t.Verify(r, msg, secret); err != nil {
+		return model.Message{}, false, err
+	}
+	recipient := msg.Recipient
 	if a, e := mail.ParseAddress(recipient); e == nil {
 		recipient = a.Address
 	}
 	inbox, _, err := s.Store.ResolveRecipient(ctx, recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			s.Store.Audit(ctx, "", "mailgun.unrouted", recipient)
+			s.Store.Audit(ctx, "", provider+".unrouted", recipient)
 		}
 		return model.Message{}, false, err
 	}
@@ -91,7 +120,7 @@ func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Mes
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: "mailgun", ProviderDeliveryID: form.Token, ProviderMessageID: firstNonEmpty(form.ProviderMessageID, parsed.RFCMessageID), RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{strings.ToLower(recipient)}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: form.Size, ReceivedAt: received, Attachments: atts})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{strings.ToLower(recipient)}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err
@@ -102,6 +131,12 @@ func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Mes
 	}
 	s.Hub.Publish(ev)
 	return m, false, nil
+}
+
+// IngestMailgun is the compat entry point for the legacy
+// POST /internal/ingest/mailgun route.
+func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Message, bool, error) {
+	return s.IngestInbound(ctx, "mailgun", r)
 }
 func firstNonEmpty(vs ...string) string {
 	for _, v := range vs {

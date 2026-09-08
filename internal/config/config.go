@@ -17,6 +17,7 @@ type Config struct {
 	TrustProxyHeaders   bool
 	AppEncryptionKey    string
 	MailgunSigningKey   string
+	CloudflareSecret    string
 	MaxMessageBytes     int64
 	DefaultQuotaBytes   int64
 	SessionTTL          time.Duration
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		TrustProxyHeaders:   envBool("TRUST_PROXY_HEADERS", false),
 		AppEncryptionKey:    strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
 		MailgunSigningKey:   strings.TrimSpace(os.Getenv("MAILGUN_SIGNING_KEY")),
+		CloudflareSecret:    strings.TrimSpace(os.Getenv("CLOUDFLARE_WEBHOOK_SECRET")),
 		MaxMessageBytes:     envInt64("MAX_MESSAGE_BYTES", 30<<20),
 		DefaultQuotaBytes:   envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
 		SessionTTL:          time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,

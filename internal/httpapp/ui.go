@@ -65,7 +65,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", 303)
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account name</label>{{if eq .Title "Set up Open Agent Inbox"}}<input name="account" required placeholder="My Inbox">{{end}}<label>Email</label><input type="email" name="email" required><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set up Open Agent Inbox"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{end}}<label>Email</label><input type="email" name="email" required><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
 
 func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 	has, _ := s.Service.Store.HasUsers(r.Context())
@@ -148,7 +148,7 @@ func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("oai_session"); err == nil {
 		s.Service.Store.DeleteSession(r.Context(), c.Value)
 	}
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", 303)
 }
 
