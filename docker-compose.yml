@@ -8,5 +8,4 @@ services:
       - ./data:/data
     ports:
       - "0.0.0.0:8081:8081"
-      # Optional dedicated inbound webhook listener (set INBOUND_LISTEN_ADDR=:8082).
-      # - "0.0.0.0:8082:8082"
+      - "0.0.0.0:8082:8082"
