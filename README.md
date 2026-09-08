@@ -26,6 +26,25 @@ https://your-host.example/internal/ingest/mailgun
 
 Open Agent Inbox resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts.
 
+## Cloudflare Email Routing inbound
+
+Inbound can also be received via Cloudflare Email Routing through a Worker that forwards messages to the generic webhook. Full dashboard navigation and the Worker example are in [docs/CLOUDFLARE_INBOUND.md](docs/CLOUDFLARE_INBOUND.md); the Worker source is [docs/cloudflare-worker.js](docs/cloudflare-worker.js).
+
+High-level steps:
+
+1. Set `CLOUDFLARE_WEBHOOK_SECRET` in `.env` to a long random secret.
+2. Create a Worker from `docs/cloudflare-worker.js`, setting `WEBHOOK_URL` to your instance's `/internal/ingest/cloudflare` endpoint and `SECRET` to the same value.
+3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
+4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
+
+Cloudflare hands each message to the Worker, which POSTs the raw MIME (base64) to:
+
+```text
+https://your-host.example/internal/ingest/cloudflare
+```
+
+The server resolves the recipient to its logical inbox with the same behavior as Mailgun.
+
 ## Outbound
 
 Create a BYO provider in the Admin UI or API, then assign its credential ID to an inbox with `PATCH /v1/inboxes/{id}`.
