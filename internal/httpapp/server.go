@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
 	m.HandleFunc("POST /ui/keys", s.withSession(s.withCSRF(s.uiCreateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateKey)))
+	m.HandleFunc("POST /ui/keys/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteKey)))
 	m.HandleFunc("POST /ui/hermes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
 	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))

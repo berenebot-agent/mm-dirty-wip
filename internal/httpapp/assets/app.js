@@ -103,6 +103,10 @@
   var copyNote = document.getElementById('key-copy-note');
   var errorBox = document.getElementById('key-error');
   var doneBtn = document.getElementById('key-done');
+  var matrix = document.getElementById('key-matrix');
+  var submitBtn = document.getElementById('key-submit');
+  var rotateBtn = document.getElementById('key-rotate');
+  var adminSnapshot = null;
 
   function sync() {
     document.querySelectorAll('.key-fields').forEach(function (fs) {
@@ -112,6 +116,47 @@
         el.disabled = !active;
       });
     });
+    dlg.classList.toggle('key-dialog--wide', sel.value === 'api');
+  }
+
+  function rolesRadios() {
+    return matrix ? matrix.querySelectorAll('input[type=radio][name^=role_]') : [];
+  }
+
+  function setAllRoles(value) {
+    rolesRadios().forEach(function (el) {
+      el.checked = el.value === value;
+    });
+  }
+
+  function syncAdmin() {
+    if (!matrix) {
+      return;
+    }
+    var on = !!(adminInput && adminInput.checked);
+    if (on) {
+      if (adminSnapshot === null) {
+        adminSnapshot = [];
+        rolesRadios().forEach(function (el) {
+          if (el.checked) {
+            adminSnapshot.push({ name: el.name, value: el.value });
+          }
+        });
+      }
+      setAllRoles('owner');
+    } else if (adminSnapshot !== null) {
+      rolesRadios().forEach(function (el) {
+        el.checked = false;
+      });
+      adminSnapshot.forEach(function (s) {
+        var el = form.querySelector('input[type=radio][name="' + s.name + '"][value="' + s.value + '"]');
+        if (el) {
+          el.checked = true;
+        }
+      });
+      adminSnapshot = null;
+    }
+    matrix.disabled = on;
   }
 
   function showForm() {
@@ -129,6 +174,7 @@
   }
 
   function showResult(data) {
+    dlg.classList.add('key-dialog--wide');
     form.hidden = true;
     errorBox.hidden = true;
     resultTitle.textContent = data.notice || 'Key created';
@@ -158,19 +204,34 @@
     form.reset();
     form.action = '/ui/keys';
     idInput.value = '';
+    adminSnapshot = null;
     sel.disabled = false;
+    if (submitBtn) {
+      submitBtn.textContent = 'Create';
+    }
+    if (rotateBtn) {
+      rotateBtn.hidden = true;
+    }
     showForm();
     sync();
+    syncAdmin();
     dlg.showModal();
   }
 
   function openEdit(btn) {
     form.reset();
+    adminSnapshot = null;
     var kind = btn.dataset.kind === 'hermes' ? 'hermes' : 'api';
     form.action = '/ui/' + (kind === 'hermes' ? 'hermes' : 'keys') + '/' + btn.dataset.id + '/edit';
     idInput.value = btn.dataset.id;
     sel.value = kind;
     sel.disabled = true;
+    if (submitBtn) {
+      submitBtn.textContent = 'Save';
+    }
+    if (rotateBtn) {
+      rotateBtn.hidden = kind !== 'api';
+    }
     nameInput.value = btn.dataset.name || '';
     if (adminInput) {
       adminInput.checked = btn.dataset.admin === '1';
@@ -182,8 +243,8 @@
       } catch (e) {
         roles = {};
       }
-      form.querySelectorAll('select[name^=role_]').forEach(function (el) {
-        el.value = roles[el.name.slice(5)] || '';
+      rolesRadios().forEach(function (el) {
+        el.checked = el.value === (roles[el.name.slice(5)] || '');
       });
     } else {
       var inbox = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
@@ -192,6 +253,7 @@
       }
     }
     sync();
+    syncAdmin();
     if (kind === 'hermes') {
       var inbox2 = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
       if (inbox2) {
@@ -267,7 +329,59 @@
     });
   }
 
-  sel.addEventListener('change', sync);
+  if (rotateBtn) {
+    rotateBtn.addEventListener('click', function () {
+      var id = idInput.value;
+      if (!id) {
+        return;
+      }
+      if (!window.confirm('Rotate this API key? The current key stops working immediately.')) {
+        return;
+      }
+      var csrfInput = form.querySelector('[name=_csrf]');
+      var body = new URLSearchParams();
+      if (csrfInput) {
+        body.append('_csrf', csrfInput.value);
+      }
+      rotateBtn.disabled = true;
+      fetch('/ui/keys/' + encodeURIComponent(id) + '/rotate', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+        },
+        body: body.toString(),
+        credentials: 'same-origin'
+      }).then(function (res) {
+        if (!res.ok) {
+          return res.text().then(function (text) {
+            throw new Error(text || 'Could not rotate key');
+          });
+        }
+        return res.json();
+      }).then(function (data) {
+        rotateBtn.disabled = false;
+        showResult(data);
+      }).catch(function (err) {
+        rotateBtn.disabled = false;
+        errorBox.textContent = err.message || 'Could not rotate key';
+        errorBox.hidden = false;
+      });
+    });
+  }
+
+  sel.addEventListener('change', function () {
+    sync();
+    syncAdmin();
+  });
+  if (adminInput) {
+    adminInput.addEventListener('change', syncAdmin);
+  }
+  document.querySelectorAll('#key-matrix [data-set-role]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      setAllRoles(btn.getAttribute('data-set-role'));
+    });
+  });
   var add = document.getElementById('add-key');
   if (add) {
     add.addEventListener('click', openCreate);

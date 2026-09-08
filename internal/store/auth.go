@@ -225,6 +225,28 @@ func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error
 	return nil
 }
 
+// RotateAPIKey issues a new secret for an existing key while keeping its id,
+// name, and permissions. The previous secret stops working immediately.
+func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (string, error) {
+	plain, err := auth.RandomToken(32)
+	if err != nil {
+		return "", err
+	}
+	plain = "oain_" + plain
+	prefix := plain
+	if len(prefix) > 14 {
+		prefix = prefix[:14]
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE api_keys SET key_hash=?, key_prefix=?, last_used_at=NULL WHERE id=? AND account_id=? AND revoked_at IS NULL`, auth.HashToken(plain), prefix, keyID, accountID)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return plain, nil
+}
+
 // UpdateAPIKey changes a key's name and permissions. Admin keys carry no
 // per-mailbox roles, so any supplied roles are ignored and cleared for them.
 func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string, admin bool, roles map[string]string) error {
