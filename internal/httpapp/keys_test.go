@@ -45,7 +45,7 @@ func TestCredentialViews(t *testing.T) {
 
 func TestHermesEnvBlock(t *testing.T) {
 	got := hermesEnvBlock("https://mail.example.test/", "gw-abc", "sekret", "deliver")
-	want := "GATEWAY_RELAY_URL=https://mail.example.test/\nGATEWAY_RELAY_ID=gw-abc\nGATEWAY_RELAY_SECRET=sekret\nGATEWAY_RELAY_DELIVERY_KEY=deliver\nGATEWAY_RELAY_PLATFORMS=email"
+	want := "GATEWAY_RELAY_URL=https://mail.example.test/\nGATEWAY_RELAY_ID=gw-abc\nGATEWAY_RELAY_SECRET=sekret\nGATEWAY_RELAY_DELIVERY_KEY=deliver\nGATEWAY_RELAY_PLATFORMS=email\nGATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true"
 	if got != want {
 		t.Fatalf("env block:\n%s\nwant:\n%s", got, want)
 	}
