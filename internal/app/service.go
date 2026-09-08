@@ -1,0 +1,319 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/mail"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/cryptox"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/mailparse"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	mg "github.com/open-agent-inbox/open-agent-inbox/internal/transport/mailgun"
+	smtpt "github.com/open-agent-inbox/open-agent-inbox/internal/transport/smtp"
+)
+
+type Service struct {
+	Config        config.Config
+	Store         *store.Store
+	Hub           *events.Hub
+	EncryptionKey []byte
+}
+
+func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
+	key, err := cryptox.DeriveKey(cfg.AppEncryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(filepath.Join(cfg.DataDir, "messages", ".tmp"), 0o700); err != nil {
+		return nil, err
+	}
+	return &Service{Config: cfg, Store: st, Hub: hub, EncryptionKey: key}, nil
+}
+
+func (s *Service) messagePath() string {
+	id := idgen.New("raw")
+	return filepath.Join(s.Config.DataDir, "messages", id[4:6], id[6:8], id+".eml")
+}
+
+func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Message, bool, error) {
+	if s.Config.MailgunSigningKey == "" {
+		return model.Message{}, false, fmt.Errorf("MAILGUN_SIGNING_KEY is not configured")
+	}
+	tmp := filepath.Join(s.Config.DataDir, "messages", ".tmp", idgen.New("in")+".eml")
+	defer os.Remove(tmp)
+	form, err := mg.ParseInboundRequest(r, tmp, s.Config.MaxMessageBytes)
+	if err != nil {
+		return model.Message{}, false, err
+	}
+	if !mg.VerifySignature(s.Config.MailgunSigningKey, form.Timestamp, form.Token, form.Signature) {
+		return model.Message{}, false, fmt.Errorf("invalid mailgun signature")
+	}
+	recipient := form.Recipient
+	if a, e := mail.ParseAddress(recipient); e == nil {
+		recipient = a.Address
+	}
+	inbox, _, err := s.Store.ResolveRecipient(ctx, recipient)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.Store.Audit(ctx, "", "mailgun.unrouted", recipient)
+		}
+		return model.Message{}, false, err
+	}
+	parsed, err := mailparse.ParseFile(tmp)
+	if err != nil {
+		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
+	}
+	final := s.messagePath()
+	if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
+		return model.Message{}, false, err
+	}
+	if err = os.Rename(tmp, final); err != nil {
+		return model.Message{}, false, err
+	}
+	rel, _ := filepath.Rel(s.Config.DataDir, final)
+	atts := make([]store.AttachmentInput, 0, len(parsed.Attachments))
+	for _, a := range parsed.Attachments {
+		atts = append(atts, store.AttachmentInput{Filename: a.Filename, ContentType: a.ContentType, ContentID: a.ContentID, Size: a.Size, PartIndex: a.PartIndex})
+	}
+	from := model.Address{Name: parsed.From.Name, Address: parsed.From.Address}
+	received := parsed.Date
+	if received.IsZero() {
+		received = time.Now().UTC()
+	}
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: "mailgun", ProviderDeliveryID: form.Token, ProviderMessageID: firstNonEmpty(form.ProviderMessageID, parsed.RFCMessageID), RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{strings.ToLower(recipient)}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: form.Size, ReceivedAt: received, Attachments: atts})
+	if err != nil {
+		_ = os.Remove(final)
+		return model.Message{}, false, err
+	}
+	if dup {
+		_ = os.Remove(final)
+		return m, true, nil
+	}
+	s.Hub.Publish(ev)
+	return m, false, nil
+}
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func (s *Service) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider string, cfg any) (store.OutboundCredential, error) {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return store.OutboundCredential{}, err
+	}
+	enc, err := cryptox.Encrypt(s.EncryptionKey, b)
+	if err != nil {
+		return store.OutboundCredential{}, err
+	}
+	return s.Store.SaveOutboundCredential(ctx, accountID, id, name, provider, enc)
+}
+func (s *Service) DecryptOutboundCredential(c store.OutboundCredential) (map[string]any, error) {
+	b, err := cryptox.Decrypt(s.EncryptionKey, c.EncryptedConfig)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err = json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+type SendInput struct {
+	InboxID          string   `json:"inbox_id"`
+	To               []string `json:"to,omitempty"`
+	CC               []string `json:"cc,omitempty"`
+	BCC              []string `json:"bcc,omitempty"`
+	Subject          string   `json:"subject"`
+	Text             string   `json:"text"`
+	HTML             string   `json:"html,omitempty"`
+	ReplyToMessageID string   `json:"reply_to_message_id,omitempty"`
+}
+type SendResult struct {
+	Message           model.Message `json:"message"`
+	ProviderMessageID string        `json:"provider_message_id"`
+}
+
+func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (SendResult, error) {
+	if !p.CanOwn(in.InboxID) {
+		return SendResult{}, store.ErrForbidden
+	}
+	if idem != "" {
+		mid, res, found, err := s.Store.IdempotencyGet(ctx, p.AccountID, idem)
+		if err != nil {
+			return SendResult{}, err
+		}
+		if found {
+			m, err := s.Store.GetMessageByID(ctx, p.AccountID, mid)
+			if err != nil {
+				return SendResult{}, err
+			}
+			var sr SendResult
+			_ = json.Unmarshal([]byte(res), &sr)
+			sr.Message = m
+			return sr, nil
+		}
+	}
+	inbox, err := s.Store.GetInboxInternal(ctx, p.AccountID, in.InboxID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	var threadID, inReply string
+	refs := []string{}
+	to := cleanAddresses(in.To)
+	subject := strings.TrimSpace(in.Subject)
+	if in.ReplyToMessageID != "" {
+		target, err := s.Store.GetMessageByID(ctx, p.AccountID, in.ReplyToMessageID)
+		if err != nil {
+			return SendResult{}, err
+		}
+		if target.InboxID != inbox.ID {
+			return SendResult{}, store.ErrForbidden
+		}
+		threadID = target.ThreadID
+		inReply = target.RFCMessageID
+		refs = append(refs, target.References...)
+		if target.RFCMessageID != "" {
+			refs = appendUnique(refs, target.RFCMessageID)
+		}
+		if len(to) == 0 {
+			if target.Direction == "inbound" {
+				to = []string{target.From.Address}
+			} else {
+				to = append([]string{}, target.To...)
+			}
+		}
+		if subject == "" {
+			subject = replySubject(target.Subject)
+		}
+	}
+	if len(to) == 0 {
+		return SendResult{}, fmt.Errorf("recipient required")
+	}
+	cred, err := s.Store.OutboundCredentialForInbox(ctx, p.AccountID, inbox.ID)
+	if err != nil {
+		return SendResult{}, fmt.Errorf("outbound provider not configured for inbox")
+	}
+	cfg, err := s.DecryptOutboundCredential(cred)
+	if err != nil {
+		return SendResult{}, err
+	}
+	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(inbox.Address, "@", 2)[1])
+	now := time.Now().UTC()
+	html := in.HTML
+	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cleanAddresses(in.CC), cleanAddresses(in.BCC), subject, in.Text, html, msgID, inReply, refs, now)
+	if err != nil {
+		return SendResult{}, err
+	}
+	acc, err := s.Store.GetAccount(ctx, p.AccountID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if acc.StorageQuotaBytes > 0 && acc.StorageUsedBytes+int64(len(raw)) > acc.StorageQuotaBytes {
+		return SendResult{}, store.ErrQuota
+	}
+	providerID := ""
+	switch cred.Provider {
+	case "mailgun":
+		var c mg.Config
+		if err = mapTo(cfg, &c); err != nil {
+			return SendResult{}, err
+		}
+		res, err := mg.Send(ctx, c, mg.SendRequest{From: formatFrom(inbox), To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, MessageID: msgID, InReplyTo: inReply, References: refs})
+		if err != nil {
+			return SendResult{}, err
+		}
+		providerID = res.ProviderMessageID
+	case "smtp":
+		var c smtpt.Config
+		if err = mapTo(cfg, &c); err != nil {
+			return SendResult{}, err
+		}
+		all := append(append(append([]string{}, to...), cleanAddresses(in.CC)...), cleanAddresses(in.BCC)...)
+		if err = smtpt.Send(ctx, c, smtpt.SendRequest{From: inbox.Address, To: all, Raw: raw}, s.Config.Mode == "hosted"); err != nil {
+			return SendResult{}, err
+		}
+		providerID = "smtp"
+	default:
+		return SendResult{}, fmt.Errorf("unknown provider")
+	}
+	path := s.messagePath()
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return SendResult{}, err
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		return SendResult{}, err
+	}
+	rel, _ := filepath.Rel(s.Config.DataDir, path)
+	m, ev, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, ProviderMessageID: providerID, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), SentAt: now, ThreadID: threadID})
+	if err != nil {
+		_ = os.Remove(path)
+		return SendResult{}, err
+	}
+	s.Hub.Publish(ev)
+	result := SendResult{Message: m, ProviderMessageID: providerID}
+	if idem != "" {
+		_ = s.Store.IdempotencyPut(ctx, p.AccountID, idem, m.ID, result)
+	}
+	return result, nil
+}
+func formatFrom(i model.Inbox) string {
+	if i.DisplayName == "" {
+		return i.Address
+	}
+	return (&mail.Address{Name: i.DisplayName, Address: i.Address}).String()
+}
+func cleanAddresses(in []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, v := range in {
+		if a, err := mail.ParseAddress(strings.TrimSpace(v)); err == nil {
+			v = strings.ToLower(a.Address)
+		} else {
+			v = strings.ToLower(strings.TrimSpace(v))
+		}
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+func appendUnique(in []string, v string) []string {
+	for _, x := range in {
+		if x == v {
+			return in
+		}
+	}
+	return append(in, v)
+}
+func replySubject(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(strings.ToLower(s), "re:") {
+		return s
+	}
+	return "Re: " + s
+}
+func mapTo(in map[string]any, out any) error {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, out)
+}

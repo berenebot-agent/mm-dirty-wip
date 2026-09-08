@@ -1,0 +1,457 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+)
+
+type AttachmentInput struct {
+	Filename, ContentType, ContentID string
+	Size                             int64
+	PartIndex                        int
+}
+type InboundRecord struct {
+	Inbox                                           model.Inbox
+	Provider, ProviderDeliveryID, ProviderMessageID string
+	RFCMessageID, InReplyTo                         string
+	References                                      []string
+	From                                            model.Address
+	To, CC, EnvelopeTo                              []string
+	Subject, Text, HTML, RawPath                    string
+	SizeBytes                                       int64
+	ReceivedAt                                      time.Time
+	Attachments                                     []AttachmentInput
+}
+type OutboundRecord struct {
+	Inbox                                                model.Inbox
+	Provider, ProviderMessageID, RFCMessageID, InReplyTo string
+	References                                           []string
+	From                                                 model.Address
+	To, CC                                               []string
+	Subject, Text, HTML, RawPath                         string
+	SizeBytes                                            int64
+	SentAt                                               time.Time
+	ThreadID                                             string
+	Attachments                                          []AttachmentInput
+}
+
+func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Message, model.Event, bool, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	defer tx.Rollback()
+	var existing string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE provider=? AND provider_delivery_id=?`, r.Provider, r.ProviderDeliveryID).Scan(&existing)
+	if err == nil {
+		m, e := model.Message{}, model.Event{}
+		_ = tx.Rollback()
+		m, err = s.GetMessageByID(ctx, r.Inbox.AccountID, existing)
+		return m, e, true, err
+	}
+	if err != sql.ErrNoRows {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var quota, used int64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=?`, r.Inbox.AccountID).Scan(&quota, &used); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if quota > 0 && used+r.SizeBytes > quota {
+		return model.Message{}, model.Event{}, false, ErrQuota
+	}
+	threadID, err := findThreadTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, r.InReplyTo, r.References)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	now := nowText()
+	if threadID == "" {
+		threadID = idgen.New("thr")
+		if _, err = tx.ExecContext(ctx, `INSERT INTO threads(id,account_id,inbox_id,subject,created_at,updated_at) VALUES(?,?,?,?,?,?)`, threadID, r.Inbox.AccountID, r.Inbox.ID, r.Subject, now, now); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
+	}
+	id := idgen.New("msg")
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var names []string
+	for _, a := range r.Attachments {
+		aid := idgen.New("att")
+		if _, err = tx.ExecContext(ctx, `INSERT INTO attachments(id,message_id,filename,content_type,size_bytes,part_index,content_id) VALUES(?,?,?,?,?,?,?)`, aid, id, a.Filename, a.ContentType, a.Size, a.PartIndex, a.ContentID); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
+		names = append(names, a.Filename)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, r.Subject, r.From.Address, strings.Join(append(append([]string{}, r.To...), r.CC...), " "), r.Text+" "+stripHTMLText(r.HTML), strings.Join(names, " ")); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.AccountID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.received", id, map[string]any{"message_id": id, "inbox_id": r.Inbox.ID, "thread_id": threadID})
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	m, err := s.GetMessageByID(ctx, r.Inbox.AccountID, id)
+	return m, ev, false, err
+}
+
+func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply string, refs []string) (string, error) {
+	ids := make([]string, 0, len(refs)+1)
+	if strings.TrimSpace(inReply) != "" {
+		ids = append(ids, strings.TrimSpace(inReply))
+	}
+	for _, r := range refs {
+		if strings.TrimSpace(r) != "" {
+			ids = append(ids, strings.TrimSpace(r))
+		}
+	}
+	if len(ids) == 0 {
+		return "", nil
+	}
+	q := `SELECT thread_id FROM messages WHERE account_id=? AND inbox_id=? AND rfc_message_id IN (` + placeholders(len(ids)) + `) ORDER BY created_at DESC LIMIT 1`
+	args := []any{accountID, inboxID}
+	for _, v := range ids {
+		args = append(args, v)
+	}
+	var thread string
+	err := tx.QueryRowContext(ctx, q, args...).Scan(&thread)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return thread, err
+}
+
+func insertEventTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, typ, entity string, payload map[string]any) (model.Event, error) {
+	now := nowText()
+	res, err := tx.ExecContext(ctx, `INSERT INTO events(account_id,inbox_id,type,entity_id,payload_json,created_at) VALUES(?,?,?,?,?,?)`, accountID, nullString(inboxID), typ, entity, jsonString(payload), now)
+	if err != nil {
+		return model.Event{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return model.Event{}, err
+	}
+	return model.Event{ID: id, Cursor: fmt.Sprintf("evt_%d", id), AccountID: accountID, InboxID: inboxID, Type: typ, EntityID: entity, Payload: payload, CreatedAt: parseTime(now)}, nil
+}
+func stripHTMLText(v string) string {
+	r := strings.NewReplacer("<br>", " ", "<br/>", " ", "<br />", " ", "</p>", " ", "</div>", " ")
+	v = r.Replace(v)
+	var b strings.Builder
+	inside := false
+	for _, ch := range v {
+		if ch == '<' {
+			inside = true
+			continue
+		}
+		if ch == '>' {
+			inside = false
+			continue
+		}
+		if !inside {
+			b.WriteRune(ch)
+		}
+	}
+	return b.String()
+}
+
+func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
+	var m model.Message
+	var refs, to, cc, env, created string
+	var received, sent sql.NullString
+	var read, arch int
+	var has int
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &env, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has)
+	if err != nil {
+		return m, err
+	}
+	m.References = decodeStrings(refs)
+	m.To = decodeStrings(to)
+	m.CC = decodeStrings(cc)
+	m.EnvelopeTo = decodeStrings(env)
+	m.Read = read != 0
+	m.Archived = arch != 0
+	m.ReceivedAt = nullableTime(received)
+	m.SentAt = nullableTime(sent)
+	m.CreatedAt = parseTime(created)
+	m.HasAttachments = has != 0
+	return m, nil
+}
+
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.envelope_to_json,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id)`
+
+func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
+	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (model.Message, error) {
+	m, err := s.GetMessageByID(ctx, p.AccountID, id)
+	if err != nil {
+		return m, err
+	}
+	if !p.CanRead(m.InboxID) {
+		return model.Message{}, ErrForbidden
+	}
+	return m, nil
+}
+
+type MessageFilter struct {
+	InboxID, ThreadID, From, To string
+	Unread, HasAttachment       *bool
+	Limit                       int
+}
+
+func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
+	q := messageSelect + ` FROM messages m WHERE m.account_id=?`
+	args := []any{p.AccountID}
+	if f.InboxID != "" {
+		if !p.CanRead(f.InboxID) {
+			return nil, ErrForbidden
+		}
+		q += ` AND m.inbox_id=?`
+		args = append(args, f.InboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Message{}, nil
+		}
+		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if f.ThreadID != "" {
+		q += ` AND m.thread_id=?`
+		args = append(args, f.ThreadID)
+	}
+	if f.From != "" {
+		q += ` AND m.from_address LIKE ?`
+		args = append(args, "%"+normalizeAddress(f.From)+"%")
+	}
+	if f.Unread != nil {
+		q += ` AND m.is_read=?`
+		args = append(args, boolInt(!*f.Unread))
+	}
+	if f.HasAttachment != nil {
+		if *f.HasAttachment {
+			q += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		} else {
+			q += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		}
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	q += ` ORDER BY m.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read, archived *bool) error {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return ErrForbidden
+	}
+	if read != nil {
+		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=?`, boolInt(*read), id)
+		if err != nil {
+			return err
+		}
+	}
+	if archived != nil {
+		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_archived=? WHERE id=?`, boolInt(*archived), id)
+	}
+	return err
+}
+func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return "", 0, model.Event{}, ErrForbidden
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, id); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE id=?`, id); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, m.SizeBytes, p.AccountID); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, "message.deleted", id, map[string]any{"message_id": id})
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	return m.RawPath, m.SizeBytes, ev, nil
+}
+
+func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageID string) ([]model.Attachment, error) {
+	m, err := s.GetMessage(ctx, p, messageID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE message_id=? ORDER BY part_index`, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Attachment
+	for rows.Next() {
+		var a model.Attachment
+		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+func (s *Store) GetAttachment(ctx context.Context, p model.Principal, id string) (model.Attachment, model.Message, error) {
+	var a model.Attachment
+	err := s.read.QueryRowContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE id=?`, id).Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID)
+	if err == sql.ErrNoRows {
+		return a, model.Message{}, ErrNotFound
+	}
+	if err != nil {
+		return a, model.Message{}, err
+	}
+	m, err := s.GetMessage(ctx, p, a.MessageID)
+	return a, m, err
+}
+
+func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Thread, error) {
+	if inboxID != "" && !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id WHERE t.account_id=?`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		q += ` AND t.inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Thread{}, nil
+		}
+		q += ` AND t.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY t.id ORDER BY t.updated_at DESC LIMIT ?`
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Thread
+	for rows.Next() {
+		var t model.Thread
+		var last string
+		if err = rows.Scan(&t.ID, &t.InboxID, &t.Subject, &t.MessageCount, &last); err != nil {
+			return nil, err
+		}
+		t.LastMessageAt = parseTime(last)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func ftsQuery(q string) string {
+	fields := strings.Fields(q)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.ReplaceAll(f, `"`, `""`)
+		out = append(out, `"`+f+`"`)
+	}
+	return strings.Join(out, " AND ")
+}
+func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxID string, limit int) ([]model.Message, error) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return []model.Message{}, nil
+	}
+	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=?`
+	args := []any{ftsQuery(q), p.AccountID}
+	if inboxID != "" {
+		if !p.CanRead(inboxID) {
+			return nil, ErrForbidden
+		}
+		sqlq += ` AND m.inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Message{}, nil
+		}
+		sqlq += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	sqlq += ` ORDER BY m.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, sqlq, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

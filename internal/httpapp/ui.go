@@ -1,0 +1,311 @@
+package httpapp
+
+import (
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"net/http"
+	"strings"
+
+	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+)
+
+const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Open Agent Inbox</title><style>
+body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px}.muted{color:#666}input,select,textarea,button{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}button{cursor:pointer;background:#111;color:white;border-color:#111}.secondary{background:white;color:#111}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}</style></head><body><header><div><b>Open Agent Inbox</b>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log out</button></form>{{end}}</header>{{template "body" .}}</body></html>`
+
+func (s *Server) render(w http.ResponseWriter, body string, data any) {
+	t, err := template.New("page").Funcs(template.FuncMap{"bytes": formatBytes, "join": strings.Join}).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err = t.Execute(w, data); err != nil {
+		s.Log.Error("render", "error", err)
+	}
+}
+
+type pageData struct {
+	Title                   string
+	Principal               model.Principal
+	CSRF                    string
+	Account                 model.Account
+	Domains                 []model.Domain
+	Inboxes                 []model.Inbox
+	Messages                []model.Message
+	Keys                    []model.APIKey
+	Outbound                []outboundView
+	Hermes                  []hermesView
+	Message                 *model.Message
+	Attachments             []model.Attachment
+	Notice, Secret, Command string
+	HasUsers                bool
+}
+type outboundView struct{ ID, Name, Provider string }
+type hermesView struct {
+	ID, InboxID, Name, GatewayID string
+	LastAck                      int64
+}
+
+func (s *Server) home(w http.ResponseWriter, r *http.Request) {
+	has, err := s.Service.Store.HasUsers(r.Context())
+	if err != nil {
+		http.Error(w, "database error", 500)
+		return
+	}
+	if !has {
+		http.Redirect(w, r, "/setup", 303)
+		return
+	}
+	if _, err = r.Cookie("oai_session"); err == nil {
+		http.Redirect(w, r, "/dashboard", 303)
+		return
+	}
+	http.Redirect(w, r, "/login", 303)
+}
+
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account name</label>{{if eq .Title "Set up Open Agent Inbox"}}<input name="account" required placeholder="My Inbox">{{end}}<label>Email</label><input type="email" name="email" required><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
+
+func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
+	has, _ := s.Service.Store.HasUsers(r.Context())
+	if has {
+		http.Redirect(w, r, "/login", 303)
+		return
+	}
+	s.render(w, authBody, pageData{Title: "Set up Open Agent Inbox", CSRF: s.setPreAuthCSRF(w, r)})
+}
+func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
+	has, _ := s.Service.Store.HasUsers(r.Context())
+	if has {
+		http.Error(w, "setup complete", 403)
+		return
+	}
+	_ = r.ParseForm()
+	u, err := s.Service.Store.CreateAccountAndAdmin(r.Context(), r.Form.Get("account"), r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
+	if err != nil {
+		s.render(w, authBody, pageData{Title: "Set up Open Agent Inbox", Notice: err.Error(), CSRF: preAuthCSRF(r)})
+		return
+	}
+	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
+	if err != nil {
+		http.Error(w, "session error", 500)
+		return
+	}
+	s.setSessionCookie(w, r, tok)
+	http.Redirect(w, r, "/dashboard", 303)
+}
+func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
+	if !s.Service.Config.AllowRegistration {
+		http.Error(w, "registration is closed", 403)
+		return
+	}
+	s.render(w, authBody, pageData{Title: "Create account", CSRF: s.setPreAuthCSRF(w, r)})
+}
+func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
+	if !s.Service.Config.AllowRegistration {
+		http.Error(w, "registration is closed", 403)
+		return
+	}
+	_ = r.ParseForm()
+	name := r.Form.Get("account")
+	if name == "" {
+		name = strings.Split(r.Form.Get("email"), "@")[0]
+	}
+	u, err := s.Service.Store.CreateAccountAndAdmin(r.Context(), name, r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
+	if err != nil {
+		s.render(w, authBody, pageData{Title: "Create account", Notice: err.Error(), CSRF: preAuthCSRF(r)})
+		return
+	}
+	tok, _, _ := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
+	s.setSessionCookie(w, r, tok)
+	http.Redirect(w, r, "/dashboard", 303)
+}
+func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
+	s.render(w, authBody, pageData{Title: "Log in", CSRF: s.setPreAuthCSRF(w, r)})
+}
+func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r, s.Service.Config.TrustProxyHeaders)
+	if !s.loginLimiter.Allow(ip) {
+		http.Error(w, "too many login attempts", 429)
+		return
+	}
+	_ = r.ParseForm()
+	u, err := s.Service.Store.AuthenticateUser(r.Context(), r.Form.Get("email"), r.Form.Get("password"))
+	if err != nil {
+		s.render(w, authBody, pageData{Title: "Log in", Notice: "Invalid email or password", CSRF: preAuthCSRF(r)})
+		return
+	}
+	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
+	if err != nil {
+		http.Error(w, "session error", 500)
+		return
+	}
+	s.setSessionCookie(w, r, tok)
+	http.Redirect(w, r, "/dashboard", 303)
+}
+func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie("oai_session"); err == nil {
+		s.Service.Store.DeleteSession(r.Context(), c.Value)
+	}
+	s.clearSessionCookie(w)
+	http.Redirect(w, r, "/login", 303)
+}
+
+const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>Copy this secret now:</b><br><code>{{.Secret}}</code>{{if .Command}}<pre>{{.Command}}</pre>{{end}}</div>{{end}}
+<div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table>{{range .Domains}}<tr><td><b>{{.Name}}</b>{{if .CatchAllInboxID}}<br><span class="muted">catch-all: {{.CatchAllInboxID}}</span>{{end}}</td><td><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="inbox"><option value="">No catch-all</option>{{range $.Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><button class="secondary">Set</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required><button>Add domain</button></form></section>
+<section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><b>{{.Address}}</b><br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
+<div class="grid"><section class="card"><h2>API keys</h2>{{if .Keys}}<table><tr><th>Name</th><th>Scope</th></tr>{{range .Keys}}<tr><td>{{.Name}}<br><code>{{.Prefix}}…</code></td><td>{{if .Admin}}Admin{{else}}{{range $id,$role:=.Roles}}<code>{{$id}}</code> {{$role}}<br>{{end}}{{end}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/keys"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" placeholder="Hermes EA" required><label><input style="width:auto" type="checkbox" name="admin" value="1"> Account Admin key</label>{{range .Inboxes}}<label>{{.Address}}</label><select name="role_{{.ID}}"><option value="">No access</option><option>read</option><option>assistant</option><option>owner</option></select>{{end}}<button>Create key</button></form></section>
+<section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" value="Primary"><label>Provider</label><select name="provider"><option value="mailgun">Mailgun API</option><option value="smtp">SMTP</option></select><label>Configuration JSON</label><textarea name="config" rows="6" placeholder='{"api_key":"key-...","domain":"mg.example.com"}' required></textarea><button>Save provider</button></form><p class="muted">Assign a provider to an inbox with the API: <code>PATCH /v1/inboxes/{id}</code>.</p></section></div>
+<section class="card"><h2>Hermes Relay</h2>{{if .Hermes}}<table><tr><th>Name</th><th>Inbox</th><th>Gateway</th><th>Last event</th></tr>{{range .Hermes}}<tr><td>{{.Name}}</td><td><code>{{.InboxID}}</code></td><td><code>{{.GatewayID}}</code></td><td>{{.LastAck}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/hermes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="row"><div><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select></div><div><label>Connection name</label><input name="name" value="Hermes"></div></div><button>Create enrollment command</button></form></section>
+<section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><tr><th>When</th><th>From</th><th>Subject</th><th></th></tr>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{.From.Address}}</td><td>{{.Subject}}</td><td><a href="/ui/messages/{{.ID}}">Open</a></td></tr>{{end}}</table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
+
+func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin UI requires Admin", 403)
+		return
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	domains, _ := s.Service.Store.ListDomains(r.Context(), p.AccountID)
+	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
+	keys, _ := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
+	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
+	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
+	var msgs []model.Message
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		msgs, _ = s.Service.Store.SearchMessages(r.Context(), p, q, "", 100)
+	} else {
+		msgs, _ = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
+	}
+	ov := []outboundView{}
+	for _, c := range creds {
+		ov = append(ov, outboundView{c.ID, c.Name, c.Provider})
+	}
+	hv := []hermesView{}
+	for _, h := range conns {
+		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
+	}
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, Hermes: hv, Notice: r.URL.Query().Get("notice")})
+}
+
+func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if _, err := s.Service.Store.CreateDomain(r.Context(), p.AccountID, r.Form.Get("name")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Domain+created", 303)
+}
+func (s *Server) uiCatchAll(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.SetDomainCatchAll(r.Context(), p.AccountID, r.PathValue("id"), r.Form.Get("inbox")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Catch-all+updated", 303)
+}
+func (s *Server) uiCreateInbox(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if _, err := s.Service.Store.CreateInbox(r.Context(), p.AccountID, r.Form.Get("domain"), r.Form.Get("local"), r.Form.Get("display")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Inbox+created", 303)
+}
+func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
+	roles := map[string]string{}
+	for _, b := range boxes {
+		if role := r.Form.Get("role_" + b.ID); role != "" {
+			roles[b.ID] = role
+		}
+	}
+	_, plain, err := s.Service.Store.CreateAPIKey(r.Context(), p.AccountID, r.Form.Get("name"), r.Form.Get("admin") == "1", roles)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.renderSecretDashboard(w, r, "API key created", plain, "")
+}
+func (s *Server) uiOutbound(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(r.Form.Get("config")), &cfg); err != nil {
+		http.Error(w, "invalid configuration JSON", 400)
+		return
+	}
+	if _, err := s.Service.SaveOutboundCredential(r.Context(), p.AccountID, "", r.Form.Get("name"), r.Form.Get("provider"), cfg); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+saved", 303)
+}
+func (s *Server) uiHermes(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	tok, err := s.Service.Store.CreateHermesEnrollToken(r.Context(), p.AccountID, r.Form.Get("inbox"), r.Form.Get("name"), s.Service.Config.RelayEnrollTTL)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	cmd := fmt.Sprintf("hermes gateway enroll --token %s --connector-url %s", tok, baseWSURL(s.Service.Config.BaseURL))
+	s.renderSecretDashboard(w, r, "Hermes enrollment created", tok, cmd)
+}
+
+func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, notice, secret, command string) {
+	p := principal(r)
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	domains, _ := s.Service.Store.ListDomains(r.Context(), p.AccountID)
+	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
+	keys, _ := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
+	msgs, _ := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
+	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
+	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
+	ov := []outboundView{}
+	for _, c := range creds {
+		ov = append(ov, outboundView{c.ID, c.Name, c.Provider})
+	}
+	hv := []hermesView{}
+	for _, h := range conns {
+		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
+	}
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, Hermes: hv, Notice: notice, Secret: secret, Command: command})
+}
+
+const messageBody = `<p><a href="/dashboard">← Dashboard</a></p><section class="card"><h1>{{.Message.Subject}}</h1><p><b>From:</b> {{.Message.From.Address}}<br><b>To:</b> {{join .Message.To ", "}}<br><b>Mailbox:</b> <code>{{.Message.InboxID}}</code><br><b>Thread:</b> <code>{{.Message.ThreadID}}</code></p>{{if .Attachments}}<h3>Attachments</h3><ul>{{range .Attachments}}<li>{{.Filename}} · {{bytes .Size}}</li>{{end}}</ul>{{end}}<hr><div class="msgbody">{{.Message.Text}}</div>{{if .Message.HTML}}<details><summary>Sanitized HTML source</summary><pre>{{.Message.HTML}}</pre></details>{{end}}</section>`
+
+func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
+	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
+	s.render(w, messageBody, pageData{Title: m.Subject, Principal: p, CSRF: csrf(r), Message: &m, Attachments: atts})
+}
