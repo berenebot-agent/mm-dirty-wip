@@ -193,3 +193,73 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 		t.Fatalf("ack not persisted: %d", updated.LastAckEventID)
 	}
 }
+
+// A message.received event whose message was later deleted must be skipped
+// rather than tearing the socket down, which would reconnect-loop forever on
+// the same stale event.
+func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
+	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-test", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, _, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "relay-gone", RFCMessageID: "<gone@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Deleted", Text: "gone", RawPath: "messages/g.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err = st.DeleteMessage(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, ev, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "relay-live", RFCMessageID: "<live@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Live", Text: "live", RawPath: "messages/l.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	client := dialRawWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/relay", makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatalf("connection dropped instead of skipping deleted message: %v", err)
+	}
+	if inbound["type"] != "inbound" || inbound["bufferId"] != ev.Cursor {
+		t.Fatalf("expected live event %v, got %#v", ev.Cursor, inbound)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	updated, err := st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastAckEventID < ev.ID {
+		t.Fatalf("ack not persisted: %d", updated.LastAckEventID)
+	}
+}

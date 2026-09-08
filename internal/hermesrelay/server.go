@@ -306,7 +306,16 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 		if err == nil {
 			m, err := s.Store.GetMessageByID(ctx, h.AccountID, ev.EntityID)
 			if err != nil {
-				return err
+				if !errors.Is(err, store.ErrNotFound) {
+					return err
+				}
+				// The message was deleted between the event and delivery, so
+				// there is nothing to replay. Advance the durable cursor past
+				// it; otherwise every reconnect re-reads the same stale event
+				// and drops the socket in a tight loop.
+				_ = s.Store.AckHermesEvent(ctx, h.ID, ev.ID)
+				after = ev.ID
+				continue
 			}
 			if err := wr.JSON(map[string]any{"type": "inbound", "event": messageEvent(m), "bufferId": ev.Cursor}); err != nil {
 				return err
