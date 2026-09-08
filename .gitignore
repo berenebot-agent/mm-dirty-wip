@@ -1,7 +1,10 @@
 /data/
-.env
+.env*
 *.db
 *.db-wal
 *.db-shm
 *.log
+*.exe
+*.test
+*.prof
 .DS_Store
