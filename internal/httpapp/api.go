@@ -38,6 +38,7 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET/POST /v1/drafts`\n" +
 		"- `POST /v1/send` (Owner)\n" +
 		"- `POST /v1/messages/{id}/reply` (Owner)\n\n" +
+		"Send and reply accept optional attachments as base64 JSON: [{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"...\"}].\n\n" +
 		"Roles are assigned per mailbox: Read, Assistant, Owner. Admin is account-wide.\n"
 	fmt.Fprint(w, guide)
 }
@@ -50,7 +51,7 @@ func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "curl -H 'Authorization: Bearer oain_...' %s/v1/bootstrap\n", s.Service.Config.BaseURL)
 }
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Open Agent Inbox", "version": "v1"}, "servers": []map[string]string{{"url": s.Service.Config.BaseURL}}, "paths": map[string]any{"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities"}}, "/v1/inboxes": map[string]any{"get": map[string]any{"summary": "List inboxes"}}, "/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages"}}, "/v1/search": map[string]any{"get": map[string]any{"summary": "Search messages"}}, "/v1/events/stream": map[string]any{"get": map[string]any{"summary": "Replay and stream events"}}, "/v1/send": map[string]any{"post": map[string]any{"summary": "Send email as an Owner"}}}})
+	writeJSON(w, 200, map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Open Agent Inbox", "version": "v1"}, "servers": []map[string]string{{"url": s.Service.Config.BaseURL}}, "paths": map[string]any{"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities"}}, "/v1/inboxes": map[string]any{"get": map[string]any{"summary": "List inboxes"}}, "/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages"}}, "/v1/search": map[string]any{"get": map[string]any{"summary": "Search messages"}}, "/v1/events/stream": map[string]any{"get": map[string]any{"summary": "Replay and stream events"}}, "/v1/send": map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields."}}}})
 }
 
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -440,16 +441,17 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		InboxID string     `json:"inbox_id"`
-		From    string     `json:"from"`
-		To      stringList `json:"to"`
-		CC      stringList `json:"cc,omitempty"`
-		BCC     stringList `json:"bcc,omitempty"`
-		Subject string     `json:"subject"`
-		Text    string     `json:"text"`
-		HTML    string     `json:"html,omitempty"`
+		InboxID     string               `json:"inbox_id"`
+		From        string               `json:"from"`
+		To          stringList           `json:"to"`
+		CC          stringList           `json:"cc,omitempty"`
+		BCC         stringList           `json:"bcc,omitempty"`
+		Subject     string               `json:"subject"`
+		Text        string               `json:"text"`
+		HTML        string               `json:"html,omitempty"`
+		Attachments []app.SendAttachment `json:"attachments,omitempty"`
 	}
-	if !decodeJSON(w, r, &in) {
+	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
 	if in.InboxID == "" && in.From != "" {
@@ -475,7 +477,7 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "inbox_id or from is required")
 		return
 	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: in.InboxID, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: in.InboxID, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -488,11 +490,15 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	var in struct{ Text, HTML string }
-	if !decodeJSON(w, r, &in) {
+	var in struct {
+		Text        string               `json:"text"`
+		HTML        string               `json:"html,omitempty"`
+		Attachments []app.SendAttachment `json:"attachments,omitempty"`
+	}
+	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), principal(r), app.SendInput{InboxID: m.InboxID, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), principal(r), app.SendInput{InboxID: m.InboxID, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return

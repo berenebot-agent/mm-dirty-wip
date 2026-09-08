@@ -55,11 +55,27 @@ Mailgun configuration:
 {"api_key":"key-...","domain":"mg.example.com"}
 ```
 
+Brevo configuration:
+
+```json
+{"api_key":"xkeysib-..."}
+```
+
+Brevo requires the inbox sender address to be a verified sender in Brevo.
+
 SMTP configuration:
 
 ```json
 {"host":"smtp.example.com","port":587,"username":"user","password":"secret","security":"starttls"}
 ```
+
+Send and reply requests may include base64-encoded attachments:
+
+```json
+{"filename":"quote.pdf","content_type":"application/pdf","content":"<base64>"}
+```
+
+Use the object above in an `attachments` array. The application translates attachments to each provider's native format and stores sent attachment metadata with the raw MIME message.
 
 ## API
 

@@ -9,7 +9,10 @@ import (
 	smtpstd "net/smtp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"gatehouse-mail/internal/transport"
 )
 
 type Config struct {
@@ -17,7 +20,7 @@ type Config struct {
 	Port       int    `json:"port"`
 	Username   string `json:"username,omitempty"`
 	Password   string `json:"password,omitempty"`
-	Security   string `json:"security,omitempty"` // starttls|tls|plain
+	Security   string `json:"security,omitempty"`
 	FromDomain string `json:"from_domain,omitempty"`
 }
 
@@ -25,6 +28,28 @@ type SendRequest struct {
 	From string
 	To   []string
 	Raw  []byte
+}
+
+type outboundTransport struct{}
+
+var hostedMode atomic.Bool
+
+func init() { transport.RegisterOutbound(outboundTransport{}) }
+
+func SetHosted(hosted bool) { hostedMode.Store(hosted) }
+
+func (outboundTransport) Name() string        { return "smtp" }
+func (outboundTransport) Description() string { return "SMTP" }
+func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {
+	var c Config
+	if err := transport.DecodeOutboundConfig(cfg, &c); err != nil {
+		return transport.OutboundResult{}, err
+	}
+	all := append(append(append([]string{}, m.To...), m.CC...), m.BCC...)
+	if err := Send(ctx, c, SendRequest{From: m.FromAddress, To: all, Raw: m.RawMIME}, hostedMode.Load()); err != nil {
+		return transport.OutboundResult{}, err
+	}
+	return transport.OutboundResult{ProviderMessageID: "smtp"}, nil
 }
 
 func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
@@ -131,6 +156,7 @@ func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
 	}
 	return last
 }
+
 func publicIP(ip net.IP) bool {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false

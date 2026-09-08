@@ -146,9 +146,11 @@ A client disconnects after event N, receives events N+1..N+K after reconnect, an
 ### Deliverables
 
 - encrypted provider credential storage
-- outbound transport interface
+- outbound transport registry and interface
 - Mailgun HTTP sender
+- Brevo HTTP sender
 - generic SMTP sender with hosted-mode public-destination validation
+- outbound attachment support with per-provider translation
 - outbound-send rate limiting
 - draft CRUD
 - send endpoint

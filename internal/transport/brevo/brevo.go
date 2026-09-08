@@ -1,0 +1,144 @@
+package brevo
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"gatehouse-mail/internal/transport"
+)
+
+type Config struct {
+	APIKey  string `json:"api_key"`
+	APIBase string `json:"api_base,omitempty"`
+}
+
+type recipient struct {
+	Name  string `json:"name,omitempty"`
+	Email string `json:"email"`
+}
+
+type attachment struct {
+	Name    string `json:"name"`
+	Content []byte `json:"content"`
+}
+
+type payload struct {
+	Sender      recipient         `json:"sender"`
+	To          []recipient       `json:"to"`
+	CC          []recipient       `json:"cc,omitempty"`
+	BCC         []recipient       `json:"bcc,omitempty"`
+	ReplyTo     recipient         `json:"replyTo,omitempty"`
+	Subject     string            `json:"subject"`
+	TextContent string            `json:"textContent,omitempty"`
+	HTMLContent string            `json:"htmlContent,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Attachment  []attachment      `json:"attachment,omitempty"`
+}
+
+type response struct {
+	MessageID  string   `json:"messageId"`
+	MessageIDs []string `json:"messageIds"`
+}
+
+type outboundTransport struct{}
+
+func init() { transport.RegisterOutbound(outboundTransport{}) }
+
+func (outboundTransport) Name() string        { return "brevo" }
+func (outboundTransport) Description() string { return "Brevo API" }
+func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {
+	var c Config
+	if err := transport.DecodeOutboundConfig(cfg, &c); err != nil {
+		return transport.OutboundResult{}, err
+	}
+	res, err := Send(ctx, c, m)
+	if err != nil {
+		return transport.OutboundResult{}, err
+	}
+	return transport.OutboundResult{ProviderMessageID: res.ProviderMessageID}, nil
+}
+
+type SendResult struct {
+	ProviderMessageID string `json:"provider_message_id"`
+}
+
+func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResult, error) {
+	if strings.TrimSpace(c.APIKey) == "" {
+		return SendResult{}, fmt.Errorf("brevo api_key is required")
+	}
+	base := strings.TrimRight(c.APIBase, "/")
+	if base == "" {
+		base = "https://api.brevo.com"
+	}
+	p := payload{
+		Sender:      recipient{Email: m.FromAddress},
+		To:          recipients(m.To),
+		CC:          recipients(m.CC),
+		BCC:         recipients(m.BCC),
+		ReplyTo:     recipient{Email: m.FromAddress},
+		Subject:     m.Subject,
+		TextContent: m.Text,
+		HTMLContent: m.HTML,
+	}
+	if m.FromName != "" {
+		p.Sender.Name = m.FromName
+		p.ReplyTo.Name = m.FromName
+	}
+	if m.MessageID != "" || m.InReplyTo != "" || len(m.References) > 0 {
+		p.Headers = map[string]string{}
+		if m.MessageID != "" {
+			p.Headers["Message-ID"] = m.MessageID
+		}
+		if m.InReplyTo != "" {
+			p.Headers["In-Reply-To"] = m.InReplyTo
+		}
+		if len(m.References) > 0 {
+			p.Headers["References"] = strings.Join(m.References, " ")
+		}
+	}
+	for _, a := range m.Attachments {
+		p.Attachment = append(p.Attachment, attachment{Name: a.Filename, Content: a.Content})
+	}
+	body, err := json.Marshal(p)
+	if err != nil {
+		return SendResult{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v3/smtp/email", bytes.NewReader(body))
+	if err != nil {
+		return SendResult{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("api-key", c.APIKey)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return SendResult{}, err
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return SendResult{}, fmt.Errorf("brevo returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+	}
+	var result response
+	if err := json.Unmarshal(responseBody, &result); err != nil {
+		return SendResult{}, err
+	}
+	if result.MessageID == "" && len(result.MessageIDs) > 0 {
+		result.MessageID = result.MessageIDs[0]
+	}
+	return SendResult{ProviderMessageID: result.MessageID}, nil
+}
+
+func recipients(in []string) []recipient {
+	out := make([]recipient, 0, len(in))
+	for _, email := range in {
+		out = append(out, recipient{Email: email})
+	}
+	return out
+}

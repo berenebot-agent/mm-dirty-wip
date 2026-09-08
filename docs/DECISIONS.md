@@ -51,6 +51,9 @@ This file records architectural decisions the implementation should treat as set
 **V1 adapters:**
 - Mailgun HTTP API
 - generic SMTP
+- Brevo HTTP API
+
+Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific JSON configuration.
 
 **Reason:** Users retain provider choice, pricing, and sender reputation while hosted operation remains simple.
 

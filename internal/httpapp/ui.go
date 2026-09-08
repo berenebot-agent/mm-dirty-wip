@@ -9,6 +9,7 @@ import (
 
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
+	"gatehouse-mail/internal/transport"
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Open Agent Inbox</title><style>
@@ -36,6 +37,7 @@ type pageData struct {
 	Messages                []model.Message
 	Keys                    []model.APIKey
 	Outbound                []outboundView
+	OutboundProviders       []transport.OutboundTransport
 	Hermes                  []hermesView
 	Message                 *model.Message
 	Attachments             []model.Attachment
@@ -156,7 +158,7 @@ const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.Stora
 <div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table>{{range .Domains}}<tr><td><b>{{.Name}}</b>{{if .CatchAllInboxID}}<br><span class="muted">catch-all: {{.CatchAllInboxID}}</span>{{end}}</td><td><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="inbox"><option value="">No catch-all</option>{{range $.Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><button class="secondary">Set</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required><button>Add domain</button></form></section>
 <section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><b>{{.Address}}</b><br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
 <div class="grid"><section class="card"><h2>API keys</h2>{{if .Keys}}<table><tr><th>Name</th><th>Scope</th></tr>{{range .Keys}}<tr><td>{{.Name}}<br><code>{{.Prefix}}…</code></td><td>{{if .Admin}}Admin{{else}}{{range $id,$role:=.Roles}}<code>{{$id}}</code> {{$role}}<br>{{end}}{{end}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/keys"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" placeholder="Hermes EA" required><label><input style="width:auto" type="checkbox" name="admin" value="1"> Account Admin key</label>{{range .Inboxes}}<label>{{.Address}}</label><select name="role_{{.ID}}"><option value="">No access</option><option>read</option><option>assistant</option><option>owner</option></select>{{end}}<button>Create key</button></form></section>
-<section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" value="Primary"><label>Provider</label><select name="provider"><option value="mailgun">Mailgun API</option><option value="smtp">SMTP</option></select><label>Configuration JSON</label><textarea name="config" rows="6" placeholder='{"api_key":"key-...","domain":"mg.example.com"}' required></textarea><button>Save provider</button></form><p class="muted">Assign a provider to an inbox with the API: <code>PATCH /v1/inboxes/{id}</code>.</p></section></div>
+<section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" value="Primary"><label>Provider</label><select name="provider">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select><label>Configuration JSON</label><textarea name="config" rows="6" placeholder='{"api_key":"key-...","domain":"mg.example.com"}' required></textarea><button>Save provider</button></form><p class="muted">Assign a provider to an inbox with the API: <code>PATCH /v1/inboxes/{id}</code>.</p></section></div>
 <section class="card"><h2>Hermes Relay</h2>{{if .Hermes}}<table><tr><th>Name</th><th>Inbox</th><th>Gateway</th><th>Last event</th></tr>{{range .Hermes}}<tr><td>{{.Name}}</td><td><code>{{.InboxID}}</code></td><td><code>{{.GatewayID}}</code></td><td>{{.LastAck}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/hermes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="row"><div><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select></div><div><label>Connection name</label><input name="name" value="Hermes"></div></div><button>Create enrollment command</button></form></section>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><tr><th>When</th><th>From</th><th>Subject</th><th></th></tr>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{.From.Address}}</td><td>{{.Subject}}</td><td><a href="/ui/messages/{{.ID}}">Open</a></td></tr>{{end}}</table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
 
@@ -186,7 +188,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	for _, h := range conns {
 		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, Hermes: hv, Notice: r.URL.Query().Get("notice")})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: transport.ListOutbound(), Hermes: hv, Notice: r.URL.Query().Get("notice")})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -294,7 +296,7 @@ func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, n
 	for _, h := range conns {
 		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, Hermes: hv, Notice: notice, Secret: secret, Command: command})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: transport.ListOutbound(), Hermes: hv, Notice: notice, Secret: secret, Command: command})
 }
 
 const messageBody = `<p><a href="/dashboard">← Dashboard</a></p><section class="card"><h1>{{.Message.Subject}}</h1><p><b>From:</b> {{.Message.From.Address}}<br><b>To:</b> {{join .Message.To ", "}}<br><b>Mailbox:</b> <code>{{.Message.InboxID}}</code><br><b>Thread:</b> <code>{{.Message.ThreadID}}</code></p>{{if .Attachments}}<h3>Attachments</h3><ul>{{range .Attachments}}<li>{{.Filename}} · {{bytes .Size}}</li>{{end}}</ul>{{end}}<hr><div class="msgbody">{{.Message.Text}}</div>{{if .Message.HTML}}<details><summary>Sanitized HTML source</summary><pre>{{.Message.HTML}}</pre></details>{{end}}</section>`

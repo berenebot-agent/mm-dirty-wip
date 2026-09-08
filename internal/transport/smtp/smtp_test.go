@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gatehouse-mail/internal/transport"
 )
 
 func fakeSMTP(t *testing.T) (host string, port int, got <-chan string, closeFn func()) {
@@ -89,5 +91,29 @@ func TestPlainSMTPAndHostedSSRF(t *testing.T) {
 	}
 	if err := Send(ctx, Config{Host: "localhost", Port: port, Security: "bogus"}, SendRequest{}, false); err == nil {
 		t.Fatal("invalid security accepted")
+	}
+}
+
+func TestOutboundAdapterHostedFlagAndRawMIME(t *testing.T) {
+	host, port, got, closeFn := fakeSMTP(t)
+	defer closeFn()
+	SetHosted(false)
+	defer SetHosted(false)
+	raw := []byte("From: a@b.test\r\nTo: c@d.test\r\nSubject: hi\r\n\r\n-- attachment body --\r\n")
+	if _, err := (outboundTransport{}).Send(context.Background(), map[string]any{"host": host, "port": port, "security": "plain"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, RawMIME: raw}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case body := <-got:
+		if !strings.Contains(body, "attachment body") {
+			t.Fatalf("raw mime not delivered: %q", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no message")
+	}
+	SetHosted(true)
+	_, err := (outboundTransport{}).Send(context.Background(), map[string]any{"host": "127.0.0.1", "port": 25, "security": "plain"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, RawMIME: raw})
+	if err == nil || !strings.Contains(err.Error(), "public-routable") {
+		t.Fatalf("hosted flag not applied: %v", err)
 	}
 }

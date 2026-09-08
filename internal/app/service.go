@@ -20,9 +20,9 @@ import (
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
+	_ "gatehouse-mail/internal/transport/brevo"
 	_ "gatehouse-mail/internal/transport/cloudflare"
 	_ "gatehouse-mail/internal/transport/mailgun"
-	mg "gatehouse-mail/internal/transport/mailgun"
 	smtpt "gatehouse-mail/internal/transport/smtp"
 )
 
@@ -41,6 +41,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if err = os.MkdirAll(filepath.Join(cfg.DataDir, "messages", ".tmp"), 0o700); err != nil {
 		return nil, err
 	}
+	smtpt.SetHosted(cfg.Mode == "hosted")
 	return &Service{Config: cfg, Store: st, Hub: hub, EncryptionKey: key}, nil
 }
 
@@ -170,15 +171,22 @@ func (s *Service) DecryptOutboundCredential(c store.OutboundCredential) (map[str
 	return out, nil
 }
 
+type SendAttachment struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type,omitempty"`
+	Content     []byte `json:"content"`
+}
+
 type SendInput struct {
-	InboxID          string   `json:"inbox_id"`
-	To               []string `json:"to,omitempty"`
-	CC               []string `json:"cc,omitempty"`
-	BCC              []string `json:"bcc,omitempty"`
-	Subject          string   `json:"subject"`
-	Text             string   `json:"text"`
-	HTML             string   `json:"html,omitempty"`
-	ReplyToMessageID string   `json:"reply_to_message_id,omitempty"`
+	InboxID          string           `json:"inbox_id"`
+	To               []string         `json:"to,omitempty"`
+	CC               []string         `json:"cc,omitempty"`
+	BCC              []string         `json:"bcc,omitempty"`
+	Subject          string           `json:"subject"`
+	Text             string           `json:"text"`
+	HTML             string           `json:"html,omitempty"`
+	ReplyToMessageID string           `json:"reply_to_message_id,omitempty"`
+	Attachments      []SendAttachment `json:"attachments,omitempty"`
 }
 type SendResult struct {
 	Message           model.Message `json:"message"`
@@ -252,7 +260,14 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(inbox.Address, "@", 2)[1])
 	now := time.Now().UTC()
 	html := in.HTML
-	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cleanAddresses(in.CC), cleanAddresses(in.BCC), subject, in.Text, html, msgID, inReply, refs, now)
+	attachments, err := outboundAttachments(in.Attachments)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if size := attachmentsSize(attachments); size > s.Config.MaxMessageBytes {
+		return SendResult{}, fmt.Errorf("attachments exceed maximum message size")
+	}
+	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cleanAddresses(in.CC), cleanAddresses(in.BCC), subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -263,31 +278,29 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if acc.StorageQuotaBytes > 0 && acc.StorageUsedBytes+int64(len(raw)) > acc.StorageQuotaBytes {
 		return SendResult{}, store.ErrQuota
 	}
-	providerID := ""
-	switch cred.Provider {
-	case "mailgun":
-		var c mg.Config
-		if err = mapTo(cfg, &c); err != nil {
-			return SendResult{}, err
-		}
-		res, err := mg.Send(ctx, c, mg.SendRequest{From: formatFrom(inbox), To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, MessageID: msgID, InReplyTo: inReply, References: refs})
-		if err != nil {
-			return SendResult{}, err
-		}
-		providerID = res.ProviderMessageID
-	case "smtp":
-		var c smtpt.Config
-		if err = mapTo(cfg, &c); err != nil {
-			return SendResult{}, err
-		}
-		all := append(append(append([]string{}, to...), cleanAddresses(in.CC)...), cleanAddresses(in.BCC)...)
-		if err = smtpt.Send(ctx, c, smtpt.SendRequest{From: inbox.Address, To: all, Raw: raw}, s.Config.Mode == "hosted"); err != nil {
-			return SendResult{}, err
-		}
-		providerID = "smtp"
-	default:
-		return SendResult{}, fmt.Errorf("unknown provider")
+	provider, ok := transport.LookupOutbound(cred.Provider)
+	if !ok {
+		return SendResult{}, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider)
 	}
+	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
+		FromName:    inbox.DisplayName,
+		FromAddress: inbox.Address,
+		To:          to,
+		CC:          cleanAddresses(in.CC),
+		BCC:         cleanAddresses(in.BCC),
+		Subject:     subject,
+		Text:        in.Text,
+		HTML:        html,
+		MessageID:   msgID,
+		InReplyTo:   inReply,
+		References:  refs,
+		RawMIME:     raw,
+		Attachments: attachments,
+	})
+	if err != nil {
+		return SendResult{}, err
+	}
+	providerID := providerResult.ProviderMessageID
 	path := s.messagePath()
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return SendResult{}, err
@@ -296,7 +309,11 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 		return SendResult{}, err
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, path)
-	m, ev, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, ProviderMessageID: providerID, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), SentAt: now, ThreadID: threadID})
+	metadata := make([]store.AttachmentInput, 0, len(attachments))
+	for i, attachment := range attachments {
+		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
+	}
+	m, ev, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, ProviderMessageID: providerID, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), SentAt: now, ThreadID: threadID, Attachments: metadata})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -308,12 +325,38 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	}
 	return result, nil
 }
-func formatFrom(i model.Inbox) string {
-	if i.DisplayName == "" {
-		return i.Address
+func outboundAttachments(in []SendAttachment) ([]transport.OutboundAttachment, error) {
+	out := make([]transport.OutboundAttachment, 0, len(in))
+	for index, attachment := range in {
+		filename := mailparse.SafeAttachmentFilename(attachment.Filename, index+1, attachment.ContentType)
+		if len(attachment.Content) == 0 {
+			return nil, fmt.Errorf("attachment %q is empty", filename)
+		}
+		contentType := strings.TrimSpace(attachment.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		out = append(out, transport.OutboundAttachment{Filename: filename, ContentType: contentType, Content: attachment.Content})
 	}
-	return (&mail.Address{Name: i.DisplayName, Address: i.Address}).String()
+	return out, nil
 }
+
+func attachmentsSize(in []transport.OutboundAttachment) int64 {
+	var total int64
+	for _, attachment := range in {
+		total += int64(len(attachment.Content))
+	}
+	return total
+}
+
+func attachmentParts(in []transport.OutboundAttachment) []mailparse.Attachment {
+	out := make([]mailparse.Attachment, 0, len(in))
+	for _, attachment := range in {
+		out = append(out, mailparse.Attachment{Filename: attachment.Filename, ContentType: attachment.ContentType, Content: attachment.Content})
+	}
+	return out
+}
+
 func cleanAddresses(in []string) []string {
 	out := []string{}
 	seen := map[string]bool{}
@@ -344,11 +387,4 @@ func replySubject(s string) string {
 		return s
 	}
 	return "Re: " + s
-}
-func mapTo(in map[string]any, out any) error {
-	b, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(b, out)
 }

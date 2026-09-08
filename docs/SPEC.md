@@ -66,7 +66,10 @@ Users connect their own outbound provider.
 V1 supports:
 
 - Mailgun HTTP API
+- Brevo HTTP API
 - generic SMTP, including SES and other SMTP-compatible services
+
+Send and reply accept optional base64-encoded attachments. The application translates them to each provider's native format and stores sent attachment metadata alongside the raw MIME message.
 
 ### 3.5 Hosted and self-hosted from one codebase
 
@@ -295,10 +298,11 @@ For an unknown recipient, the domain's configured catch-all inbox receives the m
 
 Users configure:
 
-- Mailgun API credentials; or
+- Mailgun API credentials;
+- Brevo API credentials; or
 - generic SMTP credentials.
 
-Provider credentials are encrypted at rest.
+Provider credentials are encrypted at rest. Outbound adapters are registered through a provider registry, so provider-specific code remains behind a narrow transport package.
 
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 

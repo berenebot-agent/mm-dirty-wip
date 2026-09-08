@@ -21,6 +21,7 @@ import (
 type Address struct{ Name, Address string }
 type Attachment struct {
 	Filename, ContentType, ContentID string
+	Content                          []byte
 	Size                             int64
 	PartIndex                        int
 }
@@ -152,6 +153,10 @@ func walkPart(h textproto.MIMEHeader, r io.Reader, s *walkState) error {
 	}
 	return nil
 }
+func SafeAttachmentFilename(name string, index int, media string) string {
+	return safeFilename(name, index, media)
+}
+
 func safeFilename(name string, index int, media string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	if name != "" && name != "." {
@@ -274,7 +279,7 @@ func ExtractAttachment(path string, index int, w io.Writer) error {
 	return nil
 }
 
-func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time) ([]byte, error) {
+func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {
 	var b bytes.Buffer
 	w := bufio.NewWriter(&b)
 	fromHeader := from.Address
@@ -286,6 +291,9 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 	if len(cc) > 0 {
 		fmt.Fprintf(w, "Cc: %s\r\n", strings.Join(cc, ", "))
 	}
+	if len(bcc) > 0 {
+		fmt.Fprintf(w, "Bcc: %s\r\n", strings.Join(bcc, ", "))
+	}
 	fmt.Fprintf(w, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
 	fmt.Fprintf(w, "Date: %s\r\n", date.Format(time.RFC1123Z))
 	fmt.Fprintf(w, "Message-ID: %s\r\n", messageID)
@@ -296,25 +304,104 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		fmt.Fprintf(w, "References: %s\r\n", strings.Join(refs, " "))
 	}
 	fmt.Fprint(w, "MIME-Version: 1.0\r\n")
-	if html == "" {
-		fmt.Fprint(w, "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
+	if len(attachments) == 0 {
+		if html == "" {
+			fmt.Fprint(w, "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n")
+			qw := quotedprintable.NewWriter(w)
+			_, _ = qw.Write([]byte(text))
+			_ = qw.Close()
+			_ = w.Flush()
+			return b.Bytes(), nil
+		}
+		boundary := "=_oai_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		fmt.Fprintf(w, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
+		fmt.Fprintf(w, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
 		qw := quotedprintable.NewWriter(w)
 		_, _ = qw.Write([]byte(text))
 		_ = qw.Close()
+		fmt.Fprintf(w, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
+		qw = quotedprintable.NewWriter(w)
+		_, _ = qw.Write([]byte(html))
+		_ = qw.Close()
+		fmt.Fprintf(w, "\r\n--%s--\r\n", boundary)
 		_ = w.Flush()
 		return b.Bytes(), nil
 	}
-	boundary := "=_oai_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
-	fmt.Fprintf(w, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
-	fmt.Fprintf(w, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
-	qw := quotedprintable.NewWriter(w)
-	_, _ = qw.Write([]byte(text))
-	_ = qw.Close()
-	fmt.Fprintf(w, "\r\n--%s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
-	qw = quotedprintable.NewWriter(w)
-	_, _ = qw.Write([]byte(html))
-	_ = qw.Close()
-	fmt.Fprintf(w, "\r\n--%s--\r\n", boundary)
-	_ = w.Flush()
+	outerBoundary := "=_oai_mix_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+	fmt.Fprintf(w, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", outerBoundary)
+	if err := w.Flush(); err != nil {
+		return nil, err
+	}
+	outer := multipart.NewWriter(&b)
+	if err := outer.SetBoundary(outerBoundary); err != nil {
+		return nil, err
+	}
+	if html != "" {
+		altBoundary := "=_oai_alt_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", fmt.Sprintf("multipart/alternative; boundary=%q", altBoundary))
+		part, err := outer.CreatePart(h)
+		if err != nil {
+			return nil, err
+		}
+		alt := multipart.NewWriter(part)
+		if err = alt.SetBoundary(altBoundary); err != nil {
+			return nil, err
+		}
+		if err = writeTextPart(alt, "text/plain; charset=utf-8", text); err != nil {
+			return nil, err
+		}
+		if err = writeTextPart(alt, "text/html; charset=utf-8", html); err != nil {
+			return nil, err
+		}
+		if err = alt.Close(); err != nil {
+			return nil, err
+		}
+	} else if err := writeTextPart(outer, "text/plain; charset=utf-8", text); err != nil {
+		return nil, err
+	}
+	for index, attachment := range attachments {
+		filename := safeFilename(attachment.Filename, index+1, attachment.ContentType)
+		contentType := attachment.ContentType
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", mime.FormatMediaType(contentType, map[string]string{"name": filename}))
+		h.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+		h.Set("Content-Transfer-Encoding", "base64")
+		if attachment.ContentID != "" {
+			h.Set("Content-ID", "<"+strings.Trim(attachment.ContentID, "<>")+">")
+		}
+		part, err := outer.CreatePart(h)
+		if err != nil {
+			return nil, err
+		}
+		encoder := base64.NewEncoder(base64.StdEncoding, part)
+		if _, err = encoder.Write(attachment.Content); err != nil {
+			return nil, err
+		}
+		if err = encoder.Close(); err != nil {
+			return nil, err
+		}
+	}
+	if err := outer.Close(); err != nil {
+		return nil, err
+	}
 	return b.Bytes(), nil
+}
+
+func writeTextPart(w *multipart.Writer, contentType, body string) error {
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Type", contentType)
+	h.Set("Content-Transfer-Encoding", "quoted-printable")
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return err
+	}
+	qw := quotedprintable.NewWriter(part)
+	if _, err = qw.Write([]byte(body)); err != nil {
+		return err
+	}
+	return qw.Close()
 }

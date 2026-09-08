@@ -244,14 +244,15 @@ type OutboundTransport interface {
 }
 ```
 
-V1 implementations:
+V1 implementations register through the outbound transport registry:
 
 ```text
 Mailgun HTTP API
 Generic SMTP
+Brevo HTTP API
 ```
 
-SES uses the generic SMTP path initially.
+Each adapter receives decrypted provider-specific JSON configuration. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
 Hosted-mode generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts.
 

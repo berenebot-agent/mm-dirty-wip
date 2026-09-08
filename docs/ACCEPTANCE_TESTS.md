@@ -88,9 +88,12 @@
 1. Configure Mailgun outbound credentials.
 2. Send external email.
 3. Verify provider message ID is recorded.
-4. Configure generic SMTP in another test account.
-5. Send external email successfully.
-6. In hosted mode, configure SMTP to a loopback/private/link-local target and verify the connection is rejected before dialing.
+4. Configure Brevo outbound credentials.
+5. Send external email and verify the Brevo provider message ID is recorded.
+6. Configure generic SMTP in another test account.
+7. Send external email successfully.
+8. In hosted mode, configure SMTP to a loopback/private/link-local target and verify the connection is rejected before dialing.
+9. Send with a base64-JSON attachment and verify the attachment is delivered and stored, then downloadable from the sent message.
 
 ## J. Send idempotency
 

@@ -10,6 +10,7 @@ import (
 
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/transport"
 )
 
 type OutboundCredential struct {
@@ -19,8 +20,8 @@ type OutboundCredential struct {
 
 func (s *Store) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider, encrypted string) (OutboundCredential, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider != "mailgun" && provider != "smtp" {
-		return OutboundCredential{}, fmt.Errorf("provider must be mailgun or smtp")
+	if _, ok := transport.LookupOutbound(provider); !ok {
+		return OutboundCredential{}, fmt.Errorf("unknown outbound provider %q", provider)
 	}
 	now := nowText()
 	if id == "" {
@@ -132,7 +133,15 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, r.Subject, r.From.Address, strings.Join(append(append([]string{}, r.To...), r.CC...), " "), r.Text+" "+stripHTMLText(r.HTML), ""); err != nil {
+	var attachmentNames []string
+	for _, a := range r.Attachments {
+		aid := idgen.New("att")
+		if _, err = tx.ExecContext(ctx, `INSERT INTO attachments(id,message_id,filename,content_type,size_bytes,part_index,content_id) VALUES(?,?,?,?,?,?,?)`, aid, id, a.Filename, a.ContentType, a.Size, a.PartIndex, a.ContentID); err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+		attachmentNames = append(attachmentNames, a.Filename)
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, r.Subject, r.From.Address, strings.Join(append(append([]string{}, r.To...), r.CC...), " "), r.Text+" "+stripHTMLText(r.HTML), strings.Join(attachmentNames, " ")); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.AccountID); err != nil {
