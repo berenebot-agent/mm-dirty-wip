@@ -64,3 +64,38 @@
     });
   });
 })();
+
+(function () {
+  var dlg = document.getElementById('key-dialog');
+  if (!dlg) {
+    return;
+  }
+  var sel = document.getElementById('key-type');
+  var form = dlg.querySelector('form');
+
+  function sync() {
+    document.querySelectorAll('.key-fields').forEach(function (fs) {
+      var active = fs.getAttribute('data-type') === sel.value;
+      fs.style.display = active ? '' : 'none';
+      fs.querySelectorAll('input,select').forEach(function (el) {
+        el.disabled = !active;
+      });
+    });
+  }
+
+  sel.addEventListener('change', sync);
+  var add = document.getElementById('add-key');
+  if (add) {
+    add.addEventListener('click', function () {
+      form.reset();
+      sync();
+      dlg.showModal();
+    });
+  }
+  var cancel = document.getElementById('key-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();

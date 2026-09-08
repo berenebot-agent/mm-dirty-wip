@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -29,21 +30,20 @@ func (s *Server) render(w http.ResponseWriter, body string, data any) {
 }
 
 type pageData struct {
-	Title                   string
-	Principal               model.Principal
-	CSRF                    string
-	Account                 model.Account
-	Domains                 []model.Domain
-	Inboxes                 []model.Inbox
-	Messages                []model.Message
-	Keys                    []model.APIKey
-	Outbound                []outboundView
-	OutboundProviders       []outboundProviderView
-	Hermes                  []hermesView
-	Message                 *model.Message
-	Attachments             []model.Attachment
-	Notice, Secret, Command string
-	HasUsers                bool
+	Title                       string
+	Principal                   model.Principal
+	CSRF                        string
+	Account                     model.Account
+	Domains                     []model.Domain
+	Inboxes                     []model.Inbox
+	Messages                    []model.Message
+	Credentials                 []credentialView
+	Outbound                    []outboundView
+	OutboundProviders           []outboundProviderView
+	Message                     *model.Message
+	Attachments                 []model.Attachment
+	Notice, SecretLabel, Secret string
+	HasUsers                    bool
 }
 type outboundView struct {
 	ID, Name, Provider, ConfigJSON string
@@ -53,9 +53,8 @@ type outboundProviderView struct {
 	Name, Description string
 	Fields            []transport.ConfigField
 }
-type hermesView struct {
-	ID, InboxID, Name, GatewayID string
-	LastAck                      int64
+type credentialView struct {
+	Name, Type, Scope string
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
@@ -162,14 +161,14 @@ func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", 303)
 }
 
-const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>Copy this secret now:</b><br><code>{{.Secret}}</code>{{if .Command}}<pre>{{.Command}}</pre>{{end}}</div>{{end}}
+const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
 <div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table>{{range .Domains}}<tr><td><b>{{.Name}}</b>{{if .CatchAllInboxID}}<br><span class="muted">catch-all: {{.CatchAllInboxID}}</span>{{end}}</td><td><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="inbox"><option value="">No catch-all</option>{{range $.Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><button class="secondary">Set</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required><button>Add domain</button></form></section>
 <section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><b>{{.Address}}</b><br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
-<div class="grid"><section class="card"><h2>API keys</h2>{{if .Keys}}<table><tr><th>Name</th><th>Scope</th></tr>{{range .Keys}}<tr><td>{{.Name}}<br><code>{{.Prefix}}…</code></td><td>{{if .Admin}}Admin{{else}}{{range $id,$role:=.Roles}}<code>{{$id}}</code> {{$role}}<br>{{end}}{{end}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/keys"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" placeholder="Hermes EA" required><label><input style="width:auto" type="checkbox" name="admin" value="1"> Account Admin key</label>{{range .Inboxes}}<label>{{.Address}}</label><select name="role_{{.ID}}"><option value="">No access</option><option>read</option><option>assistant</option><option>owner</option></select>{{end}}<button>Create key</button></form></section>
+<div class="grid"><section class="card"><h2>Keys &amp; connections</h2>{{if .Credentials}}<table><tr><th>Name</th><th>Type</th><th>Scope</th></tr>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Scope}}</td></tr>{{end}}</table>{{else}}<p class="muted">No keys yet.</p>{{end}}<button type="button" id="add-key">Create key</button></section>
 <section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table><tr><th>Name</th><th>Provider</th><th>Status</th><th></th></tr>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td>{{if .Active}}<span class="pill">Active</span>{{else}}<form method="post" action="/ui/outbound/{{.ID}}/active"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Set active</button></form>{{end}}</td><td class="row"><button type="button" class="secondary edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}">Edit</button><form method="post" action="/ui/outbound/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Delete</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<button type="button" id="add-provider">Add outbound provider</button><p class="muted">The active provider is used for all sending.</p></section></div>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Name</label><input name="name" value="Primary" required><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} required{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="row"><button>Save provider</button><button type="button" class="secondary" id="provider-cancel">Cancel</button></div></form></dialog>
+<dialog id="key-dialog"><form method="post" action="/ui/keys"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input style="width:auto" type="checkbox" name="admin" value="1"> Account Admin key</label>{{range .Inboxes}}<label>{{.Address}}</label><select name="role_{{.ID}}"><option value="">No access</option><option>read</option><option>assistant</option><option>owner</option></select>{{end}}</fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select></fieldset><div class="row"><button>Create</button><button type="button" class="secondary" id="key-cancel">Cancel</button></div></form></dialog>
 <script src="/assets/app.js" defer></script>
-<section class="card"><h2>Hermes Relay</h2>{{if .Hermes}}<table><tr><th>Name</th><th>Inbox</th><th>Gateway</th><th>Last event</th></tr>{{range .Hermes}}<tr><td>{{.Name}}</td><td><code>{{.InboxID}}</code></td><td><code>{{.GatewayID}}</code></td><td>{{.LastAck}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/hermes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="row"><div><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select></div><div><label>Connection name</label><input name="name" value="Hermes"></div></div><button>Create enrollment command</button></form></section>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><tr><th>When</th><th>From</th><th>Subject</th><th></th></tr>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{.From.Address}}</td><td>{{.Subject}}</td><td><a href="/ui/messages/{{.ID}}">Open</a></td></tr>{{end}}</table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -191,11 +190,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		msgs, _ = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
 	}
 	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
-	hv := []hermesView{}
-	for _, h := range conns {
-		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
-	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: outboundProviderViews(), Hermes: hv, Notice: r.URL.Query().Get("notice")})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Notice: r.URL.Query().Get("notice")})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +235,15 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
+	if r.Form.Get("type") == "hermes" {
+		gatewayID, secret, deliveryKey, err := s.Service.CreateHermesRelay(r.Context(), p, r.Form.Get("inbox"), r.Form.Get("name"))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		s.renderSecretDashboard(w, r, "Hermes relay connection created", "Paste these lines into the gateway .env", hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, secret, deliveryKey))
+		return
+	}
 	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
 	roles := map[string]string{}
 	for _, b := range boxes {
@@ -252,7 +256,7 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.renderSecretDashboard(w, r, "API key created", plain, "")
+	s.renderSecretDashboard(w, r, "API key created", "Copy this API key now", plain)
 }
 func (s *Server) uiOutbound(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -404,22 +408,65 @@ func outboundProviderViews() []outboundProviderView {
 	}
 	return out
 }
-func (s *Server) uiHermes(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
+func credentialViews(keys []model.APIKey, conns []store.HermesConnection) []credentialView {
+	out := make([]credentialView, 0, len(keys)+len(conns))
+	for _, k := range keys {
+		out = append(out, credentialView{Name: k.Name, Type: "API key", Scope: apiKeyScope(k)})
 	}
-	tok, err := s.Service.Store.CreateHermesEnrollToken(r.Context(), p.AccountID, r.Form.Get("inbox"), r.Form.Get("name"), s.Service.Config.RelayEnrollTTL)
-	if err != nil {
-		http.Error(w, err.Error(), 400)
-		return
+	for _, h := range conns {
+		out = append(out, credentialView{Name: h.Name, Type: "Hermes relay", Scope: "Owner"})
 	}
-	cmd := fmt.Sprintf("hermes gateway enroll --token %s --connector-url %s", tok, baseWSURL(s.Service.Config.BaseURL))
-	s.renderSecretDashboard(w, r, "Hermes enrollment created", tok, cmd)
+	return out
 }
 
-func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, notice, secret, command string) {
+func apiKeyScope(k model.APIKey) string {
+	if k.Admin {
+		return "Admin"
+	}
+	if len(k.Roles) == 0 {
+		return "None"
+	}
+	seen := map[string]bool{}
+	roles := make([]string, 0, len(k.Roles))
+	for _, role := range k.Roles {
+		if !seen[role] {
+			seen[role] = true
+			roles = append(roles, role)
+		}
+	}
+	sort.Slice(roles, func(i, j int) bool { return roleRank(roles[i]) < roleRank(roles[j]) })
+	for i, role := range roles {
+		roles[i] = titleRole(role)
+	}
+	return strings.Join(roles, ", ")
+}
+
+func roleRank(role string) int {
+	switch role {
+	case "owner":
+		return 0
+	case "assistant":
+		return 1
+	case "read":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func titleRole(role string) string {
+	if role == "" {
+		return role
+	}
+	return strings.ToUpper(role[:1]) + role[1:]
+}
+
+func hermesEnvBlock(baseURL, gatewayID, secret, deliveryKey string) string {
+	return fmt.Sprintf("GATEWAY_RELAY_URL=%s\nGATEWAY_RELAY_ID=%s\nGATEWAY_RELAY_SECRET=%s\nGATEWAY_RELAY_DELIVERY_KEY=%s",
+		baseURL, gatewayID, secret, deliveryKey)
+}
+
+func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, notice, secretLabel, secret string) {
 	p := principal(r)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	domains, _ := s.Service.Store.ListDomains(r.Context(), p.AccountID)
@@ -429,11 +476,7 @@ func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, n
 	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
 	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
 	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
-	hv := []hermesView{}
-	for _, h := range conns {
-		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
-	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: outboundProviderViews(), Hermes: hv, Notice: notice, Secret: secret, Command: command})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 const messageBody = `<p><a href="/dashboard">← Dashboard</a></p><section class="card"><h1>{{.Message.Subject}}</h1><p><b>From:</b> {{.Message.From.Address}}<br><b>To:</b> {{join .Message.To ", "}}<br><b>Mailbox:</b> <code>{{.Message.InboxID}}</code><br><b>Thread:</b> <code>{{.Message.ThreadID}}</code></p>{{if .Attachments}}<h3>Attachments</h3><ul>{{range .Attachments}}<li>{{.Filename}} · {{bytes .Size}}</li>{{end}}</ul>{{end}}<hr><div class="msgbody">{{.Message.Text}}</div>{{if .Message.HTML}}<details><summary>Sanitized HTML source</summary><pre>{{.Message.HTML}}</pre></details>{{end}}</section>`

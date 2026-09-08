@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/cryptox"
 	"gatehouse-mail/internal/events"
@@ -172,6 +173,47 @@ func (s *Service) DecryptOutboundCredential(c store.OutboundCredential) (map[str
 		return nil, err
 	}
 	return out, nil
+}
+
+// CreateHermesRelay issues a relay connection's credentials directly and
+// returns the plaintext secret and delivery key exactly once. The gateway id is
+// generated here so the operator only has to paste the printed .env block.
+func (s *Service) CreateHermesRelay(ctx context.Context, p model.Principal, inboxID, name string) (string, string, string, error) {
+	if !p.Admin {
+		return "", "", "", store.ErrForbidden
+	}
+	if _, err := s.Store.GetInboxInternal(ctx, p.AccountID, inboxID); err != nil {
+		return "", "", "", err
+	}
+	rand, err := auth.RandomToken(6)
+	if err != nil {
+		return "", "", "", err
+	}
+	gatewayID := "gw-" + rand
+	secret, err := auth.RandomToken(32)
+	if err != nil {
+		return "", "", "", err
+	}
+	deliveryKey, err := auth.RandomToken(32)
+	if err != nil {
+		return "", "", "", err
+	}
+	secEnc, err := cryptox.Encrypt(s.EncryptionKey, []byte(secret))
+	if err != nil {
+		return "", "", "", err
+	}
+	delEnc, err := cryptox.Encrypt(s.EncryptionKey, []byte(deliveryKey))
+	if err != nil {
+		return "", "", "", err
+	}
+	rec := store.EnrollRecord{AccountID: p.AccountID, InboxID: inboxID, Name: strings.TrimSpace(name)}
+	if rec.Name == "" {
+		rec.Name = "Hermes"
+	}
+	if _, err = s.Store.CreateHermesConnection(ctx, rec, gatewayID, secEnc, delEnc); err != nil {
+		return "", "", "", err
+	}
+	return gatewayID, secret, deliveryKey, nil
 }
 
 type SendAttachment struct {

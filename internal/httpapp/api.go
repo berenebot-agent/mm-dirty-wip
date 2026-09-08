@@ -914,12 +914,12 @@ func (s *Server) apiHermesEnroll(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	tok, err := s.Service.Store.CreateHermesEnrollToken(r.Context(), p.AccountID, in.InboxID, in.Name, s.Service.Config.RelayEnrollTTL)
+	gatewayID, secret, deliveryKey, err := s.Service.CreateHermesRelay(r.Context(), p, in.InboxID, in.Name)
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"enrollment_token": tok, "connector_url": baseWSURL(s.Service.Config.BaseURL), "command": fmt.Sprintf("hermes gateway enroll --token %s --connector-url %s", tok, baseWSURL(s.Service.Config.BaseURL))})
+	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "delivery_key": deliveryKey, "connector_url": s.Service.Config.BaseURL, "env": hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, secret, deliveryKey)})
 }
 func (s *Server) apiHermesList(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

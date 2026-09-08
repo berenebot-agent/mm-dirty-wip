@@ -74,7 +74,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/outbound", s.withSession(s.withCSRF(s.uiOutbound)))
 	m.HandleFunc("POST /ui/outbound/{id}/active", s.withSession(s.withCSRF(s.uiOutboundActive)))
 	m.HandleFunc("POST /ui/outbound/{id}/delete", s.withSession(s.withCSRF(s.uiOutboundDelete)))
-	m.HandleFunc("POST /ui/hermes", s.withSession(s.withCSRF(s.uiHermes)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 
 	// Discovery.

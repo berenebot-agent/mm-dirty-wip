@@ -148,6 +148,12 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 **Reason:** Restoring encrypted credentials requires both application data and the root secret.
 
+## D018 — Direct relay credential issuance
+
+**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block. The one-time enrollment-token flow (`POST /relay/enroll` plus `hermes gateway enroll`) remains for the CLI and hosted provisioning.
+
+**Reason:** A self-hosted operator should be able to create a relay connection and paste the resulting environment variables without a separate token-exchange step or a hosted identity token.
+
 ## Future extension register
 
 Potential future additions include:
