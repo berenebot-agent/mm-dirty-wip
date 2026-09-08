@@ -327,13 +327,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	box, err := inboxByAddress(ctx, svc.Store, p, ident.Address)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cid := cred.ID
-	if err = svc.Store.UpdateInbox(ctx, p, box.ID, "", nil, &cid); err != nil {
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("POST", "/v1/send", strings.NewReader(`{"from":"fox@example.com","to":"friend@example.net","subject":"hello","text":"hi"}`))

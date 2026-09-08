@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gatehouse-mail/internal/model"
@@ -13,7 +14,7 @@ import (
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Open Agent Inbox</title><style>
-body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px}.muted{color:#666}input,select,textarea,button{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}button{cursor:pointer;background:#111;color:white;border-color:#111}.secondary{background:white;color:#111}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}</style></head><body><header><div><b>Open Agent Inbox</b>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log out</button></form>{{end}}</header>{{template "body" .}}</body></html>`
+body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px}.muted{color:#666}input,select,textarea,button{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}button{cursor:pointer;background:#111;color:white;border-color:#111}.secondary{background:white;color:#111}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}dialog{border:0;border-radius:10px;padding:20px;max-width:480px;width:92%}dialog::backdrop{background:rgba(0,0,0,.45)}</style></head><body><header><div><b>Open Agent Inbox</b>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log out</button></form>{{end}}</header>{{template "body" .}}</body></html>`
 
 func (s *Server) render(w http.ResponseWriter, body string, data any) {
 	t, err := template.New("page").Funcs(template.FuncMap{"bytes": formatBytes, "join": strings.Join}).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
@@ -37,14 +38,21 @@ type pageData struct {
 	Messages                []model.Message
 	Keys                    []model.APIKey
 	Outbound                []outboundView
-	OutboundProviders       []transport.OutboundTransport
+	OutboundProviders       []outboundProviderView
 	Hermes                  []hermesView
 	Message                 *model.Message
 	Attachments             []model.Attachment
 	Notice, Secret, Command string
 	HasUsers                bool
 }
-type outboundView struct{ ID, Name, Provider string }
+type outboundView struct {
+	ID, Name, Provider, ConfigJSON string
+	Active                         bool
+}
+type outboundProviderView struct {
+	Name, Description string
+	Fields            []transport.ConfigField
+}
 type hermesView struct {
 	ID, InboxID, Name, GatewayID string
 	LastAck                      int64
@@ -158,7 +166,9 @@ const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.Stora
 <div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table>{{range .Domains}}<tr><td><b>{{.Name}}</b>{{if .CatchAllInboxID}}<br><span class="muted">catch-all: {{.CatchAllInboxID}}</span>{{end}}</td><td><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="inbox"><option value="">No catch-all</option>{{range $.Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><button class="secondary">Set</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required><button>Add domain</button></form></section>
 <section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><b>{{.Address}}</b><br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
 <div class="grid"><section class="card"><h2>API keys</h2>{{if .Keys}}<table><tr><th>Name</th><th>Scope</th></tr>{{range .Keys}}<tr><td>{{.Name}}<br><code>{{.Prefix}}…</code></td><td>{{if .Admin}}Admin{{else}}{{range $id,$role:=.Roles}}<code>{{$id}}</code> {{$role}}<br>{{end}}{{end}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/keys"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" placeholder="Hermes EA" required><label><input style="width:auto" type="checkbox" name="admin" value="1"> Account Admin key</label>{{range .Inboxes}}<label>{{.Address}}</label><select name="role_{{.ID}}"><option value="">No access</option><option>read</option><option>assistant</option><option>owner</option></select>{{end}}<button>Create key</button></form></section>
-<section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" value="Primary"><label>Provider</label><select name="provider">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select><label>Configuration JSON</label><textarea name="config" rows="6" placeholder='{"api_key":"key-...","domain":"mg.example.com"}' required></textarea><button>Save provider</button></form><p class="muted">Assign a provider to an inbox with the API: <code>PATCH /v1/inboxes/{id}</code>.</p></section></div>
+<section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table><tr><th>Name</th><th>Provider</th><th>Status</th><th></th></tr>{{range .Outbound}}<tr><td>{{.Name}}</td><td>{{.Provider}}</td><td>{{if .Active}}<span class="pill">Active</span>{{else}}<form method="post" action="/ui/outbound/{{.ID}}/active"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Set active</button></form>{{end}}</td><td class="row"><button type="button" class="secondary edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}">Edit</button><form method="post" action="/ui/outbound/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Delete</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<button type="button" onclick="openProviderDialog()">Add outbound provider</button><p class="muted">The active provider is used for all sending.</p></section></div>
+<dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Name</label><input name="name" value="Primary" required><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} required{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="row"><button>Save provider</button><button type="button" class="secondary" onclick="document.getElementById('provider-dialog').close()">Cancel</button></div></form></dialog>
+<script>(function(){var dlg=document.getElementById('provider-dialog');if(!dlg){return;}var sel=document.getElementById('provider-select');function sync(){document.querySelectorAll('.provider-fields').forEach(function(fs){var active=fs.getAttribute('data-provider')===sel.value;fs.style.display=active?'':'none';fs.querySelectorAll('input,select').forEach(function(el){el.disabled=!active;});});}sel.addEventListener('change',sync);window.openProviderDialog=function(){var f=dlg.querySelector('form');f.reset();f.querySelector('[name=id]').value='';f.querySelector('[name=name]').value='Primary';sync();dlg.showModal();};document.querySelectorAll('.edit-provider').forEach(function(btn){btn.addEventListener('click',function(){var f=dlg.querySelector('form');f.reset();f.querySelector('[name=id]').value=btn.dataset.id;f.querySelector('[name=name]').value=btn.dataset.name;sel.value=btn.dataset.provider;var cfg={};try{cfg=JSON.parse(btn.dataset.config||'{}');}catch(e){cfg={};}f.querySelectorAll('input,select').forEach(function(el){if(el.name&&el.name.indexOf('cfg_')===0){var key=el.name.split('_').slice(2).join('_');if(cfg[key]!==undefined&&cfg[key]!==null){el.value=String(cfg[key]);}}});sync();dlg.showModal();});});})();</script>
 <section class="card"><h2>Hermes Relay</h2>{{if .Hermes}}<table><tr><th>Name</th><th>Inbox</th><th>Gateway</th><th>Last event</th></tr>{{range .Hermes}}<tr><td>{{.Name}}</td><td><code>{{.InboxID}}</code></td><td><code>{{.GatewayID}}</code></td><td>{{.LastAck}}</td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/hermes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><div class="row"><div><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select></div><div><label>Connection name</label><input name="name" value="Hermes"></div></div><button>Create enrollment command</button></form></section>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><tr><th>When</th><th>From</th><th>Subject</th><th></th></tr>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{.From.Address}}</td><td>{{.Subject}}</td><td><a href="/ui/messages/{{.ID}}">Open</a></td></tr>{{end}}</table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
 
@@ -180,15 +190,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	} else {
 		msgs, _ = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
 	}
-	ov := []outboundView{}
-	for _, c := range creds {
-		ov = append(ov, outboundView{c.ID, c.Name, c.Provider})
-	}
+	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
 	hv := []hermesView{}
 	for _, h := range conns {
 		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: transport.ListOutbound(), Hermes: hv, Notice: r.URL.Query().Get("notice")})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: outboundProviderViews(), Hermes: hv, Notice: r.URL.Query().Get("notice")})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -253,16 +260,149 @@ func (s *Server) uiOutbound(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
-	var cfg map[string]any
-	if err := json.Unmarshal([]byte(r.Form.Get("config")), &cfg); err != nil {
-		http.Error(w, "invalid configuration JSON", 400)
+	id := strings.TrimSpace(r.Form.Get("id"))
+	provider := strings.ToLower(strings.TrimSpace(r.Form.Get("provider")))
+	t, ok := transport.LookupOutbound(provider)
+	if !ok {
+		http.Error(w, "unknown provider", 400)
 		return
 	}
-	if _, err := s.Service.SaveOutboundCredential(r.Context(), p.AccountID, "", r.Form.Get("name"), r.Form.Get("provider"), cfg); err != nil {
+	var existing store.OutboundCredential
+	sameProvider := false
+	if id != "" {
+		if e, err := s.Service.Store.GetOutboundCredential(r.Context(), p.AccountID, id); err == nil {
+			existing = e
+			sameProvider = e.Provider == provider
+		}
+	}
+	cfg, err := outboundConfigFromForm(t, r, id == "" || !sameProvider)
+	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if sameProvider {
+		if old, err := s.Service.DecryptOutboundCredential(existing); err == nil {
+			if fp, ok := t.(transport.ConfigSchemaProvider); ok {
+				for _, f := range fp.ConfigFields() {
+					if !f.Secret {
+						continue
+					}
+					if _, present := cfg[f.Name]; !present {
+						if v, ok := old[f.Name]; ok {
+							cfg[f.Name] = v
+						}
+					}
+				}
+			}
+		}
+	}
+	saved, err := s.Service.SaveOutboundCredential(r.Context(), p.AccountID, id, r.Form.Get("name"), provider, cfg)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if id == "" {
+		if acc, err := s.Service.Store.GetAccount(r.Context(), p.AccountID); err == nil && acc.ActiveOutboundCredentialID == "" {
+			_ = s.Service.Store.SetActiveOutboundCredential(r.Context(), p.AccountID, saved.ID)
+		}
+	}
 	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+saved", 303)
+}
+
+func (s *Server) uiOutboundActive(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.SetActiveOutboundCredential(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Active+provider+updated", 303)
+}
+
+func (s *Server) uiOutboundDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.DeleteOutboundCredential(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+deleted", 303)
+}
+
+func outboundConfigFromForm(t transport.OutboundTransport, r *http.Request, requireSecrets bool) (map[string]any, error) {
+	fp, ok := t.(transport.ConfigSchemaProvider)
+	if !ok {
+		cfg := map[string]any{}
+		if err := json.Unmarshal([]byte(r.Form.Get("config")), &cfg); err != nil {
+			return nil, fmt.Errorf("invalid configuration JSON")
+		}
+		return cfg, nil
+	}
+	cfg := map[string]any{}
+	for _, f := range fp.ConfigFields() {
+		raw := strings.TrimSpace(r.Form.Get("cfg_" + t.Name() + "_" + f.Name))
+		if raw == "" {
+			if f.Required && (requireSecrets || !f.Secret) {
+				return nil, fmt.Errorf("%s is required", f.Label)
+			}
+			continue
+		}
+		if f.Type == "number" {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				return nil, fmt.Errorf("%s must be a number", f.Label)
+			}
+			cfg[f.Name] = n
+			continue
+		}
+		cfg[f.Name] = raw
+	}
+	return cfg, nil
+}
+
+func (s *Server) outboundViews(creds []store.OutboundCredential, activeID string) []outboundView {
+	out := []outboundView{}
+	for _, c := range creds {
+		v := outboundView{ID: c.ID, Name: c.Name, Provider: c.Provider, Active: c.ID == activeID}
+		if t, ok := transport.LookupOutbound(c.Provider); ok {
+			if fp, ok := t.(transport.ConfigSchemaProvider); ok {
+				if cfg, err := s.Service.DecryptOutboundCredential(c); err == nil {
+					public := map[string]any{}
+					for _, f := range fp.ConfigFields() {
+						if f.Secret {
+							continue
+						}
+						if val, ok := cfg[f.Name]; ok {
+							public[f.Name] = val
+						}
+					}
+					if b, err := json.Marshal(public); err == nil {
+						v.ConfigJSON = string(b)
+					}
+				}
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func outboundProviderViews() []outboundProviderView {
+	out := []outboundProviderView{}
+	for _, t := range transport.ListOutbound() {
+		v := outboundProviderView{Name: t.Name(), Description: t.Description()}
+		if fp, ok := t.(transport.ConfigSchemaProvider); ok {
+			v.Fields = fp.ConfigFields()
+		}
+		out = append(out, v)
+	}
+	return out
 }
 func (s *Server) uiHermes(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -288,15 +428,12 @@ func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, n
 	msgs, _ := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
 	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
 	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
-	ov := []outboundView{}
-	for _, c := range creds {
-		ov = append(ov, outboundView{c.ID, c.Name, c.Provider})
-	}
+	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
 	hv := []hermesView{}
 	for _, h := range conns {
 		hv = append(hv, hermesView{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID})
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: transport.ListOutbound(), Hermes: hv, Notice: notice, Secret: secret, Command: command})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Keys: keys, Outbound: ov, OutboundProviders: outboundProviderViews(), Hermes: hv, Notice: notice, Secret: secret, Command: command})
 }
 
 const messageBody = `<p><a href="/dashboard">← Dashboard</a></p><section class="card"><h1>{{.Message.Subject}}</h1><p><b>From:</b> {{.Message.From.Address}}<br><b>To:</b> {{join .Message.To ", "}}<br><b>Mailbox:</b> <code>{{.Message.InboxID}}</code><br><b>Thread:</b> <code>{{.Message.ThreadID}}</code></p>{{if .Attachments}}<h3>Attachments</h3><ul>{{range .Attachments}}<li>{{.Filename}} · {{bytes .Size}}</li>{{end}}</ul>{{end}}<hr><div class="msgbody">{{.Message.Text}}</div>{{if .Message.HTML}}<details><summary>Sanitized HTML source</summary><pre>{{.Message.HTML}}</pre></details>{{end}}</section>`

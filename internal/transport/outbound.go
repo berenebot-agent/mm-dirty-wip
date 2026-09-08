@@ -29,6 +29,19 @@ type OutboundTransport interface {
 	Send(ctx context.Context, cfg map[string]any, m OutboundMessage) (OutboundResult, error)
 }
 
+type ConfigOption struct{ Value, Label string }
+
+type ConfigField struct {
+	Name, Label, Type    string
+	Required, Secret     bool
+	Placeholder, Default string
+	Options              []ConfigOption
+}
+
+type ConfigSchemaProvider interface {
+	ConfigFields() []ConfigField
+}
+
 func DecodeOutboundConfig(in map[string]any, out any) error {
 	b, err := json.Marshal(in)
 	if err != nil {

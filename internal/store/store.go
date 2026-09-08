@@ -54,8 +54,29 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.write.ExecContext(ctx, migration001); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-	_, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('001',?)`, nowText())
+	if _, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('001',?)`, nowText()); err != nil {
+		return err
+	}
+	applied, err := s.migrationApplied(ctx, "002")
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	if _, err := s.write.ExecContext(ctx, migration002); err != nil {
+		return fmt.Errorf("migrate 002: %w", err)
+	}
+	_, err = s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('002',?)`, nowText())
 	return err
+}
+
+func (s *Store) migrationApplied(ctx context.Context, version string) (bool, error) {
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func nowText() string              { return time.Now().UTC().Format(time.RFC3339Nano) }

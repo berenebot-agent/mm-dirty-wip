@@ -4,13 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/transport"
 )
 
 type OutboundCredential struct {
@@ -20,9 +18,6 @@ type OutboundCredential struct {
 
 func (s *Store) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider, encrypted string) (OutboundCredential, error) {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	if _, ok := transport.LookupOutbound(provider); !ok {
-		return OutboundCredential{}, fmt.Errorf("unknown outbound provider %q", provider)
-	}
 	now := nowText()
 	if id == "" {
 		id = idgen.New("out")
@@ -86,9 +81,9 @@ func (s *Store) DeleteOutboundCredential(ctx context.Context, accountID, id stri
 	}
 	return nil
 }
-func (s *Store) OutboundCredentialForInbox(ctx context.Context, accountID, inboxID string) (OutboundCredential, error) {
+func (s *Store) ActiveOutboundCredential(ctx context.Context, accountID string) (OutboundCredential, error) {
 	var id string
-	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(outbound_credential_id,'') FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&id)
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(active_outbound_credential_id,'') FROM accounts WHERE id=?`, accountID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return OutboundCredential{}, ErrNotFound
 	}
@@ -99,6 +94,26 @@ func (s *Store) OutboundCredentialForInbox(ctx context.Context, accountID, inbox
 		return OutboundCredential{}, ErrNotFound
 	}
 	return s.GetOutboundCredential(ctx, accountID, id)
+}
+
+func (s *Store) SetActiveOutboundCredential(ctx context.Context, accountID, id string) error {
+	if id != "" {
+		var n int
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, id, accountID).Scan(&n); err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrNotFound
+		}
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET active_outbound_credential_id=? WHERE id=?`, nullString(id), accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Message, model.Event, error) {

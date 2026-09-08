@@ -98,8 +98,7 @@ func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	cid := cred.ID
-	if err = svc.Store.UpdateInbox(ctx, p, box.ID, "", nil, &cid); err != nil {
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")

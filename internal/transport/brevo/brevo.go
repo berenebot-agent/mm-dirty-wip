@@ -52,6 +52,12 @@ func init() { transport.RegisterOutbound(outboundTransport{}) }
 
 func (outboundTransport) Name() string        { return "brevo" }
 func (outboundTransport) Description() string { return "Brevo API" }
+func (outboundTransport) ConfigFields() []transport.ConfigField {
+	return []transport.ConfigField{
+		{Name: "api_key", Label: "API key", Type: "password", Required: true, Secret: true, Placeholder: "xkeysib-..."},
+		{Name: "api_base", Label: "API base URL", Type: "text", Placeholder: "https://api.brevo.com"},
+	}
+}
 func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {
 	var c Config
 	if err := transport.DecodeOutboundConfig(cfg, &c); err != nil {

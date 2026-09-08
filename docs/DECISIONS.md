@@ -53,9 +53,11 @@ This file records architectural decisions the implementation should treat as set
 - generic SMTP
 - Brevo HTTP API
 
-Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific JSON configuration.
+Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific configuration. The Admin UI renders provider-specific fields from a schema each adapter exposes, so users enter an API key and the relevant settings rather than raw JSON.
 
-**Reason:** Users retain provider choice, pricing, and sender reputation while hosted operation remains simple.
+An account may hold multiple outbound credentials but selects exactly one **active** provider, stored as `accounts.active_outbound_credential_id`. All sending uses the active provider. Per-inbox credential assignment is deprecated and no longer consulted; it is retained only for backward compatibility.
+
+**Reason:** Users retain provider choice, pricing, and sender reputation while hosted operation remains simple, and a single active provider keeps V1 sending predictable ahead of future failover.
 
 ## D008 — Replayable event history
 

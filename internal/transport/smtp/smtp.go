@@ -40,6 +40,16 @@ func SetHosted(hosted bool) { hostedMode.Store(hosted) }
 
 func (outboundTransport) Name() string        { return "smtp" }
 func (outboundTransport) Description() string { return "SMTP" }
+func (outboundTransport) ConfigFields() []transport.ConfigField {
+	return []transport.ConfigField{
+		{Name: "host", Label: "SMTP host", Type: "text", Required: true, Placeholder: "smtp.example.com"},
+		{Name: "port", Label: "Port", Type: "number", Default: "587"},
+		{Name: "username", Label: "Username", Type: "text"},
+		{Name: "password", Label: "Password", Type: "password", Secret: true},
+		{Name: "security", Label: "Security", Type: "select", Default: "starttls", Options: []transport.ConfigOption{{Value: "starttls", Label: "STARTTLS"}, {Value: "tls", Label: "TLS"}, {Value: "plain", Label: "Plain"}}},
+		{Name: "from_domain", Label: "From domain", Type: "text", Placeholder: "example.com"},
+	}
+}
 func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {
 	var c Config
 	if err := transport.DecodeOutboundConfig(cfg, &c); err != nil {

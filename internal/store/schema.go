@@ -223,3 +223,5 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TEXT NOT NULL
 );
 `
+
+const migration002 = `ALTER TABLE accounts ADD COLUMN active_outbound_credential_id TEXT REFERENCES outbound_credentials(id) ON DELETE SET NULL;`

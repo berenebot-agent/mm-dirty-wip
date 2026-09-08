@@ -149,6 +149,9 @@ func firstNonEmpty(vs ...string) string {
 }
 
 func (s *Service) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider string, cfg any) (store.OutboundCredential, error) {
+	if _, ok := transport.LookupOutbound(provider); !ok {
+		return store.OutboundCredential{}, fmt.Errorf("unknown outbound provider %q", provider)
+	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		return store.OutboundCredential{}, err
@@ -249,9 +252,9 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if len(to) == 0 {
 		return SendResult{}, fmt.Errorf("recipient required")
 	}
-	cred, err := s.Store.OutboundCredentialForInbox(ctx, p.AccountID, inbox.ID)
+	cred, err := s.Store.ActiveOutboundCredential(ctx, p.AccountID)
 	if err != nil {
-		return SendResult{}, fmt.Errorf("outbound provider not configured for inbox")
+		return SendResult{}, fmt.Errorf("outbound provider not configured for account")
 	}
 	cfg, err := s.DecryptOutboundCredential(cred)
 	if err != nil {

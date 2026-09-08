@@ -7,11 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/transport"
 )
 
 func TestAPISendWithBase64Attachment(t *testing.T) {
@@ -28,9 +29,7 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	cid := cred.ID
-	if err = svc.Store.UpdateInbox(ctx, p, box.ID, "", nil, &cid); err != nil {
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -56,5 +55,66 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 || calls.Load() != 1 {
 		t.Fatalf("send %d %s calls=%d", rr.Code, rr.Body.String(), calls.Load())
+	}
+}
+
+func TestOutboundConfigFromForm(t *testing.T) {
+	brevo, ok := transport.LookupOutbound("brevo")
+	if !ok {
+		t.Fatal("brevo not registered")
+	}
+	form := func(values url.Values) *http.Request {
+		r := httptest.NewRequest("POST", "/ui/outbound", nil)
+		r.Form = values
+		return r
+	}
+	if _, err := outboundConfigFromForm(brevo, form(url.Values{}), true); err == nil {
+		t.Fatal("missing api_key should error on create")
+	}
+	cfg, err := outboundConfigFromForm(brevo, form(url.Values{"cfg_brevo_api_key": {"k"}, "cfg_brevo_api_base": {"https://api.brevo.com"}}), true)
+	if err != nil || cfg["api_key"] != "k" || cfg["api_base"] != "https://api.brevo.com" {
+		t.Fatalf("cfg %#v err %v", cfg, err)
+	}
+	cfg, err = outboundConfigFromForm(brevo, form(url.Values{"cfg_brevo_api_base": {"https://api.brevo.com"}}), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := cfg["api_key"]; present {
+		t.Fatalf("blank secret should be omitted on edit: %#v", cfg)
+	}
+	smtpProvider, ok := transport.LookupOutbound("smtp")
+	if !ok {
+		t.Fatal("smtp not registered")
+	}
+	cfg, err = outboundConfigFromForm(smtpProvider, form(url.Values{"cfg_smtp_host": {"smtp.example.com"}, "cfg_smtp_port": {"2525"}, "cfg_smtp_security": {"tls"}}), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg["port"] != 2525 || cfg["security"] != "tls" || cfg["host"] != "smtp.example.com" {
+		t.Fatalf("smtp cfg %#v", cfg)
+	}
+	if _, err = outboundConfigFromForm(smtpProvider, form(url.Values{"cfg_smtp_host": {"smtp.example.com"}, "cfg_smtp_port": {"nope"}}), true); err == nil {
+		t.Fatal("bad port should error")
+	}
+}
+
+func TestDashboardRendersOutboundProviderFields(t *testing.T) {
+	svc, _, _, _, _ := httpFixture(t)
+	srv := New(svc, nil)
+	data := pageData{
+		CSRF: "token",
+		Outbound: []outboundView{
+			{ID: "out_1", Name: "Primary", Provider: "brevo", Active: true, ConfigJSON: `{"api_base":"https://api.brevo.com"}`},
+			{ID: "out_2", Name: "Backup", Provider: "smtp"},
+		},
+		OutboundProviders: outboundProviderViews(),
+	}
+	rr := httptest.NewRecorder()
+	srv.render(rr, dashboardBody, data)
+	body := rr.Body.String()
+	for _, want := range []string{"Add outbound provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "Set active", "data-config="} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
 	}
 }

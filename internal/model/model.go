@@ -7,6 +7,7 @@ type Account struct {
 	Name string `json:"name"`
 	StorageQuotaBytes int64 `json:"storage_quota_bytes"`
 	StorageUsedBytes int64 `json:"storage_used_bytes"`
+	ActiveOutboundCredentialID string `json:"active_outbound_credential_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

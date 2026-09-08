@@ -47,7 +47,9 @@ The server resolves the recipient to its logical inbox with the same behavior as
 
 ## Outbound
 
-Create a BYO provider in the Admin UI or API, then assign its credential ID to an inbox with `PATCH /v1/inboxes/{id}`.
+In the Admin UI, click **Add outbound provider**, pick a provider, and fill in the fields it asks for (for example Brevo only needs an API key). One configured provider is the **active** provider and is used for all sending; you can add more and switch the active one at any time.
+
+The API still accepts a JSON `config` object via `POST /v1/admin/outbound`.
 
 Mailgun configuration:
 
