@@ -214,6 +214,7 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 type MessageFilter struct {
 	InboxID, ThreadID, From, To string
 	Unread, HasAttachment       *bool
+	Before                      string
 	Limit                       int
 }
 
@@ -255,11 +256,21 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 			q += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
 		}
 	}
+	if f.Before != "" {
+		var beforeCreated string
+		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		if err == nil {
+			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
+			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+		} else if err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
 	limit := f.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q += ` ORDER BY m.created_at DESC LIMIT ?`
+	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -273,6 +284,37 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
+	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return map[string]int{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY inbox_id`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var inboxID string
+		var n int
+		if err = rows.Scan(&inboxID, &n); err != nil {
+			return nil, err
+		}
+		out[inboxID] = n
 	}
 	return out, rows.Err()
 }

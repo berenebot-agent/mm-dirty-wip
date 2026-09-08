@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,15 +228,16 @@ type SendAttachment struct {
 }
 
 type SendInput struct {
-	InboxID          string           `json:"inbox_id"`
-	To               []string         `json:"to,omitempty"`
-	CC               []string         `json:"cc,omitempty"`
-	BCC              []string         `json:"bcc,omitempty"`
-	Subject          string           `json:"subject"`
-	Text             string           `json:"text"`
-	HTML             string           `json:"html,omitempty"`
-	ReplyToMessageID string           `json:"reply_to_message_id,omitempty"`
-	Attachments      []SendAttachment `json:"attachments,omitempty"`
+	InboxID            string           `json:"inbox_id"`
+	To                 []string         `json:"to,omitempty"`
+	CC                 []string         `json:"cc,omitempty"`
+	BCC                []string         `json:"bcc,omitempty"`
+	Subject            string           `json:"subject"`
+	Text               string           `json:"text"`
+	HTML               string           `json:"html,omitempty"`
+	ReplyToMessageID   string           `json:"reply_to_message_id,omitempty"`
+	ForwardOfMessageID string           `json:"forward_of_message_id,omitempty"`
+	Attachments        []SendAttachment `json:"attachments,omitempty"`
 }
 type SendResult struct {
 	Message           model.Message `json:"message"`
@@ -292,8 +294,30 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 			}
 		}
 		if subject == "" {
-			subject = replySubject(target.Subject)
+			subject = ReplySubject(target.Subject)
 		}
+	}
+	if in.ForwardOfMessageID != "" {
+		target, err := s.Store.GetMessageByID(ctx, p.AccountID, in.ForwardOfMessageID)
+		if err != nil {
+			return SendResult{}, err
+		}
+		if target.InboxID != inbox.ID {
+			return SendResult{}, store.ErrForbidden
+		}
+		if subject == "" {
+			subject = ForwardSubject(target.Subject)
+		}
+		if strings.TrimSpace(in.Text) == "" {
+			in.Text = forwardPrefix(target)
+		} else {
+			in.Text = strings.TrimRight(in.Text, "\n") + "\n\n" + forwardPrefix(target)
+		}
+		carried, err := s.forwardAttachments(ctx, p, target)
+		if err != nil {
+			return SendResult{}, err
+		}
+		in.Attachments = append(in.Attachments, carried...)
 	}
 	if len(to) == 0 {
 		return SendResult{}, fmt.Errorf("recipient required")
@@ -430,10 +454,63 @@ func appendUnique(in []string, v string) []string {
 	}
 	return append(in, v)
 }
-func replySubject(s string) string {
+func ReplySubject(s string) string {
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(strings.ToLower(s), "re:") {
 		return s
 	}
 	return "Re: " + s
+}
+func ForwardSubject(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(strings.ToLower(s), "fwd:") {
+		return s
+	}
+	return "Fwd: " + s
+}
+func addressLine(a model.Address) string {
+	if strings.TrimSpace(a.Name) == "" {
+		return a.Address
+	}
+	return a.Name + " <" + a.Address + ">"
+}
+func forwardPrefix(m model.Message) string {
+	var b strings.Builder
+	b.WriteString("---------- Forwarded message ----------\n")
+	b.WriteString("From: " + addressLine(m.From) + "\n")
+	if len(m.To) > 0 {
+		b.WriteString("To: " + strings.Join(m.To, ", ") + "\n")
+	}
+	if len(m.CC) > 0 {
+		b.WriteString("Cc: " + strings.Join(m.CC, ", ") + "\n")
+	}
+	when := m.CreatedAt
+	if m.ReceivedAt != nil {
+		when = *m.ReceivedAt
+	} else if m.SentAt != nil {
+		when = *m.SentAt
+	}
+	b.WriteString("Date: " + when.Format(time.RFC1123Z) + "\n")
+	b.WriteString("Subject: " + m.Subject + "\n\n")
+	b.WriteString(m.Text)
+	return b.String()
+}
+func (s *Service) forwardAttachments(ctx context.Context, p model.Principal, m model.Message) ([]SendAttachment, error) {
+	meta, err := s.Store.ListAttachments(ctx, p, m.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(meta) == 0 {
+		return nil, nil
+	}
+	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath))
+	out := make([]SendAttachment, 0, len(meta))
+	for _, a := range meta {
+		var buf bytes.Buffer
+		if err := mailparse.ExtractAttachment(path, a.PartIndex, &buf); err != nil {
+			return nil, err
+		}
+		out = append(out, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
+	}
+	return out, nil
 }

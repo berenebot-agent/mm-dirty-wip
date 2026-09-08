@@ -15,7 +15,7 @@ import (
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Open Agent Inbox</title><style>
-body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px}.muted{color:#666}input,select,textarea,button{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}button{cursor:pointer;background:#111;color:white;border-color:#111}.secondary{background:white;color:#111}.actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.actions form{margin:0}.btn-sm{padding:5px 10px;font-size:13px}.danger{color:#b00020;border-color:#d99}.sub{font-size:12px;color:#666;margin-top:2px}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}dialog{border:0;border-radius:10px;padding:20px;max-width:480px;width:92%}dialog::backdrop{background:rgba(0,0,0,.45)}</style></head><body><header><div><b>Open Agent Inbox</b>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log out</button></form>{{end}}</header>{{template "body" .}}</body></html>`
+body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px}.muted{color:#666}input,select,textarea,button{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}button{cursor:pointer;background:#111;color:white;border-color:#111}.secondary{background:white;color:#111}.actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.actions form{margin:0}.btn-sm{padding:5px 10px;font-size:13px}.danger{color:#b00020;border-color:#d99}.sub{font-size:12px;color:#666;margin-top:2px}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}dialog{border:0;border-radius:10px;padding:20px;max-width:480px;width:92%}dialog::backdrop{background:rgba(0,0,0,.45)}.toolbar{display:flex;gap:12px;align-items:center;margin-bottom:12px}.toolbar a{text-decoration:none}.msghead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.msghead h1{margin-top:0}.btn{display:inline-block;background:#111;color:#fff;padding:8px 12px;border-radius:6px;border:1px solid #111;text-decoration:none;line-height:1.2}.btn.secondary{background:#fff;color:#111;border-color:#bbb}.msglist td,.msglist th{padding:10px 8px}.msglist tr.unread td{font-weight:600;background:#fbfdff}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#1557b0}.unread-pill{background:#1557b0;color:#fff}.banner{padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1px solid}.banner.warn{background:#fff8e1;border-color:#e6c34a}.mailframe{width:100%;height:520px;border:1px solid #ddd;border-radius:8px;background:#fff}.attachments{list-style:none;padding:0;margin:8px 0}.attachments li{padding:4px 0}</style></head><body><header><div><b>Open Agent Inbox</b>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log out</button></form>{{end}}</header>{{template "body" .}}</body></html>`
 
 func (s *Server) render(w http.ResponseWriter, body string, data any) {
 	t, err := template.New("page").Funcs(template.FuncMap{"bytes": formatBytes, "join": strings.Join}).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
@@ -44,6 +44,19 @@ type pageData struct {
 	Attachments                 []model.Attachment
 	Notice, SecretLabel, Secret string
 	HasUsers                    bool
+
+	Inbox          *model.Inbox
+	Unread         map[string]int
+	UnreadCount    int
+	HasMore        bool
+	Before         string
+	ThreadMessages []model.Message
+	OutboundReady  bool
+
+	ComposeTitle, ComposeAction, ComposeCancel string
+	ComposeTo, ComposeCC, ComposeBCC           string
+	ComposeSubject, ComposeText, ComposeNote   string
+	ComposeError                               string
 }
 type outboundView struct {
 	ID, Name, Provider, ConfigJSON string
@@ -163,7 +176,7 @@ func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 
 const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
 <div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table>{{range .Domains}}<tr><td><b>{{.Name}}</b>{{if .CatchAllInboxID}}<br><span class="muted">catch-all: {{.CatchAllInboxID}}</span>{{end}}</td><td><form method="post" action="/ui/domains/{{.ID}}/catchall"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="inbox"><option value="">No catch-all</option>{{range $.Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><button class="secondary">Set</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required><button>Add domain</button></form></section>
-<section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><b>{{.Address}}</b><br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
+<section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table>{{range .Inboxes}}<tr><td><a href="/ui/inboxes/{{.ID}}"><b>{{.Address}}</b></a>{{if index $.Unread .ID}} <span class="pill unread-pill">{{index $.Unread .ID}}</span>{{end}}<br><span class="muted">{{.DisplayName}}</span></td><td><code>{{.ID}}</code></td></tr>{{end}}</table>{{end}}<form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select><div class="row"><div><label>Local part</label><input name="local" placeholder="hermes" required></div><div><label>Name</label><input name="display" placeholder="Hermes"></div></div><button>Create inbox</button></form></section></div>
 <div class="grid"><section class="card"><h2>Keys &amp; connections</h2>{{if .Credentials}}<table><tr><th>Name</th><th>Type</th><th>Scope</th></tr>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Scope}}</td></tr>{{end}}</table>{{else}}<p class="muted">No keys yet.</p>{{end}}<button type="button" id="add-key">Create key</button></section>
 <section class="card"><h2>Outbound providers</h2>{{if .Outbound}}<table><tr><th>Name</th><th>Status</th><th></th></tr>{{range .Outbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td>{{if .Active}}<span class="pill">Active</span>{{else}}<span class="muted">Inactive</span>{{end}}</td><td class="actions">{{if not .Active}}<form method="post" action="/ui/outbound/{{.ID}}/active"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Set active</button></form>{{end}}<button type="button" class="secondary btn-sm edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}">Edit</button><form method="post" action="/ui/outbound/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Delete</button></form></td></tr>{{end}}</table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<button type="button" id="add-provider">Add outbound provider</button><p class="muted">The active provider is used for all sending.</p></section></div>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} required{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="row"><button>Save provider</button><button type="button" class="secondary" id="provider-cancel">Cancel</button></div></form></dialog>
@@ -190,7 +203,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		msgs, _ = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{Limit: 100})
 	}
 	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Notice: r.URL.Query().Get("notice")})
+	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	if unread == nil {
+		unread = map[string]int{}
+	}
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Unread: unread, Notice: r.URL.Query().Get("notice")})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -476,10 +493,20 @@ func (s *Server) renderSecretDashboard(w http.ResponseWriter, r *http.Request, n
 	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
 	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
 	ov := s.outboundViews(creds, acc.ActiveOutboundCredentialID)
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	if unread == nil {
+		unread = map[string]int{}
+	}
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Unread: unread, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
-const messageBody = `<p><a href="/dashboard">← Dashboard</a></p><section class="card"><h1>{{.Message.Subject}}</h1><p><b>From:</b> {{.Message.From.Address}}<br><b>To:</b> {{join .Message.To ", "}}<br><b>Mailbox:</b> <code>{{.Message.InboxID}}</code><br><b>Thread:</b> <code>{{.Message.ThreadID}}</code></p>{{if .Attachments}}<h3>Attachments</h3><ul>{{range .Attachments}}<li>{{.Filename}} · {{bytes .Size}}</li>{{end}}</ul>{{end}}<hr><div class="msgbody">{{.Message.Text}}</div>{{if .Message.HTML}}<details><summary>Sanitized HTML source</summary><pre>{{.Message.HTML}}</pre></details>{{end}}</section>`
+const messageBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Message.InboxID}}">← Inbox</a><a href="/dashboard">Dashboard</a></div>
+<section class="card"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions"><a class="btn-sm secondary" href="/ui/messages/{{.Message.ID}}/reply">Reply</a><a class="btn-sm secondary" href="/ui/messages/{{.Message.ID}}/forward">Forward</a><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="{{if .Message.Read}}0{{else}}1{{end}}"><button class="secondary btn-sm">{{if .Message.Read}}Mark unread{{else}}Mark read{{end}}</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/delete" data-confirm="Delete this message permanently?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Delete</button></form></div></div>
+<p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{.Message.CreatedAt.Format "2006-01-02 15:04"}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p>
+{{if .Attachments}}<h3>Attachments</h3><ul class="attachments">{{range .Attachments}}<li><a href="/ui/attachments/{{.ID}}">{{.Filename}}</a> <span class="muted">· {{bytes .Size}}</span></li>{{end}}</ul>{{end}}
+<hr>{{if .Message.HTML}}<iframe class="mailframe" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy" src="/ui/messages/{{.Message.ID}}/html"></iframe>{{else}}<div class="msgbody">{{.Message.Text}}</div>{{end}}
+{{if and .Message.HTML .Message.Text}}<details><summary>Plain text</summary><div class="msgbody">{{.Message.Text}}</div></details>{{end}}</section>
+{{if gt (len .ThreadMessages) 1}}<section class="card"><h3>Conversation ({{len .ThreadMessages}})</h3><table>{{range .ThreadMessages}}<tr><td class="muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if eq .Direction "outbound"}}To: {{join .To ", "}}{{else}}{{.From.Address}}{{end}}</td><td>{{if eq .ID $.Message.ID}}<b>{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</b>{{else}}<a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{end}}</td></tr>{{end}}</table></section>{{end}}`
 
 func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -488,6 +515,28 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message not found", 404)
 		return
 	}
+	if !m.Read {
+		read := true
+		if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read, nil); err == nil {
+			m.Read = true
+		}
+	}
 	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
-	s.render(w, messageBody, pageData{Title: m.Subject, Principal: p, CSRF: csrf(r), Message: &m, Attachments: atts})
+	var box *model.Inbox
+	if b, e := s.Service.Store.GetInbox(r.Context(), p, m.InboxID); e == nil {
+		box = &b
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	var thread []model.Message
+	if m.ThreadID != "" {
+		thread, _ = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: m.InboxID, ThreadID: m.ThreadID, Limit: 200})
+		for i, j := 0, len(thread)-1; i < j; i, j = i+1, j-1 {
+			thread[i], thread[j] = thread[j], thread[i]
+		}
+	}
+	title := m.Subject
+	if title == "" {
+		title = "(no subject)"
+	}
+	s.render(w, messageBody, pageData{Title: title, Principal: p, CSRF: csrf(r), Message: &m, Attachments: atts, Inbox: box, ThreadMessages: thread, OutboundReady: acc.ActiveOutboundCredentialID != ""})
 }

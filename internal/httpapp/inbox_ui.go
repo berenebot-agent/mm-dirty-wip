@@ -1,0 +1,437 @@
+package httpapp
+
+import (
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/mailparse"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
+)
+
+const inboxPageSize = 50
+
+const inboxBody = `<div class="toolbar"><a href="/dashboard">← Dashboard</a><a class="btn secondary" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a></div>
+<h1>{{.Inbox.Address}}</h1><p class="muted">{{.Inbox.DisplayName}}{{if .UnreadCount}} · <b>{{.UnreadCount}} unread</b>{{end}}</p>
+{{if not .OutboundReady}}<div class="banner warn">No outbound provider is configured. <a href="/dashboard">Add one</a> before sending.</div>{{end}}
+<section class="card">{{if .Messages}}<table class="msglist"><thead><tr><th></th><th>From / To</th><th>Subject</th><th>Date</th></tr></thead><tbody>{{range .Messages}}<tr class="{{if not .Read}}unread{{end}}"><td>{{if not .Read}}<span class="dot"></span>{{end}}</td><td>{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</td><td><a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{if .HasAttachments}} <span class="pill">attach</span>{{end}}</td><td class="muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td></tr>{{end}}</tbody></table>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
+
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="row"><button>Send</button><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a></div></form></section>`
+
+func (s *Server) uiInbox(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	id := r.PathValue("id")
+	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	msgs, err := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: id, Before: before, Limit: inboxPageSize + 1})
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	hasMore := len(msgs) > inboxPageSize
+	if hasMore {
+		msgs = msgs[:inboxPageSize]
+	}
+	cursor := ""
+	if len(msgs) > 0 {
+		cursor = msgs[len(msgs)-1].ID
+	}
+	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	s.render(w, inboxBody, pageData{
+		Title:         box.Address,
+		Principal:     p,
+		CSRF:          csrf(r),
+		Account:       acc,
+		Inbox:         &box,
+		Messages:      msgs,
+		HasMore:       hasMore,
+		Before:        cursor,
+		UnreadCount:   unread[id],
+		OutboundReady: acc.ActiveOutboundCredentialID != "",
+	})
+}
+
+func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	s.render(w, composeBody, pageData{
+		Title:         "Compose",
+		Principal:     p,
+		CSRF:          csrf(r),
+		ComposeTitle:  "New message",
+		ComposeAction: actionWithCSRF("/ui/inboxes/"+box.ID+"/send", csrf(r)),
+		ComposeCancel: "/ui/inboxes/" + box.ID,
+	})
+}
+
+func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	in, err := s.parseMessageForm(w, r)
+	if err != nil {
+		s.renderComposeError(w, r, p, "New message", "/ui/inboxes/"+box.ID+"/compose", "/ui/inboxes/"+box.ID, in, err)
+		return
+	}
+	in.InboxID = box.ID
+	s.submitMessage(w, r, p, in, "New message", "/ui/inboxes/"+box.ID+"/send", "/ui/inboxes/"+box.ID)
+}
+
+func (s *Server) uiReplyForm(w http.ResponseWriter, r *http.Request) {
+	s.composeMessage(w, r, "reply")
+}
+
+func (s *Server) uiForwardForm(w http.ResponseWriter, r *http.Request) {
+	s.composeMessage(w, r, "forward")
+}
+
+func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind string) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
+	data := pageData{Principal: p, CSRF: csrf(r), ComposeCancel: "/ui/messages/" + m.ID}
+	switch kind {
+	case "reply":
+		to := strings.Join(m.To, ", ")
+		if m.Direction == "inbound" {
+			to = m.From.Address
+		}
+		data.Title = "Reply"
+		data.ComposeTitle = "Reply"
+		data.ComposeTo = to
+		data.ComposeSubject = app.ReplySubject(m.Subject)
+		data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply", csrf(r))
+	case "forward":
+		data.Title = "Forward"
+		data.ComposeTitle = "Forward"
+		data.ComposeSubject = app.ForwardSubject(m.Subject)
+		data.ComposeNote = "The original message and its attachments are included automatically."
+		data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/forward", csrf(r))
+	}
+	s.render(w, composeBody, data)
+}
+
+func (s *Server) uiReplySend(w http.ResponseWriter, r *http.Request) {
+	s.sendMessage(w, r, "reply")
+}
+
+func (s *Server) uiForwardSend(w http.ResponseWriter, r *http.Request) {
+	s.sendMessage(w, r, "forward")
+}
+
+func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
+	in, err := s.parseMessageForm(w, r)
+	if err != nil {
+		title := "Reply"
+		if kind == "forward" {
+			title = "Forward"
+		}
+		s.renderComposeError(w, r, p, title, "/ui/messages/"+m.ID+"/"+kind, "/ui/messages/"+m.ID, in, err)
+		return
+	}
+	in.InboxID = m.InboxID
+	title := "Reply"
+	action := "/ui/messages/" + m.ID + "/reply"
+	if kind == "forward" {
+		title = "Forward"
+		action = "/ui/messages/" + m.ID + "/forward"
+		in.ForwardOfMessageID = m.ID
+	} else {
+		in.ReplyToMessageID = m.ID
+	}
+	s.submitMessage(w, r, p, in, title, action, "/ui/messages/"+m.ID)
+}
+
+func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.Principal, in app.SendInput, title, action, cancel string) {
+	res, err := s.Service.Send(r.Context(), p, in, "")
+	if err != nil {
+		s.renderComposeError(w, r, p, title, action, cancel, in, err)
+		return
+	}
+	http.Redirect(w, r, "/ui/messages/"+res.Message.ID, 303)
+}
+
+func (s *Server) renderComposeError(w http.ResponseWriter, r *http.Request, p model.Principal, title, action, cancel string, in app.SendInput, err error) {
+	s.render(w, composeBody, pageData{
+		Title:          title,
+		Principal:      p,
+		CSRF:           csrf(r),
+		ComposeTitle:   title,
+		ComposeError:   err.Error(),
+		ComposeAction:  actionWithCSRF(action, csrf(r)),
+		ComposeCancel:  cancel,
+		ComposeTo:      strings.Join(in.To, ", "),
+		ComposeCC:      strings.Join(in.CC, ", "),
+		ComposeBCC:     strings.Join(in.BCC, ", "),
+		ComposeSubject: in.Subject,
+		ComposeText:    in.Text,
+	})
+}
+
+func (s *Server) parseMessageForm(w http.ResponseWriter, r *http.Request) (app.SendInput, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes+1<<20)
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		return app.SendInput{}, fmt.Errorf("could not read the form")
+	}
+	atts, err := s.formAttachments(r)
+	if err != nil {
+		return app.SendInput{}, err
+	}
+	return app.SendInput{
+		To:          formAddresses(r, "to"),
+		CC:          formAddresses(r, "cc"),
+		BCC:         formAddresses(r, "bcc"),
+		Subject:     strings.TrimSpace(r.Form.Get("subject")),
+		Text:        r.Form.Get("text"),
+		Attachments: atts,
+	}, nil
+}
+
+func (s *Server) formAttachments(r *http.Request) ([]app.SendAttachment, error) {
+	if r.MultipartForm == nil {
+		return nil, nil
+	}
+	files := r.MultipartForm.File["attachments"]
+	out := make([]app.SendAttachment, 0, len(files))
+	var total int64
+	for _, fh := range files {
+		if fh.Size > s.Service.Config.MaxMessageBytes {
+			return nil, fmt.Errorf("attachment %q exceeds the maximum message size", fh.Filename)
+		}
+		f, err := fh.Open()
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(io.LimitReader(f, s.Service.Config.MaxMessageBytes+1))
+		_ = f.Close()
+		if err != nil {
+			return nil, err
+		}
+		total += int64(len(data))
+		if total > s.Service.Config.MaxMessageBytes {
+			return nil, fmt.Errorf("attachments exceed the maximum message size")
+		}
+		if len(data) == 0 {
+			continue
+		}
+		out = append(out, app.SendAttachment{Filename: fh.Filename, ContentType: fh.Header.Get("Content-Type"), Content: data})
+	}
+	return out, nil
+}
+
+func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	read := r.Form.Get("read") == "1"
+	if err := s.Service.Store.UpdateMessageState(r.Context(), p, r.PathValue("id"), &read, nil); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/messages/"+r.PathValue("id"), 303)
+}
+
+func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
+	path, _, ev, err := s.Service.Store.DeleteMessage(r.Context(), p, m.ID)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if path != "" {
+		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+	}
+	s.Service.Hub.Publish(ev)
+	http.Redirect(w, r, "/ui/inboxes/"+m.InboxID, 303)
+}
+
+func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "message not found", 404)
+		return
+	}
+	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
+	body := rewriteCIDs(m.HTML, atts)
+	body = injectBaseTarget(body)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	_, _ = io.WriteString(w, body)
+}
+
+func (s *Server) uiAttachment(w http.ResponseWriter, r *http.Request) {
+	s.serveAttachment(w, r, false)
+}
+
+func (s *Server) uiAttachmentInline(w http.ResponseWriter, r *http.Request) {
+	s.serveAttachment(w, r, true)
+}
+
+func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline bool) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	a, m, err := s.Service.Store.GetAttachment(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "attachment not found", 404)
+		return
+	}
+	disposition := "attachment"
+	contentType := "application/octet-stream"
+	if inline {
+		if ct := normalizeContentType(a.ContentType); isInlineImage(ct) {
+			disposition = "inline"
+			contentType = ct
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		}
+	}
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": a.Filename}))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	path := filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(m.RawPath))
+	if err := mailparse.ExtractAttachment(path, a.PartIndex, w); err != nil {
+		s.Log.Error("attachment extraction", "error", err)
+	}
+}
+
+var inlineImageTypes = map[string]bool{
+	"image/png":                true,
+	"image/jpeg":               true,
+	"image/gif":                true,
+	"image/webp":               true,
+	"image/bmp":                true,
+	"image/avif":               true,
+	"image/svg+xml":            true,
+	"image/x-icon":             true,
+	"image/vnd.microsoft.icon": true,
+}
+
+func normalizeContentType(ct string) string {
+	return strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+}
+
+func isInlineImage(ct string) bool { return inlineImageTypes[ct] }
+
+func actionWithCSRF(path, token string) string {
+	if token == "" {
+		return path
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + "_csrf=" + token
+}
+
+func formAddresses(r *http.Request, name string) []string {
+	raw := r.Form.Get(name)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(ch rune) bool {
+		return ch == ',' || ch == ';' || ch == '\n' || ch == '\r'
+	})
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func rewriteCIDs(body string, atts []model.Attachment) string {
+	for _, a := range atts {
+		cid := strings.Trim(strings.TrimSpace(a.ContentID), "<>")
+		if cid == "" || !isInlineImage(normalizeContentType(a.ContentType)) {
+			continue
+		}
+		url := "/ui/attachments/" + a.ID + "/inline"
+		body = strings.ReplaceAll(body, "cid:<"+cid+">", url)
+		body = strings.ReplaceAll(body, "cid:"+cid, url)
+	}
+	return body
+}
+
+func injectBaseTarget(body string) string {
+	lower := strings.ToLower(body)
+	if i := strings.Index(lower, "<head>"); i >= 0 {
+		return body[:i+6] + `<base target="_blank">` + body[i+6:]
+	}
+	if i := strings.Index(lower, "<head "); i >= 0 {
+		if j := strings.Index(lower[i:], ">"); j >= 0 {
+			pos := i + j + 1
+			return body[:pos] + `<base target="_blank">` + body[pos:]
+		}
+	}
+	return `<base target="_blank">` + body
+}

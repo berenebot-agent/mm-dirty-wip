@@ -73,6 +73,18 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/outbound/{id}/active", s.withSession(s.withCSRF(s.uiOutboundActive)))
 	m.HandleFunc("POST /ui/outbound/{id}/delete", s.withSession(s.withCSRF(s.uiOutboundDelete)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
+	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
+	m.HandleFunc("GET /ui/inboxes/{id}/compose", s.withSession(s.uiCompose))
+	m.HandleFunc("POST /ui/inboxes/{id}/send", s.withSession(s.withCSRF(s.uiComposeSend)))
+	m.HandleFunc("GET /ui/messages/{id}/reply", s.withSession(s.uiReplyForm))
+	m.HandleFunc("POST /ui/messages/{id}/reply", s.withSession(s.withCSRF(s.uiReplySend)))
+	m.HandleFunc("GET /ui/messages/{id}/forward", s.withSession(s.uiForwardForm))
+	m.HandleFunc("POST /ui/messages/{id}/forward", s.withSession(s.withCSRF(s.uiForwardSend)))
+	m.HandleFunc("POST /ui/messages/{id}/delete", s.withSession(s.withCSRF(s.uiMessageDelete)))
+	m.HandleFunc("POST /ui/messages/{id}/read", s.withSession(s.withCSRF(s.uiMessageRead)))
+	m.HandleFunc("GET /ui/messages/{id}/html", s.withSession(s.uiMessageHTML))
+	m.HandleFunc("GET /ui/attachments/{id}", s.withSession(s.uiAttachment))
+	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
 
 	// Discovery.
 	m.HandleFunc("GET /.well-known/agent-inbox", s.discovery)
