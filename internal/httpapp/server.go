@@ -32,6 +32,7 @@ type Server struct {
 	Log          *slog.Logger
 	loginLimiter *limiter
 	sendLimiter  *limiter
+	flashes      *flashStore
 }
 
 type ctxKey int
@@ -45,7 +46,8 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	}
 	return &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		sendLimiter:  newLimiter(svc.Config.SendLimitPerMinute, time.Minute)}
+		sendLimiter:  newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
+		flashes:      newFlashStore(64, 64<<20)}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -67,8 +69,13 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /dashboard", s.withSession(s.dashboard))
 	m.HandleFunc("POST /ui/domains", s.withSession(s.withCSRF(s.uiCreateDomain)))
 	m.HandleFunc("POST /ui/domains/{id}/catchall", s.withSession(s.withCSRF(s.uiCatchAll)))
+	m.HandleFunc("POST /ui/domains/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteDomain)))
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
 	m.HandleFunc("POST /ui/keys", s.withSession(s.withCSRF(s.uiCreateKey)))
+	m.HandleFunc("POST /ui/keys/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateKey)))
+	m.HandleFunc("POST /ui/keys/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteKey)))
+	m.HandleFunc("POST /ui/hermes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
+	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
 	m.HandleFunc("POST /ui/outbound", s.withSession(s.withCSRF(s.uiOutbound)))
 	m.HandleFunc("POST /ui/outbound/{id}/active", s.withSession(s.withCSRF(s.uiOutboundActive)))
 	m.HandleFunc("POST /ui/outbound/{id}/delete", s.withSession(s.withCSRF(s.uiOutboundDelete)))

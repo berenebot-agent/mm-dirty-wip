@@ -22,7 +22,64 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 {{if not .OutboundReady}}<div class="banner warn">No outbound provider is configured. <a href="/dashboard">Add one</a> before sending.</div>{{end}}
 <section class="card">{{if .Messages}}<div class="mailheader"><span></span><span>From / To</span><span>Subject</span><span>Date</span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq .Direction "outbound"}}<span class="muted">To:</span> {{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{.CreatedAt.Format "01-02 15:04"}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><input type="hidden" name="next" value="inbox"><button class="rowbtn">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this inbox yet.</p>{{end}}</section>`
 
-const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="row"><button>Send</button><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a></div></form></section>`
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="row"><button>Send</button><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a></div></form></section>`
+
+// composeFlash carries a failed send (including uploaded attachment bytes)
+// from the POST to the GET form, so refreshing never re-submits and the user's
+// work is preserved.
+type composeFlash struct {
+	Title, Action, Cancel, Err string
+	Input                      app.SendInput
+}
+
+func composeFlashSize(f composeFlash) int {
+	n := len(f.Title) + len(f.Action) + len(f.Cancel) + len(f.Err) + len(f.Input.Subject) + len(f.Input.Text) + len(f.Input.HTML)
+	for _, group := range [][]string{f.Input.To, f.Input.CC, f.Input.BCC} {
+		for _, addr := range group {
+			n += len(addr)
+		}
+	}
+	for _, a := range f.Input.Attachments {
+		n += len(a.Filename) + len(a.ContentType) + len(a.Content)
+	}
+	return n
+}
+
+func (s *Server) peekComposeFlash(r *http.Request) (composeFlash, bool) {
+	if v, ok := s.flashes.peek(r.URL.Query().Get("_flash")); ok {
+		if f, ok := v.(composeFlash); ok {
+			return f, true
+		}
+	}
+	return composeFlash{}, false
+}
+
+func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p model.Principal, tok string, f composeFlash) {
+	note := ""
+	if len(f.Input.Attachments) > 0 {
+		names := make([]string, 0, len(f.Input.Attachments))
+		for _, a := range f.Input.Attachments {
+			names = append(names, a.Filename)
+		}
+		note = "Attachments kept: " + strings.Join(names, ", ") + ". They will be sent with this message."
+	}
+	s.render(w, composeBody, pageData{
+		Title:          f.Title,
+		Principal:      p,
+		CSRF:           csrf(r),
+		ComposeTitle:   f.Title,
+		ComposeError:   f.Err,
+		ComposeAction:  actionWithCSRF(f.Action, csrf(r)),
+		ComposeCancel:  f.Cancel,
+		ComposeTo:      strings.Join(f.Input.To, ", "),
+		ComposeCC:      strings.Join(f.Input.CC, ", "),
+		ComposeBCC:     strings.Join(f.Input.BCC, ", "),
+		ComposeSubject: f.Input.Subject,
+		ComposeText:    f.Input.Text,
+		ComposeNote:    note,
+		ComposeFlash:   tok,
+	})
+}
 
 func (s *Server) uiInbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -77,6 +134,10 @@ func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inbox not found", 404)
 		return
 	}
+	if f, ok := s.peekComposeFlash(r); ok {
+		s.renderComposeFlash(w, r, p, r.URL.Query().Get("_flash"), f)
+		return
+	}
 	s.render(w, composeBody, pageData{
 		Title:         "Compose",
 		Principal:     p,
@@ -98,13 +159,14 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inbox not found", 404)
 		return
 	}
+	formURL := "/ui/inboxes/" + box.ID + "/compose"
 	in, err := s.parseMessageForm(w, r)
 	if err != nil {
-		s.renderComposeError(w, r, p, "New message", "/ui/inboxes/"+box.ID+"/compose", "/ui/inboxes/"+box.ID, in, err)
+		s.renderComposeError(w, r, "New message", formURL, "/ui/inboxes/"+box.ID+"/send", "/ui/inboxes/"+box.ID, in, err)
 		return
 	}
 	in.InboxID = box.ID
-	s.submitMessage(w, r, p, in, "New message", "/ui/inboxes/"+box.ID+"/send", "/ui/inboxes/"+box.ID)
+	s.submitMessage(w, r, p, in, "New message", formURL, "/ui/inboxes/"+box.ID+"/send", "/ui/inboxes/"+box.ID)
 }
 
 func (s *Server) uiReplyForm(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +181,10 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
+		return
+	}
+	if f, ok := s.peekComposeFlash(r); ok {
+		s.renderComposeFlash(w, r, p, r.URL.Query().Get("_flash"), f)
 		return
 	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
@@ -167,13 +233,14 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string
 		http.Error(w, "message not found", 404)
 		return
 	}
+	formURL := "/ui/messages/" + m.ID + "/" + kind
 	in, err := s.parseMessageForm(w, r)
 	if err != nil {
 		title := "Reply"
 		if kind == "forward" {
 			title = "Forward"
 		}
-		s.renderComposeError(w, r, p, title, "/ui/messages/"+m.ID+"/"+kind, "/ui/messages/"+m.ID, in, err)
+		s.renderComposeError(w, r, title, formURL, "/ui/messages/"+m.ID+"/"+kind, "/ui/messages/"+m.ID, in, err)
 		return
 	}
 	in.InboxID = m.InboxID
@@ -186,33 +253,30 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string
 	} else {
 		in.ReplyToMessageID = m.ID
 	}
-	s.submitMessage(w, r, p, in, title, action, "/ui/messages/"+m.ID)
+	s.submitMessage(w, r, p, in, title, formURL, action, "/ui/messages/"+m.ID)
 }
 
-func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.Principal, in app.SendInput, title, action, cancel string) {
+func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.Principal, in app.SendInput, title, formURL, action, cancel string) {
 	res, err := s.Service.Send(r.Context(), p, in, "")
 	if err != nil {
-		s.renderComposeError(w, r, p, title, action, cancel, in, err)
+		s.renderComposeError(w, r, title, formURL, action, cancel, in, err)
 		return
+	}
+	if tok := r.Form.Get("_flash"); tok != "" {
+		s.flashes.take(tok)
 	}
 	http.Redirect(w, r, "/ui/messages/"+res.Message.ID, 303)
 }
 
-func (s *Server) renderComposeError(w http.ResponseWriter, r *http.Request, p model.Principal, title, action, cancel string, in app.SendInput, err error) {
-	s.render(w, composeBody, pageData{
-		Title:          title,
-		Principal:      p,
-		CSRF:           csrf(r),
-		ComposeTitle:   title,
-		ComposeError:   err.Error(),
-		ComposeAction:  actionWithCSRF(action, csrf(r)),
-		ComposeCancel:  cancel,
-		ComposeTo:      strings.Join(in.To, ", "),
-		ComposeCC:      strings.Join(in.CC, ", "),
-		ComposeBCC:     strings.Join(in.BCC, ", "),
-		ComposeSubject: in.Subject,
-		ComposeText:    in.Text,
-	})
+// renderComposeError redirects back to the compose form (Post/Redirect/Get)
+// with the failed input held in a flash, so refresh cannot re-send.
+func (s *Server) renderComposeError(w http.ResponseWriter, r *http.Request, title, formURL, action, cancel string, in app.SendInput, err error) {
+	f := composeFlash{Title: title, Action: action, Cancel: cancel, Err: err.Error(), Input: in}
+	dest := formURL
+	if tok := s.flashes.put(f, composeFlashSize(f)); tok != "" {
+		dest += "?_flash=" + tok
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
 func (s *Server) parseMessageForm(w http.ResponseWriter, r *http.Request) (app.SendInput, error) {
@@ -223,6 +287,11 @@ func (s *Server) parseMessageForm(w http.ResponseWriter, r *http.Request) (app.S
 	atts, err := s.formAttachments(r)
 	if err != nil {
 		return app.SendInput{}, err
+	}
+	if v, ok := s.flashes.peek(r.Form.Get("_flash")); ok {
+		if f, ok := v.(composeFlash); ok {
+			atts = append(atts, f.Input.Attachments...)
+		}
 	}
 	return app.SendInput{
 		To:          formAddresses(r, "to"),

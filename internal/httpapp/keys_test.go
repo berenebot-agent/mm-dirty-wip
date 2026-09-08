@@ -35,10 +35,10 @@ func TestCredentialViews(t *testing.T) {
 	if len(views) != 2 {
 		t.Fatalf("got %d views", len(views))
 	}
-	if views[0] != (credentialView{Name: "Agent", Type: "API key", Scope: "Assistant"}) {
+	if views[0] != (credentialView{Kind: "api", Name: "Agent", Type: "API key", Scope: "Assistant", RolesJSON: `{"in_1":"assistant"}`}) {
 		t.Fatalf("api view %#v", views[0])
 	}
-	if views[1] != (credentialView{Name: "Hermes", Type: "Hermes relay", Scope: "Owner"}) {
+	if views[1] != (credentialView{Kind: "hermes", Name: "Hermes", Type: "Hermes relay", Scope: "Owner"}) {
 		t.Fatalf("hermes view %#v", views[1])
 	}
 }

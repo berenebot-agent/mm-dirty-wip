@@ -92,6 +92,9 @@
   }
   var sel = document.getElementById('key-type');
   var form = dlg.querySelector('form');
+  var idInput = form.querySelector('[name=id]');
+  var nameInput = form.querySelector('[name=name]');
+  var adminInput = form.querySelector('[name=admin]');
 
   function sync() {
     document.querySelectorAll('.key-fields').forEach(function (fs) {
@@ -103,14 +106,56 @@
     });
   }
 
+  function openCreate() {
+    form.reset();
+    form.action = '/ui/keys';
+    idInput.value = '';
+    sel.disabled = false;
+    sync();
+    dlg.showModal();
+  }
+
+  function openEdit(btn) {
+    form.reset();
+    var kind = btn.dataset.kind === 'hermes' ? 'hermes' : 'api';
+    form.action = '/ui/' + (kind === 'hermes' ? 'hermes' : 'keys') + '/' + btn.dataset.id + '/edit';
+    idInput.value = btn.dataset.id;
+    sel.value = kind;
+    sel.disabled = true;
+    nameInput.value = btn.dataset.name || '';
+    if (adminInput) {
+      adminInput.checked = btn.dataset.admin === '1';
+    }
+    if (kind === 'api') {
+      var roles = {};
+      try {
+        roles = JSON.parse(btn.dataset.roles || '{}');
+      } catch (e) {
+        roles = {};
+      }
+      form.querySelectorAll('select[name^=role_]').forEach(function (el) {
+        el.value = roles[el.name.slice(5)] || '';
+      });
+    } else {
+      var inbox = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
+      if (inbox && btn.dataset.inbox) {
+        inbox.value = btn.dataset.inbox;
+      }
+    }
+    sync();
+    if (kind === 'hermes') {
+      var inbox2 = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
+      if (inbox2) {
+        inbox2.disabled = true;
+      }
+    }
+    dlg.showModal();
+  }
+
   sel.addEventListener('change', sync);
   var add = document.getElementById('add-key');
   if (add) {
-    add.addEventListener('click', function () {
-      form.reset();
-      sync();
-      dlg.showModal();
-    });
+    add.addEventListener('click', openCreate);
   }
   var cancel = document.getElementById('key-cancel');
   if (cancel) {
@@ -118,6 +163,11 @@
       dlg.close();
     });
   }
+  document.querySelectorAll('.edit-credential').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openEdit(btn);
+    });
+  });
 })();
 
 (function () {
@@ -128,4 +178,86 @@
       }
     });
   });
+})();
+
+(function () {
+  document.querySelectorAll('tr.row-link[data-href]').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+      if (e.target.closest('a,button,input,select,textarea,label,form')) {
+        return;
+      }
+      window.location.href = row.getAttribute('data-href');
+    });
+  });
+})();
+
+(function () {
+  var dlg = document.getElementById('inbox-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = dlg.querySelector('form');
+  var add = document.getElementById('add-inbox');
+  if (add) {
+    add.addEventListener('click', function () {
+      form.reset();
+      dlg.showModal();
+    });
+  }
+  var cancel = document.getElementById('inbox-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();
+
+(function () {
+  var dlg = document.getElementById('add-domain-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = dlg.querySelector('form');
+  var add = document.getElementById('add-domain');
+  if (add) {
+    add.addEventListener('click', function () {
+      form.reset();
+      dlg.showModal();
+    });
+  }
+  var cancel = document.getElementById('add-domain-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();
+
+(function () {
+  var dlg = document.getElementById('domain-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('domain-form');
+  var del = document.getElementById('domain-delete-form');
+  var select = document.getElementById('domain-catchall');
+  var title = document.getElementById('domain-dialog-title');
+  document.querySelectorAll('.edit-domain').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.dataset.id;
+      form.action = '/ui/domains/' + id + '/catchall';
+      del.action = '/ui/domains/' + id + '/delete';
+      if (title) {
+        title.textContent = btn.dataset.name || 'Domain';
+      }
+      select.value = btn.dataset.catchall || '';
+      dlg.showModal();
+    });
+  });
+  var cancel = document.getElementById('domain-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
 })();

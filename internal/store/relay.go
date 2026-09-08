@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"gatehouse-mail/internal/auth"
@@ -110,6 +111,18 @@ func (s *Store) AckHermesEvent(ctx context.Context, id string, eventID int64) er
 	_, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE id=?`, eventID, id)
 	return err
 }
+func (s *Store) UpdateHermesConnectionName(ctx context.Context, accountID, id, name string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET name=? WHERE id=? AND account_id=?`, strings.TrimSpace(name), id, accountID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) DeleteHermesConnection(ctx context.Context, accountID, id string) error {
 	res, err := s.write.ExecContext(ctx, `DELETE FROM hermes_connections WHERE id=? AND account_id=?`, id, accountID)
 	if err != nil {

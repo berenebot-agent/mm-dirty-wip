@@ -224,3 +224,39 @@ func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error
 	}
 	return nil
 }
+
+// UpdateAPIKey changes a key's name and permissions. Admin keys carry no
+// per-mailbox roles, so any supplied roles are ignored and cleared for them.
+func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string, admin bool, roles map[string]string) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE api_keys SET name=?, is_admin=? WHERE id=? AND account_id=? AND revoked_at IS NULL`, strings.TrimSpace(name), boolInt(admin), keyID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE api_key_id=?`, keyID); err != nil {
+		return err
+	}
+	if !admin {
+		for inboxID, role := range roles {
+			role = strings.ToLower(role)
+			if role != "read" && role != "assistant" && role != "owner" {
+				return fmt.Errorf("invalid role %q", role)
+			}
+			var n int
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
+				return ErrForbidden
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
