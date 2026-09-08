@@ -209,10 +209,17 @@
     e.preventDefault();
     errorBox.hidden = true;
     errorBox.textContent = '';
+    var body = new URLSearchParams();
+    new FormData(form).forEach(function (value, key) {
+      body.append(key, value);
+    });
     fetch(form.action, {
       method: 'POST',
-      headers: { Accept: 'application/json' },
-      body: new FormData(form),
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: body.toString(),
       credentials: 'same-origin'
     }).then(function (res) {
       if (!res.ok) {
