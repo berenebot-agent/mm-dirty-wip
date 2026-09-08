@@ -458,6 +458,107 @@ func ftsQuery(q string) string {
 	}
 	return strings.Join(out, " AND ")
 }
+
+type BlockedRecord struct {
+	AccountID, InboxID, Provider, ProviderDeliveryID string
+	From                                             model.Address
+	To                                               []string
+	Subject, Reason                                  string
+	SizeBytes                                        int64
+	ReceivedAt                                       time.Time
+}
+
+// CommitBlockedInbound records metadata for mail rejected by an inbox's
+// allowed-senders list. It deliberately writes no message row, no raw file, no
+// FTS entry and no event, so the blocked mail can never reach the inbox view,
+// the API or the relay connector.
+func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (model.BlockedMessage, bool, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	defer tx.Rollback()
+	var existing string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE provider=? AND provider_delivery_id=?`, r.Provider, r.ProviderDeliveryID).Scan(&existing)
+	if err == nil {
+		_ = tx.Rollback()
+		m, e := s.GetBlockedMessage(ctx, r.AccountID, existing)
+		return m, true, e
+	}
+	if err != sql.ErrNoRows {
+		return model.BlockedMessage{}, false, err
+	}
+	id := idgen.New("blk")
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.BlockedMessage{}, false, err
+	}
+	m, err := s.GetBlockedMessage(ctx, r.AccountID, id)
+	return m, false, err
+}
+
+const blockedSelect = `SELECT id,account_id,inbox_id,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at FROM blocked_messages`
+
+func scanBlockedMessage(row interface{ Scan(...any) error }) (model.BlockedMessage, error) {
+	var m model.BlockedMessage
+	var to string
+	var received, created sql.NullString
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.From.Name, &m.From.Address, &to, &m.Subject, &m.SizeBytes, &m.Reason, &received, &created)
+	if err != nil {
+		return m, err
+	}
+	m.To = decodeStrings(to)
+	m.ReceivedAt = nullableTime(received)
+	m.CreatedAt = parseTime(created.String)
+	return m, nil
+}
+
+func (s *Store) GetBlockedMessage(ctx context.Context, accountID, id string) (model.BlockedMessage, error) {
+	m, err := scanBlockedMessage(s.read.QueryRowContext(ctx, blockedSelect+` WHERE id=? AND account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+func (s *Store) ListBlockedMessages(ctx context.Context, p model.Principal, limit int) ([]model.BlockedMessage, error) {
+	q := blockedSelect + ` WHERE account_id=?`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.BlockedMessage{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	q += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.BlockedMessage
+	for rows.Next() {
+		m, err := scanBlockedMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxID string, limit int) ([]model.Message, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {

@@ -57,18 +57,25 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('001',?)`, nowText()); err != nil {
 		return err
 	}
-	applied, err := s.migrationApplied(ctx, "002")
-	if err != nil {
-		return err
+	for _, m := range []struct{ version, sql string }{
+		{"002", migration002},
+		{"003", migration003},
+	} {
+		applied, err := s.migrationApplied(ctx, m.version)
+		if err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		if _, err := s.write.ExecContext(ctx, m.sql); err != nil {
+			return fmt.Errorf("migrate %s: %w", m.version, err)
+		}
+		if _, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(?,?)`, m.version, nowText()); err != nil {
+			return err
+		}
 	}
-	if applied {
-		return nil
-	}
-	if _, err := s.write.ExecContext(ctx, migration002); err != nil {
-		return fmt.Errorf("migrate 002: %w", err)
-	}
-	_, err = s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('002',?)`, nowText())
-	return err
+	return nil
 }
 
 func (s *Store) migrationApplied(ctx context.Context, version string) (bool, error) {

@@ -109,7 +109,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -130,13 +130,14 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	var out []model.Inbox
 	for rows.Next() {
 		var i model.Inbox
-		var domain, created string
+		var domain, allowed, created string
 		var enabled int
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &created); err != nil {
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &allowed, &created); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
 		i.Enabled = enabled != 0
+		i.AllowedSenders = decodeStrings(allowed)
 		i.CreatedAt = parseTime(created)
 		out = append(out, i)
 	}
@@ -150,9 +151,9 @@ func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (mod
 }
 func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (model.Inbox, error) {
 	var i model.Inbox
-	var domain, created string
+	var domain, allowed, created string
 	var enabled int
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &allowed, &created)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -161,6 +162,7 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	}
 	i.Address = i.LocalPart + "@" + domain
 	i.Enabled = enabled != 0
+	i.AllowedSenders = decodeStrings(allowed)
 	i.CreatedAt = parseTime(created)
 	return i, nil
 }
@@ -185,8 +187,10 @@ func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display 
 	}
 	return nil
 }
-func (s *Store) DeleteInbox(ctx context.Context, accountID, id string) error {
-	res, err := s.write.ExecContext(ctx, `DELETE FROM inboxes WHERE id=? AND account_id=?`, id, accountID)
+
+// SetInboxDisplayName sets an inbox's display name, including clearing it.
+func (s *Store) SetInboxDisplayName(ctx context.Context, accountID, id, display string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE id=? AND account_id=?`, strings.TrimSpace(display), id, accountID)
 	if err != nil {
 		return err
 	}
@@ -195,6 +199,95 @@ func (s *Store) DeleteInbox(ctx context.Context, accountID, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetInboxAllowedSenders replaces an inbox's allowed-senders allowlist. An
+// empty list restores unrestricted delivery.
+func (s *Store) SetInboxAllowedSenders(ctx context.Context, accountID, inboxID string, senders []string) error {
+	if senders == nil {
+		senders = []string{}
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET allowed_senders_json=? WHERE id=? AND account_id=?`, jsonString(senders), inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PurgeInbox permanently deletes an inbox and every row it owns, returning the
+// raw .eml paths the caller must unlink from disk. Unlike a bare DELETE it also
+// clears message_fts, decrements storage accounting, removes events and detaches
+// any domain catch-all pointing at the inbox. Attachments, drafts, blocked
+// messages, relay connections, enroll tokens and key roles cascade via their
+// inbox foreign keys.
+func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, id, accountID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, ErrNotFound
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT raw_path,size_bytes FROM messages WHERE account_id=? AND inbox_id=?`, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	var total int64
+	for rows.Next() {
+		var path string
+		var size int64
+		if err = rows.Scan(&path, &size); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+		total += size
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE account_id=? AND inbox_id=?`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM threads WHERE account_id=? AND inbox_id=?`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM events WHERE account_id=? AND inbox_id=?`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE domains SET catch_all_inbox_id=NULL WHERE account_id=? AND catch_all_inbox_id=?`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, total, accountID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inboxes WHERE id=? AND account_id=?`, id, accountID); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inbox, bool, error) {
@@ -212,12 +305,12 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if err != nil {
 		return model.Inbox{}, false, err
 	}
-	var id, actualLocal, display, cred, created string
+	var id, actualLocal, display, cred, allowed, created string
 	var enabled int
-	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &cred, &created)
+	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),allowed_senders_json,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &cred, &allowed, &created)
 	usedCatch := false
 	if err == sql.ErrNoRows && catch != "" {
-		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &cred, &created)
+		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),allowed_senders_json,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &cred, &allowed, &created)
 		usedCatch = true
 	}
 	if err == sql.ErrNoRows {
@@ -229,7 +322,7 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if enabled == 0 {
 		return model.Inbox{}, usedCatch, ErrNotFound
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, OutboundCredentialID: cred, CreatedAt: parseTime(created)}, usedCatch, nil
+	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, OutboundCredentialID: cred, AllowedSenders: decodeStrings(allowed), CreatedAt: parseTime(created)}, usedCatch, nil
 }
 func placeholders(n int) string {
 	if n <= 0 {

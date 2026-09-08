@@ -7,7 +7,8 @@ services:
     volumes:
       - ./data:/data
     ports:
-      #Note that 2 ports are listened by default to allow exposing only the inbound
-      #webhook reciever to internet if desired and keeping the API and WebUI on LAN
+      #8081 port exposes the full inbound webhook endpoint, API and web ui
       - "0.0.0.0:8081:8081"
+      #8092 port exposes only the inbound webhook endpoint.
+      #For more security only expose this port to the internet to receive mail
       - "0.0.0.0:8082:8082"

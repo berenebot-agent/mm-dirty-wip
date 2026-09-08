@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Account struct {
 	ID                         string    `json:"id"`
@@ -36,7 +39,23 @@ type Inbox struct {
 	DisplayName          string    `json:"display_name"`
 	Enabled              bool      `json:"enabled"`
 	OutboundCredentialID string    `json:"outbound_credential_id,omitempty"`
+	AllowedSenders       []string  `json:"allowed_senders,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
+}
+
+// AllowsSender reports whether the inbox accepts inbound mail from address.
+// An empty allowlist means every sender is accepted.
+func (i Inbox) AllowsSender(address string) bool {
+	if len(i.AllowedSenders) == 0 {
+		return true
+	}
+	address = strings.ToLower(strings.TrimSpace(address))
+	for _, allowed := range i.AllowedSenders {
+		if strings.EqualFold(strings.TrimSpace(allowed), address) {
+			return true
+		}
+	}
+	return false
 }
 
 type Address struct {
@@ -70,6 +89,25 @@ type Message struct {
 	HasAttachments    bool       `json:"has_attachments"`
 	SizeBytes         int64      `json:"size_bytes"`
 	RawPath           string     `json:"-"`
+	// Blocked marks a synthetic Message built for the admin Recent messages log.
+	// Blocked mail is never stored in the messages table; see BlockedMessage.
+	Blocked bool `json:"blocked,omitempty"`
+}
+
+// BlockedMessage is a metadata-only record of inbound mail rejected by an
+// inbox's allowed-senders list. It is deliberately separate from Message so it
+// can never be reached by the API, relay or inbox views.
+type BlockedMessage struct {
+	ID         string     `json:"id"`
+	AccountID  string     `json:"-"`
+	InboxID    string     `json:"inbox_id"`
+	From       Address    `json:"from"`
+	To         []string   `json:"to"`
+	Subject    string     `json:"subject"`
+	SizeBytes  int64      `json:"size_bytes"`
+	Reason     string     `json:"reason"`
+	ReceivedAt *time.Time `json:"received_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type Thread struct {

@@ -204,7 +204,6 @@ type socketWriter struct {
 func (w *socketWriter) JSON(v any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	_ = w.c.SetWriteDeadline(time.Now().Add(20 * time.Second))
 	return w.c.WriteJSON(v)
 }
 

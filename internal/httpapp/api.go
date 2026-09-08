@@ -107,9 +107,10 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, v)
 	case http.MethodPatch:
 		var in struct {
-			DisplayName          string  `json:"display_name"`
-			Enabled              *bool   `json:"enabled"`
-			OutboundCredentialID *string `json:"outbound_credential_id"`
+			DisplayName          string    `json:"display_name"`
+			Enabled              *bool     `json:"enabled"`
+			OutboundCredentialID *string   `json:"outbound_credential_id"`
+			AllowedSenders       *[]string `json:"allowed_senders"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -118,15 +119,30 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
+		if in.AllowedSenders != nil {
+			senders, err := normalizeAllowedSenders(*in.AllowedSenders)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			if err = s.Service.Store.SetInboxAllowedSenders(r.Context(), p.AccountID, id, senders); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
 		v, _ := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id)
 		writeJSON(w, 200, v)
 	case http.MethodDelete:
 		if !adminOnly(w, p) {
 			return
 		}
-		if err := s.Service.Store.DeleteInbox(r.Context(), p.AccountID, id); err != nil {
+		paths, err := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, id)
+		if err != nil {
 			mapStoreError(w, err)
 			return
+		}
+		for _, path := range paths {
+			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 		}
 		w.WriteHeader(204)
 	}
@@ -209,9 +225,13 @@ func (s *Server) apiIdentityDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range boxes {
 		if strings.EqualFold(b.Address, addr) {
-			if err = s.Service.Store.DeleteInbox(r.Context(), p.AccountID, b.ID); err != nil {
+			paths, err := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, b.ID)
+			if err != nil {
 				mapStoreError(w, err)
 				return
+			}
+			for _, path := range paths {
+				_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 			}
 			writeJSON(w, 200, map[string]bool{"deleted": true})
 			return

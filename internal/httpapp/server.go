@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
@@ -33,6 +34,7 @@ type Server struct {
 	loginLimiter *limiter
 	sendLimiter  *limiter
 	flashes      *flashStore
+	assetVersion string
 }
 
 type ctxKey int
@@ -44,10 +46,18 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	sum := sha256.Sum256(appJS)
 	return &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		sendLimiter:  newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
-		flashes:      newFlashStore(64, 64<<20)}
+		flashes:      newFlashStore(64, 64<<20),
+		assetVersion: fmt.Sprintf("%x", sum[:6])}
+}
+
+// assetURL returns a content-hashed asset path so a rebuilt binary always
+// serves fresh JS instead of a stale browser cache.
+func (s *Server) assetURL(name string) string {
+	return "/assets/" + name + "?v=" + s.assetVersion
 }
 
 func (s *Server) Handler() http.Handler {
@@ -71,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/domains/{id}/catchall", s.withSession(s.withCSRF(s.uiCatchAll)))
 	m.HandleFunc("POST /ui/domains/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteDomain)))
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
+	m.HandleFunc("POST /ui/inboxes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateInbox)))
+	m.HandleFunc("POST /ui/inboxes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteInbox)))
 	m.HandleFunc("POST /ui/keys", s.withSession(s.withCSRF(s.uiCreateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateKey)))
@@ -197,7 +209,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	_, _ = w.Write(appJS)
 }
 

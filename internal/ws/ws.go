@@ -32,10 +32,11 @@ const (
 type Upgrader struct{ CheckOrigin func(*http.Request) bool }
 
 type Conn struct {
-	c      net.Conn
-	r      *bufio.Reader
-	wmu    sync.Mutex
-	closed bool
+	c            net.Conn
+	r            *bufio.Reader
+	wmu          sync.Mutex
+	closed       bool
+	writeTimeout time.Duration
 }
 
 func tokenContains(v, want string) bool {
@@ -146,6 +147,15 @@ func (c *Conn) writeFrameLocked(op byte, p []byte) error {
 	if c.closed && op != opClose {
 		return net.ErrClosed
 	}
+	timeout := c.writeTimeout
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	// Bound each write so a dead peer can't block us forever, but clear the
+	// deadline afterwards: a stale absolute deadline would otherwise fail the
+	// next frame (e.g. a pong written by the reader) after an idle period.
+	_ = c.c.SetWriteDeadline(time.Now().Add(timeout))
+	defer c.c.SetWriteDeadline(time.Time{})
 	hdr := make([]byte, 10)
 	hdr[0] = 0x80 | op
 	n := 2

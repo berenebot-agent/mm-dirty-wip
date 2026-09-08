@@ -225,3 +225,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 `
 
 const migration002 = `ALTER TABLE accounts ADD COLUMN active_outbound_credential_id TEXT REFERENCES outbound_credentials(id) ON DELETE SET NULL;`
+
+const migration003 = `ALTER TABLE inboxes ADD COLUMN allowed_senders_json TEXT NOT NULL DEFAULT '[]';
+
+CREATE TABLE IF NOT EXISTS blocked_messages (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  received_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(provider, provider_delivery_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocked_messages_inbox_created ON blocked_messages(inbox_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_blocked_messages_account_created ON blocked_messages(account_id, created_at DESC);
+`

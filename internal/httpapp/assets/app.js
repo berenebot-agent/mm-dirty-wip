@@ -106,6 +106,10 @@
   var matrix = document.getElementById('key-matrix');
   var submitBtn = document.getElementById('key-submit');
   var rotateBtn = document.getElementById('key-rotate');
+  var hermesInbox = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
+  var hermesWarning = document.getElementById('key-hermes-warning');
+  var hermesAckRow = document.getElementById('key-hermes-ack-row');
+  var hermesAck = document.getElementById('key-hermes-ack');
   var adminSnapshot = null;
 
   function sync() {
@@ -117,6 +121,7 @@
       });
     });
     dlg.classList.toggle('key-dialog--wide', sel.value === 'api');
+    syncHermesRisk();
   }
 
   function rolesRadios() {
@@ -157,6 +162,36 @@
       adminSnapshot = null;
     }
     matrix.disabled = on;
+  }
+
+  function inboxNeedsRiskAck() {
+    if (!hermesInbox) {
+      return false;
+    }
+    var opt = hermesInbox.options[hermesInbox.selectedIndex];
+    return !opt || opt.getAttribute('data-allowlist') !== '1';
+  }
+
+  // Gate creating a Hermes relay connection for an inbox with no allowed
+  // senders: show the red warning and keep Create disabled until the operator
+  // acknowledges that the agent will reply to anyone. Skipped when editing an
+  // existing connection (the inbox is fixed and already accepted).
+  function syncHermesRisk() {
+    if (!hermesWarning || !hermesAckRow || !hermesAck || !submitBtn) {
+      return;
+    }
+    var editing = form.getAttribute('action') !== '/ui/keys';
+    var warn = sel.value === 'hermes' && !editing && inboxNeedsRiskAck();
+    hermesWarning.hidden = !warn;
+    // The row carries an inline display:flex, which wins over [hidden]; toggle
+    // display directly so it actually disappears when an allow list is set.
+    hermesAckRow.style.display = warn ? 'flex' : 'none';
+    if (!warn) {
+      hermesAck.checked = false;
+      submitBtn.disabled = false;
+      return;
+    }
+    submitBtn.disabled = !hermesAck.checked;
   }
 
   function showForm() {
@@ -377,6 +412,12 @@
   if (adminInput) {
     adminInput.addEventListener('change', syncAdmin);
   }
+  if (hermesInbox) {
+    hermesInbox.addEventListener('change', syncHermesRisk);
+  }
+  if (hermesAck) {
+    hermesAck.addEventListener('change', syncHermesRisk);
+  }
   document.querySelectorAll('#key-matrix [data-set-role]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       setAllRoles(btn.getAttribute('data-set-role'));
@@ -531,4 +572,103 @@
       }
     });
   });
+})();
+
+(function () {
+  var dlg = document.getElementById('inbox-edit-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('inbox-edit-form');
+  var deleteForm = document.getElementById('inbox-edit-delete-form');
+  var address = document.getElementById('inbox-edit-address');
+  var display = form.querySelector('[name=display]');
+  var list = document.getElementById('inbox-sender-list');
+  var input = document.getElementById('inbox-sender-input');
+  var note = document.getElementById('inbox-sender-note');
+
+  function refreshSenderNote() {
+    if (!note) {
+      return;
+    }
+    var count = list.querySelectorAll('input[name=allowed]').length;
+    note.textContent = count === 0
+      ? 'Anyone can email this inbox. Add an allowed sender to restrict who can email it.'
+      : 'Only these addresses can email this inbox.';
+  }
+
+  function addSender(value) {
+    value = (value || '').trim().toLowerCase();
+    if (!value) {
+      return;
+    }
+    var row = document.createElement('div');
+    row.className = 'row';
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden';
+    hidden.name = 'allowed';
+    hidden.value = value;
+    var label = document.createElement('span');
+    label.textContent = value;
+    label.style.flex = '1';
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary';
+    remove.textContent = 'Remove';
+    remove.style.flex = '0 0 auto';
+    remove.addEventListener('click', function () {
+      row.remove();
+      refreshSenderNote();
+    });
+    row.appendChild(hidden);
+    row.appendChild(label);
+    row.appendChild(remove);
+    list.appendChild(row);
+    refreshSenderNote();
+  }
+
+  function setSenders(raw) {
+    list.innerHTML = '';
+    (raw || '').split(',').forEach(function (entry) {
+      addSender(entry);
+    });
+    refreshSenderNote();
+  }
+
+  document.querySelectorAll('.edit-inbox').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = encodeURIComponent(btn.dataset.id || '');
+      form.action = '/ui/inboxes/' + id + '/edit';
+      deleteForm.action = '/ui/inboxes/' + id + '/delete';
+      display.value = btn.dataset.name || '';
+      address.value = btn.dataset.address || '';
+      setSenders(btn.dataset.allowed || '');
+      input.value = '';
+      dlg.showModal();
+    });
+  });
+
+  var add = document.getElementById('inbox-sender-add');
+  if (add) {
+    add.addEventListener('click', function () {
+      addSender(input.value);
+      input.value = '';
+      input.focus();
+    });
+  }
+  if (input) {
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addSender(input.value);
+        input.value = '';
+      }
+    });
+  }
+  var cancel = document.getElementById('inbox-edit-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
 })();

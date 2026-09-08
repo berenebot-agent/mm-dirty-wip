@@ -106,6 +106,22 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	if err != nil {
 		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
 	}
+	if !inbox.AllowsSender(parsed.From.Address) {
+		blockedFrom := model.Address{Name: parsed.From.Name, Address: parsed.From.Address}
+		blockedAt := parsed.Date
+		if blockedAt.IsZero() {
+			blockedAt = time.Now().UTC()
+		}
+		bm, dup, err := s.Store.CommitBlockedInbound(ctx, store.BlockedRecord{
+			AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
+			ProviderDeliveryID: msg.DeliveryID, From: blockedFrom, To: parsed.To,
+			Subject: parsed.Subject, Reason: "sender not allowed", SizeBytes: msg.Size, ReceivedAt: blockedAt,
+		})
+		if err != nil {
+			return model.Message{}, false, err
+		}
+		return model.Message{ID: bm.ID, InboxID: bm.InboxID, Direction: "inbound", From: bm.From, To: bm.To, Subject: bm.Subject, SizeBytes: bm.SizeBytes, ReceivedAt: bm.ReceivedAt, CreatedAt: bm.CreatedAt, Blocked: true}, dup, nil
+	}
 	final := s.messagePath()
 	if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 		return model.Message{}, false, err

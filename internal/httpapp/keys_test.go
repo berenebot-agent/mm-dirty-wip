@@ -67,7 +67,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.render(rr, dashboardBody, data)
 	body := rr.Body.String()
-	for _, want := range []string{"Keys &amp; connections", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Key"} {
+	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Key"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
