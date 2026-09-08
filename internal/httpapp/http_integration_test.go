@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/config"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {

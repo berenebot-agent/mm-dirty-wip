@@ -1,3 +1,3 @@
-module github.com/open-agent-inbox/open-agent-inbox
+module gatehouse-mail
 
 go 1.23

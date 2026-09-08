@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/auth"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/auth"
+	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/model"
 )
 
 func (s *Store) HasUsers(ctx context.Context) (bool,error) { var n int; err:=s.read.QueryRowContext(ctx,`SELECT count(*) FROM users`).Scan(&n); return n>0,err }

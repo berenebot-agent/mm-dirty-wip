@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"strings"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/model"
 )
 
 func (s *Store) CreateDraft(ctx context.Context,p model.Principal,d model.Draft)(model.Draft,error){if !p.CanAssist(d.InboxID){return model.Draft{},ErrForbidden};id:=idgen.New("drf");now:=nowText();_,err:=s.write.ExecContext(ctx,`INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,id,p.AccountID,d.InboxID,d.ReplyToMessageID,jsonString(d.To),jsonString(d.CC),jsonString(d.BCC),d.Subject,d.Text,d.HTML,now,now);if err!=nil{return model.Draft{},err};d.ID=id;d.CreatedAt=parseTime(now);d.UpdatedAt=d.CreatedAt;return d,nil}

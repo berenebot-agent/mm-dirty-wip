@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/model"
 )
 
 func ParseCursor(v string) int64 {

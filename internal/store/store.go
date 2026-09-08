@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	_ "github.com/open-agent-inbox/open-agent-inbox/internal/sqlite3driver"
+	"gatehouse-mail/internal/model"
+	_ "gatehouse-mail/internal/sqlite3driver"
 )
 
 type Store struct {

@@ -3,7 +3,7 @@ package events
 import (
 	"sync"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/model"
 )
 
 type Hub struct {

@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/auth"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/hermesrelay"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/auth"
+	"gatehouse-mail/internal/hermesrelay"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 type Server struct {

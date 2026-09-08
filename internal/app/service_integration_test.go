@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/config"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox) {

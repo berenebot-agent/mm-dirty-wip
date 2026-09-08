@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/mailparse"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/mailparse"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {

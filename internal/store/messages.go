@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/model"
 )
 
 type AttachmentInput struct {

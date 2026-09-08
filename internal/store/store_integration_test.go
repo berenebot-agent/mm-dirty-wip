@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
+	"gatehouse-mail/internal/model"
 )
 
 func testStore(t *testing.T) (*Store, model.User, model.Domain, []model.Inbox) {

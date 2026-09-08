@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/httpapp"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/config"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/httpapp"
+	"gatehouse-mail/internal/store"
 )
 
 func main() {

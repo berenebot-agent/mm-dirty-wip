@@ -3,11 +3,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev 
 WORKDIR /src
 COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=1 go test ./... && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/open-agent-inbox ./cmd/server
+RUN CGO_ENABLED=1 go test ./... && CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mail ./cmd/server
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 gosu && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/open-agent-inbox /usr/local/bin/open-agent-inbox
+COPY --from=build /out/gatehouse-mail /usr/local/bin/gatehouse-mail
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 VOLUME ["/data"]

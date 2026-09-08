@@ -12,15 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/cryptox"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/mailparse"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
-	mg "github.com/open-agent-inbox/open-agent-inbox/internal/transport/mailgun"
-	smtpt "github.com/open-agent-inbox/open-agent-inbox/internal/transport/smtp"
+	"gatehouse-mail/internal/config"
+	"gatehouse-mail/internal/cryptox"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/mailparse"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
+	mg "gatehouse-mail/internal/transport/mailgun"
+	smtpt "gatehouse-mail/internal/transport/smtp"
 )
 
 type Service struct {

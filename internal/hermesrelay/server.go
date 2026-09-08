@@ -15,13 +15,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/auth"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/cryptox"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/ws"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/auth"
+	"gatehouse-mail/internal/cryptox"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
+	"gatehouse-mail/internal/ws"
 )
 
 type Server struct {

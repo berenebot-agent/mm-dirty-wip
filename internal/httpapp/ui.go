@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Open Agent Inbox</title><style>

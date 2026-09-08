@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/auth"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/idgen"
+	"gatehouse-mail/internal/auth"
+	"gatehouse-mail/internal/idgen"
 )
 
 type HermesConnection struct { ID,AccountID,InboxID,Name,GatewayID,SecretEncrypted,DeliveryKeyEncrypted string; LastAckEventID int64; CreatedAt time.Time; LastConnectedAt *time.Time }

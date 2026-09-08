@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-agent-inbox/open-agent-inbox/internal/app"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/config"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/cryptox"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/events"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/model"
-	"github.com/open-agent-inbox/open-agent-inbox/internal/store"
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/config"
+	"gatehouse-mail/internal/cryptox"
+	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 type rawWS struct {

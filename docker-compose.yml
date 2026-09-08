@@ -1,10 +1,10 @@
 services:
-  open-agent-inbox:
-    image: ghcr.io/open-agent-inbox/open-agent-inbox:latest
+  gatehouse-mail:
+    image: gatehouse-mail:latest
     build: .
     restart: unless-stopped
     env_file: .env
     volumes:
       - ./data:/data
     ports:
-      - "127.0.0.1:8081:8081"
+      - "0.0.0.0:8081:8081"
