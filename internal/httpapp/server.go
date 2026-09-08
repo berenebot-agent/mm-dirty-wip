@@ -50,10 +50,8 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
+	s.registerInbound(m)
 	m.HandleFunc("GET /assets/app.js", s.asset)
-	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
-	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 	m.HandleFunc("POST /relay/enroll", s.Relay.Enroll)
 	m.HandleFunc("GET /relay", s.Relay.ServeWebSocket)
 
@@ -136,6 +134,22 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("DELETE /v1/admin/hermes/{id}", api(s.apiHermesDelete))
 
 	return s.securityHeaders(s.recoverer(m))
+}
+
+// InboundHandler serves only the health check and the authenticated provider
+// webhook ingest routes. An operator can expose a dedicated port for this
+// handler so inbound mail providers reach the ingest connector without the
+// API, UI, or Relay WebSocket being available on that port.
+func (s *Server) InboundHandler() http.Handler {
+	m := http.NewServeMux()
+	s.registerInbound(m)
+	return s.securityHeaders(s.recoverer(m))
+}
+
+func (s *Server) registerInbound(m *http.ServeMux) {
+	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
+	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
+	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 }
 
 func (s *Server) recoverer(next http.Handler) http.Handler {

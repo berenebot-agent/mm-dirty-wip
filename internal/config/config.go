@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	ListenAddr          string
+	InboundListenAddr   string
 	BaseURL             string
 	DataDir             string
 	Mode                string
@@ -30,6 +31,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:          env("LISTEN_ADDR", ":8081"),
+		InboundListenAddr:   env("INBOUND_LISTEN_ADDR", ""),
 		BaseURL:             strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
 		DataDir:             env("DATA_DIR", "/data"),
 		Mode:                strings.ToLower(env("MODE", "selfhosted")),
@@ -52,6 +54,9 @@ func Load() (Config, error) {
 	if cfg.Mode != "selfhosted" && cfg.Mode != "hosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted or hosted")
 	}
+	if cfg.InboundListenAddr != "" && cfg.InboundListenAddr == cfg.ListenAddr {
+		return Config{}, fmt.Errorf("INBOUND_LISTEN_ADDR must differ from LISTEN_ADDR")
+	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MAX_MESSAGE_BYTES is too small")
 	}
@@ -66,13 +71,28 @@ func env(name, fallback string) string {
 }
 func envBool(name string, fallback bool) bool {
 	v := strings.TrimSpace(strings.ToLower(os.Getenv(name)))
-	if v == "" { return fallback }
-	switch v { case "1", "true", "yes", "on": return true; case "0", "false", "no", "off": return false }
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
 	return fallback
 }
 func envInt(name string, fallback int) int {
-	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); if err != nil { return fallback }; return v
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil {
+		return fallback
+	}
+	return v
 }
 func envInt64(name string, fallback int64) int64 {
-	v, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(name)), 10, 64); if err != nil { return fallback }; return v
+	v, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(name)), 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return v
 }

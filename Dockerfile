@@ -11,5 +11,5 @@ COPY --from=build /out/gatehouse-mail /usr/local/bin/gatehouse-mail
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 VOLUME ["/data"]
-EXPOSE 8081
+EXPOSE 8081 8082
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

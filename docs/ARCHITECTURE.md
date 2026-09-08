@@ -37,8 +37,14 @@ Production runtime:
 1 container
 1 SQLite DB
 1 filesystem data root
-1 HTTP listener
+1–2 HTTP listeners (optional dedicated inbound webhook listener)
 ```
+
+The optional second listener is created when `INBOUND_LISTEN_ADDR` is set. It
+serves only the authenticated inbound webhook routes and `/healthz`, so an
+operator can expose a dedicated port to mail providers while keeping the main
+API/UI listener private. Both listeners run in the same process and share the
+same store.
 
 ## 2. Suggested Go packages
 
@@ -353,3 +359,5 @@ Use small in-process rate limiters for login and outbound-send endpoints. Hosted
 ## 13. HTTP and TLS boundary
 
 The application listens on plain HTTP inside its deployment network. A reverse proxy such as Nginx Proxy Manager, Caddy, or Traefik terminates public TLS and forwards the original scheme/host using trusted proxy headers.
+
+When `INBOUND_LISTEN_ADDR` is set, a second plain-HTTP listener serves only the inbound webhook connector and `/healthz`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The application never terminates TLS itself.

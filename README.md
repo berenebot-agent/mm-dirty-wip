@@ -45,6 +45,31 @@ https://your-host.example/internal/ingest/cloudflare
 
 The server resolves the recipient to its logical inbox with the same behavior as Mailgun.
 
+## Dedicated inbound listener
+
+By default one listener serves the API, web UI, Relay, and inbound webhooks. To
+keep the API and UI off the public internet, set `INBOUND_LISTEN_ADDR` to start
+a second listener that serves **only** the inbound webhook routes
+(`/internal/ingest/mailgun` and `/internal/ingest/{provider}`) plus `/healthz`:
+
+```bash
+INBOUND_LISTEN_ADDR=:8082
+```
+
+Then expose only `:8082` to your reverse proxy and keep `LISTEN_ADDR` bound to a
+private interface or blocked by the firewall. Point provider webhook URLs at the
+dedicated host/port:
+
+```text
+https://inbound.example.com/internal/ingest/mailgun
+https://inbound.example.com/internal/ingest/cloudflare
+```
+
+The ingest routes remain available on the main listener for backward
+compatibility. The dedicated listener is plain HTTP like the main listener:
+terminate TLS at the reverse proxy and do not expose the port directly to the
+internet.
+
 ## Outbound
 
 In the Admin UI, click **Add outbound provider**, pick a provider, and fill in the fields it asks for (for example Brevo only needs an API key). One configured provider is the **active** provider and is used for all sending; you can add more and switch the active one at any time.
