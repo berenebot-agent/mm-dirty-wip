@@ -1,7 +1,10 @@
 package httpapp
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -64,7 +67,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.render(rr, dashboardBody, data)
 	body := rr.Body.String()
-	for _, want := range []string{"Keys &amp; connections", `id="key-dialog"`, `data-type="hermes"`, "Hermes relay", "Create Key"} {
+	for _, want := range []string{"Keys &amp; connections", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Key"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -74,5 +77,44 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	}
 	if strings.Contains(body, "onclick=") {
 		t.Fatal("inline event handlers are blocked by CSP and must not be used")
+	}
+}
+
+func TestCreateKeyReturnsJSONSecret(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"type": {"api"}, "name": {"Agent"}, "_csrf": {csrf}, "role_" + box.ID: {"read"}}
+	req := httptest.NewRequest("POST", "/ui/keys", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("cache-control = %q, want no-store", cc)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rr.Body.String())
+	}
+	if got["notice"] != "API key created" || got["label"] == "" || got["secret"] == "" {
+		t.Fatalf("unexpected response %#v", got)
+	}
+}
+
+func TestCreateKeyRedirectsWithoutJSONAccept(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"type": {"api"}, "name": {"Agent"}, "_csrf": {csrf}, "role_" + box.ID: {"read"}}
+	req := httptest.NewRequest("POST", "/ui/keys", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
 	}
 }

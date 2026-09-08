@@ -91,10 +91,18 @@
     return;
   }
   var sel = document.getElementById('key-type');
-  var form = dlg.querySelector('form');
+  var form = document.getElementById('key-form');
   var idInput = form.querySelector('[name=id]');
   var nameInput = form.querySelector('[name=name]');
   var adminInput = form.querySelector('[name=admin]');
+  var result = document.getElementById('key-result');
+  var resultTitle = document.getElementById('key-result-title');
+  var resultLabel = document.getElementById('key-result-label');
+  var resultSecret = document.getElementById('key-result-secret');
+  var copyBtn = document.getElementById('key-copy');
+  var copyNote = document.getElementById('key-copy-note');
+  var errorBox = document.getElementById('key-error');
+  var doneBtn = document.getElementById('key-done');
 
   function sync() {
     document.querySelectorAll('.key-fields').forEach(function (fs) {
@@ -106,11 +114,52 @@
     });
   }
 
+  function showForm() {
+    form.hidden = false;
+    result.hidden = true;
+    errorBox.hidden = true;
+    errorBox.textContent = '';
+    resultSecret.textContent = '';
+    if (copyBtn) {
+      copyBtn.textContent = 'Copy';
+    }
+    if (copyNote) {
+      copyNote.hidden = true;
+    }
+  }
+
+  function showResult(data) {
+    form.hidden = true;
+    errorBox.hidden = true;
+    resultTitle.textContent = data.notice || 'Key created';
+    resultLabel.textContent = data.label || '';
+    resultSecret.textContent = data.secret || '';
+    if (copyBtn) {
+      copyBtn.textContent = 'Copy';
+    }
+    if (copyNote) {
+      copyNote.hidden = true;
+    }
+    result.hidden = false;
+  }
+
+  function selectSecret() {
+    if (!window.getSelection || !document.createRange) {
+      return;
+    }
+    var range = document.createRange();
+    range.selectNodeContents(resultSecret);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
   function openCreate() {
     form.reset();
     form.action = '/ui/keys';
     idInput.value = '';
     sel.disabled = false;
+    showForm();
     sync();
     dlg.showModal();
   }
@@ -149,7 +198,66 @@
         inbox2.disabled = true;
       }
     }
+    showForm();
     dlg.showModal();
+  }
+
+  form.addEventListener('submit', function (e) {
+    if (form.getAttribute('action') !== '/ui/keys' || typeof window.fetch !== 'function') {
+      return;
+    }
+    e.preventDefault();
+    errorBox.hidden = true;
+    errorBox.textContent = '';
+    fetch(form.action, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      body: new FormData(form),
+      credentials: 'same-origin'
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (text) {
+          throw new Error(text || 'Could not create key');
+        });
+      }
+      return res.json();
+    }).then(function (data) {
+      showResult(data);
+    }).catch(function (err) {
+      errorBox.textContent = err.message || 'Could not create key';
+      errorBox.hidden = false;
+    });
+  });
+
+  if (copyBtn) {
+    copyBtn.addEventListener('click', function () {
+      var text = resultSecret.textContent;
+      if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(function () {
+            copyBtn.textContent = 'Copy';
+          }, 1500);
+        }).catch(function () {
+          if (copyNote) {
+            copyNote.hidden = false;
+          }
+          selectSecret();
+        });
+        return;
+      }
+      if (copyNote) {
+        copyNote.hidden = false;
+      }
+      selectSecret();
+    });
+  }
+
+  if (doneBtn) {
+    doneBtn.addEventListener('click', function () {
+      dlg.close();
+      window.location.reload();
+    });
   }
 
   sel.addEventListener('change', sync);

@@ -138,7 +138,9 @@ func TestAppJSServed(t *testing.T) {
 	if rr.Code != 200 || !strings.Contains(rr.Header().Get("Content-Type"), "javascript") {
 		t.Fatalf("asset %d %q", rr.Code, rr.Header().Get("Content-Type"))
 	}
-	if !strings.Contains(rr.Body.String(), "provider-dialog") || !strings.Contains(rr.Body.String(), "key-dialog") {
-		t.Fatal("asset missing dialog wiring")
+	for _, want := range []string{"provider-dialog", "key-dialog", "key-result", "isSecureContext", "navigator.clipboard"} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Fatalf("asset missing %q", want)
+		}
 	}
 }
