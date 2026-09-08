@@ -462,7 +462,7 @@ func titleRole(role string) string {
 }
 
 func hermesEnvBlock(baseURL, gatewayID, secret, deliveryKey string) string {
-	return fmt.Sprintf("GATEWAY_RELAY_URL=%s\nGATEWAY_RELAY_ID=%s\nGATEWAY_RELAY_SECRET=%s\nGATEWAY_RELAY_DELIVERY_KEY=%s",
+	return fmt.Sprintf("GATEWAY_RELAY_URL=%s\nGATEWAY_RELAY_ID=%s\nGATEWAY_RELAY_SECRET=%s\nGATEWAY_RELAY_DELIVERY_KEY=%s\nGATEWAY_RELAY_PLATFORMS=email",
 		baseURL, gatewayID, secret, deliveryKey)
 }
 

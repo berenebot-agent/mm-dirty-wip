@@ -2,6 +2,7 @@ package hermesrelay
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -77,11 +78,11 @@ func (w *rawWS) writeJSON(v any) error {
 	_, err := w.c.Write(append(append(hdr, mask...), payload...))
 	return err
 }
-func (w *rawWS) readJSON(v any) error {
+func (w *rawWS) readFrame() ([]byte, error) {
 	_ = w.c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	h := make([]byte, 2)
 	if _, err := io.ReadFull(w.r, h); err != nil {
-		return err
+		return nil, err
 	}
 	n := uint64(h[1] & 0x7f)
 	if n == 126 {
@@ -95,6 +96,13 @@ func (w *rawWS) readJSON(v any) error {
 	}
 	data := make([]byte, n)
 	if _, err := io.ReadFull(w.r, data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+func (w *rawWS) readJSON(v any) error {
+	data, err := w.readFrame()
+	if err != nil {
 		return err
 	}
 	return json.Unmarshal(data, v)
@@ -116,7 +124,7 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, RelayEnrollTTL: time.Minute}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
 	svc, err := app.New(cfg, st, hub)
 	if err != nil {
@@ -148,8 +156,15 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
 		t.Fatal(err)
 	}
+	rawDescriptor, err := client.readFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(rawDescriptor, []byte("\n")) {
+		t.Fatalf("descriptor frame must be newline-terminated: %q", rawDescriptor)
+	}
 	var descriptor map[string]any
-	if err = client.readJSON(&descriptor); err != nil {
+	if err = json.Unmarshal(rawDescriptor, &descriptor); err != nil {
 		t.Fatal(err)
 	}
 	if descriptor["type"] != "descriptor" {

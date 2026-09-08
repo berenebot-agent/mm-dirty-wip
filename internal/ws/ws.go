@@ -125,7 +125,9 @@ func (c *Conn) WriteJSON(v any) error {
 	if err != nil {
 		return err
 	}
-	return c.writeFrame(opText, b)
+	// The relay contract is newline-delimited JSON: every frame must be
+	// newline-terminated or the gateway's reader never dispatches it.
+	return c.writeFrame(opText, append(b, '\n'))
 }
 func (c *Conn) ReadJSON(v any) error {
 	_, b, err := c.readMessage()
