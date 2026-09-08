@@ -30,7 +30,7 @@ func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MailgunSigningKey: "signing-secret", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, RelayEnrollTTL: time.Minute, LoginLimitPerMinute: 10, SendLimitPerMinute: 60}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MailgunSigningKey: "signing-secret", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 10, SendLimitPerMinute: 60}
 	svc, err := New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)

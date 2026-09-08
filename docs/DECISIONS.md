@@ -154,11 +154,11 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 **Reason:** A self-hosted operator should be able to create a relay connection and paste the resulting environment variables without a separate token-exchange step or a hosted identity token.
 
-## D019 — Optional dedicated inbound listener
+## D019 — Dedicated inbound webhook listener
 
-**Decision:** When `INBOUND_LISTEN_ADDR` is set, the application starts a second HTTP listener that serves only the authenticated inbound webhook routes (`/internal/ingest/mailgun`, `/internal/ingest/{provider}`) and `/healthz`. The main listener continues to serve all routes.
+**Decision:** The application always runs a second HTTP listener on `:8082` that serves only the authenticated inbound webhook routes (`/internal/ingest/mailgun`, `/internal/ingest/{provider}`) and `/healthz`. The main listener continues to serve all routes.
 
-**Reason:** This lets an operator expose only the inbound connector to the public internet while keeping the API, web UI, and Relay WebSocket on a private interface or firewall, reducing public attack surface. It remains one process, one container, and one store, so D003 is preserved. Ingest routes stay on the main listener for backward compatibility; the feature is opt-in and defaults to disabled.
+**Reason:** This lets an operator expose only the inbound connector to the public internet while keeping the API, web UI, and Relay WebSocket on a private interface or firewall, reducing public attack surface. It remains one process, one container, and one store, so D003 is preserved. Ingest routes stay on the main listener for backward compatibility. The port is fixed rather than configurable so the split works with no extra configuration.
 
 ## Future extension register
 

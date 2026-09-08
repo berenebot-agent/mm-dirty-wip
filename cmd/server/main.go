@@ -64,15 +64,12 @@ func main() {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)
 	}
-	listeners := []*listener{mainListener}
-	if cfg.InboundListenAddr != "" {
-		inboundListener, err := start("inbound", cfg.InboundListenAddr, h.InboundHandler())
-		if err != nil {
-			log.Error("startup failed", "error", err)
-			os.Exit(1)
-		}
-		listeners = append(listeners, inboundListener)
+	inboundListener, err := start("inbound", config.InboundAddr, h.InboundHandler())
+	if err != nil {
+		log.Error("startup failed", "error", err)
+		os.Exit(1)
 	}
+	listeners := []*listener{mainListener, inboundListener}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

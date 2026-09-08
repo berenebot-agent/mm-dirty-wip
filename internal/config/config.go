@@ -8,9 +8,13 @@ import (
 	"time"
 )
 
+// InboundAddr is the fixed address of the dedicated inbound webhook listener.
+// It always runs alongside the main listener and serves only the authenticated
+// provider ingest routes plus /healthz.
+const InboundAddr = ":8082"
+
 type Config struct {
 	ListenAddr          string
-	InboundListenAddr   string
 	BaseURL             string
 	DataDir             string
 	Mode                string
@@ -22,7 +26,6 @@ type Config struct {
 	MaxMessageBytes     int64
 	DefaultQuotaBytes   int64
 	SessionTTL          time.Duration
-	RelayEnrollTTL      time.Duration
 	RelayRequireBearer  bool
 	LoginLimitPerMinute int
 	SendLimitPerMinute  int
@@ -31,7 +34,6 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		ListenAddr:          env("LISTEN_ADDR", ":8081"),
-		InboundListenAddr:   env("INBOUND_LISTEN_ADDR", ""),
 		BaseURL:             strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
 		DataDir:             env("DATA_DIR", "/data"),
 		Mode:                strings.ToLower(env("MODE", "selfhosted")),
@@ -43,7 +45,6 @@ func Load() (Config, error) {
 		MaxMessageBytes:     envInt64("MAX_MESSAGE_BYTES", 30<<20),
 		DefaultQuotaBytes:   envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
 		SessionTTL:          time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
-		RelayEnrollTTL:      time.Duration(envInt("RELAY_ENROLL_TTL_MINUTES", 15)) * time.Minute,
 		RelayRequireBearer:  envBool("RELAY_REQUIRE_CALLER_AUTH", false),
 		LoginLimitPerMinute: envInt("LOGIN_LIMIT_PER_MINUTE", 10),
 		SendLimitPerMinute:  envInt("SEND_LIMIT_PER_MINUTE", 60),
@@ -54,8 +55,8 @@ func Load() (Config, error) {
 	if cfg.Mode != "selfhosted" && cfg.Mode != "hosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted or hosted")
 	}
-	if cfg.InboundListenAddr != "" && cfg.InboundListenAddr == cfg.ListenAddr {
-		return Config{}, fmt.Errorf("INBOUND_LISTEN_ADDR must differ from LISTEN_ADDR")
+	if cfg.ListenAddr == InboundAddr {
+		return Config{}, fmt.Errorf("LISTEN_ADDR must differ from the inbound listener %s", InboundAddr)
 	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MAX_MESSAGE_BYTES is too small")

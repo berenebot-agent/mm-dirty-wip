@@ -47,18 +47,15 @@ The server resolves the recipient to its logical inbox with the same behavior as
 
 ## Dedicated inbound listener
 
-By default one listener serves the API, web UI, Relay, and inbound webhooks. To
-keep the API and UI off the public internet, set `INBOUND_LISTEN_ADDR` to start
-a second listener that serves **only** the inbound webhook routes
-(`/internal/ingest/mailgun` and `/internal/ingest/{provider}`) plus `/healthz`:
+The server always listens on two ports:
 
-```bash
-INBOUND_LISTEN_ADDR=:8082
-```
+- `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
+- `:8082` is a dedicated listener that serves **only** the inbound webhook routes
+  (`/internal/ingest/mailgun` and `/internal/ingest/{provider}`) plus `/healthz`.
 
-Then expose only `:8082` to your reverse proxy and keep `LISTEN_ADDR` bound to a
-private interface or blocked by the firewall. Point provider webhook URLs at the
-dedicated host/port:
+To keep the API and UI off the public internet, expose only `:8082` to your
+reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
+the firewall. Point provider webhook URLs at the dedicated host/port:
 
 ```text
 https://inbound.example.com/internal/ingest/mailgun
@@ -124,9 +121,9 @@ Mailbox permissions are assigned per inbox:
 
 ## Hermes Relay
 
-From the Admin UI choose an inbox and create a Hermes enrollment command, then run the displayed `hermes gateway enroll` command on the Hermes host. Email delivered to that inbox is replayed over Hermes Relay and replies egress through the inbox's configured outbound provider.
+From the Admin UI use **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host's environment. The block includes `GATEWAY_RELAY_PLATFORMS=email`, which the gateway must advertise to match this connector's email descriptor. Email delivered to that inbox is replayed over Hermes Relay and replies egress through the inbox's configured outbound provider.
 
-Hermes Relay is isolated under `internal/hermesrelay` because the upstream contract is experimental.
+The one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) remains available for hosted provisioning. Hermes Relay is isolated under `internal/hermesrelay` because the upstream contract is experimental.
 
 ## Backup
 
