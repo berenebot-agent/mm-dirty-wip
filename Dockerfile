@@ -9,6 +9,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 gosu && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/open-agent-inbox /usr/local/bin/open-agent-inbox
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

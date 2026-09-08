@@ -28,8 +28,8 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddr:          env("LISTEN_ADDR", ":8080"),
-		BaseURL:             strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
+		ListenAddr:          env("LISTEN_ADDR", ":8081"),
+		BaseURL:             strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
 		DataDir:             env("DATA_DIR", "/data"),
 		Mode:                strings.ToLower(env("MODE", "selfhosted")),
 		AllowRegistration:   envBool("ALLOW_REGISTRATION", false),
