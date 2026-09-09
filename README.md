@@ -141,4 +141,12 @@ Go is not installed on the host; all Go commands run via Docker through `./gateh
 
 Or use the tiered runner (CI parity): `./tests/run.sh`.
 
+## Licence
+
+Gatehouse Email is licensed under the GNU Affero General Public License v3.0
+(AGPL-3.0). See [LICENSE](LICENSE).
+
+Third-party components and their licences are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 Implementation decisions and acceptance criteria are in `docs/`.

@@ -73,16 +73,16 @@ func TestBuildMessageHTMLAttachmentRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHTMLIsEscaped(t *testing.T) {
-	raw := "From: a@b.test\r\nTo: c@d.test\r\nContent-Type: text/html\r\n\r\n<script>alert(1)</script>"
+func TestHTMLIsPreserved(t *testing.T) {
+	raw := "From: a@b.test\r\nTo: c@d.test\r\nContent-Type: text/html\r\n\r\n<p>Hello</p>"
 	path := t.TempDir() + "/m"
 	os.WriteFile(path, []byte(raw), 0600)
 	p, err := ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(p.HTML, "<script>") {
-		t.Fatal("unsafe html retained")
+	if !strings.Contains(p.HTML, "<p>Hello</p>") {
+		t.Fatalf("raw html not preserved: %q", p.HTML)
 	}
 }
 

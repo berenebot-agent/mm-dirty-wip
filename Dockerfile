@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /out/gatehouse-mail /usr/local/bin/gatehouse-mail
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/gatehouse-mail/
 VOLUME ["/data"]
 EXPOSE 8081 8082
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

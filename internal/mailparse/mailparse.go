@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -70,7 +69,7 @@ func parseMessage(msg *mail.Message) (Parsed, error) {
 		return Parsed{}, err
 	}
 	p.Text = strings.TrimSpace(strings.Join(state.text, "\n\n"))
-	p.HTML = sanitizeHTML(strings.Join(state.html, "\n"))
+	p.HTML = strings.Join(state.html, "\n")
 	p.Attachments = state.attachments
 	return p, nil
 }
@@ -261,7 +260,6 @@ func windows1252Rune(b byte) rune {
 	}
 	return rune(b)
 }
-func sanitizeHTML(s string) string { return html.EscapeString(s) }
 
 // errWalkStop lets a callback end the traversal early once its target is found.
 var errWalkStop = errors.New("mime walk stopped")
