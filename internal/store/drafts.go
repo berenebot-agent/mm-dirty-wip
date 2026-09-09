@@ -91,6 +91,40 @@ func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID strin
 	}
 	return out, rows.Err()
 }
+
+// CountDrafts returns the number of drafts in an inbox (or across all
+// accessible inboxes when inboxID is empty).
+func (s *Store) CountDrafts(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	if inboxID != "" && !p.CanAssist(inboxID) {
+		return 0, ErrForbidden
+	}
+	q := `SELECT count(*) FROM drafts WHERE account_id=?`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		q += ` AND inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := []string{}
+		for id, role := range p.MailboxRoles {
+			if role == "assistant" || role == "owner" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	var n int
+	if err := s.read.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {
 	old, err := s.GetDraft(ctx, p, d.ID)
 	if err != nil {

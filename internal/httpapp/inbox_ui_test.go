@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,83 @@ func TestUIInboxViewListsMessages(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("inbox view missing %q", want)
 		}
+	}
+}
+
+func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	seedInbound(t, svc, box, "d1", "<m1@test>", "Subject", "body")
+	// Two drafts.
+	for i := 0; i < 2; i++ {
+		if _, err := svc.Store.CreateDraft(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, model.Draft{InboxID: box.ID, To: []string{"a@example.net"}, Subject: fmt.Sprintf("Draft %d", i), Text: "draft"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One pending outbound message.
+	setActiveBrevo(t, svc, u.AccountID)
+	if _, err := svc.Send(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, app.SendInput{InboxID: box.ID, To: []string{"b@example.net"}, Subject: "Queued", Text: "hi"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	// Inbox view shows both badges and the new date format.
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ui/inboxes/"+box.ID, nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("inbox view %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Drafts (2)") {
+		t.Fatalf("inbox view missing drafts badge: %s", body)
+	}
+	if !strings.Contains(body, "Outbox (1)") {
+		t.Fatalf("inbox view missing outbox badge: %s", body)
+	}
+	if !regexp.MustCompile(`\d{2}:\d{2} \d{1,2}-[A-Z][a-z]{2}-\d{2}`).MatchString(body) {
+		t.Fatalf("inbox view missing new date format: %s", body)
+	}
+
+	// Drafts view shows the drafts badge.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/ui/inboxes/"+box.ID+"/drafts", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("drafts view %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Drafts (2)") {
+		t.Fatalf("drafts view missing drafts badge: %s", rr.Body.String())
+	}
+
+	// Outbox view shows the outbox badge.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/ui/inboxes/"+box.ID+"/outbox", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("outbox view %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Outbox (1)") {
+		t.Fatalf("outbox view missing outbox badge: %s", rr.Body.String())
+	}
+}
+
+func TestUIDraftsOutboxCountsEmpty(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ui/inboxes/"+box.ID, nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("inbox view %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "Drafts (") || strings.Contains(body, "Outbox (") {
+		t.Fatalf("empty inbox should not show count badges: %s", body)
 	}
 }
 

@@ -59,6 +59,8 @@ type pageData struct {
 	InboxAddr      map[string]string
 	Unread         map[string]int
 	UnreadCount    int
+	DraftCount     int
+	OutboxCount    int
 	HasMore        bool
 	Before         string
 	Folder         string
@@ -898,7 +900,7 @@ func snippetText(v string, n int) string {
 }
 
 func mailDate(t time.Time) string {
-	return t.Format("02-Jan-2006")
+	return t.Format("15:04 2-Jan-06")
 }
 
 func filesize(n int64) string {

@@ -331,6 +331,34 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 	return out, rows.Err()
 }
 
+// CountOutbox returns the number of pending or failed outbound messages for
+// an inbox (or across all accessible inboxes when inboxID is empty).
+func (s *Store) CountOutbox(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	q := `SELECT count(*) FROM messages m WHERE m.account_id=? AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		if !p.CanRead(inboxID) {
+			return 0, ErrForbidden
+		}
+		q += ` AND m.inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	var n int
+	if err := s.read.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // DeleteOutboxMessage removes a pending or failed outbound message (cancelling
 // a queued send or discarding a failed one).
 func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
