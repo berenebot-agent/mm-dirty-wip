@@ -90,6 +90,39 @@ func (s *Store) DeleteInboundCredential(ctx context.Context, accountID, id strin
 	return nil
 }
 
+// RenameInboundCredential changes the display name of a receive path without
+// touching its provider or encrypted configuration.
+func (s *Store) RenameInboundCredential(ctx context.Context, accountID, id, name string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE inbound_credentials SET name=?,updated_at=? WHERE id=? AND account_id=?`, name, nowText(), id, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// LastReceivedByInboundCredential returns the most recent inbound message time
+// for each inbound credential, inferred from the domains currently assigned to
+// it. Credentials with no assigned domain or no mail are absent from the map.
+func (s *Store) LastReceivedByInboundCredential(ctx context.Context, accountID string) (map[string]time.Time, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT d.inbound_credential_id, MAX(COALESCE(m.received_at, m.created_at)) FROM messages m JOIN inboxes i ON i.id=m.inbox_id JOIN domains d ON d.id=i.domain_id WHERE m.account_id=? AND m.direction='inbound' AND d.inbound_credential_id IS NOT NULL GROUP BY d.inbound_credential_id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id, when string
+		if err = rows.Scan(&id, &when); err != nil {
+			return nil, err
+		}
+		out[id] = parseTime(when)
+	}
+	return out, rows.Err()
+}
+
 // SetDomainInboundCredential assigns (or clears, with an empty id) the receive
 // connection for a domain. The credential must belong to the same account.
 func (s *Store) SetDomainInboundCredential(ctx context.Context, accountID, domainID, credentialID string) error {
