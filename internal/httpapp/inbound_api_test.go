@@ -213,8 +213,6 @@ func TestDashboardRendersInboundControls(t *testing.T) {
 		"tab=settings",
 		"domain-receive",
 		"add-domain-receive",
-		"http://example.test/internal/ingest/mailgun/raw-mime",
-		"http://example.test/internal/ingest/cloudflare",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)

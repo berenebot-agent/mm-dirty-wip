@@ -161,30 +161,6 @@
     dlg.showModal();
   }
 
-  function openEdit(btn) {
-    form.reset();
-    idInput.value = btn.dataset.id;
-    sel.value = btn.dataset.provider;
-    nameInput.value = btn.dataset.name;
-    lastDefault = providerDescription();
-    var cfg = {};
-    try {
-      cfg = JSON.parse(btn.dataset.config || '{}');
-    } catch (e) {
-      cfg = {};
-    }
-    form.querySelectorAll('input,select').forEach(function (el) {
-      if (el.name && el.name.indexOf('icfg_') === 0) {
-        var key = el.name.split('_').slice(2).join('_');
-        if (cfg[key] !== undefined && cfg[key] !== null) {
-          el.value = String(cfg[key]);
-        }
-      }
-    });
-    sync();
-    dlg.showModal();
-  }
-
   sel.addEventListener('change', function () {
     sync();
     applyDefaultName();
@@ -199,11 +175,6 @@
       dlg.close();
     });
   }
-  document.querySelectorAll('.edit-inbound').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      openEdit(btn);
-    });
-  });
   var assignDomain = form.querySelector('[name=assign_domain]');
   if (assignDomain && assignDomain.value !== '') {
     open();
@@ -741,6 +712,146 @@
     });
   });
   var cancel = document.getElementById('domain-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();
+
+(function () {
+  var cells = document.querySelectorAll('.assign-cell');
+  if (!cells.length) {
+    return;
+  }
+
+  function closeAll(except) {
+    cells.forEach(function (cell) {
+      if (cell !== except) {
+        cell.classList.remove('editing');
+      }
+    });
+  }
+
+  function openCreateDialog(form) {
+    var isProvider = form.getAttribute('action').indexOf('/provider') !== -1;
+    var dlg = document.getElementById(isProvider ? 'provider-dialog' : 'inbound-dialog');
+    var trigger = document.getElementById(isProvider ? 'add-provider' : 'add-inbound');
+    if (!dlg || !trigger) {
+      return;
+    }
+    var assign = dlg.querySelector('form [name=assign_domain]');
+    if (assign) {
+      assign.value = form.getAttribute('data-domain') || '';
+    }
+    trigger.click();
+  }
+
+  cells.forEach(function (cell) {
+    var chip = cell.querySelector('.assign-chip');
+    var form = cell.querySelector('.assign-form');
+    var select = cell.querySelector('.assign-select');
+    if (!chip || !form || !select) {
+      return;
+    }
+    chip.addEventListener('click', function () {
+      closeAll(cell);
+      cell.classList.add('editing');
+      select.focus();
+    });
+    select.addEventListener('change', function () {
+      if (select.value === '__add_provider__' || select.value === '__add_inbound__') {
+        cell.classList.remove('editing');
+        openCreateDialog(form);
+        return;
+      }
+      form.submit();
+    });
+    select.addEventListener('blur', function () {
+      window.setTimeout(function () {
+        cell.classList.remove('editing');
+      }, 120);
+    });
+    cell.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        cell.classList.remove('editing');
+      }
+    });
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.assign-cell')) {
+      closeAll(null);
+    }
+  });
+})();
+
+(function () {
+  var dlg = document.getElementById('inbound-rename-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('inbound-rename-form');
+  var input = form.querySelector('[name=name]');
+  document.querySelectorAll('.rename-inbound').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      form.action = '/ui/inbound/' + encodeURIComponent(btn.dataset.id) + '/rename';
+      input.value = btn.dataset.name || '';
+      dlg.showModal();
+      input.focus();
+    });
+  });
+  var cancel = document.getElementById('inbound-rename-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();
+
+(function () {
+  var dlg = document.getElementById('inbound-rotate-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('inbound-rotate-form');
+  var idInput = form.querySelector('[name=id]');
+  var note = document.getElementById('inbound-rotate-note');
+  var fieldsets = form.querySelectorAll('.inbound-rotate-fields');
+
+  function sync() {
+    var provider = form.getAttribute('data-provider') || '';
+    var hasFields = false;
+    fieldsets.forEach(function (fs) {
+      var active = fs.getAttribute('data-provider') === provider;
+      fs.style.display = active ? '' : 'none';
+      fs.querySelectorAll('input').forEach(function (el) {
+        el.disabled = !active;
+        if (active) {
+          hasFields = true;
+        }
+      });
+    });
+    if (note) {
+      note.textContent = hasFields
+        ? 'Enter the new secret below. The current secret stops working as soon as you save.'
+        : 'A new secret and Worker code will be generated. The current Worker stops working until you paste the new code.';
+    }
+  }
+
+  document.querySelectorAll('.rotate-inbound').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      form.action = '/ui/inbound/' + encodeURIComponent(btn.dataset.id) + '/rotate';
+      form.setAttribute('data-provider', btn.dataset.provider || '');
+      idInput.value = btn.dataset.id || '';
+      form.querySelectorAll('input[type=password]').forEach(function (el) {
+        el.value = '';
+      });
+      sync();
+      dlg.showModal();
+    });
+  });
+  var cancel = document.getElementById('inbound-rotate-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {
       dlg.close();

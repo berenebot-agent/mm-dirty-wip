@@ -76,6 +76,26 @@ func (s *Store) pruneDeliveryLogTx(ctx context.Context, tx *sql.Tx, accountID st
 	return err
 }
 
+// LastSentByOutboundCredential returns the most recent successful send time for
+// each outbound credential in the account, keyed by credential id. Credentials
+// that have never sent are absent from the map.
+func (s *Store) LastSentByOutboundCredential(ctx context.Context, accountID string) (map[string]time.Time, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT credential_id, MAX(created_at) FROM outbound_delivery_log WHERE account_id=? AND status='sent' AND credential_id IS NOT NULL GROUP BY credential_id`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var id, created string
+		if err = rows.Scan(&id, &created); err != nil {
+			return nil, err
+		}
+		out[id] = parseTime(created)
+	}
+	return out, rows.Err()
+}
+
 // ListDeliveryAttempts returns the delivery-log rows for a credential, newest
 // first, using keyset pagination on the row id. beforeID of 0 means the newest
 // page. The credential must belong to the account or ErrNotFound is returned.
