@@ -352,17 +352,18 @@ func TestUIComposeCSRFAndSend(t *testing.T) {
 		t.Fatalf("compose send %d: %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/ui/messages/") {
+	if loc != "/ui/inboxes/"+box.ID+"/sent" {
 		t.Fatalf("redirect %q", loc)
 	}
-	id := strings.TrimPrefix(loc, "/ui/messages/")
-	sent, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, id)
+	// The sent message was created.
+	msgs, err := svc.Store.ListMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "outbound", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent.Subject != "Composed" || sent.Direction != "outbound" {
-		t.Fatalf("sent %#v", sent)
+	if len(msgs) != 1 || msgs[0].Subject != "Composed" {
+		t.Fatalf("sent %#v", msgs)
 	}
+	sent := msgs[0]
 	atts, _ := svc.Store.ListAttachments(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, sent.ID)
 	if len(atts) != 1 || atts[0].Filename != "upload.txt" {
 		t.Fatalf("sent attachments %#v", atts)
@@ -385,9 +386,21 @@ func TestUIReplyAndForward(t *testing.T) {
 	if rr.Code != 303 {
 		t.Fatalf("reply %d: %s", rr.Code, rr.Body.String())
 	}
-	reply, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, strings.TrimPrefix(rr.Header().Get("Location"), "/ui/messages/"))
+	if loc := rr.Header().Get("Location"); loc != "/ui/inboxes/"+box.ID+"/sent" {
+		t.Fatalf("reply redirect %q", loc)
+	}
+	threadMsgs, err := svc.Store.ListMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, ThreadID: original.ThreadID, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var reply model.Message
+	for _, m := range threadMsgs {
+		if m.Direction == "outbound" {
+			reply = m
+		}
+	}
+	if reply.ID == "" {
+		t.Fatalf("no reply in thread %#v", threadMsgs)
 	}
 	if reply.ThreadID != original.ThreadID {
 		t.Fatal("reply should stay in the same thread")
@@ -406,9 +419,21 @@ func TestUIReplyAndForward(t *testing.T) {
 	if rr.Code != 303 {
 		t.Fatalf("forward %d: %s", rr.Code, rr.Body.String())
 	}
-	fwd, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, strings.TrimPrefix(rr.Header().Get("Location"), "/ui/messages/"))
+	if loc := rr.Header().Get("Location"); loc != "/ui/inboxes/"+box.ID+"/sent" {
+		t.Fatalf("forward redirect %q", loc)
+	}
+	fwdMsgs, err := svc.Store.ListMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "outbound", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
+	}
+	var fwd model.Message
+	for _, m := range fwdMsgs {
+		if m.Subject == "Fwd: Original" {
+			fwd = m
+		}
+	}
+	if fwd.ID == "" {
+		t.Fatalf("no forward %#v", fwdMsgs)
 	}
 	if !strings.Contains(fwd.Text, "---------- Forwarded message ----------") || !strings.Contains(fwd.Text, "original body") {
 		t.Fatalf("forward body %q", fwd.Text)

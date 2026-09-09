@@ -26,7 +26,7 @@ const inboxBody = `<div class="toolbar"><a class="btn secondary" href="/dashboar
 {{if not .OutboundReady}}<div class="banner warn">No outbound provider is configured. <a href="/dashboard">Add one</a> before sending.</div>{{end}}
 <section class="card">{{if .Messages}}<div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>{{if eq .Folder "sent"}}To{{else}}From{{end}}</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq $.Folder "sent"}}{{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.BasePath}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this folder yet.</p>{{end}}</section>`
 
-const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><input type="file" name="attachments" multiple>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
 
 const draftsBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard">← Dashboard</a></div>
 <div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1></div>
@@ -235,8 +235,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		in.InboxID = box.ID
-		res, err := s.Service.Send(r.Context(), p, in, "")
-		if err != nil {
+		if _, err := s.Service.Send(r.Context(), p, in, ""); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -246,7 +245,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 		}
 		_ = s.Service.Store.DeleteDraft(r.Context(), p, draftID)
-		http.Redirect(w, r, "/ui/messages/"+res.Message.ID, 303)
+		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
 		return
 	}
 	// Save draft: create or update.
@@ -289,7 +288,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/edit?notice=Draft+saved", 303)
+	http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
 }
 
 func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
@@ -550,7 +549,7 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/edit?notice=Draft+saved", 303)
+		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
 		return
 	}
 	s.submitMessage(w, r, p, in, "New message", formURL, "/ui/inboxes/"+box.ID+"/send", "/ui/inboxes/"+box.ID)
@@ -644,7 +643,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string
 }
 
 func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.Principal, in app.SendInput, title, formURL, action, cancel string) {
-	res, err := s.Service.Send(r.Context(), p, in, "")
+	_, err := s.Service.Send(r.Context(), p, in, "")
 	if err != nil {
 		s.renderComposeError(w, r, title, formURL, action, cancel, in, err)
 		return
@@ -652,7 +651,7 @@ func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.P
 	if tok := r.Form.Get("_flash"); tok != "" {
 		s.flashes.take(tok)
 	}
-	http.Redirect(w, r, "/ui/messages/"+res.Message.ID, 303)
+	http.Redirect(w, r, returnTo(r, in.InboxID, "sent"), 303)
 }
 
 // renderComposeError redirects back to the compose form (Post/Redirect/Get)
@@ -876,6 +875,21 @@ func formAddresses(r *http.Request, name string) []string {
 		}
 	}
 	return out
+}
+
+// returnTo resolves the "previous screen" a compose form should redirect to
+// after save/send. It prefers the form's return_to field (the page the user
+// came from) and falls back to the inbox folder. Only same-origin relative
+// paths are accepted to avoid open-redirect.
+func returnTo(r *http.Request, inboxID, fallbackFolder string) string {
+	dest := strings.TrimSpace(r.Form.Get("return_to"))
+	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
+		dest = "/ui/inboxes/" + inboxID
+		if fallbackFolder != "" {
+			dest += "/" + fallbackFolder
+		}
+	}
+	return dest
 }
 
 func rewriteCIDs(body string, atts []model.Attachment) string {
