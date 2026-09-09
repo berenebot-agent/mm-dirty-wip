@@ -30,15 +30,38 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	guide := "# Gatehouse Email\n\n" +
 		"Authenticate with `Authorization: Bearer <key>`.\n\n" +
 		"Start with `GET /v1/bootstrap` to discover accessible inboxes and mailbox roles.\n\n" +
-		"Core operations:\n" +
-		"- `GET /v1/messages`\n" +
-		"- `GET /v1/threads`\n" +
-		"- `GET /v1/search?q=...`\n" +
-		"- `GET /v1/events/stream?after=evt_...`\n" +
-		"- `GET/POST /v1/drafts`\n" +
-		"- `POST /v1/send` (Owner)\n" +
-		"- `POST /v1/messages/{id}/reply` (Owner)\n\n" +
-		"Send and reply accept optional attachments as base64 JSON: [{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"...\"}].\n\n" +
+		"## Inboxes\n" +
+		"- `GET /v1/inboxes` — list inboxes you can access\n" +
+		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
+		"- `POST /v1/inboxes` (Admin) — create an inbox\n\n" +
+		"## Messages\n" +
+		"- `GET /v1/messages?inbox={id}&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages\n" +
+		"- `GET /v1/messages/{id}` — message detail\n" +
+		"- `PATCH /v1/messages/{id}` — set `read`/`archived`\n" +
+		"- `DELETE /v1/messages/{id}` (Assistant/Owner)\n" +
+		"- `GET /v1/messages/{id}/attachments` — attachment metadata\n" +
+		"- `GET /v1/attachments/{id}` — download attachment bytes\n\n" +
+		"## Threads\n" +
+		"- `GET /v1/threads?inbox={id}`\n" +
+		"- `GET /v1/threads/{id}` and `GET /v1/threads/{id}/messages`\n\n" +
+		"## Search\n" +
+		"- `GET /v1/search?q=...&inbox={id}&from=...&to=...&has_attachment=true` — FTS5 search\n\n" +
+		"## Events (realtime)\n" +
+		"- `GET /v1/events?after=evt_...` — incremental history\n" +
+		"- `GET /v1/events/wait?after=evt_...&timeout=60` — long poll\n" +
+		"- `GET /v1/events/stream?after=evt_...` — SSE\n\n" +
+		"## Drafts\n" +
+		"- `GET/POST /v1/drafts`, `GET/PATCH/DELETE /v1/drafts/{id}` (Assistant/Owner)\n\n" +
+		"## Send and reply (Owner)\n" +
+		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}`\n" +
+		"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
+		"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
+		"- Use an `Idempotency-Key` header to make sends retry-safe.\n\n" +
+		"## Admin (Admin role)\n" +
+		"- `GET/POST /v1/admin/domains`, `PATCH/DELETE /v1/admin/domains/{id}`\n" +
+		"- `GET/POST /v1/admin/keys`, `DELETE /v1/admin/keys/{id}`\n" +
+		"- `GET/POST /v1/admin/outbound`, `DELETE /v1/admin/outbound/{id}`\n" +
+		"- `GET /v1/admin/hermes`, `DELETE /v1/admin/hermes/{id}`\n\n" +
 		"Roles are assigned per mailbox: Read, Assistant, Owner. Admin is account-wide.\n"
 	fmt.Fprint(w, guide)
 }
@@ -51,7 +74,83 @@ func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "curl -H 'Authorization: Bearer ghm_...' %s/v1/bootstrap\n", s.Service.Config.BaseURL)
 }
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"openapi": "3.0.3", "info": map[string]any{"title": "Gatehouse Email", "version": "v1"}, "servers": []map[string]string{{"url": s.Service.Config.BaseURL}}, "paths": map[string]any{"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities"}}, "/v1/inboxes": map[string]any{"get": map[string]any{"summary": "List inboxes"}}, "/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages"}}, "/v1/search": map[string]any{"get": map[string]any{"summary": "Search messages"}}, "/v1/events/stream": map[string]any{"get": map[string]any{"summary": "Replay and stream events"}}, "/v1/send": map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields."}}}})
+	writeJSON(w, 200, map[string]any{
+		"openapi": "3.0.3",
+		"info":    map[string]any{"title": "Gatehouse Email", "version": "v1"},
+		"servers": []map[string]string{{"url": s.Service.Config.BaseURL}},
+		"paths": map[string]any{
+			"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities and accessible inboxes", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/inboxes": map[string]any{
+				"get":  map[string]any{"summary": "List inboxes", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/inboxes/{id}": map[string]any{
+				"get":    map[string]any{"summary": "Get an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Delete an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/identities": map[string]any{
+				"get":  map[string]any{"summary": "List identities (openagent.email compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create an identity (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages with filters (inbox, thread, from, to, unread, has_attachment, before)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/messages/wait": map[string]any{
+				"get":  map[string]any{"summary": "Long-poll for a new message", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Long-poll for a new message (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/messages/{id}": map[string]any{
+				"get":    map[string]any{"summary": "Get a message", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update read/archived state", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Delete a message (Assistant/Owner)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/messages/{id}/seen":        map[string]any{"post": map[string]any{"summary": "Mark a message seen (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/messages/{id}/attachments": map[string]any{"get": map[string]any{"summary": "List message attachments", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/messages/{id}/reply":       map[string]any{"post": map[string]any{"summary": "Reply to a message (Owner)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/attachments/{id}":          map[string]any{"get": map[string]any{"summary": "Download an attachment", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/threads":                   map[string]any{"get": map[string]any{"summary": "List threads", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/threads/{id}":              map[string]any{"get": map[string]any{"summary": "Get a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/threads/{id}/messages":     map[string]any{"get": map[string]any{"summary": "List messages in a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/search":                    map[string]any{"get": map[string]any{"summary": "Search messages (FTS5)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/events":                    map[string]any{"get": map[string]any{"summary": "Incremental event history", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/events/wait":               map[string]any{"get": map[string]any{"summary": "Long-poll for events", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/events/stream":             map[string]any{"get": map[string]any{"summary": "SSE event stream", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts": map[string]any{
+				"get":  map[string]any{"summary": "List drafts", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/drafts/{id}": map[string]any{
+				"get":    map[string]any{"summary": "Get a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Delete a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/domains": map[string]any{
+				"get":  map[string]any{"summary": "List domains (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/domains/{id}": map[string]any{
+				"patch":  map[string]any{"summary": "Update a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Delete a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/keys": map[string]any{
+				"get":  map[string]any{"summary": "List API keys (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/keys/{id}": map[string]any{"delete": map[string]any{"summary": "Revoke an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/outbound": map[string]any{
+				"get":  map[string]any{"summary": "List outbound providers (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Add/update an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/outbound/{id}": map[string]any{"delete": map[string]any{"summary": "Delete an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes":        map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes/{id}":   map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+		},
+		"components": map[string]any{
+			"securitySchemes": map[string]any{
+				"bearerAuth": map[string]any{"type": "http", "scheme": "bearer"},
+			},
+		},
+	})
 }
 
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +370,7 @@ func firstString(v []string) string {
 
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Limit: intParam(r, "limit", 100)}
+	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Limit: intParam(r, "limit", 100)}
 	compatAddress := strings.TrimSpace(r.URL.Query().Get("address"))
 	if compatAddress != "" {
 		b, err := inboxByAddress(r.Context(), s.Service.Store, p, compatAddress)
@@ -425,7 +524,14 @@ func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, msgs)
 }
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Service.Store.SearchMessages(r.Context(), principal(r), r.URL.Query().Get("q"), r.URL.Query().Get("inbox"), intParam(r, "limit", 100))
+	items, err := s.Service.Store.SearchMessagesFiltered(r.Context(), principal(r), r.URL.Query().Get("q"), store.MessageFilter{
+		InboxID:       r.URL.Query().Get("inbox"),
+		From:          r.URL.Query().Get("from"),
+		To:            r.URL.Query().Get("to"),
+		Before:        r.URL.Query().Get("before"),
+		HasAttachment: boolQuery(r, "has_attachment"),
+		Limit:         intParam(r, "limit", 100),
+	})
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -829,9 +935,13 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, map[string]bool{"updated": true})
 	case http.MethodDelete:
-		if err := s.Service.Store.DeleteDomain(r.Context(), p.AccountID, id); err != nil {
+		paths, err := s.Service.Store.PurgeDomain(r.Context(), p.AccountID, id)
+		if err != nil {
 			mapStoreError(w, err)
 			return
+		}
+		for _, path := range paths {
+			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 		}
 		w.WriteHeader(204)
 	}
@@ -985,10 +1095,25 @@ func (s *Server) ingestInbound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider string) {
+	// Bound the total request body before any transport reads it. The
+	// transport itself applies a tighter per-message cap; this is a hard
+	// ceiling that also covers multipart overhead and form fields.
+	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes*2+1<<20)
+	select {
+	case s.inboundSem <- struct{}{}:
+		defer func() { <-s.inboundSem }()
+	case <-r.Context().Done():
+		http.Error(w, "request cancelled", 499)
+		return
+	}
 	m, dup, err := s.Service.IngestInbound(r.Context(), provider, r)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "recipient rejected", http.StatusNotAcceptable)
+			return
+		}
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, "storage quota exceeded", http.StatusNotAcceptable)
 			return
 		}
 		if errors.Is(err, transport.ErrUnknownProvider) {
@@ -999,9 +1124,45 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// Permanently invalid inbound messages (malformed MIME, oversize,
+		// unsupported content type) are terminal: the provider should not
+		// retry them.
+		if isTerminalInboundError(err) {
+			http.Error(w, "invalid message", http.StatusNotAcceptable)
+			return
+		}
 		s.Log.Warn("inbound ingest failed", "provider", provider, "error", err)
 		http.Error(w, "ingest failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"accepted": true, "duplicate": dup, "message_id": m.ID})
+}
+
+// isTerminalInboundError reports whether an inbound error is permanent and the
+// provider should not retry the delivery.
+func isTerminalInboundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, prefix := range []string{
+		"message too large",
+		"body-mime missing",
+		"invalid multipart boundary",
+		"unsupported content type",
+		"parse MIME:",
+		"multipart without boundary",
+		"too many multipart parts",
+		"too many mime parts",
+		"mime nesting too deep",
+		"invalid worker payload",
+		"recipient required",
+		"raw_mime_b64 required",
+		"invalid raw_mime_b64",
+	} {
+		if strings.HasPrefix(msg, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -9,10 +9,10 @@ import (
 	smtpstd "net/smtp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/netutil"
 )
 
 type Config struct {
@@ -32,11 +32,9 @@ type SendRequest struct {
 
 type outboundTransport struct{}
 
-var hostedMode atomic.Bool
-
 func init() { transport.RegisterOutbound(outboundTransport{}) }
 
-func SetHosted(hosted bool) { hostedMode.Store(hosted) }
+func SetHosted(hosted bool) { netutil.SetHosted(hosted) }
 
 func (outboundTransport) Name() string        { return "smtp" }
 func (outboundTransport) Description() string { return "SMTP" }
@@ -56,7 +54,7 @@ func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transpo
 		return transport.OutboundResult{}, err
 	}
 	all := append(append(append([]string{}, m.To...), m.CC...), m.BCC...)
-	if err := Send(ctx, c, SendRequest{From: m.FromAddress, To: all, Raw: m.RawMIME}, hostedMode.Load()); err != nil {
+	if err := Send(ctx, c, SendRequest{From: m.FromAddress, To: all, Raw: m.RawMIME}, netutil.Hosted()); err != nil {
 		return transport.OutboundResult{}, err
 	}
 	return transport.OutboundResult{ProviderMessageID: "smtp"}, nil
@@ -85,7 +83,7 @@ func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
 	}
 	var last error
 	for _, ip := range ips {
-		if hosted && !publicIP(ip) {
+		if hosted && !netutil.PublicIP(ip) {
 			last = fmt.Errorf("smtp destination is not public-routable")
 			continue
 		}
@@ -165,11 +163,4 @@ func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
 		last = fmt.Errorf("no usable smtp destination")
 	}
 	return last
-}
-
-func publicIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return false
-	}
-	return true
 }

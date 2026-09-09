@@ -2,6 +2,7 @@ package mailparse
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -81,5 +82,54 @@ func TestHTMLIsEscaped(t *testing.T) {
 	}
 	if strings.Contains(p.HTML, "<script>") {
 		t.Fatal("unsafe html retained")
+	}
+}
+
+// BCC recipients must never appear in the generated MIME; they are carried only
+// in the provider/SMTP envelope.
+func TestBuildMessageOmitsBccHeader(t *testing.T) {
+	raw, err := BuildMessage(Address{Address: "hermes@example.com"}, []string{"friend@example.net"}, nil, []string{"secret@example.net"}, "Subject", "body", "", "<m@example.com>", "", nil, time.Now(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "bcc:") {
+		t.Fatalf("generated MIME must not contain a Bcc header:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "secret@example.net") {
+		t.Fatalf("BCC recipient leaked into MIME:\n%s", raw)
+	}
+}
+
+func TestParseRejectsDeepNesting(t *testing.T) {
+	// Build a deeply nested multipart message exceeding maxMIMEDepth.
+	var b strings.Builder
+	depth := maxMIMEDepth + 2
+	for i := 0; i < depth; i++ {
+		fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n", i, i)
+	}
+	b.WriteString("Content-Type: text/plain\r\n\r\nbody\r\n")
+	for i := depth - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, "--b%d--\r\n", i)
+	}
+	raw := "From: a@b.test\r\nTo: c@d.test\r\n" + b.String()
+	path := t.TempDir() + "/deep.eml"
+	os.WriteFile(path, []byte(raw), 0600)
+	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "nesting too deep") {
+		t.Fatalf("expected nesting error, got %v", err)
+	}
+}
+
+func TestParseRejectsTooManyParts(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Content-Type: multipart/mixed; boundary=x\r\n\r\n")
+	for i := 0; i < maxMIMEParts+1; i++ {
+		fmt.Fprintf(&b, "--x\r\nContent-Type: text/plain\r\n\r\npart %d\r\n", i)
+	}
+	b.WriteString("--x--\r\n")
+	raw := "From: a@b.test\r\nTo: c@d.test\r\n" + b.String()
+	path := t.TempDir() + "/many.eml"
+	os.WriteFile(path, []byte(raw), 0600)
+	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "too many mime parts") {
+		t.Fatalf("expected part-count error, got %v", err)
 	}
 }

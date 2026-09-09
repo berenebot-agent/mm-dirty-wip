@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,5 +59,21 @@ func TestParseMultipartRawMIME(t *testing.T) {
 	raw, _ := os.ReadFile(path)
 	if !bytes.Contains(raw, []byte("hello")) {
 		t.Fatal("raw mime missing")
+	}
+}
+
+func TestParseRejectsTooManyMultipartParts(t *testing.T) {
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	for i := 0; i < maxMultipartParts+1; i++ {
+		_ = w.WriteField("field", fmt.Sprintf("v%d", i))
+	}
+	p, _ := w.CreateFormField("body-mime")
+	p.Write([]byte("From: b@test\r\n\r\nhello"))
+	w.Close()
+	r := httptest.NewRequest("POST", "/", &b)
+	r.Header.Set("Content-Type", w.FormDataContentType())
+	if _, err := ParseInboundRequest(r, t.TempDir()+"/m.eml", 1024); err == nil || !strings.Contains(err.Error(), "too many multipart parts") {
+		t.Fatalf("expected part-count error, got %v", err)
 	}
 }

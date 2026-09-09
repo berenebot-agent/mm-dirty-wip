@@ -90,9 +90,27 @@ type walkState struct {
 	text, html     []string
 	attachments    []Attachment
 	nextAttachment int
+	depth          int
+	parts          int
 }
 
+// Limits bound malicious or pathological MIME so parsing stays bounded in
+// memory and time.
+const (
+	maxMIMEDepth = 8
+	maxMIMEParts = 256
+)
+
 func walkPart(h textproto.MIMEHeader, r io.Reader, s *walkState) error {
+	s.depth++
+	defer func() { s.depth-- }()
+	if s.depth > maxMIMEDepth {
+		return fmt.Errorf("mime nesting too deep")
+	}
+	s.parts++
+	if s.parts > maxMIMEParts {
+		return fmt.Errorf("too many mime parts")
+	}
 	ct := h.Get("Content-Type")
 	if ct == "" {
 		ct = "text/plain"
@@ -225,8 +243,19 @@ func ExtractAttachment(path string, index int, w io.Writer) error {
 	}
 	target := 0
 	found := false
+	depth := 0
+	parts := 0
 	var walk func(textproto.MIMEHeader, io.Reader) error
 	walk = func(h textproto.MIMEHeader, r io.Reader) error {
+		depth++
+		defer func() { depth-- }()
+		if depth > maxMIMEDepth {
+			return fmt.Errorf("mime nesting too deep")
+		}
+		parts++
+		if parts > maxMIMEParts {
+			return fmt.Errorf("too many mime parts")
+		}
 		ct := h.Get("Content-Type")
 		if ct == "" {
 			ct = "text/plain"
@@ -291,9 +320,9 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 	if len(cc) > 0 {
 		fmt.Fprintf(w, "Cc: %s\r\n", strings.Join(cc, ", "))
 	}
-	if len(bcc) > 0 {
-		fmt.Fprintf(w, "Bcc: %s\r\n", strings.Join(bcc, ", "))
-	}
+	// BCC recipients are deliberately NOT written into the generated MIME.
+	// They are carried only in the provider/SMTP envelope so recipients never
+	// see each other's addresses.
 	fmt.Fprintf(w, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
 	fmt.Fprintf(w, "Date: %s\r\n", date.Format(time.RFC1123Z))
 	fmt.Fprintf(w, "Message-ID: %s\r\n", messageID)

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"gatehouse-mail/internal/auth"
@@ -25,6 +26,7 @@ import (
 	_ "gatehouse-mail/internal/transport/brevo"
 	_ "gatehouse-mail/internal/transport/cloudflare"
 	_ "gatehouse-mail/internal/transport/mailgun"
+	"gatehouse-mail/internal/transport/netutil"
 	smtpt "gatehouse-mail/internal/transport/smtp"
 )
 
@@ -33,6 +35,7 @@ type Service struct {
 	Store         *store.Store
 	Hub           *events.Hub
 	EncryptionKey []byte
+	unroutedLim   *rateLimiter
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
@@ -44,7 +47,17 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 		return nil, err
 	}
 	smtpt.SetHosted(cfg.Mode == "hosted")
-	return &Service{Config: cfg, Store: st, Hub: hub, EncryptionKey: key}, nil
+	netutil.SetHosted(cfg.Mode == "hosted")
+	return &Service{Config: cfg, Store: st, Hub: hub, EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
+}
+
+// auditUnrouted records a rejected unknown-recipient delivery, rate-limited per
+// recipient so random spam cannot grow the audit log without bound.
+func (s *Service) auditUnrouted(provider, recipient string) {
+	if !s.unroutedLim.Allow(recipient) {
+		return
+	}
+	s.Store.Audit(context.Background(), "", provider+".unrouted", recipient)
 }
 
 func (s *Service) messagePath() string {
@@ -84,6 +97,14 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	}
 	tmp := filepath.Join(s.Config.DataDir, "messages", ".tmp", idgen.New("in")+".eml")
 	defer os.Remove(tmp)
+	// Providers that can authenticate from headers alone (e.g. Cloudflare
+	// bearer) are verified before the MIME body is read, so an unauthenticated
+	// request never triggers expensive MIME processing.
+	if pv, ok := t.(transport.PreVerifyTransport); ok && pv.VerifyBeforeParse() {
+		if err = t.Verify(r, transport.InboundMessage{}, secret); err != nil {
+			return model.Message{}, false, err
+		}
+	}
 	msg, err := t.Parse(r, tmp, s.Config.MaxMessageBytes)
 	if err != nil {
 		return model.Message{}, false, err
@@ -98,7 +119,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	inbox, _, err := s.Store.ResolveRecipient(ctx, recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			s.Store.Audit(ctx, "", provider+".unrouted", recipient)
+			s.auditUnrouted(provider, recipient)
 		}
 		return model.Message{}, false, err
 	}
@@ -164,6 +185,41 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+// rateLimiter is a small in-process per-key limiter used to bound audit-log
+// growth from repeated rejected deliveries.
+type rateLimiter struct {
+	mu     sync.Mutex
+	max    int
+	window time.Duration
+	m      map[string]*rateEntry
+}
+type rateEntry struct {
+	start time.Time
+	n     int
+}
+
+func newRateLimiter(max int, w time.Duration) *rateLimiter {
+	if max <= 0 {
+		max = 1 << 30
+	}
+	return &rateLimiter{max: max, window: w, m: map[string]*rateEntry{}}
+}
+func (l *rateLimiter) Allow(k string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	e := l.m[k]
+	if e == nil || now.Sub(e.start) >= l.window {
+		l.m[k] = &rateEntry{start: now, n: 1}
+		return true
+	}
+	if e.n >= l.max {
+		return false
+	}
+	e.n++
+	return true
 }
 
 func (s *Service) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider string, cfg any) (store.OutboundCredential, error) {
@@ -260,25 +316,36 @@ type SendResult struct {
 	ProviderMessageID string        `json:"provider_message_id"`
 }
 
-func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (SendResult, error) {
+func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (result SendResult, err error) {
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
 	if idem != "" {
-		mid, res, found, err := s.Store.IdempotencyGet(ctx, p.AccountID, idem)
-		if err != nil {
-			return SendResult{}, err
+		// Atomically claim the idempotency key before doing any work so two
+		// concurrent requests with the same key cannot both send.
+		claimed, mid, res, rerr := s.Store.IdempotencyReserve(ctx, p.AccountID, idem)
+		if rerr != nil {
+			if errors.Is(rerr, store.ErrConflict) {
+				return SendResult{}, fmt.Errorf("idempotency key %q is already in flight", idem)
+			}
+			return SendResult{}, rerr
 		}
-		if found {
-			m, err := s.Store.GetMessageByID(ctx, p.AccountID, mid)
-			if err != nil {
-				return SendResult{}, err
+		if !claimed {
+			m, gerr := s.Store.GetMessageByID(ctx, p.AccountID, mid)
+			if gerr != nil {
+				return SendResult{}, gerr
 			}
 			var sr SendResult
 			_ = json.Unmarshal([]byte(res), &sr)
 			sr.Message = m
 			return sr, nil
 		}
+		// Release the reservation on any failure so a retry can re-send.
+		defer func() {
+			if err != nil {
+				_ = s.Store.IdempotencyRelease(ctx, p.AccountID, idem)
+			}
+		}()
 	}
 	inbox, err := s.Store.GetInboxInternal(ctx, p.AccountID, in.InboxID)
 	if err != nil {
@@ -408,9 +475,12 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 		return SendResult{}, err
 	}
 	s.Hub.Publish(ev)
-	result := SendResult{Message: m, ProviderMessageID: providerID}
+	result = SendResult{Message: m, ProviderMessageID: providerID}
 	if idem != "" {
-		_ = s.Store.IdempotencyPut(ctx, p.AccountID, idem, m.ID, result)
+		// The message is already committed. If marking the key done fails, leave
+		// it pending so a retry gets an in-flight conflict rather than sending a
+		// duplicate.
+		_ = s.Store.IdempotencyComplete(ctx, p.AccountID, idem, m.ID, result)
 	}
 	return result, nil
 }

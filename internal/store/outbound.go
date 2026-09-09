@@ -178,15 +178,64 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 
 func (s *Store) IdempotencyGet(ctx context.Context, accountID, key string) (string, string, bool, error) {
 	var mid, res string
-	err := s.read.QueryRowContext(ctx, `SELECT message_id,result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &res)
+	err := s.read.QueryRowContext(ctx, `SELECT message_id,result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='done'`, accountID, key).Scan(&mid, &res)
 	if err == sql.ErrNoRows {
 		return "", "", false, nil
 	}
 	return mid, res, err == nil, err
 }
+
+// IdempotencyReserve atomically claims an idempotency key for an in-flight
+// send. It returns (true, "", nil) if this caller won the reservation and may
+// proceed to send. It returns (false, messageID, resultJSON, nil) if the key was
+// already completed, so the caller can return the stored result. It returns
+// (false, "", "", ErrConflict) if another request currently holds the
+// reservation (in-flight), which the caller should treat as a retryable
+// conflict rather than sending again.
+func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key string) (bool, string, string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return false, "", "", err
+	}
+	defer tx.Rollback()
+	var mid, res, status string
+	err = tx.QueryRowContext(ctx, `SELECT message_id,result_json,status FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &res, &status)
+	if err == nil {
+		if status == "done" {
+			return false, mid, res, nil
+		}
+		// pending: another request is in flight.
+		return false, "", "", ErrConflict
+	}
+	if err != sql.ErrNoRows {
+		return false, "", "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,result_json,status,created_at) VALUES(?,?,?,?,?,?)`, accountID, key, "", "", "pending", nowText()); err != nil {
+		return false, "", "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, "", "", err
+	}
+	return true, "", "", nil
+}
+
+// IdempotencyComplete marks a reserved key as done with its result.
+func (s *Store) IdempotencyComplete(ctx context.Context, accountID, key, messageID string, result any) error {
+	b, _ := json.Marshal(result)
+	_, err := s.write.ExecContext(ctx, `UPDATE outbound_idempotency SET message_id=?,result_json=?,status='done' WHERE account_id=? AND idem_key=?`, messageID, string(b), accountID, key)
+	return err
+}
+
+// IdempotencyRelease clears a pending reservation so a failed send can be
+// retried with the same key.
+func (s *Store) IdempotencyRelease(ctx context.Context, accountID, key string) error {
+	_, err := s.write.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='pending'`, accountID, key)
+	return err
+}
+
 func (s *Store) IdempotencyPut(ctx context.Context, accountID, key, messageID string, result any) error {
 	b, _ := json.Marshal(result)
-	_, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO outbound_idempotency(account_id,idem_key,message_id,result_json,created_at) VALUES(?,?,?,?,?)`, accountID, key, messageID, string(b), nowText())
+	_, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO outbound_idempotency(account_id,idem_key,message_id,result_json,status,created_at) VALUES(?,?,?,?,?,?)`, accountID, key, messageID, string(b), "done", nowText())
 	return err
 }
 

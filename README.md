@@ -21,10 +21,10 @@ Persistent state is stored in `./data`.
 3. Create a Mailgun catch-all route for the domain that forwards incoming mail to:
 
 ```text
-https://your-host.example/internal/ingest/mailgun
+https://your-host.example/internal/ingest/mailgun/raw-mime
 ```
 
-Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts.
+Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The legacy `/internal/ingest/mailgun` and `/internal/ingest/{provider}` routes remain available for backward compatibility.
 
 ## Cloudflare Email Routing inbound
 
@@ -51,14 +51,14 @@ The server always listens on two ports:
 
 - `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
 - `:8082` is a dedicated listener that serves **only** the inbound webhook routes
-  (`/internal/ingest/mailgun` and `/internal/ingest/{provider}`) plus `/healthz`.
+  (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/mailgun`, and `/internal/ingest/{provider}`) plus `/healthz`.
 
 To keep the API and UI off the public internet, expose only `:8082` to your
 reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
 the firewall. Point provider webhook URLs at the dedicated host/port:
 
 ```text
-https://inbound.example.com/internal/ingest/mailgun
+https://inbound.example.com/internal/ingest/mailgun/raw-mime
 https://inbound.example.com/internal/ingest/cloudflare
 ```
 

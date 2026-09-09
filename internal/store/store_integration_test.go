@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,5 +134,140 @@ func TestSQLiteConcurrentWritesSerialized(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestQuotaEnforcementInboundAndOutbound(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	// Shrink the account quota so a single message exceeds it.
+	if _, err := s.write.ExecContext(ctx, `UPDATE accounts SET storage_quota_bytes=10 WHERE id=?`, u.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	rec := inbound(box, "quota-1", "<quota@test>", "", nil, "Big", "x")
+	rec.SizeBytes = 100
+	if _, _, _, err := s.CommitInbound(ctx, rec); !errors.Is(err, ErrQuota) {
+		t.Fatalf("inbound quota: %v", err)
+	}
+	// Outbound quota.
+	if _, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100, SentAt: time.Now().UTC()}); !errors.Is(err, ErrQuota) {
+		t.Fatalf("outbound quota: %v", err)
+	}
+}
+
+func TestPurgeDomainCleansStorageAndFiles(t *testing.T) {
+	ctx := context.Background()
+	s, u, d, b := testStore(t)
+	box := b[0]
+	// Commit a message with a raw path and size.
+	rec := inbound(box, "purge-1", "<purge@test>", "", nil, "Purge", "body")
+	rec.RawPath = "messages/purge.eml"
+	rec.SizeBytes = 50
+	if _, _, _, err := s.CommitInbound(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	acc, _ := s.GetAccount(ctx, u.AccountID)
+	if acc.StorageUsedBytes != 50 {
+		t.Fatalf("storage used = %d, want 50", acc.StorageUsedBytes)
+	}
+	paths, err := s.PurgeDomain(ctx, u.AccountID, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "messages/purge.eml" {
+		t.Fatalf("paths %#v", paths)
+	}
+	acc, _ = s.GetAccount(ctx, u.AccountID)
+	if acc.StorageUsedBytes != 0 {
+		t.Fatalf("storage used after purge = %d, want 0", acc.StorageUsedBytes)
+	}
+	// FTS rows gone.
+	got, err := s.SearchMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, "purge", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("search after purge returned %#v", got)
+	}
+	// Domain gone.
+	domains, err := s.ListDomains(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(domains) != 0 {
+		t.Fatalf("domains after purge = %#v", domains)
+	}
+}
+
+func TestIdempotencyReserveIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, _ := testStore(t)
+	// First caller wins the reservation.
+	claimed, _, _, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1")
+	if err != nil || !claimed {
+		t.Fatalf("first reserve claimed=%v err=%v", claimed, err)
+	}
+	// Second concurrent caller must get a conflict (in-flight).
+	claimed, _, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-1")
+	if err == nil || !errors.Is(err, ErrConflict) {
+		t.Fatalf("second reserve err=%v", err)
+	}
+	// Complete it, then a new reserve returns the stored result.
+	if err = s.IdempotencyComplete(ctx, u.AccountID, "key-1", "msg_1", map[string]any{"ok": true}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, mid, res, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1")
+	if err != nil || claimed || mid != "msg_1" || !strings.Contains(res, "ok") {
+		t.Fatalf("completed reserve claimed=%v mid=%q res=%q err=%v", claimed, mid, res, err)
+	}
+	// Release a pending reservation so a failed send can retry.
+	if err = s.IdempotencyRelease(ctx, u.AccountID, "key-2"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, _, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-2")
+	if err != nil || !claimed {
+		t.Fatalf("release+reserve claimed=%v err=%v", claimed, err)
+	}
+}
+
+func TestBackupRestoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := s.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 100<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.CreateDomain(context.Background(), u.AccountID, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateInbox(context.Background(), u.AccountID, d.ID, "hermes", "Hermes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := inbound(b, "bk-1", "<bk@test>", "", nil, "Backup", "restore me")
+	rec.RawPath = "messages/bk.eml"
+	if _, _, _, err = s.CommitInbound(context.Background(), rec); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen the same directory (simulating restore onto a clean instance).
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	got, err := s2.SearchMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, "restore", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Subject != "Backup" {
+		t.Fatalf("restored search %#v", got)
 	}
 }

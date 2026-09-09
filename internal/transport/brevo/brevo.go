@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/netutil"
 )
 
 type Config struct {
@@ -122,6 +124,16 @@ func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResul
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("api-key", c.APIKey)
+	if netutil.Hosted() {
+		// Reject non-public API bases before connecting (SSRF guard).
+		u, err := url.Parse(base)
+		if err != nil {
+			return SendResult{}, err
+		}
+		if _, err = netutil.ResolvePublicHost(ctx, u.Hostname()); err != nil {
+			return SendResult{}, err
+		}
+	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return SendResult{}, err

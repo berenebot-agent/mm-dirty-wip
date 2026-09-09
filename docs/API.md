@@ -254,10 +254,10 @@ On connection, backlog after the supplied cursor is delivered before the stream 
 ## 11. Mailgun inbound endpoint
 
 ```http
-POST /internal/ingest/mailgun
+POST /internal/ingest/mailgun/raw-mime
 ```
 
-This endpoint authenticates Mailgun requests and converts delivery to the canonical `InboundMessage`.
+This is the canonical Mailgun receive endpoint. It authenticates Mailgun requests and converts delivery to the canonical `InboundMessage`. The legacy `/internal/ingest/mailgun` and `/internal/ingest/{provider}` routes remain available for backward compatibility.
 
 The authenticated Mailgun webhook token is the provider delivery idempotency key. Unknown recipients route to the domain catch-all when configured; otherwise the endpoint returns `406`.
 

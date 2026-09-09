@@ -118,7 +118,7 @@ func TestUIInboxPagination(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("page 1 %d", rr.Code)
 	}
-	if strings.Count(rr.Body.String(), "/ui/messages/") != inboxPageSize {
+	if strings.Count(rr.Body.String(), `class="mailrow"`)+strings.Count(rr.Body.String(), `class="mailrow unread"`) != inboxPageSize {
 		t.Fatalf("expected %d messages on first page", inboxPageSize)
 	}
 	if !strings.Contains(rr.Body.String(), "Load older") {
@@ -140,7 +140,7 @@ func TestUIInboxPagination(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("page 2 %d", rr.Code)
 	}
-	if strings.Count(rr.Body.String(), "/ui/messages/") != 1 {
+	if strings.Count(rr.Body.String(), `class="mailrow"`)+strings.Count(rr.Body.String(), `class="mailrow unread"`) != 1 {
 		t.Fatalf("expected 1 message on second page")
 	}
 	if strings.Contains(rr.Body.String(), "Load older") {

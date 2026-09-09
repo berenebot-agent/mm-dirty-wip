@@ -43,3 +43,10 @@ type InboundTransport interface {
 	Parse(r *http.Request, tmpPath string, maxBytes int64) (InboundMessage, error)
 	Verify(r *http.Request, msg InboundMessage, secret string) error
 }
+
+// PreVerifyTransport is implemented by inbound transports whose authenticity
+// can be established from the request headers alone, before the (potentially
+// large) MIME body is read. Cloudflare bearer auth is one such case.
+type PreVerifyTransport interface {
+	VerifyBeforeParse() bool
+}

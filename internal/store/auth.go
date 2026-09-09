@@ -18,6 +18,45 @@ func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 	return n > 0, err
 }
 
+// CreateInitialAdmin atomically creates the first account and admin user. It
+// returns ErrConflict if any user already exists, so two concurrent setup
+// requests cannot both succeed. The writer connection is serialized, so the
+// check-and-insert inside one transaction is race-free.
+func (s *Store) CreateInitialAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
+	email = normalizeAddress(email)
+	if email == "" {
+		return model.User{}, fmt.Errorf("email required")
+	}
+	ph, err := auth.HashPassword(password)
+	if err != nil {
+		return model.User{}, err
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.User{}, err
+	}
+	defer tx.Rollback()
+	var n int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
+		return model.User{}, err
+	}
+	if n > 0 {
+		return model.User{}, ErrConflict
+	}
+	aid, uid := idgen.New("acct"), idgen.New("usr")
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, strings.TrimSpace(name), quota, now); err != nil {
+		return model.User{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,account_id,email,password_hash,is_admin,created_at) VALUES(?,?,?,?,1,?)`, uid, aid, email, ph, now); err != nil {
+		return model.User{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.User{}, err
+	}
+	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, CreatedAt: parseTime(now)}, nil
+}
+
 func (s *Store) CreateAccountAndAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
 	email = normalizeAddress(email)
 	if email == "" {

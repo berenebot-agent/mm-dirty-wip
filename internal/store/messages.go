@@ -249,6 +249,11 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 		q += ` AND m.from_address LIKE ?`
 		args = append(args, "%"+normalizeAddress(f.From)+"%")
 	}
+	if f.To != "" {
+		q += ` AND (m.to_json LIKE ? OR m.cc_json LIKE ?)`
+		like := "%" + normalizeAddress(f.To) + "%"
+		args = append(args, like, like)
+	}
 	if f.Unread != nil {
 		q += ` AND m.is_read=?`
 		args = append(args, boolInt(!*f.Unread))
@@ -560,18 +565,24 @@ func (s *Store) ListBlockedMessages(ctx context.Context, p model.Principal, limi
 }
 
 func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxID string, limit int) ([]model.Message, error) {
+	return s.SearchMessagesFiltered(ctx, p, q, MessageFilter{InboxID: inboxID, Limit: limit})
+}
+
+// SearchMessagesFiltered searches FTS content and applies the same optional
+// filters as ListMessages (from, to, before, has_attachment).
+func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q string, f MessageFilter) ([]model.Message, error) {
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return []model.Message{}, nil
 	}
 	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=?`
 	args := []any{ftsQuery(q), p.AccountID}
-	if inboxID != "" {
-		if !p.CanRead(inboxID) {
+	if f.InboxID != "" {
+		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden
 		}
 		sqlq += ` AND m.inbox_id=?`
-		args = append(args, inboxID)
+		args = append(args, f.InboxID)
 	} else if !p.Admin {
 		ids := principalInboxIDs(p)
 		if len(ids) == 0 {
@@ -582,6 +593,33 @@ func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxI
 			args = append(args, id)
 		}
 	}
+	if f.From != "" {
+		sqlq += ` AND m.from_address LIKE ?`
+		args = append(args, "%"+normalizeAddress(f.From)+"%")
+	}
+	if f.To != "" {
+		sqlq += ` AND (m.to_json LIKE ? OR m.cc_json LIKE ?)`
+		like := "%" + normalizeAddress(f.To) + "%"
+		args = append(args, like, like)
+	}
+	if f.HasAttachment != nil {
+		if *f.HasAttachment {
+			sqlq += ` AND EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		} else {
+			sqlq += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
+		}
+	}
+	if f.Before != "" {
+		var beforeCreated string
+		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, f.Before, p.AccountID).Scan(&beforeCreated)
+		if err == nil {
+			sqlq += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
+			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
+		} else if err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
+	limit := f.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}

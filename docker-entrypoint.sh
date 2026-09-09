@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 DATA_ROOT="${DATA_DIR:-/data}"
-if [ "$(id -u)" = "0" ]; then
-  mkdir -p "$DATA_ROOT"
-  chown 65532:65532 "$DATA_ROOT"
-  exec gosu 65532:65532 /usr/local/bin/gatehouse-mail "$@"
-fi
+# The container may start as root and drop privileges internally, but must not
+# chown or require special ownership changes on the host ./data directory. The
+# application creates its subdirectories (messages/.tmp) with 0700 as needed,
+# so we simply exec the binary and let it manage its own data layout.
+mkdir -p "$DATA_ROOT"
 exec /usr/local/bin/gatehouse-mail "$@"

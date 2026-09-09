@@ -1,7 +1,9 @@
 package httpapp
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -66,6 +68,8 @@ type pageData struct {
 	ComposeError, ComposeFlash                 string
 
 	Email string
+
+	BootstrapRequired bool
 }
 type outboundView struct {
 	ID, Name, Provider, ConfigJSON string
@@ -135,7 +139,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", 303)
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set Up Gatehouse Email"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{end}}<label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set Up Gatehouse Email"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{if .BootstrapRequired}}<label>Bootstrap token</label><input type="password" name="bootstrap_token" required placeholder="One-time setup token">{{end}}{{end}}<label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
 
 type authFlash struct {
 	Title, Error, Email string
@@ -144,7 +148,7 @@ type authFlash struct {
 // renderAuth shows an auth page, restoring any error and email left by a
 // redirect from a failed POST (Post/Redirect/Get).
 func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string) {
-	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r)}
+	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r), BootstrapRequired: s.Service.Config.AdminBootstrapToken != ""}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
@@ -175,9 +179,22 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "setup complete", 403)
 		return
 	}
+	// If a one-time bootstrap token is configured, the first Admin must present
+	// it so an arbitrary first internet visitor cannot claim the instance.
+	if tok := s.Service.Config.AdminBootstrapToken; tok != "" {
+		got := strings.TrimSpace(r.Form.Get("bootstrap_token"))
+		if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) != 1 {
+			s.flashAuth(w, r, "/setup", "Set Up Gatehouse Email", "invalid bootstrap token", r.Form.Get("email"))
+			return
+		}
+	}
 	_ = r.ParseForm()
-	u, err := s.Service.Store.CreateAccountAndAdmin(r.Context(), r.Form.Get("account"), r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
+	u, err := s.Service.Store.CreateInitialAdmin(r.Context(), r.Form.Get("account"), r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
 	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			http.Error(w, "setup complete", 403)
+			return
+		}
 		s.flashAuth(w, r, "/setup", "Set Up Gatehouse Email", err.Error(), r.Form.Get("email"))
 		return
 	}
@@ -219,7 +236,7 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 	s.renderAuth(w, r, "Log In")
 }
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r, s.Service.Config.TrustProxyHeaders)
+	ip := clientIP(r, s.Service.Config.IsTrustedProxy(r.RemoteAddr))
 	if !s.loginLimiter.Allow(ip) {
 		http.Error(w, "too many login attempts", 429)
 		return
@@ -324,9 +341,13 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
-	if err := s.Service.Store.DeleteDomain(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+	paths, err := s.Service.Store.PurgeDomain(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	}
+	for _, path := range paths {
+		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 	}
 	http.Redirect(w, r, "/dashboard?notice=Domain+deleted", 303)
 }

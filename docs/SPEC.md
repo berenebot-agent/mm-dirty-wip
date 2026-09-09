@@ -223,7 +223,7 @@ Expose:
 ```text
 /.well-known/gatehouse
 /agent
-/api/v1/bootstrap
+/v1/bootstrap
 /openapi.json
 /examples/python
 /examples/curl

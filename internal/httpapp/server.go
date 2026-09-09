@@ -33,8 +33,10 @@ type Server struct {
 	Log          *slog.Logger
 	loginLimiter *limiter
 	sendLimiter  *limiter
+	unroutedLim  *limiter
 	flashes      *flashStore
 	assetVersion string
+	inboundSem   chan struct{}
 }
 
 type ctxKey int
@@ -47,11 +49,17 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		log = slog.Default()
 	}
 	sum := sha256.Sum256(appJS)
+	conc := svc.Config.InboundConcurrency
+	if conc < 1 {
+		conc = 32
+	}
 	return &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		sendLimiter:  newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
+		unroutedLim:  newLimiter(1, time.Minute),
 		flashes:      newFlashStore(64, 64<<20),
-		assetVersion: fmt.Sprintf("%x", sum[:6])}
+		assetVersion: fmt.Sprintf("%x", sum[:6]),
+		inboundSem:   make(chan struct{}, conc)}
 }
 
 // assetURL returns a content-hashed asset path so a rebuilt binary always
@@ -182,6 +190,9 @@ func (s *Server) InboundHandler() http.Handler {
 
 func (s *Server) registerInbound(m *http.ServeMux) {
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
+	// Canonical Mailgun receive endpoint.
+	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
+	// Backward-compatible aliases.
 	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 }
@@ -318,7 +329,7 @@ func (s *Server) cookieSecure(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if s.Service.Config.TrustProxyHeaders {
+	if s.Service.Config.IsTrustedProxy(r.RemoteAddr) {
 		if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); strings.EqualFold(proto, "https") {
 			return true
 		}

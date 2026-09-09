@@ -373,9 +373,10 @@ func messageEvent(m model.Message) map[string]any {
 	}
 	return map[string]any{
 		"text": display, "message_type": "text", "user_id": m.From.Address, "user_name": name, "message_id": m.ID,
-		"source":    map[string]any{"platform": "email", "chat_id": m.ThreadID, "chat_type": "thread", "chat_name": m.Subject, "user_id": m.From.Address, "user_name": name, "thread_id": m.ThreadID, "chat_topic": nil, "message_id": m.ID},
-		"metadata":  map[string]any{"email_message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "from": m.From.Address, "subject": m.Subject},
-		"timestamp": ts.UTC().Format(time.RFC3339Nano), "allow_gateway_control": false,
+		"source":     map[string]any{"platform": "email", "chat_id": m.ThreadID, "chat_type": "thread", "chat_name": m.Subject, "user_id": m.From.Address, "user_name": name, "thread_id": m.ThreadID, "chat_topic": nil, "message_id": m.ID},
+		"metadata":   map[string]any{"email_message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "from": m.From.Address, "subject": m.Subject},
+		"provenance": map[string]any{"source": "email", "trust": "external_untrusted", "authenticated_sender": false},
+		"timestamp":  ts.UTC().Format(time.RFC3339Nano), "allow_gateway_control": false,
 	}
 }
 

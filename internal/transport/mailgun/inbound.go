@@ -96,6 +96,7 @@ func ParseInboundRequest(r *http.Request, tmpPath string, maxBytes int64) (Inbou
 		}
 		defer f.Close()
 		var wrote bool
+		var parts int
 		for {
 			p, err := mr.NextPart()
 			if err == io.EOF {
@@ -103,6 +104,11 @@ func ParseInboundRequest(r *http.Request, tmpPath string, maxBytes int64) (Inbou
 			}
 			if err != nil {
 				return out, err
+			}
+			parts++
+			if parts > maxMultipartParts {
+				p.Close()
+				return out, fmt.Errorf("too many multipart parts")
 			}
 			name := p.FormName()
 			if name == "body-mime" {
@@ -167,6 +173,11 @@ func multipartReader(r *http.Request, boundary string) *multipart.Reader {
 	}
 	return multipart.NewReader(r.Body, boundary)
 }
+
+// maxMultipartParts bounds the number of form parts Mailgun may send so a
+// malicious webhook cannot force unbounded multipart iteration.
+const maxMultipartParts = 64
+
 func setField(out *InboundForm, name, value string) {
 	value = strings.TrimSpace(value)
 	switch name {

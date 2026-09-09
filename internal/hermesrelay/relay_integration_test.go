@@ -194,6 +194,84 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	}
 }
 
+// A disconnected relay must replay buffered events in order on reconnect.
+func TestRelayDisconnectReconnectReplay(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
+	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-replay", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Commit two events while disconnected.
+	_, ev1, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "replay-1", RFCMessageID: "<r1@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Replay one", Text: "one", RawPath: "messages/r1.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ev2, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "replay-2", RFCMessageID: "<r2@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Replay two", Text: "two", RawPath: "messages/r2.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
+	client := dialRawWS(t, wsURL, makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	// First event.
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if inbound["bufferId"] != ev1.Cursor {
+		t.Fatalf("first replay %#v", inbound)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev1.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	// Second event.
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if inbound["bufferId"] != ev2.Cursor {
+		t.Fatalf("second replay %#v", inbound)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	updated, err := st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastAckEventID < ev2.ID {
+		t.Fatalf("replay ack not persisted: %d", updated.LastAckEventID)
+	}
+}
+
 // A message.received event whose message was later deleted must be skipped
 // rather than tearing the socket down, which would reconnect-loop forever on
 // the same stale event.

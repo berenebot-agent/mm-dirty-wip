@@ -247,3 +247,10 @@ CREATE TABLE IF NOT EXISTS blocked_messages (
 CREATE INDEX IF NOT EXISTS idx_blocked_messages_inbox_created ON blocked_messages(inbox_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_blocked_messages_account_created ON blocked_messages(account_id, created_at DESC);
 `
+
+// migration004 adds a status column to outbound_idempotency so a reservation
+// can be claimed atomically before the provider send, closing the race where
+// two concurrent requests with the same key both send.
+const migration004 = `ALTER TABLE outbound_idempotency ADD COLUMN status TEXT NOT NULL DEFAULT 'done';
+CREATE INDEX IF NOT EXISTS idx_outbound_idem_status ON outbound_idempotency(account_id, idem_key, status);
+`

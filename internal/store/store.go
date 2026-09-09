@@ -60,6 +60,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	for _, m := range []struct{ version, sql string }{
 		{"002", migration002},
 		{"003", migration003},
+		{"004", migration004},
 	} {
 		applied, err := s.migrationApplied(ctx, m.version)
 		if err != nil {

@@ -26,3 +26,48 @@ func TestListenAddrMustDifferFromInbound(t *testing.T) {
 		t.Fatal("expected error when LISTEN_ADDR equals the inbound listener")
 	}
 }
+
+func TestTrustedProxiesParsing(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.1,192.168.1.0/24,2001:db8::/32")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.TrustedProxies) != 3 {
+		t.Fatalf("got %d proxies", len(cfg.TrustedProxies))
+	}
+	if !cfg.IsTrustedProxy("10.0.0.1:1234") {
+		t.Fatal("exact IP should be trusted")
+	}
+	if !cfg.IsTrustedProxy("192.168.1.55:80") {
+		t.Fatal("CIDR member should be trusted")
+	}
+	if cfg.IsTrustedProxy("192.168.2.1:80") {
+		t.Fatal("non-member should not be trusted")
+	}
+	if cfg.IsTrustedProxy("8.8.8.8:53") {
+		t.Fatal("untrusted peer should not be trusted")
+	}
+}
+
+func TestTrustedProxiesInvalid(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("TRUSTED_PROXIES", "not-a-cidr")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for invalid TRUSTED_PROXIES")
+	}
+}
+
+func TestTrustProxyHeadersFallback(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("TRUSTED_PROXIES", "")
+	t.Setenv("TRUST_PROXY_HEADERS", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IsTrustedProxy("1.2.3.4:80") {
+		t.Fatal("legacy TRUST_PROXY_HEADERS should trust all peers")
+	}
+}

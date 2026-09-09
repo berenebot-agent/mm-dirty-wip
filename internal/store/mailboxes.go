@@ -85,6 +85,92 @@ func (s *Store) DeleteDomain(ctx context.Context, accountID, domainID string) er
 	return nil
 }
 
+// PurgeDomain permanently deletes a domain and every inbox and message it owns,
+// returning the raw .eml paths the caller must unlink from disk. It mirrors
+// PurgeInbox but across all inboxes of the domain, and clears message_fts,
+// storage accounting, events, idempotency, blocked messages, drafts, key roles
+// and relay connections transactionally.
+func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var exists int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, ErrNotFound
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT m.raw_path,m.size_bytes FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?`, accountID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	var total int64
+	for rows.Next() {
+		var path string
+		var size int64
+		if err = rows.Scan(&path, &size); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+		total += size
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM threads WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM events WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM blocked_messages WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM drafts WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM hermes_connections WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM hermes_enroll_tokens WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, total, accountID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inboxes WHERE account_id=? AND domain_id=?`, accountID, domainID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM domains WHERE id=? AND account_id=?`, domainID, accountID); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
 func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart, display string) (model.Inbox, error) {
 	localPart = normalizeLocal(localPart)
 	if localPart == "" || strings.ContainsAny(localPart, "@ <>\t\r\n") {

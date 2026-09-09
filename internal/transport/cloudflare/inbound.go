@@ -37,6 +37,10 @@ func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string { return "cloudflare" }
 
+// VerifyBeforeParse reports that Cloudflare bearer auth can be checked from
+// the request headers alone, before the MIME body is read.
+func (Transport) VerifyBeforeParse() bool { return true }
+
 func (Transport) Parse(r *http.Request, tmpPath string, maxBytes int64) (transport.InboundMessage, error) {
 	var out transport.InboundMessage
 	ct := strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0])

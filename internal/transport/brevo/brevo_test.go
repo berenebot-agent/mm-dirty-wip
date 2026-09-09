@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/netutil"
 )
 
 func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
@@ -82,5 +83,14 @@ func TestSendErrorsAndEmptyHTML(t *testing.T) {
 	}
 	if body.HTMLContent != "" {
 		t.Fatalf("html should be omitted: %#v", body)
+	}
+}
+
+func TestHostedRejectsPrivateAPIBase(t *testing.T) {
+	netutil.SetHosted(true)
+	defer netutil.SetHosted(false)
+	_, err := Send(context.Background(), Config{APIKey: "k", APIBase: "http://127.0.0.1:9999"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
+	if err == nil || !strings.Contains(err.Error(), "not public-routable") {
+		t.Fatalf("hosted private API base should be rejected: %v", err)
 	}
 }

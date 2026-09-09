@@ -48,7 +48,7 @@ func main() {
 		if err != nil {
 			return nil, fmt.Errorf("%s listener: %w", name, err)
 		}
-		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second}
+		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.BodyReadTimeout, IdleTimeout: 90 * time.Second}
 		go func() {
 			log.Info("Gatehouse Email listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
