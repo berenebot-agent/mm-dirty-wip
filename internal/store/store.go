@@ -63,6 +63,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"004", migration004},
 		{"005", migration005},
 		{"006", migration006},
+		{"007", migration007},
 	} {
 		applied, err := s.migrationApplied(ctx, m.version)
 		if err != nil {
@@ -124,6 +125,7 @@ var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
 var ErrConflict = errors.New("conflict")
 var ErrQuota = errors.New("storage quota exceeded")
+var ErrNoProvider = errors.New("no outbound provider configured")
 
 func normalizeAddress(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 func normalizeDomain(v string) string {

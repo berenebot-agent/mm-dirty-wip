@@ -416,9 +416,15 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if strings.TrimSpace(in.Text) == "" && strings.TrimSpace(in.HTML) == "" {
 		return SendResult{}, fmt.Errorf("message body is required")
 	}
-	cred, err := s.Store.ActiveOutboundCredential(ctx, p.AccountID)
-	if err != nil {
-		return SendResult{}, fmt.Errorf("outbound provider not configured for account")
+	// A missing provider is not fatal: the message is queued and the outbox
+	// worker holds it until a provider is assigned to the domain (or account).
+	cred, credErr := s.Store.DomainOutboundCredential(ctx, p.AccountID, inbox.DomainID)
+	queuedReason := ""
+	if credErr != nil {
+		if !errors.Is(credErr, store.ErrNoProvider) {
+			return SendResult{}, credErr
+		}
+		queuedReason = "no outbound provider configured for this domain"
 	}
 	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(inbox.Address, "@", 2)[1])
 	now := time.Now().UTC()
@@ -455,7 +461,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, Attachments: metadata})
+	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, Attachments: metadata})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -474,8 +480,11 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	if m.Direction != "outbound" || m.Status != "pending" {
 		return nil
 	}
-	cred, err := s.Store.ActiveOutboundCredential(ctx, m.AccountID)
+	cred, err := s.Store.OutboundCredentialForMessage(ctx, m.AccountID, m.ID)
 	if err != nil {
+		if errors.Is(err, store.ErrNoProvider) {
+			return s.hold(ctx, m)
+		}
 		return s.fail(ctx, m, err, "", "")
 	}
 	cfg, err := s.DecryptOutboundCredential(cred)
@@ -517,6 +526,13 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)
 	s.Hub.Publish(ev)
 	return nil
+}
+
+// hold defers a pending message that has no outbound provider yet, without
+// counting an attempt. The message stays queued and delivers once a provider is
+// assigned to its domain (or account).
+func (s *Service) hold(ctx context.Context, m model.Message) error {
+	return s.Store.HoldPending(ctx, m.AccountID, m.ID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute))
 }
 
 // fail records a failed delivery attempt with exponential backoff, returning

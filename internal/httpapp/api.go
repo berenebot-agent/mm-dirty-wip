@@ -217,15 +217,14 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, v)
 	case http.MethodPatch:
 		var in struct {
-			DisplayName          string    `json:"display_name"`
-			Enabled              *bool     `json:"enabled"`
-			OutboundCredentialID *string   `json:"outbound_credential_id"`
-			AllowedSenders       *[]string `json:"allowed_senders"`
+			DisplayName    string    `json:"display_name"`
+			Enabled        *bool     `json:"enabled"`
+			AllowedSenders *[]string `json:"allowed_senders"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		if err := s.Service.Store.UpdateInbox(r.Context(), p, id, in.DisplayName, in.Enabled, in.OutboundCredentialID); err != nil {
+		if err := s.Service.Store.UpdateInbox(r.Context(), p, id, in.DisplayName, in.Enabled); err != nil {
 			mapStoreError(w, err)
 			return
 		}
@@ -1027,13 +1026,20 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var in struct {
-			CatchAllInboxID *string `json:"catch_all_inbox_id"`
+			CatchAllInboxID      *string `json:"catch_all_inbox_id"`
+			OutboundCredentialID *string `json:"outbound_credential_id"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
 		if in.CatchAllInboxID != nil {
 			if err := s.Service.Store.SetDomainCatchAll(r.Context(), p.AccountID, id, *in.CatchAllInboxID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.OutboundCredentialID != nil {
+			if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, id, *in.OutboundCredentialID); err != nil {
 				mapStoreError(w, err)
 				return
 			}

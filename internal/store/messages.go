@@ -39,6 +39,7 @@ type OutboundRecord struct {
 	SentAt                                               time.Time
 	ThreadID                                             string
 	IdemKey                                              string
+	LastError                                            string
 	Attachments                                          []AttachmentInput
 }
 

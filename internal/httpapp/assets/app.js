@@ -530,19 +530,42 @@
   var form = document.getElementById('domain-form');
   var del = document.getElementById('domain-delete-form');
   var select = document.getElementById('domain-catchall');
+  var providerSelect = document.getElementById('domain-provider');
   var title = document.getElementById('domain-dialog-title');
+  var currentId = '';
   document.querySelectorAll('.edit-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = btn.dataset.id;
-      form.action = '/ui/domains/' + id + '/catchall';
+      currentId = id;
+      form.action = '/ui/domains/' + id + '/edit';
       del.action = '/ui/domains/' + id + '/delete';
       if (title) {
         title.textContent = btn.dataset.name || 'Domain';
       }
       select.value = btn.dataset.catchall || '';
+      if (providerSelect) {
+        providerSelect.value = btn.dataset.provider || '';
+      }
       dlg.showModal();
     });
   });
+  var addProvider = document.getElementById('domain-add-provider');
+  if (addProvider) {
+    addProvider.addEventListener('click', function () {
+      var pdlg = document.getElementById('provider-dialog');
+      var pform = pdlg && pdlg.querySelector('form');
+      var trigger = document.getElementById('add-provider');
+      if (!pdlg || !pform || !trigger) {
+        return;
+      }
+      dlg.close();
+      trigger.click();
+      var assign = pform.querySelector('[name=assign_domain]');
+      if (assign) {
+        assign.value = currentId;
+      }
+    });
+  }
   var cancel = document.getElementById('domain-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {

@@ -55,9 +55,11 @@ This file records architectural decisions the implementation should treat as set
 
 Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific configuration. The Admin UI renders provider-specific fields from a schema each adapter exposes, so users enter an API key and the relevant settings rather than raw JSON.
 
-An account may hold multiple outbound credentials but selects exactly one **active** provider, stored as `accounts.active_outbound_credential_id`. All sending uses the active provider. Per-inbox credential assignment is deprecated and no longer consulted; it is retained only for backward compatibility.
+An account may hold multiple outbound credentials and designates one as its **active** default provider (`accounts.active_outbound_credential_id`). Each domain may additionally designate its own credential (`domains.outbound_credential_id`); sending resolves the domain credential first and falls back to the account default. Per-inbox credential assignment is removed and no longer accepted by the API.
 
-**Reason:** Users retain provider choice, pricing, and sender reputation while hosted operation remains simple, and a single active provider keeps V1 sending predictable ahead of future failover.
+A domain with no resolvable provider is valid: mail is still accepted and queued as `pending` (the outbox worker holds it without consuming retry attempts) until a provider is assigned, rather than being rejected.
+
+**Reason:** Provider credentials are sending-domain-scoped (for example Mailgun's sending domain or an SMTP `from_domain`), so an account that verifies several domains across providers cannot send correctly through a single account-wide provider. Domain-level mapping keeps one credential reusable across domains while matching how provider verification actually works. Queuing instead of rejecting avoids losing mail during setup or a provider outage.
 
 ## D008 — Replayable event history
 

@@ -25,24 +25,24 @@ type User struct {
 }
 
 type Domain struct {
-	ID              string    `json:"id"`
-	AccountID       string    `json:"account_id"`
-	Name            string    `json:"name"`
-	CatchAllInboxID string    `json:"catch_all_inbox_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID                   string    `json:"id"`
+	AccountID            string    `json:"account_id"`
+	Name                 string    `json:"name"`
+	CatchAllInboxID      string    `json:"catch_all_inbox_id,omitempty"`
+	OutboundCredentialID string    `json:"outbound_credential_id,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 type Inbox struct {
-	ID                   string    `json:"id"`
-	AccountID            string    `json:"account_id"`
-	DomainID             string    `json:"domain_id"`
-	LocalPart            string    `json:"local_part"`
-	Address              string    `json:"address"`
-	DisplayName          string    `json:"display_name"`
-	Enabled              bool      `json:"enabled"`
-	OutboundCredentialID string    `json:"outbound_credential_id,omitempty"`
-	AllowedSenders       []string  `json:"allowed_senders,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	AccountID      string    `json:"account_id"`
+	DomainID       string    `json:"domain_id"`
+	LocalPart      string    `json:"local_part"`
+	Address        string    `json:"address"`
+	DisplayName    string    `json:"display_name"`
+	Enabled        bool      `json:"enabled"`
+	AllowedSenders []string  `json:"allowed_senders,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // NormalizeAllowedSender validates and normalizes a single allowed-sender

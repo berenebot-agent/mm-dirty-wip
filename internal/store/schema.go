@@ -298,3 +298,9 @@ const migration006 = `CREATE TABLE IF NOT EXISTS outbound_delivery_log (
 CREATE INDEX IF NOT EXISTS idx_outbound_log_cred ON outbound_delivery_log(account_id, credential_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_outbound_log_msg ON outbound_delivery_log(message_id);
 `
+
+// migration007 lets a domain designate its own outbound credential. Sending
+// resolves the domain credential first and falls back to the account's active
+// credential; a domain with neither queues mail until a provider is assigned.
+const migration007 = `ALTER TABLE domains ADD COLUMN outbound_credential_id TEXT REFERENCES outbound_credentials(id) ON DELETE SET NULL;
+`

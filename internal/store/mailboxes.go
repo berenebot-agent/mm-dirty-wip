@@ -39,7 +39,7 @@ func (s *Store) CreateDomain(ctx context.Context, accountID, name string) (model
 	return model.Domain{ID: id, AccountID: accountID, Name: name, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Domain, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),created_at FROM domains WHERE account_id=? ORDER BY name`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),created_at FROM domains WHERE account_id=? ORDER BY name`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 	for rows.Next() {
 		var d model.Domain
 		var c string
-		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &c); err != nil {
+		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &c); err != nil {
 			return nil, err
 		}
 		d.CreatedAt = parseTime(c)
@@ -56,6 +56,21 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 	}
 	return out, rows.Err()
 }
+
+func (s *Store) GetDomain(ctx context.Context, accountID, domainID string) (model.Domain, error) {
+	var d model.Domain
+	var c string
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),created_at FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &c)
+	if err == sql.ErrNoRows {
+		return d, ErrNotFound
+	}
+	if err != nil {
+		return d, err
+	}
+	d.CreatedAt = parseTime(c)
+	return d, nil
+}
+
 func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inboxID string) error {
 	if inboxID != "" {
 		var n int
@@ -69,6 +84,25 @@ func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inbo
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetDomainOutboundCredential assigns a domain's outbound provider. An empty id
+// clears it so the domain falls back to the account's active credential.
+func (s *Store) SetDomainOutboundCredential(ctx context.Context, accountID, domainID, credentialID string) error {
+	if credentialID != "" {
+		var n int
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, credentialID, accountID).Scan(&n); err != nil || n != 1 {
+			return ErrForbidden
+		}
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE domains SET outbound_credential_id=? WHERE id=? AND account_id=?`, nullString(credentialID), domainID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -195,7 +229,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -218,7 +252,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		var i model.Inbox
 		var domain, allowed, created string
 		var enabled int
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &allowed, &created); err != nil {
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &created); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
@@ -239,7 +273,7 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	var i model.Inbox
 	var domain, allowed, created string
 	var enabled int
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,COALESCE(i.outbound_credential_id,''),i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &i.OutboundCredentialID, &allowed, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &created)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -252,7 +286,7 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	i.CreatedAt = parseTime(created)
 	return i, nil
 }
-func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display string, enabled *bool, outboundCredID *string) error {
+func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display string, enabled *bool) error {
 	if !p.CanOwn(id) && !p.Admin {
 		return ErrForbidden
 	}
@@ -261,15 +295,6 @@ func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display 
 	}
 	if enabled != nil {
 		_, _ = s.write.ExecContext(ctx, `UPDATE inboxes SET enabled=? WHERE id=? AND account_id=?`, boolInt(*enabled), id, p.AccountID)
-	}
-	if outboundCredID != nil {
-		if *outboundCredID != "" {
-			var n int
-			if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, *outboundCredID, p.AccountID).Scan(&n); err != nil || n != 1 {
-				return ErrForbidden
-			}
-		}
-		_, _ = s.write.ExecContext(ctx, `UPDATE inboxes SET outbound_credential_id=? WHERE id=? AND account_id=?`, nullString(*outboundCredID), id, p.AccountID)
 	}
 	return nil
 }
@@ -391,12 +416,12 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if err != nil {
 		return model.Inbox{}, false, err
 	}
-	var id, actualLocal, display, cred, allowed, created string
+	var id, actualLocal, display, allowed, created string
 	var enabled int
-	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),allowed_senders_json,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &cred, &allowed, &created)
+	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &allowed, &created)
 	usedCatch := false
 	if err == sql.ErrNoRows && catch != "" {
-		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,COALESCE(outbound_credential_id,''),allowed_senders_json,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &cred, &allowed, &created)
+		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &allowed, &created)
 		usedCatch = true
 	}
 	if err == sql.ErrNoRows {
@@ -408,7 +433,7 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if enabled == 0 {
 		return model.Inbox{}, usedCatch, ErrNotFound
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, OutboundCredentialID: cred, AllowedSenders: decodeStrings(allowed), CreatedAt: parseTime(created)}, usedCatch, nil
+	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, AllowedSenders: decodeStrings(allowed), CreatedAt: parseTime(created)}, usedCatch, nil
 }
 func placeholders(n int) string {
 	if n <= 0 {

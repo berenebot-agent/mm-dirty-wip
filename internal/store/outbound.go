@@ -116,6 +116,58 @@ func (s *Store) SetActiveOutboundCredential(ctx context.Context, accountID, id s
 	return nil
 }
 
+// DomainOutboundCredential resolves the outbound credential for a domain. A
+// domain-level credential takes precedence over the account's active
+// credential. It returns ErrNoProvider when neither is configured, so callers
+// can queue mail rather than reject it.
+func (s *Store) DomainOutboundCredential(ctx context.Context, accountID, domainID string) (OutboundCredential, error) {
+	var domainCred, accountCred string
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(d.outbound_credential_id,''),COALESCE(a.active_outbound_credential_id,'') FROM domains d JOIN accounts a ON a.id=d.account_id WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&domainCred, &accountCred)
+	if err == sql.ErrNoRows {
+		return OutboundCredential{}, ErrNotFound
+	}
+	if err != nil {
+		return OutboundCredential{}, err
+	}
+	if domainCred == "" {
+		domainCred = accountCred
+	}
+	if domainCred == "" {
+		return OutboundCredential{}, ErrNoProvider
+	}
+	return s.GetOutboundCredential(ctx, accountID, domainCred)
+}
+
+// OutboundCredentialForMessage resolves the outbound credential for an existing
+// message via its inbox's domain, applying the same domain-then-account
+// precedence as DomainOutboundCredential.
+func (s *Store) OutboundCredentialForMessage(ctx context.Context, accountID, messageID string) (OutboundCredential, error) {
+	var domainID string
+	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)
+	if err == sql.ErrNoRows {
+		return OutboundCredential{}, ErrNotFound
+	}
+	if err != nil {
+		return OutboundCredential{}, err
+	}
+	return s.DomainOutboundCredential(ctx, accountID, domainID)
+}
+
+// HoldPending records why a pending message is not being delivered and defers
+// its next attempt without counting a retry. It is used when a domain has no
+// outbound provider yet: the message stays queued and delivers once a provider
+// is assigned.
+func (s *Store) HoldPending(ctx context.Context, accountID, id, reason string, next time.Time) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=? WHERE id=? AND account_id=? AND status='pending'`, reason, timeText(next), id, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Message, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -146,7 +198,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	id := idgen.New("msg")
 	// The message is enqueued as pending; the worker marks it sent after the
 	// provider accepts it. sent_at is left NULL until delivery succeeds.
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, now)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
@@ -192,7 +244,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, model.Event{}, err
 	}
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, providerMessageID, now, id, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "sent", providerMessageID, ""); err != nil {
