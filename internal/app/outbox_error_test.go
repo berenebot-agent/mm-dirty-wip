@@ -11,39 +11,13 @@ import (
 	"gatehouse-mail/internal/model"
 )
 
-func TestSendEmptyBodyAutoFillsPlaceholder(t *testing.T) {
+func TestSendEmptyBodyRejected(t *testing.T) {
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"messageId":"<empty-out>"}`)
-	}))
-	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Empty", Text: "", HTML: ""}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The stored body must be non-empty so the provider accepts it.
-	if res.Message.Text == "" {
-		t.Fatalf("stored text_body is empty")
-	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
-		t.Fatal(err)
-	}
-	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sent.Status != "sent" {
-		t.Fatalf("status %q, want sent", sent.Status)
+	_, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Empty", Text: "", HTML: ""}, "")
+	if err == nil || !strings.Contains(err.Error(), "message body is required") {
+		t.Fatalf("expected empty-body rejection, got %v", err)
 	}
 }
 

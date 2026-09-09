@@ -411,10 +411,10 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if len(to) == 0 {
 		return SendResult{}, fmt.Errorf("recipient required")
 	}
-	// Providers reject messages with no body. Ensure a non-empty body so an
-	// empty draft/email still sends.
+	// Providers reject messages with no body, so reject empty-body sends up
+	// front rather than enqueuing a message that can never be delivered.
 	if strings.TrimSpace(in.Text) == "" && strings.TrimSpace(in.HTML) == "" {
-		in.Text = " "
+		return SendResult{}, fmt.Errorf("message body is required")
 	}
 	cred, err := s.Store.ActiveOutboundCredential(ctx, p.AccountID)
 	if err != nil {
@@ -489,11 +489,6 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	provider, ok := transport.LookupOutbound(cred.Provider)
 	if !ok {
 		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider), cred.ID, cred.Provider)
-	}
-	// Safety net for messages enqueued before the empty-body guard: never hand a
-	// provider an empty body. Only the local copy is mutated; the DB is untouched.
-	if strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.HTML) == "" {
-		m.Text = " "
 	}
 	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
 		FromName:    m.From.Name,
