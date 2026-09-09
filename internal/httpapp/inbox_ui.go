@@ -80,10 +80,12 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 		}
 		note = "Attachments kept: " + strings.Join(names, ", ") + ". They will be sent with this message."
 	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	s.render(w, composeBody, pageData{
 		Title:          f.Title,
 		Principal:      p,
 		CSRF:           csrf(r),
+		Account:        acc,
 		ComposeTitle:   f.Title,
 		ComposeError:   f.Err,
 		ComposeAction:  actionWithCSRF(f.Action, csrf(r)),
@@ -201,10 +203,12 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		note = "Attachments: " + strings.Join(names, ", ")
 	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	s.render(w, composeBody, pageData{
 		Title:          "Edit Draft",
 		Principal:      p,
 		CSRF:           csrf(r),
+		Account:        acc,
 		ComposeTitle:   "Edit Draft",
 		ComposeAction:  actionWithCSRF("/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save", csrf(r)),
 		ComposeCancel:  "/ui/inboxes/" + box.ID + "/drafts",
@@ -508,10 +512,12 @@ func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 		s.renderComposeFlash(w, r, p, r.URL.Query().Get("_flash"), f)
 		return
 	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	s.render(w, composeBody, pageData{
 		Title:         "Compose",
 		Principal:     p,
 		CSRF:          csrf(r),
+		Account:       acc,
 		ComposeTitle:  "New message",
 		ComposeAction: actionWithCSRF("/ui/inboxes/"+box.ID+"/send", csrf(r)),
 		ComposeCancel: "/ui/inboxes/" + box.ID,
@@ -601,7 +607,8 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 		http.Error(w, "message not found", 404)
 		return
 	}
-	data := pageData{Principal: p, CSRF: csrf(r), ComposeCancel: "/ui/messages/" + m.ID}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	data := pageData{Principal: p, CSRF: csrf(r), Account: acc, ComposeCancel: "/ui/messages/" + m.ID}
 	switch kind {
 	case "reply":
 		to := strings.Join(m.To, ", ")
