@@ -67,7 +67,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.render(rr, dashboardBody, data)
 	body := rr.Body.String()
-	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Key"} {
+	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Client"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -91,7 +91,7 @@ func TestCreateKeyReturnsJSONSecret(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusCreated {
-		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("create client = %d body=%s", rr.Code, rr.Body.String())
 	}
 	if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("cache-control = %q, want no-store", cc)
@@ -115,6 +115,6 @@ func TestCreateKeyRedirectsWithoutJSONAccept(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("create client = %d body=%s", rr.Code, rr.Body.String())
 	}
 }

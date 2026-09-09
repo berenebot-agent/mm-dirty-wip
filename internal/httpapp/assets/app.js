@@ -436,14 +436,14 @@
     }).then(function (res) {
       if (!res.ok) {
         return res.text().then(function (text) {
-          throw new Error(text || 'Could not create key');
+          throw new Error(text || 'Could not create client');
         });
       }
       return res.json();
     }).then(function (data) {
       showResult(data);
     }).catch(function (err) {
-      errorBox.textContent = err.message || 'Could not create key';
+      errorBox.textContent = err.message || 'Could not create client';
       errorBox.hidden = false;
     });
   });
