@@ -3,3 +3,5 @@
 /data
 .env
 *.zip
+tests/logs
+*.log
