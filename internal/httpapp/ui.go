@@ -15,13 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
 )
 
 const pageTemplate = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} · Gatehouse Email</title><style>
-body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px;display:flex;flex-direction:column}.muted{color:#666}input,select,textarea{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}.btn,button{display:inline-block;font:inherit;padding:8px 14px;border:1px solid #111;border-radius:6px;background:#111;color:#fff;text-decoration:none;line-height:1.2;cursor:pointer;box-sizing:border-box}.btn:hover,button:hover{background:#000;border-color:#000}.secondary{background:#fff;color:#111;border-color:#bbb}.btn.secondary:hover,button.secondary:hover{background:#f2f3f5;border-color:#999}.danger{color:#b00020;border-color:#e0a0aa}.btn.danger:hover,button.danger:hover{background:#fdecef;border-color:#c66}.actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.actions form{margin:0}.btn-sm{height:30px;padding:0 10px;font-size:13px;display:inline-flex;align-items:center;justify-content:center}.row .btn-narrow{padding:8px 7px;flex:0 0 auto}.sub{font-size:12px;color:#666;margin-top:2px}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}.slist{list-style:none;margin:0 0 12px;padding:0;border:1px solid #ddd;border-radius:8px;overflow:hidden}.slist li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #eee}.slist li:last-child{border-bottom:0}.slist .addr{flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.slist .empty{color:#666;font-size:13px;padding:12px}.slist .icon-btn{flex:0 0 auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.secret pre{background:transparent;padding:0;margin:8px 0 0;white-space:pre-wrap;word-break:break-all}.copy-note{font-size:13px;color:#8a6d00;margin-top:8px}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}dialog{border:0;border-radius:10px;padding:20px;max-width:480px;width:92%;box-sizing:border-box}#key-dialog{width:460px;max-width:calc(100vw - 24px);max-height:90vh;overflow:auto}#key-dialog.key-dialog--wide{width:820px;max-width:calc(100vw - 24px)}#key-dialog .dialog-actions{position:sticky;bottom:0;background:#fff;border-top:1px solid #eee;padding:12px 0}dialog::backdrop{background:rgba(0,0,0,.45)}.toolbar{display:flex;gap:12px;align-items:center;margin-bottom:12px}.toolbar a{text-decoration:none}.msghead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.msghead h1{margin-top:0}.inboxhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.inboxtitle{margin:0;font-size:1.9em}.inboxaddr{font-size:1em;color:#5f6368;font-weight:400}.inboxbar{display:flex;gap:10px;align-items:center;margin:10px 0 16px}.inboxbar .active{background:#e8eaed;border-color:#999;font-weight:700}.inboxbar .active:hover{background:#dde1e6;border-color:#777}.bulkbar{display:flex;gap:8px;align-items:center;margin-left:auto}.mailheader{display:grid;grid-template-columns:28px 22px minmax(150px,220px) 1fr 110px 84px 130px;gap:8px;align-items:center;margin:0 -16px;padding:0 12px 8px;color:#5f6368;font-size:12px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #e5e5e5}.mailheader>span{text-align:left}.mailheader>span.hcenter{text-align:center}.hcenter{text-align:center}.mailrows{margin:0 -16px -16px}.mailrow{display:grid;grid-template-columns:28px 22px minmax(150px,220px) 1fr 110px 84px 130px;gap:8px;align-items:center;border-bottom:1px solid #eee;background:#f2f3f5;padding:0 12px}.mailrow:last-child{border-bottom:0}.mailrow.unread{background:#fff}.mailcheck{display:flex;align-items:center;justify-content:center}.mailcheck input[type=checkbox]{width:15px;height:15px;margin:0}.mailrowlink{grid-column:2 / 7;display:grid;grid-template-columns:22px minmax(150px,220px) 1fr 110px 84px;gap:8px;align-items:center;padding:12px 0;text-decoration:none;color:#5f6368;min-width:0}.mailrow.unread .mailrowlink{color:#202124}.mailrow.unread .mailsender,.mailrow.unread .mailsubject{font-weight:700}.mailsender,.mailsubject,.mailsnippet,.maildate,.mailsize{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mailsnippet{color:#5f6368;font-weight:400}.maildate,.mailsize{font-size:13px;color:#5f6368;text-align:center}.mailrow.unread .maildate,.mailrow.unread .mailsize{color:#202124}.mailaction{grid-column:7;display:flex;justify-content:center;align-items:center}.mailaction form{margin:0}.mailaction .btn-sm{margin:0 2px}.mailrow.outbox{grid-template-columns:22px minmax(150px,220px) 1fr 110px 150px}.mailrow.outbox .mailrowlink{grid-column:1 / 5;grid-template-columns:22px minmax(150px,220px) 1fr 110px}.mailrow.outbox .mailaction{grid-column:5;justify-content:flex-end;gap:6px}.mailaction button{width:112px;text-align:center}.maildot{display:inline-block}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#1557b0}.unread-pill{background:#1557b0;color:#fff}.banner{padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1px solid}.banner.warn{background:#fff8e1;border-color:#e6c34a}.mailframe{width:100%;height:520px;border:1px solid #ddd;border-radius:8px;background:#fff}.attachments{list-style:none;padding:0;margin:8px 0}.attachments li{padding:4px 0}.brand{color:#202124;text-decoration:none}.card-footer{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:auto;padding-top:12px}.card-footer .small{margin-right:auto}.small{font-size:13px}.icon-btn{height:30px;padding:0 7px;line-height:1;display:inline-flex;align-items:center;justify-content:center}.icon-btn svg{width:14px;height:14px;display:block}.dialog-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:16px}.dialog-actions form{margin:0;margin-right:auto}.email-field{display:flex;align-items:stretch;margin:4px 0 10px}.email-field input,.email-field select{width:auto;margin:0}.email-field input{flex:1;border-radius:6px 0 0 6px}.email-field .at{display:flex;align-items:center;padding:0 8px;color:#666;background:#f2f3f5;border:1px solid #bbb;border-left:0;border-right:0}.email-field select{border-radius:0 6px 6px 0;border-left:0;max-width:50%}.row-link{cursor:pointer}.row-link:hover td{background:#f6f9ff}.key-fields[data-type=api]>label:first-child{display:flex;align-items:center;gap:8px;margin:4px 0 10px}.key-fields[data-type=api]>label:first-child input{width:auto;margin:0}.key-matrix{width:100%;margin:6px 0}.key-matrix th,.key-matrix td{padding:6px 8px;border-bottom:1px solid #eee;vertical-align:middle}.key-matrix td:last-child,.key-matrix th:last-child{text-align:right}.key-matrix th:last-child{white-space:nowrap}.seg{position:relative;display:inline-flex;border:1px solid #bbb;border-radius:7px;overflow:hidden;background:#fff}.seg input{position:absolute;width:1px;height:1px;margin:0;padding:0;border:0;opacity:0}.seg label{display:inline-block;min-width:92px;text-align:center;box-sizing:border-box;margin:0;padding:5px 11px;font-size:13px;line-height:1.2;color:#333;cursor:pointer;user-select:none;border-left:1px solid #ddd}.seg label:first-of-type{border-left:0}.seg input:checked+label{background:#111;color:#fff}.seg input:focus-visible+label{outline:2px solid #1557b0;outline-offset:-2px}.seg input:disabled+label{cursor:not-allowed}.seg button{border:0;border-left:1px solid #ddd;border-radius:0;background:#fff;color:#333;min-width:92px;text-align:center;box-sizing:border-box;font-weight:700;padding:5px 11px;font-size:13px;line-height:1.2}.seg button:first-of-type{border-left:0}.seg button:hover{background:#f2f3f5;color:#333}.seg button:disabled{color:#999}.role-legend{width:100%;margin-top:12px;font-size:13px}.role-legend th,.role-legend td{padding:5px 8px;border-bottom:1px solid #eee;text-align:left}.role-legend td:first-child{white-space:nowrap;font-weight:600}.amber{background:#fff8e1;color:#8a6d00;border-color:#e6c34a}button.amber:hover{background:#fdf0c8;border-color:#c9a52f}#key-rotate{margin-right:auto}button:disabled{opacity:.4;cursor:not-allowed}button:disabled:hover{background:#111;border-color:#111}.notice{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100;max-width:min(92vw,560px);box-shadow:0 6px 20px rgba(0,0,0,.15);cursor:pointer;animation:notice-in .2s ease-out}.notice.dismissing{animation:notice-out .3s ease-in forwards}@keyframes notice-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}@keyframes notice-out{to{opacity:0;transform:translate(-50%,-8px)}}@media (prefers-reduced-motion:reduce){.notice{animation:none}.notice.dismissing{animation:none;opacity:0}}</style></head><body><header><div><a class="brand" href="/"><b>Gatehouse Email</b></a>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log Out</button></form>{{end}}</header>{{template "body" .}}<script src="{{asset "app.js"}}" defer></script></body></html>`
+body{font:15px system-ui,sans-serif;max-width:1180px;margin:0 auto;padding:24px;color:#202124;background:#fafafa}a{color:#1557b0}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}h1,h2,h3{margin:.4em 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}.card{background:white;border:1px solid #ddd;border-radius:10px;padding:16px;margin-bottom:16px;display:flex;flex-direction:column}.muted{color:#666}input,select,textarea{font:inherit;padding:8px;border:1px solid #bbb;border-radius:6px;box-sizing:border-box}input,select,textarea{width:100%;margin:4px 0 10px}.btn,button{display:inline-block;font:inherit;padding:8px 14px;border:1px solid #111;border-radius:6px;background:#111;color:#fff;text-decoration:none;line-height:1.2;cursor:pointer;box-sizing:border-box}.btn:hover,button:hover{background:#000;border-color:#000}.secondary{background:#fff;color:#111;border-color:#bbb}.btn.secondary:hover,button.secondary:hover{background:#f2f3f5;border-color:#999}.danger{color:#b00020;border-color:#e0a0aa}.btn.danger:hover,button.danger:hover{background:#fdecef;border-color:#c66}.actions{display:flex;gap:8px;align-items:center;justify-content:flex-end;flex-wrap:wrap}.actions form{margin:0}.btn-sm{height:30px;padding:0 10px;font-size:13px;display:inline-flex;align-items:center;justify-content:center}.row .btn-narrow{padding:8px 7px;flex:0 0 auto}.sub{font-size:12px;color:#666;margin-top:2px}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}.slist{list-style:none;margin:0 0 12px;padding:0;border:1px solid #ddd;border-radius:8px;overflow:hidden}.slist li{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #eee}.slist li:last-child{border-bottom:0}.slist .addr{flex:1;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.slist .empty{color:#666;font-size:13px;padding:12px}.slist .icon-btn{flex:0 0 auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #eee;vertical-align:top}code,pre{background:#f3f3f3;padding:2px 4px;border-radius:4px}pre{padding:12px;white-space:pre-wrap;overflow:auto}.secret{border:1px solid #d5b400;background:#fffbe6;padding:12px;border-radius:8px;word-break:break-all}.secret pre{background:transparent;padding:0;margin:8px 0 0;white-space:pre-wrap;word-break:break-all}.copy-note{font-size:13px;color:#8a6d00;margin-top:8px}.msgbody{white-space:pre-wrap}.pill{display:inline-block;background:#eee;border-radius:999px;padding:2px 7px;font-size:12px}.error{background:#fee;border:1px solid #e99;padding:10px}.ok{background:#efe;border:1px solid #9c9;padding:10px}dialog{border:0;border-radius:10px;padding:20px;max-width:480px;width:92%;box-sizing:border-box}#key-dialog{width:460px;max-width:calc(100vw - 24px);max-height:90vh;overflow:auto}#key-dialog.key-dialog--wide{width:820px;max-width:calc(100vw - 24px)}#key-dialog .dialog-actions{position:sticky;bottom:0;background:#fff;border-top:1px solid #eee;padding:12px 0}dialog::backdrop{background:rgba(0,0,0,.45)}.toolbar{display:flex;gap:12px;align-items:center;margin-bottom:12px}.toolbar a{text-decoration:none}.msghead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}.msghead h1{margin-top:0}.inboxhead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.inboxtitle{margin:0;font-size:1.9em}.inboxaddr{font-size:1em;color:#5f6368;font-weight:400}.inboxbar{display:flex;gap:10px;align-items:center;margin:10px 0 16px}.inboxbar .active{background:#e8eaed;border-color:#999;font-weight:700}.inboxbar .active:hover{background:#dde1e6;border-color:#777}.bulkbar{display:flex;gap:8px;align-items:center;margin-left:auto}.mailheader{display:grid;grid-template-columns:28px 22px minmax(150px,220px) 1fr 110px 84px 130px;gap:8px;align-items:center;margin:0 -16px;padding:0 12px 8px;color:#5f6368;font-size:12px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #e5e5e5}.mailheader>span{text-align:left}.mailheader>span.hcenter{text-align:center}.hcenter{text-align:center}.mailrows{margin:0 -16px -16px}.mailrow{display:grid;grid-template-columns:28px 22px minmax(150px,220px) 1fr 110px 84px 130px;gap:8px;align-items:center;border-bottom:1px solid #eee;background:#f2f3f5;padding:0 12px}.mailrow:last-child{border-bottom:0}.mailrow.unread{background:#fff}.mailcheck{display:flex;align-items:center;justify-content:center}.mailcheck input[type=checkbox]{width:15px;height:15px;margin:0}.mailrowlink{grid-column:2 / 7;display:grid;grid-template-columns:22px minmax(150px,220px) 1fr 110px 84px;gap:8px;align-items:center;padding:12px 0;text-decoration:none;color:#5f6368;min-width:0}.mailrow.unread .mailrowlink{color:#202124}.mailrow.unread .mailsender,.mailrow.unread .mailsubject{font-weight:700}.mailsender,.mailsubject,.mailsnippet,.maildate,.mailsize{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mailsnippet{color:#5f6368;font-weight:400}.maildate,.mailsize{font-size:13px;color:#5f6368;text-align:center}.mailrow.unread .maildate,.mailrow.unread .mailsize{color:#202124}.mailaction{grid-column:7;display:flex;justify-content:center;align-items:center}.mailaction form{margin:0}.mailaction .btn-sm{margin:0 2px}.mailrow.outbox{grid-template-columns:22px minmax(150px,220px) 1fr 110px 150px}.mailrow.outbox .mailrowlink{grid-column:1 / 5;grid-template-columns:22px minmax(150px,220px) 1fr 110px}.mailrow.outbox .mailaction{grid-column:5;justify-content:flex-end;gap:6px}.mailaction button{width:112px;text-align:center}.maildot{display:inline-block}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#1557b0}.unread-pill{background:#1557b0;color:#fff}.banner{padding:10px 12px;border-radius:8px;margin-bottom:16px;border:1px solid}.banner.warn{background:#fff8e1;border-color:#e6c34a}.mailframe{width:100%;height:520px;border:1px solid #ddd;border-radius:8px;background:#fff}.attachments{list-style:none;padding:0;margin:8px 0}.attachments li{padding:4px 0}.brand{color:#202124;text-decoration:none}.card-footer{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:auto;padding-top:12px}.card-footer .small{margin-right:auto}.small{font-size:13px}.icon-btn{height:30px;padding:0 7px;line-height:1;display:inline-flex;align-items:center;justify-content:center}.icon-btn svg{width:14px;height:14px;display:block}.dialog-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:16px}.dialog-actions form{margin:0;margin-right:auto}.email-field{display:flex;align-items:stretch;margin:4px 0 10px}.email-field input,.email-field select{width:auto;margin:0}.email-field input{flex:1;border-radius:6px 0 0 6px}.email-field .at{display:flex;align-items:center;padding:0 8px;color:#666;background:#f2f3f5;border:1px solid #bbb;border-left:0;border-right:0}.email-field select{border-radius:0 6px 6px 0;border-left:0;max-width:50%}.row-link{cursor:pointer}.row-link:hover td{background:#f6f9ff}.key-fields[data-type=api]>label:first-child{display:flex;align-items:center;gap:8px;margin:4px 0 10px}.key-fields[data-type=api]>label:first-child input{width:auto;margin:0}.key-matrix{width:100%;margin:6px 0}.key-matrix th,.key-matrix td{padding:6px 8px;border-bottom:1px solid #eee;vertical-align:middle}.key-matrix td:last-child,.key-matrix th:last-child{text-align:right}.key-matrix th:last-child{white-space:nowrap}.seg{position:relative;display:inline-flex;border:1px solid #bbb;border-radius:7px;overflow:hidden;background:#fff}.seg input{position:absolute;width:1px;height:1px;margin:0;padding:0;border:0;opacity:0}.seg label{display:inline-block;min-width:92px;text-align:center;box-sizing:border-box;margin:0;padding:5px 11px;font-size:13px;line-height:1.2;color:#333;cursor:pointer;user-select:none;border-left:1px solid #ddd}.seg label:first-of-type{border-left:0}.seg input:checked+label{background:#111;color:#fff}.seg input:focus-visible+label{outline:2px solid #1557b0;outline-offset:-2px}.seg input:disabled+label{cursor:not-allowed}.seg button{border:0;border-left:1px solid #ddd;border-radius:0;background:#fff;color:#333;min-width:92px;text-align:center;box-sizing:border-box;font-weight:700;padding:5px 11px;font-size:13px;line-height:1.2}.seg button:first-of-type{border-left:0}.seg button:hover{background:#f2f3f5;color:#333}.seg button:disabled{color:#999}.role-legend{width:100%;margin-top:12px;font-size:13px}.role-legend th,.role-legend td{padding:5px 8px;border-bottom:1px solid #eee;text-align:left}.role-legend td:first-child{white-space:nowrap;font-weight:600}.amber{background:#fff8e1;color:#8a6d00;border-color:#e6c34a}button.amber:hover{background:#fdf0c8;border-color:#c9a52f}#key-rotate{margin-right:auto}button:disabled{opacity:.4;cursor:not-allowed}button:disabled:hover{background:#111;border-color:#111}.notice{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100;max-width:min(92vw,560px);box-shadow:0 6px 20px rgba(0,0,0,.15);cursor:pointer;animation:notice-in .2s ease-out}.notice.dismissing{animation:notice-out .3s ease-in forwards}@keyframes notice-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}@keyframes notice-out{to{opacity:0;transform:translate(-50%,-8px)}}@media (prefers-reduced-motion:reduce){.notice{animation:none}.notice.dismissing{animation:none;opacity:0}}.tabs{display:flex;gap:4px;border-bottom:1px solid #ddd;margin-bottom:20px}.tab{padding:8px 16px;text-decoration:none;color:#5f6368;border-bottom:2px solid transparent;margin-bottom:-1px;font-weight:600}.tab:hover{color:#202124}.tab.active{color:#202124;border-bottom-color:#1557b0}.steps{margin:8px 0 16px;padding-left:20px}.steps li{margin:6px 0}.cf-code{max-height:420px;overflow:auto}</style></head><body><header><div><a class="brand" href="/"><b>Gatehouse Email</b></a>{{if .Account}} <span class="muted">· {{.Account.Name}}</span>{{end}}</div>{{if .Principal.UserID}}<form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Log Out</button></form>{{end}}</header>{{template "body" .}}<script src="{{asset "app.js"}}" defer></script></body></html>`
 
 func (s *Server) render(w http.ResponseWriter, body string, data any) {
 	t, err := template.New("page").Funcs(template.FuncMap{"bytes": formatBytes, "join": strings.Join, "snippet": snippetText, "mailDate": mailDate, "filesize": filesize, "asset": s.assetURL}).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
@@ -37,6 +38,7 @@ func (s *Server) render(w http.ResponseWriter, body string, data any) {
 
 type pageData struct {
 	Title                       string
+	Tab                         string
 	Principal                   model.Principal
 	CSRF                        string
 	Account                     model.Account
@@ -55,6 +57,7 @@ type pageData struct {
 	OutboundProviders           []outboundProviderView
 	InboundProviders            []outboundProviderView
 	OutboundDetail              *outboundDetailView
+	Cloudflare                  *cloudflareSetupView
 	DeliveryAttempts            []store.DeliveryAttempt
 	DeliveryHasMore             bool
 	DeliveryBefore              int64
@@ -114,6 +117,15 @@ type outboundDetailView struct {
 	CreatedAt                      time.Time
 	UpdatedAt                      time.Time
 }
+
+// cloudflareSetupView carries the one-time generated Worker code for a
+// Cloudflare receive path. WorkerCode is empty once the one-time flash has
+// been consumed, so the page offers regeneration instead.
+type cloudflareSetupView struct {
+	CredentialID string
+	WebhookURL   string
+	WorkerCode   string
+}
 type outboundProviderView struct {
 	Name, Description string
 	Fields            []transport.ConfigField
@@ -127,6 +139,12 @@ type credentialView struct {
 // dashboard GET that displays it, so refreshing cannot create it again.
 type secretFlash struct {
 	Notice, Label, Secret string
+}
+
+// cloudflareSetup carries generated Worker code (containing the one-time
+// shared secret) from the POST that generated it to the setup GET.
+type cloudflareSetup struct {
+	WorkerCode string
 }
 
 func inboxAddrMap(boxes []model.Inbox) map[string]string {
@@ -302,20 +320,23 @@ func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", 303)
 }
 
-const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}{{if .PausedDomains}}<div class="banner warn">No sending provider for {{join .PausedDomains ", "}} — mail is queued until one is assigned.</div>{{end}}{{if .UnconfiguredDomains}}<div class="banner warn">No receive path for {{join .UnconfiguredDomains ", "}} — these domains cannot accept mail until one is assigned.</div>{{end}}
+const dashboardBody = `<nav class="tabs"><a href="/dashboard" class="tab{{if eq .Tab "home"}} active{{end}}">Home</a><a href="/dashboard?tab=settings" class="tab{{if eq .Tab "settings"}} active{{end}}">Settings</a></nav><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}{{if .PausedDomains}}<div class="banner warn">No sending provider for {{join .PausedDomains ", "}} — mail is queued until one is assigned.</div>{{end}}{{if .UnconfiguredDomains}}<div class="banner warn">No receive path for {{join .UnconfiguredDomains ", "}} — these domains cannot accept mail until one is assigned.</div>{{end}}
+<div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>
 <div class="grid"><section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table><thead><tr><th>Name</th><th></th><th>Email</th><th></th></tr></thead><tbody>{{range .Inboxes}}<tr class="row-link" data-href="/ui/inboxes/{{.ID}}"><td><a href="/ui/inboxes/{{.ID}}">{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="muted">—</span>{{end}}</a>{{if .AllowedSenders}} <span title="Only allowed senders can email this inbox" aria-label="Restricted to allowed senders" style="color:#5f6368;vertical-align:middle"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/></svg></span>{{end}}</td><td>{{if index $.Unread .ID}}<span class="pill unread-pill">{{index $.Unread .ID}}</span>{{end}}</td><td>{{.Address}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-inbox" data-id="{{.ID}}" data-name="{{.DisplayName}}" data-address="{{.Address}}" data-allowed="{{join .AllowedSenders ","}}" title="Edit inbox" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inboxes/{{.ID}}/delete" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No inboxes yet.</p>{{end}}<div class="card-footer"><button type="button" id="add-inbox">Add Inbox</button></div></section>
 <section class="card"><h2>Clients</h2>{{if .Credentials}}<table><thead><tr><th>Name</th><th>Type</th><th>Scope</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Scope}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/{{if eq .Kind "hermes"}}hermes{{else}}keys{{end}}/{{.ID}}/delete" data-confirm="Delete this {{.Type}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No clients yet.</p>{{end}}<div class="card-footer"><button type="button" id="add-key">Create Client</button></div></section></div>
-<div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}<tr><td><b>{{.Name}}</b></td><td class="muted">{{if .CatchAllInboxID}}{{index $.InboxAddr .CatchAllInboxID}}{{else}}—{{end}}</td><td class="muted">{{with index $.DomainSending .ID}}{{if .Paused}}<span class="pill amber" title="Add an outbound provider to resume sending">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="muted">{{with index $.DomainReceiving .ID}}{{if .Unconfigured}}<span class="pill amber" title="Add a receive path to accept mail">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-domain" data-id="{{.ID}}" data-name="{{.Name}}" data-catchall="{{.CatchAllInboxID}}" data-provider="{{.OutboundCredentialID}}" data-receive="{{.InboundCredentialID}}" title="Edit domain" aria-label="Edit domain"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<div class="card-footer"><button type="button" id="add-domain">Add Domain</button></div></section>
-<section class="card"><h2>Outbound Providers</h2>{{if .Outbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Outbound}}<tr class="row-link" data-href="/ui/outbound/{{.ID}}"><td><a href="/ui/outbound/{{.ID}}"><b>{{.Name}}</b></a><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/outbound/{{.ID}}/delete" data-confirm="Delete this outbound provider?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a provider to each domain before it can send.</span><button type="button" id="add-provider">Add Outbound Provider</button></div></section>
-<section class="card"><h2>Receiving Providers</h2>{{if .Inbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Inbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-inbound" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inbound/{{.ID}}/delete" data-confirm="Delete this receive path? Domains using it become unconfigured."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No receive path configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a receive path to each domain before it can accept mail.</span><button type="button" id="add-inbound">Add Receive Path</button></div><p class="muted small">Mailgun: <code>POST {{.BaseURL}}/internal/ingest/mailgun/raw-mime</code> · Cloudflare Worker: <code>POST {{.BaseURL}}/internal/ingest/cloudflare</code>. Provider/DNS setup is external; saving a receive path alone does not establish delivery.</p></section></div>
+<section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span style="color:#b8860b;font-weight:700">Blocked</span>{{else if eq .Direction "outbound"}}Sent{{else}}Received{{end}}</td><td>{{.From.Address}}</td><td>{{join .To ", "}}</td><td>{{.Subject}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
+</div>
+<div class="tab-panel"{{if ne .Tab "settings"}} hidden{{end}}>
+<section class="card"><h2>Domains</h2>{{if .Domains}}<table><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}<tr><td><b>{{.Name}}</b></td><td class="muted">{{if .CatchAllInboxID}}{{index $.InboxAddr .CatchAllInboxID}}{{else}}—{{end}}</td><td class="muted">{{with index $.DomainSending .ID}}{{if .Paused}}<span class="pill amber" title="Add an outbound provider to resume sending">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="muted">{{with index $.DomainReceiving .ID}}{{if .Unconfigured}}<span class="pill amber" title="Add a receive path to accept mail">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-domain" data-id="{{.ID}}" data-name="{{.Name}}" data-catchall="{{.CatchAllInboxID}}" data-provider="{{.OutboundCredentialID}}" data-receive="{{.InboundCredentialID}}" title="Edit domain" aria-label="Edit domain"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<div class="card-footer"><button type="button" id="add-domain">Add Domain</button></div></section>
+<section class="card"><h2>Receiving Providers</h2>{{if .Inbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Inbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-inbound" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inbound/{{.ID}}/delete" data-confirm="Delete this receive path? Domains using it become unconfigured."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No receive path configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a receive path to each domain before it can accept mail.</span><button type="button" id="add-inbound">Add Receive Path</button></div><p class="muted small">Mailgun: <code>POST {{.BaseURL}}/internal/ingest/mailgun/raw-mime</code> · Cloudflare Worker: <code>POST {{.BaseURL}}/internal/ingest/cloudflare</code>. Provider/DNS setup is external; saving a receive path alone does not establish delivery.</p></section>
+<section class="card"><h2>Outbound Providers</h2>{{if .Outbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Outbound}}<tr class="row-link" data-href="/ui/outbound/{{.ID}}"><td><a href="/ui/outbound/{{.ID}}"><b>{{.Name}}</b></a><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/outbound/{{.ID}}/delete" data-confirm="Delete this outbound provider?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a provider to each domain before it can send.</span><button type="button" id="add-provider">Add Outbound Provider</button></div></section></div>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}"{{if eq .Name "smtp"}} selected{{end}}>{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="provider-cancel">Cancel</button><button>Save Provider</button></div></form></dialog>
-<dialog id="inbound-dialog"><form method="post" action="/ui/inbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignInboundDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="inbound-provider-select">{{range .InboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .InboundProviders}}<fieldset class="inbound-provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-cancel">Cancel</button><button>Save Receive Path</button></div></form></dialog>
+<dialog id="inbound-dialog"><form method="post" action="/ui/inbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignInboundDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="inbound-provider-select">{{range .InboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .InboundProviders}}<fieldset class="inbound-provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}{{if not $f.Generated}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-cancel">Cancel</button><button id="inbound-submit">Save Receive Path</button></div></form></dialog>
 <dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead><tbody>{{range .Inboxes}}<tr><td>{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments</td></tr><tr><td>Assistant</td><td>Read + delete messages</td></tr><tr><td>Owner</td><td>Assistant + send/reply and mailbox settings</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .AllowedSenders}}1{{end}}">{{.Address}}</option>{{end}}</select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Create</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
 <dialog id="domain-dialog"><h3 id="domain-dialog-title">Domain</h3><form method="post" id="domain-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Catch-all inbox</label><select name="inbox" id="domain-catchall"><option value="">No catch-all</option>{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><label>Sending provider</label><select name="provider" id="domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><p class="muted small" id="domain-provider-status" hidden></p><label>Receive path</label><select name="receive" id="domain-receive"><option value="">Not configured</option>{{range .Inbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_inbound__">Add new receive path…</option></select><p class="muted small" id="domain-receive-status" hidden></p></form><div class="dialog-actions"><form method="post" id="domain-delete-form" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Domain</button></form><button type="button" class="secondary" id="domain-cancel">Cancel</button><button type="submit" form="domain-form">Save</button></div></dialog>
 <dialog id="add-domain-dialog"><form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain <span title="Enter the bare domain (example.com). Add the whole domain even if you only use a few addresses." aria-label="More info">ⓘ</span></label><input name="name" placeholder="example.com" required aria-describedby="add-domain-hint"><p class="muted small" id="add-domain-hint">Enter the bare domain (<code>example.com</code>). Add the whole domain even if you only use a few addresses.</p><label>Sending provider</label><select name="provider" id="add-domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><label>Receive path</label><select name="receive" id="add-domain-receive"><option value="">Not configured</option>{{range .Inbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_inbound__">Add new receive path…</option></select><div class="dialog-actions"><button type="button" class="secondary" id="add-domain-cancel">Cancel</button><button>Add Domain</button></div></form></dialog>
 <dialog id="inbox-dialog"><form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email address</label><div class="email-field"><input name="local" placeholder="hermes" required><span class="at">@</span><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></div><label>Display Name</label><input name="display" placeholder="Hermes"><div class="dialog-actions"><button type="button" class="secondary" id="inbox-cancel">Cancel</button><button>Create Inbox</button></div></form></dialog>
-<dialog id="inbox-edit-dialog"><form method="post" id="inbox-edit-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Display name</label><input name="display"><label>Email address</label><input id="inbox-edit-address" value="" disabled><label>Allowed senders</label><p class="muted" id="inbox-sender-note">Anyone can email this inbox. Add an allowed sender to restrict who can email it.</p><ul id="inbox-sender-list" class="slist"><li class="empty">Anyone can email this inbox. Add an address below to restrict who can email it.</li></ul><div class="row"><input id="inbox-sender-input" type="text" placeholder="someone@example.com"><button type="button" class="secondary btn-narrow" id="inbox-sender-add">Add</button></div><p class="muted small" id="inbox-sender-hint">Use <code>*@example.com</code> to allow any sender at a domain, or <code>*@*.example.com</code> for its subdomains.</p></form><div class="dialog-actions"><form method="post" id="inbox-edit-delete-form" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Inbox</button></form><button type="button" class="secondary" id="inbox-edit-cancel">Cancel</button><button type="submit" form="inbox-edit-form">Save</button></div></dialog>
-<section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span style="color:#b8860b;font-weight:700">Blocked</span>{{else if eq .Direction "outbound"}}Sent{{else}}Received{{end}}</td><td>{{.From.Address}}</td><td>{{join .To ", "}}</td><td>{{.Subject}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
+<dialog id="inbox-edit-dialog"><form method="post" id="inbox-edit-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Display name</label><input name="display"><label>Email address</label><input id="inbox-edit-address" value="" disabled><label>Allowed senders</label><p class="muted" id="inbox-sender-note">Anyone can email this inbox. Add an allowed sender to restrict who can email it.</p><ul id="inbox-sender-list" class="slist"><li class="empty">Anyone can email this inbox. Add an address below to restrict who can email it.</li></ul><div class="row"><input id="inbox-sender-input" type="text" placeholder="someone@example.com"><button type="button" class="secondary btn-narrow" id="inbox-sender-add">Add</button></div><p class="muted small" id="inbox-sender-hint">Use <code>*@example.com</code> to allow any sender at a domain, or <code>*@*.example.com</code> for its subdomains.</p></form><div class="dialog-actions"><form method="post" id="inbox-edit-delete-form" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Inbox</button></form><button type="button" class="secondary" id="inbox-edit-cancel">Cancel</button><button type="submit" form="inbox-edit-form">Save</button></div></dialog>`
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -374,7 +395,14 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			notice, secretLabel, secret = f.Notice, f.Label, f.Secret
 		}
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSending: domainSending, DomainReceiving: domainReceiving, PausedDomains: pausedDomains, UnconfiguredDomains: unconfiguredDomains, AssignDomain: assignDomain, AssignInboundDomain: assignInbound, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, Inbound: iv, OutboundProviders: outboundProviderViews(), InboundProviders: inboundProviderViews(), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	tab := r.URL.Query().Get("tab")
+	if tab != "settings" {
+		tab = "home"
+	}
+	if assignDomain != "" || assignInbound != "" {
+		tab = "settings"
+	}
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: tab, Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSending: domainSending, DomainReceiving: domainReceiving, PausedDomains: pausedDomains, UnconfiguredDomains: unconfiguredDomains, AssignDomain: assignDomain, AssignInboundDomain: assignInbound, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, Inbound: iv, OutboundProviders: outboundProviderViews(), InboundProviders: inboundProviderViews(), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -392,11 +420,11 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 	receive := strings.TrimSpace(r.Form.Get("receive"))
 	if outbound == addProviderOption {
 		// The domain exists; open the provider form to create and assign one.
-		http.Redirect(w, r, "/dashboard?add_provider_for="+url.QueryEscape(d.ID), 303)
+		http.Redirect(w, r, "/dashboard?tab=settings&add_provider_for="+url.QueryEscape(d.ID), 303)
 		return
 	}
 	if receive == addInboundOption {
-		http.Redirect(w, r, "/dashboard?add_inbound_for="+url.QueryEscape(d.ID), 303)
+		http.Redirect(w, r, "/dashboard?tab=settings&add_inbound_for="+url.QueryEscape(d.ID), 303)
 		return
 	}
 	if outbound != "" {
@@ -411,7 +439,7 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/dashboard?notice=Domain+created", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Domain+created", 303)
 }
 
 // addProviderOption is the sentinel value of the "Add new provider…" item in
@@ -437,11 +465,11 @@ func (s *Server) uiUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	outbound := strings.TrimSpace(r.Form.Get("provider"))
 	receive := strings.TrimSpace(r.Form.Get("receive"))
 	if outbound == addProviderOption {
-		http.Redirect(w, r, "/dashboard?add_provider_for="+url.QueryEscape(id), 303)
+		http.Redirect(w, r, "/dashboard?tab=settings&add_provider_for="+url.QueryEscape(id), 303)
 		return
 	}
 	if receive == addInboundOption {
-		http.Redirect(w, r, "/dashboard?add_inbound_for="+url.QueryEscape(id), 303)
+		http.Redirect(w, r, "/dashboard?tab=settings&add_inbound_for="+url.QueryEscape(id), 303)
 		return
 	}
 	if outbound != "" || r.Form.Has("provider") {
@@ -456,7 +484,7 @@ func (s *Server) uiUpdateDomain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/dashboard?notice=Domain+updated", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Domain+updated", 303)
 }
 func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -472,7 +500,7 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	for _, path := range paths {
 		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 	}
-	http.Redirect(w, r, "/dashboard?notice=Domain+deleted", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Domain+deleted", 303)
 }
 func (s *Server) uiCreateInbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -746,17 +774,17 @@ func (s *Server) uiOutbound(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		http.Redirect(w, r, "/dashboard?notice=Provider+assigned+to+domain", 303)
+		http.Redirect(w, r, "/dashboard?tab=settings&notice=Provider+assigned+to+domain", 303)
 		return
 	}
 	if rt := strings.TrimSpace(r.Form.Get("return_to")); strings.HasPrefix(rt, "/ui/outbound/") {
 		http.Redirect(w, r, rt, 303)
 		return
 	}
-	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+saved", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Outbound+provider+saved", 303)
 }
 
-const outboundDetailBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard">← Dashboard</a></div>
+const outboundDetailBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard?tab=settings">← Settings</a></div>
 <section class="card"><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px"><div><h1>{{.OutboundDetail.Name}} <span class="sub">{{.OutboundDetail.Provider}}</span></h1><p class="muted">Created {{.OutboundDetail.CreatedAt.Format "2006-01-02 15:04"}} · Updated {{.OutboundDetail.UpdatedAt.Format "2006-01-02 15:04"}}</p></div><button type="button" class="edit-provider" data-id="{{.OutboundDetail.ID}}" data-name="{{.OutboundDetail.Name}}" data-provider="{{.OutboundDetail.Provider}}" data-config="{{.OutboundDetail.ConfigJSON}}" title="Provider settings" aria-label="Provider settings">Settings</button></div></section>
 <section class="card"><h2>Delivery activity</h2>{{if .DeliveryAttempts}}<table style="font-size:12px"><thead><tr><th>When</th><th>Address</th><th>Message</th><th>Attempt</th><th>Status</th><th>Provider ID</th><th>Error</th></tr></thead><tbody>{{range .DeliveryAttempts}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .MessageID}}<div>to: {{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</div><div>from: {{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</div>{{else}}<span class="muted">message_deleted</span>{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">{{.MessageID}}</a>{{else}}<span class="muted">—</span>{{end}}</td><td>{{.Attempt}}</td><td>{{if eq .Status "sent"}}<span class="pill">Sent</span>{{else}}<span class="pill danger">Failed</span>{{end}}</td><td class="muted" style="font-size:10px;word-break:break-all">{{.ProviderMessageID}}</td><td class="muted" style="word-break:break-all">{{.ErrorText}}</td></tr>{{end}}</tbody></table>{{if .DeliveryHasMore}}<p><a href="/ui/outbound/{{.OutboundDetail.ID}}?before={{.DeliveryBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No delivery attempts yet.</p>{{end}}</section>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="return_to" value="/ui/outbound/{{.OutboundDetail.ID}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="provider-cancel">Cancel</button><button>Save Provider</button></div></form></dialog>`
@@ -832,7 +860,7 @@ func (s *Server) uiOutboundDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+deleted", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Outbound+provider+deleted", 303)
 }
 
 func (s *Server) uiInbound(w http.ResponseWriter, r *http.Request) {
@@ -850,25 +878,137 @@ func (s *Server) uiInbound(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := map[string]any{}
 	for _, f := range t.ConfigFields() {
+		if f.Generated {
+			continue
+		}
 		if raw := strings.TrimSpace(r.Form.Get("icfg_" + provider + "_" + f.Name)); raw != "" {
 			cfg[f.Name] = raw
 		}
+	}
+	// Cloudflare's shared secret is generated server-side and shown once with
+	// ready-to-paste Worker code; the operator never types it.
+	generatedSecret := ""
+	if provider == "cloudflare" && id == "" {
+		sec, err := auth.RandomToken(32)
+		if err != nil {
+			http.Error(w, "could not generate secret", 500)
+			return
+		}
+		generatedSecret = sec
+		cfg["webhook_secret"] = sec
 	}
 	saved, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, id, r.Form.Get("name"), provider, cfg)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if domainID := strings.TrimSpace(r.Form.Get("assign_domain")); domainID != "" {
+	domainID := strings.TrimSpace(r.Form.Get("assign_domain"))
+	if domainID != "" {
 		if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, domainID, saved.ID); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		http.Redirect(w, r, "/dashboard?notice=Receive+path+assigned+to+domain", 303)
+	}
+	if generatedSecret != "" {
+		s.redirectCloudflareSetup(w, r, saved.ID, generatedSecret)
 		return
 	}
-	http.Redirect(w, r, "/dashboard?notice=Receive+path+saved", 303)
+	if domainID != "" {
+		http.Redirect(w, r, "/dashboard?tab=settings&notice=Receive+path+assigned+to+domain", 303)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Receive+path+saved", 303)
 }
+
+// redirectCloudflareSetup stores the one-time Worker code (which contains the
+// generated secret) and sends the operator to the setup page.
+func (s *Server) redirectCloudflareSetup(w http.ResponseWriter, r *http.Request, credID, secret string) {
+	code := s.cloudflareWorkerCode(secret)
+	dest := "/ui/inbound/" + url.PathEscape(credID) + "/setup"
+	if tok := s.flashes.put(cloudflareSetup{WorkerCode: code}, len(code)+64); tok != "" {
+		dest += "?_flash=" + tok
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// cloudflareWorkerCode renders the embedded Worker template with this
+// instance's ingest URL and the generated shared secret.
+func (s *Server) cloudflareWorkerCode(secret string) string {
+	code := string(cloudflareWorkerTemplate)
+	code = strings.ReplaceAll(code, "__GATEHOUSE_WEBHOOK_URL__", s.Service.Config.BaseURL+"/internal/ingest/cloudflare")
+	code = strings.ReplaceAll(code, "__GATEHOUSE_WEBHOOK_SECRET__", secret)
+	return code
+}
+
+// uiInboundSetup shows the one-time generated Worker code for a Cloudflare
+// receive path. Once the flash has been consumed the code cannot be shown
+// again; the page offers regeneration instead.
+func (s *Server) uiInboundSetup(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	cred, err := s.Service.Store.GetInboundCredential(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "receive path not found", 404)
+		return
+	}
+	if cred.Provider != "cloudflare" {
+		http.Error(w, "not a Cloudflare receive path", 400)
+		return
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	view := &cloudflareSetupView{CredentialID: cred.ID, WebhookURL: s.Service.Config.BaseURL + "/internal/ingest/cloudflare"}
+	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+		if f, ok := v.(cloudflareSetup); ok {
+			view.WorkerCode = f.WorkerCode
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.render(w, cloudflareSetupBody, pageData{Title: "Cloudflare Worker setup", Principal: p, CSRF: csrf(r), Account: acc, Cloudflare: view})
+}
+
+// uiInboundRegenerate issues a new Cloudflare shared secret, invalidating the
+// previous Worker until the operator pastes the new code.
+func (s *Server) uiInboundRegenerate(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	cred, err := s.Service.Store.GetInboundCredential(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "receive path not found", 404)
+		return
+	}
+	if cred.Provider != "cloudflare" {
+		http.Error(w, "not a Cloudflare receive path", 400)
+		return
+	}
+	sec, err := auth.RandomToken(32)
+	if err != nil {
+		http.Error(w, "could not generate secret", 500)
+		return
+	}
+	if _, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, cred.ID, cred.Name, "cloudflare", map[string]any{"webhook_secret": sec}); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.redirectCloudflareSetup(w, r, cred.ID, sec)
+}
+
+const cloudflareSetupBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard?tab=settings">← Settings</a></div>
+<section class="card"><h1>Cloudflare Worker setup</h1>
+{{if .Cloudflare.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your generated shared secret, which is shown only on this page.</p>
+<ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Worker</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In your domain, open <b>Email</b> → <b>Email Routing</b>, enable it, and apply the MX records Cloudflare shows.</li><li>Under <b>Routing rules</b>, add a <b>Send to a Worker</b> rule for each receiving address and choose this Worker.</li></ol>
+<pre class="cf-code" id="cf-code">{{.Cloudflare.WorkerCode}}</pre>
+<p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p>
+<div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><a class="btn" href="/dashboard?tab=settings">Done</a></div>
+{{else}}<p class="muted">The shared secret is shown only once, so the Worker code is no longer available. Regenerate to get a new secret and fresh code. The current Worker stops working as soon as you regenerate.</p>
+<form method="post" action="/ui/inbound/{{.Cloudflare.CredentialID}}/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="amber">Regenerate secret</button></form>
+{{end}}<p class="muted small">Ingest URL: <code>{{.Cloudflare.WebhookURL}}</code>. Saving a receive path alone does not establish delivery; Email Routing and DNS setup happen in Cloudflare.</p>
+</section>`
 
 func (s *Server) uiInboundDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -880,7 +1020,7 @@ func (s *Server) uiInboundDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	http.Redirect(w, r, "/dashboard?notice=Receive+path+deleted", 303)
+	http.Redirect(w, r, "/dashboard?tab=settings&notice=Receive+path+deleted", 303)
 }
 
 func outboundConfigFromForm(t transport.OutboundTransport, r *http.Request, requireSecrets bool) (map[string]any, error) {

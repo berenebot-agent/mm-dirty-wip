@@ -28,12 +28,12 @@ Gatehouse Email resolves the recipient to its logical inbox. A configured domain
 
 ## Cloudflare Email Routing inbound
 
-Inbound can also be received via Cloudflare Email Routing through a Worker that streams the raw MIME to the generic webhook. Full dashboard navigation and the Worker example are in [docs/CLOUDFLARE_INBOUND.md](docs/CLOUDFLARE_INBOUND.md); the Worker source is [docs/cloudflare-worker.js](docs/cloudflare-worker.js).
+Inbound can also be received via Cloudflare Email Routing through a Worker that streams the raw MIME to the generic webhook. Full dashboard navigation is in [docs/CLOUDFLARE_INBOUND.md](docs/CLOUDFLARE_INBOUND.md).
 
 High-level steps:
 
-1. In the Admin UI, edit the domain and add a **Receive path** of type **Cloudflare Worker**, entering a long random shared secret. The secret is stored encrypted; it is no longer read from the environment.
-2. Create a Worker from `docs/cloudflare-worker.js`, setting `WEBHOOK_URL` to your instance's `/internal/ingest/cloudflare` endpoint and the Worker secret to the same value.
+1. In the Admin **Settings** tab, edit the domain and add a **Receive path** of type **Cloudflare Worker**. Gatehouse generates the shared secret and opens a one-time setup page with the complete Worker code and Cloudflare steps. The secret is shown once; use **Regenerate** if you lose it.
+2. In Cloudflare, create a Worker and paste the generated code (it already contains your ingest URL and secret), then deploy it.
 3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
 4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
 
