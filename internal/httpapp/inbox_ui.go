@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/htmlsanitize"
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
@@ -807,6 +808,7 @@ func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
 	}
 	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
 	body := rewriteCIDs(m.HTML, atts)
+	body = htmlsanitize.Sanitize(body)
 	body = injectBaseTarget(body)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")

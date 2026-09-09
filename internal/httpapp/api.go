@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/htmlsanitize"
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
@@ -369,7 +370,7 @@ func openAgentMessage(m model.Message) map[string]any {
 	if len(snippet) > 240 {
 		snippet = snippet[:240]
 	}
-	return map[string]any{"id": m.ID, "from": m.From.Address, "to": firstString(m.To), "subject": m.Subject, "date": when, "seen": m.Read, "snippet": snippet, "hasOtp": false, "source": "external", "text": m.Text, "html": m.HTML, "messageId": m.RFCMessageID, "threadId": m.ThreadID, "hasAttachments": m.HasAttachments}
+	return map[string]any{"id": m.ID, "from": m.From.Address, "to": firstString(m.To), "subject": m.Subject, "date": when, "seen": m.Read, "snippet": snippet, "hasOtp": false, "source": "external", "text": m.Text, "html": htmlsanitize.Sanitize(m.HTML), "messageId": m.RFCMessageID, "threadId": m.ThreadID, "hasAttachments": m.HasAttachments}
 }
 func firstString(v []string) string {
 	if len(v) > 0 {
