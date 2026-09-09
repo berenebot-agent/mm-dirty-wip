@@ -759,3 +759,42 @@
     });
   }
 })();
+
+(function () {
+  var notices = document.querySelectorAll('.notice');
+  if (!notices.length) {
+    return;
+  }
+
+  function dismiss(el) {
+    if (el.dataset.dismissed) {
+      return;
+    }
+    el.dataset.dismissed = '1';
+    el.classList.add('dismissing');
+    window.setTimeout(function () {
+      if (el.parentNode) {
+        el.parentNode.removeChild(el);
+      }
+    }, 300);
+  }
+
+  notices.forEach(function (el) {
+    var timer = window.setTimeout(function () {
+      dismiss(el);
+    }, 5000);
+    el.addEventListener('click', function () {
+      window.clearTimeout(timer);
+      dismiss(el);
+    });
+  });
+
+  // Drop the notice from the URL so a refresh does not show it again.
+  if (window.history && window.history.replaceState && window.URLSearchParams) {
+    var url = new URL(window.location.href);
+    if (url.searchParams.has('notice')) {
+      url.searchParams.delete('notice');
+      window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+    }
+  }
+})();
