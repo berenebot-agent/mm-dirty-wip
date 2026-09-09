@@ -1,11 +1,13 @@
 package httpapp
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -120,11 +122,13 @@ type outboundDetailView struct {
 
 // cloudflareSetupView carries the one-time generated Worker code for a
 // Cloudflare receive path. WorkerCode is empty once the one-time flash has
-// been consumed, so the page offers regeneration instead.
+// been consumed, so the page offers regeneration instead. Warning is set when
+// the webhook hostname cannot be reached from Cloudflare.
 type cloudflareSetupView struct {
 	CredentialID string
 	WebhookURL   string
 	WorkerCode   string
+	Warning      string
 }
 type outboundProviderView struct {
 	Name, Description string
@@ -145,6 +149,7 @@ type secretFlash struct {
 // shared secret) from the POST that generated it to the setup GET.
 type cloudflareSetup struct {
 	WorkerCode string
+	WebhookURL string
 }
 
 func inboxAddrMap(boxes []model.Inbox) map[string]string {
@@ -921,23 +926,57 @@ func (s *Server) uiInbound(w http.ResponseWriter, r *http.Request) {
 }
 
 // redirectCloudflareSetup stores the one-time Worker code (which contains the
-// generated secret) and sends the operator to the setup page.
+// generated secret) and sends the operator to the setup page. The Worker URL
+// comes from the configured BASE_URL.
 func (s *Server) redirectCloudflareSetup(w http.ResponseWriter, r *http.Request, credID, secret string) {
-	code := s.cloudflareWorkerCode(secret)
+	base := s.Service.Config.BaseURL
+	webhook := strings.TrimRight(base, "/") + "/internal/ingest/cloudflare"
+	code := s.cloudflareWorkerCode(base, secret)
 	dest := "/ui/inbound/" + url.PathEscape(credID) + "/setup"
-	if tok := s.flashes.put(cloudflareSetup{WorkerCode: code}, len(code)+64); tok != "" {
+	if tok := s.flashes.put(cloudflareSetup{WorkerCode: code, WebhookURL: webhook}, len(code)+64); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
-// cloudflareWorkerCode renders the embedded Worker template with this
-// instance's ingest URL and the generated shared secret.
-func (s *Server) cloudflareWorkerCode(secret string) string {
+// cloudflareWorkerCode renders the embedded Worker template with the given
+// base URL and generated shared secret.
+func (s *Server) cloudflareWorkerCode(baseURL, secret string) string {
 	code := string(cloudflareWorkerTemplate)
-	code = strings.ReplaceAll(code, "__GATEHOUSE_WEBHOOK_URL__", s.Service.Config.BaseURL+"/internal/ingest/cloudflare")
+	code = strings.ReplaceAll(code, "__GATEHOUSE_WEBHOOK_URL__", strings.TrimRight(baseURL, "/")+"/internal/ingest/cloudflare")
 	code = strings.ReplaceAll(code, "__GATEHOUSE_WEBHOOK_SECRET__", secret)
 	return code
+}
+
+// privateHostWarning reports whether a webhook hostname resolves only to
+// private/loopback addresses, which Cloudflare Workers cannot fetch (error
+// 1002). It returns a human-readable warning, or "" when the host looks public
+// or cannot be resolved.
+func privateHostWarning(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	if host == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return ""
+	}
+	for _, s := range ips {
+		ip := net.ParseIP(s)
+		if ip == nil {
+			continue
+		}
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Sprintf("Cloudflare cannot reach %s: it resolves to the private address %s, and Worker fetches to private addresses fail with error 1002. Fix the DNS record or set BASE_URL to a publicly reachable hostname, then regenerate.", host, s)
+		}
+	}
+	return ""
 }
 
 // uiInboundSetup shows the one-time generated Worker code for a Cloudflare
@@ -959,12 +998,17 @@ func (s *Server) uiInboundSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	view := &cloudflareSetupView{CredentialID: cred.ID, WebhookURL: s.Service.Config.BaseURL + "/internal/ingest/cloudflare"}
+	webhook := strings.TrimRight(s.Service.Config.BaseURL, "/") + "/internal/ingest/cloudflare"
+	view := &cloudflareSetupView{CredentialID: cred.ID, WebhookURL: webhook}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(cloudflareSetup); ok {
 			view.WorkerCode = f.WorkerCode
+			if f.WebhookURL != "" {
+				view.WebhookURL = f.WebhookURL
+			}
 		}
 	}
+	view.Warning = privateHostWarning(view.WebhookURL)
 	w.Header().Set("Cache-Control", "no-store")
 	s.render(w, cloudflareSetupBody, pageData{Title: "Cloudflare Worker setup", Principal: p, CSRF: csrf(r), Account: acc, Cloudflare: view})
 }
@@ -1000,6 +1044,7 @@ func (s *Server) uiInboundRegenerate(w http.ResponseWriter, r *http.Request) {
 
 const cloudflareSetupBody = `<div class="toolbar"><a class="btn secondary" href="/dashboard?tab=settings">← Settings</a></div>
 <section class="card"><h1>Cloudflare Worker setup</h1>
+{{if .Cloudflare.Warning}}<div class="banner warn"><b>This URL is not reachable from Cloudflare.</b> {{.Cloudflare.Warning}}</div>{{end}}
 {{if .Cloudflare.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your generated shared secret, which is shown only on this page.</p>
 <ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Worker</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In your domain, open <b>Email</b> → <b>Email Routing</b>, enable it, and apply the MX records Cloudflare shows.</li><li>Under <b>Routing rules</b>, add a <b>Send to a Worker</b> rule for each receiving address and choose this Worker.</li></ol>
 <pre class="cf-code" id="cf-code">{{.Cloudflare.WorkerCode}}</pre>

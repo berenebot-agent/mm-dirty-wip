@@ -28,6 +28,12 @@ generates the Cloudflare shared secret for you:
    shown only once; use **Regenerate** on the receive path if you lose it.
 4. Repeat for each domain you receive on.
 
+The generated Worker uses `BASE_URL`. That hostname must resolve to a
+**public** IP: Cloudflare Workers cannot fetch private addresses (`10.x`,
+`192.168.x`, `172.16-31.x`, `127.x`) and fail with error `1002`. If the setup
+page shows a reachability warning, set `BASE_URL` (or fix the DNS record) to a
+public hostname and regenerate.
+
 You can also use the REST API, which requires you to supply the secret because
 the plaintext is never returned:
 
