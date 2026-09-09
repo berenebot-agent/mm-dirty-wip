@@ -90,7 +90,7 @@ func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inbo
 }
 
 // SetDomainOutboundCredential assigns a domain's outbound provider. An empty id
-// clears it so the domain falls back to the account's active credential.
+// clears it, so the domain queues mail until a provider is assigned.
 func (s *Store) SetDomainOutboundCredential(ctx context.Context, accountID, domainID, credentialID string) error {
 	if credentialID != "" {
 		var n int

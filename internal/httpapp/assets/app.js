@@ -531,8 +531,25 @@
   var del = document.getElementById('domain-delete-form');
   var select = document.getElementById('domain-catchall');
   var providerSelect = document.getElementById('domain-provider');
+  var providerStatus = document.getElementById('domain-provider-status');
   var title = document.getElementById('domain-dialog-title');
   var currentId = '';
+
+  function syncProviderStatus() {
+    if (!providerStatus || !providerSelect) {
+      return;
+    }
+    if (providerSelect.value === '') {
+      providerStatus.textContent = 'Sending paused — mail will queue until a provider is set.';
+      return;
+    }
+    var opt = providerSelect.options[providerSelect.selectedIndex];
+    providerStatus.textContent = 'Sending via ' + (opt ? opt.text : 'the selected provider') + '.';
+  }
+
+  if (providerSelect) {
+    providerSelect.addEventListener('change', syncProviderStatus);
+  }
   document.querySelectorAll('.edit-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = btn.dataset.id;
@@ -546,6 +563,7 @@
       if (providerSelect) {
         providerSelect.value = btn.dataset.provider || '';
       }
+      syncProviderStatus();
       dlg.showModal();
     });
   });

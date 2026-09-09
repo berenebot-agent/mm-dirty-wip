@@ -183,9 +183,12 @@ func TestDashboardDomainSendingState(t *testing.T) {
 		OutboundProviders: outboundProviderViews(),
 	})
 	body := rr.Body.String()
-	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-add-provider", "add-domain-provider", "No sending provider for a.example"} {
+	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "domain-add-provider", "add-domain-provider", "No sending provider for a.example"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Mail queues until a provider is set.") {
+		t.Fatalf("static paused hint should be replaced by the dynamic status line")
 	}
 }
