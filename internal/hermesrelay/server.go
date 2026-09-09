@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ type Server struct {
 	Service             *app.Service
 	Store               *store.Store
 	Hub                 *events.Hub
+	Log                 *slog.Logger
 	RequireCallerBearer bool
 	upgrader            ws.Upgrader
 }
@@ -37,6 +39,7 @@ func New(svc *app.Service) *Server {
 		Service:             svc,
 		Store:               svc.Store,
 		Hub:                 svc.Hub,
+		Log:                 svc.Log,
 		RequireCallerBearer: svc.Config.RelayRequireBearer,
 		upgrader:            ws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 	}
@@ -106,6 +109,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
+	s.Log.Info("relay enrolled", "gateway_id", req.GatewayID, "account_id", rec.AccountID, "inbox_id", rec.InboxID)
 	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: rec.AccountID, GatewayID: req.GatewayID})
 }
 
@@ -193,6 +197,7 @@ func (s *Server) ServeWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	s.Store.MarkHermesConnected(r.Context(), h.ID)
+	s.Log.Info("relay connected", "gateway_id", h.GatewayID, "inbox_id", h.InboxID)
 	_ = s.run(r.Context(), c, h)
 }
 
@@ -281,6 +286,7 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 					_ = wr.JSON(outboundResult(f.RequestID, false, "invalid outbound action", ""))
 					continue
 				}
+				s.Log.Info("relay outbound", "gateway_id", h.GatewayID, "request_id", f.RequestID, "op", a.Op, "chat_id", a.ChatID)
 				go s.handleOutbound(ctx, wr, h, f.RequestID, a)
 			case "interrupt":
 				// Email sends are short, transactional operations. Interrupt is acknowledged implicitly by the next result.
@@ -319,11 +325,13 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 			if err := wr.JSON(map[string]any{"type": "inbound", "event": messageEvent(m), "bufferId": ev.Cursor}); err != nil {
 				return err
 			}
+			s.Log.Info("relay inbound", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
 			for {
 				select {
 				case id := <-ackCh:
 					if id >= ev.ID {
 						after = id
+						s.Log.Info("relay acked", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
 						goto delivered
 					}
 				case err := <-errCh:
@@ -417,9 +425,11 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 		p := model.Principal{AccountID: h.AccountID, MailboxRoles: map[string]string{h.InboxID: "owner"}}
 		res, err := s.Service.Send(ctx, p, app.SendInput{InboxID: h.InboxID, ReplyToMessageID: target.ID, Text: content}, requestID)
 		if err != nil {
+			s.Log.Warn("relay outbound failed", "gateway_id", h.GatewayID, "request_id", requestID, "error", err)
 			_ = wr.JSON(outboundResult(requestID, false, err.Error(), ""))
 			return
 		}
+		s.Log.Info("relay outbound sent", "gateway_id", h.GatewayID, "request_id", requestID, "message_id", res.Message.ID)
 		_ = wr.JSON(outboundResult(requestID, true, "", res.Message.ID))
 	default:
 		_ = wr.JSON(outboundResult(requestID, false, "unsupported email operation", ""))

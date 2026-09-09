@@ -446,6 +446,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		if path != "" {
 			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 		}
+		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 		s.Service.Hub.Publish(ev)
 		w.WriteHeader(204)
 	}
@@ -786,6 +787,7 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 	if path != "" {
 		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 	}
+	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 	s.Service.Hub.Publish(ev)
 	w.WriteHeader(204)
 }

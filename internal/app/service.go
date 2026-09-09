@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"os"
@@ -34,6 +35,7 @@ type Service struct {
 	Config        config.Config
 	Store         *store.Store
 	Hub           *events.Hub
+	Log           *slog.Logger
 	EncryptionKey []byte
 	unroutedLim   *rateLimiter
 }
@@ -48,7 +50,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	}
 	smtpt.SetHosted(cfg.Mode == "hosted")
 	netutil.SetHosted(cfg.Mode == "hosted")
-	return &Service{Config: cfg, Store: st, Hub: hub, EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
 }
 
 // auditUnrouted records a rejected unknown-recipient delivery, rate-limited per
@@ -169,6 +171,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 		_ = os.Remove(final)
 		return m, true, nil
 	}
+	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
 	s.Hub.Publish(ev)
 	return m, false, nil
 }
@@ -506,6 +509,7 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	if m.IdemKey != "" {
 		_ = s.Store.IdempotencyComplete(ctx, m.AccountID, m.IdemKey, m.ID, SendResult{Message: sent, ProviderMessageID: providerResult.ProviderMessageID})
 	}
+	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
 	s.Hub.Publish(ev)
 	return nil
 }

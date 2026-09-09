@@ -37,6 +37,7 @@ func main() {
 		log.Error("application init failed", "error", err)
 		os.Exit(1)
 	}
+	svc.Log = log
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
 	defer worker.Stop()
