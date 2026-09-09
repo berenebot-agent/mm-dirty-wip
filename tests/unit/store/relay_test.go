@@ -1,10 +1,12 @@
-package store
+package store_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 	"time"
+
+	"gatehouse-mail/internal/store"
 )
 
 func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
@@ -23,7 +25,7 @@ func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	victim, err := s.CreateHermesConnection(ctx, EnrollRecord{AccountID: ub.AccountID, InboxID: bb.ID, Name: "v"}, "gw-victim", "victim-secret", "victim-delivery")
+	victim, err := s.CreateHermesConnection(ctx, store.EnrollRecord{AccountID: ub.AccountID, InboxID: bb.ID, Name: "v"}, "gw-victim", "victim-secret", "victim-delivery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +34,7 @@ func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EnrollHermesConnection(ctx, tok, "gw-victim", "stolen", "stolen"); !errors.Is(err, ErrForbidden) {
+	if _, err := s.EnrollHermesConnection(ctx, tok, "gw-victim", "stolen", "stolen"); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("cross-account enroll err=%v, want forbidden", err)
 	}
 

@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 )
 
@@ -15,7 +16,7 @@ func TestSendEmptyBodyRejected(t *testing.T) {
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
-	_, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Empty", Text: "", HTML: ""}, "")
+	_, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Empty", Text: "", HTML: ""}, "")
 	if err == nil || !strings.Contains(err.Error(), "message body is required") {
 		t.Fatalf("expected empty-body rejection, got %v", err)
 	}
@@ -38,7 +39,7 @@ func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Bad", Text: "hi"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Bad", Text: "hi"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestDeliverTransientErrorRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Transient", Text: "hi"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Transient", Text: "hi"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

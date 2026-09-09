@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"bytes"
@@ -16,13 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
 
-func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox) {
+func testService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbox) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
@@ -31,7 +32,7 @@ func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox)
 	}
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 10, SendLimitPerMinute: 60}
-	svc, err := New(cfg, st, events.NewHub())
+	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ const (
 
 // seedInbound creates an account-owned receive credential and assigns it to a
 // domain, mirroring the domain-first setup flow.
-func seedInbound(t *testing.T, svc *Service, accountID, domainID, provider string, cfg map[string]any) {
+func seedInbound(t *testing.T, svc *app.Service, accountID, domainID, provider string, cfg map[string]any) {
 	t.Helper()
 	cred, err := svc.SaveInboundCredential(context.Background(), accountID, "", "", provider, cfg)
 	if err != nil {
@@ -121,18 +122,18 @@ func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Message.ThreadID != m.ThreadID || res.Message.InReplyTo != "<inbound@test>" {
 		t.Fatalf("reply thread/header: %+v", res.Message)
 	}
-	// Deliver so the idempotency reservation completes.
+	// app.Deliver so the idempotency reservation completes.
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	again, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")
+	again, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")
 	if err != nil {
 		t.Fatal(err)
 	}

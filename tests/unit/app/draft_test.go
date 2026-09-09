@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -31,7 +32,7 @@ func TestSendDraftConsumesAndAttaches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := svc.SendDraft(ctx, admin, draft.ID, SendInput{InboxID: box.ID, To: draft.To, Subject: draft.Subject, Text: draft.Text}, "")
+	res, err := svc.SendDraft(ctx, admin, draft.ID, app.SendInput{InboxID: box.ID, To: draft.To, Subject: draft.Subject, Text: draft.Text}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package cloudflare
+package cloudflare_test
 
 import (
 	"context"
@@ -9,9 +9,10 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/cloudflare"
 )
 
-var _ transport.InboundTransport = Transport{}
+var _ transport.InboundTransport = cloudflare.Transport{}
 
 type fakeResolver struct {
 	binding transport.InboundBinding
@@ -39,10 +40,10 @@ func workerRequest(t *testing.T, secret, deliveryID, raw string) *http.Request {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader(raw))
 	r.Header.Set("Content-Type", "message/rfc822")
-	r.Header.Set(HeaderRecipient, "hermes@example.com")
-	r.Header.Set(HeaderEnvelopeTo, "sender@outside.test")
+	r.Header.Set(cloudflare.HeaderRecipient, "hermes@example.com")
+	r.Header.Set(cloudflare.HeaderEnvelopeTo, "sender@outside.test")
 	if deliveryID != "" {
-		r.Header.Set(HeaderDeliveryID, deliveryID)
+		r.Header.Set(cloudflare.HeaderDeliveryID, deliveryID)
 	}
 	if secret != "" {
 		r.Header.Set("Authorization", "Bearer "+secret)
@@ -51,7 +52,7 @@ func workerRequest(t *testing.T, secret, deliveryID, raw string) *http.Request {
 }
 
 func TestReceiveAndVerify(t *testing.T) {
-	var tr Transport
+	var tr cloudflare.Transport
 	raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\nSubject: hi\r\n\r\nhello"
 	path := t.TempDir() + "/m.eml"
 	msg, binding, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "cf-delivery-1", raw), cfResolver(), path, 1024)
@@ -71,12 +72,12 @@ func TestReceiveAndVerify(t *testing.T) {
 }
 
 func TestWrongBearerRejectedBeforeBody(t *testing.T) {
-	var tr Transport
+	var tr cloudflare.Transport
 	var read bool
 	body := &trackingReader{read: &read, r: strings.NewReader("From: x\r\n\r\nbody")}
 	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", body)
 	r.Header.Set("Content-Type", "message/rfc822")
-	r.Header.Set(HeaderRecipient, "hermes@example.com")
+	r.Header.Set(cloudflare.HeaderRecipient, "hermes@example.com")
 	r.Header.Set("Authorization", "Bearer wrong")
 	if _, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024); err != transport.ErrInboundUnauthorized {
 		t.Fatalf("err=%v", err)
@@ -94,7 +95,7 @@ type trackingReader struct {
 func (t *trackingReader) Read(p []byte) (int, error) { *t.read = true; return t.r.Read(p) }
 
 func TestMissingRecipientRejected(t *testing.T) {
-	var tr Transport
+	var tr cloudflare.Transport
 	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader("body"))
 	r.Header.Set("Authorization", "Bearer s3cret")
 	if _, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024); err != transport.ErrInboundUnauthorized {
@@ -103,7 +104,7 @@ func TestMissingRecipientRejected(t *testing.T) {
 }
 
 func TestDeliveryIDFallsBackToMIMEHash(t *testing.T) {
-	var tr Transport
+	var tr cloudflare.Transport
 	raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\n\r\nhello"
 	msg, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", raw), cfResolver(), t.TempDir()+"/m.eml", 1024)
 	if err != nil {
@@ -122,7 +123,7 @@ func TestDeliveryIDFallsBackToMIMEHash(t *testing.T) {
 }
 
 func TestRejectsBadPayload(t *testing.T) {
-	var tr Transport
+	var tr cloudflare.Transport
 	raw := "From: sender@outside.test\r\n\r\nhello"
 	if _, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", ""), cfResolver(), t.TempDir()+"/m.eml", 1024); err == nil {
 		t.Fatal("empty body accepted")

@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 )
@@ -38,14 +39,14 @@ func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
 	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "brevo-key")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []app.SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "brevo-key")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Message.Status != "pending" {
 		t.Fatalf("expected pending, got %q", res.Message.Status)
 	}
-	// Deliver via the worker path.
+	// app.Deliver via the worker path.
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "mg-key")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []app.SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "mg-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +153,7 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

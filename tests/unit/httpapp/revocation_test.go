@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"context"

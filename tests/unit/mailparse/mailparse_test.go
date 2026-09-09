@@ -1,4 +1,4 @@
-package mailparse
+package mailparse_test
 
 import (
 	"bytes"
@@ -8,6 +8,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gatehouse-mail/internal/mailparse"
+)
+
+// Mirror internal/mailparse unexported limits (internal/mailparse/parse.go).
+const (
+	testMaxMIMEDepth = 8
+	testMaxMIMEParts = 256
 )
 
 func TestParseAndExtractAttachment(t *testing.T) {
@@ -15,7 +23,7 @@ func TestParseAndExtractAttachment(t *testing.T) {
 		"From: Alice <alice@example.net>", "To: box@example.com", "Subject: Test", "Message-ID: <one@test>", "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=x", "", "--x", "Content-Type: text/plain; charset=utf-8", "", "hello body", "--x", "Content-Type: text/html; name=attack.html", "Content-Disposition: attachment; filename=attack.html", "Content-Transfer-Encoding: base64", "", "PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "--x--", ""}, "\r\n")
 	path := t.TempDir() + "/m.eml"
 	os.WriteFile(path, []byte(raw), 0600)
-	p, err := ParseFile(path)
+	p, err := mailparse.ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +31,7 @@ func TestParseAndExtractAttachment(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 	var b bytes.Buffer
-	if err = ExtractAttachment(path, p.Attachments[0].PartIndex, &b); err != nil {
+	if err = mailparse.ExtractAttachment(path, p.Attachments[0].PartIndex, &b); err != nil {
 		t.Fatal(err)
 	}
 	if b.String() != "<script>alert(1)</script>" {
@@ -31,7 +39,7 @@ func TestParseAndExtractAttachment(t *testing.T) {
 	}
 }
 func TestBuildMessageAttachmentRoundTrip(t *testing.T) {
-	raw, err := BuildMessage(Address{Name: "Hermes", Address: "hermes@example.com"}, []string{"friend@example.net"}, []string{"cc@example.net"}, []string{"bcc@example.net"}, "Report", "See attached", "", "<m1@example.com>", "", nil, time.Now(), []Attachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}})
+	raw, err := mailparse.BuildMessage(mailparse.Address{Name: "Hermes", Address: "hermes@example.com"}, []string{"friend@example.net"}, []string{"cc@example.net"}, []string{"bcc@example.net"}, "Report", "See attached", "", "<m1@example.com>", "", nil, time.Now(), []mailparse.Attachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +47,7 @@ func TestBuildMessageAttachmentRoundTrip(t *testing.T) {
 	if err = os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ParseFile(path)
+	p, err := mailparse.ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +55,7 @@ func TestBuildMessageAttachmentRoundTrip(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 	var b bytes.Buffer
-	if err = ExtractAttachment(path, p.Attachments[0].PartIndex, &b); err != nil {
+	if err = mailparse.ExtractAttachment(path, p.Attachments[0].PartIndex, &b); err != nil {
 		t.Fatal(err)
 	}
 	if b.String() != "hello attachment" {
@@ -56,7 +64,7 @@ func TestBuildMessageAttachmentRoundTrip(t *testing.T) {
 }
 
 func TestBuildMessageHTMLAttachmentRoundTrip(t *testing.T) {
-	raw, err := BuildMessage(Address{Address: "hermes@example.com"}, []string{"friend@example.net"}, nil, nil, "Report", "text body", "<p>html body</p>", "<m2@example.com>", "", nil, time.Now(), []Attachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}})
+	raw, err := mailparse.BuildMessage(mailparse.Address{Address: "hermes@example.com"}, []string{"friend@example.net"}, nil, nil, "Report", "text body", "<p>html body</p>", "<m2@example.com>", "", nil, time.Now(), []mailparse.Attachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +72,7 @@ func TestBuildMessageHTMLAttachmentRoundTrip(t *testing.T) {
 	if err = os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ParseFile(path)
+	p, err := mailparse.ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +85,7 @@ func TestHTMLIsPreserved(t *testing.T) {
 	raw := "From: a@b.test\r\nTo: c@d.test\r\nContent-Type: text/html\r\n\r\n<p>Hello</p>"
 	path := t.TempDir() + "/m"
 	os.WriteFile(path, []byte(raw), 0600)
-	p, err := ParseFile(path)
+	p, err := mailparse.ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +97,7 @@ func TestHTMLIsPreserved(t *testing.T) {
 // BCC recipients must never appear in the generated MIME; they are carried only
 // in the provider/SMTP envelope.
 func TestBuildMessageOmitsBccHeader(t *testing.T) {
-	raw, err := BuildMessage(Address{Address: "hermes@example.com"}, []string{"friend@example.net"}, nil, []string{"secret@example.net"}, "Subject", "body", "", "<m@example.com>", "", nil, time.Now(), nil)
+	raw, err := mailparse.BuildMessage(mailparse.Address{Address: "hermes@example.com"}, []string{"friend@example.net"}, nil, []string{"secret@example.net"}, "Subject", "body", "", "<m@example.com>", "", nil, time.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +112,7 @@ func TestBuildMessageOmitsBccHeader(t *testing.T) {
 func TestParseRejectsDeepNesting(t *testing.T) {
 	// Build a deeply nested multipart message exceeding maxMIMEDepth.
 	var b strings.Builder
-	depth := maxMIMEDepth + 2
+	depth := testMaxMIMEDepth + 2
 	for i := 0; i < depth; i++ {
 		fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=b%d\r\n\r\n--b%d\r\n", i, i)
 	}
@@ -115,7 +123,7 @@ func TestParseRejectsDeepNesting(t *testing.T) {
 	raw := "From: a@b.test\r\nTo: c@d.test\r\n" + b.String()
 	path := t.TempDir() + "/deep.eml"
 	os.WriteFile(path, []byte(raw), 0600)
-	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "nesting too deep") {
+	if _, err := mailparse.ParseFile(path); err == nil || !strings.Contains(err.Error(), "nesting too deep") {
 		t.Fatalf("expected nesting error, got %v", err)
 	}
 }
@@ -123,14 +131,14 @@ func TestParseRejectsDeepNesting(t *testing.T) {
 func TestParseRejectsTooManyParts(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("Content-Type: multipart/mixed; boundary=x\r\n\r\n")
-	for i := 0; i < maxMIMEParts+1; i++ {
+	for i := 0; i < testMaxMIMEParts+1; i++ {
 		fmt.Fprintf(&b, "--x\r\nContent-Type: text/plain\r\n\r\npart %d\r\n", i)
 	}
 	b.WriteString("--x--\r\n")
 	raw := "From: a@b.test\r\nTo: c@d.test\r\n" + b.String()
 	path := t.TempDir() + "/many.eml"
 	os.WriteFile(path, []byte(raw), 0600)
-	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "too many mime parts") {
+	if _, err := mailparse.ParseFile(path); err == nil || !strings.Contains(err.Error(), "too many mime parts") {
 		t.Fatalf("expected part-count error, got %v", err)
 	}
 }
@@ -155,7 +163,7 @@ func TestParseExtractIndexConsistency(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := ParseFile(path)
+	p, err := mailparse.ParseFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +176,7 @@ func TestParseExtractIndexConsistency(t *testing.T) {
 	want := map[int]string{1: "hello broken", 2: "a,b"}
 	for _, a := range p.Attachments {
 		var b bytes.Buffer
-		if err := ExtractAttachment(path, a.PartIndex, &b); err != nil {
+		if err := mailparse.ExtractAttachment(path, a.PartIndex, &b); err != nil {
 			t.Fatalf("extract %d: %v", a.PartIndex, err)
 		}
 		if b.String() != want[a.PartIndex] {
@@ -176,7 +184,7 @@ func TestParseExtractIndexConsistency(t *testing.T) {
 		}
 	}
 	var names []string
-	if err := ExtractAllAttachments(path, func(a Attachment, r io.Reader) error {
+	if err := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err

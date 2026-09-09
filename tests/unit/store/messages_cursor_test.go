@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func TestListMessagesBeforeCursor(t *testing.T) {
@@ -29,21 +30,21 @@ func TestListMessagesBeforeCursor(t *testing.T) {
 		return out
 	}
 
-	first, err := s.ListMessages(ctx, p, MessageFilter{InboxID: box.ID, Limit: 2})
+	first, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first) != 2 || first[0].ID != ids[4] || first[1].ID != ids[3] {
 		t.Fatalf("first page %v", idsOf(first))
 	}
-	second, err := s.ListMessages(ctx, p, MessageFilter{InboxID: box.ID, Before: first[1].ID, Limit: 2})
+	second, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Before: first[1].ID, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(second) != 2 || second[0].ID != ids[2] || second[1].ID != ids[1] {
 		t.Fatalf("second page %v", idsOf(second))
 	}
-	third, err := s.ListMessages(ctx, p, MessageFilter{InboxID: box.ID, Before: second[1].ID, Limit: 2})
+	third, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Before: second[1].ID, Limit: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestUnreadCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := true
-	msgs, err := s.ListMessages(ctx, p, MessageFilter{InboxID: boxes[1].ID, Limit: 1})
+	msgs, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: boxes[1].ID, Limit: 1})
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("list %v %#v", err, msgs)
 	}

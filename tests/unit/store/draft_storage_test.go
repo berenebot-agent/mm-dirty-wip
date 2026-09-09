@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func TestDraftStorageAccounting(t *testing.T) {
@@ -80,13 +81,13 @@ func TestSendDraftConsumesWithoutDoubleCount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, err = s.CommitOutbound(ctx, OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<draft@test>",
+	_, _, err = s.CommitOutbound(ctx, store.OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<draft@test>",
 		From: model.Address{Address: b[0].Address}, To: []string{"x@y.test"}, Subject: "s", Text: "body",
 		RawPath: "messages/d.eml", SizeBytes: 500, DraftID: d.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetDraft(ctx, p, d.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetDraft(ctx, p, d.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("draft not consumed: %v", err)
 	}
 	after, err := s.GetAccount(ctx, u.AccountID)

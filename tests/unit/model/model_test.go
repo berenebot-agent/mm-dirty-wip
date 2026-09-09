@@ -1,6 +1,10 @@
-package model
+package model_test
 
-import "testing"
+import (
+	"testing"
+
+	"gatehouse-mail/internal/model"
+)
 
 func TestNormalizeAllowedSender(t *testing.T) {
 	cases := []struct {
@@ -25,19 +29,19 @@ func TestNormalizeAllowedSender(t *testing.T) {
 		{"**@example.com", "", true},
 	}
 	for _, tc := range cases {
-		got, err := NormalizeAllowedSender(tc.in)
+		got, err := model.NormalizeAllowedSender(tc.in)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("NormalizeAllowedSender(%q) = %q, want error", tc.in, got)
+				t.Errorf("model.NormalizeAllowedSender(%q) = %q, want error", tc.in, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("NormalizeAllowedSender(%q) unexpected error: %v", tc.in, err)
+			t.Errorf("model.NormalizeAllowedSender(%q) unexpected error: %v", tc.in, err)
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("NormalizeAllowedSender(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("model.NormalizeAllowedSender(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -63,17 +67,17 @@ func TestMatchAllowedSender(t *testing.T) {
 		{"*@example.com", "", false},
 	}
 	for _, tc := range cases {
-		if got := MatchAllowedSender(tc.pattern, tc.address); got != tc.want {
-			t.Errorf("MatchAllowedSender(%q, %q) = %v, want %v", tc.pattern, tc.address, got, tc.want)
+		if got := model.MatchAllowedSender(tc.pattern, tc.address); got != tc.want {
+			t.Errorf("model.MatchAllowedSender(%q, %q) = %v, want %v", tc.pattern, tc.address, got, tc.want)
 		}
 	}
 }
 
 func TestInboxAllowsSender(t *testing.T) {
-	if !(Inbox{}).AllowsSender("anyone@example.com") {
+	if !(model.Inbox{}).AllowsSender("anyone@example.com") {
 		t.Fatal("empty allowlist must allow all senders")
 	}
-	box := Inbox{AllowedSenders: []string{"alice@example.com", "*@allowed.test", "*@*.corp.test"}}
+	box := model.Inbox{AllowedSenders: []string{"alice@example.com", "*@allowed.test", "*@*.corp.test"}}
 	cases := []struct {
 		address string
 		want    bool
@@ -87,7 +91,7 @@ func TestInboxAllowsSender(t *testing.T) {
 	}
 	for _, tc := range cases {
 		if got := box.AllowsSender(tc.address); got != tc.want {
-			t.Errorf("AllowsSender(%q) = %v, want %v", tc.address, got, tc.want)
+			t.Errorf("model.AllowsSender(%q) = %v, want %v", tc.address, got, tc.want)
 		}
 	}
 }

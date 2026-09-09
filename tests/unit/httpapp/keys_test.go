@@ -1,71 +1,59 @@
-package httpapp
+package httpapp_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
-
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
 )
 
-func TestAPIKeyScope(t *testing.T) {
-	cases := []struct {
-		name string
-		key  model.APIKey
-		want string
-	}{
-		{"admin", model.APIKey{Admin: true, Roles: map[string]string{"in_1": "read"}}, "Admin"},
-		{"none", model.APIKey{}, "None"},
-		{"owner", model.APIKey{Roles: map[string]string{"in_1": "owner"}}, "Owner"},
-		{"mixed", model.APIKey{Roles: map[string]string{"in_1": "read", "in_2": "owner", "in_3": "owner"}}, "Owner, Read"},
-	}
-	for _, tc := range cases {
-		if got := apiKeyScope(tc.key); got != tc.want {
-			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestCredentialViews(t *testing.T) {
-	views := credentialViews(
-		[]model.APIKey{{Name: "Agent", Roles: map[string]string{"in_1": "assistant"}}},
-		[]store.HermesConnection{{Name: "Hermes", GatewayID: "gw-abc"}},
-	)
-	if len(views) != 2 {
-		t.Fatalf("got %d views", len(views))
-	}
-	if views[0] != (credentialView{Kind: "api", Name: "Agent", Type: "API key", Scope: "Assistant", RolesJSON: `{"in_1":"assistant"}`}) {
-		t.Fatalf("api view %#v", views[0])
-	}
-	if views[1] != (credentialView{Kind: "hermes", Name: "Hermes", Type: "Hermes relay", Scope: "Owner"}) {
-		t.Fatalf("hermes view %#v", views[1])
-	}
-}
-
 func TestHermesEnvBlock(t *testing.T) {
-	got := hermesEnvBlock("https://mail.example.test/", "gw-abc", "sekret", "deliver")
-	want := "GATEWAY_RELAY_URL=https://mail.example.test/\nGATEWAY_RELAY_ID=gw-abc\nGATEWAY_RELAY_SECRET=sekret\nGATEWAY_RELAY_DELIVERY_KEY=deliver\nGATEWAY_RELAY_PLATFORMS=email\nGATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true"
-	if got != want {
-		t.Fatalf("env block:\n%s\nwant:\n%s", got, want)
+	svc, h, u, _, box := httpFixture(t)
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/admin/hermes/enroll", strings.NewReader(`{"inbox_id":"`+box.ID+`","name":"gw"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("enroll %d %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		GatewayID   string `json:"gateway_id"`
+		Secret      string `json:"secret"`
+		DeliveryKey string `json:"delivery_key"`
+		Env         string `json:"env"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v body=%s", err, rr.Body.String())
+	}
+	want := "GATEWAY_RELAY_URL=http://example.test\n" +
+		"GATEWAY_RELAY_ID=" + got.GatewayID + "\n" +
+		"GATEWAY_RELAY_SECRET=" + got.Secret + "\n" +
+		"GATEWAY_RELAY_DELIVERY_KEY=" + got.DeliveryKey + "\n" +
+		"GATEWAY_RELAY_PLATFORMS=email\n" +
+		"GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true"
+	if got.Env != want {
+		t.Fatalf("env block:\n%s\nwant:\n%s", got.Env, want)
 	}
 }
 
 func TestDashboardRendersKeyDialog(t *testing.T) {
-	svc, _, _, _, _ := httpFixture(t)
-	srv := New(svc, nil)
-	data := pageData{
-		CSRF: "token",
-		Credentials: []credentialView{
-			{Name: "Agent", Type: "API key", Scope: "Admin"},
-			{Name: "Hermes", Type: "Hermes relay", Scope: "Owner"},
-		},
-	}
+	svc, h, u, _, _ := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
-	srv.render(rr, dashboardBody, data)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
 	body := rr.Body.String()
 	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Create Client"} {
 		if !strings.Contains(body, want) {

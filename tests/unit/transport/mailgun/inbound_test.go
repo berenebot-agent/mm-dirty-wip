@@ -1,4 +1,4 @@
-package mailgun
+package mailgun_test
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/mailgun"
 )
 
 type fakeResolver struct {
@@ -44,11 +45,11 @@ func TestSignatureFreshness(t *testing.T) {
 	key := "secret"
 	tok := "abc"
 	tsi := fmtInt(time.Now().Unix())
-	if !VerifySignature(key, tsi, tok, signature(key, tsi, tok)) {
+	if !mailgun.VerifySignature(key, tsi, tok, signature(key, tsi, tok)) {
 		t.Fatal("valid signature rejected")
 	}
 	old := fmtInt(time.Now().Add(-48 * time.Hour).Unix())
-	if VerifySignature(key, old, tok, signature(key, old, tok)) {
+	if mailgun.VerifySignature(key, old, tok, signature(key, old, tok)) {
 		t.Fatal("stale signature accepted")
 	}
 }
@@ -75,7 +76,7 @@ func multipartRequest(t *testing.T, key, token, recipient, raw string, extra map
 }
 
 func TestReceiveMultipartRawMIME(t *testing.T) {
-	var tr Transport
+	var tr mailgun.Transport
 	path := t.TempDir() + "/m.eml"
 	msg, binding, err := tr.Receive(context.Background(), multipartRequest(t, "key", "tok", "a@example.com", "From: b@test\r\nTo: a@example.com\r\n\r\nhello", nil), fakeResolver{key: "key"}, path, 1024)
 	if err != nil {
@@ -94,7 +95,7 @@ func TestReceiveMultipartRawMIME(t *testing.T) {
 }
 
 func TestReceiveURLEncoded(t *testing.T) {
-	var tr Transport
+	var tr mailgun.Transport
 	ts := fmtInt(time.Now().Unix())
 	raw := "From: b@test\r\nTo: a@example.com\r\n\r\nhello"
 	form := url.Values{
@@ -114,7 +115,7 @@ func TestReceiveURLEncoded(t *testing.T) {
 }
 
 func TestReceiveRejectsBadSignature(t *testing.T) {
-	var tr Transport
+	var tr mailgun.Transport
 	req := multipartRequest(t, "wrong", "tok", "a@example.com", "body", nil)
 	if _, _, err := tr.Receive(context.Background(), req, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", 1024); err != transport.ErrInboundUnauthorized {
 		t.Fatalf("err=%v", err)
@@ -122,17 +123,20 @@ func TestReceiveRejectsBadSignature(t *testing.T) {
 }
 
 func TestReceiveRejectsDuplicateSingleton(t *testing.T) {
-	var tr Transport
+	var tr mailgun.Transport
 	req := multipartRequest(t, "key", "tok", "a@example.com", "body", map[string]string{"recipient": "other@example.com"})
 	if _, _, err := tr.Receive(context.Background(), req, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", 1024); err == nil || !strings.Contains(err.Error(), "duplicate field") {
 		t.Fatalf("err=%v", err)
 	}
 }
 
+// testMaxMultipartParts mirrors internal/transport/mailgun's unexported maxMultipartParts.
+const testMaxMultipartParts = 64
+
 func TestReceiveRejectsTooManyMultipartParts(t *testing.T) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
-	for i := 0; i < maxMultipartParts+1; i++ {
+	for i := 0; i < testMaxMultipartParts+1; i++ {
 		_ = w.WriteField("field", fmt.Sprintf("v%d", i))
 	}
 	p, _ := w.CreateFormField("body-mime")
@@ -140,7 +144,7 @@ func TestReceiveRejectsTooManyMultipartParts(t *testing.T) {
 	w.Close()
 	r := httptest.NewRequest("POST", "/", &b)
 	r.Header.Set("Content-Type", w.FormDataContentType())
-	var tr Transport
+	var tr mailgun.Transport
 	if _, _, err := tr.Receive(context.Background(), r, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", 1024); err == nil || !strings.Contains(err.Error(), "too many multipart parts") {
 		t.Fatalf("expected part-count error, got %v", err)
 	}

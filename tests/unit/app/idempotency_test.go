@@ -1,10 +1,11 @@
-package app
+package app_test
 
 import (
 	"context"
 	"errors"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -21,17 +22,17 @@ func TestIdempotencyReplayScopedToMailbox(t *testing.T) {
 	}
 
 	admin := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	res, err := svc.Send(ctx, admin, SendInput{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key")
+	res, err := svc.Send(ctx, admin, app.SendInput{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ownerOther := model.Principal{AccountID: u.AccountID, MailboxRoles: map[string]string{other.ID: "owner"}}
-	if _, err := svc.Send(ctx, ownerOther, SendInput{InboxID: other.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key"); !errors.Is(err, store.ErrConflict) {
+	if _, err := svc.Send(ctx, ownerOther, app.SendInput{InboxID: other.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key"); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("cross-mailbox replay err=%v, want conflict", err)
 	}
 
-	again, err := svc.Send(ctx, admin, SendInput{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key")
+	again, err := svc.Send(ctx, admin, app.SendInput{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"}, "shared-key")
 	if err != nil {
 		t.Fatal(err)
 	}

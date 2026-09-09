@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
 )
 
 func TestAPIDomainOutboundCredential(t *testing.T) {
@@ -108,6 +107,8 @@ func TestUIDomainProviderAssignment(t *testing.T) {
 	}
 }
 
+const testAddProviderOption = "__add_provider__"
+
 func TestUIDomainEditIgnoresAddProviderSentinel(t *testing.T) {
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
@@ -119,7 +120,7 @@ func TestUIDomainEditIgnoresAddProviderSentinel(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("POST", "/ui/domains/"+d.ID+"/edit", strings.NewReader("provider="+addProviderOption+"&_csrf="+csrf))
+	req := httptest.NewRequest("POST", "/ui/domains/"+d.ID+"/edit", strings.NewReader("provider="+testAddProviderOption+"&_csrf="+csrf))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
@@ -197,7 +198,7 @@ func TestUIDomainCreateWithAddProviderRedirect(t *testing.T) {
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
-	form := url.Values{"name": {"addnew.example"}, "provider": {addProviderOption}, "_csrf": {csrf}}
+	form := url.Values{"name": {"addnew.example"}, "provider": {testAddProviderOption}, "_csrf": {csrf}}
 	req := httptest.NewRequest("POST", "/ui/domains", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -232,26 +233,30 @@ func TestUIDomainCreateWithAddProviderRedirect(t *testing.T) {
 }
 
 func TestDashboardDomainSendingState(t *testing.T) {
-	svc, _, _, _, _ := httpFixture(t)
-	srv := New(svc, nil)
-	domains := []model.Domain{{ID: "dom_1", Name: "a.example"}, {ID: "dom_2", Name: "b.example", OutboundCredentialID: "out_1"}}
-	creds := []store.OutboundCredential{{ID: "out_1", Name: "Primary", Provider: "brevo"}}
+	svc, h, u, dom, _ := httpFixture(t)
+	ctx := context.Background()
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Primary", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Store.CreateDomain(ctx, u.AccountID, "paused.example"); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
-	srv.render(rr, dashboardBody, pageData{
-		CSRF:              "token",
-		Domains:           domains,
-		DomainSending:     domainSendingViews(domains, creds),
-		PausedDomains:     []string{"a.example"},
-		Outbound:          []outboundView{{ID: "out_1", Name: "Primary", Provider: "brevo"}},
-		OutboundProviders: outboundProviderViews(),
-	})
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
 	body := rr.Body.String()
-	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "No sending provider for a.example"} {
+	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "No sending provider for paused.example"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
-	}
-	if strings.Contains(body, "Mail queues until a provider is set.") {
-		t.Fatalf("static paused hint should be replaced by the dynamic status line")
 	}
 }

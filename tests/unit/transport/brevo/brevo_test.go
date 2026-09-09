@@ -1,4 +1,4 @@
-package brevo
+package brevo_test
 
 import (
 	"context"
@@ -10,12 +10,33 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/transport"
+	"gatehouse-mail/internal/transport/brevo"
 	"gatehouse-mail/internal/transport/netutil"
 )
 
+// brevoPayload mirrors the unexported JSON payload that brevo.Send posts.
+type brevoPayload struct {
+	Sender struct {
+		Name  string `json:"name,omitempty"`
+		Email string `json:"email"`
+	} `json:"sender"`
+	To []struct {
+		Name  string `json:"name,omitempty"`
+		Email string `json:"email"`
+	} `json:"to"`
+	Subject     string            `json:"subject"`
+	TextContent string            `json:"textContent,omitempty"`
+	HTMLContent string            `json:"htmlContent,omitempty"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Attachment  []struct {
+		Name    string `json:"name"`
+		Content []byte `json:"content"`
+	} `json:"attachment,omitempty"`
+}
+
 func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 	var got *http.Request
-	var body payload
+	var body brevoPayload
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r
 		data, _ := io.ReadAll(r.Body)
@@ -25,7 +46,7 @@ func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := Send(context.Background(), Config{APIKey: "xkeysib-test", APIBase: srv.URL}, transport.OutboundMessage{
+	res, err := brevo.Send(context.Background(), brevo.Config{APIKey: "xkeysib-test", APIBase: srv.URL}, transport.OutboundMessage{
 		FromName:    "Hermes",
 		FromAddress: "hermes@example.com",
 		To:          []string{"friend@example.net"},
@@ -68,17 +89,17 @@ func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 }
 
 func TestSendErrorsAndEmptyHTML(t *testing.T) {
-	if _, err := Send(context.Background(), Config{}, transport.OutboundMessage{}); err == nil || !strings.Contains(err.Error(), "api_key") {
+	if _, err := brevo.Send(context.Background(), brevo.Config{}, transport.OutboundMessage{}); err == nil || !strings.Contains(err.Error(), "api_key") {
 		t.Fatalf("missing key err %v", err)
 	}
-	var body payload
+	var body brevoPayload
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(data, &body)
 		http.Error(w, "bad request", http.StatusBadRequest)
 	}))
 	defer srv.Close()
-	if _, err := Send(context.Background(), Config{APIKey: "k", APIBase: srv.URL}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"}); err == nil || !strings.Contains(err.Error(), "brevo returned") {
+	if _, err := brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: srv.URL}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"}); err == nil || !strings.Contains(err.Error(), "brevo returned") {
 		t.Fatalf("error status %v", err)
 	}
 	if body.HTMLContent != "" {
@@ -89,7 +110,7 @@ func TestSendErrorsAndEmptyHTML(t *testing.T) {
 func TestHostedRejectsPrivateAPIBase(t *testing.T) {
 	netutil.SetHosted(true)
 	defer netutil.SetHosted(false)
-	_, err := Send(context.Background(), Config{APIKey: "k", APIBase: "http://127.0.0.1:9999"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
+	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: "http://127.0.0.1:9999"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "not public-routable") {
 		t.Fatalf("hosted private API base should be rejected: %v", err)
 	}

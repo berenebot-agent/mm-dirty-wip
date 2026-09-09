@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"gatehouse-mail/internal/httpapp"
 	"gatehouse-mail/internal/transport/cloudflare"
 )
 
@@ -130,7 +131,7 @@ func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 	if mgID == "" {
 		t.Fatal("mailgun credential missing")
 	}
-	inbound := New(svc, nil).InboundHandler()
+	inbound := httpapp.New(svc, nil).InboundHandler()
 
 	cfReq := func() *http.Request {
 		raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\nSubject: cf\r\n\r\nhi"
@@ -200,11 +201,15 @@ func TestUIInboundCSRFAndAssignment(t *testing.T) {
 }
 
 func TestDashboardRendersInboundControls(t *testing.T) {
-	svc, h, _, _, _ := httpFixture(t)
-	srv := New(svc, nil)
-	data := pageData{CSRF: "token", BaseURL: "http://example.test", InboundProviders: inboundProviderViews()}
+	svc, h, u, _, _ := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
-	srv.render(rr, dashboardBody, data)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
 	body := rr.Body.String()
 	for _, want := range []string{
 		"Add Receive Path",

@@ -1,10 +1,12 @@
-package httpapp
+package httpapp_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"gatehouse-mail/internal/httpapp"
 )
 
 func inboundRawMessage() string {
@@ -23,7 +25,7 @@ func inboundRawMessage() string {
 
 func TestInboundHandlerExposesOnlyConnector(t *testing.T) {
 	svc, _, _, _, _ := httpFixture(t)
-	h := New(svc, nil).InboundHandler()
+	h := httpapp.New(svc, nil).InboundHandler()
 
 	for _, tc := range []struct {
 		method string
@@ -49,7 +51,7 @@ func TestInboundHandlerExposesOnlyConnector(t *testing.T) {
 
 func TestInboundHandlerAcceptsWebhook(t *testing.T) {
 	svc, _, _, _, box := httpFixture(t)
-	h := New(svc, nil).InboundHandler()
+	h := httpapp.New(svc, nil).InboundHandler()
 
 	req := signedMGRequest(t, testMailgunKey, "inbound-dedicated", box.Address, inboundRawMessage())
 	rr := httptest.NewRecorder()

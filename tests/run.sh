@@ -15,7 +15,7 @@
 # Tiers (mirror .github/workflows/ci.yml):
 #   unit     Go unit/integration tests (test -race -count=1 -v ./...)
 #   vet      Go static analysis (vet ./...)
-#   fmt      gofmt gate (gofmt -l cmd internal, fail on output)
+#   fmt      gofmt gate (gofmt -l cmd internal tests, fail on output)
 #
 # Output levels (all written to the run folder every time):
 #   L1  summary.txt   per-tier pass/fail + elapsed + first error + folder path
@@ -106,7 +106,7 @@ for t in "${SELECTED[@]}"; do
         fmt)
             # CI gate: gofmt -l prints unformatted files; empty output = pass.
             GATEHOUSE_TEST_DIR="$RUN_DIR/fmt" \
-                ./gatehouse-go.sh gofmt -l cmd internal >/dev/null 2>&1 || rc=$?
+                ./gatehouse-go.sh gofmt -l cmd internal tests >/dev/null 2>&1 || rc=$?
             if [ "$rc" -eq 0 ] && [ -s "$RUN_DIR/fmt/out.log" ]; then
                 rc=1
             fi

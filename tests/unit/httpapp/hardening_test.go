@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"bufio"
@@ -15,6 +15,7 @@ import (
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/httpapp"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -212,7 +213,7 @@ func TestBootstrapTokenRequired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(svc, nil).Handler()
+	h := httpapp.New(svc, nil).Handler()
 	// Without the token, setup is rejected.
 	form := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=csrf"
 	req := httptest.NewRequest("POST", "/setup", strings.NewReader(form))
@@ -258,7 +259,7 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return New(svc, nil).Handler()
+		return httpapp.New(svc, nil).Handler()
 	}
 	// Untrusted peer: spoofed X-Forwarded-Proto must NOT set Secure cookies.
 	h := newHandler(t, "")

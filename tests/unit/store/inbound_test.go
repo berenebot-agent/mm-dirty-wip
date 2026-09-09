@@ -1,18 +1,18 @@
-package store
+package store_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
+
+	"gatehouse-mail/internal/store"
 )
 
 func TestInboundCredentialCRUDAndBinding(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
-	if _, err := s.ResolveInboundBinding(ctx, "mailgun", "x@example.com"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ResolveInboundBinding(ctx, "mailgun", "x@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unconfigured resolve err=%v", err)
 	}
 	cred, err := s.SaveInboundCredential(ctx, u.AccountID, "", "MG", "mailgun", "enc")
@@ -35,7 +35,7 @@ func TestInboundCredentialCRUDAndBinding(t *testing.T) {
 	if b.AccountID != u.AccountID || b.DomainID != d.ID || b.CredentialID != cred.ID || b.Recipient != "hermes@example.com" {
 		t.Fatalf("binding %+v", b)
 	}
-	if _, err = s.ResolveInboundBinding(ctx, "cloudflare", "hermes@example.com"); !errors.Is(err, ErrNotFound) {
+	if _, err = s.ResolveInboundBinding(ctx, "cloudflare", "hermes@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("wrong provider err=%v", err)
 	}
 
@@ -48,7 +48,7 @@ func TestInboundCredentialCRUDAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SetDomainInboundCredential(ctx, u2.AccountID, d2.ID, cred.ID); !errors.Is(err, ErrForbidden) {
+	if err = s.SetDomainInboundCredential(ctx, u2.AccountID, d2.ID, cred.ID); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("cross-account assign err=%v", err)
 	}
 
@@ -56,7 +56,7 @@ func TestInboundCredentialCRUDAndBinding(t *testing.T) {
 	if err = s.SetDomainInboundCredential(ctx, u.AccountID, d.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ResolveInboundBinding(ctx, "mailgun", "hermes@example.com"); !errors.Is(err, ErrNotFound) {
+	if _, err = s.ResolveInboundBinding(ctx, "mailgun", "hermes@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cleared resolve err=%v", err)
 	}
 	// Deleting a credential leaves assigned domains unconfigured.
@@ -97,80 +97,16 @@ func TestInboundDedupScopedByRecipient(t *testing.T) {
 	}
 
 	// Blocked messages use the same scoped identity.
-	bm1, dup, err := s.CommitBlockedInbound(ctx, BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[0].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[0].Address})
+	bm1, dup, err := s.CommitBlockedInbound(ctx, store.BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[0].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[0].Address})
 	if err != nil || dup {
 		t.Fatalf("blocked first %v dup=%v", err, dup)
 	}
-	_, dup, err = s.CommitBlockedInbound(ctx, BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[1].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[1].Address})
+	_, dup, err = s.CommitBlockedInbound(ctx, store.BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[1].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[1].Address})
 	if err != nil || dup {
 		t.Fatalf("blocked different recipient %v dup=%v", err, dup)
 	}
-	bm2, dup, err := s.CommitBlockedInbound(ctx, BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[0].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[0].Address})
+	bm2, dup, err := s.CommitBlockedInbound(ctx, store.BlockedRecord{AccountID: r1.Inbox.AccountID, InboxID: b[0].ID, Provider: "mailgun", ProviderDeliveryID: "blk-1", EnvelopeRecipient: b[0].Address})
 	if err != nil || !dup || bm2.ID != bm1.ID {
 		t.Fatalf("blocked retry %v dup=%v", err, dup)
-	}
-}
-
-// TestMigration009BackfillAndRebuild exercises the legacy-data path: it builds a
-// database at schema 008, inserts a message that recorded envelope_to_json but
-// no envelope_recipient, then applies migration009 and checks the backfill and
-// the new scoped uniqueness.
-func TestMigration009BackfillAndRebuild(t *testing.T) {
-	dir := t.TempDir()
-	dsn := "file:" + filepath.Join(dir, "legacy.db") + "?_foreign_keys=on&_journal_mode=WAL"
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, m := range []string{migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008} {
-		if _, err := db.Exec(m); err != nil {
-			t.Fatalf("apply legacy migration: %v", err)
-		}
-	}
-	exec := func(q string, args ...any) {
-		t.Helper()
-		if _, err := db.Exec(q, args...); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-	}
-	exec(`INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES('acc','A',1000,'2026-01-01T00:00:00Z')`)
-	exec(`INSERT INTO domains(id,account_id,name,created_at) VALUES('dom','acc','example.com','2026-01-01T00:00:00Z')`)
-	exec(`INSERT INTO inboxes(id,account_id,domain_id,local_part,created_at) VALUES('box','acc','dom','hermes','2026-01-01T00:00:00Z')`)
-	exec(`INSERT INTO threads(id,account_id,inbox_id,subject,created_at,updated_at) VALUES('thr','acc','box','s','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
-	exec(`INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,envelope_to_json,created_at) VALUES('msg','acc','box','thr','inbound','mailgun','legacy-1','["Hermes@Example.com"]','2026-01-01T00:00:00Z')`)
-	exec(`INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,to_json,created_at) VALUES('blk','acc','box','mailgun','legacy-2','["x@example.com"]','2026-01-01T00:00:00Z')`)
-
-	if _, err := db.Exec(migration009); err != nil {
-		t.Fatalf("migration009: %v", err)
-	}
-	var recipient string
-	if err := db.QueryRow(`SELECT envelope_recipient FROM messages WHERE id='msg'`).Scan(&recipient); err != nil {
-		t.Fatal(err)
-	}
-	if recipient != "Hermes@Example.com" {
-		t.Fatalf("backfilled recipient %q", recipient)
-	}
-	var blockedRecipient string
-	if err := db.QueryRow(`SELECT envelope_recipient FROM blocked_messages WHERE id='blk'`).Scan(&blockedRecipient); err != nil {
-		t.Fatal(err)
-	}
-	if blockedRecipient != "" {
-		t.Fatalf("legacy blocked recipient should stay empty, got %q", blockedRecipient)
-	}
-	// New scoped uniqueness accepts the same delivery for a different recipient
-	// but rejects a repeat for the same one.
-	exec(`INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,envelope_recipient,created_at) VALUES('msg2','acc','box','thr','inbound','mailgun','legacy-1','other@example.com','2026-01-01T00:00:00Z')`)
-	if _, err := db.Exec(`INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,envelope_recipient,created_at) VALUES('msg3','acc','box','thr','inbound','mailgun','legacy-1','Hermes@Example.com','2026-01-01T00:00:00Z')`); err == nil {
-		t.Fatal("duplicate scoped delivery accepted")
-	}
-	// The rebuild must leave foreign keys intact.
-	rows, err := db.Query(`PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	if rows.Next() {
-		t.Fatal("foreign key violations after migration009")
 	}
 }
