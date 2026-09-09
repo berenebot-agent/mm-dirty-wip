@@ -597,34 +597,50 @@
       : 'Only these addresses can email this inbox.';
   }
 
+  function refreshSenderEmpty() {
+    var empty = list.querySelector('.empty');
+    if (list.querySelectorAll('input[name=allowed]').length === 0) {
+      if (!empty) {
+        var li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'Anyone can email this inbox. Add an address below to restrict who can email it.';
+        list.appendChild(li);
+      }
+    } else if (empty) {
+      empty.remove();
+    }
+  }
+
   function addSender(value) {
     value = (value || '').trim().toLowerCase();
     if (!value) {
       return;
     }
-    var row = document.createElement('div');
-    row.className = 'row';
+    var li = document.createElement('li');
     var hidden = document.createElement('input');
     hidden.type = 'hidden';
     hidden.name = 'allowed';
     hidden.value = value;
     var label = document.createElement('span');
+    label.className = 'addr';
     label.textContent = value;
-    label.style.flex = '1';
     var remove = document.createElement('button');
     remove.type = 'button';
-    remove.className = 'secondary';
-    remove.textContent = 'Remove';
-    remove.style.flex = '0 0 auto';
+    remove.className = 'secondary icon-btn';
+    remove.title = 'Remove';
+    remove.setAttribute('aria-label', 'Remove');
+    remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
     remove.addEventListener('click', function () {
-      row.remove();
+      li.remove();
       refreshSenderNote();
+      refreshSenderEmpty();
     });
-    row.appendChild(hidden);
-    row.appendChild(label);
-    row.appendChild(remove);
-    list.appendChild(row);
+    li.appendChild(hidden);
+    li.appendChild(label);
+    li.appendChild(remove);
+    list.appendChild(li);
     refreshSenderNote();
+    refreshSenderEmpty();
   }
 
   function setSenders(raw) {
@@ -633,6 +649,7 @@
       addSender(entry);
     });
     refreshSenderNote();
+    refreshSenderEmpty();
   }
 
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
