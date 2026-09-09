@@ -102,6 +102,10 @@
       openEdit(btn);
     });
   });
+  var assignDomain = form.querySelector('[name=assign_domain]');
+  if (assignDomain && assignDomain.value !== '') {
+    open();
+  }
 })();
 
 (function () {
@@ -534,21 +538,43 @@
   var providerStatus = document.getElementById('domain-provider-status');
   var title = document.getElementById('domain-dialog-title');
   var currentId = '';
+  var currentProvider = '';
+  var ADD_PROVIDER = '__add_provider__';
 
   function syncProviderStatus() {
-    if (!providerStatus || !providerSelect) {
+    if (!providerStatus) {
       return;
     }
-    if (providerSelect.value === '') {
-      providerStatus.textContent = 'Sending paused — mail will queue until a provider is set.';
+    var paused = !providerSelect || providerSelect.value === '';
+    providerStatus.textContent = paused ? 'Sending paused — mail will queue until a provider is set.' : '';
+    providerStatus.hidden = !paused;
+  }
+
+  function openAddProvider() {
+    var pdlg = document.getElementById('provider-dialog');
+    var pform = pdlg && pdlg.querySelector('form');
+    var trigger = document.getElementById('add-provider');
+    if (!pdlg || !pform || !trigger) {
       return;
     }
-    var opt = providerSelect.options[providerSelect.selectedIndex];
-    providerStatus.textContent = 'Sending via ' + (opt ? opt.text : 'the selected provider') + '.';
+    dlg.close();
+    trigger.click();
+    var assign = pform.querySelector('[name=assign_domain]');
+    if (assign) {
+      assign.value = currentId;
+    }
   }
 
   if (providerSelect) {
-    providerSelect.addEventListener('change', syncProviderStatus);
+    providerSelect.addEventListener('change', function () {
+      if (providerSelect.value === ADD_PROVIDER) {
+        providerSelect.value = currentProvider;
+        openAddProvider();
+        return;
+      }
+      currentProvider = providerSelect.value;
+      syncProviderStatus();
+    });
   }
   document.querySelectorAll('.edit-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -560,30 +586,14 @@
         title.textContent = btn.dataset.name || 'Domain';
       }
       select.value = btn.dataset.catchall || '';
+      currentProvider = btn.dataset.provider || '';
       if (providerSelect) {
-        providerSelect.value = btn.dataset.provider || '';
+        providerSelect.value = currentProvider;
       }
       syncProviderStatus();
       dlg.showModal();
     });
   });
-  var addProvider = document.getElementById('domain-add-provider');
-  if (addProvider) {
-    addProvider.addEventListener('click', function () {
-      var pdlg = document.getElementById('provider-dialog');
-      var pform = pdlg && pdlg.querySelector('form');
-      var trigger = document.getElementById('add-provider');
-      if (!pdlg || !pform || !trigger) {
-        return;
-      }
-      dlg.close();
-      trigger.click();
-      var assign = pform.querySelector('[name=assign_domain]');
-      if (assign) {
-        assign.value = currentId;
-      }
-    });
-  }
   var cancel = document.getElementById('domain-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {

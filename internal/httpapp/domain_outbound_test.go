@@ -108,6 +108,31 @@ func TestUIDomainProviderAssignment(t *testing.T) {
 	}
 }
 
+func TestUIDomainEditIgnoresAddProviderSentinel(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	ctx := context.Background()
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("POST", "/ui/domains/"+d.ID+"/edit", strings.NewReader("provider="+addProviderOption+"&_csrf="+csrf))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 303 {
+		t.Fatalf("update domain %d %s", rr.Code, rr.Body.String())
+	}
+	dom, err := svc.Store.GetDomain(ctx, u.AccountID, d.ID)
+	if err != nil || dom.OutboundCredentialID != cred.ID {
+		t.Fatalf("sentinel must not clear the provider: %v %+v", err, dom)
+	}
+}
+
 func TestUIDomainCreateWithProvider(t *testing.T) {
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
@@ -168,6 +193,43 @@ func TestAPICreateDomainWithCredential(t *testing.T) {
 	}
 }
 
+func TestUIDomainCreateWithAddProviderRedirect(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"name": {"addnew.example"}, "provider": {addProviderOption}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/domains", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 303 {
+		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/dashboard?add_provider_for=") {
+		t.Fatalf("location %q", loc)
+	}
+	domainID := strings.TrimPrefix(loc, "/dashboard?add_provider_for=")
+	dom, err := svc.Store.GetDomain(ctx, u.AccountID, domainID)
+	if err != nil || dom.OutboundCredentialID != "" {
+		t.Fatalf("domain should exist with no provider: %v %+v", err, dom)
+	}
+	req = httptest.NewRequest("GET", loc, nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{`name="assign_domain" value="` + domainID + `"`, `<option value="smtp" selected>`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+}
+
 func TestDashboardDomainSendingState(t *testing.T) {
 	svc, _, _, _, _ := httpFixture(t)
 	srv := New(svc, nil)
@@ -183,7 +245,7 @@ func TestDashboardDomainSendingState(t *testing.T) {
 		OutboundProviders: outboundProviderViews(),
 	})
 	body := rr.Body.String()
-	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "domain-add-provider", "add-domain-provider", "No sending provider for a.example"} {
+	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "No sending provider for a.example"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
