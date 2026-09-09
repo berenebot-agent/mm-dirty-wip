@@ -171,7 +171,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 		_ = os.Remove(final)
 		return m, true, nil
 	}
-	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
+	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To)
 	s.Hub.Publish(ev)
 	return m, false, nil
 }
@@ -519,7 +519,7 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	if m.IdemKey != "" {
 		_ = s.Store.IdempotencyComplete(ctx, m.AccountID, m.IdemKey, m.ID, SendResult{Message: sent, ProviderMessageID: providerResult.ProviderMessageID})
 	}
-	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
+	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)
 	s.Hub.Publish(ev)
 	return nil
 }

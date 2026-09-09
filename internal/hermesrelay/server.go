@@ -286,7 +286,9 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 					_ = wr.JSON(outboundResult(f.RequestID, false, "invalid outbound action", ""))
 					continue
 				}
-				s.Log.Info("relay outbound", "gateway_id", h.GatewayID, "request_id", f.RequestID, "op", a.Op, "chat_id", a.ChatID)
+				if a.Op != "typing" {
+					s.Log.Info("relay outbound", "gateway_id", h.GatewayID, "request_id", f.RequestID, "op", a.Op, "chat_id", a.ChatID)
+				}
 				go s.handleOutbound(ctx, wr, h, f.RequestID, a)
 			case "interrupt":
 				// Email sends are short, transactional operations. Interrupt is acknowledged implicitly by the next result.
@@ -325,7 +327,7 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 			if err := wr.JSON(map[string]any{"type": "inbound", "event": messageEvent(m), "bufferId": ev.Cursor}); err != nil {
 				return err
 			}
-			s.Log.Info("relay inbound", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", m.ID, "from", m.From.Address, "to", m.To, "subject", m.Subject)
+			s.Log.Info("relay inbound", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", m.ID, "from", m.From.Address, "to", m.To)
 			for {
 				select {
 				case id := <-ackCh:
