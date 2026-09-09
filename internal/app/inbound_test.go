@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -63,6 +64,35 @@ func TestInboundUnknownProviderAndUnauthorized(t *testing.T) {
 	}
 	if _, _, err := svc.IngestInbound(ctx, "cloudflare", cfRequest(t, "wrong", "x", box.Address, raw)); !errors.Is(err, transport.ErrInboundUnauthorized) {
 		t.Fatalf("unauthorized err=%v", err)
+	}
+}
+
+func TestInboundAllowedSenderWildcard(t *testing.T) {
+	svc, u, _, box := testService(t)
+	svc.Config.CloudflareSecret = "cf-secret"
+	ctx := context.Background()
+	if err := svc.Store.SetInboxAllowedSenders(ctx, u.AccountID, box.ID, []string{"*@allowed.test", "*@*.corp.test"}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Format(time.RFC1123Z)
+	cases := []struct {
+		from    string
+		blocked bool
+	}{
+		{"someone@allowed.test", false},
+		{"anyone@deep.sub.corp.test", false},
+		{"intruder@other.test", true},
+		{"apex@corp.test", true},
+	}
+	for i, tc := range cases {
+		raw := "From: " + tc.from + "\r\nTo: hermes@example.com\r\nSubject: s\r\nMessage-ID: <w" + strconv.Itoa(i) + "@test>\r\nDate: " + now + "\r\n\r\nbody"
+		m, dup, err := svc.IngestInbound(ctx, "cloudflare", cfRequest(t, "cf-secret", "wild-"+strconv.Itoa(i), box.Address, raw))
+		if err != nil || dup {
+			t.Fatalf("case %d ingest err=%v dup=%v", i, err, dup)
+		}
+		if m.Blocked != tc.blocked {
+			t.Fatalf("case %d from=%s blocked=%v want %v", i, tc.from, m.Blocked, tc.blocked)
+		}
 	}
 }
 

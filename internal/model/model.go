@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 )
@@ -43,15 +45,72 @@ type Inbox struct {
 	CreatedAt            time.Time `json:"created_at"`
 }
 
+// NormalizeAllowedSender validates and normalizes a single allowed-sender
+// pattern. It accepts a bare email address, a domain wildcard (*@example.com)
+// or a subdomain wildcard (*@*.example.com). An empty entry returns "".
+func NormalizeAllowedSender(raw string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "*@") {
+		domain := value[2:]
+		if strings.HasPrefix(domain, "*.") {
+			domain = domain[2:]
+		}
+		if domain == "" || strings.Contains(domain, "*") {
+			return "", fmt.Errorf("invalid sender pattern: %s", raw)
+		}
+		probe := "x@" + domain
+		addr, err := mail.ParseAddress(probe)
+		if err != nil || !strings.EqualFold(addr.Address, probe) {
+			return "", fmt.Errorf("invalid sender pattern: %s", raw)
+		}
+		return value, nil
+	}
+	if strings.Contains(value, "*") {
+		return "", fmt.Errorf("invalid sender pattern: %s", raw)
+	}
+	addr, err := mail.ParseAddress(value)
+	if err != nil || !strings.EqualFold(addr.Address, value) {
+		return "", fmt.Errorf("invalid sender address: %s", raw)
+	}
+	return value, nil
+}
+
+// MatchAllowedSender reports whether address matches an allowed-sender pattern.
+// Patterns are matched case-insensitively. A "*@domain" pattern matches any
+// local part at exactly domain; a "*@*.domain" pattern matches any local part
+// at a proper subdomain of domain (not the apex).
+func MatchAllowedSender(pattern, address string) bool {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	address = strings.ToLower(strings.TrimSpace(address))
+	if pattern == "" || address == "" {
+		return false
+	}
+	if strings.HasPrefix(pattern, "*@") {
+		at := strings.LastIndexByte(address, '@')
+		if at < 0 {
+			return false
+		}
+		addrDomain := address[at+1:]
+		domain := pattern[2:]
+		if strings.HasPrefix(domain, "*.") {
+			return strings.HasSuffix(addrDomain, "."+domain[2:])
+		}
+		return addrDomain == domain
+	}
+	return pattern == address
+}
+
 // AllowsSender reports whether the inbox accepts inbound mail from address.
 // An empty allowlist means every sender is accepted.
 func (i Inbox) AllowsSender(address string) bool {
 	if len(i.AllowedSenders) == 0 {
 		return true
 	}
-	address = strings.ToLower(strings.TrimSpace(address))
 	for _, allowed := range i.AllowedSenders {
-		if strings.EqualFold(strings.TrimSpace(allowed), address) {
+		if MatchAllowedSender(allowed, address) {
 			return true
 		}
 	}
