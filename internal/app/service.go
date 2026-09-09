@@ -316,13 +316,16 @@ type SendResult struct {
 	ProviderMessageID string        `json:"provider_message_id"`
 }
 
+// Send enqueues an outbound message into the outbox and returns immediately
+// with the pending message. The background worker delivers it. If idem is set,
+// the idempotency key is reserved at enqueue time and completed on delivery.
 func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (result SendResult, err error) {
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
 	if idem != "" {
 		// Atomically claim the idempotency key before doing any work so two
-		// concurrent requests with the same key cannot both send.
+		// concurrent requests with the same key cannot both enqueue.
 		claimed, mid, res, rerr := s.Store.IdempotencyReserve(ctx, p.AccountID, idem)
 		if rerr != nil {
 			if errors.Is(rerr, store.ErrConflict) {
@@ -409,10 +412,6 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if err != nil {
 		return SendResult{}, fmt.Errorf("outbound provider not configured for account")
 	}
-	cfg, err := s.DecryptOutboundCredential(cred)
-	if err != nil {
-		return SendResult{}, err
-	}
 	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(inbox.Address, "@", 2)[1])
 	now := time.Now().UTC()
 	html := in.HTML
@@ -434,29 +433,8 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if acc.StorageQuotaBytes > 0 && acc.StorageUsedBytes+int64(len(raw)) > acc.StorageQuotaBytes {
 		return SendResult{}, store.ErrQuota
 	}
-	provider, ok := transport.LookupOutbound(cred.Provider)
-	if !ok {
-		return SendResult{}, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider)
-	}
-	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
-		FromName:    inbox.DisplayName,
-		FromAddress: inbox.Address,
-		To:          to,
-		CC:          cleanAddresses(in.CC),
-		BCC:         cleanAddresses(in.BCC),
-		Subject:     subject,
-		Text:        in.Text,
-		HTML:        html,
-		MessageID:   msgID,
-		InReplyTo:   inReply,
-		References:  refs,
-		RawMIME:     raw,
-		Attachments: attachments,
-	})
-	if err != nil {
-		return SendResult{}, err
-	}
-	providerID := providerResult.ProviderMessageID
+	// Persist the raw MIME and enqueue the pending message. Delivery happens
+	// later in the worker.
 	path := s.messagePath()
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return SendResult{}, err
@@ -469,20 +447,112 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, ev, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, ProviderMessageID: providerID, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), SentAt: now, ThreadID: threadID, Attachments: metadata})
+	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, Attachments: metadata})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
 	}
-	s.Hub.Publish(ev)
-	result = SendResult{Message: m, ProviderMessageID: providerID}
-	if idem != "" {
-		// The message is already committed. If marking the key done fails, leave
-		// it pending so a retry gets an in-flight conflict rather than sending a
-		// duplicate.
-		_ = s.Store.IdempotencyComplete(ctx, p.AccountID, idem, m.ID, result)
-	}
+	result = SendResult{Message: m}
 	return result, nil
+}
+
+// Deliver performs the actual provider send for a pending outbound message and
+// marks it sent or failed. It is called by the outbox worker.
+func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
+	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
+	if err != nil {
+		return err
+	}
+	if m.Direction != "outbound" || m.Status != "pending" {
+		return nil
+	}
+	cred, err := s.Store.ActiveOutboundCredential(ctx, m.AccountID)
+	if err != nil {
+		return s.fail(ctx, m, err)
+	}
+	cfg, err := s.DecryptOutboundCredential(cred)
+	if err != nil {
+		return s.fail(ctx, m, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath)))
+	if err != nil {
+		return s.fail(ctx, m, err)
+	}
+	provider, ok := transport.LookupOutbound(cred.Provider)
+	if !ok {
+		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider))
+	}
+	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
+		FromName:    m.From.Name,
+		FromAddress: m.From.Address,
+		To:          m.To,
+		CC:          m.CC,
+		BCC:         m.BCC,
+		Subject:     m.Subject,
+		Text:        m.Text,
+		HTML:        m.HTML,
+		MessageID:   m.RFCMessageID,
+		InReplyTo:   m.InReplyTo,
+		References:  m.References,
+		RawMIME:     raw,
+	})
+	if err != nil {
+		return s.fail(ctx, m, err)
+	}
+	sent, ev, err := s.Store.MarkSent(ctx, m.AccountID, m.ID, providerResult.ProviderMessageID)
+	if err != nil {
+		return err
+	}
+	if m.IdemKey != "" {
+		_ = s.Store.IdempotencyComplete(ctx, m.AccountID, m.IdemKey, m.ID, SendResult{Message: sent, ProviderMessageID: providerResult.ProviderMessageID})
+	}
+	s.Hub.Publish(ev)
+	return nil
+}
+
+// fail records a failed delivery attempt with exponential backoff, returning
+// the error so the worker can log it.
+func (s *Service) fail(ctx context.Context, m model.Message, err error) error {
+	backoff := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 4 * time.Hour}
+	attempt := m.Attempts
+	if attempt < 0 || attempt >= len(backoff) {
+		attempt = len(backoff) - 1
+	}
+	next := time.Now().UTC().Add(backoff[attempt])
+	_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1)
+	if ferr != nil {
+		return ferr
+	}
+	return err
+}
+
+// WaitForDelivery blocks until the message reaches a terminal state (sent or
+// failed) or the timeout elapses. It is used by the synchronous ?wait=true path.
+func (s *Service) WaitForDelivery(ctx context.Context, accountID, msgID string, timeout time.Duration) (model.Message, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
+		if err != nil {
+			return model.Message{}, err
+		}
+		if m.Status == "sent" || m.Status == "failed" {
+			return m, nil
+		}
+		if time.Now().After(deadline) {
+			return m, fmt.Errorf("delivery timed out after %s", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return m, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// AccountIDForMessage resolves the account id for a message id. The worker
+// claims messages without a principal, so it needs a way to look up the account.
+func (s *Service) AccountIDForMessage(ctx context.Context, msgID string) (string, error) {
+	return s.Store.MessageAccountID(ctx, msgID)
 }
 func outboundAttachments(in []SendAttachment) ([]transport.OutboundAttachment, error) {
 	out := make([]transport.OutboundAttachment, 0, len(in))

@@ -33,11 +33,12 @@ type OutboundRecord struct {
 	Provider, ProviderMessageID, RFCMessageID, InReplyTo string
 	References                                           []string
 	From                                                 model.Address
-	To, CC                                               []string
+	To, CC, BCC                                          []string
 	Subject, Text, HTML, RawPath                         string
 	SizeBytes                                            int64
 	SentAt                                               time.Time
 	ThreadID                                             string
+	IdemKey                                              string
 	Attachments                                          []AttachmentInput
 }
 
@@ -170,17 +171,18 @@ func stripHTMLText(v string) string {
 
 func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var m model.Message
-	var refs, to, cc, env, created string
+	var refs, to, cc, bcc, env, created string
 	var received, sent sql.NullString
 	var read, arch int
 	var has int
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &env, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has)
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey)
 	if err != nil {
 		return m, err
 	}
 	m.References = decodeStrings(refs)
 	m.To = decodeStrings(to)
 	m.CC = decodeStrings(cc)
+	m.BCC = decodeStrings(bcc)
 	m.EnvelopeTo = decodeStrings(env)
 	m.Read = read != 0
 	m.Archived = arch != 0
@@ -191,7 +193,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.envelope_to_json,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id)`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -199,6 +201,17 @@ func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model
 		return m, ErrNotFound
 	}
 	return m, err
+}
+
+// MessageAccountID resolves the account id for a message id. Used by the
+// outbox worker, which claims messages without a principal.
+func (s *Store) MessageAccountID(ctx context.Context, id string) (string, error) {
+	var accountID string
+	err := s.read.QueryRowContext(ctx, `SELECT account_id FROM messages WHERE id=?`, id).Scan(&accountID)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return accountID, err
 }
 func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (model.Message, error) {
 	m, err := s.GetMessageByID(ctx, p.AccountID, id)

@@ -144,7 +144,9 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,sent_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), `[]`, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.SentAt), now)
+	// The message is enqueued as pending; the worker marks it sent after the
+	// provider accepts it. sent_at is left NULL until delivery succeeds.
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, now)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
@@ -165,15 +167,176 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": r.Inbox.ID, "thread_id": threadID})
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, model.Event{}, err
+	}
+	m, err := s.GetMessageByID(ctx, r.Inbox.AccountID, id)
+	return m, model.Event{}, err
+}
+
+// MarkSent transitions a pending outbound message to sent after the provider
+// accepts it, recording the provider message id and emitting the message.sent
+// event. It is the durable truth that delivery succeeded.
+func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID string) (model.Message, model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, model.Event{}, err
+	}
+	defer tx.Rollback()
+	var inboxID, threadID string
+	if err = tx.QueryRowContext(ctx, `SELECT inbox_id,thread_id FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&inboxID, &threadID); err != nil {
+		if err == sql.ErrNoRows {
+			return model.Message{}, model.Event{}, ErrNotFound
+		}
+		return model.Message{}, model.Event{}, err
+	}
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, providerMessageID, now, id, accountID); err != nil {
+		return model.Message{}, model.Event{}, err
+	}
+	ev, err := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	m, err := s.GetMessageByID(ctx, r.Inbox.AccountID, id)
+	m, err := s.GetMessageByID(ctx, accountID, id)
 	return m, ev, err
+}
+
+// MarkFailed records a failed delivery attempt. If attempts remain, the message
+// is returned to pending with a next_attempt_at; otherwise it is marked failed.
+func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int) (model.Message, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, err
+	}
+	defer tx.Rollback()
+	var attempts int
+	if err = tx.QueryRowContext(ctx, `SELECT attempts FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&attempts); err != nil {
+		if err == sql.ErrNoRows {
+			return model.Message{}, ErrNotFound
+		}
+		return model.Message{}, err
+	}
+	attempts++
+	status := "pending"
+	next := ""
+	if attempts >= maxAttempts {
+		status = "failed"
+	} else {
+		next = timeText(nextAttemptAt)
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=? WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
+		return model.Message{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, err
+	}
+	return s.GetMessageByID(ctx, accountID, id)
+}
+
+// ClaimNextPending atomically claims the next due pending message for delivery.
+// It returns the message id, or "" if none is due.
+func (s *Store) ClaimNextPending(ctx context.Context, now time.Time) (string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now)).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	// Mark as in-flight so a concurrent claim (or a restart) does not pick it
+	// up again while the worker is delivering. next_attempt_at is set far in the
+	// future; MarkSent/MarkFailed overwrite it.
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET next_attempt_at=? WHERE id=?`, timeText(now.Add(24*time.Hour)), id); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// RequeueFailed resets a failed message to pending for a manual retry.
+func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string) error {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return err
+	}
+	if m.Direction != "outbound" || m.Status != "failed" {
+		return ErrConflict
+	}
+	if !p.CanOwn(m.InboxID) {
+		return ErrForbidden
+	}
+	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, id, p.AccountID)
+	return err
+}
+
+// ListOutbox lists pending and failed outbound messages for an account,
+// optionally scoped to an inbox.
+func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Message, error) {
+	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		if !p.CanRead(inboxID) {
+			return nil, ErrForbidden
+		}
+		q += ` AND m.inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []model.Message{}, nil
+		}
+		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	q += ` ORDER BY m.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// DeleteOutboxMessage removes a pending or failed outbound message (cancelling
+// a queued send or discarding a failed one).
+func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if m.Direction != "outbound" || (m.Status != "pending" && m.Status != "failed") {
+		return "", 0, model.Event{}, ErrConflict
+	}
+	if !p.CanOwn(m.InboxID) {
+		return "", 0, model.Event{}, ErrForbidden
+	}
+	return s.DeleteMessage(ctx, p, id)
 }
 
 func (s *Store) IdempotencyGet(ctx context.Context, accountID, key string) (string, string, bool, error) {

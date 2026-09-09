@@ -37,6 +37,9 @@ func main() {
 		log.Error("application init failed", "error", err)
 		os.Exit(1)
 	}
+	worker := app.NewOutboxWorker(svc, log)
+	worker.Start()
+	defer worker.Stop()
 	h := httpapp.New(svc, log)
 
 	type listener struct {

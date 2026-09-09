@@ -66,6 +66,9 @@ type pageData struct {
 	ComposeTo, ComposeCC, ComposeBCC           string
 	ComposeSubject, ComposeText, ComposeNote   string
 	ComposeError, ComposeFlash                 string
+	ComposeDraftID                             string
+
+	Drafts []model.Draft
 
 	Email string
 

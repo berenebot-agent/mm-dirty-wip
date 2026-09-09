@@ -72,6 +72,7 @@ type Message struct {
 	From              Address    `json:"from"`
 	To                []string   `json:"to"`
 	CC                []string   `json:"cc"`
+	BCC               []string   `json:"bcc,omitempty"`
 	Subject           string     `json:"subject"`
 	Text              string     `json:"text"`
 	HTML              string     `json:"html,omitempty"`
@@ -89,6 +90,12 @@ type Message struct {
 	HasAttachments    bool       `json:"has_attachments"`
 	SizeBytes         int64      `json:"size_bytes"`
 	RawPath           string     `json:"-"`
+	// Outbox state. Status is one of "pending", "sent" or "failed".
+	Status    string `json:"status,omitempty"`
+	Attempts  int    `json:"attempts,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+	NextRetry string `json:"next_retry,omitempty"`
+	IdemKey   string `json:"-"`
 	// Blocked marks a synthetic Message built for the admin Recent messages log.
 	// Blocked mail is never stored in the messages table; see BlockedMessage.
 	Blocked bool `json:"blocked,omitempty"`
@@ -151,6 +158,19 @@ type Draft struct {
 	HTML             string    `json:"html,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// DraftAttachment is a file attached to a draft. Unlike message attachments
+// (which are extracted from a stored MIME part), draft attachments are stored
+// as raw files on disk and copied to the sent message on send.
+type DraftAttachment struct {
+	ID          string    `json:"id"`
+	DraftID     string    `json:"draft_id"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	RawPath     string    `json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type APIKey struct {

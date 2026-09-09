@@ -23,7 +23,7 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "outbox", "send", "hermes-relay"}})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -51,12 +51,17 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/events/wait?after=evt_...&timeout=60` — long poll\n" +
 		"- `GET /v1/events/stream?after=evt_...` — SSE\n\n" +
 		"## Drafts\n" +
-		"- `GET/POST /v1/drafts`, `GET/PATCH/DELETE /v1/drafts/{id}` (Assistant/Owner)\n\n" +
+		"- `GET/POST /v1/drafts`, `GET/PATCH/DELETE /v1/drafts/{id}` (Assistant/Owner)\n" +
+		"- `POST /v1/drafts/{id}/send` (Owner) — send a draft (copies fields + attachments, deletes the draft)\n\n" +
 		"## Send and reply (Owner)\n" +
-		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}`\n" +
+		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery.\n" +
 		"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
 		"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
 		"- Use an `Idempotency-Key` header to make sends retry-safe.\n\n" +
+		"## Outbox (Owner)\n" +
+		"- `GET /v1/outbox?inbox={id}` — list pending and failed outbound messages\n" +
+		"- `POST /v1/outbox/{id}/retry` — re-queue a failed message\n" +
+		"- `DELETE /v1/outbox/{id}` — cancel a pending send or discard a failed one\n\n" +
 		"## Admin (Admin role)\n" +
 		"- `GET/POST /v1/admin/domains`, `PATCH/DELETE /v1/admin/domains/{id}`\n" +
 		"- `GET/POST /v1/admin/keys`, `DELETE /v1/admin/keys/{id}`\n" +
@@ -114,7 +119,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			"/v1/events":                    map[string]any{"get": map[string]any{"summary": "Incremental event history", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/wait":               map[string]any{"get": map[string]any{"summary": "Long-poll for events", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/stream":             map[string]any{"get": map[string]any{"summary": "SSE event stream", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Accepts JSON attachments with filename, content_type, and base64-encoded content fields.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Enqueues into the outbox and returns immediately. Add ?wait=true to block until delivery. Accepts JSON attachments with filename, content_type, and base64-encoded content fields.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/drafts": map[string]any{
 				"get":  map[string]any{"summary": "List drafts", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
@@ -124,6 +129,10 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"patch":  map[string]any{"summary": "Update a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
+			"/v1/drafts/{id}/send":  map[string]any{"post": map[string]any{"summary": "Send a draft (Owner)", "description": "Copies the draft's fields and attachments into a new outbound message, then deletes the draft.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox":            map[string]any{"get": map[string]any{"summary": "List pending and failed outbound messages", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox/{id}/retry": map[string]any{"post": map[string]any{"summary": "Re-queue a failed outbound message", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox/{id}":       map[string]any{"delete": map[string]any{"summary": "Cancel a pending send or discard a failed one", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/admin/domains": map[string]any{
 				"get":  map[string]any{"summary": "List domains (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
@@ -608,6 +617,17 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
+	// Async by default: return the pending message immediately. With ?wait=true
+	// the request blocks until the worker delivers or fails (or times out).
+	if r.URL.Query().Get("wait") == "true" {
+		m, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
+		if werr != nil {
+			writeError(w, 504, werr.Error())
+			return
+		}
+		res.Message = m
+		res.ProviderMessageID = m.ProviderMessageID
+	}
 	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
@@ -685,6 +705,87 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(204)
 	}
+}
+
+// apiDraftSend sends a draft: it copies the draft's fields and attachments into
+// a new pending outbound message, then deletes the draft. Requires owner.
+func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	d, err := s.Service.Store.GetDraft(r.Context(), p, id)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if !p.CanOwn(d.InboxID) {
+		mapStoreError(w, store.ErrForbidden)
+		return
+	}
+	// Load draft attachments from disk into the send input.
+	atts, err := s.Service.Store.ListDraftAttachments(r.Context(), p, id)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	sendAtts := make([]app.SendAttachment, 0, len(atts))
+	for _, a := range atts {
+		data, rerr := os.ReadFile(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(a.RawPath)))
+		if rerr != nil {
+			mapStoreError(w, rerr)
+			return
+		}
+		sendAtts = append(sendAtts, app.SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
+	}
+	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: d.InboxID, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML, Attachments: sendAtts}, idemKey(r))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	// Delete the draft and its attachment files now that it is queued.
+	paths, derr := s.Service.Store.DeleteDraftAttachments(r.Context(), p, id)
+	if derr == nil {
+		for _, path := range paths {
+			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		}
+	}
+	if derr = s.Service.Store.DeleteDraft(r.Context(), p, id); derr != nil {
+		mapStoreError(w, derr)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": res.Message})
+}
+
+func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	v, err := s.Service.Store.ListOutbox(r.Context(), p, r.URL.Query().Get("inbox"), intParam(r, "limit", 100))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, v)
+}
+
+func (s *Server) apiOutboxRetry(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if err := s.Service.Store.RequeueFailed(r.Context(), p, r.PathValue("id")); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	path, _, ev, err := s.Service.Store.DeleteOutboxMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if path != "" {
+		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+	}
+	s.Service.Hub.Publish(ev)
+	w.WriteHeader(204)
 }
 
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {

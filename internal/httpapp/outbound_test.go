@@ -53,8 +53,23 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || calls.Load() != 1 {
-		t.Fatalf("send %d %s calls=%d", rr.Code, rr.Body.String(), calls.Load())
+	if rr.Code != 200 {
+		t.Fatalf("send %d %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Message struct {
+			ID string `json:"id"`
+		} `json:"message"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &resp); err != nil || resp.Message.ID == "" {
+		t.Fatalf("no message id in %s", rr.Body.String())
+	}
+	// Deliver the queued message via the worker path.
+	if err = svc.Deliver(ctx, u.AccountID, resp.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls=%d", calls.Load())
 	}
 }
 

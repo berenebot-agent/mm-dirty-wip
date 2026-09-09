@@ -41,8 +41,19 @@ func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.ProviderMessageID != "<brevo-out>" || calls.Load() != 1 {
-		t.Fatalf("provider id %q calls %d", res.ProviderMessageID, calls.Load())
+	if res.Message.Status != "pending" {
+		t.Fatalf("expected pending, got %q", res.Message.Status)
+	}
+	// Deliver via the worker path.
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Status != "sent" || sent.ProviderMessageID != "<brevo-out>" || calls.Load() != 1 {
+		t.Fatalf("provider id %q status %q calls %d", sent.ProviderMessageID, sent.Status, calls.Load())
 	}
 	if body["textContent"] != "See attached" {
 		t.Fatalf("brevo body %#v", body)
