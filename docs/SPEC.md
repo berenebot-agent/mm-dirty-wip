@@ -67,6 +67,7 @@ V1 supports:
 
 - Mailgun HTTP API
 - Brevo HTTP API
+- Resend HTTP API
 - generic SMTP, including SES and other SMTP-compatible services
 
 Send and reply accept optional base64-encoded attachments. The application translates them to each provider's native format and stores sent attachment metadata alongside the raw MIME message.
@@ -270,7 +271,7 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures a receive path per domain (Mailgun or Cloudflare Worker) in the Admin UI, and optional outbound credentials. Inbound provider secrets are stored encrypted in the database rather than in the process environment.
+The operator configures a receive path per domain (Mailgun, Cloudflare Worker, or Resend) in the Admin UI, and optional outbound credentials. Inbound provider secrets are stored encrypted in the database rather than in the process environment.
 
 Self-hosted setup uses a first-run Admin bootstrap. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -280,12 +281,12 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 ### Inbound
 
-V1 supports Mailgun and Cloudflare Email Routing (via a Worker) as inbound transports.
+V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as inbound transports.
 
 ```text
 Internet SMTP
     ↓
-Mailgun or Cloudflare Email Routing
+Mailgun, Cloudflare Email Routing, or Resend
     ↓ HTTPS webhook
 Gatehouse Email
 ```
@@ -298,8 +299,10 @@ provider secrets are not read from the environment.
 Mailgun delivers raw MIME to `/internal/ingest/mailgun/raw-mime` (the suffix is
 protocol-significant) using its signed webhook fields. The Cloudflare Worker
 streams raw MIME to `/internal/ingest/cloudflare` with bearer authentication
-and envelope headers. In both cases the adapter authenticates before MIME is
-parsed or persisted.
+and envelope headers. Resend posts a Svix-signed metadata webhook to
+`/internal/ingest/resend`; the adapter verifies the signature and then fetches
+the raw MIME from the Resend API using the account key. In all cases the adapter
+authenticates before MIME is parsed or persisted.
 
 Delivery identity is scoped to the account, provider, canonical original
 envelope recipient, and provider delivery id, so retries are deduplicated even
@@ -312,7 +315,8 @@ For an unknown recipient, the domain's configured catch-all inbox receives the m
 Users configure:
 
 - Mailgun API credentials;
-- Brevo API credentials; or
+- Brevo API credentials;
+- Resend API credentials; or
 - generic SMTP credentials.
 
 Provider credentials are encrypted at rest. Outbound adapters are registered through a provider registry, so provider-specific code remains behind a narrow transport package. Each adapter declares the fields the Admin UI should collect, so adding a provider only asks for its API key and relevant settings rather than raw JSON.

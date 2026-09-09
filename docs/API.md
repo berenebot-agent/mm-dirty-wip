@@ -265,18 +265,27 @@ Cloudflare Worker endpoint:
 POST /internal/ingest/cloudflare
 ```
 
-Both authenticate the provider (Mailgun HMAC signature; Cloudflare bearer plus
-`X-Gatehouse-Recipient`) before parsing or persisting MIME, then convert
-delivery to the canonical `InboundMessage` with an explicit authenticated
-binding. The legacy `/internal/ingest/mailgun` alias has been removed;
+Resend endpoint:
+
+```http
+POST /internal/ingest/resend
+```
+
+Each adapter authenticates the provider (Mailgun HMAC signature; Cloudflare
+bearer plus `X-Gatehouse-Recipient`; Resend Svix signature headers) before
+parsing or persisting MIME, then converts delivery to the canonical
+`InboundMessage` with an explicit authenticated binding. Resend webhooks carry
+metadata only, so the adapter fetches the raw MIME from the Resend API after
+verification. The legacy `/internal/ingest/mailgun` alias has been removed;
 `/internal/ingest/{provider}` remains for other providers.
 
 Delivery idempotency is scoped to `(account_id, provider, canonical original
 envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated
 webhook `token`; Cloudflare uses `X-Gatehouse-Delivery-ID` or a SHA-256 hash of
-the raw MIME. Unknown recipients route to the domain catch-all when configured;
-otherwise the endpoint returns `406`. Missing credentials, unknown domains, and
-bad authentication return `401`.
+the raw MIME; Resend uses `data.email_id`. Unknown recipients route to the
+domain catch-all when configured; otherwise the endpoint returns `406`. Missing
+credentials, unknown domains, and bad authentication return `401`. Resend event
+types other than `email.received` are acknowledged with `200` and ignored.
 
 Receive connections are account-owned, encrypted credentials configured
 through the Admin API (Admin role required):
@@ -289,7 +298,8 @@ DELETE /v1/admin/inbound/{id}
 ```
 
 `POST`/`PATCH` accept `provider` and a provider-specific `config`
-(`mailgun: {"signing_key": "..."}`; `cloudflare: {"webhook_secret": "..."}`).
+(`mailgun: {"signing_key": "..."}`; `cloudflare: {"webhook_secret": "..."}`;
+`resend: {"api_key": "...", "webhook_secret": "whsec_..."}`).
 Provider identity is immutable on update; a blank secret retains the stored
 value; secret fields are never returned. Assign a credential to a domain with
 `inbound_credential_id` on `POST`/`PATCH /v1/admin/domains[/{id}]`

@@ -66,6 +66,7 @@ listeners run in the same process and share the same store.
   /transport
       /mailgun
       /cloudflare
+      /resend
       /smtp
 
   /integrations
@@ -154,6 +155,15 @@ original envelope recipient, so the same delivery id for a different recipient
 or account is not collapsed, and replacing a credential does not turn a retry
 into a new delivery. MIME `Message-ID` remains message metadata rather than the
 delivery deduplication key.
+
+Resend inbound is webhook-triggered pull: the Svix-signed webhook carries only
+metadata, so the adapter verifies the signature, resolves the binding from the
+first recipient that maps to a configured domain, then fetches the raw MIME from
+`GET /emails/receiving/{email_id}` (Bearer API key) and stages it. The pull stays
+inside the adapter; the core still receives a staged `InboundMessage`. The
+delivery id is the Resend `email_id`, and event types other than
+`email.received` are acknowledged with `200` and ignored via
+`transport.ErrInboundIgnored`.
 
 Thread lookup is always scoped to the same `account_id` and `inbox_id`. Standard `Message-ID`, `In-Reply-To`, and `References` headers select the thread only inside that boundary.
 

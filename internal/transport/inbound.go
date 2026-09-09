@@ -17,6 +17,11 @@ import (
 var (
 	ErrUnknownProvider     = errors.New("unknown inbound provider")
 	ErrInboundUnauthorized = errors.New("inbound webhook unauthorized")
+	// ErrInboundIgnored lets an adapter acknowledge a webhook that needs no
+	// ingest (for example a provider event type other than inbound mail). The
+	// HTTP layer answers 200 so the provider stops retrying; no message is
+	// persisted and no provider content is fetched.
+	ErrInboundIgnored = errors.New("inbound webhook ignored")
 )
 
 // InboundMessage is a parsed provider webhook, normalized for the shared
@@ -68,4 +73,12 @@ type InboundTransport interface {
 	Description() string
 	ConfigFields() []ConfigField
 	Receive(ctx context.Context, r *http.Request, resolver BindingResolver, tmpPath string, maxBytes int64) (InboundMessage, InboundBinding, error)
+}
+
+// IngestPathProvider is implemented by inbound adapters whose public webhook
+// URL is fixed. The Admin UI uses it to show operators the exact URL to
+// register with the provider, so provider-specific path knowledge stays in the
+// adapter rather than the UI.
+type IngestPathProvider interface {
+	IngestPath() string
 }

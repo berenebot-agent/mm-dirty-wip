@@ -27,6 +27,7 @@ func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string        { return "cloudflare" }
 func (Transport) Description() string { return "Cloudflare Worker" }
+func (Transport) IngestPath() string  { return "/internal/ingest/cloudflare" }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
 		{Name: "webhook_secret", Label: "Worker shared secret", Type: "password", Required: true, Secret: true, Generated: true, Placeholder: "Generated automatically"},
