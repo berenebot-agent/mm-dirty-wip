@@ -3,6 +3,7 @@ package httpapp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -546,5 +547,68 @@ func TestRewriteCIDsOnlyRewritesImages(t *testing.T) {
 	}
 	if !isInlineImage(normalizeContentType("image/jpeg")) || isInlineImage(normalizeContentType("text/html")) {
 		t.Fatal("inline image allowlist is wrong")
+	}
+}
+
+func TestUIDraftSendDeletesDraft(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	setActiveBrevo(t, svc, u.AccountID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+
+	// Create a draft with an attachment.
+	d, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Draft", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawPath := filepath.Join(svc.Config.DataDir, "drafts", "test.bin")
+	if err = writeFile(rawPath, []byte("draft attachment")); err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := filepath.Rel(svc.Config.DataDir, rawPath)
+	if _, err = svc.Store.AddDraftAttachment(ctx, p, d.ID, model.DraftAttachment{Filename: "d.txt", ContentType: "text/plain", Size: 16, RawPath: filepath.ToSlash(rel)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Send the draft via the UI form (action=send).
+	body, ctype := multipartBody(t, map[string]string{
+		"to":        "friend@example.net",
+		"subject":   "Draft",
+		"text":      "body",
+		"action":    "send",
+		"draft_id":  d.ID,
+		"return_to": "/ui/inboxes/" + box.ID + "/drafts",
+	}, "", "")
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save?_csrf="+csrf, body)
+	req.Header.Set("Content-Type", ctype)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 303 {
+		t.Fatalf("draft send %d: %s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/ui/inboxes/"+box.ID+"/drafts" {
+		t.Fatalf("redirect %q", loc)
+	}
+
+	// The draft and its attachments must be gone.
+	if _, err = svc.Store.GetDraft(ctx, p, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("draft still present after send: %v", err)
+	}
+	if _, err = svc.Store.ListDraftAttachments(ctx, p, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("draft attachments after send err=%v", err)
+	}
+	if _, err = os.Stat(rawPath); !os.IsNotExist(err) {
+		t.Fatalf("attachment file still present: %v", err)
+	}
+
+	// The message was enqueued.
+	msgs, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Direction: "outbound", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Subject != "Draft" {
+		t.Fatalf("sent %#v", msgs)
 	}
 }
