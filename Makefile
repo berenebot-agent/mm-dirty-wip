@@ -1,9 +1,11 @@
-.PHONY: build test run fmt
+.PHONY: build test run fmt vet
 build:
-	go build ./cmd/server
+	./gatehouse-go.sh build ./cmd/server
 test:
-	go test ./...
+	./gatehouse-go.sh test -race -count=1 ./...
 run:
-	go run ./cmd/server
+	./gatehouse-go.sh run ./cmd/server
 fmt:
-	gofmt -w cmd internal
+	./gatehouse-go.sh gofmt -w cmd internal
+vet:
+	./gatehouse-go.sh vet ./...
