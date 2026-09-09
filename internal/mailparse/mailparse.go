@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -64,9 +65,8 @@ func parseMessage(msg *mail.Message) (Parsed, error) {
 	} else {
 		p.Date = time.Now().UTC()
 	}
-	state := walkState{}
-	h := textproto.MIMEHeader(msg.Header)
-	if err := walkPart(h, msg.Body, &state); err != nil {
+	state := parseState{}
+	if err := walkMIME(textproto.MIMEHeader(msg.Header), msg.Body, state.collect); err != nil {
 		return Parsed{}, err
 	}
 	p.Text = strings.TrimSpace(strings.Join(state.text, "\n\n"))
@@ -86,14 +86,6 @@ func parseAddressList(h mail.Header, key string) []string {
 	return out
 }
 
-type walkState struct {
-	text, html     []string
-	attachments    []Attachment
-	nextAttachment int
-	depth          int
-	parts          int
-}
-
 // Limits bound malicious or pathological MIME so parsing stays bounded in
 // memory and time.
 const (
@@ -101,14 +93,36 @@ const (
 	maxMIMEParts = 256
 )
 
-func walkPart(h textproto.MIMEHeader, r io.Reader, s *walkState) error {
-	s.depth++
-	defer func() { s.depth-- }()
-	if s.depth > maxMIMEDepth {
+// partInfo is the shared classification of one leaf MIME part.
+type partInfo struct {
+	Media, Filename, ContentID, Transfer string
+	Params                               map[string]string
+	IsAttachment                         bool
+}
+
+type walker struct {
+	fn    func(partInfo, io.Reader) error
+	depth int
+	parts int
+}
+
+// walkMIME performs one bounded traversal of a MIME entity. Container parts are
+// recursed; every leaf part is passed to fn with its metadata and a reader at
+// the undecoded content. Parsing and extraction share this so their attachment
+// ordering and classification can never diverge.
+func walkMIME(h textproto.MIMEHeader, r io.Reader, fn func(partInfo, io.Reader) error) error {
+	w := &walker{fn: fn}
+	return w.walk(h, r)
+}
+
+func (w *walker) walk(h textproto.MIMEHeader, r io.Reader) error {
+	w.depth++
+	defer func() { w.depth-- }()
+	if w.depth > maxMIMEDepth {
 		return fmt.Errorf("mime nesting too deep")
 	}
-	s.parts++
-	if s.parts > maxMIMEParts {
+	w.parts++
+	if w.parts > maxMIMEParts {
 		return fmt.Errorf("too many mime parts")
 	}
 	ct := h.Get("Content-Type")
@@ -134,7 +148,7 @@ func walkPart(h textproto.MIMEHeader, r io.Reader, s *walkState) error {
 			if err != nil {
 				return err
 			}
-			if err = walkPart(part.Header, part, s); err != nil {
+			if err = w.walk(part.Header, part); err != nil {
 				part.Close()
 				return err
 			}
@@ -142,28 +156,46 @@ func walkPart(h textproto.MIMEHeader, r io.Reader, s *walkState) error {
 		}
 		return nil
 	}
-	r = decodeTransfer(h.Get("Content-Transfer-Encoding"), r)
 	disp, dparams, _ := mime.ParseMediaType(h.Get("Content-Disposition"))
 	filename := dparams["filename"]
 	if filename == "" {
 		filename = params["name"]
 	}
-	isAttachment := strings.EqualFold(disp, "attachment") || filename != "" || (!strings.HasPrefix(strings.ToLower(media), "text/") && media != "message/rfc822")
-	if isAttachment {
+	info := partInfo{
+		Media:     media,
+		Params:    params,
+		Filename:  filename,
+		ContentID: strings.Trim(h.Get("Content-Id"), "<> "),
+		Transfer:  h.Get("Content-Transfer-Encoding"),
+		IsAttachment: strings.EqualFold(disp, "attachment") || filename != "" ||
+			(!strings.HasPrefix(strings.ToLower(media), "text/") && media != "message/rfc822"),
+	}
+	return w.fn(info, r)
+}
+
+type parseState struct {
+	text, html     []string
+	attachments    []Attachment
+	nextAttachment int
+}
+
+func (s *parseState) collect(info partInfo, r io.Reader) error {
+	r = decodeTransfer(info.Transfer, r)
+	if info.IsAttachment {
 		s.nextAttachment++
 		n, err := io.Copy(io.Discard, r)
 		if err != nil {
 			return err
 		}
-		s.attachments = append(s.attachments, Attachment{Filename: safeFilename(filename, s.nextAttachment, media), ContentType: media, ContentID: strings.Trim(h.Get("Content-Id"), "<> "), Size: n, PartIndex: s.nextAttachment})
+		s.attachments = append(s.attachments, Attachment{Filename: safeFilename(info.Filename, s.nextAttachment, info.Media), ContentType: info.Media, ContentID: info.ContentID, Size: n, PartIndex: s.nextAttachment})
 		return nil
 	}
 	body, err := io.ReadAll(io.LimitReader(r, 10<<20))
 	if err != nil {
 		return err
 	}
-	body = convertCharset(body, params["charset"])
-	switch strings.ToLower(media) {
+	body = convertCharset(body, info.Params["charset"])
+	switch strings.ToLower(info.Media) {
 	case "text/plain":
 		s.text = append(s.text, string(body))
 	case "text/html":
@@ -231,6 +263,9 @@ func windows1252Rune(b byte) rune {
 }
 func sanitizeHTML(s string) string { return html.EscapeString(s) }
 
+// errWalkStop lets a callback end the traversal early once its target is found.
+var errWalkStop = errors.New("mime walk stopped")
+
 func ExtractAttachment(path string, index int, w io.Writer) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -243,69 +278,50 @@ func ExtractAttachment(path string, index int, w io.Writer) error {
 	}
 	target := 0
 	found := false
-	depth := 0
-	parts := 0
-	var walk func(textproto.MIMEHeader, io.Reader) error
-	walk = func(h textproto.MIMEHeader, r io.Reader) error {
-		depth++
-		defer func() { depth-- }()
-		if depth > maxMIMEDepth {
-			return fmt.Errorf("mime nesting too deep")
-		}
-		parts++
-		if parts > maxMIMEParts {
-			return fmt.Errorf("too many mime parts")
-		}
-		ct := h.Get("Content-Type")
-		if ct == "" {
-			ct = "text/plain"
-		}
-		media, params, _ := mime.ParseMediaType(ct)
-		if strings.HasPrefix(strings.ToLower(media), "multipart/") {
-			mr := multipart.NewReader(r, params["boundary"])
-			for {
-				p, e := mr.NextPart()
-				if e == io.EOF {
-					break
-				}
-				if e != nil {
-					return e
-				}
-				e = walk(p.Header, p)
-				p.Close()
-				if e != nil {
-					return e
-				}
-				if found {
-					return nil
-				}
-			}
-			return nil
-		}
-		disp, dparams, _ := mime.ParseMediaType(h.Get("Content-Disposition"))
-		filename := dparams["filename"]
-		if filename == "" {
-			filename = params["name"]
-		}
-		isAtt := strings.EqualFold(disp, "attachment") || filename != "" || (!strings.HasPrefix(strings.ToLower(media), "text/") && media != "message/rfc822")
-		if !isAtt {
+	err = walkMIME(textproto.MIMEHeader(msg.Header), msg.Body, func(info partInfo, r io.Reader) error {
+		if !info.IsAttachment {
 			return nil
 		}
 		target++
-		if target == index {
-			_, e := io.Copy(w, decodeTransfer(h.Get("Content-Transfer-Encoding"), r))
-			found = e == nil
-			return e
+		if target != index {
+			return nil
 		}
-		return nil
-	}
-	if err = walk(textproto.MIMEHeader(msg.Header), msg.Body); err != nil {
+		if _, err := io.Copy(w, decodeTransfer(info.Transfer, r)); err != nil {
+			return err
+		}
+		found = true
+		return errWalkStop
+	})
+	if err != nil && !errors.Is(err, errWalkStop) {
 		return err
 	}
 	if !found {
 		return fmt.Errorf("attachment not found")
 	}
 	return nil
+}
+
+// ExtractAllAttachments extracts every attachment in one traversal. The
+// callback must consume the reader before returning.
+func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	msg, err := mail.ReadMessage(bufio.NewReader(f))
+	if err != nil {
+		return err
+	}
+	target := 0
+	return walkMIME(textproto.MIMEHeader(msg.Header), msg.Body, func(info partInfo, r io.Reader) error {
+		if !info.IsAttachment {
+			return nil
+		}
+		target++
+		meta := Attachment{Filename: safeFilename(info.Filename, target, info.Media), ContentType: info.Media, ContentID: info.ContentID, PartIndex: target}
+		return fn(meta, decodeTransfer(info.Transfer, r))
+	})
 }
 
 func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {

@@ -367,7 +367,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 	if sendResp.Message.ID == "" {
 		t.Fatalf("no message id in %s", rr.Body.String())
 	}
-	if err = svc.Deliver(ctx, u.AccountID, sendResp.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, sendResp.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {

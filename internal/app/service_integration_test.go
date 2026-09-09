@@ -129,7 +129,7 @@ func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 		t.Fatalf("reply thread/header: %+v", res.Message)
 	}
 	// Deliver so the idempotency reservation completes.
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	again, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")

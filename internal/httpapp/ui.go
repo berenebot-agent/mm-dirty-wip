@@ -326,6 +326,9 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("ghm_session"); err == nil {
 		s.Service.Store.DeleteSession(r.Context(), c.Value)
+		if p := principal(r); p.SessionHash != "" {
+			s.Service.Hub.CancelScope("sess:" + p.SessionHash)
+		}
 	}
 	s.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", 303)
@@ -438,6 +441,8 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "user.password_change", "")
+	// Other devices were logged out in the database; cancel their live streams.
+	s.Service.Hub.CancelScope("user:" + p.UserID)
 	s.settingsRedirect(w, r, "Password changed. Other devices have been logged out.", "")
 }
 
@@ -829,6 +834,7 @@ func (s *Server) uiUpdateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	http.Redirect(w, r, "/dashboard?notice=Key+updated", 303)
 }
 
@@ -843,6 +849,7 @@ func (s *Server) uiRotateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	if wantsJSON(r) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]string{"notice": "API key rotated", "label": "Copy this API key now", "secret": plain})
@@ -861,6 +868,7 @@ func (s *Server) uiDeleteKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	http.Redirect(w, r, "/dashboard?notice=Key+deleted", 303)
 }
 
@@ -887,6 +895,7 @@ func (s *Server) uiDeleteHermes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	s.Service.Hub.CancelScope("hrm:" + r.PathValue("id"))
 	http.Redirect(w, r, "/dashboard?notice=Connection+deleted", 303)
 }
 

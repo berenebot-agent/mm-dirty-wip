@@ -3,6 +3,7 @@ package mailparse
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -131,5 +132,64 @@ func TestParseRejectsTooManyParts(t *testing.T) {
 	os.WriteFile(path, []byte(raw), 0600)
 	if _, err := ParseFile(path); err == nil || !strings.Contains(err.Error(), "too many mime parts") {
 		t.Fatalf("expected part-count error, got %v", err)
+	}
+}
+
+// TestParseExtractIndexConsistency guards the shared walker: attachment
+// indexing during parsing must match extraction even with nested multiparts
+// and a malformed Content-Type.
+func TestParseExtractIndexConsistency(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: Alice <alice@example.net>", "To: box@example.com", "Subject: Nested", "Message-ID: <n@test>",
+		"MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=outer", "",
+		"--outer", "Content-Type: text/plain", "", "hello", "",
+		"--outer", "Content-Type: multipart/alternative; boundary=inner", "",
+		"--inner", "Content-Type: text/plain", "", "alt text", "",
+		"--inner", "Content-Type: text/html", "", "<p>alt html</p>", "",
+		"--inner--", "",
+		"--outer", "Content-Type: application/octet-stream; name=\"broken", "Content-Disposition: attachment; filename=broken.bin", "Content-Transfer-Encoding: base64", "", "aGVsbG8gYnJva2Vu", "",
+		"--outer", "Content-Type: text/csv; name=data.csv", "Content-Disposition: attachment; filename=data.csv", "Content-Transfer-Encoding: base64", "", "YSxi", "",
+		"--outer--", "",
+	}, "\r\n")
+	path := t.TempDir() + "/nested.eml"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments, got %#v", p.Attachments)
+	}
+	if p.Attachments[0].Filename != "broken.bin" || p.Attachments[1].Filename != "data.csv" {
+		t.Fatalf("filenames %#v", p.Attachments)
+	}
+	want := map[int]string{1: "hello broken", 2: "a,b"}
+	for _, a := range p.Attachments {
+		var b bytes.Buffer
+		if err := ExtractAttachment(path, a.PartIndex, &b); err != nil {
+			t.Fatalf("extract %d: %v", a.PartIndex, err)
+		}
+		if b.String() != want[a.PartIndex] {
+			t.Fatalf("part %d = %q, want %q", a.PartIndex, b.String(), want[a.PartIndex])
+		}
+	}
+	var names []string
+	if err := ExtractAllAttachments(path, func(a Attachment, r io.Reader) error {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
+		if string(data) != want[a.PartIndex] {
+			t.Fatalf("bulk part %d = %q", a.PartIndex, data)
+		}
+		names = append(names, a.Filename)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 2 || names[0] != "broken.bin" || names[1] != "data.csv" {
+		t.Fatalf("bulk names %#v", names)
 	}
 }

@@ -67,7 +67,7 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 		t.Fatalf("no message id in %s", rr.Body.String())
 	}
 	// Deliver the queued message via the worker path.
-	if err = svc.Deliver(ctx, u.AccountID, resp.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, resp.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {
@@ -172,7 +172,7 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Admin key can read the log.
@@ -213,7 +213,7 @@ func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	cookie, _ := uiSession(t, svc, u.ID)

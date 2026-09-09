@@ -37,7 +37,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 	if res.Message.Status != "pending" || res.Message.LastError == "" {
 		t.Fatalf("queued message: status=%q err=%q", res.Message.Status, res.Message.LastError)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatalf("deliver while held: %v", err)
 	}
 	held, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
@@ -57,7 +57,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatalf("deliver after provider assigned: %v", err)
 	}
 	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
@@ -95,7 +95,7 @@ func TestSendUsesDomainCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
@@ -137,7 +137,7 @@ func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 0 {
@@ -149,7 +149,7 @@ func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res2.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res2.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {

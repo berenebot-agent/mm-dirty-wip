@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,7 +24,7 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 		t.Fatalf("status = %q, want pending", m.Status)
 	}
 	// Claim it.
-	id, err := s.ClaimNextPending(ctx, time.Now().UTC())
+	id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w1", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +32,7 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 		t.Fatalf("claimed %q, want %q", id, m.ID)
 	}
 	// A second claim must find nothing (in-flight).
-	id, err = s.ClaimNextPending(ctx, time.Now().UTC())
+	id, err = s.ClaimNextPending(ctx, time.Now().UTC(), "w1", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +75,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 		t.Fatalf("failed %+v", failed)
 	}
 	// Not due yet.
-	id, err := s.ClaimNextPending(ctx, time.Now().UTC())
+	id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w1", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 		t.Fatalf("claimed not-due message %q", id)
 	}
 	// Due now.
-	id, err = s.ClaimNextPending(ctx, time.Now().UTC().Add(2*time.Minute))
+	id, err = s.ClaimNextPending(ctx, time.Now().UTC().Add(2*time.Minute), "w1", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,4 +156,72 @@ func TestDraftAttachmentsCRUD(t *testing.T) {
 		t.Fatalf("after delete %v %#v", err, atts)
 	}
 	_ = a
+}
+
+func TestClaimRecoveredAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, b := testStore(t)
+	box := b[0]
+	m, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<r@test>",
+		From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t",
+		RawPath: "messages/r.eml", SizeBytes: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w1", time.Hour); err != nil || id != m.ID {
+		t.Fatalf("first claim id=%q err=%v", id, err)
+	}
+	// A long lease blocks a different worker.
+	if id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w2", time.Hour); err != nil || id != "" {
+		t.Fatalf("second claim id=%q err=%v, want empty", id, err)
+	}
+	// Startup recovery clears the abandoned claim so it can be delivered.
+	if err := s.RecoverAbandonedClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w3", time.Hour); err != nil || id != m.ID {
+		t.Fatalf("recovered claim id=%q err=%v", id, err)
+	}
+}
+
+func TestConcurrentDeleteSubtractsOnce(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	m, _, _, err := s.CommitInbound(ctx, inbound(b[0], "del-race", "<race@test>", "", nil, "s", "body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.GetAccount(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var successes, notFounds int32
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, _, err := s.DeleteMessage(ctx, p, m.ID)
+			switch {
+			case err == nil:
+				atomic.AddInt32(&successes, 1)
+			case errors.Is(err, ErrNotFound):
+				atomic.AddInt32(&notFounds, 1)
+			default:
+				t.Errorf("delete err %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if successes != 1 || notFounds != 1 {
+		t.Fatalf("successes=%d notFounds=%d", successes, notFounds)
+	}
+	after, err := s.GetAccount(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.StorageUsedBytes-after.StorageUsedBytes != m.SizeBytes {
+		t.Fatalf("storage delta %d, want %d", before.StorageUsedBytes-after.StorageUsedBytes, m.SizeBytes)
+	}
 }

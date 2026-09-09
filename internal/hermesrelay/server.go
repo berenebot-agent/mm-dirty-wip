@@ -80,11 +80,6 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enrollmentToken and gatewayId are required"})
 		return
 	}
-	rec, err := s.Store.ConsumeHermesEnrollToken(r.Context(), req.EnrollmentToken)
-	if err != nil {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired enrollment token"})
-		return
-	}
 	secret, err := auth.RandomToken(32)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
@@ -105,12 +100,20 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	if _, err = s.Store.CreateHermesConnection(r.Context(), rec, req.GatewayID, secEnc, delEnc); err != nil {
+	// The token is consumed and the connection created/replaced in one
+	// transaction; a gateway owned by another account is rejected without
+	// burning the token.
+	conn, err := s.Store.EnrollHermesConnection(r.Context(), req.EnrollmentToken, req.GatewayID, secEnc, delEnc)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrForbidden) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired enrollment token"})
+			return
+		}
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	s.Log.Info("relay enrolled", "gateway_id", req.GatewayID, "account_id", rec.AccountID, "inbox_id", rec.InboxID)
-	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: rec.AccountID, GatewayID: req.GatewayID})
+	s.Log.Info("relay enrolled", "gateway_id", conn.GatewayID, "account_id", conn.AccountID, "inbox_id", conn.InboxID)
+	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: conn.AccountID, GatewayID: req.GatewayID})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -243,8 +246,13 @@ func descriptor() map[string]any {
 }
 
 func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) error {
+	// Deleting the connection cancels this socket immediately.
+	scopeCtx, unregister := s.Hub.RegisterScope("hrm:" + h.ID)
+	defer unregister()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	stop := context.AfterFunc(scopeCtx, cancel)
+	defer stop()
 	wr := &socketWriter{c: c}
 	ackCh := make(chan int64, 8)
 	helloCh := make(chan struct{}, 1)
@@ -309,6 +317,11 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 	defer cancelSub()
 	after := h.LastAckEventID
 	for {
+		// Revalidate the connection so a direct database deletion also closes
+		// the socket, not just the delete handler's scope cancellation.
+		if _, err := s.Store.GetHermesConnectionByGateway(ctx, h.GatewayID); err != nil {
+			return err
+		}
 		ev, err := s.Store.NextHermesEvent(ctx, h.ID, after)
 		if err == nil {
 			m, err := s.Store.GetMessageByID(ctx, h.AccountID, ev.EntityID)
@@ -402,6 +415,12 @@ func outboundResult(requestID string, success bool, errText, messageID string) m
 }
 
 func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.HermesConnection, requestID string, a outboundAction) {
+	// The connection may have been deleted since this socket was accepted;
+	// revalidate before performing any outbound operation.
+	if _, err := s.Store.GetHermesConnectionByGateway(ctx, h.GatewayID); err != nil {
+		_ = wr.JSON(outboundResult(requestID, false, "relay connection is no longer active", ""))
+		return
+	}
 	switch a.Op {
 	case "typing":
 		_ = wr.JSON(outboundResult(requestID, true, "", ""))

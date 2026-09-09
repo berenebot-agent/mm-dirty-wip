@@ -160,6 +160,44 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 		return nil, err
 	}
 	rows.Close()
+	draftRows, err := tx.QueryContext(ctx, `SELECT d.text_body,d.html_body FROM drafts d JOIN inboxes i ON i.id=d.inbox_id WHERE i.account_id=? AND i.domain_id=?`, accountID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	for draftRows.Next() {
+		var text, html string
+		if err = draftRows.Scan(&text, &html); err != nil {
+			draftRows.Close()
+			return nil, err
+		}
+		total += int64(len(text) + len(html))
+	}
+	if err = draftRows.Err(); err != nil {
+		draftRows.Close()
+		return nil, err
+	}
+	draftRows.Close()
+	attRows, err := tx.QueryContext(ctx, `SELECT da.raw_path,da.size_bytes FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id JOIN inboxes i ON i.id=d.inbox_id WHERE i.account_id=? AND i.domain_id=?`, accountID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	for attRows.Next() {
+		var path string
+		var size int64
+		if err = attRows.Scan(&path, &size); err != nil {
+			attRows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+		total += size
+	}
+	if err = attRows.Err(); err != nil {
+		attRows.Close()
+		return nil, err
+	}
+	attRows.Close()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, domainID); err != nil {
 		return nil, err
 	}
@@ -371,6 +409,44 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 		return nil, err
 	}
 	rows.Close()
+	draftRows, err := tx.QueryContext(ctx, `SELECT text_body,html_body FROM drafts WHERE account_id=? AND inbox_id=?`, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	for draftRows.Next() {
+		var text, html string
+		if err = draftRows.Scan(&text, &html); err != nil {
+			draftRows.Close()
+			return nil, err
+		}
+		total += int64(len(text) + len(html))
+	}
+	if err = draftRows.Err(); err != nil {
+		draftRows.Close()
+		return nil, err
+	}
+	draftRows.Close()
+	attRows, err := tx.QueryContext(ctx, `SELECT da.raw_path,da.size_bytes FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id WHERE d.account_id=? AND d.inbox_id=?`, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	for attRows.Next() {
+		var path string
+		var size int64
+		if err = attRows.Scan(&path, &size); err != nil {
+			attRows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+		total += size
+	}
+	if err = attRows.Err(); err != nil {
+		attRows.Close()
+		return nil, err
+	}
+	attRows.Close()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, id); err != nil {
 		return nil, err
 	}

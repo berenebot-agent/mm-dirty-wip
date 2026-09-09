@@ -11,7 +11,6 @@ import (
 	"net/mail"
 	"net/url"
 	"strings"
-	"time"
 
 	"gatehouse-mail/internal/transport"
 	"gatehouse-mail/internal/transport/netutil"
@@ -134,18 +133,7 @@ func Send(ctx context.Context, c Config, m SendRequest) (SendResult, error) {
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.SetBasicAuth("api", c.APIKey)
-	cl := &http.Client{Timeout: 30 * time.Second}
-	if netutil.Hosted() {
-		// Reject non-public API bases before connecting (SSRF guard).
-		u, err := url.Parse(base)
-		if err != nil {
-			return SendResult{}, err
-		}
-		if _, err = netutil.ResolvePublicHost(ctx, u.Hostname()); err != nil {
-			return SendResult{}, err
-		}
-	}
-	resp, err := cl.Do(req)
+	resp, err := netutil.HTTPClient().Do(req)
 	if err != nil {
 		return SendResult{}, err
 	}

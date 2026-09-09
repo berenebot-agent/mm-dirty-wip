@@ -42,7 +42,7 @@ func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err == nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err == nil {
 		t.Fatal("expected delivery error")
 	}
 	m, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
@@ -84,7 +84,7 @@ func TestDeliverTransientErrorRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err == nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err == nil {
 		t.Fatal("expected delivery error")
 	}
 	m, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)

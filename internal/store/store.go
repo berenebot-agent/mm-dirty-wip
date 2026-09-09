@@ -51,45 +51,49 @@ func Open(dataDir string) (*Store, error) {
 func (s *Store) Close() error { _ = s.read.Close(); return s.write.Close() }
 func (s *Store) Path() string { return s.path }
 func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.write.ExecContext(ctx, migration001); err != nil {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	if _, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('001',?)`, nowText()); err != nil {
+	// Pin the single writer connection so the foreign_keys pragma and the
+	// migration transaction run on the same connection.
+	conn, err := s.write.Conn(ctx)
+	if err != nil {
 		return err
 	}
-	for _, m := range []struct{ version, sql string }{
-		{"002", migration002},
-		{"003", migration003},
-		{"004", migration004},
-		{"005", migration005},
-		{"006", migration006},
-		{"007", migration007},
-		{"008", migration008},
-		{"009", migration009},
-	} {
-		applied, err := s.migrationApplied(ctx, m.version)
+	defer conn.Close()
+
+	// The 001 baseline is idempotent (all IF NOT EXISTS) and creates the
+	// schema_migrations table the rest of the runner depends on.
+	if err := runMigration(ctx, conn, migration{version: "001", sql: migration001}); err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	for _, m := range migrations() {
+		applied, err := migrationMarker(ctx, conn, m.version)
 		if err != nil {
 			return err
 		}
 		if applied {
 			continue
 		}
-		if _, err := s.write.ExecContext(ctx, m.sql); err != nil {
-			return fmt.Errorf("migrate %s: %w", m.version, err)
+		if m.detect != nil {
+			state, err := m.detect(ctx, conn)
+			if err != nil {
+				return fmt.Errorf("migrate %s: inspect schema: %w", m.version, err)
+			}
+			switch state {
+			case stateApplied:
+				// The schema work committed but its marker was lost (an
+				// interrupted upgrade under the old runner). Record it.
+				if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(?,?)`, m.version, nowText()); err != nil {
+					return err
+				}
+				continue
+			case statePartial:
+				return fmt.Errorf("migrate %s: schema is partially applied; restore the database from backup or repair it manually before starting", m.version)
+			}
 		}
-		if _, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(?,?)`, m.version, nowText()); err != nil {
-			return err
+		if err := runMigration(ctx, conn, m); err != nil {
+			return fmt.Errorf("migrate %s: %w", m.version, err)
 		}
 	}
 	return nil
-}
-
-func (s *Store) migrationApplied(ctx context.Context, version string) (bool, error) {
-	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations WHERE version=?`, version).Scan(&n); err != nil {
-		return false, err
-	}
-	return n > 0, nil
 }
 
 func nowText() string              { return time.Now().UTC().Format(time.RFC3339Nano) }
