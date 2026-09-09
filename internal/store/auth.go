@@ -104,6 +104,117 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	return u, nil
 }
 
+func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) {
+	var u model.User
+	var created string
+	var admin int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,created_at FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &created)
+	if err == sql.ErrNoRows {
+		return model.User{}, ErrNotFound
+	}
+	if err != nil {
+		return model.User{}, err
+	}
+	u.IsAdmin = admin != 0
+	u.CreatedAt = parseTime(created)
+	return u, nil
+}
+
+// UpdateAccountName changes an account's display name. The name is a label
+// only; it never identifies the tenant, which is always accounts.id.
+func (s *Store) UpdateAccountName(ctx context.Context, accountID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("account name is required")
+	}
+	if len(name) > 80 {
+		return fmt.Errorf("account name must be 80 characters or fewer")
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET name=? WHERE id=?`, name, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateUserEmail changes a user's login email after verifying the current
+// password. Email uniqueness is enforced by the users table; the serialized
+// writer connection makes the check-and-update race-free.
+func (s *Store) UpdateUserEmail(ctx context.Context, userID, accountID, newEmail, currentPassword string) error {
+	newEmail = normalizeAddress(newEmail)
+	if newEmail == "" || !strings.Contains(newEmail, "@") {
+		return fmt.Errorf("a valid email address is required")
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var ph string
+	if err = tx.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id=? AND account_id=?`, userID, accountID).Scan(&ph); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if !auth.CheckPassword(ph, currentPassword) {
+		return ErrForbidden
+	}
+	var other string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE email=? AND id!=?`, newEmail, userID).Scan(&other)
+	if err == nil {
+		return ErrConflict
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=? AND account_id=?`, newEmail, userID, accountID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpdateUserPassword verifies the current password, stores a new hash and
+// revokes every other session for the user so a compromised session cannot
+// survive a password change. keepSession is the raw session token to retain
+// (the one making the change); pass "" to revoke all sessions.
+func (s *Store) UpdateUserPassword(ctx context.Context, userID, currentPassword, newPassword, keepSession string) error {
+	var ph string
+	err := s.read.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id=?`, userID).Scan(&ph)
+	if err == sql.ErrNoRows {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !auth.CheckPassword(ph, currentPassword) {
+		return ErrForbidden
+	}
+	newHash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, newHash, userID); err != nil {
+		return err
+	}
+	if keepSession != "" {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=? AND id_hash!=?`, userID, auth.HashToken(keepSession)); err != nil {
+			return err
+		}
+	} else if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) CreateSession(ctx context.Context, userID string, ttl time.Duration) (token, csrf string, err error) {
 	token, err = auth.RandomToken(32)
 	if err != nil {

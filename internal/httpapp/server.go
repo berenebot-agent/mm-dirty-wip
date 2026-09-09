@@ -31,15 +31,16 @@ var appJS []byte
 var cloudflareWorkerTemplate []byte
 
 type Server struct {
-	Service      *app.Service
-	Relay        *hermesrelay.Server
-	Log          *slog.Logger
-	loginLimiter *limiter
-	sendLimiter  *limiter
-	unroutedLim  *limiter
-	flashes      *flashStore
-	assetVersion string
-	inboundSem   chan struct{}
+	Service         *app.Service
+	Relay           *hermesrelay.Server
+	Log             *slog.Logger
+	loginLimiter    *limiter
+	sendLimiter     *limiter
+	unroutedLim     *limiter
+	passwordLimiter *limiter
+	flashes         *flashStore
+	assetVersion    string
+	inboundSem      chan struct{}
 }
 
 type ctxKey int
@@ -57,12 +58,13 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		conc = 32
 	}
 	return &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
-		loginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		sendLimiter:  newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
-		unroutedLim:  newLimiter(1, time.Minute),
-		flashes:      newFlashStore(64, 64<<20),
-		assetVersion: fmt.Sprintf("%x", sum[:6]),
-		inboundSem:   make(chan struct{}, conc)}
+		loginLimiter:    newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		sendLimiter:     newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
+		unroutedLim:     newLimiter(1, time.Minute),
+		passwordLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		flashes:         newFlashStore(64, 64<<20),
+		assetVersion:    fmt.Sprintf("%x", sum[:6]),
+		inboundSem:      make(chan struct{}, conc)}
 }
 
 // assetURL returns a content-hashed asset path so a rebuilt binary always
@@ -87,6 +89,10 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /login", s.loginGet)
 	m.HandleFunc("POST /login", s.withPreAuthCSRF(s.loginPost))
 	m.HandleFunc("POST /logout", s.withSession(s.withCSRF(s.logoutPost)))
+	m.HandleFunc("GET /settings", s.withSession(s.settingsGet))
+	m.HandleFunc("POST /ui/settings/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
+	m.HandleFunc("POST /ui/settings/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
+	m.HandleFunc("POST /ui/settings/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
 	m.HandleFunc("GET /dashboard", s.withSession(s.dashboard))
 	m.HandleFunc("POST /ui/domains", s.withSession(s.withCSRF(s.uiCreateDomain)))
 	m.HandleFunc("POST /ui/domains/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateDomain)))
