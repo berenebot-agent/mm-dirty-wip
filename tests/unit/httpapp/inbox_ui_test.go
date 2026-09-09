@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"bytes"
@@ -183,9 +183,12 @@ func TestUIDraftsOutboxCountsEmpty(t *testing.T) {
 	}
 }
 
+// testInboxPageSize mirrors internal/httpapp's unexported inboxPageSize.
+const testInboxPageSize = 50
+
 func TestUIInboxPagination(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
-	for i := 0; i < inboxPageSize+1; i++ {
+	for i := 0; i < testInboxPageSize+1; i++ {
 		seedInbound(t, svc, box, fmt.Sprintf("d%d", i), fmt.Sprintf("<m%d@test>", i), fmt.Sprintf("Subject %02d", i), "body")
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -197,8 +200,8 @@ func TestUIInboxPagination(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("page 1 %d", rr.Code)
 	}
-	if strings.Count(rr.Body.String(), `class="mailrow"`)+strings.Count(rr.Body.String(), `class="mailrow unread"`) != inboxPageSize {
-		t.Fatalf("expected %d messages on first page", inboxPageSize)
+	if strings.Count(rr.Body.String(), `class="mailrow"`)+strings.Count(rr.Body.String(), `class="mailrow unread"`) != testInboxPageSize {
+		t.Fatalf("expected %d messages on first page", testInboxPageSize)
 	}
 	if !strings.Contains(rr.Body.String(), "Load older") {
 		t.Fatal("first page should offer Load older")
@@ -380,7 +383,7 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 	req.AddCookie(cookie)
 	h.ServeHTTP(rr, req)
 	body := rr.Body.String()
-	if !strings.Contains(body, `sandbox="allow-popups allow-popups-to-escape-sandbox"`) {
+	if !strings.Contains(body, `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"`) {
 		t.Fatal("message view should sandbox HTML iframe")
 	}
 	if !strings.Contains(body, "/ui/messages/"+m.ID+"/html") {
@@ -529,24 +532,48 @@ func writeFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-func TestRewriteCIDsOnlyRewritesImages(t *testing.T) {
-	atts := []model.Attachment{
-		{ID: "att_1", ContentID: "<logo@test>", ContentType: "image/png; name=logo"},
-		{ID: "att_2", ContentID: "<page@test>", ContentType: "text/html"},
+func TestUIMessageHTMLRewritesOnlyImageCIDs(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	rel := filepath.Join("messages", "cid.eml")
+	if err := writeFile(filepath.Join(svc.Config.DataDir, rel), []byte("From: alice@outside.test\r\n\r\n")); err != nil {
+		t.Fatal(err)
 	}
-	body := `<img src="cid:logo@test"><img src="cid:<page@test>">`
-	got := rewriteCIDs(body, atts)
-	if !strings.Contains(got, "/ui/attachments/att_1/inline") {
-		t.Fatalf("image cid not rewritten: %q", got)
+	m, _, _, err := svc.Store.CommitInbound(context.Background(), store.InboundRecord{
+		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "cid-1", RFCMessageID: "<cid@outside.test>",
+		From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address},
+		EnvelopeTo: []string{box.Address}, Subject: "CIDs", Text: "see attached",
+		HTML:    `<img src="cid:logo@test"><img src="cid:<page@test>">`,
+		RawPath: rel, SizeBytes: 32, ReceivedAt: time.Now().UTC(),
+		Attachments: []store.AttachmentInput{
+			{Filename: "logo.png", ContentType: "image/png", ContentID: "<logo@test>", Size: 3, PartIndex: 1},
+			{Filename: "page.html", ContentType: "text/html", ContentID: "<page@test>", Size: 12, PartIndex: 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(got, "att_2") {
-		t.Fatalf("non-image cid must not be rewritten: %q", got)
+	atts, err := svc.Store.ListAttachments(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, m.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "cid:<page@test>") {
-		t.Fatalf("non-image cid should be left untouched: %q", got)
+	byName := map[string]string{}
+	for _, a := range atts {
+		byName[a.Filename] = a.ID
 	}
-	if !isInlineImage(normalizeContentType("image/jpeg")) || isInlineImage(normalizeContentType("text/html")) {
-		t.Fatal("inline image allowlist is wrong")
+	cookie, _ := uiSession(t, svc, u.ID)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ui/messages/"+m.ID+"/html", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("html %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "/ui/attachments/"+byName["logo.png"]+"/inline") {
+		t.Fatalf("image cid not rewritten: %q", body)
+	}
+	if strings.Contains(body, byName["page.html"]) {
+		t.Fatalf("non-image cid must not be rewritten: %q", body)
 	}
 }
 

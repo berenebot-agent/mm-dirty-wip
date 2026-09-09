@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 // TestCommitReturnsCommittedMessage locks the invariant that the message
@@ -27,7 +28,7 @@ func TestCommitReturnsCommittedMessage(t *testing.T) {
 		t.Fatalf("inbound mismatch:\n%#v\n%#v", in, fetchedIn)
 	}
 
-	out, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<out@test>",
+	out, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<out@test>",
 		From: model.Address{Address: b[0].Address}, To: []string{"friend@example.net"}, Subject: "out", Text: "body",
 		RawPath: "messages/out.eml", SizeBytes: 50, IdemKey: "hydrate-key"})
 	if err != nil {

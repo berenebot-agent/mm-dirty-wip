@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -9,13 +9,14 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
 func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
-	rec := OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
 	m, _, err := s.CommitOutbound(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +62,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
-	rec := OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
 	m, _, err := s.CommitOutbound(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +113,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 	}
 	// Non-owner cannot retry a failed message.
 	ro := model.Principal{AccountID: u.AccountID, MailboxRoles: map[string]string{box.ID: "read"}}
-	if err = s.RequeueFailed(ctx, ro, m.ID); !errors.Is(err, ErrForbidden) {
+	if err = s.RequeueFailed(ctx, ro, m.ID); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("read retry err=%v", err)
 	}
 	// Owner retry resets to pending.
@@ -162,7 +163,7 @@ func TestClaimRecoveredAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 	box := b[0]
-	m, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<r@test>",
+	m, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<r@test>",
 		From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t",
 		RawPath: "messages/r.eml", SizeBytes: 10})
 	if err != nil {
@@ -206,7 +207,7 @@ func TestConcurrentDeleteSubtractsOnce(t *testing.T) {
 			switch {
 			case err == nil:
 				atomic.AddInt32(&successes, 1)
-			case errors.Is(err, ErrNotFound):
+			case errors.Is(err, store.ErrNotFound):
 				atomic.AddInt32(&notFounds, 1)
 			default:
 				t.Errorf("delete err %v", err)

@@ -1,12 +1,14 @@
-package events
+package events_test
 
 import (
 	"testing"
 	"time"
+
+	"gatehouse-mail/internal/events"
 )
 
 func TestRegisterScopeCancelsOnRevoke(t *testing.T) {
-	h := NewHub()
+	h := events.NewHub()
 	ctx, unregister := h.RegisterScope("key:k1", "user:u1")
 	defer unregister()
 	h.CancelScope("key:k1")
@@ -18,7 +20,7 @@ func TestRegisterScopeCancelsOnRevoke(t *testing.T) {
 }
 
 func TestUnregisterCancelsAndDetaches(t *testing.T) {
-	h := NewHub()
+	h := events.NewHub()
 	ctx, unregister := h.RegisterScope("key:k2")
 	unregister()
 	select {

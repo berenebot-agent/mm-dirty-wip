@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 )
@@ -30,14 +31,14 @@ func TestForwardCarriesBodyAndAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	original, err := svc.Send(ctx, p, SendInput{
+	original, err := svc.Send(ctx, p, app.SendInput{
 		InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "body text",
-		Attachments: []SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}},
+		Attachments: []app.SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	forwarded, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"elsewhere@example.net"}, ForwardOfMessageID: original.Message.ID}, "")
+	forwarded, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"elsewhere@example.net"}, ForwardOfMessageID: original.Message.ID}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

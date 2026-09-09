@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -56,6 +56,6 @@ func TestListAPIKeysConcurrentCompletes(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Fatalf("concurrent ListAPIKeys: %v", err)
+		t.Fatalf("concurrent store.ListAPIKeys: %v", err)
 	}
 }

@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 )
 
@@ -33,12 +34,12 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Worker", Text: "hi"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Worker", Text: "hi"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Start the worker and wait for delivery.
-	w := NewOutboxWorker(svc, nil)
+	// app.Start the worker and wait for delivery.
+	w := app.NewOutboxWorker(svc, nil)
 	w.SetPeriod(10 * time.Millisecond)
 	w.Start()
 	defer w.Stop()
@@ -93,20 +94,20 @@ func TestDraftSendFlow(t *testing.T) {
 	if _, err = svc.Store.AddDraftAttachment(ctx, p, d.ID, model.DraftAttachment{Filename: "d.txt", ContentType: "text/plain", Size: 16, RawPath: filepath.ToSlash(rel)}); err != nil {
 		t.Fatal(err)
 	}
-	// Send the draft via the send-draft path (copy fields + attachments, enqueue, delete draft).
+	// app.Send the draft via the send-draft path (copy fields + attachments, enqueue, delete draft).
 	atts, err := svc.Store.ListDraftAttachments(ctx, p, d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sendAtts := make([]SendAttachment, 0, len(atts))
+	sendAtts := make([]app.SendAttachment, 0, len(atts))
 	for _, a := range atts {
 		data, rerr := os.ReadFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(a.RawPath)))
 		if rerr != nil {
 			t.Fatal(rerr)
 		}
-		sendAtts = append(sendAtts, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
+		sendAtts = append(sendAtts, app.SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
 	}
-	res, err := svc.Send(ctx, p, SendInput{InboxID: d.InboxID, To: d.To, Subject: d.Subject, Text: d.Text, Attachments: sendAtts}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: d.InboxID, To: d.To, Subject: d.Subject, Text: d.Text, Attachments: sendAtts}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestDraftSendFlow(t *testing.T) {
 	if _, err = svc.Store.GetDraft(ctx, p, d.ID); !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("draft still present: %v", err)
 	}
-	// Deliver and confirm the attachment carried over.
+	// app.Deliver and confirm the attachment carried over.
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}

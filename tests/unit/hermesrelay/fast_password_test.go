@@ -1,4 +1,4 @@
-package hermesrelay
+package hermesrelay_test
 
 import (
 	"os"

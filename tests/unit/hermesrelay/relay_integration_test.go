@@ -1,4 +1,4 @@
-package hermesrelay
+package hermesrelay_test
 
 import (
 	"bufio"
@@ -25,6 +25,7 @@ import (
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/cryptox"
 	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/hermesrelay"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -147,7 +148,7 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 		t.Fatal(err)
 	}
 	hub.Publish(ev)
-	rs := New(svc)
+	rs := hermesrelay.New(svc)
 	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
 	defer ts.Close()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
@@ -229,7 +230,7 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs := New(svc)
+	rs := hermesrelay.New(svc)
 	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
 	defer ts.Close()
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
@@ -311,7 +312,7 @@ func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rs := New(svc)
+	rs := hermesrelay.New(svc)
 	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
 	defer ts.Close()
 	client := dialRawWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/relay", makeUpgradeTokenTest(conn.GatewayID, secret))

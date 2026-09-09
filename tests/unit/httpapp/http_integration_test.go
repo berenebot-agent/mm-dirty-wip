@@ -1,4 +1,4 @@
-package httpapp
+package httpapp_test
 
 import (
 	"bytes"
@@ -21,6 +21,7 @@ import (
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
+	"gatehouse-mail/internal/httpapp"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -51,7 +52,7 @@ func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Do
 		t.Fatal(err)
 	}
 	seedInboundCredential(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
-	return svc, New(svc, nil).Handler(), u, d, b
+	return svc, httpapp.New(svc, nil).Handler(), u, d, b
 }
 
 const (
@@ -81,7 +82,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, _ := app.New(cfg, st, events.NewHub())
-	h := New(svc, nil).Handler()
+	h := httpapp.New(svc, nil).Handler()
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
 	if rr.Code != 200 {
@@ -147,7 +148,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return New(svc, nil).Handler()
+		return httpapp.New(svc, nil).Handler()
 	}
 	csrfCookie := func(t *testing.T, h http.Handler, req *http.Request) *http.Cookie {
 		t.Helper()

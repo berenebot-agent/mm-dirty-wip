@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -9,11 +9,12 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
 
-func testStore(t *testing.T) (*Store, model.User, model.Domain, []model.Inbox) {
+func testStore(t *testing.T) (*store.Store, model.User, model.Domain, []model.Inbox) {
 	t.Helper()
-	s, err := Open(t.TempDir())
+	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +38,8 @@ func testStore(t *testing.T) (*Store, model.User, model.Domain, []model.Inbox) {
 	return s, u, d, boxes
 }
 
-func inbound(box model.Inbox, delivery, rfc, inReply string, refs []string, subject, body string) InboundRecord {
-	return InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: delivery, RFCMessageID: rfc, InReplyTo: inReply, References: refs,
+func inbound(box model.Inbox, delivery, rfc, inReply string, refs []string, subject, body string) store.InboundRecord {
+	return store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: delivery, RFCMessageID: rfc, InReplyTo: inReply, References: refs,
 		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: subject, Text: body,
 		RawPath: "messages/test.eml", SizeBytes: 100, ReceivedAt: time.Now().UTC()}
 }
@@ -60,7 +61,7 @@ func TestPermissionsThreadIsolationDedupSearchEvents(t *testing.T) {
 	if _, err = s.CreateDraft(ctx, p, model.Draft{InboxID: b[1].ID, Subject: "draft"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.CreateDraft(ctx, p, model.Draft{InboxID: b[2].ID}); !errors.Is(err, ErrForbidden) {
+	if _, err = s.CreateDraft(ctx, p, model.Draft{InboxID: b[2].ID}); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("read created draft: %v", err)
 	}
 
@@ -95,7 +96,7 @@ func TestPermissionsThreadIsolationDedupSearchEvents(t *testing.T) {
 	if len(got) != 1 || got[0].ID != m1.ID {
 		t.Fatalf("search got %#v", got)
 	}
-	if _, err = s.SearchMessages(ctx, p, "forged", b[3].ID, 20); !errors.Is(err, ErrForbidden) {
+	if _, err = s.SearchMessages(ctx, p, "forged", b[3].ID, 20); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("search scope: %v", err)
 	}
 	evs, err := s.ListEvents(ctx, p, 0, b[0].ID, 100)
@@ -141,16 +142,20 @@ func TestQuotaEnforcementInboundAndOutbound(t *testing.T) {
 	s, u, _, b := testStore(t)
 	box := b[0]
 	// Shrink the account quota so a single message exceeds it.
-	if _, err := s.write.ExecContext(ctx, `UPDATE accounts SET storage_quota_bytes=10 WHERE id=?`, u.AccountID); err != nil {
+	db := rawDB(t, s.Path())
+	if _, err := db.ExecContext(ctx, `UPDATE accounts SET storage_quota_bytes=10 WHERE id=?`, u.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	rec := inbound(box, "quota-1", "<quota@test>", "", nil, "Big", "x")
 	rec.SizeBytes = 100
-	if _, _, _, err := s.CommitInbound(ctx, rec); !errors.Is(err, ErrQuota) {
+	if _, _, _, err := s.CommitInbound(ctx, rec); !errors.Is(err, store.ErrQuota) {
 		t.Fatalf("inbound quota: %v", err)
 	}
 	// Outbound quota.
-	if _, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100, SentAt: time.Now().UTC()}); !errors.Is(err, ErrQuota) {
+	if _, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100, SentAt: time.Now().UTC()}); !errors.Is(err, store.ErrQuota) {
 		t.Fatalf("outbound quota: %v", err)
 	}
 }
@@ -209,11 +214,11 @@ func TestIdempotencyReserveIsAtomic(t *testing.T) {
 	}
 	// Second concurrent caller must get a conflict (in-flight).
 	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-1", b[0].ID)
-	if err == nil || !errors.Is(err, ErrConflict) {
+	if err == nil || !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("second reserve err=%v", err)
 	}
 	// Enqueueing the message completes the key in the same transaction.
-	m, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<idem@test>",
+	m, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<idem@test>",
 		From: model.Address{Address: b[0].Address}, To: []string{"friend@example.net"}, Subject: "s", Text: "b",
 		RawPath: "messages/idem.eml", SizeBytes: 10, IdemKey: "key-1"})
 	if err != nil {
@@ -236,7 +241,7 @@ func TestIdempotencyReserveIsAtomic(t *testing.T) {
 
 func TestBackupRestoreRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	s, err := Open(dir)
+	s, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +266,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reopen the same directory (simulating restore onto a clean instance).
-	s2, err := Open(dir)
+	s2, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

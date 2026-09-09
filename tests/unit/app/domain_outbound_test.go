@@ -1,4 +1,4 @@
-package app
+package app_test
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 )
 
@@ -30,7 +31,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "queue-key")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "queue-key")
 	if err != nil {
 		t.Fatalf("send without provider should queue, got %v", err)
 	}
@@ -91,7 +92,7 @@ func TestSendUsesDomainCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +134,7 @@ func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
 	}
 
 	// box is on a different domain with no provider: it must queue, not send.
-	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
 	}
 
 	// The other domain's inbox does send through its assigned credential.
-	res2, err := svc.Send(ctx, p, SendInput{InboxID: otherBox.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	res2, err := svc.Send(ctx, p, app.SendInput{InboxID: otherBox.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

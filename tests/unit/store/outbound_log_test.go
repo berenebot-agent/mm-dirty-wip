@@ -1,4 +1,4 @@
-package store
+package store_test
 
 import (
 	"context"
@@ -7,7 +7,11 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/store"
 )
+
+// testDeliveryLogCap mirrors internal/store's unexported testDeliveryLogCap.
+const testDeliveryLogCap = 5000
 
 func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 	ctx := context.Background()
@@ -17,7 +21,7 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
 	m, _, err := s.CommitOutbound(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +59,7 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 		t.Fatalf("older %+v", older)
 	}
 	// Unknown credential for this account -> not found.
-	if _, err = s.ListDeliveryAttempts(ctx, u.AccountID, "out_missing", 10, 0); !errors.Is(err, ErrNotFound) {
+	if _, err = s.ListDeliveryAttempts(ctx, u.AccountID, "out_missing", 10, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("foreign cred err=%v", err)
 	}
 }
@@ -68,34 +72,36 @@ func TestDeliveryLogPruneKeepsNewestAndRecent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
 	m, _, err := s.CommitOutbound(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Insert more than the cap so the oldest rows are pruned.
-	for i := 0; i < maxDeliveryLogPerAccount+10; i++ {
+	for i := 0; i < testDeliveryLogCap+10; i++ {
 		if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", cred.ID, "brevo"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := deliveryLogCount(t, s, u.AccountID); n != maxDeliveryLogPerAccount {
-		t.Fatalf("after prune count %d, want %d", n, maxDeliveryLogPerAccount)
+	if n := deliveryLogCount(t, s, u.AccountID); n != testDeliveryLogCap {
+		t.Fatalf("after prune count %d, want %d", n, testDeliveryLogCap)
 	}
 	// A further insert still keeps the count at the cap (the oldest row is
 	// pruned even though it is recent, because the count bound applies).
 	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", cred.ID, "brevo"); err != nil {
 		t.Fatal(err)
 	}
-	if n := deliveryLogCount(t, s, u.AccountID); n != maxDeliveryLogPerAccount {
-		t.Fatalf("after recent insert count %d, want %d", n, maxDeliveryLogPerAccount)
+	if n := deliveryLogCount(t, s, u.AccountID); n != testDeliveryLogCap {
+		t.Fatalf("after recent insert count %d, want %d", n, testDeliveryLogCap)
 	}
 }
 
-func deliveryLogCount(t *testing.T, s *Store, accountID string) int {
+func deliveryLogCount(t *testing.T, s *store.Store, accountID string) int {
 	t.Helper()
+	db := rawDB(t, s.Path())
+	defer db.Close()
 	var n int
-	if err := s.read.QueryRowContext(context.Background(), `SELECT count(*) FROM outbound_delivery_log WHERE account_id=?`, accountID).Scan(&n); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM outbound_delivery_log WHERE account_id=?`, accountID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -109,7 +115,7 @@ func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
 	m, _, err := s.CommitOutbound(ctx, rec)
 	if err != nil {
 		t.Fatal(err)
