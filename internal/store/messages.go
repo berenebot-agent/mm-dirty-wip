@@ -41,6 +41,7 @@ type OutboundRecord struct {
 	ThreadID                                             string
 	IdemKey                                              string
 	LastError                                            string
+	DraftID                                              string
 	Attachments                                          []AttachmentInput
 }
 
@@ -105,11 +106,19 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
-	if err = tx.Commit(); err != nil {
+	m, err := s.getMessageTx(ctx, tx, r.Inbox.AccountID, id)
+	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
-	m, err := s.GetMessageByID(ctx, r.Inbox.AccountID, id)
-	return m, ev, false, err
+	if err = tx.Commit(); err != nil {
+		// The commit may have reached disk before reporting an error. Only
+		// treat it as failed if the row is genuinely absent.
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), r.Inbox.AccountID, id); gerr == nil {
+			return existing, ev, false, nil
+		}
+		return model.Message{}, model.Event{}, false, err
+	}
+	return m, ev, false, nil
 }
 
 func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply string, refs []string) (string, error) {
@@ -199,6 +208,16 @@ const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.directi
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+// getMessageTx reads a message on the caller's transaction, so a write path can
+// return the exact committed row without a fallible read after commit.
+func (s *Store) getMessageTx(ctx context.Context, tx *sql.Tx, accountID, id string) (model.Message, error) {
+	m, err := scanMessage(tx.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
 	if err == sql.ErrNoRows {
 		return m, ErrNotFound
 	}
@@ -363,23 +382,30 @@ func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id st
 	return err
 }
 func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
-	m, err := s.GetMessage(ctx, p, id)
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	defer tx.Rollback()
+	// Load and authorise inside the serialized write transaction so a
+	// concurrent duplicate delete cannot subtract storage twice or emit a
+	// second event.
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
 	if err != nil {
 		return "", 0, model.Event{}, err
 	}
 	if !p.CanAssist(m.InboxID) {
 		return "", 0, model.Event{}, ErrForbidden
 	}
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return "", 0, model.Event{}, err
-	}
-	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, id); err != nil {
 		return "", 0, model.Event{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM messages WHERE id=?`, id); err != nil {
+	res, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id=? AND account_id=?`, id, p.AccountID)
+	if err != nil {
 		return "", 0, model.Event{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return "", 0, model.Event{}, ErrNotFound
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, m.SizeBytes, p.AccountID); err != nil {
 		return "", 0, model.Event{}, err

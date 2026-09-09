@@ -701,9 +701,13 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, v)
 	case http.MethodDelete:
-		if err := s.Service.Store.DeleteDraft(r.Context(), p, id); err != nil {
+		paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, id)
+		if err != nil {
 			mapStoreError(w, err)
 			return
+		}
+		for _, path := range paths {
+			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 		}
 		w.WriteHeader(204)
 	}
@@ -723,35 +727,9 @@ func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, store.ErrForbidden)
 		return
 	}
-	// Load draft attachments from disk into the send input.
-	atts, err := s.Service.Store.ListDraftAttachments(r.Context(), p, id)
+	res, err := s.Service.SendDraft(r.Context(), p, id, app.SendInput{InboxID: d.InboxID, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
-		return
-	}
-	sendAtts := make([]app.SendAttachment, 0, len(atts))
-	for _, a := range atts {
-		data, rerr := os.ReadFile(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(a.RawPath)))
-		if rerr != nil {
-			mapStoreError(w, rerr)
-			return
-		}
-		sendAtts = append(sendAtts, app.SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
-	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: d.InboxID, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML, Attachments: sendAtts}, idemKey(r))
-	if err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	// Delete the draft and its attachment files now that it is queued.
-	paths, derr := s.Service.Store.DeleteDraftAttachments(r.Context(), p, id)
-	if derr == nil {
-		for _, path := range paths {
-			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
-		}
-	}
-	if derr = s.Service.Store.DeleteDraft(r.Context(), p, id); derr != nil {
-		mapStoreError(w, derr)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": res.Message})
@@ -848,14 +826,25 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := principal(r)
+	// Revoking, rotating, or rescoping the credential cancels this stream.
+	scopeCtx, unregister := s.Service.Hub.RegisterScope(p.Scopes()...)
+	defer unregister()
+	ctx, cancelCtx := context.WithCancel(r.Context())
+	defer cancelCtx()
+	stop := context.AfterFunc(scopeCtx, cancelCtx)
+	defer stop()
 	after := store.ParseCursor(r.URL.Query().Get("after"))
 	inbox := r.URL.Query().Get("inbox")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	_, ch, cancel := s.Service.Hub.Subscribe(32)
-	defer cancel()
+	_, ch, cancelSub := s.Service.Hub.Subscribe(32)
+	defer cancelSub()
 	bw := bufio.NewWriter(w)
+	// Flush an initial comment so clients know the stream is established.
+	fmt.Fprint(bw, ": connected\n\n")
+	_ = bw.Flush()
+	fl.Flush()
 	send := func(e model.Event) error {
 		b, _ := json.Marshal(e)
 		if _, err := fmt.Fprintf(bw, "id: %s\nevent: %s\ndata: %s\n\n", e.Cursor, e.Type, b); err != nil {
@@ -869,7 +858,7 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	for {
-		items, err := s.Service.Store.ListEvents(r.Context(), p, after, inbox, 500)
+		items, err := s.Service.Store.ListEvents(ctx, p, after, inbox, 500)
 		if err != nil {
 			return
 		}
@@ -885,7 +874,7 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(bw, ": keepalive\n\n")
 			_ = bw.Flush()
 			fl.Flush()
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -1122,6 +1111,7 @@ func (s *Server) apiKey(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
+	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	w.WriteHeader(204)
 }
 
@@ -1339,6 +1329,7 @@ func (s *Server) apiHermesDelete(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
+	s.Service.Hub.CancelScope("hrm:" + r.PathValue("id"))
 	w.WriteHeader(204)
 }
 

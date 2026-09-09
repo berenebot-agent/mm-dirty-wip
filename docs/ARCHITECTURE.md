@@ -76,8 +76,6 @@ listeners run in the same process and share the same store.
 
   /web
   /config
-
-/migrations
 /web
 ```
 

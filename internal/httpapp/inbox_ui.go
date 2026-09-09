@@ -250,25 +250,20 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no draft to send", 400)
 			return
 		}
+		// Preserve the draft's reply linkage while using the edited form fields.
+		d, derr := s.Service.Store.GetDraft(r.Context(), p, draftID)
+		if derr != nil {
+			http.Error(w, derr.Error(), 400)
+			return
+		}
 		in.InboxID = box.ID
-		if _, err := s.Service.Send(r.Context(), p, in, ""); err != nil {
+		if in.ReplyToMessageID == "" {
+			in.ReplyToMessageID = d.ReplyToMessageID
+		}
+		if _, err := s.Service.SendDraft(r.Context(), p, draftID, in, ""); err != nil {
 			s.Log.Error("draft send: enqueue failed", "draft_id", draftID, "inbox_id", box.ID, "error", err)
 			http.Error(w, err.Error(), 400)
 			return
-		}
-		// Delete the draft and its attachments. The message is already queued,
-		// so a failure here must not leave the draft behind silently.
-		paths, derr := s.Service.Store.DeleteDraftAttachments(r.Context(), p, draftID)
-		if derr != nil {
-			s.Log.Error("draft send: delete attachments", "draft_id", draftID, "error", derr)
-		}
-		for _, path := range paths {
-			if rerr := os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path))); rerr != nil {
-				s.Log.Warn("draft send: remove attachment file", "draft_id", draftID, "path", path, "error", rerr)
-			}
-		}
-		if derr = s.Service.Store.DeleteDraft(r.Context(), p, draftID); derr != nil {
-			s.Log.Error("draft send: delete draft", "draft_id", draftID, "error", derr)
 		}
 		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
 		return
@@ -323,13 +318,13 @@ func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	draftID := r.PathValue("draftId")
-	paths, _ := s.Service.Store.DeleteDraftAttachments(r.Context(), p, draftID)
-	for _, path := range paths {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
-	}
-	if err = s.Service.Store.DeleteDraft(r.Context(), p, draftID); err != nil {
+	paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, draftID)
+	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	}
+	for _, path := range paths {
+		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Draft+deleted", 303)
 }

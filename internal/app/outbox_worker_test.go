@@ -123,7 +123,7 @@ func TestDraftSendFlow(t *testing.T) {
 		t.Fatalf("draft still present: %v", err)
 	}
 	// Deliver and confirm the attachment carried over.
-	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	msgAtts, err := svc.Store.ListAttachments(ctx, p, res.Message.ID)

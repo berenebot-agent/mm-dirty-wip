@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -202,30 +201,34 @@ func TestPurgeDomainCleansStorageAndFiles(t *testing.T) {
 
 func TestIdempotencyReserveIsAtomic(t *testing.T) {
 	ctx := context.Background()
-	s, u, _, _ := testStore(t)
+	s, u, _, b := testStore(t)
 	// First caller wins the reservation.
-	claimed, _, _, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1")
+	claimed, _, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1", b[0].ID)
 	if err != nil || !claimed {
 		t.Fatalf("first reserve claimed=%v err=%v", claimed, err)
 	}
 	// Second concurrent caller must get a conflict (in-flight).
-	claimed, _, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-1")
+	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-1", b[0].ID)
 	if err == nil || !errors.Is(err, ErrConflict) {
 		t.Fatalf("second reserve err=%v", err)
 	}
-	// Complete it, then a new reserve returns the stored result.
-	if err = s.IdempotencyComplete(ctx, u.AccountID, "key-1", "msg_1", map[string]any{"ok": true}); err != nil {
+	// Enqueueing the message completes the key in the same transaction.
+	m, _, err := s.CommitOutbound(ctx, OutboundRecord{Inbox: b[0], Provider: "smtp", RFCMessageID: "<idem@test>",
+		From: model.Address{Address: b[0].Address}, To: []string{"friend@example.net"}, Subject: "s", Text: "b",
+		RawPath: "messages/idem.eml", SizeBytes: 10, IdemKey: "key-1"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, mid, res, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1")
-	if err != nil || claimed || mid != "msg_1" || !strings.Contains(res, "ok") {
-		t.Fatalf("completed reserve claimed=%v mid=%q res=%q err=%v", claimed, mid, res, err)
+	// A new reserve now replays the existing message.
+	claimed, mid, err := s.IdempotencyReserve(ctx, u.AccountID, "key-1", b[0].ID)
+	if err != nil || claimed || mid != m.ID {
+		t.Fatalf("completed reserve claimed=%v mid=%q err=%v", claimed, mid, err)
 	}
 	// Release a pending reservation so a failed send can retry.
 	if err = s.IdempotencyRelease(ctx, u.AccountID, "key-2"); err != nil {
 		t.Fatal(err)
 	}
-	claimed, _, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-2")
+	claimed, _, err = s.IdempotencyReserve(ctx, u.AccountID, "key-2", b[0].ID)
 	if err != nil || !claimed {
 		t.Fatalf("release+reserve claimed=%v err=%v", claimed, err)
 	}

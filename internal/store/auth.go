@@ -247,6 +247,7 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 	}
 	p.Admin = admin != 0
 	p.ViaSession = true
+	p.SessionHash = auth.HashToken(token)
 	p.MailboxRoles = map[string]string{}
 	if !p.Admin {
 		roles, _ := s.userMailboxRoles(ctx, p.UserID)
@@ -334,32 +335,33 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 	return p, nil
 }
 func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIKey, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,name,key_prefix,is_admin,created_at FROM api_keys WHERE account_id=? AND revoked_at IS NULL ORDER BY created_at DESC`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.is_admin,k.created_at,r.inbox_id,r.role FROM api_keys k LEFT JOIN api_key_mailbox_roles r ON r.api_key_id=k.id WHERE k.account_id=? AND k.revoked_at IS NULL ORDER BY k.created_at DESC, k.id`, accountID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []model.APIKey
+	index := map[string]int{}
 	for rows.Next() {
 		var k model.APIKey
 		var admin int
 		var created string
-		if err = rows.Scan(&k.ID, &k.Name, &k.Prefix, &admin, &created); err != nil {
+		var inboxID, role sql.NullString
+		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &admin, &created, &inboxID, &role); err != nil {
 			return nil, err
 		}
-		k.Admin = admin != 0
-		k.CreatedAt = parseTime(created)
-		k.Roles = map[string]string{}
-		rr, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM api_key_mailbox_roles WHERE api_key_id=?`, k.ID)
-		if err == nil {
-			for rr.Next() {
-				var i, r string
-				_ = rr.Scan(&i, &r)
-				k.Roles[i] = r
-			}
-			rr.Close()
+		idx, ok := index[k.ID]
+		if !ok {
+			k.Admin = admin != 0
+			k.CreatedAt = parseTime(created)
+			k.Roles = map[string]string{}
+			out = append(out, k)
+			idx = len(out) - 1
+			index[k.ID] = idx
 		}
-		out = append(out, k)
+		if inboxID.Valid && role.Valid {
+			out[idx].Roles[inboxID.String] = role.String
+		}
 	}
 	return out, rows.Err()
 }

@@ -79,7 +79,7 @@ func TestAPIDraftSendAndOutbox(t *testing.T) {
 	if len(outbox) != 1 {
 		t.Fatalf("outbox len %d", len(outbox))
 	}
-	if err = svc.Deliver(ctx, u.AccountID, outbox[0].ID); err != nil {
+	if err = svc.Deliver(ctx, u.AccountID, outbox[0].ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {

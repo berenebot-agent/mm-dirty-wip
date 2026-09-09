@@ -13,10 +13,20 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if !p.CanAssist(d.InboxID) {
 		return model.Draft{}, ErrForbidden
 	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	defer tx.Rollback()
+	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)); err != nil {
+		return model.Draft{}, err
+	}
 	id := idgen.New("drf")
 	now := nowText()
-	_, err := s.write.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, now)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, now); err != nil {
+		return model.Draft{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return model.Draft{}, err
 	}
 	d.ID = id
@@ -126,9 +136,17 @@ func (s *Store) CountDrafts(ctx context.Context, p model.Principal, inboxID stri
 }
 
 func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {
-	old, err := s.GetDraft(ctx, p, d.ID)
+	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Draft{}, err
+	}
+	defer tx.Rollback()
+	old, err := getDraftTx(ctx, tx, p.AccountID, d.ID)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	if !p.CanAssist(old.InboxID) {
+		return model.Draft{}, ErrForbidden
 	}
 	if d.InboxID == "" {
 		d.InboxID = old.InboxID
@@ -136,22 +154,54 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if d.InboxID != old.InboxID && !p.CanAssist(d.InboxID) {
 		return model.Draft{}, ErrForbidden
 	}
-	now := nowText()
-	_, err = s.write.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, d.ID, p.AccountID)
-	if err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)-draftBodyBytes(old)); err != nil {
 		return model.Draft{}, err
 	}
-	return s.GetDraft(ctx, p, d.ID)
+	now := nowText()
+	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, d.ID, p.AccountID); err != nil {
+		return model.Draft{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Draft{}, err
+	}
+	d.CreatedAt = old.CreatedAt
+	d.UpdatedAt = parseTime(now)
+	return d, nil
 }
-func (s *Store) DeleteDraft(ctx context.Context, p model.Principal, id string) error {
-	d, err := s.GetDraft(ctx, p, id)
+
+// DeleteDraftCascade removes a draft and its attachment rows and returns the
+// attachment file paths so the caller can remove them from disk.
+func (s *Store) DeleteDraftCascade(ctx context.Context, p model.Principal, id string) ([]string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	defer tx.Rollback()
+	d, err := getDraftTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return nil, err
 	}
 	if !p.CanAssist(d.InboxID) {
-		return ErrForbidden
+		return nil, ErrForbidden
 	}
-	_, err = s.write.ExecContext(ctx, `DELETE FROM drafts WHERE id=?`, id)
+	paths, attTotal, err := draftAttachmentPathsTx(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
+		return nil, err
+	}
+	if err := adjustStorageTx(ctx, tx, p.AccountID, -(draftBodyBytes(d) + attTotal)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+func (s *Store) DeleteDraft(ctx context.Context, p model.Principal, id string) error {
+	_, err := s.DeleteDraftCascade(ctx, p, id)
 	return err
 }
 func cleanSubject(v string) string { return strings.TrimSpace(v) }

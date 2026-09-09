@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -120,7 +119,7 @@ func (s *Store) OutboundCredentialForMessage(ctx context.Context, accountID, mes
 // outbound provider yet: the message stays queued and delivers once a provider
 // is assigned.
 func (s *Store) HoldPending(ctx context.Context, accountID, id, reason string, next time.Time) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=? WHERE id=? AND account_id=? AND status='pending'`, reason, timeText(next), id, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending'`, reason, timeText(next), id, accountID)
 	if err != nil {
 		return err
 	}
@@ -136,6 +135,24 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		return model.Message{}, model.Event{}, err
 	}
 	defer tx.Rollback()
+	// Consume the draft first so its freed bytes count against the quota check
+	// and the draft can never be double-counted alongside the sent message.
+	if r.DraftID != "" {
+		d, err := getDraftTx(ctx, tx, r.Inbox.AccountID, r.DraftID)
+		if err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+		_, attTotal, err := draftAttachmentPathsTx(ctx, tx, r.DraftID)
+		if err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM drafts WHERE id=? AND account_id=?`, r.DraftID, r.Inbox.AccountID); err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+		if err = adjustStorageTx(ctx, tx, r.Inbox.AccountID, -(draftBodyBytes(d) + attTotal)); err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+	}
 	var quota, used int64
 	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=?`, r.Inbox.AccountID).Scan(&quota, &used); err != nil {
 		return model.Message{}, model.Event{}, err
@@ -181,11 +198,24 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	if err = tx.Commit(); err != nil {
+	// Record the key-to-message mapping as part of enqueueing, so a retry with
+	// the same key replays the queued message regardless of delivery outcome.
+	if r.IdemKey != "" {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,'done',?) ON CONFLICT(account_id,idem_key) DO UPDATE SET message_id=excluded.message_id,inbox_id=excluded.inbox_id,result_json=excluded.result_json,status='done'`, r.Inbox.AccountID, r.IdemKey, id, r.Inbox.ID, "{}", now); err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+	}
+	m, err := s.getMessageTx(ctx, tx, r.Inbox.AccountID, id)
+	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	m, err := s.GetMessageByID(ctx, r.Inbox.AccountID, id)
-	return m, model.Event{}, err
+	if err = tx.Commit(); err != nil {
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), r.Inbox.AccountID, id); gerr == nil {
+			return existing, model.Event{}, nil
+		}
+		return model.Message{}, model.Event{}, err
+	}
+	return m, model.Event{}, nil
 }
 
 // MarkSent transitions a pending outbound message to sent after the provider
@@ -206,7 +236,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, model.Event{}, err
 	}
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "sent", providerMessageID, ""); err != nil {
@@ -216,11 +246,17 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	if err = tx.Commit(); err != nil {
+	m, err := s.getMessageTx(ctx, tx, accountID, id)
+	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	m, err := s.GetMessageByID(ctx, accountID, id)
-	return m, ev, err
+	if err = tx.Commit(); err != nil {
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
+			return existing, ev, nil
+		}
+		return model.Message{}, model.Event{}, err
+	}
+	return m, ev, nil
 }
 
 // MarkFailed records a failed delivery attempt. If attempts remain, the message
@@ -247,44 +283,67 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	} else {
 		next = timeText(nextAttemptAt)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=? WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
 		return model.Message{}, err
 	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "failed", "", errText); err != nil {
 		return model.Message{}, err
 	}
-	if err = tx.Commit(); err != nil {
+	m, err := s.getMessageTx(ctx, tx, accountID, id)
+	if err != nil {
 		return model.Message{}, err
 	}
-	return s.GetMessageByID(ctx, accountID, id)
+	if err = tx.Commit(); err != nil {
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
+			return existing, nil
+		}
+		return model.Message{}, err
+	}
+	return m, nil
 }
 
 // ClaimNextPending atomically claims the next due pending message for delivery.
-// It returns the message id, or "" if none is due.
-func (s *Store) ClaimNextPending(ctx context.Context, now time.Time) (string, error) {
+// It returns the message id, or "" if none is due. The claim is separate from
+// retry scheduling: next_attempt_at is left untouched and only the claim lease
+// is recorded, so a crash can be recovered without waiting 24 hours.
+func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner string, lease time.Duration) (string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now)).Scan(&id)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	// Mark as in-flight so a concurrent claim (or a restart) does not pick it
-	// up again while the worker is delivering. next_attempt_at is set far in the
-	// future; MarkSent/MarkFailed overwrite it.
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET next_attempt_at=? WHERE id=?`, timeText(now.Add(24*time.Hour)), id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET claim_owner=?,claim_expires_at=? WHERE id=?`, owner, timeText(now.Add(lease)), id); err != nil {
 		return "", err
 	}
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+// RecoverAbandonedClaims clears claims left by a previous process. Under the
+// single-process model every outstanding claim at startup is abandoned.
+func (s *Store) RecoverAbandonedClaims(ctx context.Context) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!=''`)
+	return err
+}
+
+// MessageClaimOwner returns the current claim owner for a message.
+func (s *Store) MessageClaimOwner(ctx context.Context, accountID, id string) (string, error) {
+	var owner string
+	err := s.read.QueryRowContext(ctx, `SELECT claim_owner FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&owner)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return owner, err
 }
 
 // RequeueFailed resets a failed message to pending for a manual retry.
@@ -299,7 +358,7 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 	if !p.CanOwn(m.InboxID) {
 		return ErrForbidden
 	}
-	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, id, p.AccountID)
+	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, id, p.AccountID)
 	return err
 }
 
@@ -389,66 +448,43 @@ func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id s
 	return s.DeleteMessage(ctx, p, id)
 }
 
-func (s *Store) IdempotencyGet(ctx context.Context, accountID, key string) (string, string, bool, error) {
-	var mid, res string
-	err := s.read.QueryRowContext(ctx, `SELECT message_id,result_json FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='done'`, accountID, key).Scan(&mid, &res)
-	if err == sql.ErrNoRows {
-		return "", "", false, nil
-	}
-	return mid, res, err == nil, err
-}
-
 // IdempotencyReserve atomically claims an idempotency key for an in-flight
 // send. It returns (true, "", nil) if this caller won the reservation and may
-// proceed to send. It returns (false, messageID, resultJSON, nil) if the key was
-// already completed, so the caller can return the stored result. It returns
-// (false, "", "", ErrConflict) if another request currently holds the
-// reservation (in-flight), which the caller should treat as a retryable
-// conflict rather than sending again.
-func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key string) (bool, string, string, error) {
+// proceed to enqueue. It returns (false, messageID, nil) if the key was already
+// completed, so the caller can return the existing message. It returns
+// (false, "", ErrConflict) if another request currently holds the reservation
+// (in-flight), which the caller should treat as a retryable conflict.
+func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID string) (bool, string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return false, "", "", err
+		return false, "", err
 	}
 	defer tx.Rollback()
-	var mid, res, status string
-	err = tx.QueryRowContext(ctx, `SELECT message_id,result_json,status FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &res, &status)
+	var mid, status string
+	err = tx.QueryRowContext(ctx, `SELECT message_id,status FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status)
 	if err == nil {
 		if status == "done" {
-			return false, mid, res, nil
+			return false, mid, nil
 		}
 		// pending: another request is in flight.
-		return false, "", "", ErrConflict
+		return false, "", ErrConflict
 	}
 	if err != sql.ErrNoRows {
-		return false, "", "", err
+		return false, "", err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,result_json,status,created_at) VALUES(?,?,?,?,?,?)`, accountID, key, "", "", "pending", nowText()); err != nil {
-		return false, "", "", err
+	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_idempotency(account_id,idem_key,message_id,inbox_id,result_json,status,created_at) VALUES(?,?,?,?,?,?,?)`, accountID, key, "", inboxID, "", "pending", nowText()); err != nil {
+		return false, "", err
 	}
 	if err = tx.Commit(); err != nil {
-		return false, "", "", err
+		return false, "", err
 	}
-	return true, "", "", nil
-}
-
-// IdempotencyComplete marks a reserved key as done with its result.
-func (s *Store) IdempotencyComplete(ctx context.Context, accountID, key, messageID string, result any) error {
-	b, _ := json.Marshal(result)
-	_, err := s.write.ExecContext(ctx, `UPDATE outbound_idempotency SET message_id=?,result_json=?,status='done' WHERE account_id=? AND idem_key=?`, messageID, string(b), accountID, key)
-	return err
+	return true, "", nil
 }
 
 // IdempotencyRelease clears a pending reservation so a failed send can be
 // retried with the same key.
 func (s *Store) IdempotencyRelease(ctx context.Context, accountID, key string) error {
 	_, err := s.write.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='pending'`, accountID, key)
-	return err
-}
-
-func (s *Store) IdempotencyPut(ctx context.Context, accountID, key, messageID string, result any) error {
-	b, _ := json.Marshal(result)
-	_, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO outbound_idempotency(account_id,idem_key,message_id,result_json,status,created_at) VALUES(?,?,?,?,?,?)`, accountID, key, messageID, string(b), "done", nowText())
 	return err
 }
 

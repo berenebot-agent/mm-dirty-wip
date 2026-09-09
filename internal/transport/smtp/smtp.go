@@ -38,6 +38,7 @@ func SetHosted(hosted bool) { netutil.SetHosted(hosted) }
 
 func (outboundTransport) Name() string        { return "smtp" }
 func (outboundTransport) Description() string { return "SMTP" }
+func (outboundTransport) PreferRawMIME() bool { return true }
 func (outboundTransport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
 		{Name: "host", Label: "SMTP host", Type: "text", Required: true, Placeholder: "smtp.example.com"},

@@ -11,7 +11,7 @@ Each phase should leave the application runnable and tested.
 - config loader
 - structured logging
 - SQLite driver with WAL, busy timeout, serialized writer and bounded read pool
-- migrations runner
+- migrations runner (versioned Go constants in `internal/store`)
 - `/healthz`
 - reverse-proxy-aware HTTP configuration
 - Dockerfile

@@ -245,9 +245,26 @@ type Principal struct {
 	AccountID    string
 	UserID       string
 	APIKeyID     string
+	SessionHash  string
 	Admin        bool
 	MailboxRoles map[string]string
 	ViaSession   bool
+}
+
+// Scopes returns the revocation scopes a live connection for this principal is
+// registered under, so revoking a credential can cancel it immediately.
+func (p Principal) Scopes() []string {
+	var scopes []string
+	if p.APIKeyID != "" {
+		scopes = append(scopes, "key:"+p.APIKeyID)
+	}
+	if p.SessionHash != "" {
+		scopes = append(scopes, "sess:"+p.SessionHash)
+	}
+	if p.UserID != "" {
+		scopes = append(scopes, "user:"+p.UserID)
+	}
+	return scopes
 }
 
 func (p Principal) Role(inboxID string) string {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -380,6 +381,9 @@ type SendInput struct {
 	ReplyToMessageID   string           `json:"reply_to_message_id,omitempty"`
 	ForwardOfMessageID string           `json:"forward_of_message_id,omitempty"`
 	Attachments        []SendAttachment `json:"attachments,omitempty"`
+	// DraftID, when set, consumes the draft in the same transaction that
+	// enqueues the message. It is never accepted from API JSON.
+	DraftID string `json:"-"`
 }
 type SendResult struct {
 	Message           model.Message `json:"message"`
@@ -396,7 +400,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if idem != "" {
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
-		claimed, mid, res, rerr := s.Store.IdempotencyReserve(ctx, p.AccountID, idem)
+		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, p.AccountID, idem, in.InboxID)
 		if rerr != nil {
 			if errors.Is(rerr, store.ErrConflict) {
 				return SendResult{}, fmt.Errorf("idempotency key %q is already in flight", idem)
@@ -408,10 +412,12 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 			if gerr != nil {
 				return SendResult{}, gerr
 			}
-			var sr SendResult
-			_ = json.Unmarshal([]byte(res), &sr)
-			sr.Message = m
-			return sr, nil
+			// The key is account-wide, so a replay must be scoped to the
+			// mailbox it was used for and the caller must own that mailbox.
+			if m.InboxID != in.InboxID || !p.CanOwn(m.InboxID) {
+				return SendResult{}, store.ErrConflict
+			}
+			return SendResult{Message: m, ProviderMessageID: m.ProviderMessageID}, nil
 		}
 		// Release the reservation on any failure so a retry can re-send.
 		defer func() {
@@ -528,7 +534,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, Attachments: metadata})
+	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: cred.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -537,9 +543,53 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	return result, nil
 }
 
+// SendDraft enqueues a draft and consumes it atomically: the draft rows are
+// deleted in the same transaction as the message insert, and its attachment
+// files are removed afterwards. The caller supplies the message fields (which
+// may include unsaved edits); the draft's saved attachments are added here.
+func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID string, in SendInput, idem string) (SendResult, error) {
+	d, err := s.Store.GetDraft(ctx, p, draftID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	if !p.CanOwn(d.InboxID) {
+		return SendResult{}, store.ErrForbidden
+	}
+	if in.InboxID == "" {
+		in.InboxID = d.InboxID
+	}
+	if in.InboxID != d.InboxID {
+		return SendResult{}, store.ErrForbidden
+	}
+	atts, err := s.Store.ListDraftAttachments(ctx, p, draftID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	paths := make([]string, 0, len(atts))
+	for _, a := range atts {
+		data, rerr := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(a.RawPath)))
+		if rerr != nil {
+			return SendResult{}, rerr
+		}
+		in.Attachments = append(in.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
+		paths = append(paths, a.RawPath)
+	}
+	in.DraftID = draftID
+	res, err := s.Send(ctx, p, in, idem)
+	if err != nil {
+		return SendResult{}, err
+	}
+	// The draft rows were consumed with the enqueue; remove the files now.
+	for _, path := range paths {
+		_ = os.Remove(filepath.Join(s.Config.DataDir, filepath.FromSlash(path)))
+	}
+	return res, nil
+}
+
 // Deliver performs the actual provider send for a pending outbound message and
-// marks it sent or failed. It is called by the outbox worker.
-func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
+// marks it sent or failed. It is called by the outbox worker with the owner of
+// the claim so a stale worker cannot deliver a message re-claimed elsewhere.
+func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) error {
 	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
 	if err != nil {
 		return err
@@ -547,26 +597,39 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	if m.Direction != "outbound" || m.Status != "pending" {
 		return nil
 	}
+	if owner != "" {
+		current, err := s.Store.MessageClaimOwner(ctx, accountID, msgID)
+		if err != nil {
+			return err
+		}
+		if current != owner {
+			return fmt.Errorf("message %s is claimed by another worker", msgID)
+		}
+	}
+	// Outcome bookkeeping must survive cancellation of the delivery context but
+	// stay bounded, so a failed send is always recorded.
+	outcomeCtx, cancelOutcome := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelOutcome()
 	cred, err := s.Store.OutboundCredentialForMessage(ctx, m.AccountID, m.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNoProvider) {
-			return s.hold(ctx, m)
+			return s.hold(outcomeCtx, m)
 		}
-		return s.fail(ctx, m, err, "", "")
+		return s.fail(outcomeCtx, m, err, "", "")
 	}
 	cfg, err := s.DecryptOutboundCredential(cred)
 	if err != nil {
-		return s.fail(ctx, m, err, cred.ID, cred.Provider)
+		return s.fail(outcomeCtx, m, err, cred.ID, cred.Provider)
 	}
 	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath)))
 	if err != nil {
-		return s.fail(ctx, m, err, cred.ID, cred.Provider)
+		return s.fail(outcomeCtx, m, err, cred.ID, cred.Provider)
 	}
 	provider, ok := transport.LookupOutbound(cred.Provider)
 	if !ok {
-		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider), cred.ID, cred.Provider)
+		return s.fail(outcomeCtx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider), cred.ID, cred.Provider)
 	}
-	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
+	outbound := transport.OutboundMessage{
 		FromName:    m.From.Name,
 		FromAddress: m.From.Address,
 		To:          m.To,
@@ -579,16 +642,24 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 		InReplyTo:   m.InReplyTo,
 		References:  m.References,
 		RawMIME:     raw,
-	})
-	if err != nil {
-		return s.fail(ctx, m, err, cred.ID, cred.Provider)
 	}
-	sent, ev, err := s.Store.MarkSent(ctx, m.AccountID, m.ID, providerResult.ProviderMessageID, cred.ID, cred.Provider)
+	// HTTP adapters build their request from structured fields, so the
+	// attachment bytes must be reconstructed from the stored MIME. Transports
+	// that send the raw MIME directly (SMTP) skip this.
+	if !prefersRawMIME(provider) {
+		atts, aerr := s.deliveryAttachments(m)
+		if aerr != nil {
+			return s.fail(outcomeCtx, m, aerr, cred.ID, cred.Provider)
+		}
+		outbound.Attachments = atts
+	}
+	providerResult, err := provider.Send(ctx, cfg, outbound)
+	if err != nil {
+		return s.fail(outcomeCtx, m, err, cred.ID, cred.Provider)
+	}
+	_, ev, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, cred.ID, cred.Provider)
 	if err != nil {
 		return err
-	}
-	if m.IdemKey != "" {
-		_ = s.Store.IdempotencyComplete(ctx, m.AccountID, m.IdemKey, m.ID, SendResult{Message: sent, ProviderMessageID: providerResult.ProviderMessageID})
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)
 	s.Hub.Publish(ev)
@@ -763,13 +834,43 @@ func (s *Service) forwardAttachments(ctx context.Context, p model.Principal, m m
 		return nil, nil
 	}
 	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath))
-	out := make([]SendAttachment, 0, len(meta))
-	for _, a := range meta {
+	var out []SendAttachment
+	err = mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		var buf bytes.Buffer
-		if err := mailparse.ExtractAttachment(path, a.PartIndex, &buf); err != nil {
-			return nil, err
+		if _, err := io.Copy(&buf, r); err != nil {
+			return err
 		}
 		out = append(out, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func prefersRawMIME(t transport.OutboundTransport) bool {
+	if r, ok := t.(transport.RawMIMEProvider); ok {
+		return r.PreferRawMIME()
+	}
+	return false
+}
+
+// deliveryAttachments reconstructs attachment bytes from the persisted MIME so
+// HTTP adapters send the same content the stored message describes.
+func (s *Service) deliveryAttachments(m model.Message) ([]transport.OutboundAttachment, error) {
+	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath))
+	var out []transport.OutboundAttachment
+	err := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, r); err != nil {
+			return err
+		}
+		out = append(out, transport.OutboundAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }

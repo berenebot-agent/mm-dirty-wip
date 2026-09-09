@@ -30,6 +30,13 @@ type OutboundTransport interface {
 	Send(ctx context.Context, cfg map[string]any, m OutboundMessage) (OutboundResult, error)
 }
 
+// RawMIMEProvider is implemented by transports that build their request from
+// the raw MIME (e.g. SMTP) and therefore do not need structured attachments
+// reconstructed from it.
+type RawMIMEProvider interface {
+	PreferRawMIME() bool
+}
+
 type ConfigOption struct{ Value, Label string }
 
 type ConfigField struct {

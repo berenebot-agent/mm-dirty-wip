@@ -311,9 +311,9 @@ const migration007 = `ALTER TABLE domains ADD COLUMN outbound_credential_id TEXT
 // SQLite cannot DROP a column that carries a foreign key, so the accounts table
 // is rebuilt. No data is backfilled: existing domains start with no provider
 // and pause sending until one is assigned.
-const migration008 = `PRAGMA foreign_keys=OFF;
-BEGIN;
-CREATE TABLE accounts_new (
+// The transaction and foreign_keys pragma are owned by the migration runner
+// (internal/store/migrate.go); this constant contains only the schema work.
+const migration008 = `CREATE TABLE accounts_new (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   storage_quota_bytes INTEGER NOT NULL,
@@ -324,8 +324,6 @@ INSERT INTO accounts_new(id,name,storage_quota_bytes,storage_used_bytes,created_
   SELECT id,name,storage_quota_bytes,storage_used_bytes,created_at FROM accounts;
 DROP TABLE accounts;
 ALTER TABLE accounts_new RENAME TO accounts;
-COMMIT;
-PRAGMA foreign_keys=ON;
 `
 
 // migration009 moves inbound credentials from process environment into
@@ -352,8 +350,6 @@ const migration009 = `CREATE TABLE IF NOT EXISTS inbound_credentials (
 CREATE INDEX IF NOT EXISTS idx_inbound_credentials_account ON inbound_credentials(account_id);
 ALTER TABLE domains ADD COLUMN inbound_credential_id TEXT REFERENCES inbound_credentials(id) ON DELETE SET NULL;
 
-PRAGMA foreign_keys=OFF;
-BEGIN;
 CREATE TABLE messages_new (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -422,6 +418,17 @@ DROP TABLE blocked_messages;
 ALTER TABLE blocked_messages_new RENAME TO blocked_messages;
 CREATE INDEX IF NOT EXISTS idx_blocked_messages_inbox_created ON blocked_messages(inbox_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_blocked_messages_account_created ON blocked_messages(account_id, created_at DESC);
-COMMIT;
-PRAGMA foreign_keys=ON;
+`
+
+// migration010 scopes outbound idempotency keys to the mailbox they were used
+// for, so a key replayed against a different mailbox in the same account is
+// rejected. Existing rows are reconciled by reconcileIdempotency.
+const migration010 = `ALTER TABLE outbound_idempotency ADD COLUMN inbox_id TEXT NOT NULL DEFAULT '';`
+
+// migration011 separates an outbound claim (a worker's temporary ownership of
+// a pending message) from retry scheduling, so a crash no longer parks a
+// message for 24 hours. Claims carry an explicit owner and lease expiry.
+const migration011 = `ALTER TABLE messages ADD COLUMN claim_owner TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN claim_expires_at TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_messages_claim ON messages(status, claim_expires_at);
 `

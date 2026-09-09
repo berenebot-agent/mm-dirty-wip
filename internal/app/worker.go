@@ -4,25 +4,28 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"gatehouse-mail/internal/idgen"
 )
 
 // OutboxWorker delivers pending outbound messages in the background. It is a
 // single goroutine that polls the outbox on an interval, claiming one due
-// message at a time and delivering it. On startup it re-scans so messages left
-// pending by a previous process are resumed.
+// message at a time and delivering it. On startup it recovers claims left by a
+// previous process and re-scans so pending messages resume.
 type OutboxWorker struct {
 	svc    *Service
 	log    *slog.Logger
 	stop   chan struct{}
 	done   chan struct{}
 	period time.Duration
+	owner  string
 }
 
 func NewOutboxWorker(svc *Service, log *slog.Logger) *OutboxWorker {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), period: 5 * time.Second}
+	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), period: 5 * time.Second, owner: idgen.New("wrk")}
 }
 
 // Start launches the worker loop. It returns immediately.
@@ -41,6 +44,10 @@ func (w *OutboxWorker) Stop() {
 
 func (w *OutboxWorker) run() {
 	defer close(w.done)
+	// Under the single-process model any outstanding claim is abandoned.
+	if err := w.svc.Store.RecoverAbandonedClaims(context.Background()); err != nil {
+		w.log.Error("outbox claim recovery", "error", err)
+	}
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
 	// Re-scan on startup so pending messages from a previous process resume.
@@ -56,24 +63,29 @@ func (w *OutboxWorker) run() {
 }
 
 func (w *OutboxWorker) deliverDue() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	for {
-		msgID, err := w.svc.Store.ClaimNextPending(ctx, time.Now().UTC())
+		// Each message gets its own deadline so one slow delivery cannot consume
+		// the whole loop's budget.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		msgID, err := w.svc.Store.ClaimNextPending(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
 		if err != nil {
+			cancel()
 			w.log.Error("outbox claim", "error", err)
 			return
 		}
 		if msgID == "" {
+			cancel()
 			return
 		}
 		accountID, err := w.svc.AccountIDForMessage(ctx, msgID)
 		if err != nil {
+			cancel()
 			w.log.Error("outbox account lookup", "message_id", msgID, "error", err)
 			continue
 		}
-		if err := w.svc.Deliver(ctx, accountID, msgID); err != nil {
+		if err := w.svc.Deliver(ctx, accountID, msgID, w.owner); err != nil {
 			w.log.Warn("outbox delivery failed", "message_id", msgID, "error", err)
 		}
+		cancel()
 	}
 }
