@@ -235,7 +235,7 @@ A capable agent should be able to begin with a base URL and API key.
 
 The hosted service provides:
 
-- hosted receiving addresses
+- BYO receiving (managed SaaS receiving addresses are deferred)
 - effectively unlimited logical inbox identities
 - incoming mail
 - modest account-level storage
@@ -270,7 +270,7 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures inbound Mailgun delivery and optional outbound credentials.
+The operator configures a receive path per domain (Mailgun or Cloudflare Worker) in the Admin UI, and optional outbound credentials. Inbound provider secrets are stored encrypted in the database rather than in the process environment.
 
 Self-hosted setup uses a first-run Admin bootstrap. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -280,17 +280,30 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 ### Inbound
 
-V1 uses Mailgun as the reference inbound transport.
+V1 supports Mailgun and Cloudflare Email Routing (via a Worker) as inbound transports.
 
 ```text
 Internet SMTP
     ↓
-Mailgun
+Mailgun or Cloudflare Email Routing
     ↓ HTTPS webhook
 Gatehouse Email
 ```
 
-One catch-all transport route can serve many logical inbox identities.
+One catch-all transport route can serve many logical inbox identities. Receive
+connections are account-owned, encrypted credentials; each domain selects one
+receive path. A domain with no receive path cannot accept mail. Inbound
+provider secrets are not read from the environment.
+
+Mailgun delivers raw MIME to `/internal/ingest/mailgun/raw-mime` (the suffix is
+protocol-significant) using its signed webhook fields. The Cloudflare Worker
+streams raw MIME to `/internal/ingest/cloudflare` with bearer authentication
+and envelope headers. In both cases the adapter authenticates before MIME is
+parsed or persisted.
+
+Delivery identity is scoped to the account, provider, canonical original
+envelope recipient, and provider delivery id, so retries are deduplicated even
+when credentials are replaced. A catch-all preserves the original recipient.
 
 For an unknown recipient, the domain's configured catch-all inbox receives the message when one is set. Otherwise the ingest endpoint returns a terminal rejection to the transport and records a minimal audit entry.
 
@@ -310,9 +323,9 @@ Domain setup documentation covers the provider DNS records required for receivin
 
 ### Transport extension
 
-The mailbox core consumes a normalized inbound-message interface, giving additional transports the same inbox and message semantics.
+The mailbox core consumes a normalized inbound-message interface plus an explicit authenticated binding, giving additional transports the same inbox and message semantics.
 
-Potential future adapters include direct SMTP/Maddy, Cloudflare Email Routing, SES inbound, and other webhook providers.
+Potential future adapters include direct SMTP/Maddy, SES inbound, and other webhook providers.
 
 ## 8. API direction
 

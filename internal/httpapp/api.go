@@ -1008,6 +1008,7 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Name                 string `json:"name"`
 			OutboundCredentialID string `json:"outbound_credential_id"`
+			InboundCredentialID  string `json:"inbound_credential_id"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -1022,6 +1023,14 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 				mapStoreError(w, err)
 				return
 			}
+		}
+		if in.InboundCredentialID != "" {
+			if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, v.ID, in.InboundCredentialID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.OutboundCredentialID != "" || in.InboundCredentialID != "" {
 			v, _ = s.Service.Store.GetDomain(r.Context(), p.AccountID, v.ID)
 		}
 		writeJSON(w, 201, v)
@@ -1038,6 +1047,7 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			CatchAllInboxID      *string `json:"catch_all_inbox_id"`
 			OutboundCredentialID *string `json:"outbound_credential_id"`
+			InboundCredentialID  *string `json:"inbound_credential_id"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -1050,6 +1060,12 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.OutboundCredentialID != nil {
 			if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, id, *in.OutboundCredentialID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.InboundCredentialID != nil {
+			if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, id, *in.InboundCredentialID); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -1169,6 +1185,110 @@ func (s *Server) apiOutboundDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
+
+func (s *Server) apiInbound(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		v, err := s.Service.Store.ListInboundCredentials(r.Context(), p.AccountID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		out := make([]map[string]any, 0, len(v))
+		for _, c := range v {
+			out = append(out, s.inboundCredentialView(c))
+		}
+		writeJSON(w, 200, out)
+	case http.MethodPost:
+		var in struct {
+			Name, Provider string
+			Config         map[string]any `json:"config"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		v, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, "", in.Name, in.Provider, in.Config)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 201, s.inboundCredentialView(v))
+	}
+}
+
+func (s *Server) apiInboundItem(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	id := r.PathValue("id")
+	switch r.Method {
+	case http.MethodPatch:
+		var in struct {
+			Name, Provider string
+			Config         map[string]any `json:"config"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		existing, err := s.Service.Store.GetInboundCredential(r.Context(), p.AccountID, id)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		name, provider := in.Name, in.Provider
+		if strings.TrimSpace(name) == "" {
+			name = existing.Name
+		}
+		if strings.TrimSpace(provider) == "" {
+			provider = existing.Provider
+		}
+		v, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, id, name, provider, in.Config)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, s.inboundCredentialView(v))
+	case http.MethodDelete:
+		if err := s.Service.Store.DeleteInboundCredential(r.Context(), p.AccountID, id); err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		w.WriteHeader(204)
+	}
+}
+
+// inboundCredentialView returns a credential with secret fields removed.
+func (s *Server) inboundCredentialView(c store.InboundCredential) map[string]any {
+	view := map[string]any{
+		"id":         c.ID,
+		"name":       c.Name,
+		"provider":   c.Provider,
+		"config":     map[string]any{},
+		"created_at": c.CreatedAt,
+		"updated_at": c.UpdatedAt,
+	}
+	if t, ok := transport.LookupInbound(c.Provider); ok {
+		if cfg, err := s.Service.DecryptInboundCredential(c); err == nil {
+			public := map[string]any{}
+			for _, f := range t.ConfigFields() {
+				if f.Secret {
+					continue
+				}
+				if v, ok := cfg[f.Name]; ok {
+					public[f.Name] = v
+				}
+			}
+			view["config"] = public
+		}
+	}
+	return view
+}
+
 func (s *Server) apiHermesEnroll(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !adminOnly(w, p) {
@@ -1223,12 +1343,18 @@ func (s *Server) apiHermesDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mailgunIngest(w http.ResponseWriter, r *http.Request) {
-	// Compat: the legacy Mailgun route predates the generic inbound path.
 	s.ingestProvider(w, r, "mailgun")
 }
 
 func (s *Server) ingestInbound(w http.ResponseWriter, r *http.Request) {
-	s.ingestProvider(w, r, r.PathValue("provider"))
+	provider := r.PathValue("provider")
+	// The legacy /internal/ingest/mailgun alias was removed. Mailgun must use
+	// the raw-MIME endpoint, whose suffix is protocol-significant.
+	if provider == "mailgun" {
+		http.NotFound(w, r)
+		return
+	}
+	s.ingestProvider(w, r, provider)
 }
 
 func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider string) {
@@ -1290,12 +1416,14 @@ func isTerminalInboundError(err error) bool {
 		"parse MIME:",
 		"multipart without boundary",
 		"too many multipart parts",
+		"too many form fields",
+		"duplicate field",
+		"multiple body-mime parts",
+		"form field too large",
+		"delivery id too long",
+		"empty message",
 		"too many mime parts",
 		"mime nesting too deep",
-		"invalid worker payload",
-		"recipient required",
-		"raw_mime_b64 required",
-		"invalid raw_mime_b64",
 	} {
 		if strings.HasPrefix(msg, prefix) {
 			return true

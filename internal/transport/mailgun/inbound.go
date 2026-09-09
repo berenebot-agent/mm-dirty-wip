@@ -1,6 +1,7 @@
 package mailgun
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -18,6 +20,8 @@ import (
 	"gatehouse-mail/internal/transport"
 )
 
+// InboundForm holds the Mailgun webhook fields the adapter consumes. Auth
+// material (Timestamp/Token/Signature) stays internal to this package.
 type InboundForm struct {
 	Timestamp         string
 	Token             string
@@ -34,152 +38,246 @@ type Transport struct{}
 
 func init() { transport.RegisterInbound(Transport{}) }
 
-func (Transport) Name() string { return "mailgun" }
+func (Transport) Name() string        { return "mailgun" }
+func (Transport) Description() string { return "Mailgun" }
+func (Transport) ConfigFields() []transport.ConfigField {
+	return []transport.ConfigField{
+		{Name: "signing_key", Label: "Webhook signing key", Type: "password", Required: true, Secret: true, Placeholder: "Mailgun HTTP webhook signing key"},
+	}
+}
 
-func (Transport) Parse(r *http.Request, tmpPath string, maxBytes int64) (transport.InboundMessage, error) {
-	form, err := ParseInboundRequest(r, tmpPath, maxBytes)
+// Receive authenticates the Mailgun webhook, stages the raw MIME to tmpPath and
+// returns the binding it verified. The canonical envelope recipient selects the
+// domain and its assigned signing key.
+func (Transport) Receive(ctx context.Context, r *http.Request, resolver transport.BindingResolver, tmpPath string, maxBytes int64) (transport.InboundMessage, transport.InboundBinding, error) {
+	ct := r.Header.Get("Content-Type")
+	media, params, _ := mime.ParseMediaType(ct)
+	var (
+		form    InboundForm
+		binding transport.InboundBinding
+		err     error
+	)
+	switch {
+	case media == "multipart/form-data":
+		form, binding, err = receiveMultipart(ctx, r, resolver, params["boundary"], tmpPath, maxBytes)
+	case media == "application/x-www-form-urlencoded" || media == "":
+		form, binding, err = receiveURLEncoded(ctx, r, resolver, tmpPath, maxBytes)
+	default:
+		return transport.InboundMessage{}, transport.InboundBinding{}, fmt.Errorf("unsupported content type %s", media)
+	}
 	if err != nil {
-		return transport.InboundMessage{}, err
+		return transport.InboundMessage{}, transport.InboundBinding{}, err
 	}
 	return transport.InboundMessage{
 		Provider:          "mailgun",
-		Recipient:         form.Recipient,
+		Recipient:         binding.Recipient,
 		EnvelopeFrom:      form.Sender,
 		RawPath:           form.RawPath,
 		Size:              form.Size,
 		DeliveryID:        form.Token,
 		ProviderMessageID: form.ProviderMessageID,
-		Timestamp:         form.Timestamp,
-		Token:             form.Token,
-		Signature:         form.Signature,
-	}, nil
+	}, binding, nil
 }
 
-func (Transport) Verify(_ *http.Request, msg transport.InboundMessage, secret string) error {
-	if !VerifySignature(secret, msg.Timestamp, msg.Token, msg.Signature) {
-		return transport.ErrInboundUnauthorized
+// verifyBinding resolves the recipient's receive connection and checks the
+// Mailgun HMAC. The signature covers timestamp+token, not the recipient or MIME.
+func verifyBinding(ctx context.Context, resolver transport.BindingResolver, form InboundForm) (transport.InboundBinding, error) {
+	if strings.TrimSpace(form.Recipient) == "" {
+		return transport.InboundBinding{}, fmt.Errorf("recipient missing")
 	}
-	return nil
-}
-
-func VerifySignature(signingKey, timestamp, token, signature string) bool {
-	if signingKey == "" || timestamp == "" || token == "" || signature == "" {
-		return false
-	}
-	ts, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64)
+	recipient := canonicalRecipient(form.Recipient)
+	binding, err := resolver.ResolveInboundBinding(ctx, "mailgun", recipient)
 	if err != nil {
-		return false
+		return transport.InboundBinding{}, err
 	}
-	delta := time.Since(time.Unix(ts, 0))
-	if delta < -15*time.Minute || delta > 15*time.Minute {
-		return false
+	key, _ := binding.Config["signing_key"].(string)
+	if !VerifySignature(key, form.Timestamp, form.Token, form.Signature) {
+		return transport.InboundBinding{}, transport.ErrInboundUnauthorized
 	}
-	mac := hmac.New(sha256.New, []byte(signingKey))
-	_, _ = mac.Write([]byte(timestamp + token))
-	want := mac.Sum(nil)
-	got, err := hex.DecodeString(strings.TrimSpace(signature))
-	return err == nil && hmac.Equal(want, got)
+	return binding, nil
 }
 
-func ParseInboundRequest(r *http.Request, tmpPath string, maxBytes int64) (InboundForm, error) {
-	var out InboundForm
-	ct := r.Header.Get("Content-Type")
-	media, params, _ := mime.ParseMediaType(ct)
-	if media == "multipart/form-data" {
-		mr := multipartReader(r, params["boundary"])
-		if mr == nil {
-			return out, fmt.Errorf("invalid multipart boundary")
+// canonicalRecipient strips any display name and lowercases the address.
+func canonicalRecipient(v string) string {
+	if a, err := mail.ParseAddress(strings.TrimSpace(v)); err == nil {
+		return strings.ToLower(a.Address)
+	}
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+// authReady reports whether the fields needed to resolve and verify are present.
+func authReady(form InboundForm) bool {
+	return strings.TrimSpace(form.Timestamp) != "" && strings.TrimSpace(form.Token) != "" &&
+		strings.TrimSpace(form.Signature) != "" && strings.TrimSpace(form.Recipient) != ""
+}
+
+// receiveMultipart streams the Mailgun multipart webhook. It verifies as soon
+// as the auth and recipient fields are available; if the MIME part arrives
+// first it is staged to disk but not parsed or committed until verification.
+func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.BindingResolver, boundary, tmpPath string, maxBytes int64) (InboundForm, transport.InboundBinding, error) {
+	var form InboundForm
+	if boundary == "" {
+		return form, transport.InboundBinding{}, fmt.Errorf("invalid multipart boundary")
+	}
+	mr := multipart.NewReader(r.Body, boundary)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return form, transport.InboundBinding{}, err
+	}
+	defer f.Close()
+	var (
+		wroteMIME bool
+		verified  bool
+		binding   transport.InboundBinding
+		seen      = map[string]bool{}
+		parts     int
+	)
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
 		}
-		f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
-			return out, err
+			return form, transport.InboundBinding{}, err
 		}
-		defer f.Close()
-		var wrote bool
-		var parts int
-		for {
-			p, err := mr.NextPart()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return out, err
-			}
-			parts++
-			if parts > maxMultipartParts {
+		parts++
+		if parts > maxMultipartParts {
+			p.Close()
+			return form, transport.InboundBinding{}, fmt.Errorf("too many multipart parts")
+		}
+		name := p.FormName()
+		if name == "body-mime" {
+			if wroteMIME {
 				p.Close()
-				return out, fmt.Errorf("too many multipart parts")
+				return form, transport.InboundBinding{}, fmt.Errorf("multiple body-mime parts")
 			}
-			name := p.FormName()
-			if name == "body-mime" {
-				n, err := io.Copy(f, io.LimitReader(p, maxBytes+1))
-				p.Close()
-				if err != nil {
-					return out, err
-				}
-				if n > maxBytes {
-					return out, fmt.Errorf("message too large")
-				}
-				out.Size = n
-				wrote = true
-				continue
-			}
-			b, err := io.ReadAll(io.LimitReader(p, 1<<20))
+			n, err := io.Copy(f, io.LimitReader(p, maxBytes+1))
 			p.Close()
 			if err != nil {
-				return out, err
+				return form, transport.InboundBinding{}, err
 			}
-			setField(&out, name, string(b))
-		}
-		if !wrote {
-			return out, fmt.Errorf("body-mime missing")
-		}
-		out.RawPath = tmpPath
-		return out, nil
-	}
-	if media == "application/x-www-form-urlencoded" || media == "" {
-		r.Body = http.MaxBytesReader(nil, r.Body, maxBytes*2)
-		b, err := io.ReadAll(r.Body)
-		if err != nil {
-			return out, err
-		}
-		vals, err := url.ParseQuery(string(b))
-		if err != nil {
-			return out, err
-		}
-		for k, v := range vals {
-			if len(v) > 0 {
-				setField(&out, k, v[0])
+			if n > maxBytes {
+				return form, transport.InboundBinding{}, fmt.Errorf("message too large")
 			}
+			form.Size = n
+			form.RawPath = tmpPath
+			wroteMIME = true
+			continue
 		}
-		raw := vals.Get("body-mime")
-		if int64(len(raw)) > maxBytes {
-			return out, fmt.Errorf("message too large")
+		b, err := io.ReadAll(io.LimitReader(p, maxFieldBytes+1))
+		p.Close()
+		if err != nil {
+			return form, transport.InboundBinding{}, err
 		}
-		if err = os.WriteFile(tmpPath, []byte(raw), 0o600); err != nil {
-			return out, err
+		if int64(len(b)) > maxFieldBytes {
+			return form, transport.InboundBinding{}, fmt.Errorf("form field too large")
 		}
-		out.RawPath = tmpPath
-		out.Size = int64(len(raw))
-		return out, nil
+		if err = setField(&form, name, string(b), seen); err != nil {
+			return form, transport.InboundBinding{}, err
+		}
+		if !verified && authReady(form) {
+			binding, err = verifyBinding(ctx, resolver, form)
+			if err != nil {
+				return form, transport.InboundBinding{}, err
+			}
+			verified = true
+		}
 	}
-	return out, fmt.Errorf("unsupported content type %s", media)
+	if !wroteMIME {
+		return form, transport.InboundBinding{}, fmt.Errorf("body-mime missing")
+	}
+	if !verified {
+		if !authReady(form) {
+			return form, transport.InboundBinding{}, transport.ErrInboundUnauthorized
+		}
+		if binding, err = verifyBinding(ctx, resolver, form); err != nil {
+			return form, transport.InboundBinding{}, err
+		}
+	}
+	return form, binding, nil
 }
 
-// local wrapper avoids exposing multipart type in package API.
-func multipartReader(r *http.Request, boundary string) *multipart.Reader {
-	if boundary == "" {
-		return nil
+// receiveURLEncoded handles application/x-www-form-urlencoded webhooks with
+// explicit caps on the encoded body, field size and field count.
+func receiveURLEncoded(ctx context.Context, r *http.Request, resolver transport.BindingResolver, tmpPath string, maxBytes int64) (InboundForm, transport.InboundBinding, error) {
+	var form InboundForm
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes*2)
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		return form, transport.InboundBinding{}, err
 	}
-	return multipart.NewReader(r.Body, boundary)
+	vals, err := url.ParseQuery(string(b))
+	if err != nil {
+		return form, transport.InboundBinding{}, err
+	}
+	if len(vals) > maxFormFields {
+		return form, transport.InboundBinding{}, fmt.Errorf("too many form fields")
+	}
+	seen := map[string]bool{}
+	for k, v := range vals {
+		if len(v) > 1 && isSingletonField(k) {
+			return form, transport.InboundBinding{}, fmt.Errorf("duplicate field %s", k)
+		}
+		if len(v) == 0 {
+			continue
+		}
+		if len(v[0]) > maxFieldBytes {
+			return form, transport.InboundBinding{}, fmt.Errorf("form field too large")
+		}
+		if err = setField(&form, k, v[0], seen); err != nil {
+			return form, transport.InboundBinding{}, err
+		}
+	}
+	raw := vals.Get("body-mime")
+	if raw == "" {
+		return form, transport.InboundBinding{}, fmt.Errorf("body-mime missing")
+	}
+	if int64(len(raw)) > maxBytes {
+		return form, transport.InboundBinding{}, fmt.Errorf("message too large")
+	}
+	if !authReady(form) {
+		return form, transport.InboundBinding{}, transport.ErrInboundUnauthorized
+	}
+	binding, err := verifyBinding(ctx, resolver, form)
+	if err != nil {
+		return form, transport.InboundBinding{}, err
+	}
+	if err = os.WriteFile(tmpPath, []byte(raw), 0o600); err != nil {
+		return form, transport.InboundBinding{}, err
+	}
+	form.RawPath = tmpPath
+	form.Size = int64(len(raw))
+	return form, binding, nil
 }
 
-// maxMultipartParts bounds the number of form parts Mailgun may send so a
-// malicious webhook cannot force unbounded multipart iteration.
-const maxMultipartParts = 64
+// bounds for Mailgun webhook parsing. The multipart part count is capped so a
+// malicious webhook cannot force unbounded iteration; individual non-MIME
+// fields are capped separately from the MIME body.
+const (
+	maxMultipartParts = 64
+	maxFormFields     = 64
+	maxFieldBytes     = 1 << 20
+)
 
-func setField(out *InboundForm, name, value string) {
+func isSingletonField(name string) bool {
+	switch name {
+	case "timestamp", "token", "signature", "sender", "recipient", "Message-Id", "message-id", "message_id":
+		return true
+	}
+	return false
+}
+
+// setField records a known Mailgun field, rejecting a repeated singleton so a
+// later value cannot change the recipient or auth material after verification.
+func setField(out *InboundForm, name, value string, seen map[string]bool) error {
 	value = strings.TrimSpace(value)
+	switch name {
+	case "timestamp", "token", "signature", "sender", "recipient", "Message-Id", "message-id", "message_id":
+		if seen[name] {
+			return fmt.Errorf("duplicate field %s", name)
+		}
+		seen[name] = true
+	}
 	switch name {
 	case "timestamp":
 		out.Timestamp = value
@@ -194,4 +292,30 @@ func setField(out *InboundForm, name, value string) {
 	case "Message-Id", "message-id", "message_id":
 		out.ProviderMessageID = value
 	}
+	return nil
+}
+
+// signatureMaxAge bounds how old a Mailgun timestamp may be. Mailgun warns that
+// webhook processing can be delayed well beyond 15 minutes, and token-based
+// deduplication already prevents replays, so a generous window avoids dropping
+// legitimately delayed deliveries.
+const signatureMaxAge = 24 * time.Hour
+
+func VerifySignature(signingKey, timestamp, token, signature string) bool {
+	if signingKey == "" || timestamp == "" || token == "" || signature == "" {
+		return false
+	}
+	ts, err := strconv.ParseInt(strings.TrimSpace(timestamp), 10, 64)
+	if err != nil {
+		return false
+	}
+	delta := time.Since(time.Unix(ts, 0))
+	if delta < -signatureMaxAge || delta > signatureMaxAge {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	_, _ = mac.Write([]byte(timestamp + token))
+	want := mac.Sum(nil)
+	got, err := hex.DecodeString(strings.TrimSpace(signature))
+	return err == nil && hmac.Equal(want, got)
 }

@@ -109,6 +109,98 @@
 })();
 
 (function () {
+  var dlg = document.getElementById('inbound-dialog');
+  if (!dlg) {
+    return;
+  }
+  var sel = document.getElementById('inbound-provider-select');
+  var form = dlg.querySelector('form');
+  var nameInput = form.querySelector('[name=name]');
+  var idInput = form.querySelector('[name=id]');
+  var lastDefault = '';
+
+  function sync() {
+    document.querySelectorAll('.inbound-provider-fields').forEach(function (fs) {
+      var active = fs.getAttribute('data-provider') === sel.value;
+      fs.style.display = active ? '' : 'none';
+      fs.querySelectorAll('input,select').forEach(function (el) {
+        el.disabled = !active;
+      });
+    });
+  }
+
+  function providerDescription() {
+    var opt = sel.options[sel.selectedIndex];
+    return opt ? opt.text : '';
+  }
+
+  function applyDefaultName() {
+    var desc = providerDescription();
+    if (nameInput.value === '' || nameInput.value === lastDefault) {
+      nameInput.value = desc;
+    }
+    lastDefault = desc;
+  }
+
+  function open() {
+    form.reset();
+    idInput.value = '';
+    lastDefault = '';
+    applyDefaultName();
+    sync();
+    dlg.showModal();
+  }
+
+  function openEdit(btn) {
+    form.reset();
+    idInput.value = btn.dataset.id;
+    sel.value = btn.dataset.provider;
+    nameInput.value = btn.dataset.name;
+    lastDefault = providerDescription();
+    var cfg = {};
+    try {
+      cfg = JSON.parse(btn.dataset.config || '{}');
+    } catch (e) {
+      cfg = {};
+    }
+    form.querySelectorAll('input,select').forEach(function (el) {
+      if (el.name && el.name.indexOf('icfg_') === 0) {
+        var key = el.name.split('_').slice(2).join('_');
+        if (cfg[key] !== undefined && cfg[key] !== null) {
+          el.value = String(cfg[key]);
+        }
+      }
+    });
+    sync();
+    dlg.showModal();
+  }
+
+  sel.addEventListener('change', function () {
+    sync();
+    applyDefaultName();
+  });
+  var add = document.getElementById('add-inbound');
+  if (add) {
+    add.addEventListener('click', open);
+  }
+  var cancel = document.getElementById('inbound-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+  document.querySelectorAll('.edit-inbound').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openEdit(btn);
+    });
+  });
+  var assignDomain = form.querySelector('[name=assign_domain]');
+  if (assignDomain && assignDomain.value !== '') {
+    open();
+  }
+})();
+
+(function () {
   var dlg = document.getElementById('key-dialog');
   if (!dlg) {
     return;
@@ -536,10 +628,14 @@
   var select = document.getElementById('domain-catchall');
   var providerSelect = document.getElementById('domain-provider');
   var providerStatus = document.getElementById('domain-provider-status');
+  var receiveSelect = document.getElementById('domain-receive');
+  var receiveStatus = document.getElementById('domain-receive-status');
   var title = document.getElementById('domain-dialog-title');
   var currentId = '';
   var currentProvider = '';
+  var currentReceive = '';
   var ADD_PROVIDER = '__add_provider__';
+  var ADD_INBOUND = '__add_inbound__';
 
   function syncProviderStatus() {
     if (!providerStatus) {
@@ -548,6 +644,15 @@
     var paused = !providerSelect || providerSelect.value === '';
     providerStatus.textContent = paused ? 'Sending paused — mail will queue until a provider is set.' : '';
     providerStatus.hidden = !paused;
+  }
+
+  function syncReceiveStatus() {
+    if (!receiveStatus) {
+      return;
+    }
+    var unconfigured = !receiveSelect || receiveSelect.value === '';
+    receiveStatus.textContent = unconfigured ? 'No receive path — this domain cannot accept mail yet.' : '';
+    receiveStatus.hidden = !unconfigured;
   }
 
   function openAddProvider() {
@@ -565,6 +670,21 @@
     }
   }
 
+  function openAddInbound() {
+    var idlg = document.getElementById('inbound-dialog');
+    var iform = idlg && idlg.querySelector('form');
+    var trigger = document.getElementById('add-inbound');
+    if (!idlg || !iform || !trigger) {
+      return;
+    }
+    dlg.close();
+    trigger.click();
+    var assign = iform.querySelector('[name=assign_domain]');
+    if (assign) {
+      assign.value = currentId;
+    }
+  }
+
   if (providerSelect) {
     providerSelect.addEventListener('change', function () {
       if (providerSelect.value === ADD_PROVIDER) {
@@ -574,6 +694,17 @@
       }
       currentProvider = providerSelect.value;
       syncProviderStatus();
+    });
+  }
+  if (receiveSelect) {
+    receiveSelect.addEventListener('change', function () {
+      if (receiveSelect.value === ADD_INBOUND) {
+        receiveSelect.value = currentReceive;
+        openAddInbound();
+        return;
+      }
+      currentReceive = receiveSelect.value;
+      syncReceiveStatus();
     });
   }
   document.querySelectorAll('.edit-domain').forEach(function (btn) {
@@ -590,7 +721,12 @@
       if (providerSelect) {
         providerSelect.value = currentProvider;
       }
+      currentReceive = btn.dataset.receive || '';
+      if (receiveSelect) {
+        receiveSelect.value = currentReceive;
+      }
       syncProviderStatus();
+      syncReceiveStatus();
       dlg.showModal();
     });
   });

@@ -30,7 +30,7 @@ func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MailgunSigningKey: "signing-secret", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 10, SendLimitPerMinute: 60}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 10, SendLimitPerMinute: 60}
 	svc, err := New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +49,25 @@ func testService(t *testing.T) (*Service, model.User, model.Domain, model.Inbox)
 	}
 	return svc, u, d, b
 }
+
+const (
+	testMailgunKey = "signing-secret"
+	testCFSecret   = "cf-secret"
+)
+
+// seedInbound creates an account-owned receive credential and assigns it to a
+// domain, mirroring the domain-first setup flow.
+func seedInbound(t *testing.T, svc *Service, accountID, domainID, provider string, cfg map[string]any) {
+	t.Helper()
+	cred, err := svc.SaveInboundCredential(context.Background(), accountID, "", "", provider, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainInboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func mgSig(key, ts, tok string) string {
 	m := hmac.New(sha256.New, []byte(key))
 	m.Write([]byte(ts + tok))
@@ -73,13 +92,14 @@ func mgRequest(t *testing.T, key, token, recipient, raw string) *http.Request {
 
 func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 	svc, u, dom, box := testService(t)
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	ctx := context.Background()
 	raw := "From: Sender <sender@outside.test>\r\nTo: hermes@example.com\r\nSubject: Hello\r\nMessage-ID: <inbound@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nPlease reply"
-	m, dup, err := svc.IngestMailgun(ctx, mgRequest(t, svc.Config.MailgunSigningKey, "delivery-1", box.Address, raw))
+	m, dup, err := svc.IngestInbound(ctx, "mailgun", mgRequest(t, testMailgunKey, "delivery-1", box.Address, raw))
 	if err != nil || dup {
 		t.Fatalf("ingest %v dup=%v", err, dup)
 	}
-	m2, dup, err := svc.IngestMailgun(ctx, mgRequest(t, svc.Config.MailgunSigningKey, "delivery-1", box.Address, raw))
+	m2, dup, err := svc.IngestInbound(ctx, "mailgun", mgRequest(t, testMailgunKey, "delivery-1", box.Address, raw))
 	if err != nil || !dup || m2.ID != m.ID {
 		t.Fatalf("dedup %v dup=%v", err, dup)
 	}

@@ -1,9 +1,7 @@
 package cloudflare
 
 import (
-	"bytes"
-	"encoding/base64"
-	"encoding/json"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,70 +13,106 @@ import (
 
 var _ transport.InboundTransport = Transport{}
 
-func workerRequest(t *testing.T, secret string, mutate func(*WorkerPayload)) *http.Request {
+type fakeResolver struct {
+	binding transport.InboundBinding
+	err     error
+}
+
+func (f fakeResolver) ResolveInboundBinding(_ context.Context, provider, recipient string) (transport.InboundBinding, error) {
+	if f.err != nil {
+		return transport.InboundBinding{}, f.err
+	}
+	b := f.binding
+	b.Provider = provider
+	b.Recipient = recipient
+	return b, nil
+}
+
+func cfResolver() fakeResolver {
+	return fakeResolver{binding: transport.InboundBinding{
+		AccountID: "acc", DomainID: "dom", CredentialID: "cred",
+		Config: map[string]any{"webhook_secret": "s3cret"},
+	}}
+}
+
+func workerRequest(t *testing.T, secret, deliveryID, raw string) *http.Request {
 	t.Helper()
-	p := WorkerPayload{
-		Recipient:    "hermes@example.com",
-		EnvelopeFrom: "sender@outside.test",
-		RawMIMEB64:   base64.StdEncoding.EncodeToString([]byte("From: sender@outside.test\r\nTo: hermes@example.com\r\nSubject: hi\r\n\r\nhello")),
-		DeliveryID:   "cf-delivery-1",
+	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader(raw))
+	r.Header.Set("Content-Type", "message/rfc822")
+	r.Header.Set(HeaderRecipient, "hermes@example.com")
+	r.Header.Set(HeaderEnvelopeTo, "sender@outside.test")
+	if deliveryID != "" {
+		r.Header.Set(HeaderDeliveryID, deliveryID)
 	}
-	if mutate != nil {
-		mutate(&p)
-	}
-	b, err := json.Marshal(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", bytes.NewReader(b))
-	r.Header.Set("Content-Type", "application/json")
 	if secret != "" {
 		r.Header.Set("Authorization", "Bearer "+secret)
 	}
 	return r
 }
 
-func TestParseAndVerify(t *testing.T) {
+func TestReceiveAndVerify(t *testing.T) {
 	var tr Transport
-	r := workerRequest(t, "s3cret", nil)
-	msg, err := tr.Parse(r, t.TempDir()+"/m.eml", 1024)
+	raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\nSubject: hi\r\n\r\nhello"
+	path := t.TempDir() + "/m.eml"
+	msg, binding, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "cf-delivery-1", raw), cfResolver(), path, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if msg.Provider != "cloudflare" || msg.Recipient != "hermes@example.com" || msg.DeliveryID != "cf-delivery-1" {
 		t.Fatalf("%+v", msg)
 	}
-	raw, _ := os.ReadFile(msg.RawPath)
-	if !bytes.Contains(raw, []byte("hello")) {
+	if binding.AccountID != "acc" || binding.CredentialID != "cred" {
+		t.Fatalf("binding %+v", binding)
+	}
+	staged, _ := os.ReadFile(msg.RawPath)
+	if !strings.Contains(string(staged), "hello") {
 		t.Fatal("raw mime missing")
 	}
-	// Rebuild the request for Verify since Parse consumed the body.
-	r = workerRequest(t, "s3cret", nil)
-	if err = tr.Verify(r, msg, "s3cret"); err != nil {
-		t.Fatalf("valid bearer rejected: %v", err)
+}
+
+func TestWrongBearerRejectedBeforeBody(t *testing.T) {
+	var tr Transport
+	var read bool
+	body := &trackingReader{read: &read, r: strings.NewReader("From: x\r\n\r\nbody")}
+	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", body)
+	r.Header.Set("Content-Type", "message/rfc822")
+	r.Header.Set(HeaderRecipient, "hermes@example.com")
+	r.Header.Set("Authorization", "Bearer wrong")
+	if _, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024); err != transport.ErrInboundUnauthorized {
+		t.Fatalf("err=%v", err)
 	}
-	r = workerRequest(t, "wrong", nil)
-	if err = tr.Verify(r, msg, "s3cret"); err == nil {
-		t.Fatal("wrong bearer accepted")
+	if read {
+		t.Fatal("body must not be read before authentication")
 	}
-	r = workerRequest(t, "", nil)
-	if err = tr.Verify(r, msg, "s3cret"); err == nil {
-		t.Fatal("missing bearer accepted")
+}
+
+type trackingReader struct {
+	read *bool
+	r    *strings.Reader
+}
+
+func (t *trackingReader) Read(p []byte) (int, error) { *t.read = true; return t.r.Read(p) }
+
+func TestMissingRecipientRejected(t *testing.T) {
+	var tr Transport
+	r := httptest.NewRequest("POST", "/internal/ingest/cloudflare", strings.NewReader("body"))
+	r.Header.Set("Authorization", "Bearer s3cret")
+	if _, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024); err != transport.ErrInboundUnauthorized {
+		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestDeliveryIDFallsBackToMIMEHash(t *testing.T) {
 	var tr Transport
-	r := workerRequest(t, "s3cret", func(p *WorkerPayload) { p.DeliveryID = "" })
-	msg, err := tr.Parse(r, t.TempDir()+"/m.eml", 1024)
+	raw := "From: sender@outside.test\r\nTo: hermes@example.com\r\n\r\nhello"
+	msg, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", raw), cfResolver(), t.TempDir()+"/m.eml", 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(msg.DeliveryID, "cf-") || len(msg.DeliveryID) < 10 {
 		t.Fatalf("delivery id %q", msg.DeliveryID)
 	}
-	r2 := workerRequest(t, "s3cret", func(p *WorkerPayload) { p.DeliveryID = "" })
-	msg2, err := tr.Parse(r2, t.TempDir()+"/m2.eml", 1024)
+	msg2, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", raw), cfResolver(), t.TempDir()+"/m2.eml", 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,18 +123,16 @@ func TestDeliveryIDFallsBackToMIMEHash(t *testing.T) {
 
 func TestRejectsBadPayload(t *testing.T) {
 	var tr Transport
-	for _, mutate := range []func(*WorkerPayload){
-		func(p *WorkerPayload) { p.Recipient = "" },
-		func(p *WorkerPayload) { p.RawMIMEB64 = "" },
-		func(p *WorkerPayload) { p.RawMIMEB64 = "!!not-base64!!" },
-	} {
-		r := workerRequest(t, "s3cret", mutate)
-		if _, err := tr.Parse(r, t.TempDir()+"/m.eml", 1024); err == nil {
-			t.Fatal("bad payload accepted")
-		}
+	raw := "From: sender@outside.test\r\n\r\nhello"
+	if _, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", ""), cfResolver(), t.TempDir()+"/m.eml", 1024); err == nil {
+		t.Fatal("empty body accepted")
 	}
-	r := workerRequest(t, "s3cret", nil)
-	if _, err := tr.Parse(r, t.TempDir()+"/m.eml", 8); err == nil {
+	r := workerRequest(t, "s3cret", "", raw)
+	r.Header.Set("Content-Type", "application/json")
+	if _, _, err := tr.Receive(context.Background(), r, cfResolver(), t.TempDir()+"/m.eml", 1024); err == nil {
+		t.Fatal("bad content type accepted")
+	}
+	if _, _, err := tr.Receive(context.Background(), workerRequest(t, "s3cret", "", raw), cfResolver(), t.TempDir()+"/m.eml", 4); err == nil {
 		t.Fatal("oversize accepted")
 	}
 }

@@ -39,8 +39,8 @@ func TestSendForbiddenForReadAndAssistant(t *testing.T) {
 }
 
 func TestRawMIMERouteIsCanonical(t *testing.T) {
-	svc, h, _, _, box := httpFixture(t)
-	req := signedMGRequest(t, svc.Config.MailgunSigningKey, "raw-mime-1", box.Address, inboundRawMessage())
+	_, h, _, _, box := httpFixture(t)
+	req := signedMGRequest(t, testMailgunKey, "raw-mime-1", box.Address, inboundRawMessage())
 	req.URL.Path = "/internal/ingest/mailgun/raw-mime"
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

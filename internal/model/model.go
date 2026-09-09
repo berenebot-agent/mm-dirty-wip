@@ -29,6 +29,7 @@ type Domain struct {
 	Name                 string    `json:"name"`
 	CatchAllInboxID      string    `json:"catch_all_inbox_id,omitempty"`
 	OutboundCredentialID string    `json:"outbound_credential_id,omitempty"`
+	InboundCredentialID  string    `json:"inbound_credential_id,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }
 

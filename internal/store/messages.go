@@ -19,6 +19,7 @@ type AttachmentInput struct {
 type InboundRecord struct {
 	Inbox                                           model.Inbox
 	Provider, ProviderDeliveryID, ProviderMessageID string
+	EnvelopeRecipient                               string
 	RFCMessageID, InReplyTo                         string
 	References                                      []string
 	From                                            model.Address
@@ -50,7 +51,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	}
 	defer tx.Rollback()
 	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE provider=? AND provider_delivery_id=?`, r.Provider, r.ProviderDeliveryID).Scan(&existing)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.Inbox.AccountID, r.Provider, r.EnvelopeRecipient, r.ProviderDeliveryID).Scan(&existing)
 	if err == nil {
 		m, e := model.Message{}, model.Event{}
 		_ = tx.Rollback()
@@ -79,7 +80,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
@@ -480,6 +481,7 @@ func ftsQuery(q string) string {
 
 type BlockedRecord struct {
 	AccountID, InboxID, Provider, ProviderDeliveryID string
+	EnvelopeRecipient                                string
 	From                                             model.Address
 	To                                               []string
 	Subject, Reason                                  string
@@ -498,7 +500,7 @@ func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (mode
 	}
 	defer tx.Rollback()
 	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE provider=? AND provider_delivery_id=?`, r.Provider, r.ProviderDeliveryID).Scan(&existing)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.AccountID, r.Provider, r.EnvelopeRecipient, r.ProviderDeliveryID).Scan(&existing)
 	if err == nil {
 		_ = tx.Rollback()
 		m, e := s.GetBlockedMessage(ctx, r.AccountID, existing)
@@ -509,8 +511,8 @@ func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (mode
 	}
 	id := idgen.New("blk")
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, normalizeAddress(r.EnvelopeRecipient), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
 		return model.BlockedMessage{}, false, err
 	}
 	if err = tx.Commit(); err != nil {

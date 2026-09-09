@@ -327,3 +327,101 @@ ALTER TABLE accounts_new RENAME TO accounts;
 COMMIT;
 PRAGMA foreign_keys=ON;
 `
+
+// migration009 moves inbound credentials from process environment into
+// account-owned encrypted rows and scopes inbound delivery identity. It:
+//   - adds inbound_credentials (multiple per account, one assigned per domain
+//     via domains.inbound_credential_id);
+//   - rebuilds messages and blocked_messages to store the canonical original
+//     envelope recipient and to key deduplication on
+//     (account_id, provider, envelope_recipient, provider_delivery_id).
+//
+// SQLite cannot ALTER a UNIQUE constraint, so both tables are rebuilt. The
+// original recipient is backfilled from messages.envelope_to_json where it was
+// recorded; legacy blocked rows never stored it and are left empty rather than
+// guessing a catch-all address.
+const migration009 = `CREATE TABLE IF NOT EXISTS inbound_credentials (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  name TEXT NOT NULL,
+  encrypted_config TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_credentials_account ON inbound_credentials(account_id);
+ALTER TABLE domains ADD COLUMN inbound_credential_id TEXT REFERENCES inbound_credentials(id) ON DELETE SET NULL;
+
+PRAGMA foreign_keys=OFF;
+BEGIN;
+CREATE TABLE messages_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  rfc_message_id TEXT NOT NULL DEFAULT '',
+  in_reply_to TEXT NOT NULL DEFAULT '',
+  references_json TEXT NOT NULL DEFAULT '[]',
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  cc_json TEXT NOT NULL DEFAULT '[]',
+  envelope_to_json TEXT NOT NULL DEFAULT '[]',
+  envelope_recipient TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  text_body TEXT NOT NULL DEFAULT '',
+  html_body TEXT NOT NULL DEFAULT '',
+  raw_path TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  is_archived INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT,
+  sent_at TEXT,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'sent',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  next_attempt_at TEXT NOT NULL DEFAULT '',
+  bcc_json TEXT NOT NULL DEFAULT '[]',
+  idem_key TEXT NOT NULL DEFAULT '',
+  UNIQUE(account_id, provider, envelope_recipient, provider_delivery_id)
+);
+INSERT INTO messages_new(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,sent_at,created_at,status,attempts,last_error,next_attempt_at,bcc_json,idem_key)
+  SELECT id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,COALESCE(json_extract(envelope_to_json,'$[0]'),''),subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,sent_at,created_at,status,attempts,last_error,next_attempt_at,bcc_json,idem_key FROM messages;
+DROP TABLE messages;
+ALTER TABLE messages_new RENAME TO messages;
+CREATE INDEX IF NOT EXISTS idx_messages_inbox_created ON messages(inbox_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_rfc_thread ON messages(account_id, inbox_id, rfc_message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_outbox ON messages(status, next_attempt_at);
+
+CREATE TABLE blocked_messages_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  envelope_recipient TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  received_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(account_id, provider, envelope_recipient, provider_delivery_id)
+);
+INSERT INTO blocked_messages_new(id,account_id,inbox_id,provider,provider_delivery_id,from_name,from_address,to_json,envelope_recipient,subject,size_bytes,reason,received_at,created_at)
+  SELECT id,account_id,inbox_id,provider,provider_delivery_id,from_name,from_address,to_json,'',subject,size_bytes,reason,received_at,created_at FROM blocked_messages;
+DROP TABLE blocked_messages;
+ALTER TABLE blocked_messages_new RENAME TO blocked_messages;
+CREATE INDEX IF NOT EXISTS idx_blocked_messages_inbox_created ON blocked_messages(inbox_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_blocked_messages_account_created ON blocked_messages(account_id, created_at DESC);
+COMMIT;
+PRAGMA foreign_keys=ON;
+`

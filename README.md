@@ -17,27 +17,27 @@ Persistent state is stored in `./data`.
 ## Mailgun inbound
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
-2. Set `MAILGUN_SIGNING_KEY` to the account webhook signing key.
+2. In the Admin UI, edit the domain and add a **Receive path** of type **Mailgun**, entering the account's webhook signing key. The secret is stored encrypted; it is no longer read from the environment.
 3. Create a Mailgun catch-all route for the domain that forwards incoming mail to:
 
 ```text
 https://your-host.example/internal/ingest/mailgun/raw-mime
 ```
 
-Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The legacy `/internal/ingest/mailgun` and `/internal/ingest/{provider}` routes remain available for backward compatibility.
+Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Cloudflare Email Routing inbound
 
-Inbound can also be received via Cloudflare Email Routing through a Worker that forwards messages to the generic webhook. Full dashboard navigation and the Worker example are in [docs/CLOUDFLARE_INBOUND.md](docs/CLOUDFLARE_INBOUND.md); the Worker source is [docs/cloudflare-worker.js](docs/cloudflare-worker.js).
+Inbound can also be received via Cloudflare Email Routing through a Worker that streams the raw MIME to the generic webhook. Full dashboard navigation and the Worker example are in [docs/CLOUDFLARE_INBOUND.md](docs/CLOUDFLARE_INBOUND.md); the Worker source is [docs/cloudflare-worker.js](docs/cloudflare-worker.js).
 
 High-level steps:
 
-1. Set `CLOUDFLARE_WEBHOOK_SECRET` in `.env` to a long random secret.
-2. Create a Worker from `docs/cloudflare-worker.js`, setting `WEBHOOK_URL` to your instance's `/internal/ingest/cloudflare` endpoint and `SECRET` to the same value.
+1. In the Admin UI, edit the domain and add a **Receive path** of type **Cloudflare Worker**, entering a long random shared secret. The secret is stored encrypted; it is no longer read from the environment.
+2. Create a Worker from `docs/cloudflare-worker.js`, setting `WEBHOOK_URL` to your instance's `/internal/ingest/cloudflare` endpoint and the Worker secret to the same value.
 3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
 4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
 
-Cloudflare hands each message to the Worker, which POSTs the raw MIME (base64) to:
+Cloudflare hands each message to the Worker, which streams the raw MIME to:
 
 ```text
 https://your-host.example/internal/ingest/cloudflare
@@ -51,7 +51,7 @@ The server always listens on two ports:
 
 - `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
 - `:8082` is a dedicated listener that serves **only** the inbound webhook routes
-  (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/mailgun`, and `/internal/ingest/{provider}`) plus `/healthz`.
+  (`/internal/ingest/mailgun/raw-mime` and `/internal/ingest/{provider}`) plus `/healthz`.
 
 To keep the API and UI off the public internet, expose only `:8082` to your
 reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
@@ -69,7 +69,7 @@ internet.
 
 ## Outbound
 
-In the Admin UI, click **Add outbound provider**, pick a provider, and fill in the fields it asks for (for example Brevo only needs an API key). One configured provider is the **active** provider and is used for all sending; you can add more and switch the active one at any time.
+In the Admin UI, click **Add outbound provider**, pick a provider, and fill in the fields it asks for (for example Brevo only needs an API key). Each domain selects its own **Sending provider**; there is no account-level default, so mail can only leave through the provider explicitly assigned to its domain. A domain with no provider queues mail until one is assigned.
 
 The API still accepts a JSON `config` object via `POST /v1/admin/outbound`.
 
@@ -131,9 +131,14 @@ Back up a filesystem-consistent snapshot of `./data` and separately retain `APP_
 
 ## Development
 
+Go is not installed on the host; all Go commands run via Docker through `./gatehouse-go.sh`:
+
 ```bash
-go test ./...
-go run ./cmd/server
+./gatehouse-go.sh test -race -count=1 ./...
+./gatehouse-go.sh vet ./...
+./gatehouse-go.sh build -buildvcs=false ./cmd/server
 ```
+
+Or use the tiered runner (CI parity): `./tests/run.sh`.
 
 Implementation decisions and acceptance criteria are in `docs/`.

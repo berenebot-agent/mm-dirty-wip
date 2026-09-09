@@ -16,6 +16,15 @@ func LookupInbound(name string) (InboundTransport, bool) {
 	return t, ok
 }
 
+func ListInbound() []InboundTransport {
+	out := make([]InboundTransport, 0, len(inbound))
+	for _, t := range inbound {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}
+
 var outbound = map[string]OutboundTransport{}
 
 func RegisterOutbound(t OutboundTransport) {

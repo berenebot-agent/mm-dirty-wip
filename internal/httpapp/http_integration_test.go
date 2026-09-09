@@ -33,7 +33,7 @@ func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Do
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MailgunSigningKey: "signing-secret", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,26 @@ func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Do
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedInboundCredential(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	return svc, New(svc, nil).Handler(), u, d, b
+}
+
+const (
+	testMailgunKey = "signing-secret"
+	testCFSecret   = "cf-secret"
+)
+
+// seedInbound creates an account-owned receive credential and assigns it to a
+// domain, mirroring the domain-first setup flow.
+func seedInboundCredential(t *testing.T, svc *app.Service, accountID, domainID, provider string, cfg map[string]any) {
+	t.Helper()
+	cred, err := svc.SaveInboundCredential(context.Background(), accountID, "", "", provider, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainInboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
@@ -201,7 +220,7 @@ func signedMGRequest(t *testing.T, key, token, recipient, raw string) *http.Requ
 	p, _ := mw.CreateFormField("body-mime")
 	io.WriteString(p, raw)
 	mw.Close()
-	r := httptest.NewRequest("POST", "/internal/ingest/mailgun", &body)
+	r := httptest.NewRequest("POST", "/internal/ingest/mailgun/raw-mime", &body)
 	r.Header.Set("Content-Type", mw.FormDataContentType())
 	return r
 }
@@ -210,7 +229,7 @@ func TestAgentAPIAndAttachmentDownload(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	raw := strings.Join([]string{"From: sender@outside.test", "To: hermes@example.com", "Subject: attachment", "Message-ID: <a@test>", "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=x", "", "--x", "Content-Type: text/plain", "", "hello searchable", "--x", "Content-Type: text/html; name=attack.html", "Content-Disposition: attachment; filename=attack.html", "Content-Transfer-Encoding: base64", "", "PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "--x--", ""}, "\r\n")
-	m, _, err := svc.IngestMailgun(ctx, signedMGRequest(t, svc.Config.MailgunSigningKey, "d1", box.Address, raw))
+	m, _, err := svc.IngestInbound(ctx, "mailgun", signedMGRequest(t, testMailgunKey, "d1", box.Address, raw))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +275,10 @@ func TestAgentAPIAndAttachmentDownload(t *testing.T) {
 }
 
 func TestUnknownRecipientIs406(t *testing.T) {
-	svc, h, _, _, _ := httpFixture(t)
+	_, h, _, _, _ := httpFixture(t)
 	raw := "From: x@y.test\r\nTo: missing@example.com\r\n\r\nhi"
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, signedMGRequest(t, svc.Config.MailgunSigningKey, "unknown1", "missing@example.com", raw))
+	h.ServeHTTP(rr, signedMGRequest(t, testMailgunKey, "unknown1", "missing@example.com", raw))
 	if rr.Code != http.StatusNotAcceptable {
 		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
 	}
@@ -288,7 +307,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 		t.Fatalf("identity %#v", ident)
 	}
 	raw := "From: noreply@service.test\r\nTo: fox@example.com\r\nSubject: Verify account\r\nMessage-ID: <verify@test>\r\n\r\nverification body"
-	m, _, err := svc.IngestMailgun(ctx, signedMGRequest(t, svc.Config.MailgunSigningKey, "compat-d1", ident.Address, raw))
+	m, _, err := svc.IngestInbound(ctx, "mailgun", signedMGRequest(t, testMailgunKey, "compat-d1", ident.Address, raw))
 	if err != nil {
 		t.Fatal(err)
 	}

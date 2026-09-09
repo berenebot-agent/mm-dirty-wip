@@ -42,13 +42,18 @@ type pageData struct {
 	Account                     model.Account
 	Domains                     []model.Domain
 	DomainSending               map[string]domainSendingView
+	DomainReceiving             map[string]domainReceivingView
 	PausedDomains               []string
+	UnconfiguredDomains         []string
 	AssignDomain                string
+	AssignInboundDomain         string
 	Inboxes                     []model.Inbox
 	Messages                    []model.Message
 	Credentials                 []credentialView
 	Outbound                    []outboundView
+	Inbound                     []inboundView
 	OutboundProviders           []outboundProviderView
+	InboundProviders            []outboundProviderView
 	OutboundDetail              *outboundDetailView
 	DeliveryAttempts            []store.DeliveryAttempt
 	DeliveryHasMore             bool
@@ -57,6 +62,7 @@ type pageData struct {
 	Attachments                 []model.Attachment
 	Notice, SecretLabel, Secret string
 	HasUsers                    bool
+	BaseURL                     string
 
 	Inbox          *model.Inbox
 	InboxAddr      map[string]string
@@ -86,12 +92,22 @@ type pageData struct {
 type outboundView struct {
 	ID, Name, Provider, ConfigJSON string
 }
+type inboundView struct {
+	ID, Name, Provider, ConfigJSON string
+}
 
 // domainSendingView is the resolved outbound provider shown on the Domains
 // card. Paused is true when the domain has no provider.
 type domainSendingView struct {
 	ProviderLabel string
 	Paused        bool
+}
+
+// domainReceivingView is the resolved inbound credential shown on the Domains
+// card. Unconfigured is true when the domain has no receive path.
+type domainReceivingView struct {
+	ProviderLabel string
+	Unconfigured  bool
 }
 type outboundDetailView struct {
 	ID, Name, Provider, ConfigJSON string
@@ -286,15 +302,17 @@ func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", 303)
 }
 
-const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}{{if .PausedDomains}}<div class="banner warn">No sending provider for {{join .PausedDomains ", "}} — mail is queued until one is assigned.</div>{{end}}
+const dashboardBody = `<h1>Dashboard</h1><p class="muted">{{bytes .Account.StorageUsedBytes}} of {{bytes .Account.StorageQuotaBytes}} stored.</p>{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}{{if .PausedDomains}}<div class="banner warn">No sending provider for {{join .PausedDomains ", "}} — mail is queued until one is assigned.</div>{{end}}{{if .UnconfiguredDomains}}<div class="banner warn">No receive path for {{join .UnconfiguredDomains ", "}} — these domains cannot accept mail until one is assigned.</div>{{end}}
 <div class="grid"><section class="card"><h2>Inboxes</h2>{{if .Inboxes}}<table><thead><tr><th>Name</th><th></th><th>Email</th><th></th></tr></thead><tbody>{{range .Inboxes}}<tr class="row-link" data-href="/ui/inboxes/{{.ID}}"><td><a href="/ui/inboxes/{{.ID}}">{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="muted">—</span>{{end}}</a>{{if .AllowedSenders}} <span title="Only allowed senders can email this inbox" aria-label="Restricted to allowed senders" style="color:#5f6368;vertical-align:middle"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/></svg></span>{{end}}</td><td>{{if index $.Unread .ID}}<span class="pill unread-pill">{{index $.Unread .ID}}</span>{{end}}</td><td>{{.Address}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-inbox" data-id="{{.ID}}" data-name="{{.DisplayName}}" data-address="{{.Address}}" data-allowed="{{join .AllowedSenders ","}}" title="Edit inbox" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inboxes/{{.ID}}/delete" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No inboxes yet.</p>{{end}}<div class="card-footer"><button type="button" id="add-inbox">Add Inbox</button></div></section>
 <section class="card"><h2>Clients</h2>{{if .Credentials}}<table><thead><tr><th>Name</th><th>Type</th><th>Scope</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td>{{.Scope}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/{{if eq .Kind "hermes"}}hermes{{else}}keys{{end}}/{{.ID}}/delete" data-confirm="Delete this {{.Type}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No keys yet.</p>{{end}}<div class="card-footer"><button type="button" id="add-key">Create Key</button></div></section></div>
-<div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th></th></tr></thead><tbody>{{range .Domains}}<tr><td><b>{{.Name}}</b></td><td class="muted">{{if .CatchAllInboxID}}{{index $.InboxAddr .CatchAllInboxID}}{{else}}—{{end}}</td><td class="muted">{{with index $.DomainSending .ID}}{{if .Paused}}<span class="pill amber" title="Add an outbound provider to resume sending">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-domain" data-id="{{.ID}}" data-name="{{.Name}}" data-catchall="{{.CatchAllInboxID}}" data-provider="{{.OutboundCredentialID}}" title="Edit domain" aria-label="Edit domain"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<div class="card-footer"><button type="button" id="add-domain">Add Domain</button></div></section>
-<section class="card"><h2>Outbound Providers</h2>{{if .Outbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Outbound}}<tr class="row-link" data-href="/ui/outbound/{{.ID}}"><td><a href="/ui/outbound/{{.ID}}"><b>{{.Name}}</b></a><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/outbound/{{.ID}}/delete" data-confirm="Delete this outbound provider?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a provider to each domain before it can send.</span><button type="button" id="add-provider">Add Outbound Provider</button></div></section></div>
+<div class="grid"><section class="card"><h2>Domains</h2>{{if .Domains}}<table><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}<tr><td><b>{{.Name}}</b></td><td class="muted">{{if .CatchAllInboxID}}{{index $.InboxAddr .CatchAllInboxID}}{{else}}—{{end}}</td><td class="muted">{{with index $.DomainSending .ID}}{{if .Paused}}<span class="pill amber" title="Add an outbound provider to resume sending">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="muted">{{with index $.DomainReceiving .ID}}{{if .Unconfigured}}<span class="pill amber" title="Add a receive path to accept mail">{{.ProviderLabel}}</span>{{else}}{{.ProviderLabel}}{{end}}{{end}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-domain" data-id="{{.ID}}" data-name="{{.Name}}" data-catchall="{{.CatchAllInboxID}}" data-provider="{{.OutboundCredentialID}}" data-receive="{{.InboundCredentialID}}" title="Edit domain" aria-label="Edit domain"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}<div class="card-footer"><button type="button" id="add-domain">Add Domain</button></div></section>
+<section class="card"><h2>Outbound Providers</h2>{{if .Outbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Outbound}}<tr class="row-link" data-href="/ui/outbound/{{.ID}}"><td><a href="/ui/outbound/{{.ID}}"><b>{{.Name}}</b></a><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/outbound/{{.ID}}/delete" data-confirm="Delete this outbound provider?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a provider to each domain before it can send.</span><button type="button" id="add-provider">Add Outbound Provider</button></div></section>
+<section class="card"><h2>Receiving Providers</h2>{{if .Inbound}}<table><thead><tr><th>Name</th><th></th></tr></thead><tbody>{{range .Inbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td class="actions"><button type="button" class="secondary icon-btn edit-inbound" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inbound/{{.ID}}/delete" data-confirm="Delete this receive path? Domains using it become unconfigured."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No receive path configured.</p>{{end}}<div class="card-footer"><span class="muted small">Assign a receive path to each domain before it can accept mail.</span><button type="button" id="add-inbound">Add Receive Path</button></div><p class="muted small">Mailgun: <code>POST {{.BaseURL}}/internal/ingest/mailgun/raw-mime</code> · Cloudflare Worker: <code>POST {{.BaseURL}}/internal/ingest/cloudflare</code>. Provider/DNS setup is external; saving a receive path alone does not establish delivery.</p></section></div>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}"{{if eq .Name "smtp"}} selected{{end}}>{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="provider-cancel">Cancel</button><button>Save Provider</button></div></form></dialog>
+<dialog id="inbound-dialog"><form method="post" action="/ui/inbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignInboundDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="inbound-provider-select">{{range .InboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .InboundProviders}}<fieldset class="inbound-provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-cancel">Cancel</button><button>Save Receive Path</button></div></form></dialog>
 <dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead><tbody>{{range .Inboxes}}<tr><td>{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments</td></tr><tr><td>Assistant</td><td>Read + delete messages</td></tr><tr><td>Owner</td><td>Assistant + send/reply and mailbox settings</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .AllowedSenders}}1{{end}}">{{.Address}}</option>{{end}}</select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Create</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
-<dialog id="domain-dialog"><h3 id="domain-dialog-title">Domain</h3><form method="post" id="domain-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Catch-all inbox</label><select name="inbox" id="domain-catchall"><option value="">No catch-all</option>{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><label>Sending provider</label><select name="provider" id="domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><p class="muted small" id="domain-provider-status" hidden></p></form><div class="dialog-actions"><form method="post" id="domain-delete-form" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Domain</button></form><button type="button" class="secondary" id="domain-cancel">Cancel</button><button type="submit" form="domain-form">Save</button></div></dialog>
-<dialog id="add-domain-dialog"><form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain <span title="Enter the bare domain (example.com). Add the whole domain even if you only use a few addresses." aria-label="More info">ⓘ</span></label><input name="name" placeholder="example.com" required aria-describedby="add-domain-hint"><p class="muted small" id="add-domain-hint">Enter the bare domain (<code>example.com</code>). Add the whole domain even if you only use a few addresses.</p><label>Sending provider</label><select name="provider" id="add-domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><div class="dialog-actions"><button type="button" class="secondary" id="add-domain-cancel">Cancel</button><button>Add Domain</button></div></form></dialog>
+<dialog id="domain-dialog"><h3 id="domain-dialog-title">Domain</h3><form method="post" id="domain-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Catch-all inbox</label><select name="inbox" id="domain-catchall"><option value="">No catch-all</option>{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><label>Sending provider</label><select name="provider" id="domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><p class="muted small" id="domain-provider-status" hidden></p><label>Receive path</label><select name="receive" id="domain-receive"><option value="">Not configured</option>{{range .Inbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_inbound__">Add new receive path…</option></select><p class="muted small" id="domain-receive-status" hidden></p></form><div class="dialog-actions"><form method="post" id="domain-delete-form" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Domain</button></form><button type="button" class="secondary" id="domain-cancel">Cancel</button><button type="submit" form="domain-form">Save</button></div></dialog>
+<dialog id="add-domain-dialog"><form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain <span title="Enter the bare domain (example.com). Add the whole domain even if you only use a few addresses." aria-label="More info">ⓘ</span></label><input name="name" placeholder="example.com" required aria-describedby="add-domain-hint"><p class="muted small" id="add-domain-hint">Enter the bare domain (<code>example.com</code>). Add the whole domain even if you only use a few addresses.</p><label>Sending provider</label><select name="provider" id="add-domain-provider"><option value="">None — paused</option>{{range .Outbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select><label>Receive path</label><select name="receive" id="add-domain-receive"><option value="">Not configured</option>{{range .Inbound}}<option value="{{.ID}}">{{.Name}}</option>{{end}}<option value="__add_inbound__">Add new receive path…</option></select><div class="dialog-actions"><button type="button" class="secondary" id="add-domain-cancel">Cancel</button><button>Add Domain</button></div></form></dialog>
 <dialog id="inbox-dialog"><form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email address</label><div class="email-field"><input name="local" placeholder="hermes" required><span class="at">@</span><select name="domain" required>{{range .Domains}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></div><label>Display Name</label><input name="display" placeholder="Hermes"><div class="dialog-actions"><button type="button" class="secondary" id="inbox-cancel">Cancel</button><button>Create Inbox</button></div></form></dialog>
 <dialog id="inbox-edit-dialog"><form method="post" id="inbox-edit-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Display name</label><input name="display"><label>Email address</label><input id="inbox-edit-address" value="" disabled><label>Allowed senders</label><p class="muted" id="inbox-sender-note">Anyone can email this inbox. Add an allowed sender to restrict who can email it.</p><ul id="inbox-sender-list" class="slist"><li class="empty">Anyone can email this inbox. Add an address below to restrict who can email it.</li></ul><div class="row"><input id="inbox-sender-input" type="text" placeholder="someone@example.com"><button type="button" class="secondary btn-narrow" id="inbox-sender-add">Add</button></div><p class="muted small" id="inbox-sender-hint">Use <code>*@example.com</code> to allow any sender at a domain, or <code>*@*.example.com</code> for its subdomains.</p></form><div class="dialog-actions"><form method="post" id="inbox-edit-delete-form" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Inbox</button></form><button type="button" class="secondary" id="inbox-edit-cancel">Cancel</button><button type="submit" form="inbox-edit-form">Save</button></div></dialog>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/dashboard" class="row"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<table><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span style="color:#b8860b;font-weight:700">Blocked</span>{{else if eq .Direction "outbound"}}Sent{{else}}Received{{end}}</td><td>{{.From.Address}}</td><td>{{join .To ", "}}</td><td>{{.Subject}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>`
@@ -310,6 +328,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
 	keys, _ := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
 	creds, _ := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
+	inboundCreds, _ := s.Service.Store.ListInboundCredentials(r.Context(), p.AccountID)
 	conns, _ := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
 	var msgs []model.Message
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
@@ -320,11 +339,17 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		msgs = mergeBlockedMessages(msgs, blocked, 100)
 	}
 	ov := s.outboundViews(creds)
+	iv := s.inboundViews(inboundCreds)
 	domainSending := domainSendingViews(domains, creds)
+	domainReceiving := domainReceivingViews(domains, inboundCreds)
 	var pausedDomains []string
+	var unconfiguredDomains []string
 	for _, d := range domains {
 		if domainSending[d.ID].Paused {
 			pausedDomains = append(pausedDomains, d.Name)
+		}
+		if domainReceiving[d.ID].Unconfigured {
+			unconfiguredDomains = append(unconfiguredDomains, d.Name)
 		}
 	}
 	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
@@ -337,13 +362,19 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			assignDomain = ""
 		}
 	}
+	assignInbound := strings.TrimSpace(r.URL.Query().Get("add_inbound_for"))
+	if assignInbound != "" {
+		if _, err := s.Service.Store.GetDomain(r.Context(), p.AccountID, assignInbound); err != nil {
+			assignInbound = ""
+		}
+	}
 	notice, secretLabel, secret := r.URL.Query().Get("notice"), "", ""
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(secretFlash); ok {
 			notice, secretLabel, secret = f.Notice, f.Label, f.Secret
 		}
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, Domains: domains, DomainSending: domainSending, PausedDomains: pausedDomains, AssignDomain: assignDomain, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, OutboundProviders: outboundProviderViews(), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSending: domainSending, DomainReceiving: domainReceiving, PausedDomains: pausedDomains, UnconfiguredDomains: unconfiguredDomains, AssignDomain: assignDomain, AssignInboundDomain: assignInbound, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, Inbound: iv, OutboundProviders: outboundProviderViews(), InboundProviders: inboundProviderViews(), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -357,13 +388,25 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	switch credID := strings.TrimSpace(r.Form.Get("provider")); {
-	case credID == addProviderOption:
+	outbound := strings.TrimSpace(r.Form.Get("provider"))
+	receive := strings.TrimSpace(r.Form.Get("receive"))
+	if outbound == addProviderOption {
 		// The domain exists; open the provider form to create and assign one.
 		http.Redirect(w, r, "/dashboard?add_provider_for="+url.QueryEscape(d.ID), 303)
 		return
-	case credID != "":
-		if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, d.ID, credID); err != nil {
+	}
+	if receive == addInboundOption {
+		http.Redirect(w, r, "/dashboard?add_inbound_for="+url.QueryEscape(d.ID), 303)
+		return
+	}
+	if outbound != "" {
+		if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, d.ID, outbound); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+	if receive != "" {
+		if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, d.ID, receive); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -376,6 +419,10 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 // provider form; the server ignores it if it is ever submitted.
 const addProviderOption = "__add_provider__"
 
+// addInboundOption is the equivalent sentinel for the domain's receive-path
+// select, opening the inbound credential form instead.
+const addInboundOption = "__add_inbound__"
+
 func (s *Server) uiUpdateDomain(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -387,8 +434,24 @@ func (s *Server) uiUpdateDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if provider := strings.TrimSpace(r.Form.Get("provider")); provider != addProviderOption {
-		if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, id, provider); err != nil {
+	outbound := strings.TrimSpace(r.Form.Get("provider"))
+	receive := strings.TrimSpace(r.Form.Get("receive"))
+	if outbound == addProviderOption {
+		http.Redirect(w, r, "/dashboard?add_provider_for="+url.QueryEscape(id), 303)
+		return
+	}
+	if receive == addInboundOption {
+		http.Redirect(w, r, "/dashboard?add_inbound_for="+url.QueryEscape(id), 303)
+		return
+	}
+	if outbound != "" || r.Form.Has("provider") {
+		if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, id, outbound); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
+	if receive != "" || r.Form.Has("receive") {
+		if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, id, receive); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -772,6 +835,54 @@ func (s *Server) uiOutboundDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard?notice=Outbound+provider+deleted", 303)
 }
 
+func (s *Server) uiInbound(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	id := strings.TrimSpace(r.Form.Get("id"))
+	provider := strings.ToLower(strings.TrimSpace(r.Form.Get("provider")))
+	t, ok := transport.LookupInbound(provider)
+	if !ok {
+		http.Error(w, "unknown provider", 400)
+		return
+	}
+	cfg := map[string]any{}
+	for _, f := range t.ConfigFields() {
+		if raw := strings.TrimSpace(r.Form.Get("icfg_" + provider + "_" + f.Name)); raw != "" {
+			cfg[f.Name] = raw
+		}
+	}
+	saved, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, id, r.Form.Get("name"), provider, cfg)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if domainID := strings.TrimSpace(r.Form.Get("assign_domain")); domainID != "" {
+		if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, domainID, saved.ID); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		http.Redirect(w, r, "/dashboard?notice=Receive+path+assigned+to+domain", 303)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Receive+path+saved", 303)
+}
+
+func (s *Server) uiInboundDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.DeleteInboundCredential(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/dashboard?notice=Receive+path+deleted", 303)
+}
+
 func outboundConfigFromForm(t transport.OutboundTransport, r *http.Request, requireSecrets bool) (map[string]any, error) {
 	fp, ok := t.(transport.ConfigSchemaProvider)
 	if !ok {
@@ -830,6 +941,31 @@ func (s *Server) outboundViews(creds []store.OutboundCredential) []outboundView 
 	return out
 }
 
+func (s *Server) inboundViews(creds []store.InboundCredential) []inboundView {
+	out := []inboundView{}
+	for _, c := range creds {
+		v := inboundView{ID: c.ID, Name: c.Name, Provider: c.Provider}
+		if t, ok := transport.LookupInbound(c.Provider); ok {
+			if cfg, err := s.Service.DecryptInboundCredential(c); err == nil {
+				public := map[string]any{}
+				for _, f := range t.ConfigFields() {
+					if f.Secret {
+						continue
+					}
+					if val, ok := cfg[f.Name]; ok {
+						public[f.Name] = val
+					}
+				}
+				if b, err := json.Marshal(public); err == nil {
+					v.ConfigJSON = string(b)
+				}
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
 // domainSendingViews resolves each domain's outbound provider for display. A
 // domain with no credential is shown as paused.
 func domainSendingViews(domains []model.Domain, creds []store.OutboundCredential) map[string]domainSendingView {
@@ -857,6 +993,33 @@ func outboundProviderViews() []outboundProviderView {
 			v.Fields = fp.ConfigFields()
 		}
 		out = append(out, v)
+	}
+	return out
+}
+
+// domainReceivingViews resolves each domain's inbound credential for display.
+// A domain with no receive path is shown as unconfigured.
+func domainReceivingViews(domains []model.Domain, creds []store.InboundCredential) map[string]domainReceivingView {
+	names := make(map[string]string, len(creds))
+	for _, c := range creds {
+		names[c.ID] = c.Name
+	}
+	out := make(map[string]domainReceivingView, len(domains))
+	for _, d := range domains {
+		name, ok := names[d.InboundCredentialID]
+		if d.InboundCredentialID == "" || !ok {
+			out[d.ID] = domainReceivingView{ProviderLabel: "Not configured", Unconfigured: true}
+			continue
+		}
+		out[d.ID] = domainReceivingView{ProviderLabel: name}
+	}
+	return out
+}
+
+func inboundProviderViews() []outboundProviderView {
+	out := []outboundProviderView{}
+	for _, t := range transport.ListInbound() {
+		out = append(out, outboundProviderView{Name: t.Name(), Description: t.Description(), Fields: t.ConfigFields()})
 	}
 	return out
 }

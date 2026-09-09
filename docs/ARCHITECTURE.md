@@ -65,6 +65,7 @@ listeners run in the same process and share the same store.
 
   /transport
       /mailgun
+      /cloudflare
       /smtp
 
   /integrations
@@ -84,37 +85,57 @@ Packages should follow capability boundaries rather than generic framework layer
 
 ## 3. Canonical inbound boundary
 
-Transport adapters normalize provider delivery into a core type:
+Transport adapters authenticate their own webhook, stage raw MIME to a bounded
+temp file, and return both a normalized message and the explicit binding they
+verified:
 
 ```go
 type InboundMessage struct {
-    Transport     string
-    EnvelopeFrom  string
-    EnvelopeTo    []string
-    ReceivedAt    time.Time
-    RawMIME       io.Reader
-    ProviderID    string
+    Provider          string
+    Recipient         string // canonical original envelope recipient
+    EnvelopeFrom      string
+    RawPath           string
+    Size              int64
+    DeliveryID        string
+    ProviderMessageID string
+}
+
+type InboundBinding struct {
+    AccountID, DomainID, CredentialID, Provider, Recipient string
+    Config map[string]any // decrypted provider configuration
+}
+
+type InboundTransport interface {
+    Name() string
+    Description() string
+    ConfigFields() []ConfigField
+    Receive(ctx context.Context, r *http.Request, resolver BindingResolver, tmpPath string, maxBytes int64) (InboundMessage, InboundBinding, error)
 }
 ```
 
-The mailbox core should be transport-neutral beyond this boundary.
+The service implements `BindingResolver`, which maps the envelope recipient to
+the account, domain, and assigned encrypted receive credential. Provider auth
+material stays inside the adapter. The mailbox core is transport-neutral beyond
+this boundary.
 
 ## 4. Inbound transaction
 
 ```text
 receive provider request
        ↓
-authenticate provider
+resolve recipient → domain → assigned receive credential (decrypted config)
        ↓
-derive provider delivery key
+authenticate provider (before MIME is parsed; Cloudflare before MIME is read)
        ↓
-stream raw MIME to controlled temporary path
+stream raw MIME to controlled temporary path (bounded)
        ↓
-resolve recipient(s)
+validate the resolved inbox against the authenticated account/domain
        ↓
 parse required metadata
        ↓
 begin SQLite transaction
+       ↓
+dedup on (account, provider, canonical recipient, provider delivery id)
        ↓
 insert message / recipients / inbox links / thread / event
        ↓
@@ -127,11 +148,18 @@ publish in-process realtime notification
 provider success response
 ```
 
-Mailgun delivery idempotency uses the authenticated Mailgun webhook `token` as the provider delivery key. Store the token only with the successfully committed message so a failed first attempt can be retried safely. MIME `Message-ID` remains message metadata rather than the delivery deduplication key.
+Mailgun delivery idempotency uses the authenticated Mailgun webhook `token`;
+Cloudflare uses its delivery id or a raw-MIME hash. Store the delivery id only
+with the successfully committed message so a failed first attempt can be
+retried safely. The dedup key is scoped to the account, provider, and canonical
+original envelope recipient, so the same delivery id for a different recipient
+or account is not collapsed, and replacing a credential does not turn a retry
+into a new delivery. MIME `Message-ID` remains message metadata rather than the
+delivery deduplication key.
 
 Thread lookup is always scoped to the same `account_id` and `inbox_id`. Standard `Message-ID`, `In-Reply-To`, and `References` headers select the thread only inside that boundary.
 
-Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return Mailgun `406` and create a minimal audit entry.
+Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing credentials, unknown domains, and bad authentication return a uniform `401`.
 
 ## 5. Persistence
 

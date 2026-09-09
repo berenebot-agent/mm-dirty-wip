@@ -38,11 +38,11 @@ This file records architectural decisions the implementation should treat as set
 
 ## D006 — Mailgun reference inbound transport
 
-**Decision:** V1 inbound internet transport uses Mailgun HTTPS delivery.
+**Decision:** V1 inbound internet transport uses Mailgun HTTPS delivery, with Cloudflare Email Routing (via a Worker) as a second adapter.
 
-**Reason:** It removes public SMTP/MX protocol operation from the application while keeping the provider adapter small.
+**Reason:** It removes public SMTP/MX protocol operation from the application while keeping each provider adapter small.
 
-**Boundary:** Mailgun-specific code remains isolated in `/internal/transport/mailgun`.
+**Boundary:** Provider-specific code remains isolated in `/internal/transport/mailgun` and `/internal/transport/cloudflare`. Adapters authenticate their own webhook and return the explicit binding they verified; the shared mailbox core is transport-neutral.
 
 ## D007 — BYO outbound
 
@@ -140,9 +140,9 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 ## D016 — Mail integrity boundaries
 
-**Decision:** Mailgun webhook tokens provide inbound delivery idempotency. Thread matching is scoped to the same account and inbox. Unknown recipients use a configured catch-all or receive a terminal transport rejection.
+**Decision:** Inbound delivery idempotency is scoped to `(account_id, provider, canonical original envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated webhook `token`; Cloudflare uses its delivery id or a raw-MIME hash. Thread matching is scoped to the same account and inbox. Unknown recipients use a configured catch-all or receive a terminal transport rejection.
 
-**Reason:** Stable retry behaviour and isolation between mailboxes/accounts.
+**Reason:** Stable retry behaviour and isolation between mailboxes/accounts. Including the original recipient prevents a catch-all from collapsing distinct deliveries, and excluding the credential row means replacing a credential does not turn a retry into a new delivery.
 
 ## D017 — Root encryption key
 
@@ -158,9 +158,17 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 ## D019 — Dedicated inbound webhook listener
 
-**Decision:** The application always runs a second HTTP listener on `:8082` that serves only the authenticated inbound webhook routes (`/internal/ingest/mailgun`, `/internal/ingest/{provider}`) and `/healthz`. The main listener continues to serve all routes.
+**Decision:** The application always runs a second HTTP listener on `:8082` that serves only the authenticated inbound webhook routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/cloudflare`, and `/internal/ingest/{provider}`) and `/healthz`. The main listener continues to serve all routes.
 
 **Reason:** This lets an operator expose only the inbound connector to the public internet while keeping the API, web UI, and Relay WebSocket on a private interface or firewall, reducing public attack surface. It remains one process, one container, and one store, so D003 is preserved. Ingest routes stay on the main listener for backward compatibility. The port is fixed rather than configurable so the split works with no extra configuration.
+
+## D020 — Account-owned inbound credentials, domain assignments
+
+**Decision:** Inbound provider secrets are stored as account-owned, encrypted credentials (`inbound_credentials`), and each domain selects one nullable receive credential (`domains.inbound_credential_id`) independent of its outbound credential. Credential reuse is restricted to the same account. Provider identity is immutable on update. The process environment no longer supplies inbound secrets (`MAILGUN_SIGNING_KEY`, `CLOUDFLARE_WEBHOOK_SECRET` are removed).
+
+**Reason:** The concrete BYO requirement is that a self-hosted operator can add a domain, add or select its receive path, and follow the provider's setup steps without editing environment variables or restarting. This supports multiple providers and multiple credentials per account while keeping encryption at rest on the existing `APP_ENCRYPTION_KEY` AES-GCM path. One receive connection per domain is a V1 simplification; provider overlap and failover are deferred. A domain with no receive path is valid to save but cannot accept mail.
+
+**Boundary:** Provider-specific webhook parsing and authentication stay in the transport adapters. The service resolves the account/domain/credential binding and the shared core persists the message.
 
 ## Future extension register
 

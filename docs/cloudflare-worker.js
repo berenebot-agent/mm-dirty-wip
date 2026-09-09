@@ -2,48 +2,40 @@
 //
 // Deployment steps and dashboard navigation are in docs/CLOUDFLARE_INBOUND.md.
 //
-// Update these two constants:
-//   WEBHOOK_URL - your instance's Cloudflare ingest endpoint
-//   SECRET       - must match CLOUDFLARE_WEBHOOK_SECRET
+// The Worker streams the raw MIME to Gatehouse without buffering it. Set
+// WEBHOOK_URL to your instance's Cloudflare ingest endpoint and make SECRET
+// match the webhook secret on the domain's receive path. Prefer binding
+// GATEHOUSE_WEBHOOK_SECRET as a Worker secret; the SECRET constant is a
+// fallback for quick testing.
 const WEBHOOK_URL = "https://mail.example.com/internal/ingest/cloudflare";
-const SECRET = "replace-with-your-cloudeflare-webhook-secret";
-
-// Helper function to safely convert ArrayBuffer to Base64 in V8/Workers
-function arrayBufferToBase64(buffer) {
-  let binary = "";
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
+const SECRET = "replace-with-your-gatehouse-webhook-secret";
 
 export default {
   async email(message, env, ctx) {
-    // Read the message.raw ReadableStream as an ArrayBuffer
-    const rawBuffer = await new Response(message.raw).arrayBuffer();
-    const raw_mime_b64 = arrayBufferToBase64(rawBuffer);
-
-    const payload = {
-      recipient: message.to,
-      envelope_from: message.from,
-      raw_mime_b64: raw_mime_b64,
-      delivery_id: "", // leave empty; server hashes the MIME for dedup
-      received_at: new Date().toISOString(),
-    };
+    const secret = (env && env.GATEHOUSE_WEBHOOK_SECRET) || SECRET;
 
     const resp = await fetch(WEBHOOK_URL, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + SECRET,
+        "Content-Type": "message/rfc822",
+        "Authorization": "Bearer " + secret,
+        // Envelope metadata; the recipient selects the domain and its secret.
+        "X-Gatehouse-Recipient": message.to,
+        "X-Gatehouse-Envelope-From": message.from,
+        // Optional stable delivery id; when absent the server derives one from
+        // a hash of the raw MIME.
+        // "X-Gatehouse-Delivery-ID": "",
       },
-      body: JSON.stringify(payload),
+      // message.raw is a ReadableStream and is forwarded as-is.
+      body: message.raw,
     });
 
     if (!resp.ok) {
-      console.error("gatehouse forward failed", resp.status, await resp.text());
+      const detail = await resp.text();
+      // Throwing surfaces the failure in Worker logs and lets Cloudflare retry.
+      // Gatehouse returns 4xx for permanent rejections and 5xx for retryable
+      // failures; inspect `resp.status` to distinguish them.
+      throw new Error("gatehouse forward failed: " + resp.status + " " + detail);
     }
   },
 };

@@ -67,65 +67,69 @@ func (s *Service) messagePath() string {
 	return filepath.Join(s.Config.DataDir, "messages", id[4:6], id[6:8], id+".eml")
 }
 
-func (s *Service) inboundSecret(provider string) (string, error) {
-	switch provider {
-	case "mailgun":
-		if s.Config.MailgunSigningKey == "" {
-			return "", fmt.Errorf("MAILGUN_SIGNING_KEY is not configured")
+// ResolveInboundBinding implements transport.BindingResolver. It maps an
+// envelope recipient to its domain and assigned receive credential, decrypts
+// the provider configuration, and returns ErrInboundUnauthorized for unknown or
+// unconfigured recipients so every rejection is uniform.
+func (s *Service) ResolveInboundBinding(ctx context.Context, provider, recipient string) (transport.InboundBinding, error) {
+	b, err := s.Store.ResolveInboundBinding(ctx, provider, recipient)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return transport.InboundBinding{}, transport.ErrInboundUnauthorized
 		}
-		return s.Config.MailgunSigningKey, nil
-	case "cloudflare":
-		if s.Config.CloudflareSecret == "" {
-			return "", fmt.Errorf("CLOUDFLARE_WEBHOOK_SECRET is not configured")
-		}
-		return s.Config.CloudflareSecret, nil
-	default:
-		return "", fmt.Errorf("%w: %s", transport.ErrUnknownProvider, provider)
+		return transport.InboundBinding{}, err
 	}
+	cfg, err := s.decryptConfig(b.EncryptedConfig)
+	if err != nil {
+		return transport.InboundBinding{}, err
+	}
+	return transport.InboundBinding{
+		AccountID:    b.AccountID,
+		DomainID:     b.DomainID,
+		CredentialID: b.CredentialID,
+		Provider:     b.Provider,
+		Recipient:    b.Recipient,
+		Config:       cfg,
+	}, nil
 }
 
-// IngestInbound runs the shared provider-neutral ingest pipeline for any
-// registered inbound transport: parse the provider webhook, verify
-// authenticity with the provider scheme, resolve the recipient, parse the
-// staged MIME, commit transactionally, then publish the realtime event.
+// IngestInbound receives a provider webhook: the adapter authenticates it and
+// stages the raw MIME, then the shared core persists it. HTTP request details
+// and provider secrets stay outside the core.
 func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Request) (model.Message, bool, error) {
 	t, ok := transport.LookupInbound(provider)
 	if !ok {
 		return model.Message{}, false, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, provider)
 	}
-	secret, err := s.inboundSecret(provider)
-	if err != nil {
-		return model.Message{}, false, err
-	}
 	tmp := filepath.Join(s.Config.DataDir, "messages", ".tmp", idgen.New("in")+".eml")
 	defer os.Remove(tmp)
-	// Providers that can authenticate from headers alone (e.g. Cloudflare
-	// bearer) are verified before the MIME body is read, so an unauthenticated
-	// request never triggers expensive MIME processing.
-	if pv, ok := t.(transport.PreVerifyTransport); ok && pv.VerifyBeforeParse() {
-		if err = t.Verify(r, transport.InboundMessage{}, secret); err != nil {
-			return model.Message{}, false, err
-		}
-	}
-	msg, err := t.Parse(r, tmp, s.Config.MaxMessageBytes)
+	msg, binding, err := t.Receive(ctx, r, s, tmp, s.Config.MaxMessageBytes)
 	if err != nil {
 		return model.Message{}, false, err
 	}
-	if err = t.Verify(r, msg, secret); err != nil {
-		return model.Message{}, false, err
-	}
-	recipient := msg.Recipient
-	if a, e := mail.ParseAddress(recipient); e == nil {
-		recipient = a.Address
-	}
-	inbox, _, err := s.Store.ResolveRecipient(ctx, recipient)
+	return s.ingestStaged(ctx, provider, msg, binding)
+}
+
+// ingestStaged is the protocol-independent mailbox core. It resolves the inbox
+// for the canonical envelope recipient, validates the authenticated binding,
+// parses MIME, applies sender rules and quota, persists the message/event
+// transactionally, then publishes the realtime event. A future SMTP ingress can
+// call the same core with its own authorization context.
+func (s *Service) ingestStaged(ctx context.Context, provider string, msg transport.InboundMessage, binding transport.InboundBinding) (model.Message, bool, error) {
+	inbox, _, err := s.Store.ResolveRecipient(ctx, msg.Recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			s.auditUnrouted(provider, recipient)
+			s.auditUnrouted(provider, msg.Recipient)
 		}
 		return model.Message{}, false, err
 	}
-	parsed, err := mailparse.ParseFile(tmp)
+	// The inbox must belong to the exact account/domain that was authenticated.
+	// This also covers catch-all routing, where the inbox address differs from
+	// the original recipient but the domain is the same.
+	if inbox.AccountID != binding.AccountID || inbox.DomainID != binding.DomainID {
+		return model.Message{}, false, transport.ErrInboundUnauthorized
+	}
+	parsed, err := mailparse.ParseFile(msg.RawPath)
 	if err != nil {
 		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
 	}
@@ -137,7 +141,8 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 		}
 		bm, dup, err := s.Store.CommitBlockedInbound(ctx, store.BlockedRecord{
 			AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
-			ProviderDeliveryID: msg.DeliveryID, From: blockedFrom, To: parsed.To,
+			ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
+			From: blockedFrom, To: parsed.To,
 			Subject: parsed.Subject, Reason: "sender not allowed", SizeBytes: msg.Size, ReceivedAt: blockedAt,
 		})
 		if err != nil {
@@ -149,7 +154,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 		return model.Message{}, false, err
 	}
-	if err = os.Rename(tmp, final); err != nil {
+	if err = os.Rename(msg.RawPath, final); err != nil {
 		return model.Message{}, false, err
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, final)
@@ -162,7 +167,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{strings.ToLower(recipient)}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err
@@ -176,11 +181,6 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 	return m, false, nil
 }
 
-// IngestMailgun is the compat entry point for the legacy
-// POST /internal/ingest/mailgun route.
-func (s *Service) IngestMailgun(ctx context.Context, r *http.Request) (model.Message, bool, error) {
-	return s.IngestInbound(ctx, "mailgun", r)
-}
 func firstNonEmpty(vs ...string) string {
 	for _, v := range vs {
 		if strings.TrimSpace(v) != "" {
@@ -244,7 +244,74 @@ func (s *Service) SaveOutboundCredential(ctx context.Context, accountID, id, nam
 	return s.Store.SaveOutboundCredential(ctx, accountID, id, name, provider, enc)
 }
 func (s *Service) DecryptOutboundCredential(c store.OutboundCredential) (map[string]any, error) {
-	b, err := cryptox.Decrypt(s.EncryptionKey, c.EncryptedConfig)
+	return s.decryptConfig(c.EncryptedConfig)
+}
+
+// SaveInboundCredential creates or updates an account-owned receive
+// credential. Provider identity is immutable on update: switching providers
+// requires a new credential and a domain reassignment. Blank secret fields on
+// update retain the stored value, and required secrets are validated before
+// persistence.
+func (s *Service) SaveInboundCredential(ctx context.Context, accountID, id, name, provider string, cfg any) (store.InboundCredential, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	t, ok := transport.LookupInbound(provider)
+	if !ok {
+		return store.InboundCredential{}, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, provider)
+	}
+	fields := t.ConfigFields()
+	var existing store.InboundCredential
+	if id != "" {
+		e, err := s.Store.GetInboundCredential(ctx, accountID, id)
+		if err != nil {
+			return store.InboundCredential{}, err
+		}
+		if e.Provider != provider {
+			return store.InboundCredential{}, fmt.Errorf("%w: provider cannot be changed", store.ErrForbidden)
+		}
+		existing = e
+	}
+	values, _ := cfg.(map[string]any)
+	if values == nil {
+		values = map[string]any{}
+	}
+	for _, f := range fields {
+		if !f.Required || !f.Secret {
+			continue
+		}
+		if v, _ := values[f.Name].(string); strings.TrimSpace(v) != "" {
+			continue
+		}
+		// Retain the stored secret when editing the same provider.
+		if id != "" {
+			if old, err := s.decryptConfig(existing.EncryptedConfig); err == nil {
+				if ov, ok := old[f.Name]; ok {
+					values[f.Name] = ov
+					continue
+				}
+			}
+		}
+		return store.InboundCredential{}, fmt.Errorf("%s is required", f.Label)
+	}
+	if strings.TrimSpace(name) == "" {
+		name = t.Description()
+	}
+	b, err := json.Marshal(values)
+	if err != nil {
+		return store.InboundCredential{}, err
+	}
+	enc, err := cryptox.Encrypt(s.EncryptionKey, b)
+	if err != nil {
+		return store.InboundCredential{}, err
+	}
+	return s.Store.SaveInboundCredential(ctx, accountID, id, name, provider, enc)
+}
+
+func (s *Service) DecryptInboundCredential(c store.InboundCredential) (map[string]any, error) {
+	return s.decryptConfig(c.EncryptedConfig)
+}
+
+func (s *Service) decryptConfig(encrypted string) (map[string]any, error) {
+	b, err := cryptox.Decrypt(s.EncryptionKey, encrypted)
 	if err != nil {
 		return nil, err
 	}

@@ -4,8 +4,8 @@ This guide sets up Cloudflare Email Routing so incoming mail reaches your
 Gatehouse Email instance over the generic inbound webhook.
 
 Email Routing cannot POST directly to an arbitrary URL - it delivers each
-message to a Cloudflare Worker. The Worker below receives the message, wraps
-the raw MIME in JSON, and forwards it to Gatehouse Email.
+message to a Cloudflare Worker. The Worker below streams the raw MIME and the
+envelope metadata to Gatehouse Email.
 
 Flow:
 
@@ -14,46 +14,70 @@ Internet email -> Cloudflare MX -> Email Routing -> Worker -> HTTPS POST
     -> /internal/ingest/cloudflare -> logical inbox
 ```
 
+## 1. Add the receive path in Gatehouse Email
+
+Inbound provider secrets are no longer environment variables. Configure them
+per domain:
+
+1. Open the Admin **Dashboard** and edit the domain you receive on.
+2. Under **Receive path**, choose **Add new receive path…**, pick
+   **Cloudflare Worker**, and enter a long random **Worker shared secret**.
+3. Save. Gatehouse creates the encrypted credential and assigns it to the
+   domain. Repeat for each domain you receive on.
+
+You can also use the REST API:
+
+```bash
+curl -X POST "$BASE_URL/v1/admin/inbound" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"cloudflare","config":{"webhook_secret":"generate-a-long-random-secret"}}'
+```
+
+Then assign it to the domain:
+
+```bash
+curl -X PATCH "$BASE_URL/v1/admin/domains/$DOMAIN_ID" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"inbound_credential_id":"<id from the create response>"}'
+```
+
 ## Webhook contract
 
 - Endpoint: `POST /internal/ingest/cloudflare`
-- Auth: `Authorization: Bearer <CLOUDFLARE_WEBHOOK_SECRET>`
-- Content-Type: `application/json`
-- Body:
+- Auth: `Authorization: Bearer <webhook_secret>` (the domain's receive-path
+  credential)
+- Content-Type: `message/rfc822`
+- Headers:
+  - `X-Gatehouse-Recipient` (required) - the envelope recipient; selects the
+    domain and its assigned credential. It is a routing hint and grants no
+    authority until the bearer matches.
+  - `X-Gatehouse-Envelope-From` (optional) - the envelope sender.
+  - `X-Gatehouse-Delivery-ID` (optional, bounded) - a stable id used for
+    deduplication. When absent, the server derives one from a SHA-256 hash of
+    the raw MIME. Reuse the same id when the Worker retries a delivery.
+- Body: the raw RFC822 message, streamed to a bounded temp file.
 
-```json
-{
-  "recipient": "hermes@example.com",
-  "envelope_from": "sender@outside.test",
-  "raw_mime_b64": "RnJvbTogc2VuZGVyQG91dHNpZGUudGVzdA0K...",
-  "received_at": "2026-09-08T19:00:00Z",
-  "delivery_id": "<Message-Id or empty>"
-}
-```
+The server verifies the bearer **before** reading the message body. Invalid or
+missing authentication is rejected without consuming MIME.
 
-- `recipient` must resolve to an enabled inbox (or the domain catch-all) on
-  your account, otherwise the server returns `406` and drops the message.
-- `delivery_id` is the dedup key. Provide the message `Message-Id` if
-  available; if empty, the server derives it from a SHA-256 of the raw MIME.
+- `recipient` must resolve to an enabled inbox (or the domain catch-all) on the
+  assigned account, otherwise the server returns `406` and drops the message.
+- A domain with no receive path returns `401` (uniform unauthorized).
 
-## 1. Set the server secret
-
-In `.env` set:
-
-```text
-CLOUDFLARE_WEBHOOK_SECRET=generate-a-long-random-secret
-```
-
-Keep this secret matching the `SECRET` constant in the Worker.
+The content-hash fallback can collapse separate identical messages to the same
+recipient, so provide a delivery id when you can.
 
 ## 2. Copy the Worker example
 
 Take `docs/cloudflare-worker.js` as your Worker. Set `WEBHOOK_URL` to your
-instance's ingest endpoint and set `SECRET`:
+instance's ingest endpoint and configure the secret (prefer a Worker secret
+named `GATEHOUSE_WEBHOOK_SECRET`, or set the `SECRET` constant):
 
 ```js
 const WEBHOOK_URL = "https://mail.example.com/internal/ingest/cloudflare";
-const SECRET = "your-cloudeflare-webhook-secret";
+const SECRET = "your-gatehouse-webhook-secret";
 ```
 
 ## 3. Create the Worker (Cloudflare dashboard)
@@ -98,6 +122,13 @@ server routes unknown local parts according to the domain catch-all setting.
 ## Verification
 
 Send an email to the configured address, then check the message appears in
-the inbox via the UI or `GET /v1/messages`. If it does not arrive, check the
-Worker logs (Workers & Pages -> your Worker -> Logs) for the forwarded
-status, and confirm `CLOUDFLARE_WEBHOOK_SECRET` matches the Worker `SECRET`.
+the inbox via the UI or `GET /v1/messages`. If it does not arrive:
+
+- check the Worker logs (Workers & Pages -> your Worker -> Logs) for the
+  forwarded status; the Worker throws on a non-2xx response so failures are
+  visible and Cloudflare can retry;
+- confirm the Worker secret matches the domain's receive-path credential;
+- confirm the domain's **Receive path** is configured and the inbox exists.
+
+Provider/DNS setup is external: saving a receive path alone does not establish
+delivery.

@@ -51,7 +51,7 @@ func TestInboundHandlerAcceptsWebhook(t *testing.T) {
 	svc, _, _, _, box := httpFixture(t)
 	h := New(svc, nil).InboundHandler()
 
-	req := signedMGRequest(t, svc.Config.MailgunSigningKey, "inbound-dedicated", box.Address, inboundRawMessage())
+	req := signedMGRequest(t, testMailgunKey, "inbound-dedicated", box.Address, inboundRawMessage())
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -60,9 +60,9 @@ func TestInboundHandlerAcceptsWebhook(t *testing.T) {
 }
 
 func TestMainHandlerStillServesInbound(t *testing.T) {
-	svc, h, _, _, box := httpFixture(t)
+	_, h, _, _, box := httpFixture(t)
 
-	req := signedMGRequest(t, svc.Config.MailgunSigningKey, "inbound-main", box.Address, inboundRawMessage())
+	req := signedMGRequest(t, testMailgunKey, "inbound-main", box.Address, inboundRawMessage())
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {

@@ -251,15 +251,49 @@ data: {"message_id":"msg_01K...","inbox_id":"in_01K...","thread_id":"thr_01K..."
 
 On connection, backlog after the supplied cursor is delivered before the stream joins live events.
 
-## 11. Mailgun inbound endpoint
+## 11. Inbound endpoints and receive configuration
+
+Mailgun canonical endpoint:
 
 ```http
 POST /internal/ingest/mailgun/raw-mime
 ```
 
-This is the canonical Mailgun receive endpoint. It authenticates Mailgun requests and converts delivery to the canonical `InboundMessage`. The legacy `/internal/ingest/mailgun` and `/internal/ingest/{provider}` routes remain available for backward compatibility.
+Cloudflare Worker endpoint:
 
-The authenticated Mailgun webhook token is the provider delivery idempotency key. Unknown recipients route to the domain catch-all when configured; otherwise the endpoint returns `406`.
+```http
+POST /internal/ingest/cloudflare
+```
+
+Both authenticate the provider (Mailgun HMAC signature; Cloudflare bearer plus
+`X-Gatehouse-Recipient`) before parsing or persisting MIME, then convert
+delivery to the canonical `InboundMessage` with an explicit authenticated
+binding. The legacy `/internal/ingest/mailgun` alias has been removed;
+`/internal/ingest/{provider}` remains for other providers.
+
+Delivery idempotency is scoped to `(account_id, provider, canonical original
+envelope recipient, provider_delivery_id)`. Mailgun uses its authenticated
+webhook `token`; Cloudflare uses `X-Gatehouse-Delivery-ID` or a SHA-256 hash of
+the raw MIME. Unknown recipients route to the domain catch-all when configured;
+otherwise the endpoint returns `406`. Missing credentials, unknown domains, and
+bad authentication return `401`.
+
+Receive connections are account-owned, encrypted credentials configured
+through the Admin API (Admin role required):
+
+```http
+GET    /v1/admin/inbound
+POST   /v1/admin/inbound
+PATCH  /v1/admin/inbound/{id}
+DELETE /v1/admin/inbound/{id}
+```
+
+`POST`/`PATCH` accept `provider` and a provider-specific `config`
+(`mailgun: {"signing_key": "..."}`; `cloudflare: {"webhook_secret": "..."}`).
+Provider identity is immutable on update; a blank secret retains the stored
+value; secret fields are never returned. Assign a credential to a domain with
+`inbound_credential_id` on `POST`/`PATCH /v1/admin/domains[/{id}]`
+(`PATCH` with `""` clears it).
 
 It is provider-facing rather than agent-facing.
 

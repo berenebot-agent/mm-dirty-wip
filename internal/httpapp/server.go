@@ -100,6 +100,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/outbound", s.withSession(s.withCSRF(s.uiOutbound)))
 	m.HandleFunc("POST /ui/outbound/{id}/delete", s.withSession(s.withCSRF(s.uiOutboundDelete)))
 	m.HandleFunc("GET /ui/outbound/{id}", s.withSession(s.uiOutboundDetail))
+	m.HandleFunc("POST /ui/inbound", s.withSession(s.withCSRF(s.uiInbound)))
+	m.HandleFunc("POST /ui/inbound/{id}/delete", s.withSession(s.withCSRF(s.uiInboundDelete)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
@@ -184,6 +186,10 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/admin/outbound", api(s.apiOutbound))
 	m.HandleFunc("GET /v1/admin/outbound/{id}/deliveries", api(s.apiOutboundDeliveries))
 	m.HandleFunc("DELETE /v1/admin/outbound/{id}", api(s.apiOutboundDelete))
+	m.HandleFunc("GET /v1/admin/inbound", api(s.apiInbound))
+	m.HandleFunc("POST /v1/admin/inbound", api(s.apiInbound))
+	m.HandleFunc("PATCH /v1/admin/inbound/{id}", api(s.apiInboundItem))
+	m.HandleFunc("DELETE /v1/admin/inbound/{id}", api(s.apiInboundItem))
 	m.HandleFunc("POST /v1/admin/hermes/enroll", api(s.apiHermesEnroll))
 	m.HandleFunc("GET /v1/admin/hermes", api(s.apiHermesList))
 	m.HandleFunc("DELETE /v1/admin/hermes/{id}", api(s.apiHermesDelete))
@@ -203,10 +209,8 @@ func (s *Server) InboundHandler() http.Handler {
 
 func (s *Server) registerInbound(m *http.ServeMux) {
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
-	// Canonical Mailgun receive endpoint.
+	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
 	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
-	// Backward-compatible aliases.
-	m.HandleFunc("POST /internal/ingest/mailgun", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
 }
 

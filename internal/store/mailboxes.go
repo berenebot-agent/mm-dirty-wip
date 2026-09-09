@@ -39,7 +39,7 @@ func (s *Store) CreateDomain(ctx context.Context, accountID, name string) (model
 	return model.Domain{ID: id, AccountID: accountID, Name: name, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Domain, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),created_at FROM domains WHERE account_id=? ORDER BY name`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),COALESCE(inbound_credential_id,''),created_at FROM domains WHERE account_id=? ORDER BY name`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 	for rows.Next() {
 		var d model.Domain
 		var c string
-		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &c); err != nil {
+		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &d.InboundCredentialID, &c); err != nil {
 			return nil, err
 		}
 		d.CreatedAt = parseTime(c)
@@ -60,7 +60,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 func (s *Store) GetDomain(ctx context.Context, accountID, domainID string) (model.Domain, error) {
 	var d model.Domain
 	var c string
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),created_at FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &c)
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),COALESCE(inbound_credential_id,''),created_at FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &d.InboundCredentialID, &c)
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
