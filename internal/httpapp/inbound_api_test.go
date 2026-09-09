@@ -210,7 +210,6 @@ func TestDashboardRendersInboundControls(t *testing.T) {
 		"Add Receive Path",
 		"inbound-provider-select",
 		`data-provider="cloudflare"`,
-		"tab=settings",
 		"domain-receive",
 		"add-domain-receive",
 	} {

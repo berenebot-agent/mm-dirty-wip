@@ -207,10 +207,11 @@ func TestUIDomainCreateWithAddProviderRedirect(t *testing.T) {
 		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.HasPrefix(loc, "/dashboard?add_provider_for=") {
+	const prefix = "/dashboard?tab=settings&add_provider_for="
+	if !strings.HasPrefix(loc, prefix) {
 		t.Fatalf("location %q", loc)
 	}
-	domainID := strings.TrimPrefix(loc, "/dashboard?add_provider_for=")
+	domainID := strings.TrimPrefix(loc, prefix)
 	dom, err := svc.Store.GetDomain(ctx, u.AccountID, domainID)
 	if err != nil || dom.OutboundCredentialID != "" {
 		t.Fatalf("domain should exist with no provider: %v %+v", err, dom)
