@@ -4,8 +4,8 @@ This guide sets up Cloudflare Email Routing so incoming mail reaches your
 Gatehouse Email instance over the generic inbound webhook.
 
 Email Routing cannot POST directly to an arbitrary URL - it delivers each
-message to a Cloudflare Worker. The Worker below streams the raw MIME and the
-envelope metadata to Gatehouse Email.
+message to a Cloudflare Worker. Gatehouse Email generates a ready-to-paste
+Worker that streams the raw MIME and the envelope metadata to Gatehouse Email.
 
 Flow:
 
@@ -16,16 +16,20 @@ Internet email -> Cloudflare MX -> Email Routing -> Worker -> HTTPS POST
 
 ## 1. Add the receive path in Gatehouse Email
 
-Inbound provider secrets are no longer environment variables. Configure them
-per domain:
+Inbound provider secrets are no longer environment variables. Gatehouse
+generates the Cloudflare shared secret for you:
 
-1. Open the Admin **Dashboard** and edit the domain you receive on.
+1. Open the Admin **Settings** tab and edit the domain you receive on.
 2. Under **Receive path**, choose **Add new receive path…**, pick
-   **Cloudflare Worker**, and enter a long random **Worker shared secret**.
-3. Save. Gatehouse creates the encrypted credential and assigns it to the
-   domain. Repeat for each domain you receive on.
+   **Cloudflare Worker**, and click **Generate Worker**.
+3. Gatehouse creates the encrypted credential, assigns it to the domain, and
+   opens a one-time setup page with the complete Worker code (the generated
+   secret is already embedded) and the Cloudflare steps below. The secret is
+   shown only once; use **Regenerate** on the receive path if you lose it.
+4. Repeat for each domain you receive on.
 
-You can also use the REST API:
+You can also use the REST API, which requires you to supply the secret because
+the plaintext is never returned:
 
 ```bash
 curl -X POST "$BASE_URL/v1/admin/inbound" \
@@ -69,15 +73,15 @@ missing authentication is rejected without consuming MIME.
 The content-hash fallback can collapse separate identical messages to the same
 recipient, so provide a delivery id when you can.
 
-## 2. Copy the Worker example
+## 2. Copy the generated Worker code
 
-Take `docs/cloudflare-worker.js` as your Worker. Set `WEBHOOK_URL` to your
-instance's ingest endpoint and configure the secret (prefer a Worker secret
-named `GATEHOUSE_WEBHOOK_SECRET`, or set the `SECRET` constant):
+The setup page shows the complete Worker code for your instance. It already
+contains the ingest URL and the generated shared secret, so you can paste it
+as-is:
 
 ```js
 const WEBHOOK_URL = "https://mail.example.com/internal/ingest/cloudflare";
-const SECRET = "your-gatehouse-webhook-secret";
+const SECRET = "<generated-shared-secret>";
 ```
 
 ## 3. Create the Worker (Cloudflare dashboard)
@@ -90,7 +94,7 @@ Walk through the Cloudflare navigation:
 4. Click **Create application** -> **Worker** -> **Deploy**.
 5. Give the Worker a name, e.g. `oa-gatehouse`.
 6. Click **Deploy** to create a stub Worker, then **Edit code**.
-7. Replace the default stub with the contents of `docs/cloudflare-worker.js`.
+7. Replace the default stub with the generated code from the setup page.
 8. Click **Deploy** (top-right) to publish the new code.
 
 ## 4. Enable Email Routing for your domain

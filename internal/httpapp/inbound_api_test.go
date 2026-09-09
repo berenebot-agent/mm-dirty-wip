@@ -210,7 +210,7 @@ func TestDashboardRendersInboundControls(t *testing.T) {
 		"Add Receive Path",
 		"inbound-provider-select",
 		`data-provider="cloudflare"`,
-		"icfg_cloudflare_webhook_secret",
+		"tab=settings",
 		"domain-receive",
 		"add-domain-receive",
 		"http://example.test/internal/ingest/mailgun/raw-mime",
@@ -219,6 +219,9 @@ func TestDashboardRendersInboundControls(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "icfg_cloudflare_webhook_secret") {
+		t.Fatal("generated Cloudflare secret field must not be rendered")
 	}
 	// The client script drives the receive-path select and inline dialog.
 	rr = httptest.NewRecorder()

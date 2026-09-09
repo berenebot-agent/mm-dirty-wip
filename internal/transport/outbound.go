@@ -35,6 +35,7 @@ type ConfigOption struct{ Value, Label string }
 type ConfigField struct {
 	Name, Label, Type    string
 	Required, Secret     bool
+	Generated            bool
 	Placeholder, Default string
 	Options              []ConfigOption
 }

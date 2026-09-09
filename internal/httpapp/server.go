@@ -27,6 +27,9 @@ import (
 //go:embed assets/app.js
 var appJS []byte
 
+//go:embed assets/cloudflare-worker.js
+var cloudflareWorkerTemplate []byte
+
 type Server struct {
 	Service      *app.Service
 	Relay        *hermesrelay.Server
@@ -102,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/outbound/{id}", s.withSession(s.uiOutboundDetail))
 	m.HandleFunc("POST /ui/inbound", s.withSession(s.withCSRF(s.uiInbound)))
 	m.HandleFunc("POST /ui/inbound/{id}/delete", s.withSession(s.withCSRF(s.uiInboundDelete)))
+	m.HandleFunc("GET /ui/inbound/{id}/setup", s.withSession(s.uiInboundSetup))
+	m.HandleFunc("POST /ui/inbound/{id}/regenerate", s.withSession(s.withCSRF(s.uiInboundRegenerate)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))

@@ -117,6 +117,7 @@
   var form = dlg.querySelector('form');
   var nameInput = form.querySelector('[name=name]');
   var idInput = form.querySelector('[name=id]');
+  var submitBtn = document.getElementById('inbound-submit');
   var lastDefault = '';
 
   function sync() {
@@ -127,6 +128,15 @@
         el.disabled = !active;
       });
     });
+    if (submitBtn) {
+      if (idInput.value) {
+        submitBtn.textContent = 'Save';
+      } else if (sel.value === 'cloudflare') {
+        submitBtn.textContent = 'Generate Worker';
+      } else {
+        submitBtn.textContent = 'Save Receive Path';
+      }
+    }
   }
 
   function providerDescription() {
@@ -933,4 +943,32 @@
       window.history.replaceState(null, '', url.pathname + url.search + url.hash);
     }
   }
+})();
+
+(function () {
+  var btn = document.getElementById('cf-copy');
+  if (!btn) {
+    return;
+  }
+  var code = document.getElementById('cf-code');
+  var note = document.getElementById('cf-copy-note');
+  btn.addEventListener('click', function () {
+    var text = code ? code.textContent : '';
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.textContent = 'Copy code';
+        }, 1500);
+      }).catch(function () {
+        if (note) {
+          note.hidden = false;
+        }
+      });
+      return;
+    }
+    if (note) {
+      note.hidden = false;
+    }
+  });
 })();

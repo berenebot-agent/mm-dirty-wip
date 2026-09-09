@@ -29,7 +29,7 @@ func (Transport) Name() string        { return "cloudflare" }
 func (Transport) Description() string { return "Cloudflare Worker" }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
-		{Name: "webhook_secret", Label: "Worker shared secret", Type: "password", Required: true, Secret: true, Placeholder: "Shared secret in the Worker"},
+		{Name: "webhook_secret", Label: "Worker shared secret", Type: "password", Required: true, Secret: true, Generated: true, Placeholder: "Generated automatically"},
 	}
 }
 
