@@ -304,7 +304,7 @@ Users configure:
 
 Provider credentials are encrypted at rest. Outbound adapters are registered through a provider registry, so provider-specific code remains behind a narrow transport package. Each adapter declares the fields the Admin UI should collect, so adding a provider only asks for its API key and relevant settings rather than raw JSON.
 
-An account may store several outbound credentials but marks one as the active provider used for all sending.
+An account may store several outbound credentials, and each domain designates the credential it sends through. A domain with no credential queues mail until one is assigned.
 
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 

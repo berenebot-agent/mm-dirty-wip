@@ -26,7 +26,7 @@ func providerServer(t *testing.T, id string, calls *atomic.Int32) *httptest.Serv
 // provider still accepts mail into the outbox, holds it without consuming a
 // retry, and delivers it once a provider is assigned.
 func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 
@@ -54,7 +54,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
@@ -69,25 +69,21 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 	}
 }
 
-// TestDomainCredentialOverridesAccountActive verifies that a domain credential
-// takes precedence over the account's active provider.
-func TestDomainCredentialOverridesAccountActive(t *testing.T) {
+// TestSendUsesDomainCredential verifies that a domain sends through the
+// credential assigned to it, not another credential on the account.
+func TestSendUsesDomainCredential(t *testing.T) {
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 
-	var brevoCalls, mgCalls atomic.Int32
-	brevo := providerServer(t, "<brevo>", &brevoCalls)
-	mg := providerServer(t, "<mailgun>", &mgCalls)
+	var chosenCalls, otherCalls atomic.Int32
+	chosen := providerServer(t, "<mailgun>", &chosenCalls)
+	other := providerServer(t, "<brevo>", &otherCalls)
 
-	brevoCred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": brevo.URL})
-	if err != nil {
+	if _, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": other.URL}); err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, brevoCred.ID); err != nil {
-		t.Fatal(err)
-	}
-	mgCred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "MG", "mailgun", map[string]any{"api_key": "k", "domain": "mg.example.com", "api_base": mg.URL})
+	mgCred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "MG", "mailgun", map[string]any{"api_key": "k", "domain": "mg.example.com", "api_base": chosen.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +102,57 @@ func TestDomainCredentialOverridesAccountActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent.Status != "sent" || sent.Provider != "mailgun" || mgCalls.Load() != 1 || brevoCalls.Load() != 0 {
-		t.Fatalf("domain provider: status=%q provider=%q mg=%d brevo=%d", sent.Status, sent.Provider, mgCalls.Load(), brevoCalls.Load())
+	if sent.Status != "sent" || sent.Provider != "mailgun" || chosenCalls.Load() != 1 || otherCalls.Load() != 0 {
+		t.Fatalf("domain provider: status=%q provider=%q chosen=%d other=%d", sent.Status, sent.Provider, chosenCalls.Load(), otherCalls.Load())
+	}
+}
+
+// TestSendDoesNotUseOtherDomainCredential verifies the core isolation rule: a
+// domain with no credential must never send through another domain's provider.
+func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
+	svc, u, _, box := testService(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+
+	otherDomain, err := svc.Store.CreateDomain(ctx, u.AccountID, "other.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBox, err := svc.Store.CreateInbox(ctx, u.AccountID, otherDomain.ID, "agent", "Agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	api := providerServer(t, "<brevo-other>", &calls)
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, otherDomain.ID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// box is on a different domain with no provider: it must queue, not send.
+	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("unassigned domain must not send through another domain's provider, calls=%d", calls.Load())
+	}
+
+	// The other domain's inbox does send through its assigned credential.
+	res2, err := svc.Send(ctx, p, SendInput{InboxID: otherBox.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res2.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("assigned domain should send, calls=%d", calls.Load())
 	}
 }

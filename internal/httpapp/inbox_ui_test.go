@@ -45,7 +45,7 @@ func seedInbound(t *testing.T, svc *app.Service, box model.Inbox, delivery, rfc,
 	return m
 }
 
-func setActiveBrevo(t *testing.T, svc *app.Service, accountID string) {
+func setDomainBrevo(t *testing.T, svc *app.Service, accountID, domainID string) {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -56,7 +56,7 @@ func setActiveBrevo(t *testing.T, svc *app.Service, accountID string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(context.Background(), accountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -107,7 +107,7 @@ func TestUIInboxViewListsMessages(t *testing.T) {
 }
 
 func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	seedInbound(t, svc, box, "d1", "<m1@test>", "Subject", "body")
 	// Two drafts.
 	for i := 0; i < 2; i++ {
@@ -116,7 +116,7 @@ func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
 		}
 	}
 	// One pending outbound message.
-	setActiveBrevo(t, svc, u.AccountID)
+	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	if _, err := svc.Send(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, app.SendInput{InboxID: box.ID, To: []string{"b@example.net"}, Subject: "Queued", Text: "hi"}, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -406,8 +406,8 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 }
 
 func TestUIComposeCSRFAndSend(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
-	setActiveBrevo(t, svc, u.AccountID)
+	svc, h, u, dom, box := httpFixture(t)
+	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
 	// Missing CSRF (multipart body token is not parsed by ParseForm) must be rejected.
@@ -450,8 +450,8 @@ func TestUIComposeCSRFAndSend(t *testing.T) {
 }
 
 func TestUIReplyAndForward(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
-	setActiveBrevo(t, svc, u.AccountID)
+	svc, h, u, dom, box := httpFixture(t)
+	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	original := seedInbound(t, svc, box, "d1", "<orig@test>", "Original", "original body")
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -551,8 +551,8 @@ func TestRewriteCIDsOnlyRewritesImages(t *testing.T) {
 }
 
 func TestUIDraftSendDeletesDraft(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
-	setActiveBrevo(t, svc, u.AccountID)
+	svc, h, u, dom, box := httpFixture(t)
+	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}

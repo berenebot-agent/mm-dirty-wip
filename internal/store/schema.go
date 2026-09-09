@@ -299,8 +299,31 @@ CREATE INDEX IF NOT EXISTS idx_outbound_log_cred ON outbound_delivery_log(accoun
 CREATE INDEX IF NOT EXISTS idx_outbound_log_msg ON outbound_delivery_log(message_id);
 `
 
-// migration007 lets a domain designate its own outbound credential. Sending
-// resolves the domain credential first and falls back to the account's active
-// credential; a domain with neither queues mail until a provider is assigned.
+// migration007 lets a domain designate its own outbound credential. It
+// originally resolved the domain credential first and fell back to the
+// account's active credential; migration008 removes that fallback. A domain
+// with no credential queues mail until a provider is assigned.
 const migration007 = `ALTER TABLE domains ADD COLUMN outbound_credential_id TEXT REFERENCES outbound_credentials(id) ON DELETE SET NULL;
+`
+
+// migration008 removes the account-level default provider. A domain may only
+// send through its own outbound credential; a domain with none queues mail.
+// SQLite cannot DROP a column that carries a foreign key, so the accounts table
+// is rebuilt. No data is backfilled: existing domains start with no provider
+// and pause sending until one is assigned.
+const migration008 = `PRAGMA foreign_keys=OFF;
+BEGIN;
+CREATE TABLE accounts_new (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  storage_quota_bytes INTEGER NOT NULL,
+  storage_used_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+INSERT INTO accounts_new(id,name,storage_quota_bytes,storage_used_bytes,created_at)
+  SELECT id,name,storage_quota_bytes,storage_used_bytes,created_at FROM accounts;
+DROP TABLE accounts;
+ALTER TABLE accounts_new RENAME TO accounts;
+COMMIT;
+PRAGMA foreign_keys=ON;
 `

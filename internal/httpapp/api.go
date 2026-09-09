@@ -1005,7 +1005,10 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, v)
 	case http.MethodPost:
-		var in struct{ Name string }
+		var in struct {
+			Name                 string `json:"name"`
+			OutboundCredentialID string `json:"outbound_credential_id"`
+		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
@@ -1013,6 +1016,13 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			mapStoreError(w, err)
 			return
+		}
+		if in.OutboundCredentialID != "" {
+			if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, v.ID, in.OutboundCredentialID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			v, _ = s.Service.Store.GetDomain(r.Context(), p.AccountID, v.ID)
 		}
 		writeJSON(w, 201, v)
 	}

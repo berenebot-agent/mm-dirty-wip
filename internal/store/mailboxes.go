@@ -14,7 +14,7 @@ import (
 func (s *Store) GetAccount(ctx context.Context, accountID string) (model.Account, error) {
 	var a model.Account
 	var created string
-	err := s.read.QueryRowContext(ctx, `SELECT id,name,storage_quota_bytes,storage_used_bytes,COALESCE(active_outbound_credential_id,''),created_at FROM accounts WHERE id=?`, accountID).Scan(&a.ID, &a.Name, &a.StorageQuotaBytes, &a.StorageUsedBytes, &a.ActiveOutboundCredentialID, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT id,name,storage_quota_bytes,storage_used_bytes,created_at FROM accounts WHERE id=?`, accountID).Scan(&a.ID, &a.Name, &a.StorageQuotaBytes, &a.StorageUsedBytes, &created)
 	if err == sql.ErrNoRows {
 		return a, ErrNotFound
 	}

@@ -22,7 +22,7 @@ func TestSendEmptyBodyRejected(t *testing.T) {
 }
 
 func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -34,7 +34,7 @@ func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
@@ -64,7 +64,7 @@ func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
 }
 
 func TestDeliverTransientErrorRetries(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -76,7 +76,7 @@ func TestDeliverTransientErrorRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}

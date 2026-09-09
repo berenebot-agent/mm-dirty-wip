@@ -81,9 +81,14 @@ func (s *Store) DeleteOutboundCredential(ctx context.Context, accountID, id stri
 	}
 	return nil
 }
-func (s *Store) ActiveOutboundCredential(ctx context.Context, accountID string) (OutboundCredential, error) {
+
+// DomainOutboundCredential resolves the outbound credential for a domain. A
+// domain may only send through its own credential; there is no account-level
+// fallback. It returns ErrNoProvider when the domain has none, so callers can
+// queue mail rather than reject it.
+func (s *Store) DomainOutboundCredential(ctx context.Context, accountID, domainID string) (OutboundCredential, error) {
 	var id string
-	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(active_outbound_credential_id,'') FROM accounts WHERE id=?`, accountID).Scan(&id)
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(outbound_credential_id,'') FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return OutboundCredential{}, ErrNotFound
 	}
@@ -91,56 +96,13 @@ func (s *Store) ActiveOutboundCredential(ctx context.Context, accountID string) 
 		return OutboundCredential{}, err
 	}
 	if id == "" {
-		return OutboundCredential{}, ErrNotFound
+		return OutboundCredential{}, ErrNoProvider
 	}
 	return s.GetOutboundCredential(ctx, accountID, id)
 }
 
-func (s *Store) SetActiveOutboundCredential(ctx context.Context, accountID, id string) error {
-	if id != "" {
-		var n int
-		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, id, accountID).Scan(&n); err != nil {
-			return err
-		}
-		if n != 1 {
-			return ErrNotFound
-		}
-	}
-	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET active_outbound_credential_id=? WHERE id=?`, nullString(id), accountID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// DomainOutboundCredential resolves the outbound credential for a domain. A
-// domain-level credential takes precedence over the account's active
-// credential. It returns ErrNoProvider when neither is configured, so callers
-// can queue mail rather than reject it.
-func (s *Store) DomainOutboundCredential(ctx context.Context, accountID, domainID string) (OutboundCredential, error) {
-	var domainCred, accountCred string
-	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(d.outbound_credential_id,''),COALESCE(a.active_outbound_credential_id,'') FROM domains d JOIN accounts a ON a.id=d.account_id WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&domainCred, &accountCred)
-	if err == sql.ErrNoRows {
-		return OutboundCredential{}, ErrNotFound
-	}
-	if err != nil {
-		return OutboundCredential{}, err
-	}
-	if domainCred == "" {
-		domainCred = accountCred
-	}
-	if domainCred == "" {
-		return OutboundCredential{}, ErrNoProvider
-	}
-	return s.GetOutboundCredential(ctx, accountID, domainCred)
-}
-
 // OutboundCredentialForMessage resolves the outbound credential for an existing
-// message via its inbox's domain, applying the same domain-then-account
-// precedence as DomainOutboundCredential.
+// message via its inbox's domain.
 func (s *Store) OutboundCredentialForMessage(ctx context.Context, accountID, messageID string) (OutboundCredential, error) {
 	var domainID string
 	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)

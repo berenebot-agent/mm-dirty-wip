@@ -16,7 +16,7 @@ import (
 )
 
 func TestAPIDraftSendAndOutbox(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +29,7 @@ func TestAPIDraftSendAndOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -88,7 +88,7 @@ func TestAPIDraftSendAndOutbox(t *testing.T) {
 }
 
 func TestAPISendWaitTrue(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +101,7 @@ func TestAPISendWaitTrue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)

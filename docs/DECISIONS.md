@@ -55,11 +55,11 @@ This file records architectural decisions the implementation should treat as set
 
 Outbound adapters register through the provider registry, while each credential retains encrypted provider-specific configuration. The Admin UI renders provider-specific fields from a schema each adapter exposes, so users enter an API key and the relevant settings rather than raw JSON.
 
-An account may hold multiple outbound credentials and designates one as its **active** default provider (`accounts.active_outbound_credential_id`). Each domain may additionally designate its own credential (`domains.outbound_credential_id`); sending resolves the domain credential first and falls back to the account default. Per-inbox credential assignment is removed and no longer accepted by the API.
+An account may hold multiple outbound credentials. Each domain designates the credential it sends through (`domains.outbound_credential_id`); there is no account-level default, so mail can only leave through the provider explicitly attached to its domain. Per-inbox credential assignment is removed and no longer accepted by the API.
 
-A domain with no resolvable provider is valid: mail is still accepted and queued as `pending` (the outbox worker holds it without consuming retry attempts) until a provider is assigned, rather than being rejected.
+A domain with no credential is valid: mail is still accepted and queued as `pending` (the outbox worker holds it without consuming retry attempts) until a provider is assigned, rather than being rejected or sent through another domain's provider. On upgrade, existing domains are left with no credential and start paused until an admin assigns one.
 
-**Reason:** Provider credentials are sending-domain-scoped (for example Mailgun's sending domain or an SMTP `from_domain`), so an account that verifies several domains across providers cannot send correctly through a single account-wide provider. Domain-level mapping keeps one credential reusable across domains while matching how provider verification actually works. Queuing instead of rejecting avoids losing mail during setup or a provider outage.
+**Reason:** Provider credentials are sending-domain-scoped (for example Mailgun's sending domain or an SMTP `from_domain`), and an account-level default risked sending a domain's mail through the wrong provider. Forcing an explicit per-domain choice removes that failure mode while keeping one credential reusable across domains. Queuing instead of rejecting avoids losing mail during setup or a provider outage.
 
 ## D008 — Replayable event history
 

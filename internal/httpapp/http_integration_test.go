@@ -266,7 +266,7 @@ func TestUnknownRecipientIs406(t *testing.T) {
 }
 
 func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
+	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, adminKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
@@ -327,7 +327,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("POST", "/v1/send", strings.NewReader(`{"from":"fox@example.com","to":"friend@example.net","subject":"hello","text":"hi"}`))

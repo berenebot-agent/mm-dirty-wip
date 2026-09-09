@@ -17,7 +17,7 @@ import (
 )
 
 func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	var body map[string]any
@@ -34,7 +34,7 @@ func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "brevo-key")
@@ -81,7 +81,7 @@ func TestUnknownOutboundProviderRejected(t *testing.T) {
 }
 
 func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +94,7 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}

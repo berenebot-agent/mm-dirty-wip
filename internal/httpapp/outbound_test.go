@@ -18,7 +18,7 @@ import (
 )
 
 func TestAPISendWithBase64Attachment(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +31,7 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -121,7 +121,7 @@ func TestDashboardRendersOutboundProviderFields(t *testing.T) {
 	data := pageData{
 		CSRF: "token",
 		Outbound: []outboundView{
-			{ID: "out_1", Name: "Primary", Provider: "brevo", Active: true, ConfigJSON: `{"api_base":"https://api.brevo.com"}`},
+			{ID: "out_1", Name: "Primary", Provider: "brevo", ConfigJSON: `{"api_base":"https://api.brevo.com"}`},
 			{ID: "out_2", Name: "Backup", Provider: "smtp"},
 		},
 		OutboundProviders: outboundProviderViews(),
@@ -129,7 +129,7 @@ func TestDashboardRendersOutboundProviderFields(t *testing.T) {
 	rr := httptest.NewRecorder()
 	srv.render(rr, dashboardBody, data)
 	body := rr.Body.String()
-	for _, want := range []string{"Add Outbound Provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "Set Default", "data-config=", `src="/assets/app.js?v=`} {
+	for _, want := range []string{"Add Outbound Provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "data-config=", `src="/assets/app.js?v=`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -149,7 +149,7 @@ func TestCSPAllowsSelfScripts(t *testing.T) {
 }
 
 func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -160,7 +160,7 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -194,7 +194,7 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 }
 
 func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
+	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -205,7 +205,7 @@ func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}

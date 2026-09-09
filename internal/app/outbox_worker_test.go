@@ -16,7 +16,7 @@ import (
 )
 
 func TestOutboxWorkerDeliversPending(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +29,7 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -60,7 +60,7 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 }
 
 func TestDraftSendFlow(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +73,7 @@ func TestDraftSendFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}

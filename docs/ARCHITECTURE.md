@@ -259,7 +259,7 @@ Generic SMTP
 Brevo HTTP API
 ```
 
-Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. An account stores multiple credentials but designates one active provider (`accounts.active_outbound_credential_id`) used for all sending. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
+Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. An account stores multiple credentials, and each domain designates the credential it sends through (`domains.outbound_credential_id`); there is no account-level default, so a domain with no credential queues mail instead of sending through another domain's provider. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
 Hosted-mode generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts.
 

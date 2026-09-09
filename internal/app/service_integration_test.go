@@ -72,7 +72,7 @@ func mgRequest(t *testing.T, key, token, recipient, raw string) *http.Request {
 }
 
 func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
-	svc, u, _, box := testService(t)
+	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	raw := "From: Sender <sender@outside.test>\r\nTo: hermes@example.com\r\nSubject: Hello\r\nMessage-ID: <inbound@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nPlease reply"
 	m, dup, err := svc.IngestMailgun(ctx, mgRequest(t, svc.Config.MailgunSigningKey, "delivery-1", box.Address, raw))
@@ -98,7 +98,7 @@ func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
 	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")

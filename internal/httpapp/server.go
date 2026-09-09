@@ -98,7 +98,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/hermes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
 	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
 	m.HandleFunc("POST /ui/outbound", s.withSession(s.withCSRF(s.uiOutbound)))
-	m.HandleFunc("POST /ui/outbound/{id}/active", s.withSession(s.withCSRF(s.uiOutboundActive)))
 	m.HandleFunc("POST /ui/outbound/{id}/delete", s.withSession(s.withCSRF(s.uiOutboundDelete)))
 	m.HandleFunc("GET /ui/outbound/{id}", s.withSession(s.uiOutboundDetail))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
