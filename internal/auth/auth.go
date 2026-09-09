@@ -12,7 +12,18 @@ import (
 	"strings"
 )
 
-const passwordIterations = 310000
+const defaultPasswordIterations = 310000
+const minPasswordIterations = 100000
+const maxPasswordIterations = 2000000
+
+var passwordIterations = defaultPasswordIterations
+
+func SetIterationsForTest(n int) {
+	if n < 1 {
+		n = 1
+	}
+	passwordIterations = n
+}
 
 func RandomToken(bytes int) (string, error) {
 	b := make([]byte, bytes)
@@ -46,7 +57,10 @@ func CheckPassword(encoded, password string) bool {
 		return false
 	}
 	iterations, err := strconv.Atoi(parts[1])
-	if err != nil || iterations < 100000 || iterations > 2000000 {
+	if err != nil {
+		return false
+	}
+	if iterations != passwordIterations && (iterations < minPasswordIterations || iterations > maxPasswordIterations) {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
