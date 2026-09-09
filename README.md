@@ -45,6 +45,22 @@ https://your-host.example/internal/ingest/cloudflare
 
 The server resolves the recipient to its logical inbox with the same behavior as Mailgun.
 
+## Resend inbound
+
+Inbound can also be received via Resend. Resend posts a signed metadata webhook; Gatehouse verifies it and then fetches the raw MIME from the Resend API. Full setup is in [docs/RESEND.md](docs/RESEND.md).
+
+The webhook URL to register in Resend is:
+
+```text
+https://your-host.example/internal/ingest/resend
+```
+
+1. In Resend, verify the domain (including the inbound MX record) and create a **full access** API key. A send-only key cannot read received mail.
+2. In the Admin **Settings** tab, edit the domain and add a **Receive path** of type **Resend**. The dialog shows the exact webhook URL. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), and enter it with the API key.
+3. Save: Gatehouse opens a setup page with the URL and steps. Then assign the receive path to the domain.
+
+Resend also works as an outbound provider (see below).
+
 ## Dedicated inbound listener
 
 The server always listens on two ports:
@@ -60,6 +76,7 @@ the firewall. Point provider webhook URLs at the dedicated host/port:
 ```text
 https://inbound.example.com/internal/ingest/mailgun/raw-mime
 https://inbound.example.com/internal/ingest/cloudflare
+https://inbound.example.com/internal/ingest/resend
 ```
 
 The ingest routes remain available on the main listener for backward
@@ -86,6 +103,14 @@ Brevo configuration:
 ```
 
 Brevo requires the inbox sender address to be a verified sender in Brevo.
+
+Resend configuration:
+
+```json
+{"api_key":"re_..."}
+```
+
+The `from` domain must be a verified sending domain in Resend.
 
 SMTP configuration:
 

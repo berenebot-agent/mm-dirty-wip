@@ -1083,3 +1083,31 @@
     }
   });
 })();
+
+(function () {
+  var btn = document.getElementById('setup-copy');
+  if (!btn) {
+    return;
+  }
+  var url = document.getElementById('setup-webhook-url');
+  var note = document.getElementById('setup-copy-note');
+  btn.addEventListener('click', function () {
+    var text = url ? url.textContent : '';
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.textContent = 'Copy webhook URL';
+        }, 1500);
+      }).catch(function () {
+        if (note) {
+          note.hidden = false;
+        }
+      });
+      return;
+    }
+    if (note) {
+      note.hidden = false;
+    }
+  });
+})();

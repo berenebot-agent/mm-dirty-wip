@@ -60,7 +60,7 @@ type pageData struct {
 	OutboundProviders           []outboundProviderView
 	InboundProviders            []outboundProviderView
 	OutboundDetail              *outboundDetailView
-	Cloudflare                  *cloudflareSetupView
+	InboundSetup                *inboundSetupView
 	DeliveryAttempts            []store.DeliveryAttempt
 	DeliveryHasMore             bool
 	DeliveryBefore              int64
@@ -126,12 +126,14 @@ type outboundDetailView struct {
 	UpdatedAt                      time.Time
 }
 
-// cloudflareSetupView carries the one-time generated Worker code for a
-// Cloudflare receive path. WorkerCode is empty once the one-time flash has
-// been consumed, so the page offers regeneration instead. Warning is set when
-// the webhook hostname cannot be reached from Cloudflare.
-type cloudflareSetupView struct {
+// inboundSetupView drives the provider setup page. WebhookURL is the exact URL
+// to register with the provider. WorkerCode is present only for a freshly
+// generated Cloudflare Worker. Warning flags a webhook host that the provider
+// cannot reach.
+type inboundSetupView struct {
 	CredentialID string
+	Provider     string
+	ProviderName string
 	WebhookURL   string
 	WorkerCode   string
 	Warning      string
@@ -139,6 +141,7 @@ type cloudflareSetupView struct {
 type outboundProviderView struct {
 	Name, Description string
 	Fields            []transport.ConfigField
+	WebhookURL        string
 }
 type credentialView struct {
 	ID, Kind, Name, Type, Scope, RolesJSON, InboxID string
@@ -454,10 +457,10 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 </div>
 <div class="tab-panel"{{if ne .Tab "settings"}} hidden{{end}}>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<table><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}<tr><td><b>{{.Name}}</b></td><td class="muted">{{if .CatchAllInboxID}}{{index $.InboxAddr .CatchAllInboxID}}{{else}}—{{end}}</td><td class="muted assign-cell">{{$sd := .}}{{with index $.DomainSending .ID}}<button type="button" class="assign-chip{{if .Paused}} paused{{end}}" title="Change sending provider">{{.ProviderLabel}}</button>{{end}}<form method="post" action="/ui/domains/{{$sd.ID}}/provider" class="assign-form" data-domain="{{$sd.ID}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="provider" class="assign-select"><option value="">None — paused</option>{{range $.Outbound}}<option value="{{.ID}}"{{if eq .ID $sd.OutboundCredentialID}} selected{{end}}>{{.Name}}</option>{{end}}<option value="__add_provider__">Add new provider…</option></select></form></td><td class="muted assign-cell">{{$rd := .}}{{with index $.DomainReceiving .ID}}<button type="button" class="assign-chip{{if .Unconfigured}} paused{{end}}" title="Change receive path">{{.ProviderLabel}}</button>{{end}}<form method="post" action="/ui/domains/{{$rd.ID}}/receive" class="assign-form" data-domain="{{$rd.ID}}"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><select name="receive" class="assign-select"><option value="">Not configured</option>{{range $.Inbound}}<option value="{{.ID}}"{{if eq .ID $rd.InboundCredentialID}} selected{{end}}>{{.Name}}</option>{{end}}<option value="__add_inbound__">Add new receive path…</option></select></form></td><td class="actions"><button type="button" class="secondary icon-btn edit-domain" data-id="{{.ID}}" data-name="{{.Name}}" data-catchall="{{.CatchAllInboxID}}" data-provider="{{.OutboundCredentialID}}" data-receive="{{.InboundCredentialID}}" title="Edit domain" aria-label="Edit domain"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Add your receiving domain.</p>{{end}}</section>
-<section class="card"><div class="card-head"><h2>Receiving Providers</h2><button type="button" id="add-inbound">Add Receive Path</button></div>{{if .Inbound}}<table><tbody>{{range .Inbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td class="muted">{{if .Domains}}{{join .Domains ", "}}{{else}}—{{end}}</td><td class="muted">{{.LastReceived}}</td><td class="actions"><button type="button" class="secondary btn-sm rename-inbound" data-id="{{.ID}}" data-name="{{.Name}}" title="Rename receive path">Rename</button><button type="button" class="secondary btn-sm rotate-inbound" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Rotate credentials">Rotate</button><form method="post" action="/ui/inbound/{{.ID}}/delete" data-confirm="Delete this receive path? Domains using it become unconfigured."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No receive path configured.</p>{{end}}</section>
+<section class="card"><div class="card-head"><h2>Receiving Providers</h2><button type="button" id="add-inbound">Add Receive Path</button></div>{{if .Inbound}}<table><tbody>{{range .Inbound}}<tr><td><b>{{.Name}}</b><div class="sub">{{.Provider}}</div></td><td class="muted">{{if .Domains}}{{join .Domains ", "}}{{else}}—{{end}}</td><td class="muted">{{.LastReceived}}</td><td class="actions"><a class="secondary btn-sm" href="/ui/inbound/{{.ID}}/setup">Setup</a><button type="button" class="secondary btn-sm rename-inbound" data-id="{{.ID}}" data-name="{{.Name}}" title="Rename receive path">Rename</button><button type="button" class="secondary btn-sm rotate-inbound" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Rotate credentials">Rotate</button><form method="post" action="/ui/inbound/{{.ID}}/delete" data-confirm="Delete this receive path? Domains using it become unconfigured."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No receive path configured.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Outbound Providers</h2><button type="button" id="add-provider">Add Outbound Provider</button></div>{{if .Outbound}}<table><tbody>{{range .Outbound}}<tr class="row-link" data-href="/ui/outbound/{{.ID}}"><td><a href="/ui/outbound/{{.ID}}"><b>{{.Name}}</b></a><div class="sub">{{.Provider}}</div></td><td class="muted">{{if .Domains}}{{join .Domains ", "}}{{else}}—{{end}}</td><td class="muted">{{.LastSent}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-provider" data-id="{{.ID}}" data-name="{{.Name}}" data-provider="{{.Provider}}" data-config="{{.ConfigJSON}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/outbound/{{.ID}}/delete" data-confirm="Delete this outbound provider?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No outbound provider configured.</p>{{end}}</section></div>
 <dialog id="provider-dialog"><form method="post" action="/ui/outbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="provider-select">{{range .OutboundProviders}}<option value="{{.Name}}"{{if eq .Name "smtp"}} selected{{end}}>{{.Description}}</option>{{end}}</select>{{range $p := .OutboundProviders}}<fieldset class="provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label>{{if $f.Options}}<select name="cfg_{{$p.Name}}_{{$f.Name}}">{{range $f.Options}}<option value="{{.Value}}"{{if eq .Value $f.Default}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<input type="{{$f.Type}}" name="cfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="provider-cancel">Cancel</button><button>Save Provider</button></div></form></dialog>
-<dialog id="inbound-dialog"><form method="post" action="/ui/inbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignInboundDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="inbound-provider-select">{{range .InboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .InboundProviders}}<fieldset class="inbound-provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}{{if not $f.Generated}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-cancel">Cancel</button><button id="inbound-submit">Save Receive Path</button></div></form></dialog>
+<dialog id="inbound-dialog"><form method="post" action="/ui/inbound"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><input type="hidden" name="assign_domain" value="{{.AssignInboundDomain}}"><label>Name</label><input name="name" placeholder="Defaults to provider"><label>Provider</label><select name="provider" id="inbound-provider-select">{{range .InboundProviders}}<option value="{{.Name}}">{{.Description}}</option>{{end}}</select>{{range $p := .InboundProviders}}<fieldset class="inbound-provider-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}{{if not $f.Generated}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" value="{{$f.Default}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} data-required="1" required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}{{if $p.WebhookURL}}<p class="muted small">Webhook URL: <code>{{$p.WebhookURL}}</code></p>{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-cancel">Cancel</button><button id="inbound-submit">Save Receive Path</button></div></form></dialog>
 <dialog id="inbound-rename-dialog"><form method="post" id="inbound-rename-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" required><div class="dialog-actions"><button type="button" class="secondary" id="inbound-rename-cancel">Cancel</button><button>Save</button></div></form></dialog>
 <dialog id="inbound-rotate-dialog"><form method="post" id="inbound-rotate-form" data-provider=""><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><p class="muted" id="inbound-rotate-note"></p>{{range $p := .InboundProviders}}<fieldset class="inbound-rotate-fields" data-provider="{{$p.Name}}" style="border:0;padding:0;margin:0">{{range $f := $p.Fields}}{{if not $f.Generated}}<label>{{$f.Label}}{{if $f.Required}} *{{end}}</label><input type="{{$f.Type}}" name="icfg_{{$p.Name}}_{{$f.Name}}" placeholder="{{$f.Placeholder}}"{{if $f.Required}} required{{end}}{{if $f.Secret}} data-secret="1"{{end}}>{{end}}{{end}}</fieldset>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="inbound-rotate-cancel">Cancel</button><button>Rotate</button></div></form></dialog>
 <dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead><tbody>{{range .Inboxes}}<tr><td>{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody></table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments</td></tr><tr><td>Assistant</td><td>Read + delete messages</td></tr><tr><td>Owner</td><td>Assistant + send/reply and mailbox settings</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .AllowedSenders}}1{{end}}">{{.Address}}</option>{{end}}</select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Create</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
@@ -532,7 +535,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if assignDomain != "" || assignInbound != "" {
 		tab = "settings"
 	}
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: tab, Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSending: domainSending, DomainReceiving: domainReceiving, PausedDomains: pausedDomains, UnconfiguredDomains: unconfiguredDomains, AssignDomain: assignDomain, AssignInboundDomain: assignInbound, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, Inbound: iv, OutboundProviders: outboundProviderViews(), InboundProviders: inboundProviderViews(), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: tab, Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSending: domainSending, DomainReceiving: domainReceiving, PausedDomains: pausedDomains, UnconfiguredDomains: unconfiguredDomains, AssignDomain: assignDomain, AssignInboundDomain: assignInbound, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Outbound: ov, Inbound: iv, OutboundProviders: outboundProviderViews(), InboundProviders: inboundProviderViews(s.Service.Config.BaseURL), Unread: unread, InboxAddr: inboxAddrMap(boxes), Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -1089,6 +1092,12 @@ func (s *Server) uiInbound(w http.ResponseWriter, r *http.Request) {
 		s.redirectCloudflareSetup(w, r, saved.ID, generatedSecret)
 		return
 	}
+	if provider == "resend" && id == "" {
+		// Send the operator to the setup page so the exact webhook URL and the
+		// Resend dashboard steps are shown immediately.
+		http.Redirect(w, r, "/ui/inbound/"+url.PathEscape(saved.ID)+"/setup", http.StatusSeeOther)
+		return
+	}
 	if domainID != "" {
 		http.Redirect(w, r, "/dashboard?tab=settings&notice=Receive+path+assigned+to+domain", 303)
 		return
@@ -1150,9 +1159,9 @@ func privateHostWarning(rawURL string) string {
 	return ""
 }
 
-// uiInboundSetup shows the one-time generated Worker code for a Cloudflare
-// receive path. Once the flash has been consumed the code cannot be shown
-// again; the page offers regeneration instead.
+// uiInboundSetup shows the exact webhook URL and provider-specific setup steps
+// for a receive path. Cloudflare's generated Worker code is shown once from a
+// one-time flash; other providers show their fixed ingest URL and steps.
 func (s *Server) uiInboundSetup(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -1164,13 +1173,16 @@ func (s *Server) uiInboundSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "receive path not found", 404)
 		return
 	}
-	if cred.Provider != "cloudflare" {
-		http.Error(w, "not a Cloudflare receive path", 400)
+	t, ok := transport.LookupInbound(cred.Provider)
+	if !ok {
+		http.Error(w, "unknown provider", 400)
 		return
 	}
-	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	webhook := strings.TrimRight(s.Service.Config.BaseURL, "/") + "/internal/ingest/cloudflare"
-	view := &cloudflareSetupView{CredentialID: cred.ID, WebhookURL: webhook}
+	webhook := strings.TrimRight(s.Service.Config.BaseURL, "/")
+	if ip, ok := t.(transport.IngestPathProvider); ok {
+		webhook += ip.IngestPath()
+	}
+	view := &inboundSetupView{CredentialID: cred.ID, Provider: cred.Provider, ProviderName: t.Description(), WebhookURL: webhook}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(cloudflareSetup); ok {
 			view.WorkerCode = f.WorkerCode
@@ -1179,9 +1191,12 @@ func (s *Server) uiInboundSetup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	view.Warning = privateHostWarning(view.WebhookURL)
+	if cred.Provider == "cloudflare" {
+		view.Warning = privateHostWarning(view.WebhookURL)
+	}
+	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, cloudflareSetupBody, pageData{Title: "Cloudflare Worker setup", Principal: p, CSRF: csrf(r), Account: acc, Cloudflare: view})
+	s.render(w, inboundSetupBody, pageData{Title: t.Description() + " setup", Principal: p, CSRF: csrf(r), Account: acc, InboundSetup: view})
 }
 
 // uiInboundRegenerate issues a new Cloudflare shared secret, invalidating the
@@ -1213,16 +1228,31 @@ func (s *Server) uiInboundRegenerate(w http.ResponseWriter, r *http.Request) {
 	s.redirectCloudflareSetup(w, r, cred.ID, sec)
 }
 
-const cloudflareSetupBody = `<section class="card"><h1>Cloudflare Worker setup</h1>
-{{if .Cloudflare.Warning}}<div class="banner warn"><b>This URL is not reachable from Cloudflare.</b> {{.Cloudflare.Warning}}</div>{{end}}
-{{if .Cloudflare.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your generated shared secret, which is shown only on this page.</p>
+const inboundSetupBody = `<section class="card"><h1>{{.InboundSetup.ProviderName}} setup</h1>
+{{if .InboundSetup.Warning}}<div class="banner warn"><b>This URL is not reachable from Cloudflare.</b> {{.InboundSetup.Warning}}</div>{{end}}
+{{if eq .InboundSetup.Provider "cloudflare"}}
+{{if .InboundSetup.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your generated shared secret, which is shown only on this page.</p>
 <ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Worker</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In your domain, open <b>Email</b> → <b>Email Routing</b>, enable it, and apply the MX records Cloudflare shows.</li><li>Under <b>Routing rules</b>, add a <b>Send to a Worker</b> rule for each receiving address and choose this Worker.</li></ol>
-<pre class="cf-code" id="cf-code">{{.Cloudflare.WorkerCode}}</pre>
+<pre class="cf-code" id="cf-code">{{.InboundSetup.WorkerCode}}</pre>
 <p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p>
 <div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><a class="btn" href="/dashboard?tab=settings">Done</a></div>
 {{else}}<p class="muted">The shared secret is shown only once, so the Worker code is no longer available. Regenerate to get a new secret and fresh code. The current Worker stops working as soon as you regenerate.</p>
-<form method="post" action="/ui/inbound/{{.Cloudflare.CredentialID}}/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="amber">Regenerate secret</button></form>
-{{end}}<p class="muted small">Ingest URL: <code>{{.Cloudflare.WebhookURL}}</code>. Saving a receive path alone does not establish delivery; Email Routing and DNS setup happen in Cloudflare.</p>
+<form method="post" action="/ui/inbound/{{.InboundSetup.CredentialID}}/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="amber">Regenerate secret</button></form>
+{{end}}<p class="muted small">Ingest URL: <code>{{.InboundSetup.WebhookURL}}</code>. Saving a receive path alone does not establish delivery; Email Routing and DNS setup happen in Cloudflare.</p>
+{{else if eq .InboundSetup.Provider "resend"}}
+<p class="muted">Add this webhook in Resend, subscribe it to <b>email.received</b>, then copy the signing secret back into this receive path.</p>
+<div class="secret"><pre id="setup-webhook-url">{{.InboundSetup.WebhookURL}}</pre></div>
+<p class="copy-note" id="setup-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the URL above and copy it manually.</p>
+<div class="dialog-actions"><button type="button" class="secondary" id="setup-copy">Copy webhook URL</button><a class="btn" href="/dashboard?tab=settings">Done</a></div>
+<ol class="steps"><li>In Resend, open <b>Webhooks</b> → <b>Add Webhook</b>.</li><li>Paste the webhook URL above.</li><li>Under events, tick <b>email.received</b> and leave the other events unchecked.</li><li>Click <b>Add</b>, then open the webhook and copy its <b>signing secret</b> (<code>whsec_...</code>).</li><li>Back in Gatehouse, edit this receive path (or use <b>Rotate</b>) and paste the signing secret.</li><li>Make sure this receive path's <b>API key</b> is a <b>full access</b> Resend key: Gatehouse uses it to fetch the message body and attachments.</li></ol>
+<p class="muted small">Resend webhooks contain only metadata. Gatehouse verifies the signature and then downloads the raw message from the Resend API.</p>
+{{else}}
+<p class="muted">Register this webhook URL with {{.InboundSetup.ProviderName}}:</p>
+<div class="secret"><pre id="setup-webhook-url">{{.InboundSetup.WebhookURL}}</pre></div>
+<p class="copy-note" id="setup-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the URL above and copy it manually.</p>
+<div class="dialog-actions"><button type="button" class="secondary" id="setup-copy">Copy webhook URL</button><a class="btn" href="/dashboard?tab=settings">Done</a></div>
+{{end}}
+<p class="muted small">Saving a receive path alone does not establish delivery; provider setup happens outside Gatehouse.</p>
 </section>`
 
 // uiInboundRename changes a receive path's display name only.
@@ -1467,10 +1497,17 @@ func domainReceivingViews(domains []model.Domain, creds []store.InboundCredentia
 	return out
 }
 
-func inboundProviderViews() []outboundProviderView {
+func inboundProviderViews(baseURL string) []outboundProviderView {
 	out := []outboundProviderView{}
+	base := strings.TrimRight(baseURL, "/")
 	for _, t := range transport.ListInbound() {
-		out = append(out, outboundProviderView{Name: t.Name(), Description: t.Description(), Fields: t.ConfigFields()})
+		v := outboundProviderView{Name: t.Name(), Description: t.Description(), Fields: t.ConfigFields()}
+		if ip, ok := t.(transport.IngestPathProvider); ok {
+			if p := ip.IngestPath(); p != "" {
+				v.WebhookURL = base + p
+			}
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -1542,7 +1579,7 @@ const messageBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Message.InboxI
 <section class="card"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions"><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/reply">Reply</a><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/forward">Forward</a><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary btn-sm">Mark unread</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/delete" data-confirm="Delete this message permanently?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Delete</button></form></div></div>
 <p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{.Message.CreatedAt.Format "2006-01-02 15:04"}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p>
 {{if .Attachments}}<h3>Attachments</h3><ul class="attachments">{{range .Attachments}}<li><a href="/ui/attachments/{{.ID}}">{{.Filename}}</a> <span class="muted">· {{bytes .Size}}</span></li>{{end}}</ul>{{end}}
-<hr>{{if .Message.HTML}}<iframe class="mailframe" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy" src="/ui/messages/{{.Message.ID}}/html"></iframe>{{else}}<div class="msgbody">{{.Message.Text}}</div>{{end}}
+<hr>{{if .Message.HTML}}<iframe class="mailframe" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy" src="/ui/messages/{{.Message.ID}}/html"></iframe>{{else}}<div class="msgbody">{{.Message.Text}}</div>{{end}}
 {{if and .Message.HTML .Message.Text}}<details><summary>Plain text</summary><div class="msgbody">{{.Message.Text}}</div></details>{{end}}</section>
 {{if gt (len .ThreadMessages) 1}}<section class="card"><h3>Conversation ({{len .ThreadMessages}})</h3><table>{{range .ThreadMessages}}<tr><td class="muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if eq .Direction "outbound"}}To: {{join .To ", "}}{{else}}{{.From.Address}}{{end}}</td><td>{{if eq .ID $.Message.ID}}<b>{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</b>{{else}}<a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{end}}</td></tr>{{end}}</table></section>{{end}}`
 

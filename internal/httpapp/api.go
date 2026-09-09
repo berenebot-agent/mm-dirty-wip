@@ -1379,6 +1379,12 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		if errors.Is(err, transport.ErrInboundIgnored) {
+			// Acknowledge provider events that need no ingest so they are not
+			// retried; nothing was persisted.
+			writeJSON(w, 200, map[string]any{"accepted": true, "ignored": true})
+			return
+		}
 		// Permanently invalid inbound messages (malformed MIME, oversize,
 		// unsupported content type) are terminal: the provider should not
 		// retry them.

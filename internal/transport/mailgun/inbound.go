@@ -40,6 +40,7 @@ func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string        { return "mailgun" }
 func (Transport) Description() string { return "Mailgun" }
+func (Transport) IngestPath() string  { return "/internal/ingest/mailgun/raw-mime" }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
 		{Name: "signing_key", Label: "Webhook signing key", Type: "password", Required: true, Secret: true, Placeholder: "Mailgun HTTP webhook signing key"},

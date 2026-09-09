@@ -29,6 +29,7 @@ import (
 	_ "gatehouse-mail/internal/transport/cloudflare"
 	_ "gatehouse-mail/internal/transport/mailgun"
 	"gatehouse-mail/internal/transport/netutil"
+	_ "gatehouse-mail/internal/transport/resend"
 	smtpt "gatehouse-mail/internal/transport/smtp"
 )
 
