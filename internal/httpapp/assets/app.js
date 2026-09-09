@@ -6,7 +6,9 @@
   var sel = document.getElementById('provider-select');
   var form = dlg.querySelector('form');
   var nameInput = form.querySelector('[name=name]');
+  var idInput = form.querySelector('[name=id]');
   var lastDefault = '';
+  var originalProvider = '';
 
   function sync() {
     document.querySelectorAll('.provider-fields').forEach(function (fs) {
@@ -15,6 +17,16 @@
       fs.querySelectorAll('input,select').forEach(function (el) {
         el.disabled = !active;
       });
+    });
+  }
+
+  // Secrets are never prefilled when editing, so only require them when adding
+  // a provider or switching to a different provider. The server preserves the
+  // stored secret when the field is left empty, so an operator can rename or
+  // tweak a provider without re-entering it.
+  function requireSecrets(required) {
+    form.querySelectorAll('[data-secret][data-required]').forEach(function (el) {
+      el.required = required;
     });
   }
 
@@ -33,8 +45,10 @@
 
   function open() {
     form.reset();
-    form.querySelector('[name=id]').value = '';
+    idInput.value = '';
+    originalProvider = '';
     lastDefault = '';
+    requireSecrets(true);
     applyDefaultName();
     sync();
     dlg.showModal();
@@ -42,8 +56,9 @@
 
   function openEdit(btn) {
     form.reset();
-    form.querySelector('[name=id]').value = btn.dataset.id;
+    idInput.value = btn.dataset.id;
     sel.value = btn.dataset.provider;
+    originalProvider = btn.dataset.provider;
     nameInput.value = btn.dataset.name;
     lastDefault = providerDescription();
     var cfg = {};
@@ -60,6 +75,7 @@
         }
       }
     });
+    requireSecrets(false);
     sync();
     dlg.showModal();
   }
@@ -67,6 +83,9 @@
   sel.addEventListener('change', function () {
     sync();
     applyDefaultName();
+    if (idInput.value) {
+      requireSecrets(sel.value !== originalProvider);
+    }
   });
   var add = document.getElementById('add-provider');
   if (add) {
