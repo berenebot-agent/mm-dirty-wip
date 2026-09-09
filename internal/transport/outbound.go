@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 type OutboundMessage struct {
@@ -48,4 +49,18 @@ func DecodeOutboundConfig(in map[string]any, out any) error {
 		return err
 	}
 	return json.Unmarshal(b, out)
+}
+
+// PermanentError marks a provider error that will never succeed on retry (e.g.
+// a 4xx client rejection). The outbox worker fails such messages immediately
+// instead of retrying them with backoff.
+type PermanentError struct{ Err error }
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+// IsPermanent reports whether err is a permanent (non-retryable) provider error.
+func IsPermanent(err error) bool {
+	var pe *PermanentError
+	return errors.As(err, &pe)
 }

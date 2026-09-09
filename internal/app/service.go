@@ -411,6 +411,11 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if len(to) == 0 {
 		return SendResult{}, fmt.Errorf("recipient required")
 	}
+	// Providers reject messages with no body. Ensure a non-empty body so an
+	// empty draft/email still sends.
+	if strings.TrimSpace(in.Text) == "" && strings.TrimSpace(in.HTML) == "" {
+		in.Text = " "
+	}
 	cred, err := s.Store.ActiveOutboundCredential(ctx, p.AccountID)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("outbound provider not configured for account")
@@ -485,6 +490,11 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	if !ok {
 		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider), cred.ID, cred.Provider)
 	}
+	// Safety net for messages enqueued before the empty-body guard: never hand a
+	// provider an empty body. Only the local copy is mutated; the DB is untouched.
+	if strings.TrimSpace(m.Text) == "" && strings.TrimSpace(m.HTML) == "" {
+		m.Text = " "
+	}
 	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
 		FromName:    m.From.Name,
 		FromAddress: m.From.Address,
@@ -519,6 +529,15 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 // to a credential when one was resolved; they are empty when no active
 // credential was available.
 func (s *Service) fail(ctx context.Context, m model.Message, err error, credID, provider string) error {
+	// A permanent provider error will never succeed on retry, so fail the
+	// message immediately instead of retrying with backoff.
+	if transport.IsPermanent(err) {
+		_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, credID, provider)
+		if ferr != nil {
+			return ferr
+		}
+		return err
+	}
 	backoff := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 4 * time.Hour}
 	attempt := m.Attempts
 	if attempt < 0 || attempt >= len(backoff) {

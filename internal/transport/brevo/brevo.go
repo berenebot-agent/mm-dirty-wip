@@ -141,7 +141,11 @@ func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResul
 	defer resp.Body.Close()
 	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return SendResult{}, fmt.Errorf("brevo returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		err := fmt.Errorf("brevo returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return SendResult{}, &transport.PermanentError{Err: err}
+		}
+		return SendResult{}, err
 	}
 	var result response
 	if err := json.Unmarshal(responseBody, &result); err != nil {
