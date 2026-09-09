@@ -225,7 +225,7 @@ func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
 		t.Fatalf("detail %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Delivery activity", "Sent", res.Message.ID, "/ui/messages/" + res.Message.ID} {
+	for _, want := range []string{"Delivery activity", "Sent", res.Message.ID, "/ui/messages/" + res.Message.ID, "to: friend@example.net", "from: " + box.Address, "edit-provider"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail missing %q", want)
 		}

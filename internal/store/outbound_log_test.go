@@ -40,6 +40,9 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 	if attempts[0].Status != "sent" || attempts[0].MessageID != m.ID || attempts[0].ProviderMessageID != "<provider-id>" || attempts[0].Attempt != 2 {
 		t.Fatalf("newest %+v", attempts[0])
 	}
+	if attempts[0].FromAddress != box.Address || len(attempts[0].To) != 1 || attempts[0].To[0] != "x@y.test" {
+		t.Fatalf("newest addresses %+v", attempts[0])
+	}
 	if attempts[1].Status != "failed" || attempts[1].ErrorText != "provider down" || attempts[1].Attempt != 1 {
 		t.Fatalf("oldest %+v", attempts[1])
 	}
@@ -124,5 +127,8 @@ func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
 	}
 	if len(attempts) != 1 || attempts[0].MessageID != "" {
 		t.Fatalf("after message delete %+v", attempts)
+	}
+	if attempts[0].FromAddress != "" || len(attempts[0].To) != 0 {
+		t.Fatalf("addresses should be cleared after message delete %+v", attempts[0])
 	}
 }

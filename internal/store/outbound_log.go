@@ -19,6 +19,8 @@ type DeliveryAttempt struct {
 	Status            string    `json:"status"`
 	ProviderMessageID string    `json:"provider_message_id,omitempty"`
 	ErrorText         string    `json:"error_text,omitempty"`
+	FromAddress       string    `json:"from_address,omitempty"`
+	To                []string  `json:"to,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -88,13 +90,16 @@ func (s *Store) ListDeliveryAttempts(ctx context.Context, accountID, credentialI
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT id,account_id,COALESCE(credential_id,''),provider,COALESCE(message_id,''),attempt,status,provider_message_id,error_text,created_at FROM outbound_delivery_log WHERE account_id=? AND credential_id=?`
+	q := `SELECT l.id,l.account_id,COALESCE(l.credential_id,''),l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]')
+		FROM outbound_delivery_log l
+		LEFT JOIN messages m ON m.id=l.message_id
+		WHERE l.account_id=? AND l.credential_id=?`
 	args := []any{accountID, credentialID}
 	if beforeID > 0 {
-		q += ` AND id < ?`
+		q += ` AND l.id < ?`
 		args = append(args, beforeID)
 	}
-	q += ` ORDER BY id DESC LIMIT ?`
+	q += ` ORDER BY l.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -104,10 +109,11 @@ func (s *Store) ListDeliveryAttempts(ctx context.Context, accountID, credentialI
 	var out []DeliveryAttempt
 	for rows.Next() {
 		var a DeliveryAttempt
-		var created string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.CredentialID, &a.Provider, &a.MessageID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created); err != nil {
+		var created, to string
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.CredentialID, &a.Provider, &a.MessageID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to); err != nil {
 			return nil, err
 		}
+		a.To = decodeStrings(to)
 		a.CreatedAt = parseTime(created)
 		out = append(out, a)
 	}
