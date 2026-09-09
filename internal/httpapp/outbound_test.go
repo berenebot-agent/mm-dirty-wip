@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/transport"
 )
 
@@ -143,6 +145,90 @@ func TestCSPAllowsSelfScripts(t *testing.T) {
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/healthz", nil))
 	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") {
 		t.Fatalf("csp must allow same-origin scripts: %q", csp)
+	}
+}
+
+func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<log-http>"}`)
+	}))
+	defer api.Close()
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Admin key can read the log.
+	req := httptest.NewRequest("GET", "/v1/admin/outbound/"+cred.ID+"/deliveries", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"status":"sent"`) || !strings.Contains(rr.Body.String(), res.Message.ID) {
+		t.Fatalf("deliveries %d %s", rr.Code, rr.Body.String())
+	}
+	// Unknown credential -> 404.
+	req = httptest.NewRequest("GET", "/v1/admin/outbound/out_missing/deliveries", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 404 {
+		t.Fatalf("foreign cred %d", rr.Code)
+	}
+}
+
+func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<ui-log>"}`)
+	}))
+	defer api.Close()
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/ui/outbound/"+cred.ID, nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("detail %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"Delivery activity", "Sent", res.Message.ID, "/ui/messages/" + res.Message.ID} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("detail missing %q", want)
+		}
 	}
 }
 

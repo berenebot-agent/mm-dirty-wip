@@ -176,8 +176,9 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 
 // MarkSent transitions a pending outbound message to sent after the provider
 // accepts it, recording the provider message id and emitting the message.sent
-// event. It is the durable truth that delivery succeeded.
-func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID string) (model.Message, model.Event, error) {
+// event. It is the durable truth that delivery succeeded. The delivery attempt
+// is appended to the per-provider log in the same transaction.
+func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, credID, provider string) (model.Message, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
@@ -194,6 +195,9 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID s
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='' WHERE id=? AND account_id=?`, providerMessageID, now, id, accountID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
+	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "sent", providerMessageID, ""); err != nil {
+		return model.Message{}, model.Event{}, err
+	}
 	ev, err := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
 	if err != nil {
 		return model.Message{}, model.Event{}, err
@@ -207,7 +211,8 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID s
 
 // MarkFailed records a failed delivery attempt. If attempts remain, the message
 // is returned to pending with a next_attempt_at; otherwise it is marked failed.
-func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int) (model.Message, error) {
+// The failed attempt is appended to the per-provider log in the same transaction.
+func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, credID, provider string) (model.Message, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, err
@@ -229,6 +234,9 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 		next = timeText(nextAttemptAt)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=? WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
+		return model.Message{}, err
+	}
+	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "failed", "", errText); err != nil {
 		return model.Message{}, err
 	}
 	if err = tx.Commit(); err != nil {

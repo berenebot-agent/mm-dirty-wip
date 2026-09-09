@@ -468,19 +468,19 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 	}
 	cred, err := s.Store.ActiveOutboundCredential(ctx, m.AccountID)
 	if err != nil {
-		return s.fail(ctx, m, err)
+		return s.fail(ctx, m, err, "", "")
 	}
 	cfg, err := s.DecryptOutboundCredential(cred)
 	if err != nil {
-		return s.fail(ctx, m, err)
+		return s.fail(ctx, m, err, cred.ID, cred.Provider)
 	}
 	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath)))
 	if err != nil {
-		return s.fail(ctx, m, err)
+		return s.fail(ctx, m, err, cred.ID, cred.Provider)
 	}
 	provider, ok := transport.LookupOutbound(cred.Provider)
 	if !ok {
-		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider))
+		return s.fail(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, cred.Provider), cred.ID, cred.Provider)
 	}
 	providerResult, err := provider.Send(ctx, cfg, transport.OutboundMessage{
 		FromName:    m.From.Name,
@@ -497,9 +497,9 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 		RawMIME:     raw,
 	})
 	if err != nil {
-		return s.fail(ctx, m, err)
+		return s.fail(ctx, m, err, cred.ID, cred.Provider)
 	}
-	sent, ev, err := s.Store.MarkSent(ctx, m.AccountID, m.ID, providerResult.ProviderMessageID)
+	sent, ev, err := s.Store.MarkSent(ctx, m.AccountID, m.ID, providerResult.ProviderMessageID, cred.ID, cred.Provider)
 	if err != nil {
 		return err
 	}
@@ -511,15 +511,17 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID string) error {
 }
 
 // fail records a failed delivery attempt with exponential backoff, returning
-// the error so the worker can log it.
-func (s *Service) fail(ctx context.Context, m model.Message, err error) error {
+// the error so the worker can log it. credID and provider attribute the attempt
+// to a credential when one was resolved; they are empty when no active
+// credential was available.
+func (s *Service) fail(ctx context.Context, m model.Message, err error, credID, provider string) error {
 	backoff := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 4 * time.Hour}
 	attempt := m.Attempts
 	if attempt < 0 || attempt >= len(backoff) {
 		attempt = len(backoff) - 1
 	}
 	next := time.Now().UTC().Add(backoff[attempt])
-	_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1)
+	_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1, credID, provider)
 	if ferr != nil {
 		return ferr
 	}

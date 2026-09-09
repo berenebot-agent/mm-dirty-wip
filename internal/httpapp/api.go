@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,9 +151,10 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"get":  map[string]any{"summary": "List outbound providers (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Add/update an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
-			"/v1/admin/outbound/{id}": map[string]any{"delete": map[string]any{"summary": "Delete an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes":        map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes/{id}":   map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/outbound/{id}":            map[string]any{"delete": map[string]any{"summary": "Delete an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/outbound/{id}/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for an outbound provider (Admin)", "description": "Returns the per-attempt delivery log for a credential, newest first, with message_id linking to the message. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes":                   map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes/{id}":              map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 		},
 		"components": map[string]any{
 			"securitySchemes": map[string]any{
@@ -1121,6 +1123,22 @@ func (s *Server) apiOutbound(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 201, map[string]any{"id": v.ID, "name": v.Name, "provider": v.Provider})
 	}
+}
+func (s *Server) apiOutboundDeliveries(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	before := int64(0)
+	if v := r.URL.Query().Get("before"); v != "" {
+		before, _ = strconv.ParseInt(v, 10, 64)
+	}
+	attempts, err := s.Service.Store.ListDeliveryAttempts(r.Context(), p.AccountID, r.PathValue("id"), intParam(r, "limit", 100), before)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, attempts)
 }
 func (s *Server) apiOutboundDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

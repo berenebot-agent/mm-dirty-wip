@@ -278,3 +278,23 @@ CREATE TABLE IF NOT EXISTS draft_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_draft_attachments_draft ON draft_attachments(draft_id);
 `
+
+// migration006 adds a per-attempt outbound delivery log. Each provider send
+// (success or failure) appends an immutable row linked to the message, so an
+// operator can see the full retry history for a provider. Rows are pruned to
+// the newest 5000 per account or 30 days, whichever is more recent.
+const migration006 = `CREATE TABLE IF NOT EXISTS outbound_delivery_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  credential_id TEXT REFERENCES outbound_credentials(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL DEFAULT '',
+  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK(status IN ('sent','failed')),
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  error_text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_log_cred ON outbound_delivery_log(account_id, credential_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_outbound_log_msg ON outbound_delivery_log(message_id);
+`

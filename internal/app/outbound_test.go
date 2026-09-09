@@ -79,3 +79,41 @@ func TestUnknownOutboundProviderRejected(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
+	svc, u, _, box := testService(t)
+	ctx := context.Background()
+	var calls atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<log-out>"}`)
+	}))
+	defer api.Close()
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetActiveOutboundCredential(ctx, u.AccountID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	res, err := svc.Send(ctx, p, SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := svc.Store.ListDeliveryAttempts(ctx, u.AccountID, cred.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts len %d", len(attempts))
+	}
+	a := attempts[0]
+	if a.Status != "sent" || a.MessageID != res.Message.ID || a.CredentialID != cred.ID || a.Provider != "brevo" || a.ProviderMessageID != "<log-out>" || a.Attempt != 1 {
+		t.Fatalf("attempt %+v", a)
+	}
+}

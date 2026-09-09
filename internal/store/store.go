@@ -62,6 +62,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		{"003", migration003},
 		{"004", migration004},
 		{"005", migration005},
+		{"006", migration006},
 	} {
 		applied, err := s.migrationApplied(ctx, m.version)
 		if err != nil {
