@@ -14,19 +14,21 @@ Internet email -> Cloudflare MX -> Email Routing -> Worker -> HTTPS POST
     -> /internal/ingest/cloudflare -> logical inbox
 ```
 
-## 1. Add the receive path in Gatehouse Email
+## 1. Add the receiving configuration in Gatehouse Email
 
-Inbound provider secrets are no longer environment variables. Gatehouse
-generates the Cloudflare shared secret for you:
+Inbound provider secrets are no longer environment variables, and there is no
+separate credential to create and then assign. Receiving is configured directly
+on the domain:
 
-1. Open the Admin **Settings** tab and edit the domain you receive on.
-2. Under **Receive path**, choose **Add new receive path…**, pick
-   **Cloudflare Worker**, and click **Generate Worker**.
-3. Gatehouse creates the encrypted credential, assigns it to the domain, and
-   opens a one-time setup page with the complete Worker code (the generated
-   secret is already embedded) and the Cloudflare steps below. The secret is
-   shown only once; use **Regenerate** on the receive path if you lose it.
-4. Repeat for each domain you receive on.
+1. Open the Admin **Settings** tab and open the domain you receive on.
+2. Under **Receiving**, choose **Cloudflare Worker** and save the form.
+3. Gatehouse generates the shared secret, stores it encrypted on that domain,
+   and opens a one-time setup page with the complete Worker code (the generated
+   secret is already embedded) and the Cloudflare steps below. The generated
+   secret is shown only once; use **Regenerate secret** on the domain's
+   receiving section if you lose it, then paste the new Worker code.
+4. Repeat for each domain you receive on. Each domain has its own configuration;
+   a normal re-save keeps its existing secret.
 
 The generated Worker uses `BASE_URL`. That hostname must resolve to a
 **public** IP: Cloudflare Workers cannot fetch private addresses (`10.x`,
@@ -34,34 +36,34 @@ The generated Worker uses `BASE_URL`. That hostname must resolve to a
 page shows a reachability warning, set `BASE_URL` (or fix the DNS record) to a
 public hostname and regenerate.
 
-You can also use the REST API, which requires you to supply the secret because
-the plaintext is never returned:
+You can also use the REST API. Omitting the secret lets Gatehouse generate one,
+returned once in `generated.webhook_secret`:
 
 ```bash
-curl -X POST "$BASE_URL/v1/admin/inbound" \
+curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"cloudflare","config":{}}'
+```
+
+To supply your own secret instead, include it (it is never returned):
+
+```bash
+curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
   -H "Authorization: Bearer $ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"provider":"cloudflare","config":{"webhook_secret":"generate-a-long-random-secret"}}'
 ```
 
-Then assign it to the domain:
-
-```bash
-curl -X PATCH "$BASE_URL/v1/admin/domains/$DOMAIN_ID" \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"inbound_credential_id":"<id from the create response>"}'
-```
-
 ## Webhook contract
 
 - Endpoint: `POST /internal/ingest/cloudflare`
-- Auth: `Authorization: Bearer <webhook_secret>` (the domain's receive-path
-  credential)
+- Auth: `Authorization: Bearer <webhook_secret>` (the domain's receiving
+  configuration)
 - Content-Type: `message/rfc822`
 - Headers:
   - `X-Gatehouse-Recipient` (required) - the envelope recipient; selects the
-    domain and its assigned credential. It is a routing hint and grants no
+    domain and its receiving configuration. It is a routing hint and grants no
     authority until the bearer matches.
   - `X-Gatehouse-Envelope-From` (optional) - the envelope sender.
   - `X-Gatehouse-Delivery-ID` (optional, bounded) - a stable id used for
@@ -73,11 +75,19 @@ The server verifies the bearer **before** reading the message body. Invalid or
 missing authentication is rejected without consuming MIME.
 
 - `recipient` must resolve to an enabled inbox (or the domain catch-all) on the
-  assigned account, otherwise the server returns `406` and drops the message.
-- A domain with no receive path returns `401` (uniform unauthorized).
+  authenticated account, otherwise the server returns `406` and drops the
+  message.
+- A domain with no receiving configuration returns `401` (uniform unauthorized).
 
 The content-hash fallback can collapse separate identical messages to the same
 recipient, so provide a delivery id when you can.
+
+The Worker shared secret is a bearer credential between Cloudflare and this
+instance. Configuring a receiving provider stores the secret on that domain, but
+it does not by itself isolate domains from one another: a secret copied to
+several domains (or one migrated from the old shared-credential model) still
+authenticates whichever recipient header it carries. Treat the generated secret
+as an external credential and regenerate it if it leaks.
 
 ## 2. Copy the generated Worker code
 
@@ -137,8 +147,11 @@ the inbox via the UI or `GET /v1/messages`. If it does not arrive:
 - check the Worker logs (Workers & Pages -> your Worker -> Logs) for the
   forwarded status; the Worker throws on a non-2xx response so failures are
   visible and Cloudflare can retry;
-- confirm the Worker secret matches the domain's receive-path credential;
-- confirm the domain's **Receive path** is configured and the inbox exists.
+- confirm the Worker secret matches the domain's receiving configuration;
+- confirm the domain's **Receiving** provider is configured and the inbox
+  exists.
 
-Provider/DNS setup is external: saving a receive path alone does not establish
-delivery.
+Provider/DNS setup is external and there is no automatic verification: saving a
+receiving configuration checks nothing at the provider and does not establish
+delivery. Enable Email Routing, apply the MX records, and add the Worker rule
+before expecting mail.

@@ -47,6 +47,17 @@ func migrations() []migration {
 		{version: "010", sql: migration010, run: reconcileIdempotency, detect: stateOf(columnAdded("outbound_idempotency", "inbox_id"))},
 		{version: "011", sql: migration011, detect: stateOf(columnAdded("messages", "claim_owner"))},
 		{version: "012", run: backfillDraftStorage},
+		{version: "013", sql: migration013, fkOff: true, detect: allOf(
+			tableExists("domain_sending_configs"),
+			tableExists("domain_receiving_configs"),
+			columnAdded("outbound_delivery_log", "domain_id"),
+			columnMissing("outbound_delivery_log", "credential_id"),
+			columnMissing("domains", "outbound_credential_id"),
+			columnMissing("domains", "inbound_credential_id"),
+			columnMissing("inboxes", "outbound_credential_id"),
+			tableMissing("outbound_credentials"),
+			tableMissing("inbound_credentials"),
+		)},
 	}
 }
 
@@ -174,5 +185,16 @@ func tableExists(name string) detector {
 			return false, err
 		}
 		return n > 0, nil
+	}
+}
+
+func tableMissing(name string) detector {
+	exists := tableExists(name)
+	return func(ctx context.Context, conn *sql.Conn) (bool, error) {
+		ok, err := exists(ctx, conn)
+		if err != nil {
+			return false, err
+		}
+		return !ok, nil
 	}
 }

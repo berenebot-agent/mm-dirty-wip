@@ -38,8 +38,14 @@ func (s *Store) CreateDomain(ctx context.Context, accountID, name string) (model
 	}
 	return model.Domain{ID: id, AccountID: accountID, Name: name, CreatedAt: parseTime(now)}, nil
 }
+
+const domainSummarySelect = `SELECT d.id,d.account_id,d.name,COALESCE(d.catch_all_inbox_id,''),COALESCE(sc.provider,''),COALESCE(rc.provider,''),d.created_at
+	FROM domains d
+	LEFT JOIN domain_sending_configs sc ON sc.domain_id=d.id AND sc.account_id=d.account_id
+	LEFT JOIN domain_receiving_configs rc ON rc.domain_id=d.id AND rc.account_id=d.account_id`
+
 func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Domain, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),COALESCE(inbound_credential_id,''),created_at FROM domains WHERE account_id=? ORDER BY name`, accountID)
+	rows, err := s.read.QueryContext(ctx, domainSummarySelect+` WHERE d.account_id=? ORDER BY d.name`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +54,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 	for rows.Next() {
 		var d model.Domain
 		var c string
-		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &d.InboundCredentialID, &c); err != nil {
+		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.SendingProvider, &d.ReceivingProvider, &c); err != nil {
 			return nil, err
 		}
 		d.CreatedAt = parseTime(c)
@@ -60,7 +66,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 func (s *Store) GetDomain(ctx context.Context, accountID, domainID string) (model.Domain, error) {
 	var d model.Domain
 	var c string
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,name,COALESCE(catch_all_inbox_id,''),COALESCE(outbound_credential_id,''),COALESCE(inbound_credential_id,''),created_at FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.OutboundCredentialID, &d.InboundCredentialID, &c)
+	err := s.read.QueryRowContext(ctx, domainSummarySelect+` WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.SendingProvider, &d.ReceivingProvider, &c)
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
@@ -89,24 +95,6 @@ func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inbo
 	return nil
 }
 
-// SetDomainOutboundCredential assigns a domain's outbound provider. An empty id
-// clears it, so the domain queues mail until a provider is assigned.
-func (s *Store) SetDomainOutboundCredential(ctx context.Context, accountID, domainID, credentialID string) error {
-	if credentialID != "" {
-		var n int
-		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, credentialID, accountID).Scan(&n); err != nil || n != 1 {
-			return ErrForbidden
-		}
-	}
-	res, err := s.write.ExecContext(ctx, `UPDATE domains SET outbound_credential_id=? WHERE id=? AND account_id=?`, nullString(credentialID), domainID, accountID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
 func (s *Store) DeleteDomain(ctx context.Context, accountID, domainID string) error {
 	res, err := s.write.ExecContext(ctx, `DELETE FROM domains WHERE id=? AND account_id=?`, domainID, accountID)
 	if err != nil {

@@ -7,12 +7,14 @@ import (
 )
 
 // DeliveryAttempt is one immutable provider send (success or failure) for an
-// outbound message. It is the per-provider activity log: every retry appends a
-// row, so an operator can see the full history for a credential.
+// outbound message. It is the per-domain activity log: every retry appends a
+// row, so an operator can see the full history for a domain. DomainID is a
+// nullable attribution snapshot (SET NULL when the domain is deleted) and the
+// provider stays as the attempt-time provider snapshot.
 type DeliveryAttempt struct {
 	ID                int64     `json:"id"`
 	AccountID         string    `json:"-"`
-	CredentialID      string    `json:"credential_id,omitempty"`
+	DomainID          string    `json:"domain_id,omitempty"`
 	Provider          string    `json:"provider,omitempty"`
 	MessageID         string    `json:"message_id,omitempty"`
 	Attempt           int       `json:"attempt"`
@@ -33,17 +35,21 @@ const maxDeliveryLogPerAccount = 5000
 const deliveryLogMaxAge = 30 * 24 * time.Hour
 
 // RecordDeliveryAttempt appends one attempt row and prunes the log to the
-// retention bounds. It is called from the same transaction that marks the
-// message sent or failed, so the attempt and the message state are durable
-// together.
+// retention bounds. When the caller does not supply a domain, it is derived
+// from the message's inbox; an attempt that cannot be attributed to a domain is
+// recorded with a NULL domain rather than dropped.
 func (s *Store) RecordDeliveryAttempt(ctx context.Context, a DeliveryAttempt) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,credential_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		a.AccountID, nullString(a.CredentialID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText()); err != nil {
+	domainID, err := resolveAttemptDomainTx(ctx, tx, a.AccountID, a.DomainID, a.MessageID)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		a.AccountID, nullString(domainID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText()); err != nil {
 		return err
 	}
 	if err = s.pruneDeliveryLogTx(ctx, tx, a.AccountID); err != nil {
@@ -54,12 +60,40 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, a DeliveryAttempt) er
 
 // insertDeliveryAttemptTx appends one attempt row and prunes the log within an
 // existing transaction, so the attempt is durable with the message state change.
-func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, credID, provider, messageID, status, providerMessageID, errorText string) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,credential_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?)`,
-		accountID, nullString(credID), provider, nullString(messageID), messageID, accountID, status, providerMessageID, errorText, nowText()); err != nil {
+func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, domainID, provider, messageID, status, providerMessageID, errorText string) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?)`,
+		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, status, providerMessageID, errorText, nowText()); err != nil {
 		return err
 	}
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)
+}
+
+// resolveAttemptDomainTx validates an explicitly supplied domain (it must belong
+// to the account) or derives one from the message's inbox. An attempt with no
+// surviving message is left unattributed.
+func resolveAttemptDomainTx(ctx context.Context, tx *sql.Tx, accountID, domainID, messageID string) (string, error) {
+	if domainID != "" {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&n); err != nil {
+			return "", err
+		}
+		if n != 1 {
+			return "", ErrNotFound
+		}
+		return domainID, nil
+	}
+	if messageID == "" {
+		return "", nil
+	}
+	var derived string
+	err := tx.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&derived)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return derived, nil
 }
 
 // pruneDeliveryLogTx deletes delivery-log rows for an account that fall outside
@@ -76,32 +110,14 @@ func (s *Store) pruneDeliveryLogTx(ctx context.Context, tx *sql.Tx, accountID st
 	return err
 }
 
-// LastSentByOutboundCredential returns the most recent successful send time for
-// each outbound credential in the account, keyed by credential id. Credentials
-// that have never sent are absent from the map.
-func (s *Store) LastSentByOutboundCredential(ctx context.Context, accountID string) (map[string]time.Time, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT credential_id, MAX(created_at) FROM outbound_delivery_log WHERE account_id=? AND status='sent' AND credential_id IS NOT NULL GROUP BY credential_id`, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]time.Time{}
-	for rows.Next() {
-		var id, created string
-		if err = rows.Scan(&id, &created); err != nil {
-			return nil, err
-		}
-		out[id] = parseTime(created)
-	}
-	return out, rows.Err()
-}
-
-// ListDeliveryAttempts returns the delivery-log rows for a credential, newest
+// ListDomainDeliveryAttempts returns the delivery-log rows for a domain, newest
 // first, using keyset pagination on the row id. beforeID of 0 means the newest
-// page. The credential must belong to the account or ErrNotFound is returned.
-func (s *Store) ListDeliveryAttempts(ctx context.Context, accountID, credentialID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
+// page. The domain must belong to the account or ErrNotFound is returned. The
+// history is scoped by domain, never by the domain's current config, so
+// deleting or rotating a config does not hide past attempts.
+func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domainID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
 	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM outbound_credentials WHERE id=? AND account_id=?`, credentialID, accountID).Scan(&n); err != nil {
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&n); err != nil {
 		return nil, err
 	}
 	if n != 1 {
@@ -110,11 +126,11 @@ func (s *Store) ListDeliveryAttempts(ctx context.Context, accountID, credentialI
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT l.id,l.account_id,COALESCE(l.credential_id,''),l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]')
+	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
-		WHERE l.account_id=? AND l.credential_id=?`
-	args := []any{accountID, credentialID}
+		WHERE l.account_id=? AND l.domain_id=?`
+	args := []any{accountID, domainID}
 	if beforeID > 0 {
 		q += ` AND l.id < ?`
 		args = append(args, beforeID)
@@ -130,7 +146,7 @@ func (s *Store) ListDeliveryAttempts(ctx context.Context, accountID, credentialI
 	for rows.Next() {
 		var a DeliveryAttempt
 		var created, to string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.CredentialID, &a.Provider, &a.MessageID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to); err != nil {
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.Provider, &a.MessageID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to); err != nil {
 			return nil, err
 		}
 		a.To = decodeStrings(to)

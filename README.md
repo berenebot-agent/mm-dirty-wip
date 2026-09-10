@@ -17,7 +17,7 @@ Persistent state is stored in `./data`.
 ## Mailgun inbound
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
-2. In the Admin UI, edit the domain and add a **Receive path** of type **Mailgun**, entering the account's webhook signing key. The secret is stored encrypted; it is no longer read from the environment.
+2. In the Admin UI, open the domain's page (**Dashboard → Settings → the domain**) and configure a **Receiving** provider of type **Mailgun**, entering the account's webhook signing key. The secret is stored encrypted on that domain; it is no longer read from the environment.
 3. Create a Mailgun catch-all route for the domain that forwards incoming mail to:
 
 ```text
@@ -32,7 +32,7 @@ Inbound can also be received via Cloudflare Email Routing through a Worker that 
 
 High-level steps:
 
-1. In the Admin **Settings** tab, edit the domain and add a **Receive path** of type **Cloudflare Worker**. Gatehouse generates the shared secret and opens a one-time setup page with the complete Worker code and Cloudflare steps. The secret is shown once; use **Regenerate** if you lose it.
+1. In the Admin **Settings** tab, open the domain and configure a **Receiving** provider of type **Cloudflare Worker**. Gatehouse generates the shared secret, stores it encrypted on that domain, and opens a one-time setup page with the complete Worker code and Cloudflare steps. The generated secret is shown once; use **Regenerate secret** on the same section if you lose it (this replaces it, and the old Worker stops working until you paste the new code).
 2. In Cloudflare, create a Worker and paste the generated code (it already contains your ingest URL and secret), then deploy it.
 3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
 4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
@@ -56,10 +56,10 @@ https://your-host.example/internal/ingest/resend
 ```
 
 1. In Resend, verify the domain (including the inbound MX record) and create a **full access** API key. A send-only key cannot read received mail.
-2. In the Admin **Settings** tab, edit the domain and add a **Receive path** of type **Resend**. The dialog shows the exact webhook URL. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), and enter it with the API key.
-3. Save: Gatehouse opens a setup page with the URL and steps. Then assign the receive path to the domain.
+2. On the domain page, under **Receiving**, choose **Resend**. The form shows the exact webhook URL before you save. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), then enter it with the API key and save.
+3. Saving opens a setup page with the URL and steps. Each domain stores its own receiving configuration; if several domains share one Resend webhook, enter the same signing secret on each domain.
 
-Resend also works as an outbound provider (see below).
+Resend also works as a sending provider (see below).
 
 ## Dedicated inbound listener
 
@@ -86,9 +86,17 @@ internet.
 
 ## Outbound
 
-In the Admin UI, click **Add outbound provider**, pick a provider, and fill in the fields it asks for (for example Brevo only needs an API key). Each domain selects its own **Sending provider**; there is no account-level default, so mail can only leave through the provider explicitly assigned to its domain. A domain with no provider queues mail until one is assigned.
+Sending is configured per domain. Open a domain's page, choose a **Sending** provider, and fill in the fields it asks for (for example Brevo only needs an API key). Each domain owns its own configuration; there is no account-level connector pool, no reusable named credential, and no assignment step, so mail can only leave through the provider configured on its domain. A domain with no sending provider queues mail until one is configured, and removing a provider pauses sending for that domain only.
 
-The API still accepts a JSON `config` object via `POST /v1/admin/outbound`.
+The same operations are available through the Admin API, scoped to a domain:
+
+```http
+GET    /v1/admin/domains/{id}/sending
+PUT    /v1/admin/domains/{id}/sending
+DELETE /v1/admin/domains/{id}/sending
+```
+
+`PUT` accepts `{"provider":"...","config":{...}}`, and `GET /v1/admin/domains/{id}/sending/deliveries` lists the domain's send attempts newest first. The legacy `POST /v1/admin/outbound` endpoint, the account-level connector model, and the `/ui/outbound*` admin pages have been removed.
 
 Mailgun configuration:
 
@@ -146,13 +154,38 @@ Mailbox permissions are assigned per inbox:
 
 ## Hermes Relay
 
-From the Admin UI use **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host's environment. The block includes `GATEWAY_RELAY_PLATFORMS=email`, which the gateway must advertise to match this connector's email descriptor, and `GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true`, which keeps any existing direct platform connections (such as Telegram) alive alongside the relay. Email delivered to that inbox is replayed over Hermes Relay and replies egress through the inbox's configured outbound provider.
+From the Admin UI use **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host's environment. The block includes `GATEWAY_RELAY_PLATFORMS=email`, which the gateway must advertise to match this connector's email descriptor, and `GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true`, which keeps any existing direct platform connections (such as Telegram) alive alongside the relay. Email delivered to that inbox is replayed over Hermes Relay and replies egress through the sending provider configured on the inbox's domain.
 
 The one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) remains available for hosted provisioning. Hermes Relay is isolated under `internal/hermesrelay` because the upstream contract is experimental.
 
+## Upgrading
+
+This release replaces account-level, named provider connectors with one optional
+sending and one optional receiving configuration owned by each domain. It is a
+single-install breaking change: the old connector APIs (`/v1/admin/outbound*`,
+`/v1/admin/inbound*`), the domain credential-assignment fields, and the
+standalone connector UI are removed.
+
+Migration 013 runs automatically the first time the new binary opens the
+database. It:
+
+- copies each domain's assigned connector into a private per-domain config,
+  preserving the encrypted bytes (a connector shared by several domains becomes
+  independent copies, and no re-key is needed because `APP_ENCRYPTION_KEY` is
+  unchanged);
+- drops connectors not assigned to any domain;
+- preserves mailbox, auth, message, storage, and account data;
+- preserves delivery-log history, attributing each attempt to a domain where it
+  can be derived from the attempt's message and inbox (attempts that cannot be
+  attributed keep an unattributed entry instead of being dropped).
+
+There is no full database wipe. Back up `/data` and `APP_ENCRYPTION_KEY` before
+running the new binary. If startup reports a partially applied schema, restore
+from backup and retry rather than deleting the database.
+
 ## Backup
 
-Back up a filesystem-consistent snapshot of `./data` and separately retain `APP_ENCRYPTION_KEY`. Both are required to restore encrypted provider credentials.
+Back up a filesystem-consistent snapshot of `./data` and separately retain `APP_ENCRYPTION_KEY`. Both are required to restore encrypted provider configurations.
 
 ## Development
 

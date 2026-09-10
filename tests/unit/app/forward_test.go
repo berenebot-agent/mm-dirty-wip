@@ -23,13 +23,7 @@ func TestForwardCarriesBodyAndAttachments(t *testing.T) {
 		_, _ = io.WriteString(w, `{"messageId":"<brevo-fwd>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "xkeysib-test", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "xkeysib-test", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 	original, err := svc.Send(ctx, p, app.SendInput{
 		InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "body text",

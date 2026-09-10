@@ -3,6 +3,7 @@ package httpapp_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -11,45 +12,77 @@ import (
 	"gatehouse-mail/internal/model"
 )
 
-func TestAPIDomainOutboundCredential(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest("PATCH", "/v1/admin/domains/"+d.ID, strings.NewReader(`{"outbound_credential_id":"`+cred.ID+`"}`))
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
+func TestUIDomainCreateNameOnlyRedirectsToDomainPage(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"name": {"brand-new.example"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/domains", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 {
-		t.Fatalf("patch domain %d %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
 	}
-	dom, err := svc.Store.GetDomain(ctx, u.AccountID, d.ID)
-	if err != nil || dom.OutboundCredentialID != cred.ID {
-		t.Fatalf("domain credential: %v %+v", err, dom)
+	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/ui/domains/") {
+		t.Fatalf("create domain redirect %q", loc)
 	}
-	req = httptest.NewRequest("GET", "/v1/admin/domains", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
+}
+
+func TestUIDomainSendingConfigWorkflow(t *testing.T) {
+	svc, h, u, dom, _ := httpFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// Choosing a provider renders its non-secret form fields.
+	req := httptest.NewRequest("GET", "/ui/domains/"+dom.ID+"?sending=brevo", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("domain page %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `name="cfg_brevo_api_key"`) || !strings.Contains(body, `action="/ui/domains/`+dom.ID+`/sending"`) {
+		t.Fatalf("domain page missing sending form")
+	}
+
+	// Saving persists the config and redirects back to the domain page.
+	form := url.Values{
+		"provider":           {"brevo"},
+		"cfg_brevo_api_key":  {"k"},
+		"cfg_brevo_api_base": {"https://api.brevo.com"},
+		"_csrf":              {csrf},
+	}
+	req = httptest.NewRequest("POST", "/ui/domains/"+dom.ID+"/sending", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), cred.ID) {
-		t.Fatalf("list domains %d %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("save sending %d %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.SendingProvider != "brevo" {
+		t.Fatalf("sending provider %+v", got)
+	}
+
+	// Clearing removes it.
+	req = httptest.NewRequest("POST", "/ui/domains/"+dom.ID+"/sending/clear", strings.NewReader("_csrf="+csrf))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("clear sending %d %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.SendingProvider != "" {
+		t.Fatalf("sending provider not cleared %+v", got)
 	}
 }
 
 func TestAPIInboxNoOutboundCredentialField(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -79,105 +112,20 @@ func TestAPIInboxNoOutboundCredentialField(t *testing.T) {
 	}
 
 	// The deprecated field is rejected outright rather than silently ignored.
-	rr = patch(`{"outbound_credential_id":"` + cred.ID + `"}`)
+	rr = patch(`{"outbound_credential_id":"out_legacy"}`)
 	if rr.Code != 400 || !strings.Contains(rr.Body.String(), "outbound_credential_id") {
 		t.Fatalf("removed field should be rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestUIDomainProviderAssignment(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cookie, csrf := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("POST", "/ui/domains/"+d.ID+"/edit", strings.NewReader("provider="+cred.ID+"&_csrf="+csrf))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 303 {
-		t.Fatalf("update domain %d %s", rr.Code, rr.Body.String())
-	}
-	dom, err := svc.Store.GetDomain(ctx, u.AccountID, d.ID)
-	if err != nil || dom.OutboundCredentialID != cred.ID {
-		t.Fatalf("domain credential: %v %+v", err, dom)
-	}
-}
-
-const testAddProviderOption = "__add_provider__"
-
-func TestUIDomainEditIgnoresAddProviderSentinel(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
-	cookie, csrf := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("POST", "/ui/domains/"+d.ID+"/edit", strings.NewReader("provider="+testAddProviderOption+"&_csrf="+csrf))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 303 {
-		t.Fatalf("update domain %d %s", rr.Code, rr.Body.String())
-	}
-	dom, err := svc.Store.GetDomain(ctx, u.AccountID, d.ID)
-	if err != nil || dom.OutboundCredentialID != cred.ID {
-		t.Fatalf("sentinel must not clear the provider: %v %+v", err, dom)
-	}
-}
-
-func TestUIDomainCreateWithProvider(t *testing.T) {
+func TestAPICreateDomainNameOnly(t *testing.T) {
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cookie, csrf := uiSession(t, svc, u.ID)
-	form := url.Values{"name": {"new.example"}, "provider": {cred.ID}, "_csrf": {csrf}}
-	req := httptest.NewRequest("POST", "/ui/domains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 303 {
-		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
-	}
-	domains, err := svc.Store.ListDomains(ctx, u.AccountID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, d := range domains {
-		if d.Name == "new.example" {
-			if d.OutboundCredentialID != cred.ID {
-				t.Fatalf("domain provider = %q, want %q", d.OutboundCredentialID, cred.ID)
-			}
-			return
-		}
-	}
-	t.Fatal("created domain not found")
-}
-
-func TestAPICreateDomainWithCredential(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/v1/admin/domains", strings.NewReader(`{"name":"api.example","outbound_credential_id":"`+cred.ID+`"}`))
+	req := httptest.NewRequest("POST", "/v1/admin/domains", strings.NewReader(`{"name":"api.example"}`))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
@@ -189,85 +137,17 @@ func TestAPICreateDomainWithCredential(t *testing.T) {
 	if err = json.Unmarshal(rr.Body.Bytes(), &dom); err != nil {
 		t.Fatal(err)
 	}
-	if dom.Name != "api.example" || dom.OutboundCredentialID != cred.ID {
+	if dom.Name != "api.example" {
 		t.Fatalf("created domain %+v", dom)
 	}
-}
-
-func TestUIDomainCreateWithAddProviderRedirect(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	ctx := context.Background()
-	cookie, csrf := uiSession(t, svc, u.ID)
-	form := url.Values{"name": {"addnew.example"}, "provider": {testAddProviderOption}, "_csrf": {csrf}}
-	req := httptest.NewRequest("POST", "/ui/domains", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 303 {
-		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
-	}
-	loc := rr.Header().Get("Location")
-	const prefix = "/dashboard?tab=settings&add_provider_for="
-	if !strings.HasPrefix(loc, prefix) {
-		t.Fatalf("location %q", loc)
-	}
-	domainID := strings.TrimPrefix(loc, prefix)
-	dom, err := svc.Store.GetDomain(ctx, u.AccountID, domainID)
-	if err != nil || dom.OutboundCredentialID != "" {
-		t.Fatalf("domain should exist with no provider: %v %+v", err, dom)
-	}
-	req = httptest.NewRequest("GET", loc, nil)
-	req.AddCookie(cookie)
+	// Assignment selectors were removed from the domain DTO.
+	req = httptest.NewRequest("POST", "/v1/admin/domains", strings.NewReader(`{"name":"api2.example","outbound_credential_id":"out_x"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 {
-		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
-	}
-	body := rr.Body.String()
-	for _, want := range []string{`name="assign_domain" value="` + domainID + `"`, `<option value="smtp" selected>`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing %q", want)
-		}
-	}
-}
-
-func TestDashboardDomainSendingState(t *testing.T) {
-	svc, h, u, dom, _ := httpFixture(t)
-	ctx := context.Background()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Primary", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
-	paused, err := svc.Store.CreateDomain(ctx, u.AccountID, "paused.example")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = svc.Store.CreateInbox(ctx, u.AccountID, paused.ID, "ops", "Ops"); err != nil {
-		t.Fatal(err)
-	}
-	cookie, _ := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("GET", "/dashboard", nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 200 {
-		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
-	}
-	body := rr.Body.String()
-	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "issue-dot"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing %q", want)
-		}
-	}
-	// Empty domains must not produce global banners; issues surface per inbox.
-	for _, banned := range []string{"No sending provider for", "No receive path for"} {
-		if strings.Contains(body, banned) {
-			t.Fatalf("dashboard must not show global banner %q", banned)
-		}
+	if rr.Code != 400 {
+		t.Fatalf("removed assignment field should be rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -314,11 +194,7 @@ func TestDashboardInboxIssueDotReceiveOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Primary", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
+	if _, err = svc.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops"); err != nil {

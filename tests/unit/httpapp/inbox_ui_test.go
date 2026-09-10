@@ -52,11 +52,7 @@ func setDomainBrevo(t *testing.T, svc *app.Service, accountID, domainID string) 
 		_, _ = io.WriteString(w, `{"messageId":"<mock-out>"}`)
 	}))
 	t.Cleanup(api.Close)
-	cred, err := svc.SaveOutboundCredential(context.Background(), accountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(context.Background(), accountID, domainID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 }

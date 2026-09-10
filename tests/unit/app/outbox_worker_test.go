@@ -26,13 +26,7 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<worker-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Worker", Text: "hi"}, "")
 	if err != nil {
@@ -70,13 +64,7 @@ func TestDraftSendFlow(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<draft-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
 	// Create a draft with an attachment.
 	d, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Draft", Text: "body"})

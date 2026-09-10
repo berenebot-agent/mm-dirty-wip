@@ -10,110 +10,6 @@ import (
 	"gatehouse-mail/internal/model"
 )
 
-type OutboundCredential struct {
-	ID, AccountID, Name, Provider, EncryptedConfig string
-	CreatedAt, UpdatedAt                           time.Time
-}
-
-func (s *Store) SaveOutboundCredential(ctx context.Context, accountID, id, name, provider, encrypted string) (OutboundCredential, error) {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	now := nowText()
-	if id == "" {
-		id = idgen.New("out")
-		_, err := s.write.ExecContext(ctx, `INSERT INTO outbound_credentials(id,account_id,name,provider,encrypted_config,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, id, accountID, name, provider, encrypted, now, now)
-		if err != nil {
-			return OutboundCredential{}, err
-		}
-	} else {
-		res, err := s.write.ExecContext(ctx, `UPDATE outbound_credentials SET name=?,provider=?,encrypted_config=?,updated_at=? WHERE id=? AND account_id=?`, name, provider, encrypted, now, id, accountID)
-		if err != nil {
-			return OutboundCredential{}, err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			return OutboundCredential{}, ErrNotFound
-		}
-	}
-	return s.GetOutboundCredential(ctx, accountID, id)
-}
-func (s *Store) GetOutboundCredential(ctx context.Context, accountID, id string) (OutboundCredential, error) {
-	var c OutboundCredential
-	var created, updated string
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,name,provider,encrypted_config,created_at,updated_at FROM outbound_credentials WHERE id=? AND account_id=?`, id, accountID).Scan(&c.ID, &c.AccountID, &c.Name, &c.Provider, &c.EncryptedConfig, &created, &updated)
-	if err == sql.ErrNoRows {
-		return c, ErrNotFound
-	}
-	if err != nil {
-		return c, err
-	}
-	c.CreatedAt = parseTime(created)
-	c.UpdatedAt = parseTime(updated)
-	return c, nil
-}
-func (s *Store) ListOutboundCredentials(ctx context.Context, accountID string) ([]OutboundCredential, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,name,provider,encrypted_config,created_at,updated_at FROM outbound_credentials WHERE account_id=? ORDER BY name`, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []OutboundCredential
-	for rows.Next() {
-		var c OutboundCredential
-		var cr, up string
-		if err = rows.Scan(&c.ID, &c.AccountID, &c.Name, &c.Provider, &c.EncryptedConfig, &cr, &up); err != nil {
-			return nil, err
-		}
-		c.CreatedAt = parseTime(cr)
-		c.UpdatedAt = parseTime(up)
-		out = append(out, c)
-	}
-	return out, rows.Err()
-}
-func (s *Store) DeleteOutboundCredential(ctx context.Context, accountID, id string) error {
-	res, err := s.write.ExecContext(ctx, `DELETE FROM outbound_credentials WHERE id=? AND account_id=?`, id, accountID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// DomainOutboundCredential resolves the outbound credential for a domain. A
-// domain may only send through its own credential; there is no account-level
-// fallback. It returns ErrNoProvider when the domain has none, so callers can
-// queue mail rather than reject it.
-func (s *Store) DomainOutboundCredential(ctx context.Context, accountID, domainID string) (OutboundCredential, error) {
-	var id string
-	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(outbound_credential_id,'') FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&id)
-	if err == sql.ErrNoRows {
-		return OutboundCredential{}, ErrNotFound
-	}
-	if err != nil {
-		return OutboundCredential{}, err
-	}
-	if id == "" {
-		return OutboundCredential{}, ErrNoProvider
-	}
-	return s.GetOutboundCredential(ctx, accountID, id)
-}
-
-// OutboundCredentialForMessage resolves the outbound credential for an existing
-// message via its inbox's domain.
-func (s *Store) OutboundCredentialForMessage(ctx context.Context, accountID, messageID string) (OutboundCredential, error) {
-	var domainID string
-	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)
-	if err == sql.ErrNoRows {
-		return OutboundCredential{}, ErrNotFound
-	}
-	if err != nil {
-		return OutboundCredential{}, err
-	}
-	return s.DomainOutboundCredential(ctx, accountID, domainID)
-}
-
 // HoldPending records why a pending message is not being delivered and defers
 // its next attempt without counting a retry. It is used when a domain has no
 // outbound provider yet: the message stays queued and delivers once a provider
@@ -221,15 +117,17 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 // MarkSent transitions a pending outbound message to sent after the provider
 // accepts it, recording the provider message id and emitting the message.sent
 // event. It is the durable truth that delivery succeeded. The delivery attempt
-// is appended to the per-provider log in the same transaction.
-func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, credID, provider string) (model.Message, model.Event, error) {
+// is appended to the per-domain log in the same transaction. The domain is
+// derived from the message's inbox in the same transaction, so deleting the
+// domain config during an in-flight send cannot break outcome persistence.
+func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider string) (model.Message, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	defer tx.Rollback()
-	var inboxID, threadID string
-	if err = tx.QueryRowContext(ctx, `SELECT inbox_id,thread_id FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&inboxID, &threadID); err != nil {
+	var inboxID, threadID, domainID string
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, model.Event{}, ErrNotFound
 		}
@@ -239,7 +137,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "sent", providerMessageID, ""); err != nil {
+	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "sent", providerMessageID, ""); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	ev, err := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
@@ -261,15 +159,18 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 
 // MarkFailed records a failed delivery attempt. If attempts remain, the message
 // is returned to pending with a next_attempt_at; otherwise it is marked failed.
-// The failed attempt is appended to the per-provider log in the same transaction.
-func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, credID, provider string) (model.Message, error) {
+// The failed attempt is appended to the per-domain log in the same transaction.
+// The domain is derived from the message's inbox in the same transaction, so a
+// config deletion during an in-flight send cannot break outcome persistence.
+func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider string) (model.Message, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, err
 	}
 	defer tx.Rollback()
 	var attempts int
-	if err = tx.QueryRowContext(ctx, `SELECT attempts FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&attempts); err != nil {
+	var domainID string
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainID); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, ErrNotFound
 		}
@@ -286,7 +187,7 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
 		return model.Message{}, err
 	}
-	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, credID, provider, id, "failed", "", errText); err != nil {
+	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "failed", "", errText); err != nil {
 		return model.Message{}, err
 	}
 	m, err := s.getMessageTx(ctx, tx, accountID, id)

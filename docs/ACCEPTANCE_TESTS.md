@@ -28,7 +28,7 @@
 
 ## B. Inbound Mailgun delivery
 
-1. Configure catch-all inbound delivery to the Mailgun webhook endpoint.
+1. Configure a Mailgun receiving provider on the domain and a catch-all inbound route to the Mailgun webhook endpoint.
 2. Send a real external message to `hermes@example.com`.
 3. Verify Mailgun receives an HTTP success only after durable local persistence.
 4. Verify raw MIME exists under `/data/messages`.
@@ -85,12 +85,12 @@
 
 ## I. BYO outbound
 
-1. Configure Mailgun outbound credentials.
+1. Configure Mailgun as the domain's sending provider.
 2. Send external email.
 3. Verify provider message ID is recorded.
-4. Configure Brevo outbound credentials.
+4. Replace it with Brevo as the domain's sending provider.
 5. Send external email and verify the Brevo provider message ID is recorded.
-6. Configure generic SMTP in another test account.
+6. Configure generic SMTP as the sending provider on another test account/domain.
 7. Send external email successfully.
 8. In hosted mode, configure SMTP to a loopback/private/link-local target and verify the connection is rejected before dialing.
 9. Send with a base64-JSON attachment and verify the attachment is delivered and stored, then downloadable from the sent message.

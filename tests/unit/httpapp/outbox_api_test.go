@@ -25,11 +25,7 @@ func TestAPIDraftSendAndOutbox(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<draft-http>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -97,11 +93,7 @@ func TestAPISendWaitTrue(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<wait-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)

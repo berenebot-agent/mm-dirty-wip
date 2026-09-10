@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -67,7 +66,9 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"## Admin (Admin role)\n" +
 		"- `GET/POST /v1/admin/domains`, `PATCH/DELETE /v1/admin/domains/{id}`\n" +
 		"- `GET/POST /v1/admin/keys`, `DELETE /v1/admin/keys/{id}`\n" +
-		"- `GET/POST /v1/admin/outbound`, `DELETE /v1/admin/outbound/{id}`\n" +
+		"- `GET/PUT/DELETE /v1/admin/domains/{id}/sending` — sending provider config\n" +
+		"- `GET/PUT/DELETE /v1/admin/domains/{id}/receiving` — receiving provider config\n" +
+		"- `GET /v1/admin/domains/{id}/sending/deliveries` — delivery activity for a domain\n" +
 		"- `GET /v1/admin/hermes`, `DELETE /v1/admin/hermes/{id}`\n\n" +
 		"Roles are assigned per mailbox: Read, Assistant, Owner. Admin is account-wide.\n"
 	fmt.Fprint(w, guide)
@@ -140,22 +141,27 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]any{"summary": "Create a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/admin/domains/{id}": map[string]any{
-				"patch":  map[string]any{"summary": "Update a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update a domain (Admin)", "description": "Accepts catch_all_inbox_id only.", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
+			"/v1/admin/domains/{id}/sending": map[string]any{
+				"get":    map[string]any{"summary": "Get a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"put":    map[string]any{"summary": "Set a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Clear a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/domains/{id}/receiving": map[string]any{
+				"get":    map[string]any{"summary": "Get a domain's receiving provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"put":    map[string]any{"summary": "Set a domain's receiving provider config (Admin)", "description": "Accepts provider, config, and regenerate_secret. Generated secrets are returned once in the response.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Clear a domain's receiving provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/domains/{id}/sending/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for a domain (Admin)", "description": "Returns the per-attempt delivery log for a domain, newest first, with message_id linking to the message. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/admin/keys": map[string]any{
 				"get":  map[string]any{"summary": "List API keys (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
-			"/v1/admin/keys/{id}": map[string]any{"delete": map[string]any{"summary": "Revoke an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/outbound": map[string]any{
-				"get":  map[string]any{"summary": "List outbound providers (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Add/update an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/outbound/{id}":            map[string]any{"delete": map[string]any{"summary": "Delete an outbound provider (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/outbound/{id}/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for an outbound provider (Admin)", "description": "Returns the per-attempt delivery log for a credential, newest first, with message_id linking to the message. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes":                   map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes/{id}":              map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/keys/{id}":   map[string]any{"delete": map[string]any{"summary": "Revoke an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes":      map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/hermes/{id}": map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 		},
 		"components": map[string]any{
 			"securitySchemes": map[string]any{
@@ -996,9 +1002,7 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, v)
 	case http.MethodPost:
 		var in struct {
-			Name                 string `json:"name"`
-			OutboundCredentialID string `json:"outbound_credential_id"`
-			InboundCredentialID  string `json:"inbound_credential_id"`
+			Name string `json:"name"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -1007,21 +1011,6 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			mapStoreError(w, err)
 			return
-		}
-		if in.OutboundCredentialID != "" {
-			if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, v.ID, in.OutboundCredentialID); err != nil {
-				mapStoreError(w, err)
-				return
-			}
-		}
-		if in.InboundCredentialID != "" {
-			if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, v.ID, in.InboundCredentialID); err != nil {
-				mapStoreError(w, err)
-				return
-			}
-		}
-		if in.OutboundCredentialID != "" || in.InboundCredentialID != "" {
-			v, _ = s.Service.Store.GetDomain(r.Context(), p.AccountID, v.ID)
 		}
 		writeJSON(w, 201, v)
 	}
@@ -1035,27 +1024,13 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var in struct {
-			CatchAllInboxID      *string `json:"catch_all_inbox_id"`
-			OutboundCredentialID *string `json:"outbound_credential_id"`
-			InboundCredentialID  *string `json:"inbound_credential_id"`
+			CatchAllInboxID *string `json:"catch_all_inbox_id"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
 		if in.CatchAllInboxID != nil {
 			if err := s.Service.Store.SetDomainCatchAll(r.Context(), p.AccountID, id, *in.CatchAllInboxID); err != nil {
-				mapStoreError(w, err)
-				return
-			}
-		}
-		if in.OutboundCredentialID != nil {
-			if err := s.Service.Store.SetDomainOutboundCredential(r.Context(), p.AccountID, id, *in.OutboundCredentialID); err != nil {
-				mapStoreError(w, err)
-				return
-			}
-		}
-		if in.InboundCredentialID != nil {
-			if err := s.Service.Store.SetDomainInboundCredential(r.Context(), p.AccountID, id, *in.InboundCredentialID); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -1114,170 +1089,6 @@ func (s *Server) apiKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	w.WriteHeader(204)
-}
-
-func (s *Server) apiOutbound(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !adminOnly(w, p) {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		v, err := s.Service.Store.ListOutboundCredentials(r.Context(), p.AccountID)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		out := make([]map[string]any, 0, len(v))
-		for _, c := range v {
-			out = append(out, map[string]any{"id": c.ID, "name": c.Name, "provider": c.Provider, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt})
-		}
-		writeJSON(w, 200, out)
-	case http.MethodPost:
-		var in struct {
-			ID, Name, Provider string
-			Config             map[string]any `json:"config"`
-		}
-		if !decodeJSON(w, r, &in) {
-			return
-		}
-		v, err := s.Service.SaveOutboundCredential(r.Context(), p.AccountID, in.ID, in.Name, in.Provider, in.Config)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		writeJSON(w, 201, map[string]any{"id": v.ID, "name": v.Name, "provider": v.Provider})
-	}
-}
-func (s *Server) apiOutboundDeliveries(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !adminOnly(w, p) {
-		return
-	}
-	before := int64(0)
-	if v := r.URL.Query().Get("before"); v != "" {
-		before, _ = strconv.ParseInt(v, 10, 64)
-	}
-	attempts, err := s.Service.Store.ListDeliveryAttempts(r.Context(), p.AccountID, r.PathValue("id"), intParam(r, "limit", 100), before)
-	if err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	writeJSON(w, 200, attempts)
-}
-func (s *Server) apiOutboundDelete(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !adminOnly(w, p) {
-		return
-	}
-	if err := s.Service.Store.DeleteOutboundCredential(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	w.WriteHeader(204)
-}
-
-func (s *Server) apiInbound(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !adminOnly(w, p) {
-		return
-	}
-	switch r.Method {
-	case http.MethodGet:
-		v, err := s.Service.Store.ListInboundCredentials(r.Context(), p.AccountID)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		out := make([]map[string]any, 0, len(v))
-		for _, c := range v {
-			out = append(out, s.inboundCredentialView(c))
-		}
-		writeJSON(w, 200, out)
-	case http.MethodPost:
-		var in struct {
-			Name, Provider string
-			Config         map[string]any `json:"config"`
-		}
-		if !decodeJSON(w, r, &in) {
-			return
-		}
-		v, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, "", in.Name, in.Provider, in.Config)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		writeJSON(w, 201, s.inboundCredentialView(v))
-	}
-}
-
-func (s *Server) apiInboundItem(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !adminOnly(w, p) {
-		return
-	}
-	id := r.PathValue("id")
-	switch r.Method {
-	case http.MethodPatch:
-		var in struct {
-			Name, Provider string
-			Config         map[string]any `json:"config"`
-		}
-		if !decodeJSON(w, r, &in) {
-			return
-		}
-		existing, err := s.Service.Store.GetInboundCredential(r.Context(), p.AccountID, id)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		name, provider := in.Name, in.Provider
-		if strings.TrimSpace(name) == "" {
-			name = existing.Name
-		}
-		if strings.TrimSpace(provider) == "" {
-			provider = existing.Provider
-		}
-		v, err := s.Service.SaveInboundCredential(r.Context(), p.AccountID, id, name, provider, in.Config)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		writeJSON(w, 200, s.inboundCredentialView(v))
-	case http.MethodDelete:
-		if err := s.Service.Store.DeleteInboundCredential(r.Context(), p.AccountID, id); err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		w.WriteHeader(204)
-	}
-}
-
-// inboundCredentialView returns a credential with secret fields removed.
-func (s *Server) inboundCredentialView(c store.InboundCredential) map[string]any {
-	view := map[string]any{
-		"id":         c.ID,
-		"name":       c.Name,
-		"provider":   c.Provider,
-		"config":     map[string]any{},
-		"created_at": c.CreatedAt,
-		"updated_at": c.UpdatedAt,
-	}
-	if t, ok := transport.LookupInbound(c.Provider); ok {
-		if cfg, err := s.Service.DecryptInboundCredential(c); err == nil {
-			public := map[string]any{}
-			for _, f := range t.ConfigFields() {
-				if f.Secret {
-					continue
-				}
-				if v, ok := cfg[f.Name]; ok {
-					public[f.Name] = v
-				}
-			}
-			view["config"] = public
-		}
-	}
-	return view
 }
 
 func (s *Server) apiHermesEnroll(w http.ResponseWriter, r *http.Request) {
