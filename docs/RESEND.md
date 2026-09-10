@@ -106,6 +106,11 @@ Handling details:
   the endpoint returns `406`. Missing credentials, unknown domains, and bad
   signatures return `401`.
 - Failures fetching the content return `500` so Resend retries.
+- Once admitted for processing, Resend ingestion has a three-minute deadline
+  independent of the webhook connection. A caller disconnect does not cancel
+  the metadata fetch, raw MIME download, or database commit. The handler still
+  waits for persistence before returning `200`; retries after a lost response
+  are deduplicated by `email_id`.
 
 ## Verification
 
