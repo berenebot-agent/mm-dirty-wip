@@ -24,6 +24,9 @@ func (s *Store) AddDraftAttachment(ctx context.Context, p model.Principal, draft
 	if !p.CanAssist(d.InboxID) {
 		return model.DraftAttachment{}, ErrForbidden
 	}
+	if d.Status == model.DraftStatusPendingApproval {
+		return model.DraftAttachment{}, ErrConflict
+	}
 	if err := adjustStorageTx(ctx, tx, p.AccountID, a.Size); err != nil {
 		return model.DraftAttachment{}, err
 	}
@@ -113,6 +116,9 @@ func (s *Store) DeleteDraftAttachment(ctx context.Context, p model.Principal, dr
 	if !p.CanAssist(d.InboxID) {
 		return "", ErrForbidden
 	}
+	if d.Status == model.DraftStatusPendingApproval {
+		return "", ErrConflict
+	}
 	var raw string
 	var size int64
 	err = tx.QueryRowContext(ctx, `SELECT raw_path,size_bytes FROM draft_attachments WHERE id=? AND draft_id=?`, id, draftID).Scan(&raw, &size)
@@ -148,6 +154,9 @@ func (s *Store) DeleteDraftAttachments(ctx context.Context, p model.Principal, d
 	}
 	if !p.CanAssist(d.InboxID) {
 		return nil, ErrForbidden
+	}
+	if d.Status == model.DraftStatusPendingApproval {
+		return nil, ErrConflict
 	}
 	paths, total, err := draftAttachmentPathsTx(ctx, tx, draftID)
 	if err != nil {

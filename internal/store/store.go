@@ -119,6 +119,9 @@ func bootstrapBaseline(ctx context.Context, conn *sql.Conn) error {
 func nowText() string              { return time.Now().UTC().Format(time.RFC3339Nano) }
 func timeText(t time.Time) string  { return t.UTC().Format(time.RFC3339Nano) }
 func parseTime(v string) time.Time { t, _ := time.Parse(time.RFC3339Nano, v); return t }
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
 func nullableTime(v sql.NullString) *time.Time {
 	if !v.Valid {
 		return nil

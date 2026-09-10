@@ -36,7 +36,7 @@ func TestMigrateFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	for _, v := range []string{"001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013"} {
+	for _, v := range []string{"001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014"} {
 		if n := markerCount(t, st, v); n != 1 {
 			t.Fatalf("migration %s marker count %d", v, n)
 		}

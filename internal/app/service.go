@@ -677,6 +677,13 @@ type SendInput struct {
 	// DraftID, when set, consumes the draft in the same transaction that
 	// enqueues the message. It is never accepted from API JSON.
 	DraftID string `json:"-"`
+	// SendRequestID, when set, atomically authorizes the referenced draft send
+	// request as part of this send. It is never accepted from API JSON.
+	SendRequestID    string `json:"-"`
+	DecisionActor    string `json:"-"`
+	DecisionActorID  string `json:"-"`
+	DecisionMethod   string `json:"-"`
+	DecisionFeedback string `json:"-"`
 }
 type SendResult struct {
 	Message           model.Message `json:"message"`
@@ -838,10 +845,13 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata})
+	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
+	}
+	if draftEvent.Type != "" {
+		s.Hub.Publish(draftEvent)
 	}
 	result = SendResult{Message: m}
 	return result, nil
@@ -877,6 +887,22 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 		}
 		in.Attachments = append(in.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
 		paths = append(paths, a.RawPath)
+	}
+	// A direct owner send of a pending draft authorizes the outstanding request
+	// as it enqueues; the approval and the message land in one transaction.
+	if in.SendRequestID == "" && d.SendRequest != nil && d.SendRequest.Status == model.SendRequestPending {
+		actor, aerr := s.Store.ActorIdentity(ctx, p)
+		if aerr != nil {
+			return SendResult{}, aerr
+		}
+		in.SendRequestID = d.SendRequest.ID
+		in.DecisionActor = actor.Label
+		in.DecisionActorID = actor.ID()
+		if p.ViaSession {
+			in.DecisionMethod = model.DecisionMethodUI
+		} else {
+			in.DecisionMethod = model.DecisionMethodAPI
+		}
 	}
 	in.DraftID = draftID
 	res, err := s.Send(ctx, p, in, idem)
@@ -961,12 +987,14 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if err != nil {
 		return s.fail(outcomeCtx, m, err, sending.Provider)
 	}
-	_, ev, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider)
+	_, events, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider)
 	if err != nil {
 		return err
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)
-	s.Hub.Publish(ev)
+	for _, ev := range events {
+		s.Hub.Publish(ev)
+	}
 	return nil
 }
 
@@ -987,9 +1015,12 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 	// A permanent provider error will never succeed on retry, so fail the
 	// message immediately instead of retrying with backoff.
 	if transport.IsPermanent(err) {
-		_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider)
+		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider)
 		if ferr != nil {
 			return ferr
+		}
+		for _, ev := range events {
+			s.Hub.Publish(ev)
 		}
 		return err
 	}
@@ -999,9 +1030,12 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 		attempt = len(backoff) - 1
 	}
 	next := time.Now().UTC().Add(backoff[attempt])
-	_, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1, provider)
+	_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1, provider)
 	if ferr != nil {
 		return ferr
+	}
+	for _, ev := range events {
+		s.Hub.Publish(ev)
 	}
 	return err
 }

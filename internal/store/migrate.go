@@ -58,6 +58,10 @@ func migrations() []migration {
 			tableMissing("outbound_credentials"),
 			tableMissing("inbound_credentials"),
 		)},
+		{version: "014", sql: migration014, detect: allOf(
+			columnAdded("drafts", "status"),
+			tableExists("draft_send_requests"),
+		)},
 	}
 }
 

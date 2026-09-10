@@ -101,6 +101,16 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 			return model.Message{}, model.Event{}, err
 		}
 	}
+	// An approved send claims its send request in the same transaction that
+	// enqueues the message, so a request can never authorize two sends.
+	var draftEvent model.Event
+	if r.SendRequestID != "" {
+		ev, aerr := approveSendRequestTx(ctx, tx, r.Inbox.AccountID, r.DraftID, r.SendRequestID, r.DecisionActor, r.DecisionActorID, r.DecisionMethod, r.DecisionFeedback, id)
+		if aerr != nil {
+			return model.Message{}, model.Event{}, aerr
+		}
+		draftEvent = ev
+	}
 	m, err := s.getMessageTx(ctx, tx, r.Inbox.AccountID, id)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
@@ -111,7 +121,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		}
 		return model.Message{}, model.Event{}, err
 	}
-	return m, model.Event{}, nil
+	return m, draftEvent, nil
 }
 
 // MarkSent transitions a pending outbound message to sent after the provider
@@ -120,41 +130,47 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 // is appended to the per-domain log in the same transaction. The domain is
 // derived from the message's inbox in the same transaction, so deleting the
 // domain config during an in-flight send cannot break outcome persistence.
-func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider string) (model.Message, model.Event, error) {
+func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider string) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	defer tx.Rollback()
 	var inboxID, threadID, domainID string
 	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID); err != nil {
 		if err == sql.ErrNoRows {
-			return model.Message{}, model.Event{}, ErrNotFound
+			return model.Message{}, nil, ErrNotFound
 		}
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	now := nowText()
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "sent", providerMessageID, ""); err != nil {
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	ev, err := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
 	if err != nil {
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
+	}
+	events := []model.Event{ev}
+	if dev, derr := sendRequestDeliveryTx(ctx, tx, accountID, id, model.SendDeliverySent, model.EventDraftSent); derr != nil {
+		return model.Message{}, nil, derr
+	} else if dev != nil {
+		events = append(events, *dev)
 	}
 	m, err := s.getMessageTx(ctx, tx, accountID, id)
 	if err != nil {
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
-			return existing, ev, nil
+			return existing, events, nil
 		}
-		return model.Message{}, model.Event{}, err
+		return model.Message{}, nil, err
 	}
-	return m, ev, nil
+	return m, events, nil
 }
 
 // MarkFailed records a failed delivery attempt. If attempts remain, the message
@@ -162,19 +178,19 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 // The failed attempt is appended to the per-domain log in the same transaction.
 // The domain is derived from the message's inbox in the same transaction, so a
 // config deletion during an in-flight send cannot break outcome persistence.
-func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider string) (model.Message, error) {
+func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider string) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return model.Message{}, err
+		return model.Message{}, nil, err
 	}
 	defer tx.Rollback()
 	var attempts int
 	var domainID string
 	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainID); err != nil {
 		if err == sql.ErrNoRows {
-			return model.Message{}, ErrNotFound
+			return model.Message{}, nil, ErrNotFound
 		}
-		return model.Message{}, err
+		return model.Message{}, nil, err
 	}
 	attempts++
 	status := "pending"
@@ -185,22 +201,30 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 		next = timeText(nextAttemptAt)
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
-		return model.Message{}, err
+		return model.Message{}, nil, err
 	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "failed", "", errText); err != nil {
-		return model.Message{}, err
+		return model.Message{}, nil, err
+	}
+	var events []model.Event
+	if status == "failed" {
+		if dev, derr := sendRequestDeliveryTx(ctx, tx, accountID, id, model.SendDeliveryFailed, model.EventDraftSendFailed); derr != nil {
+			return model.Message{}, nil, derr
+		} else if dev != nil {
+			events = append(events, *dev)
+		}
 	}
 	m, err := s.getMessageTx(ctx, tx, accountID, id)
 	if err != nil {
-		return model.Message{}, err
+		return model.Message{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
-			return existing, nil
+			return existing, events, nil
 		}
-		return model.Message{}, err
+		return model.Message{}, nil, err
 	}
-	return m, nil
+	return m, events, nil
 }
 
 // ClaimNextPending atomically claims the next due pending message for delivery.
