@@ -669,32 +669,6 @@
 })();
 
 (function () {
-  document.querySelectorAll('.catchall-cell').forEach(function (cell) {
-    var value = cell.querySelector('.cell-edit');
-    var form = cell.querySelector('.inline-edit');
-    if (!value || !form) {
-      return;
-    }
-    value.addEventListener('click', function () {
-      value.hidden = true;
-      form.hidden = false;
-      var select = form.querySelector('select');
-      if (select) {
-        select.focus();
-      }
-    });
-    var cancel = form.querySelector('[data-cancel]');
-    if (cancel) {
-      cancel.addEventListener('click', function (e) {
-        e.preventDefault();
-        form.hidden = true;
-        value.hidden = false;
-      });
-    }
-  });
-})();
-
-(function () {
   document.querySelectorAll('.open-domain-dialog').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var dlg = document.getElementById('domain-' + btn.getAttribute('data-kind') + '-dialog-' + btn.getAttribute('data-domain'));
@@ -715,5 +689,42 @@
         dlg.close();
       }
     });
+  });
+})();
+
+(function () {
+  function sync(dlg) {
+    var sel = dlg.querySelector('.provider-select');
+    if (!sel) {
+      return;
+    }
+    var value = sel.value;
+    dlg.querySelectorAll('.provider-fields').forEach(function (group) {
+      var active = group.getAttribute('data-provider') === value;
+      group.hidden = !active;
+      group.querySelectorAll('input,select,textarea').forEach(function (el) {
+        el.disabled = !active;
+      });
+    });
+    var save = dlg.querySelector('[data-save-provider]');
+    if (save) {
+      save.disabled = !value;
+      var opt = sel.options[sel.selectedIndex];
+      save.textContent = opt && opt.getAttribute('data-next') ? 'Next' : 'Save';
+    }
+    var hint = dlg.querySelector('.provider-hint');
+    if (hint) {
+      hint.hidden = !!value;
+    }
+  }
+  document.querySelectorAll('.domain-dialog').forEach(function (dlg) {
+    var sel = dlg.querySelector('.provider-select');
+    if (!sel) {
+      return;
+    }
+    sel.addEventListener('change', function () {
+      sync(dlg);
+    });
+    sync(dlg);
   });
 })();
