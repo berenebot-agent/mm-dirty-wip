@@ -15,12 +15,6 @@ import (
 	"gatehouse-mail/internal/transport"
 )
 
-// domainProviderChoiceView is one selectable provider in a picker.
-type domainProviderChoiceView struct {
-	Name        string
-	Description string
-}
-
 // domainEditorView drives the save form for a chosen provider. Non-secret
 // values are prefilled from the stored same-provider config or the schema
 // defaults; secret inputs are always truly empty and generated fields are not
@@ -42,6 +36,8 @@ type domainEditorView struct {
 	Values map[string]string
 	// Error is a user-safe validation message shown inside the dialog.
 	Error string
+	// Selected marks the provider whose field group is shown and enabled.
+	Selected bool
 }
 
 // domainSendingEditor builds the prefilled sending editor for one provider,
@@ -63,6 +59,29 @@ func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID,
 	}
 	e.Values, e.KeepSecrets = s.receivingEditorState(ctx, accountID, domainID, provider, e.Fields)
 	return e, true
+}
+
+// domainSendingEditors builds one editor per outbound provider so the dialog can
+// switch between them client-side without a round trip.
+func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
+	out := []*domainEditorView{}
+	for _, t := range transport.ListOutbound() {
+		if e, ok := s.domainSendingEditor(ctx, accountID, domainID, t.Name()); ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// domainReceivingEditors is the receiving counterpart of domainSendingEditors.
+func (s *Server) domainReceivingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
+	out := []*domainEditorView{}
+	for _, t := range transport.ListInbound() {
+		if e, ok := s.domainReceivingEditor(ctx, accountID, domainID, t.Name()); ok {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // domainWorkerFlash carries freshly generated Cloudflare Worker code (which
@@ -432,7 +451,7 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WorkerCode: code,
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
-	dest := "/dashboard?domain=" + url.PathEscape(domainID) + "&kind=receiving"
+	dest := "/dashboard?domain=" + url.PathEscape(domainID)
 	if tok := s.flashes.put(f, len(code)+128); tok != "" {
 		dest += "&_flash=" + tok
 	}
@@ -484,22 +503,6 @@ func configFromForm(provider string, fields []transport.ConfigField, r *http.Req
 		cfg[f.Name] = raw
 	}
 	return cfg, nil
-}
-
-func domainSendingChoices() []domainProviderChoiceView {
-	out := []domainProviderChoiceView{}
-	for _, t := range transport.ListOutbound() {
-		out = append(out, domainProviderChoiceView{Name: t.Name(), Description: t.Description()})
-	}
-	return out
-}
-
-func domainReceivingChoices() []domainProviderChoiceView {
-	out := []domainProviderChoiceView{}
-	for _, t := range transport.ListInbound() {
-		out = append(out, domainProviderChoiceView{Name: t.Name(), Description: t.Description()})
-	}
-	return out
 }
 
 func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
