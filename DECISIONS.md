@@ -2,6 +2,25 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Draft send-request migration (migration 014)
+
+Migration 014 adds the human-in-the-loop draft workflow. Rationale is in
+`docs/DECISIONS.md` D025.
+
+- `drafts.status` is one of `draft`, `pending_approval`, `rejected`. A pending
+  draft is frozen until its request is cancelled.
+- `draft_send_requests` is the durable record of a request, the human decision
+  and the delivery outcome. It survives the draft being consumed by an approved
+  send: `draft_id` is a plain column with no foreign key, while `account_id`
+  and `inbox_id` cascade so purging an account or inbox removes requests.
+- A partial unique index allows at most one `pending` request per draft, and
+  approval updates that row conditionally inside the enqueue transaction, so a
+  request can authorize at most one send.
+- Decision (`status`) and delivery (`delivery_status`) are tracked separately
+  so a provider failure never invalidates an approval.
+- Draft bytes stay charged until send consumes them, unchanged by this
+  migration.
+
 ## Domain-owned provider configuration migration (migration 013)
 
 Migration 013 replaces the account-level connector tables with one optional

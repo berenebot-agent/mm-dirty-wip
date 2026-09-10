@@ -26,6 +26,19 @@
 3. Verify self-hosted first-run setup creates the initial Admin and public registration remains closed by default.
 4. Verify an HTML attachment downloads rather than executing inline in the authenticated application origin.
 
+## A3. Draft approval workflow
+
+1. As Assistant, create a draft and request send. Verify the draft becomes `pending_approval` and edits are rejected with `409`.
+2. Verify a Read key cannot create drafts or request send.
+3. Verify an Assistant key cannot approve or reject.
+4. As Owner, reject with feedback. Verify the draft becomes `rejected`, feedback is stored, and editing returns it to `draft`.
+5. As Owner, approve a resubmitted draft. Verify the exact frozen content is enqueued through the outbox, the draft is consumed, and `GET /v1/drafts/{id}/send-request` reports `approved` with the resulting message id.
+6. Verify a second approval of the same request cannot send again.
+7. Verify a direct `POST /v1/drafts/{id}/send` by an Owner resolves an outstanding request as `approved` with `decision_method=api`.
+8. Verify the `draft.*` events appear in `GET /v1/events`.
+9. Verify upload/list/delete of draft attachments, that uploads are frozen while pending, and that an approved send carries the attachments.
+10. In the web UI, verify the dashboard unsent-drafts count, the inbox Draft send requests section with a quick Send action, and the review page Approve/Reject/Cancel actions.
+
 ## B. Inbound Mailgun delivery
 
 1. Configure a Mailgun receiving provider on the domain and a catch-all inbound route to the Mailgun webhook endpoint.

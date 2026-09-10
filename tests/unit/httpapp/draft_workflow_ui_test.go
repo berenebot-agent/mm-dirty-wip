@@ -44,7 +44,7 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 
 	// Dashboard shows the drafts count.
 	rr := uiGet(t, h, cookie, "/dashboard")
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), ">Drafts</th>") {
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `title="Unsent drafts needing attention"`) {
 		t.Fatalf("dashboard drafts column %d", rr.Code)
 	}
 	// Inbox detail shows the send-request section with a quick Send action.
