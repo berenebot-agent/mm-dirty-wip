@@ -55,6 +55,24 @@ func TestTrustedProxiesParsing(t *testing.T) {
 	}
 }
 
+func TestTrustedProxiesBareIPAndHostCIDR(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("TRUSTED_PROXIES", "203.0.113.10,10.2.2.0/24")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.IsTrustedProxy("203.0.113.10:443") {
+		t.Fatal("bare IP should be treated as /32")
+	}
+	if cfg.IsTrustedProxy("10.1.1.19:443") {
+		t.Fatal("bare IP should not match a neighbouring host")
+	}
+	if !cfg.IsTrustedProxy("10.2.2.7:443") {
+		t.Fatal("host CIDR should match")
+	}
+}
+
 func TestTrustedProxiesInvalid(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("TRUSTED_PROXIES", "not-a-cidr")

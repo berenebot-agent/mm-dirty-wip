@@ -242,6 +242,23 @@ func TestBootstrapTokenRequired(t *testing.T) {
 	}
 }
 
+func TestSendRejectsHeaderInjection(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"inbox_id":"` + box.ID + `","to":["victim@example.net\r\nBcc: attacker@example.net"],"subject":"s","text":"t"}`
+	req := httptest.NewRequest("POST", "/v1/send", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("send with injected address = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 	newHandler := func(t *testing.T, trusted string) http.Handler {
 		t.Helper()

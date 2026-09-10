@@ -143,6 +143,37 @@ func TestParseRejectsTooManyParts(t *testing.T) {
 	}
 }
 
+// TestBuildMessageRejectsHeaderInjection guards against CRLF smuggling: no
+// address or header-bound value may carry a CR/LF into the generated message.
+func TestBuildMessageRejectsHeaderInjection(t *testing.T) {
+	from := mailparse.Address{Address: "hermes@example.com"}
+	cases := []struct {
+		name      string
+		from      mailparse.Address
+		to, cc    []string
+		messageID string
+		inReplyTo string
+	}{
+		{name: "to address", from: from, to: []string{"victim@example.net\r\nBcc: attacker@example.net"}},
+		{name: "cc address", from: from, to: []string{"victim@example.net"}, cc: []string{"cc@example.net\r\nBcc: attacker@example.net"}},
+		{name: "from name", from: mailparse.Address{Name: "Evil\r\nBcc: attacker@example.net", Address: "hermes@example.com"}, to: []string{"victim@example.net"}},
+		{name: "from address", from: mailparse.Address{Address: "hermes@example.com\r\nBcc: attacker@example.net"}, to: []string{"victim@example.net"}},
+		{name: "message id", from: from, to: []string{"victim@example.net"}, messageID: "<m@example.com>\r\nBcc: attacker@example.net"},
+		{name: "in reply to", from: from, to: []string{"victim@example.net"}, messageID: "<m@example.com>", inReplyTo: "<p@example.com>\r\nBcc: attacker@example.net"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgID := tc.messageID
+			if msgID == "" {
+				msgID = "<m@example.com>"
+			}
+			if _, err := mailparse.BuildMessage(tc.from, tc.to, tc.cc, nil, "Subject", "body", "", msgID, tc.inReplyTo, nil, time.Now(), nil); err == nil {
+				t.Fatal("expected control-character error")
+			}
+		})
+	}
+}
+
 // TestParseExtractIndexConsistency guards the shared walker: attachment
 // indexing during parsing must match extraction even with nested multiparts
 // and a malformed Content-Type.

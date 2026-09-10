@@ -725,7 +725,18 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	}
 	var threadID, inReply string
 	refs := []string{}
-	to := cleanAddresses(in.To)
+	to, err := cleanAddresses(in.To)
+	if err != nil {
+		return SendResult{}, err
+	}
+	cc, err := cleanAddresses(in.CC)
+	if err != nil {
+		return SendResult{}, err
+	}
+	bcc, err := cleanAddresses(in.BCC)
+	if err != nil {
+		return SendResult{}, err
+	}
 	subject := strings.TrimSpace(in.Subject)
 	if in.ReplyToMessageID != "" {
 		target, err := s.Store.GetMessageByID(ctx, p.AccountID, in.ReplyToMessageID)
@@ -802,7 +813,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if size := attachmentsSize(attachments); size > s.Config.MaxMessageBytes {
 		return SendResult{}, fmt.Errorf("attachments exceed maximum message size")
 	}
-	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cleanAddresses(in.CC), cleanAddresses(in.BCC), subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
+	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cc, bcc, subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -827,7 +838,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cleanAddresses(in.CC), BCC: cleanAddresses(in.BCC), Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata})
+	m, _, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -1055,21 +1066,28 @@ func attachmentParts(in []transport.OutboundAttachment) []mailparse.Attachment {
 	return out
 }
 
-func cleanAddresses(in []string) []string {
+func cleanAddresses(in []string) ([]string, error) {
 	out := []string{}
 	seen := map[string]bool{}
 	for _, v := range in {
-		if a, err := mail.ParseAddress(strings.TrimSpace(v)); err == nil {
+		v = strings.TrimSpace(v)
+		// Reject CR/LF and other control characters up front. Falling back to
+		// the raw value would let a caller smuggle extra MIME headers into the
+		// outbound message (header injection).
+		if mailparse.HasControlChars(v) {
+			return nil, fmt.Errorf("address contains control characters")
+		}
+		if a, err := mail.ParseAddress(v); err == nil {
 			v = strings.ToLower(a.Address)
 		} else {
-			v = strings.ToLower(strings.TrimSpace(v))
+			v = strings.ToLower(v)
 		}
 		if v != "" && !seen[v] {
 			seen[v] = true
 			out = append(out, v)
 		}
 	}
-	return out
+	return out, nil
 }
 func appendUnique(in []string, v string) []string {
 	for _, x := range in {

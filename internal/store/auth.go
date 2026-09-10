@@ -23,41 +23,17 @@ func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 // requests cannot both succeed. The writer connection is serialized, so the
 // check-and-insert inside one transaction is race-free.
 func (s *Store) CreateInitialAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
-	email = normalizeAddress(email)
-	if email == "" {
-		return model.User{}, fmt.Errorf("email required")
-	}
-	ph, err := auth.HashPassword(password)
-	if err != nil {
-		return model.User{}, err
-	}
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return model.User{}, err
-	}
-	defer tx.Rollback()
-	var n int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
-		return model.User{}, err
-	}
-	if n > 0 {
-		return model.User{}, ErrConflict
-	}
-	aid, uid := idgen.New("acct"), idgen.New("usr")
-	now := nowText()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, strings.TrimSpace(name), quota, now); err != nil {
-		return model.User{}, err
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,account_id,email,password_hash,is_admin,created_at) VALUES(?,?,?,?,1,?)`, uid, aid, email, ph, now); err != nil {
-		return model.User{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return model.User{}, err
-	}
-	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, CreatedAt: parseTime(now)}, nil
+	return s.createAccountAndAdmin(ctx, name, email, password, quota, true)
 }
 
 func (s *Store) CreateAccountAndAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
+	return s.createAccountAndAdmin(ctx, name, email, password, quota, false)
+}
+
+// createAccountAndAdmin performs the shared account + admin-user insert. When
+// requireEmpty is set it first asserts that no user exists, which makes it the
+// one-time bootstrap path.
+func (s *Store) createAccountAndAdmin(ctx context.Context, name, email, password string, quota int64, requireEmpty bool) (model.User, error) {
 	email = normalizeAddress(email)
 	if email == "" {
 		return model.User{}, fmt.Errorf("email required")
@@ -71,6 +47,15 @@ func (s *Store) CreateAccountAndAdmin(ctx context.Context, name, email, password
 		return model.User{}, err
 	}
 	defer tx.Rollback()
+	if requireEmpty {
+		var n int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
+			return model.User{}, err
+		}
+		if n > 0 {
+			return model.User{}, ErrConflict
+		}
+	}
 	aid, uid := idgen.New("acct"), idgen.New("usr")
 	now := nowText()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, strings.TrimSpace(name), quota, now); err != nil {
@@ -250,13 +235,23 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 	p.SessionHash = auth.HashToken(token)
 	p.MailboxRoles = map[string]string{}
 	if !p.Admin {
-		roles, _ := s.userMailboxRoles(ctx, p.UserID)
+		roles, err := s.userMailboxRoles(ctx, p.UserID)
+		if err != nil {
+			return p, "", err
+		}
 		p.MailboxRoles = roles
 	}
 	return p, csrf, nil
 }
+
+// userMailboxRoles is intentionally unimplemented. Every user row created by
+// this package is an admin (see createAccountAndAdmin), so no non-admin session
+// can currently reach this path. Rather than silently return an empty role set
+// (which would lock a future non-admin user out of every mailbox with no
+// signal), fail closed and loudly. Implement a user_mailbox_roles table
+// mirroring api_key_mailbox_roles before introducing non-admin sessions.
 func (s *Store) userMailboxRoles(ctx context.Context, userID string) (map[string]string, error) {
-	return map[string]string{}, nil
+	return nil, fmt.Errorf("non-admin session users are not supported")
 }
 
 func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin bool, roles map[string]string) (model.APIKey, string, error) {
