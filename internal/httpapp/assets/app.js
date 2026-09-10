@@ -644,8 +644,11 @@
 (function () {
   document.querySelectorAll('.setup-copy').forEach(function (btn) {
     var dlg = btn.closest('dialog') || document;
-    var url = dlg.querySelector('.setup-webhook-url');
-    var note = dlg.querySelector('.setup-copy-note');
+    // Each provider group owns its own webhook URL and note. Resolve them from
+    // the button's group so a copy never picks up another provider's URL.
+    var scope = btn.closest('.provider-fields') || dlg;
+    var url = scope.querySelector('.setup-webhook-url');
+    var note = scope.querySelector('.setup-copy-note');
     btn.addEventListener('click', function () {
       var text = url ? url.textContent : '';
       if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
