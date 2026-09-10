@@ -228,7 +228,9 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if x := recover(); x != nil {
-				s.Log.Error("panic", "error", x)
+				// Log only the panic type: the raw value can embed request data
+				// (and therefore secrets), and logs are a common export channel.
+				s.Log.Error("panic recovered", "type", fmt.Sprintf("%T", x))
 				writeError(w, 500, "internal server error")
 			}
 		}()
@@ -440,11 +442,16 @@ func clientIP(r *http.Request, trust bool) string {
 	return r.RemoteAddr
 }
 
+// maxTrackedIPs bounds the number of distinct rate-limit keys held at once so
+// a caller rotating X-Forwarded-For cannot grow the map without limit.
+const maxTrackedIPs = 1 << 16
+
 type limiter struct {
-	mu     sync.Mutex
-	max    int
-	window time.Duration
-	m      map[string]*limitEntry
+	mu        sync.Mutex
+	max       int
+	window    time.Duration
+	m         map[string]*limitEntry
+	lastSweep time.Time
 }
 type limitEntry struct {
 	start time.Time
@@ -461,16 +468,41 @@ func (l *limiter) Allow(k string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
-	e := l.m[k]
-	if e == nil || now.Sub(e.start) >= l.window {
-		l.m[k] = &limitEntry{start: now, n: 1}
+	// Opportunistically drop entries whose window has elapsed so long-lived
+	// processes do not accumulate one entry per client ever seen.
+	if now.Sub(l.lastSweep) >= l.window {
+		l.sweepLocked(now)
+		l.lastSweep = now
+	}
+	if e := l.m[k]; e != nil {
+		if now.Sub(e.start) >= l.window {
+			l.m[k] = &limitEntry{start: now, n: 1}
+			return true
+		}
+		if e.n >= l.max {
+			return false
+		}
+		e.n++
 		return true
 	}
-	if e.n >= l.max {
-		return false
+	if len(l.m) >= maxTrackedIPs {
+		l.sweepLocked(now)
+		if len(l.m) >= maxTrackedIPs {
+			// Fail closed: refuse new keys rather than grow without bound.
+			return false
+		}
 	}
-	e.n++
+	l.m[k] = &limitEntry{start: now, n: 1}
 	return true
+}
+
+// sweepLocked removes entries whose window has elapsed. Callers must hold mu.
+func (l *limiter) sweepLocked(now time.Time) {
+	for k, e := range l.m {
+		if now.Sub(e.start) >= l.window {
+			delete(l.m, k)
+		}
+	}
 }
 
 func baseWSURL(base string) string {

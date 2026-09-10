@@ -25,6 +25,9 @@ func main() {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
+	if cfg.TrustProxyHeaders && len(cfg.TrustedProxies) == 0 {
+		log.Warn("TRUST_PROXY_HEADERS=true trusts X-Forwarded-* headers from any peer; prefer TRUSTED_PROXIES with your reverse proxy's address")
+	}
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		log.Error("database open failed", "error", err)

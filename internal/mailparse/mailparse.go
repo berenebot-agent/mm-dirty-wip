@@ -322,7 +322,61 @@ func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error) er
 	})
 }
 
+// HasControlChars reports whether s contains a CR, LF, or another C0/DEL
+// control character. Header values must never contain them: they enable MIME
+// header injection (smuggling extra headers or body content into a message).
+func HasControlChars(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+// boundaryFor derives a MIME boundary from a message id. MIME boundary tokens
+// must not contain characters such as '@', '<' or '>'.
+func boundaryFor(prefix, messageID string) string {
+	return prefix + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+}
+
+// validateHeaderField rejects values that would break out of a single header
+// line. It is a defense-in-depth companion to address validation at the API
+// boundary.
+func validateHeaderField(name, value string) error {
+	if HasControlChars(value) {
+		return fmt.Errorf("%s contains control characters", name)
+	}
+	return nil
+}
+
 func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {
+	if err := validateHeaderField("from name", from.Name); err != nil {
+		return nil, err
+	}
+	if err := validateHeaderField("from address", from.Address); err != nil {
+		return nil, err
+	}
+	for _, addr := range to {
+		if err := validateHeaderField("to address", addr); err != nil {
+			return nil, err
+		}
+	}
+	for _, addr := range cc {
+		if err := validateHeaderField("cc address", addr); err != nil {
+			return nil, err
+		}
+	}
+	for _, addr := range bcc {
+		if err := validateHeaderField("bcc address", addr); err != nil {
+			return nil, err
+		}
+	}
+	for _, value := range append([]string{messageID, inReplyTo}, refs...) {
+		if err := validateHeaderField("message reference", value); err != nil {
+			return nil, err
+		}
+	}
 	var b bytes.Buffer
 	w := bufio.NewWriter(&b)
 	fromHeader := from.Address
@@ -356,7 +410,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 			_ = w.Flush()
 			return b.Bytes(), nil
 		}
-		boundary := "=_ghm_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		boundary := boundaryFor("=_ghm_", messageID)
 		fmt.Fprintf(w, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", boundary)
 		fmt.Fprintf(w, "--%s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n", boundary)
 		qw := quotedprintable.NewWriter(w)
@@ -370,7 +424,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		_ = w.Flush()
 		return b.Bytes(), nil
 	}
-	outerBoundary := "=_ghm_mix_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+	outerBoundary := boundaryFor("=_ghm_mix_", messageID)
 	fmt.Fprintf(w, "Content-Type: multipart/mixed; boundary=%q\r\n\r\n", outerBoundary)
 	if err := w.Flush(); err != nil {
 		return nil, err
@@ -380,7 +434,7 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 		return nil, err
 	}
 	if html != "" {
-		altBoundary := "=_ghm_alt_" + strings.Trim(strings.ReplaceAll(messageID, "@", "_"), "<>")
+		altBoundary := boundaryFor("=_ghm_alt_", messageID)
 		h := textproto.MIMEHeader{}
 		h.Set("Content-Type", fmt.Sprintf("multipart/alternative; boundary=%q", altBoundary))
 		part, err := outer.CreatePart(h)
