@@ -242,7 +242,11 @@ func TestDashboardDomainSendingState(t *testing.T) {
 	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.Store.CreateDomain(ctx, u.AccountID, "paused.example"); err != nil {
+	paused, err := svc.Store.CreateDomain(ctx, u.AccountID, "paused.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Store.CreateInbox(ctx, u.AccountID, paused.ID, "ops", "Ops"); err != nil {
 		t.Fatal(err)
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -254,9 +258,166 @@ func TestDashboardDomainSendingState(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "No sending provider for paused.example"} {
+	for _, want := range []string{"Sending", "sending paused", "Primary", "domain-provider", "domain-provider-status", "__add_provider__", "add-domain-provider", "issue-dot"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	// Empty domains must not produce global banners; issues surface per inbox.
+	for _, banned := range []string{"No sending provider for", "No receive path for"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("dashboard must not show global banner %q", banned)
+		}
+	}
+}
+
+func TestDashboardInboxIssueDot(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, box.Address) {
+		t.Fatalf("dashboard missing inbox %q", box.Address)
+	}
+	if !strings.Contains(body, `class="issue-dot"`) {
+		t.Fatalf("dashboard missing issue-dot for inbox in unconfigured domain")
+	}
+	if !strings.Contains(body, "Sending paused and not receiving") {
+		t.Fatalf("dashboard missing combined issue tooltip")
+	}
+	for _, banned := range []string{"No sending provider for", "No receive path for"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("dashboard must not show global banner %q", banned)
+		}
+	}
+}
+
+func TestDashboardInboxIssueDotReceiveOnly(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "norcv.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Primary", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops"); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Not receiving — no receive path is configured for this domain.") {
+		t.Fatalf("dashboard missing receive-path issue tooltip")
+	}
+}
+
+func TestInboxViewPerInboxBanners(t *testing.T) {
+	svc, h, u, _, fixtureBox := httpFixture(t)
+	ctx := context.Background()
+	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokenBox, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	get := func(path string) string {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("GET %s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		return rr.Body.String()
+	}
+	// Fixture domain has a receive path but no sending provider.
+	fixtureBody := get("/ui/inboxes/" + fixtureBox.ID)
+	if !strings.Contains(fixtureBody, "Sending is paused until a provider is configured for this domain.") {
+		t.Fatalf("inbox view missing sending banner")
+	}
+	if strings.Contains(fixtureBody, "Not receiving — no receive path is configured for this domain.") {
+		t.Fatalf("inbox view must not show receiving banner for configured domain")
+	}
+	// Domain with neither provider shows both banners.
+	brokenBody := get("/ui/inboxes/" + brokenBox.ID)
+	for _, want := range []string{
+		"Sending is paused until a provider is configured for this domain.",
+		"Not receiving — no receive path is configured for this domain.",
+	} {
+		if !strings.Contains(brokenBody, want) {
+			t.Fatalf("inbox view missing %q", want)
+		}
+	}
+}
+
+func TestMessageViewPerInboxBanners(t *testing.T) {
+	svc, h, u, _, fixtureBox := httpFixture(t)
+	ctx := context.Background()
+	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokenBox, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "ops", "Ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mFixture := seedInbound(t, svc, fixtureBox, "del-1", "<m1>", "Hello", "body one")
+	mBroken := seedInbound(t, svc, brokenBox, "del-2", "<m2>", "Hello", "body two")
+	cookie, _ := uiSession(t, svc, u.ID)
+	get := func(path string) string {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("GET %s: %d %s", path, rr.Code, rr.Body.String())
+		}
+		return rr.Body.String()
+	}
+	fixtureBody := get("/ui/messages/" + mFixture.ID)
+	if !strings.Contains(fixtureBody, "Sending is paused until a provider is configured for this domain.") {
+		t.Fatalf("message view missing sending banner")
+	}
+	if strings.Contains(fixtureBody, "Not receiving — no receive path is configured for this domain.") {
+		t.Fatalf("message view must not show receiving banner for configured domain")
+	}
+	brokenBody := get("/ui/messages/" + mBroken.ID)
+	for _, want := range []string{
+		"Sending is paused until a provider is configured for this domain.",
+		"Not receiving — no receive path is configured for this domain.",
+	} {
+		if !strings.Contains(brokenBody, want) {
+			t.Fatalf("message view missing %q", want)
 		}
 	}
 }
