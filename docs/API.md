@@ -51,7 +51,7 @@ Returns a compact discovery document:
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
   "bootstrap": "/v1/bootstrap",
-  "capabilities": ["inboxes","messages","threads","search","attachments","events","send"]
+  "capabilities": ["inboxes","messages","threads","search","attachments","events","drafts","draft-approval","outbox","send","hermes-relay"]
 }
 ```
 
@@ -183,9 +183,41 @@ POST   /v1/drafts
 GET    /v1/drafts/{id}
 PATCH  /v1/drafts/{id}
 DELETE /v1/drafts/{id}
+
+GET    /v1/drafts/{id}/attachments
+POST   /v1/drafts/{id}/attachments
+DELETE /v1/drafts/{id}/attachments/{attId}
 ```
 
-`assistant` and `owner` keys can create and edit drafts. Sending a draft requires `owner`.
+`assistant` and `owner` keys can create and edit drafts and upload attachments
+(multipart field `attachments`). Sending a draft requires `owner`.
+
+### Draft approval workflow
+
+An Assistant can draft and request send; an Owner authorizes.
+
+```http
+POST /v1/drafts/{id}/request-send          # assistant; freezes the draft
+POST /v1/drafts/{id}/cancel-send-request   # assistant; unfreezes
+POST /v1/drafts/{id}/approve               # owner; approve and send
+POST /v1/drafts/{id}/reject                # owner; reject with optional feedback
+GET  /v1/drafts/{id}/send-request          # latest request, survives send
+GET  /v1/send-requests?inbox={id}&active=true
+```
+
+- Draft `status` is `draft`, `pending_approval` or `rejected`. A draft is
+  frozen while `pending_approval`; changing it requires cancelling the request
+  first. Editing a rejected draft returns it to `draft`.
+- `approve` authorizes the exact frozen draft and enqueues it through the
+  normal outbound flow. `reject` stores optional feedback and leaves the draft
+  editable.
+- Approval and delivery are separate: approval enqueues a pending message;
+  `delivery_status` moves `none` → `pending` → `sent`/`failed`.
+- Workflow events: `draft.send_requested`, `draft.send_request_cancelled`,
+  `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`.
+
+Human users in the web UI are always Owners. Mailbox roles apply to API keys.
+Hermes Relay sends as an owner directly and does not use the draft workflow.
 
 ## 9. Send and reply
 
