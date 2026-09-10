@@ -46,6 +46,13 @@ This file records architectural decisions the implementation should treat as set
 
 ## D007 — BYO outbound
 
+> **Superseded in part by [D024](#d024--domain-owned-sending-and-receiving-configuration).**
+> The account-level outbound credential pool, named connector reuse, and
+> `domains.outbound_credential_id` assignment below were replaced by one optional
+> sending configuration owned by each domain. The BYO rationale, provider
+> registry, and adapter-schema boundary remain. Text below is retained as the
+> historical decision.
+
 **Decision:** Users provide outbound credentials.
 
 **V1 adapters:**
@@ -164,6 +171,12 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 ## D020 — Account-owned inbound credentials, domain assignments
 
+> **Superseded in part by [D024](#d024--domain-owned-sending-and-receiving-configuration).**
+> Inbound secrets are no longer account-owned credentials selected by a nullable
+> assignment; each domain owns at most one receiving configuration. The
+> provider-boundary and encryption-at-rest rationale below remain. Text below is
+> retained as the historical decision.
+
 **Decision:** Inbound provider secrets are stored as account-owned, encrypted credentials (`inbound_credentials`), and each domain selects one nullable receive credential (`domains.inbound_credential_id`) independent of its outbound credential. Credential reuse is restricted to the same account. Provider identity is immutable on update. The process environment no longer supplies inbound secrets (`MAILGUN_SIGNING_KEY`, `CLOUDFLARE_WEBHOOK_SECRET` are removed).
 
 **Reason:** The concrete BYO requirement is that a self-hosted operator can add a domain, add or select its receive path, and follow the provider's setup steps without editing environment variables or restarting. This supports multiple providers and multiple credentials per account while keeping encryption at rest on the existing `APP_ENCRYPTION_KEY` AES-GCM path. One receive connection per domain is a V1 simplification; provider overlap and failover are deferred. A domain with no receive path is valid to save but cannot accept mail.
@@ -193,6 +206,53 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 **Reason:** Without `allow-same-origin` the frame has an opaque origin, so the browser does not send the `SameSite=Lax` session cookie for inline `cid:` images served from `/ui/attachments/{id}/inline`; those images fail authentication and render broken. Scripts remain blocked by the absent `allow-scripts` token, the iframe CSP (`default-src 'none'`, no `script-src`) and the sanitizer, so the residual risk is that sanitized mail can trigger authenticated same-origin GETs. The only state-changing GET is opening a message, which marks it read.
 
 **Scope:** HTML message rendering only.
+
+## D024 — Domain-owned sending and receiving configuration
+
+**Decision:** Each domain owns at most one optional sending configuration and at
+most one optional receiving configuration. There is no account-level connector
+pool, no named or reusable connector, no shared assignment, and no standalone
+connector API. Sending and receiving are managed directly on the domain:
+
+```http
+GET    /v1/admin/domains/{id}/sending
+PUT    /v1/admin/domains/{id}/sending
+DELETE /v1/admin/domains/{id}/sending
+GET    /v1/admin/domains/{id}/receiving
+PUT    /v1/admin/domains/{id}/receiving
+DELETE /v1/admin/domains/{id}/receiving
+GET    /v1/admin/domains/{id}/sending/deliveries
+```
+
+`PUT` takes `{provider, config}` (receiving also takes `regenerate_secret`). A
+generated Cloudflare Worker secret is created only when missing, preserved by a
+normal same-provider save, and replaced only by an explicit regenerate. Domain
+creation accepts `name` only; `PATCH /v1/admin/domains/{id}` accepts
+`catch_all_inbox_id` only. Supersedes the affected portions of
+[D007](#d007--byo-outbound) and [D020](#d020--account-owned-inbound-credentials-domain-assignments).
+
+**Requirement:** The old model exposed an account-level pool of named
+credentials plus explicit per-domain assignment selectors in both the API and
+the UI. It was insufficient because the underlying provider configuration is
+already sending/receiving-domain-scoped (for example Mailgun's sending domain or
+an SMTP `from` domain), so a reusable named connector invited sending a domain's
+mail through another domain's provider. The separate connector lifecycle also
+required orphan handling and an assignment step that had no product value, and
+the UI split configuration across a connector screen and a domain screen. A
+domain-first model makes ownership, the pause-on-missing-provider behaviour, and
+the per-domain delivery history explicit.
+
+**Complexity:** Qualitative, not measured. The change removes the standalone
+connector CRUD, assignment fields, and orphan handling while adding two
+domain-keyed tables, one forward migration, and domain-scoped handlers. It
+introduces no new runtime service and no new dependency: it reuses the existing
+SQLite store, AES-GCM encryption with `APP_ENCRYPTION_KEY`, provider registry,
+and adapters. Net surface area is smaller than the connector model.
+
+**Migration:** Migration 013 copies assigned connector bytes into independent
+per-domain configs without re-keying, drops connectors not assigned to any
+domain, and preserves mailbox, auth, message, storage, and delivery-log data.
+See the migration note in the root `DECISIONS.md`.
 
 ## Future extension register
 

@@ -5,17 +5,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
+	"gatehouse-mail/internal/transport"
 )
 
 func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
@@ -31,14 +32,8 @@ func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<brevo-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "xkeysib-test", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "xkeysib-test", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []app.SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "brevo-key")
 	if err != nil {
 		t.Fatal(err)
@@ -107,13 +102,7 @@ func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
 		io.WriteString(w, `{"id":"<mg-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Mailgun", "mailgun", map[string]any{"api_key": "key-test", "domain": "mg.example.com", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"api_key": "key-test", "domain": "mg.example.com", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Report", Text: "See attached", Attachments: []app.SendAttachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}}}, "mg-key")
 	if err != nil {
@@ -127,11 +116,14 @@ func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
 	}
 }
 
-func TestUnknownOutboundProviderRejected(t *testing.T) {
-	svc, u, _, _ := testService(t)
-	_, err := svc.SaveOutboundCredential(context.Background(), u.AccountID, "", "X", "not-a-provider", map[string]any{"api_key": "k"})
-	if err == nil || !strings.Contains(err.Error(), "unknown outbound provider") {
-		t.Fatalf("err %v", err)
+func TestUnknownSendingProviderRejected(t *testing.T) {
+	svc, u, d, _ := testService(t)
+	_, err := svc.SaveDomainSendingConfig(context.Background(), u.AccountID, d.ID, "not-a-provider", map[string]any{"api_key": "k"})
+	if !errors.Is(err, app.ErrInvalidConfig) {
+		t.Fatalf("err %v, want ErrInvalidConfig", err)
+	}
+	if !errors.Is(err, transport.ErrUnknownProvider) {
+		t.Fatalf("err %v, want ErrUnknownProvider", err)
 	}
 }
 
@@ -145,13 +137,7 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<log-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Log", Text: "hi"}, "")
 	if err != nil {
@@ -160,7 +146,7 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	attempts, err := svc.Store.ListDeliveryAttempts(ctx, u.AccountID, cred.ID, 10, 0)
+	attempts, err := svc.Store.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +154,7 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 		t.Fatalf("attempts len %d", len(attempts))
 	}
 	a := attempts[0]
-	if a.Status != "sent" || a.MessageID != res.Message.ID || a.CredentialID != cred.ID || a.Provider != "brevo" || a.ProviderMessageID != "<log-out>" || a.Attempt != 1 {
+	if a.Status != "sent" || a.MessageID != res.Message.ID || a.DomainID != d.ID || a.Provider != "brevo" || a.ProviderMessageID != "<log-out>" || a.Attempt != 1 {
 		t.Fatalf("attempt %+v", a)
 	}
 }

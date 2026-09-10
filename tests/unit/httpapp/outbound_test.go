@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,11 +25,7 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<brevo-http>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -74,94 +69,6 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 	}
 }
 
-func TestOutboundConfigFromForm(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	ctx := context.Background()
-	post := func(form url.Values) *httptest.ResponseRecorder {
-		t.Helper()
-		cookie, csrf := uiSession(t, svc, u.ID)
-		form.Set("_csrf", csrf)
-		req := httptest.NewRequest("POST", "/ui/outbound", strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.AddCookie(cookie)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
-	}
-	if rr := post(url.Values{"provider": {"brevo"}, "name": {"B"}}); rr.Code != http.StatusBadRequest {
-		t.Fatalf("missing api_key should error on create: %d %s", rr.Code, rr.Body.String())
-	}
-	if rr := post(url.Values{"provider": {"brevo"}, "name": {"Brevo"}, "cfg_brevo_api_key": {"k"}, "cfg_brevo_api_base": {"https://api.brevo.com"}}); rr.Code != http.StatusSeeOther {
-		t.Fatalf("create brevo %d %s", rr.Code, rr.Body.String())
-	}
-	creds, err := svc.Store.ListOutboundCredentials(ctx, u.AccountID)
-	if err != nil || len(creds) != 1 {
-		t.Fatalf("creds %v %#v", err, creds)
-	}
-	brevoID := creds[0].ID
-	cfg, err := svc.DecryptOutboundCredential(creds[0])
-	if err != nil || cfg["api_key"] != "k" || cfg["api_base"] != "https://api.brevo.com" {
-		t.Fatalf("brevo cfg %#v err %v", cfg, err)
-	}
-	// Editing without re-entering the secret preserves it.
-	if rr := post(url.Values{"id": {brevoID}, "provider": {"brevo"}, "name": {"Brevo"}, "cfg_brevo_api_base": {"https://api2.brevo.com"}}); rr.Code != http.StatusSeeOther {
-		t.Fatalf("edit brevo %d %s", rr.Code, rr.Body.String())
-	}
-	cred, err := svc.Store.GetOutboundCredential(ctx, u.AccountID, brevoID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, err = svc.DecryptOutboundCredential(cred)
-	if err != nil || cfg["api_key"] != "k" || cfg["api_base"] != "https://api2.brevo.com" {
-		t.Fatalf("edited brevo cfg %#v err %v", cfg, err)
-	}
-	// SMTP config is mapped and coerced; an invalid port is rejected.
-	if rr := post(url.Values{"provider": {"smtp"}, "name": {"SMTP"}, "cfg_smtp_host": {"smtp.example.com"}, "cfg_smtp_port": {"2525"}, "cfg_smtp_security": {"tls"}}); rr.Code != http.StatusSeeOther {
-		t.Fatalf("create smtp %d %s", rr.Code, rr.Body.String())
-	}
-	creds, err = svc.Store.ListOutboundCredentials(ctx, u.AccountID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var smtpCfg map[string]any
-	for _, c := range creds {
-		if c.Provider == "smtp" {
-			smtpCfg, err = svc.DecryptOutboundCredential(c)
-		}
-	}
-	if err != nil || smtpCfg["port"] != float64(2525) || smtpCfg["security"] != "tls" || smtpCfg["host"] != "smtp.example.com" {
-		t.Fatalf("smtp cfg %#v err %v", smtpCfg, err)
-	}
-	if rr := post(url.Values{"provider": {"smtp"}, "name": {"Bad"}, "cfg_smtp_host": {"smtp.example.com"}, "cfg_smtp_port": {"nope"}}); rr.Code != http.StatusBadRequest {
-		t.Fatalf("bad port should error: %d %s", rr.Code, rr.Body.String())
-	}
-}
-
-func TestDashboardRendersOutboundProviderFields(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	ctx := context.Background()
-	if _, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Primary", "brevo", map[string]any{"api_key": "k", "api_base": "https://api.brevo.com"}); err != nil {
-		t.Fatal(err)
-	}
-	cookie, _ := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("GET", "/dashboard", nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
-	}
-	body := rr.Body.String()
-	for _, want := range []string{"Add Outbound Provider", `data-provider="brevo"`, `data-provider="smtp"`, "cfg_smtp_host", "data-config=", `src="/assets/app.js?v=`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing %q", want)
-		}
-	}
-	if strings.Contains(body, "onclick=") {
-		t.Fatal("inline event handlers are blocked by CSP and must not be used")
-	}
-}
-
 func TestCSPAllowsSelfScripts(t *testing.T) {
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
@@ -179,11 +86,7 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<log-http>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -198,25 +101,25 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	// Admin key can read the log.
-	req := httptest.NewRequest("GET", "/v1/admin/outbound/"+cred.ID+"/deliveries", nil)
+	// Admin key can read the log by domain.
+	req := httptest.NewRequest("GET", "/v1/admin/domains/"+dom.ID+"/sending/deliveries", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"status":"sent"`) || !strings.Contains(rr.Body.String(), res.Message.ID) {
 		t.Fatalf("deliveries %d %s", rr.Code, rr.Body.String())
 	}
-	// Unknown credential -> 404.
-	req = httptest.NewRequest("GET", "/v1/admin/outbound/out_missing/deliveries", nil)
+	// Unknown domain -> 404.
+	req = httptest.NewRequest("GET", "/v1/admin/domains/dom_missing/sending/deliveries", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 404 {
-		t.Fatalf("foreign cred %d", rr.Code)
+		t.Fatalf("foreign domain %d", rr.Code)
 	}
 }
 
-func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
+func TestUIDomainDeliveriesShowsActivity(t *testing.T) {
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,11 +127,7 @@ func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
 		io.WriteString(w, `{"messageId":"<ui-log>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
@@ -240,17 +139,17 @@ func TestUIOutboundDetailShowsDeliveryLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("GET", "/ui/outbound/"+cred.ID, nil)
+	req := httptest.NewRequest("GET", "/ui/domains/"+dom.ID+"/sending/deliveries", nil)
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 {
-		t.Fatalf("detail %d %s", rr.Code, rr.Body.String())
+		t.Fatalf("domain deliveries %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Delivery activity", "Sent", res.Message.ID, "/ui/messages/" + res.Message.ID, "to: friend@example.net", "from: " + box.Address, "edit-provider"} {
+	for _, want := range []string{res.Message.ID, "/ui/messages/" + res.Message.ID} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("detail missing %q", want)
+			t.Fatalf("domain deliveries missing %q", want)
 		}
 	}
 }
@@ -262,7 +161,7 @@ func TestAppJSServed(t *testing.T) {
 	if rr.Code != 200 || !strings.Contains(rr.Header().Get("Content-Type"), "javascript") {
 		t.Fatalf("asset %d %q", rr.Code, rr.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{"provider-dialog", "key-dialog", "key-result", "isSecureContext", "navigator.clipboard", "domain-provider-status", "__add_provider__"} {
+	for _, want := range []string{"key-dialog", "key-result", "isSecureContext", "navigator.clipboard"} {
 		if !strings.Contains(rr.Body.String(), want) {
 			t.Fatalf("asset missing %q", want)
 		}

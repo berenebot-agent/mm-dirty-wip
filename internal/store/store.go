@@ -59,9 +59,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	// The 001 baseline is idempotent (all IF NOT EXISTS) and creates the
-	// schema_migrations table the rest of the runner depends on.
-	if err := runMigration(ctx, conn, migration{version: "001", sql: migration001}); err != nil {
+	// The 001 baseline creates the schema_migrations table the rest of the
+	// runner depends on. It must only run on a genuinely fresh (or pre-runner
+	// legacy) database: it is all CREATE TABLE IF NOT EXISTS, so running it on
+	// an already-migrated database would resurrect tables that a later
+	// migration dropped (e.g. the retired credential tables).
+	if err := bootstrapBaseline(ctx, conn); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	for _, m := range migrations() {
@@ -94,6 +97,23 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// bootstrapBaseline applies the 001 baseline only when the database has no
+// schema_migrations table yet. A database that already carries the runner's
+// marker table has completed the baseline at some point in its life, so
+// re-running the idempotent baseline would recreate dropped tables (the
+// migration-013 baseline-resurrection hazard). A fresh database and a
+// pre-runner legacy database both lack the marker table and are bootstrapped.
+func bootstrapBaseline(ctx context.Context, conn *sql.Conn) error {
+	hasMarkerTable, err := tableExists("schema_migrations")(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if hasMarkerTable {
+		return nil
+	}
+	return runMigration(ctx, conn, migration{version: "001", sql: migration001})
 }
 
 func nowText() string              { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -131,7 +151,7 @@ var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
 var ErrConflict = errors.New("conflict")
 var ErrQuota = errors.New("storage quota exceeded")
-var ErrNoProvider = errors.New("no outbound provider configured")
+var ErrNoProvider = errors.New("no provider configured")
 
 func normalizeAddress(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 func normalizeDomain(v string) string {

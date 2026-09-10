@@ -60,15 +60,11 @@ const (
 	testCFSecret   = "cf-secret"
 )
 
-// seedInbound creates an account-owned receive credential and assigns it to a
-// domain, mirroring the domain-first setup flow.
+// seedInboundCredential configures the domain's receive path, mirroring the
+// domain-first setup flow.
 func seedInboundCredential(t *testing.T, svc *app.Service, accountID, domainID, provider string, cfg map[string]any) {
 	t.Helper()
-	cred, err := svc.SaveInboundCredential(context.Background(), accountID, "", "", provider, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Store.SetDomainInboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
+	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), accountID, domainID, provider, cfg, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -343,11 +339,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 		io.WriteString(w, `{"id":"<compat-out>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "MG", "mailgun", map[string]any{"api_key": "key", "domain": "mg.example.com", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	if _, err = svc.SaveDomainSendingConfig(ctx, u.AccountID, dom.ID, "mailgun", map[string]any{"api_key": "key", "domain": "mg.example.com", "api_base": api.URL}); err != nil {
 		t.Fatal(err)
 	}
 	req = httptest.NewRequest("POST", "/v1/send", strings.NewReader(`{"from":"fox@example.com","to":"friend@example.net","subject":"hello","text":"hi"}`))

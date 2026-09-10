@@ -41,7 +41,7 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 		t.Fatalf("second claim got %q, want empty", id)
 	}
 	// Mark sent.
-	sent, ev, err := s.MarkSent(ctx, u.AccountID, m.ID, "<provider-id>", "", "brevo")
+	sent, ev, err := s.MarkSent(ctx, u.AccountID, m.ID, "<provider-id>", "brevo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fail it (attempt 1 of 6 -> stays pending with a next_attempt_at).
-	failed, err := s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "", "brevo")
+	failed, err := s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "brevo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 		if cur.Status == "failed" {
 			break
 		}
-		if _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "down", time.Now().UTC(), 6, "", "brevo"); err != nil {
+		if _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "down", time.Now().UTC(), 6, "brevo"); err != nil {
 			t.Fatal(err)
 		}
 	}

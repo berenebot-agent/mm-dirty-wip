@@ -51,13 +51,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 
 	var calls atomic.Int32
 	api := providerServer(t, "<brevo-queued>", &calls)
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatalf("deliver after provider assigned: %v", err)
 	}
@@ -71,7 +65,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 }
 
 // TestSendUsesDomainCredential verifies that a domain sends through the
-// credential assigned to it, not another credential on the account.
+// provider configured for it, not a provider configured on another domain.
 func TestSendUsesDomainCredential(t *testing.T) {
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
@@ -81,16 +75,12 @@ func TestSendUsesDomainCredential(t *testing.T) {
 	chosen := providerServer(t, "<mailgun>", &chosenCalls)
 	other := providerServer(t, "<brevo>", &otherCalls)
 
-	if _, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": other.URL}); err != nil {
-		t.Fatal(err)
-	}
-	mgCred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "MG", "mailgun", map[string]any{"api_key": "k", "domain": "mg.example.com", "api_base": chosen.URL})
+	otherDomain, err := svc.Store.CreateDomain(ctx, u.AccountID, "other.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, d.ID, mgCred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, otherDomain.ID, "brevo", map[string]any{"api_key": "k", "api_base": other.URL})
+	seedSending(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"api_key": "k", "domain": "mg.example.com", "api_base": chosen.URL})
 
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
 	if err != nil {
@@ -125,13 +115,7 @@ func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
 	}
 	var calls atomic.Int32
 	api := providerServer(t, "<brevo-other>", &calls)
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "Brevo", "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, otherDomain.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, otherDomain.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
 
 	// box is on a different domain with no provider: it must queue, not send.
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")

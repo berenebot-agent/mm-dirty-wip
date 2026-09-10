@@ -2,6 +2,35 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Domain-owned provider configuration migration (migration 013)
+
+Migration 013 replaces the account-level connector tables with one optional
+sending (`domain_sending_configs`) and one optional receiving
+(`domain_receiving_configs`) row per domain, each keyed by a composite
+`(domain_id, account_id)` foreign key that cascades with the domain. The
+rationale is in `docs/DECISIONS.md` D024.
+
+- Assigned connector rows are copied to per-domain configs, preserving the
+  encrypted bytes. A connector shared by several domains becomes independent
+  copies, and no re-key is needed because the same `APP_ENCRYPTION_KEY` still
+  decrypts them.
+- Connectors not assigned to any domain are dropped with the old tables.
+- `domains` loses the credential-assignment columns; `inboxes` keeps every
+  column, including `allowed_senders_json`, minus the dead outbound foreign key.
+- `outbound_delivery_log` replaces `credential_id` with a nullable `domain_id`
+  (`ON DELETE SET NULL`, no foreign key to a config row). Attempts are backfilled
+  from the attempt's message and inbox; attempts that cannot be attributed keep a
+  NULL domain and every attempt is retained. The provider stays an attempt-time
+  snapshot.
+- Mailbox, auth, message, storage, dedup, and other data are preserved.
+
+The schema baseline (`001`) is gated on the absence of the `schema_migrations`
+marker table so a routine boot of an existing database cannot resurrect the
+dropped connector tables; the existing marker-recovery and partial-schema
+fail-fast behaviour is retained. A partially applied upgrade fails with an
+actionable error rather than retrying into a duplicate-column crash loop, so
+back up `/data` and `APP_ENCRYPTION_KEY` before running the new binary.
+
 ## Atomic migration runner (BUG-04)
 
 Schema migrations and their `schema_migrations` marker are applied in one

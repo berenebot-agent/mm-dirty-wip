@@ -56,15 +56,19 @@ const (
 	testCFSecret   = "cf-secret"
 )
 
-// seedInbound creates an account-owned receive credential and assigns it to a
-// domain, mirroring the domain-first setup flow.
+// seedInbound configures the domain's single receiving provider, mirroring the
+// domain-first setup flow.
 func seedInbound(t *testing.T, svc *app.Service, accountID, domainID, provider string, cfg map[string]any) {
 	t.Helper()
-	cred, err := svc.SaveInboundCredential(context.Background(), accountID, "", "", provider, cfg)
-	if err != nil {
+	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), accountID, domainID, provider, cfg, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetDomainInboundCredential(context.Background(), accountID, domainID, cred.ID); err != nil {
+}
+
+// seedSending configures the domain's single sending provider.
+func seedSending(t *testing.T, svc *app.Service, accountID, domainID, provider string, cfg map[string]any) {
+	t.Helper()
+	if _, err := svc.SaveDomainSendingConfig(context.Background(), accountID, domainID, provider, cfg); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -114,14 +118,8 @@ func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
 		io.WriteString(w, `{"id":"<mailgun-id>"}`)
 	}))
 	defer api.Close()
-	cred, err := svc.SaveOutboundCredential(ctx, u.AccountID, "", "MG", "mailgun", map[string]any{"api_key": "key-test", "domain": "mg.example.com", "api_base": api.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
+	seedSending(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"api_key": "key-test", "domain": "mg.example.com", "api_base": api.URL})
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
-	if err = svc.Store.SetDomainOutboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
 	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, ReplyToMessageID: m.ID, Text: "Done"}, "same-key")
 	if err != nil {
 		t.Fatal(err)

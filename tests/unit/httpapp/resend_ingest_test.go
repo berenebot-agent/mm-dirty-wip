@@ -58,14 +58,10 @@ func resendIngestFixture(t *testing.T) (*app.Service, *httpapp.Server, model.Pri
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := svc.SaveInboundCredential(ctx, u.AccountID, "", "Resend", "resend", map[string]any{
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, dom.ID, "resend", map[string]any{
 		"api_key": "re_fixture", "webhook_secret": "whsec_" + base64.StdEncoding.EncodeToString([]byte(resendFixtureKey)),
 		"api_base": "https://resend-api.example.test",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.SetDomainInboundCredential(ctx, u.AccountID, dom.ID, cred.ID); err != nil {
+	}, false); err != nil {
 		t.Fatal(err)
 	}
 	return svc, httpapp.New(svc, nil), model.Principal{AccountID: u.AccountID, Admin: true}, box

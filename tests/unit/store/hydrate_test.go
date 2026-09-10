@@ -42,7 +42,7 @@ func TestCommitReturnsCommittedMessage(t *testing.T) {
 		t.Fatalf("outbound mismatch:\n%#v\n%#v", out, fetchedOut)
 	}
 
-	sent, _, err := s.MarkSent(ctx, out.AccountID, out.ID, "<provider@id>", "", "smtp")
+	sent, _, err := s.MarkSent(ctx, out.AccountID, out.ID, "<provider@id>", "smtp")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -93,7 +93,7 @@ one HTTP port
 
 ### Accounts and domains
 
-An account owns domains, inboxes, messages, API keys, outbound credentials, storage allocation, and Hermes connections.
+An account owns domains, inboxes, messages, API keys, storage allocation, and Hermes connections. Each domain owns at most one optional sending and one optional receiving provider configuration.
 
 Domains support hosted addresses and custom-domain operation.
 
@@ -169,7 +169,7 @@ An additional **Admin** role applies at the account level.
 - create and delete inboxes
 - manage domains
 - manage API keys and users
-- manage outbound-provider settings
+- manage each domain's sending and receiving provider settings
 - manage Hermes connections
 - manage account-wide settings
 
@@ -213,7 +213,7 @@ Provide a lightweight interface for:
 - search
 - attachments
 - API keys
-- outbound provider settings
+- per-domain sending and receiving settings
 - Hermes connections
 - storage usage
 
@@ -249,7 +249,7 @@ The hosted service provides:
 - attachments
 - basic human UI
 - custom domains as supported by the deployment
-- BYO outbound credentials
+- BYO per-domain sending and receiving provider configuration
 
 The initial public service focuses on free access and operational simplicity.
 
@@ -271,7 +271,7 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures a receive path per domain (Mailgun, Cloudflare Worker, or Resend) in the Admin UI, and optional outbound credentials. Inbound provider secrets are stored encrypted in the database rather than in the process environment.
+The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, or Resend) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
 Self-hosted setup uses a first-run Admin bootstrap. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -291,10 +291,10 @@ Mailgun, Cloudflare Email Routing, or Resend
 Gatehouse Email
 ```
 
-One catch-all transport route can serve many logical inbox identities. Receive
-connections are account-owned, encrypted credentials; each domain selects one
-receive path. A domain with no receive path cannot accept mail. Inbound
-provider secrets are not read from the environment.
+One catch-all transport route can serve many logical inbox identities. Each
+domain owns at most one optional receiving provider configuration, stored as an
+encrypted secret on that domain. A domain with no receiving configuration cannot
+accept mail. Inbound provider secrets are not read from the environment.
 
 Mailgun delivers raw MIME to `/internal/ingest/mailgun/raw-mime` (the suffix is
 protocol-significant) using its signed webhook fields. The Cloudflare Worker
@@ -306,22 +306,23 @@ authenticates before MIME is parsed or persisted.
 
 Delivery identity is scoped to the account, provider, canonical original
 envelope recipient, and provider delivery id, so retries are deduplicated even
-when credentials are replaced. A catch-all preserves the original recipient.
+when a receiving configuration is replaced. A catch-all preserves the original
+recipient.
 
 For an unknown recipient, the domain's configured catch-all inbox receives the message when one is set. Otherwise the ingest endpoint returns a terminal rejection to the transport and records a minimal audit entry.
 
 ### Outbound
 
-Users configure:
+Each domain can be configured with one of:
 
 - Mailgun API credentials;
 - Brevo API credentials;
 - Resend API credentials; or
 - generic SMTP credentials.
 
-Provider credentials are encrypted at rest. Outbound adapters are registered through a provider registry, so provider-specific code remains behind a narrow transport package. Each adapter declares the fields the Admin UI should collect, so adding a provider only asks for its API key and relevant settings rather than raw JSON.
+Provider configurations are encrypted at rest. Outbound adapters are registered through a provider registry, so provider-specific code remains behind a narrow transport package. Each adapter declares the fields the Admin UI should collect, so adding a provider only asks for its API key and relevant settings rather than raw JSON.
 
-An account may store several outbound credentials, and each domain designates the credential it sends through. A domain with no credential queues mail until one is assigned.
+Each domain owns at most one optional sending configuration; there is no account-level connector pool, reusable named credential, or assignment step. A domain with no sending configuration queues mail until one is configured, and a queued send resolves the domain's current configuration when the worker delivers it.
 
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 
@@ -372,7 +373,7 @@ A hosted user can:
 5. connect Hermes using one enrollment command;
 6. send a test email;
 7. see Hermes receive it immediately;
-8. connect an outbound provider when sending is needed;
+8. configure a sending provider on the domain when sending is needed;
 9. create additional inbox identities immediately from the same domain configuration.
 
 A self-hosted user can run the same application from the published Docker image and receive the same API and Hermes experience.

@@ -432,3 +432,119 @@ const migration011 = `ALTER TABLE messages ADD COLUMN claim_owner TEXT NOT NULL 
 ALTER TABLE messages ADD COLUMN claim_expires_at TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_messages_claim ON messages(status, claim_expires_at);
 `
+
+// migration013 replaces the shared credential pools with one optional sending
+// and one optional receiving configuration per domain. It runs inside the
+// runner's foreign_keys=OFF transaction because it rebuilds domains, inboxes
+// and the delivery log.
+//
+//   - domain_sending_configs / domain_receiving_configs each hold one row per
+//     domain, keyed by a composite (domain_id, account_id) foreign key that
+//     cascades with the domain. The old assigned credential rows are copied
+//     per domain so a credential shared by several domains becomes independent
+//     copies; unused credentials are dropped with their tables.
+//   - domains drops the outbound_credential_id/inbound_credential_id
+//     assignment columns; a unique (id, account_id) index backs the composite
+//     config foreign keys.
+//   - inboxes drops the retired outbound_credential_id foreign key while
+//     preserving every other column, including allowed_senders_json.
+//   - outbound_delivery_log replaces credential_id with a nullable domain_id
+//     (SET NULL, no config foreign key) backfilled from the attempt's
+//     message+inbox; attempts with no surviving message keep a NULL domain and
+//     every attempt is retained.
+//
+// The baseline is gated so it cannot recreate the dropped credential tables;
+// see bootstrapBaseline in store.go.
+const migration013 = `
+CREATE TABLE domain_sending_configs (
+  id TEXT PRIMARY KEY,
+  domain_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  encrypted_config TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(domain_id),
+  FOREIGN KEY(domain_id,account_id) REFERENCES domains(id,account_id) ON DELETE CASCADE
+);
+CREATE TABLE domain_receiving_configs (
+  id TEXT PRIMARY KEY,
+  domain_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  encrypted_config TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(domain_id),
+  FOREIGN KEY(domain_id,account_id) REFERENCES domains(id,account_id) ON DELETE CASCADE
+);
+
+INSERT INTO domain_sending_configs(id,domain_id,account_id,provider,encrypted_config,revision,created_at,updated_at)
+  SELECT 'dsc_'||lower(hex(randomblob(16))), d.id, d.account_id, c.provider, c.encrypted_config, 1, c.created_at, c.updated_at
+  FROM domains d JOIN outbound_credentials c ON c.id=d.outbound_credential_id
+  WHERE d.outbound_credential_id IS NOT NULL;
+INSERT INTO domain_receiving_configs(id,domain_id,account_id,provider,encrypted_config,revision,created_at,updated_at)
+  SELECT 'drc_'||lower(hex(randomblob(16))), d.id, d.account_id, c.provider, c.encrypted_config, 1, c.created_at, c.updated_at
+  FROM domains d JOIN inbound_credentials c ON c.id=d.inbound_credential_id
+  WHERE d.inbound_credential_id IS NOT NULL;
+
+CREATE TABLE outbound_delivery_log_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT REFERENCES domains(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL DEFAULT '',
+  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  attempt INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK(status IN ('sent','failed')),
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  error_text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+INSERT INTO outbound_delivery_log_new(id,account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at)
+  SELECT l.id, l.account_id,
+    (SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=l.message_id AND m.account_id=l.account_id),
+    l.provider, l.message_id, l.attempt, l.status, l.provider_message_id, l.error_text, l.created_at
+  FROM outbound_delivery_log l;
+DROP TABLE outbound_delivery_log;
+ALTER TABLE outbound_delivery_log_new RENAME TO outbound_delivery_log;
+
+CREATE TABLE inboxes_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+  local_part TEXT NOT NULL COLLATE NOCASE,
+  display_name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  allowed_senders_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  UNIQUE(domain_id, local_part)
+);
+INSERT INTO inboxes_new(id,account_id,domain_id,local_part,display_name,enabled,allowed_senders_json,created_at)
+  SELECT id,account_id,domain_id,local_part,display_name,enabled,allowed_senders_json,created_at FROM inboxes;
+DROP TABLE inboxes;
+ALTER TABLE inboxes_new RENAME TO inboxes;
+
+CREATE TABLE domains_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL COLLATE NOCASE,
+  catch_all_inbox_id TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(account_id, name),
+  UNIQUE(name)
+);
+INSERT INTO domains_new(id,account_id,name,catch_all_inbox_id,created_at)
+  SELECT id,account_id,name,catch_all_inbox_id,created_at FROM domains;
+DROP TABLE domains;
+ALTER TABLE domains_new RENAME TO domains;
+CREATE UNIQUE INDEX idx_domains_id_account ON domains(id,account_id);
+
+DROP TABLE outbound_credentials;
+DROP TABLE inbound_credentials;
+
+CREATE INDEX idx_inboxes_account ON inboxes(account_id);
+CREATE INDEX idx_outbound_log_domain ON outbound_delivery_log(account_id, domain_id, id DESC);
+CREATE INDEX idx_outbound_log_msg ON outbound_delivery_log(message_id);
+`

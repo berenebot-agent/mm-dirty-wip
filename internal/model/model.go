@@ -24,13 +24,13 @@ type User struct {
 }
 
 type Domain struct {
-	ID                   string    `json:"id"`
-	AccountID            string    `json:"account_id"`
-	Name                 string    `json:"name"`
-	CatchAllInboxID      string    `json:"catch_all_inbox_id,omitempty"`
-	OutboundCredentialID string    `json:"outbound_credential_id,omitempty"`
-	InboundCredentialID  string    `json:"inbound_credential_id,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                string    `json:"id"`
+	AccountID         string    `json:"account_id"`
+	Name              string    `json:"name"`
+	CatchAllInboxID   string    `json:"catch_all_inbox_id,omitempty"`
+	SendingProvider   string    `json:"sending_provider"`
+	ReceivingProvider string    `json:"receiving_provider"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Inbox struct {

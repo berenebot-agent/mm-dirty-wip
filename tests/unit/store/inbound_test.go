@@ -8,38 +8,36 @@ import (
 	"gatehouse-mail/internal/store"
 )
 
-func TestInboundCredentialCRUDAndBinding(t *testing.T) {
+func TestResolveInboundBindingAndIsolation(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
 	if _, err := s.ResolveInboundBinding(ctx, "mailgun", "x@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unconfigured resolve err=%v", err)
 	}
-	cred, err := s.SaveInboundCredential(ctx, u.AccountID, "", "MG", "mailgun", "enc")
+	cfg, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "Mailgun", "enc", store.ConfigVersion{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.GetInboundCredential(ctx, u.AccountID, cred.ID); err != nil || got.Name != "MG" {
-		t.Fatalf("get %+v err=%v", got, err)
-	}
-	if list, err := s.ListInboundCredentials(ctx, u.AccountID); err != nil || len(list) != 1 {
-		t.Fatalf("list %v %v", list, err)
-	}
-	if err = s.SetDomainInboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
+	if cfg.Provider != "mailgun" || cfg.Revision != 1 {
+		t.Fatalf("receiving config %+v", cfg)
 	}
 	b, err := s.ResolveInboundBinding(ctx, "mailgun", "Hermes@Example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.AccountID != u.AccountID || b.DomainID != d.ID || b.CredentialID != cred.ID || b.Recipient != "hermes@example.com" {
+	if b.AccountID != u.AccountID || b.DomainID != d.ID || b.CredentialID != cfg.ID || b.Recipient != "hermes@example.com" {
 		t.Fatalf("binding %+v", b)
 	}
 	if _, err = s.ResolveInboundBinding(ctx, "cloudflare", "hermes@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("wrong provider err=%v", err)
 	}
+	dom, err := s.GetDomain(ctx, u.AccountID, d.ID)
+	if err != nil || dom.ReceivingProvider != "mailgun" || dom.SendingProvider != "" {
+		t.Fatalf("domain summary %+v err=%v", dom, err)
+	}
 
-	// Cross-account assignment is forbidden.
+	// A foreign account cannot configure or read another account's domain.
 	u2, err := s.CreateAccountAndAdmin(ctx, "B", "admin@b.test", "correct horse battery staple", 100<<20)
 	if err != nil {
 		t.Fatal(err)
@@ -48,27 +46,25 @@ func TestInboundCredentialCRUDAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.SetDomainInboundCredential(ctx, u2.AccountID, d2.ID, cred.ID); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("cross-account assign err=%v", err)
+	if _, err = s.SaveDomainReceivingConfig(ctx, u2.AccountID, d.ID, "resend", "enc", store.ConfigVersion{ID: cfg.ID, Revision: 1}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-account save err=%v, want not found", err)
+	}
+	if _, err = s.GetDomainReceivingConfig(ctx, u2.AccountID, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-account get err=%v, want not found", err)
+	}
+	if err = s.DeleteDomainReceivingConfig(ctx, u2.AccountID, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("cross-account delete err=%v, want not found", err)
+	}
+	if err = s.DeleteDomainReceivingConfig(ctx, u2.AccountID, d2.ID); err != nil {
+		t.Fatalf("delete on existing domain without config should be idempotent: %v", err)
 	}
 
-	// Clearing leaves the domain unconfigured.
-	if err = s.SetDomainInboundCredential(ctx, u.AccountID, d.ID, ""); err != nil {
+	// Deleting the config leaves the domain unconfigured.
+	if err = s.DeleteDomainReceivingConfig(ctx, u.AccountID, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.ResolveInboundBinding(ctx, "mailgun", "hermes@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cleared resolve err=%v", err)
-	}
-	// Deleting a credential leaves assigned domains unconfigured.
-	if err = s.SetDomainInboundCredential(ctx, u.AccountID, d.ID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.DeleteInboundCredential(ctx, u.AccountID, cred.ID); err != nil {
-		t.Fatal(err)
-	}
-	dom, err := s.GetDomain(ctx, u.AccountID, d.ID)
-	if err != nil || dom.InboundCredentialID != "" {
-		t.Fatalf("domain after delete %+v err=%v", dom, err)
 	}
 }
 

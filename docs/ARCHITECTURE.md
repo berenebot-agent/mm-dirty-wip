@@ -113,16 +113,17 @@ type InboundTransport interface {
 ```
 
 The service implements `BindingResolver`, which maps the envelope recipient to
-the account, domain, and assigned encrypted receive credential. Provider auth
-material stays inside the adapter. The mailbox core is transport-neutral beyond
-this boundary.
+the account, domain, and that domain's optional encrypted receiving
+configuration (`CredentialID` is the config row's id). Provider auth material
+stays inside the adapter. The mailbox core is transport-neutral beyond this
+boundary.
 
 ## 4. Inbound transaction
 
 ```text
 receive provider request
        ↓
-resolve recipient → domain → assigned receive credential (decrypted config)
+resolve recipient → domain → receiving configuration (decrypted config)
        ↓
 authenticate provider (before MIME is parsed; Cloudflare before MIME is read)
        ↓
@@ -152,9 +153,9 @@ Cloudflare uses its delivery id or a raw-MIME hash. Store the delivery id only
 with the successfully committed message so a failed first attempt can be
 retried safely. The dedup key is scoped to the account, provider, and canonical
 original envelope recipient, so the same delivery id for a different recipient
-or account is not collapsed, and replacing a credential does not turn a retry
-into a new delivery. MIME `Message-ID` remains message metadata rather than the
-delivery deduplication key.
+or account is not collapsed, and replacing a domain's receiving configuration
+does not turn a retry into a new delivery. MIME `Message-ID` remains message
+metadata rather than the delivery deduplication key.
 
 Resend inbound is webhook-triggered pull: the Svix-signed webhook carries only
 metadata, so the adapter verifies the signature, resolves the binding from the
@@ -167,7 +168,7 @@ delivery id is the Resend `email_id`, and event types other than
 
 Thread lookup is always scoped to the same `account_id` and `inbox_id`. Standard `Message-ID`, `In-Reply-To`, and `References` headers select the thread only inside that boundary.
 
-Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing credentials, unknown domains, and bad authentication return a uniform `401`.
+Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 
 ## 5. Persistence
 
@@ -198,11 +199,18 @@ api_keys
 api_key_inboxes
 api_key_mailbox_roles
 events
-outbound_credentials
+domain_sending_configs
+domain_receiving_configs
+outbound_delivery_log
 hermes_connections
 audit_log
 settings
 ```
+
+A domain owns at most one row in `domain_sending_configs` and at most one in
+`domain_receiving_configs`, each holding encrypted provider configuration keyed
+by a composite `(domain_id, account_id)` foreign key. There is no account-level
+credential pool and no assignment column on `domains`.
 
 FTS5 tables index normalized searchable message content.
 
@@ -295,7 +303,7 @@ Generic SMTP
 Brevo HTTP API
 ```
 
-Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. An account stores multiple credentials, and each domain designates the credential it sends through (`domains.outbound_credential_id`); there is no account-level default, so a domain with no credential queues mail instead of sending through another domain's provider. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
+Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. Each domain owns at most one optional sending configuration (`domain_sending_configs`); there is no account-level connector pool, no reusable named credential, and no assignment selector, so a domain with no sending configuration queues mail instead of sending through another domain's provider. A queued send resolves the domain's current configuration at worker delivery time; if the domain has none, the message is held without consuming a retry attempt. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
 Hosted-mode generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts.
 
@@ -335,11 +343,14 @@ Admin      → full account access, including inbox/domain/key/provider manageme
 
 Authorization evaluates the mailbox role for mailbox operations and the account-level Admin role for account administration.
 
-### Provider credentials
+### Provider configuration
 
-Outbound credentials are recoverable secrets.
+Sending and receiving provider configurations are recoverable secrets. Each
+domain owns at most one optional configuration of each kind; the encrypted bytes
+belong to that domain alone. The same external API key may still be entered on
+more than one domain, producing independent stored copies.
 
-Encrypt with authenticated encryption using `APP_ENCRYPTION_KEY` supplied through environment/config. Treat this key as a root secret and document separate backup/recovery alongside `/data`.
+Encrypt with authenticated encryption using `APP_ENCRYPTION_KEY` supplied through environment/config. Treat this key as a root secret and document separate backup/recovery alongside `/data`. A migration copies existing shared credential bytes into per-domain configs without re-keying, so this key must survive the upgrade.
 
 ## 10. Web UI
 

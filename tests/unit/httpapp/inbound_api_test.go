@@ -12,82 +12,13 @@ import (
 	"gatehouse-mail/internal/transport/cloudflare"
 )
 
-func TestInboundRESTCRUDAndRedaction(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	ctx := context.Background()
-	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	do := func(method, path, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+key)
-		req.Header.Set("Content-Type", "application/json")
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
-	}
-	// Create.
-	rr := do("POST", "/v1/admin/inbound", `{"name":"CF","provider":"cloudflare","config":{"webhook_secret":"top-secret"}}`)
-	if rr.Code != 201 {
-		t.Fatalf("create %d %s", rr.Code, rr.Body.String())
-	}
-	var created struct{ ID, Name, Provider string }
-	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil || created.ID == "" {
-		t.Fatalf("create body %s err=%v", rr.Body.String(), err)
-	}
-	// List redacts the secret.
-	rr = do("GET", "/v1/admin/inbound", "")
-	if rr.Code != 200 {
-		t.Fatalf("list %d", rr.Code)
-	}
-	if strings.Contains(rr.Body.String(), "top-secret") {
-		t.Fatal("secret leaked in list")
-	}
-	var list []map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil || len(list) != 2 {
-		t.Fatalf("list %s err=%v", rr.Body.String(), err)
-	}
-	// Update name with blank secret retains stored secret.
-	rr = do("PATCH", "/v1/admin/inbound/"+created.ID, `{"name":"Renamed"}`)
-	if rr.Code != 200 {
-		t.Fatalf("patch %d %s", rr.Code, rr.Body.String())
-	}
-	cred, err := svc.Store.GetInboundCredential(ctx, u.AccountID, created.ID)
-	if err != nil || cred.Name != "Renamed" {
-		t.Fatalf("cred %+v err=%v", cred, err)
-	}
-	if cfg, err := svc.DecryptInboundCredential(cred); err != nil || cfg["webhook_secret"] != "top-secret" {
-		t.Fatalf("secret not retained: %#v err=%v", cfg, err)
-	}
-	// Provider is immutable.
-	if rr = do("PATCH", "/v1/admin/inbound/"+created.ID, `{"provider":"mailgun"}`); rr.Code != http.StatusForbidden {
-		t.Fatalf("provider change %d", rr.Code)
-	}
-	// Missing required secret is rejected.
-	if rr = do("POST", "/v1/admin/inbound", `{"provider":"mailgun","config":{}}`); rr.Code != 400 {
-		t.Fatalf("missing secret %d", rr.Code)
-	}
-	// Delete.
-	if rr = do("DELETE", "/v1/admin/inbound/"+created.ID, ""); rr.Code != 204 {
-		t.Fatalf("delete %d", rr.Code)
-	}
-	if _, err := svc.Store.GetInboundCredential(ctx, u.AccountID, created.ID); err == nil {
-		t.Fatal("credential still present")
-	}
-}
-
-func TestInboundDomainAssignmentREST(t *testing.T) {
+func TestDomainReceivingConfigREST(t *testing.T) {
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := svc.SaveInboundCredential(ctx, u.AccountID, "", "CF", "cloudflare", map[string]any{"webhook_secret": "s"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -96,41 +27,146 @@ func TestInboundDomainAssignmentREST(t *testing.T) {
 		h.ServeHTTP(rr, req)
 		return rr
 	}
-	if rr := do("PATCH", "/v1/admin/domains/"+dom.ID, `{"inbound_credential_id":"`+cred.ID+`"}`); rr.Code != 200 {
-		t.Fatalf("assign %d %s", rr.Code, rr.Body.String())
+	base := "/v1/admin/domains/" + dom.ID + "/receiving"
+
+	// A configured mailgun fixture is visible with a redacted config and a
+	// provider-specific webhook URL.
+	rr := do("GET", base, "")
+	if rr.Code != 200 {
+		t.Fatalf("get configured %d %s", rr.Code, rr.Body.String())
 	}
-	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.InboundCredentialID != cred.ID {
-		t.Fatalf("assignment %+v", got)
+	if strings.Contains(rr.Body.String(), testMailgunKey) {
+		t.Fatal("signing key leaked in receiving GET")
 	}
-	if rr := do("PATCH", "/v1/admin/domains/"+dom.ID, `{"inbound_credential_id":""}`); rr.Code != 200 {
-		t.Fatalf("clear %d", rr.Code)
+	var view struct {
+		DomainID   string         `json:"domain_id"`
+		Configured bool           `json:"configured"`
+		Provider   string         `json:"provider"`
+		Config     map[string]any `json:"config"`
+		WebhookURL string         `json:"webhook_url"`
 	}
-	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.InboundCredentialID != "" {
-		t.Fatalf("not cleared %+v", got)
+	if err = json.Unmarshal(rr.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
 	}
-	// Foreign credential is forbidden.
-	if rr := do("PATCH", "/v1/admin/domains/"+dom.ID, `{"inbound_credential_id":"inb_missing"}`); rr.Code != http.StatusForbidden {
-		t.Fatalf("foreign assign %d", rr.Code)
+	if !view.Configured || view.Provider != "mailgun" {
+		t.Fatalf("configured view %+v", view)
+	}
+	if view.Config["signing_key"] != nil {
+		t.Fatalf("secret field present in redacted config: %+v", view.Config)
+	}
+	if view.WebhookURL != "http://example.test/internal/ingest/mailgun/raw-mime" {
+		t.Fatalf("webhook url %q", view.WebhookURL)
+	}
+
+	// Missing required secret on a new provider is a validation error.
+	if rr = do("PUT", base, `{"provider":"resend","config":{}}`); rr.Code != 400 {
+		t.Fatalf("missing secret %d %s", rr.Code, rr.Body.String())
+	}
+	// Explicit secret create succeeds; the secret is never echoed back.
+	if rr = do("PUT", base, `{"provider":"cloudflare","config":{"webhook_secret":"top-secret"}}`); rr.Code != 200 {
+		t.Fatalf("put receiving %d %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "top-secret") {
+		t.Fatalf("secret leaked in receiving PUT: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"webhook_url":"http://example.test/internal/ingest/cloudflare"`) {
+		t.Fatalf("missing cloudflare webhook url: %s", rr.Body.String())
+	}
+	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.ReceivingProvider != "cloudflare" {
+		t.Fatalf("domain receiving provider %+v", got)
+	}
+	// Saving the same provider with a blank secret retains the stored secret.
+	if rr = do("PUT", base, `{"provider":"cloudflare","config":{}}`); rr.Code != 200 {
+		t.Fatalf("retain secret %d %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := svc.Store.GetDomain(ctx, u.AccountID, dom.ID); got.ReceivingProvider != "cloudflare" {
+		t.Fatalf("domain receiving provider after retain %+v", got)
+	}
+	// A foreign or missing domain is a 404.
+	if rr = do("GET", "/v1/admin/domains/dom_missing/receiving", ""); rr.Code != 404 {
+		t.Fatalf("missing domain %d", rr.Code)
+	}
+	// Non-admin keys are forbidden.
+	_, plainKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "reader", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("PUT", base, strings.NewReader(`{"provider":"cloudflare","config":{"webhook_secret":"x"}}`))
+	req.Header.Set("Authorization", "Bearer "+plainKey)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("non-admin %d", rr.Code)
+	}
+	// Delete is idempotent and clears the config; a repeat delete is still 204.
+	if rr = do("DELETE", base, ""); rr.Code != 204 {
+		t.Fatalf("delete %d", rr.Code)
+	}
+	if rr = do("DELETE", base, ""); rr.Code != 204 {
+		t.Fatalf("repeat delete %d", rr.Code)
+	}
+	rr = do("GET", base, "")
+	if err = json.Unmarshal(rr.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Configured || view.Provider != "" {
+		t.Fatalf("cleared view %+v", view)
+	}
+}
+
+func TestDomainReceivingGeneratedSecretReturnedOnce(t *testing.T) {
+	svc, h, u, dom, _ := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "/v1/admin/domains/" + dom.ID + "/receiving"
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PUT", base, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	// Deleting the fixture config then creating cloudflare with no secret
+	// generates one and returns it exactly once, with no-store.
+	req := httptest.NewRequest("DELETE", base, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	rr = put(`{"provider":"cloudflare","config":{}}`)
+	if rr.Code != 200 {
+		t.Fatalf("generate %d %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("config responses must be no-store: %q", rr.Header().Get("Cache-Control"))
+	}
+	var result struct {
+		Generated map[string]string `json:"generated"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	secret := result.Generated["webhook_secret"]
+	if secret == "" {
+		t.Fatalf("expected generated webhook_secret, got %s", rr.Body.String())
+	}
+	// A subsequent GET never returns the generated value.
+	req = httptest.NewRequest("GET", base, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if strings.Contains(rr.Body.String(), secret) {
+		t.Fatalf("generated secret leaked on GET: %s", rr.Body.String())
 	}
 }
 
 func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
-	cfCred, err := svc.SaveInboundCredential(ctx, u.AccountID, "", "CF", "cloudflare", map[string]any{"webhook_secret": testCFSecret})
-	if err != nil {
-		t.Fatal(err)
-	}
-	creds, _ := svc.Store.ListInboundCredentials(ctx, u.AccountID)
-	var mgID string
-	for _, c := range creds {
-		if c.Provider == "mailgun" {
-			mgID = c.ID
-		}
-	}
-	if mgID == "" {
-		t.Fatal("mailgun credential missing")
-	}
 	inbound := httpapp.New(svc, nil).InboundHandler()
 
 	cfReq := func() *http.Request {
@@ -142,7 +178,7 @@ func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 		return r
 	}
 	for name, handler := range map[string]http.Handler{"main": h, "inbound": inbound} {
-		if err := svc.Store.SetDomainInboundCredential(ctx, u.AccountID, dom.ID, cfCred.ID); err != nil {
+		if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret}, false); err != nil {
 			t.Fatal(err)
 		}
 		rr := httptest.NewRecorder()
@@ -150,7 +186,7 @@ func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Fatalf("%s cloudflare = %d %s", name, rr.Code, rr.Body.String())
 		}
-		if err := svc.Store.SetDomainInboundCredential(ctx, u.AccountID, dom.ID, mgID); err != nil {
+		if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey}, false); err != nil {
 			t.Fatal(err)
 		}
 		rr = httptest.NewRecorder()
@@ -169,68 +205,24 @@ func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 	}
 }
 
-func TestUIInboundCSRFAndAssignment(t *testing.T) {
+func TestUIDomainReceivingConfigRequiresCSRF(t *testing.T) {
 	svc, h, u, dom, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
-	form := func(csrfValue, assign string) *http.Request {
-		body := "_csrf=" + csrfValue + "&name=UI&provider=cloudflare&icfg_cloudflare_webhook_secret=uisecret"
-		if assign != "" {
-			body += "&assign_domain=" + assign
-		}
-		r := httptest.NewRequest("POST", "/ui/inbound", strings.NewReader(body))
+	post := func(csrfValue string) *httptest.ResponseRecorder {
+		body := "provider=cloudflare&_csrf=" + csrfValue
+		r := httptest.NewRequest("POST", "/ui/domains/"+dom.ID+"/receiving", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		r.AddCookie(cookie)
-		return r
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		return rr
 	}
-	// Missing CSRF is rejected.
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, form("wrong", dom.ID))
-	if rr.Code != http.StatusForbidden {
+	// Missing CSRF is rejected before any config work happens.
+	if rr := post("wrong"); rr.Code != http.StatusForbidden {
 		t.Fatalf("csrf %d", rr.Code)
 	}
-	// Valid CSRF creates and assigns.
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, form(csrf, dom.ID))
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("create %d %s", rr.Code, rr.Body.String())
-	}
-	got, err := svc.Store.GetDomain(context.Background(), u.AccountID, dom.ID)
-	if err != nil || got.InboundCredentialID == "" {
-		t.Fatalf("domain not assigned %+v err=%v", got, err)
-	}
-}
-
-func TestDashboardRendersInboundControls(t *testing.T) {
-	svc, h, u, _, _ := httpFixture(t)
-	cookie, _ := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("GET", "/dashboard", nil)
-	req.AddCookie(cookie)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
-	}
-	body := rr.Body.String()
-	for _, want := range []string{
-		"Add Receive Path",
-		"inbound-provider-select",
-		`data-provider="cloudflare"`,
-		"domain-receive",
-		"add-domain-receive",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing %q", want)
-		}
-	}
-	if strings.Contains(body, "icfg_cloudflare_webhook_secret") {
-		t.Fatal("generated Cloudflare secret field must not be rendered")
-	}
-	// The client script drives the receive-path select and inline dialog.
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest("GET", "/assets/app.js", nil))
-	for _, want := range []string{"inbound-dialog", "inbound-provider-select", "__add_inbound__", "domain-receive-status"} {
-		if !strings.Contains(rr.Body.String(), want) {
-			t.Fatalf("app.js missing %q", want)
-		}
+	// A valid token reaches the handler (which must not reject it as CSRF).
+	if rr := post(csrf); rr.Code == http.StatusForbidden {
+		t.Fatalf("valid csrf rejected: %d %s", rr.Code, rr.Body.String())
 	}
 }
