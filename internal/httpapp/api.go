@@ -1361,7 +1361,17 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 		http.Error(w, "request cancelled", 499)
 		return
 	}
-	m, dup, err := s.Service.IngestInbound(r.Context(), provider, r)
+	ctx := r.Context()
+	if provider == "resend" {
+		// Resend posts metadata, then we fetch the MIME before persisting it.
+		// A webhook caller can disconnect while that fetch is still running.
+		// Keep the entire ingest (including the commit) alive independently,
+		// bounded by the 30s metadata + 2m download limits plus commit time.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer cancel()
+	}
+	m, dup, err := s.Service.IngestInbound(ctx, provider, r)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "recipient rejected", http.StatusNotAcceptable)
