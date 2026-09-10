@@ -40,6 +40,24 @@ func dialogHTML(t *testing.T, body, id string) string {
 	return body[start : start+end]
 }
 
+// providerGroupHTML returns one provider group's markup inside a dialog: from
+// its data-provider marker up to the next group, or the end of the dialog. The
+// dashboard renders every provider group in a single dialog and toggles them
+// with JS, so assertions about one provider must be scoped to its group.
+func providerGroupHTML(t *testing.T, dialog, provider string) string {
+	t.Helper()
+	marker := `data-provider="` + provider + `"`
+	start := strings.Index(dialog, marker)
+	if start < 0 {
+		t.Fatalf("provider group %q not found", provider)
+	}
+	rest := dialog[start+len(marker):]
+	if next := strings.Index(rest, `data-provider="`); next >= 0 {
+		rest = rest[:next]
+	}
+	return rest
+}
+
 // domainPost performs an authenticated UI POST with the given CSRF token.
 func domainPost(t *testing.T, h http.Handler, cookie *http.Cookie, path string, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
@@ -85,7 +103,7 @@ func TestUIDomainPagePickersAndInstructions(t *testing.T) {
 		t.Fatalf("sending picker %d %s", rr.Code, rr.Body.String())
 	}
 	body = rr.Body.String()
-	for _, want := range []string{`name="provider" value="resend"`, `name="cfg_resend_api_key"`, `name="cfg_resend_api_base"`} {
+	for _, want := range []string{`<option value="resend" selected`, `name="cfg_resend_api_key"`, `name="cfg_resend_api_base"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("sending editor missing %q", want)
 		}
@@ -399,7 +417,7 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 		t.Fatalf("cloudflare must remain selectable after it is configured")
 	}
 	body = domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving&provider=cloudflare").Body.String()
-	if !strings.Contains(body, `name="provider" value="cloudflare"`) {
+	if !strings.Contains(body, `<option value="cloudflare" selected`) {
 		t.Fatalf("cloudflare editor not reachable after configure")
 	}
 	if strings.Contains(body, `name="cfg_cloudflare_webhook_secret"`) {
@@ -647,13 +665,14 @@ func TestUIDomainEditorDefaultsOnCreateAndSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	body = dialogHTML(t, domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending&provider=brevo").Body.String(), "domain-sending-dialog-"+d.ID)
-	if !strings.Contains(body, `name="provider" value="brevo"`) {
+	if !strings.Contains(body, `<option value="brevo" selected`) {
 		t.Fatalf("switch editor not for brevo")
 	}
-	if strings.Contains(body, `value="smtp.example.com"`) {
+	brevo := providerGroupHTML(t, body, "brevo")
+	if strings.Contains(brevo, `value="smtp.example.com"`) {
 		t.Fatalf("switch editor prefilled the previous provider's values")
 	}
-	if strings.Contains(body, "(leave blank to keep the current value)") {
+	if strings.Contains(brevo, "(leave blank to keep the current value)") {
 		t.Fatalf("a provider switch must not offer leave-blank retention")
 	}
 }
@@ -717,5 +736,67 @@ func TestUIDomainWorkerFlashConcurrentSingleUse(t *testing.T) {
 		if hits != 1 {
 			t.Fatalf("round %d: one-time Worker code rendered %d times across concurrent GETs, want exactly 1", round, hits)
 		}
+	}
+}
+
+// TestUIDomainReceivingWebhookURLIsPerProvider guards the DOM contract the
+// dashboard's "Copy webhook URL" button relies on: every provider group owns
+// its own webhook URL and its own copy button. The dialog renders all providers
+// at once and toggles them with JS, so a dialog-wide lookup would copy whichever
+// provider happens to be first (Mailgun) even when Resend is selected. That
+// pointed the Resend webhook at /internal/ingest/mailgun/raw-mime, where the
+// Mailgun adapter rejected the JSON body as a terminal error and returned 406.
+func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	dlg := dialogHTML(t, domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving&provider=resend").Body.String(), "domain-receiving-dialog-"+d.ID)
+
+	webhookURL := func(group string) string {
+		const open = `<pre class="setup-webhook-url">`
+		i := strings.Index(group, open)
+		if i < 0 {
+			return ""
+		}
+		rest := group[i+len(open):]
+		j := strings.Index(rest, "</pre>")
+		if j < 0 {
+			return ""
+		}
+		return rest[:j]
+	}
+
+	for _, tc := range []struct{ provider, suffix string }{
+		{"mailgun", "/internal/ingest/mailgun/raw-mime"},
+		{"resend", "/internal/ingest/resend"},
+	} {
+		group := providerGroupHTML(t, dlg, tc.provider)
+		if got := webhookURL(group); !strings.HasSuffix(got, tc.suffix) {
+			t.Fatalf("%s webhook URL = %q, want suffix %q", tc.provider, got, tc.suffix)
+		}
+		// The copy button must live in the same group as the URL it copies.
+		if !strings.Contains(group, `secondary setup-copy`) {
+			t.Fatalf("%s group has no scoped copy button", tc.provider)
+		}
+	}
+}
+
+// TestDashboardWebhookCopyScopesToProviderGroup pins the fix for the copy
+// handler: it resolves the URL within the button's provider group instead of
+// the whole dialog.
+func TestDashboardWebhookCopyScopesToProviderGroup(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	req := httptest.NewRequest("GET", "/assets/app.js", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("app.js %d", rr.Code)
+	}
+	js := rr.Body.String()
+	if !strings.Contains(js, `closest('.provider-fields')`) {
+		t.Fatalf("copy handler must scope the webhook URL to its provider group")
+	}
+	if strings.Contains(js, `dlg.querySelector('.setup-webhook-url')`) {
+		t.Fatalf("copy handler must not look up the webhook URL dialog-wide")
 	}
 }
