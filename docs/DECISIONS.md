@@ -222,6 +222,7 @@ GET    /v1/admin/domains/{id}/receiving
 PUT    /v1/admin/domains/{id}/receiving
 DELETE /v1/admin/domains/{id}/receiving
 GET    /v1/admin/domains/{id}/sending/deliveries
+GET    /v1/admin/domains/{id}/receiving/deliveries
 ```
 
 `PUT` takes `{provider, config}` (receiving also takes `regenerate_secret`). A
@@ -240,7 +241,8 @@ mail through another domain's provider. The separate connector lifecycle also
 required orphan handling and an assignment step that had no product value, and
 the UI split configuration across a connector screen and a domain screen. A
 domain-first model makes ownership, the pause-on-missing-provider behaviour, and
-the per-domain delivery history explicit.
+the per-domain two-way activity log (outbound attempts plus delivered and
+blocked inbound mail) explicit.
 
 **Complexity:** Qualitative, not measured. The change removes the standalone
 connector CRUD, assignment fields, and orphan handling while adding two

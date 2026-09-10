@@ -199,6 +199,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("PUT /v1/admin/domains/{id}/receiving", api(s.apiDomainReceiving))
 	m.HandleFunc("DELETE /v1/admin/domains/{id}/receiving", api(s.apiDomainReceiving))
 	m.HandleFunc("GET /v1/admin/domains/{id}/sending/deliveries", api(s.apiDomainSendingDeliveries))
+	m.HandleFunc("GET /v1/admin/domains/{id}/receiving/deliveries", api(s.apiDomainReceivingDeliveries))
 	m.HandleFunc("POST /v1/admin/hermes/enroll", api(s.apiHermesEnroll))
 	m.HandleFunc("GET /v1/admin/hermes", api(s.apiHermesList))
 	m.HandleFunc("DELETE /v1/admin/hermes/{id}", api(s.apiHermesDelete))
