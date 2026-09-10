@@ -205,18 +205,87 @@ type Event struct {
 	CreatedAt time.Time      `json:"created_at"`
 }
 
+// Draft workflow states stored on drafts.status.
+const (
+	DraftStatusDraft           = "draft"
+	DraftStatusPendingApproval = "pending_approval"
+	DraftStatusRejected        = "rejected"
+)
+
+// Draft send-request decision states stored on draft_send_requests.status.
+const (
+	SendRequestPending   = "pending"
+	SendRequestApproved  = "approved"
+	SendRequestRejected  = "rejected"
+	SendRequestCancelled = "cancelled"
+)
+
+// Draft send-request delivery states stored on draft_send_requests.delivery_status.
+const (
+	SendDeliveryNone    = "none"
+	SendDeliveryPending = "pending"
+	SendDeliverySent    = "sent"
+	SendDeliveryFailed  = "failed"
+)
+
+// Decision methods recorded for a draft send request.
+const (
+	DecisionMethodUI  = "ui"
+	DecisionMethodAPI = "api"
+)
+
+// Durable draft workflow event types.
+const (
+	EventDraftSendRequested        = "draft.send_requested"
+	EventDraftSendRequestCancelled = "draft.send_request_cancelled"
+	EventDraftApproved             = "draft.approved"
+	EventDraftRejected             = "draft.rejected"
+	EventDraftSent                 = "draft.sent"
+	EventDraftSendFailed           = "draft.send_failed"
+)
+
 type Draft struct {
-	ID               string    `json:"id"`
-	InboxID          string    `json:"inbox_id"`
-	ReplyToMessageID string    `json:"reply_to_message_id,omitempty"`
-	To               []string  `json:"to"`
-	CC               []string  `json:"cc,omitempty"`
-	BCC              []string  `json:"bcc,omitempty"`
-	Subject          string    `json:"subject"`
-	Text             string    `json:"text"`
-	HTML             string    `json:"html,omitempty"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string   `json:"id"`
+	InboxID          string   `json:"inbox_id"`
+	ReplyToMessageID string   `json:"reply_to_message_id,omitempty"`
+	To               []string `json:"to"`
+	CC               []string `json:"cc,omitempty"`
+	BCC              []string `json:"bcc,omitempty"`
+	Subject          string   `json:"subject"`
+	Text             string   `json:"text"`
+	HTML             string   `json:"html,omitempty"`
+	// Status is one of DraftStatusDraft, DraftStatusPendingApproval or
+	// DraftStatusRejected.
+	Status string `json:"status,omitempty"`
+	// SendRequest is the active or most recent workflow request, populated on
+	// retrieval; it is not stored on the draft row.
+	SendRequest *DraftSendRequest `json:"send_request,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// DraftSendRequest records an agent's request that a draft be authorized and
+// sent. It is deliberately independent of the draft row so it survives the
+// draft being consumed by a successful send.
+type DraftSendRequest struct {
+	ID                  string     `json:"id"`
+	DraftID             string     `json:"draft_id"`
+	InboxID             string     `json:"inbox_id"`
+	Status              string     `json:"status"`
+	DeliveryStatus      string     `json:"delivery_status"`
+	ContentHash         string     `json:"-"`
+	RequestedAt         time.Time  `json:"requested_at"`
+	RequestedBy         string     `json:"requested_by,omitempty"`
+	RequestedByAPIKeyID string     `json:"requested_by_api_key_id,omitempty"`
+	RequestedByUserID   string     `json:"requested_by_user_id,omitempty"`
+	DecidedAt           *time.Time `json:"decided_at,omitempty"`
+	DecisionActor       string     `json:"decision_actor,omitempty"`
+	DecisionActorID     string     `json:"decision_actor_id,omitempty"`
+	DecisionMethod      string     `json:"decision_method,omitempty"`
+	Feedback            string     `json:"feedback,omitempty"`
+	MessageID           string     `json:"message_id,omitempty"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // DraftAttachment is a file attached to a draft. Unlike message attachments

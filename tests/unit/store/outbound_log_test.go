@@ -23,7 +23,7 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Record a failed then a sent attempt.
-	if _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "brevo"); err != nil {
+	if _, _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "brevo"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<provider-id>", "brevo"); err != nil {

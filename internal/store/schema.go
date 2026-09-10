@@ -548,3 +548,45 @@ CREATE INDEX idx_inboxes_account ON inboxes(account_id);
 CREATE INDEX idx_outbound_log_domain ON outbound_delivery_log(account_id, domain_id, id DESC);
 CREATE INDEX idx_outbound_log_msg ON outbound_delivery_log(message_id);
 `
+
+// migration014 adds the human-in-the-loop draft send workflow. It:
+//   - adds drafts.status (draft|pending_approval|rejected) for the live state of
+//     an unsent draft;
+//   - adds draft_send_requests, the durable record of an assistant's request
+//     that a draft be authorized and sent, the human decision, and the delivery
+//     outcome.
+//
+// draft_send_requests.draft_id deliberately has no foreign key: the draft row is
+// consumed (deleted) in the same transaction that enqueues the approved send,
+// but the request must survive to report the terminal outcome. The account and
+// inbox foreign keys cascade, so purging an account or inbox still removes the
+// requests. A partial unique index allows only one pending request per draft,
+// which is what makes a decision single-use.
+const migration014 = `ALTER TABLE drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft';
+
+CREATE TABLE IF NOT EXISTS draft_send_requests (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  draft_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  delivery_status TEXT NOT NULL DEFAULT 'none',
+  content_hash TEXT NOT NULL DEFAULT '',
+  requested_at TEXT NOT NULL,
+  requested_by TEXT NOT NULL DEFAULT '',
+  requested_by_api_key_id TEXT NOT NULL DEFAULT '',
+  requested_by_user_id TEXT NOT NULL DEFAULT '',
+  decided_at TEXT,
+  decision_actor TEXT NOT NULL DEFAULT '',
+  decision_actor_id TEXT NOT NULL DEFAULT '',
+  decision_method TEXT NOT NULL DEFAULT '',
+  feedback TEXT NOT NULL DEFAULT '',
+  message_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_send_requests_active_draft ON draft_send_requests(draft_id) WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_send_requests_inbox ON draft_send_requests(inbox_id, status, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_send_requests_draft ON draft_send_requests(draft_id, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_send_requests_message ON draft_send_requests(message_id);
+`

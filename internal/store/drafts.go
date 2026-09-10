@@ -23,13 +23,14 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 	}
 	id := idgen.New("drf")
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, model.DraftStatusDraft, now, now); err != nil {
 		return model.Draft{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Draft{}, err
 	}
 	d.ID = id
+	d.Status = model.DraftStatusDraft
 	d.CreatedAt = parseTime(now)
 	d.UpdatedAt = d.CreatedAt
 	return d, nil
@@ -37,7 +38,7 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 func scanDraft(row interface{ Scan(...any) error }) (model.Draft, error) {
 	var d model.Draft
 	var to, cc, bcc, created, updated string
-	err := row.Scan(&d.ID, &d.InboxID, &d.ReplyToMessageID, &to, &cc, &bcc, &d.Subject, &d.Text, &d.HTML, &created, &updated)
+	err := row.Scan(&d.ID, &d.InboxID, &d.ReplyToMessageID, &to, &cc, &bcc, &d.Subject, &d.Text, &d.HTML, &d.Status, &created, &updated)
 	if err != nil {
 		return d, err
 	}
@@ -49,7 +50,7 @@ func scanDraft(row interface{ Scan(...any) error }) (model.Draft, error) {
 	return d, nil
 }
 func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (model.Draft, error) {
-	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID))
+	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID))
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
@@ -59,13 +60,14 @@ func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (mod
 	if !p.CanAssist(d.InboxID) {
 		return model.Draft{}, ErrForbidden
 	}
+	d.SendRequest, _ = s.latestSendRequestForDraft(ctx, p.AccountID, id)
 	return d, nil
 }
 func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID string) ([]model.Draft, error) {
 	if inboxID != "" && !p.CanAssist(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,created_at,updated_at FROM drafts WHERE account_id=?`
+	q := `SELECT id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE account_id=?`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		q += ` AND inbox_id=?`
@@ -99,7 +101,11 @@ func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID strin
 		}
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.attachLatestSendRequests(ctx, p.AccountID, out)
+	return out, nil
 }
 
 // CountDrafts returns the number of drafts in an inbox (or across all
@@ -154,16 +160,24 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if d.InboxID != old.InboxID && !p.CanAssist(d.InboxID) {
 		return model.Draft{}, ErrForbidden
 	}
+	// A pending draft is frozen: the approval must apply to the exact version
+	// reviewed, so the caller must cancel the send request before editing.
+	// Editing a rejected draft is the documented way to revise and resubmit.
+	if old.Status == model.DraftStatusPendingApproval {
+		return model.Draft{}, ErrConflict
+	}
+	status := model.DraftStatusDraft
 	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)-draftBodyBytes(old)); err != nil {
 		return model.Draft{}, err
 	}
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, now, d.ID, p.AccountID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,status=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, status, now, d.ID, p.AccountID); err != nil {
 		return model.Draft{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Draft{}, err
 	}
+	d.Status = status
 	d.CreatedAt = old.CreatedAt
 	d.UpdatedAt = parseTime(now)
 	return d, nil
@@ -183,6 +197,11 @@ func (s *Store) DeleteDraftCascade(ctx context.Context, p model.Principal, id st
 	}
 	if !p.CanAssist(d.InboxID) {
 		return nil, ErrForbidden
+	}
+	// Deleting a draft invalidates any outstanding send request; the request row
+	// itself is retained as history.
+	if _, err := tx.ExecContext(ctx, `UPDATE draft_send_requests SET status=?,updated_at=? WHERE draft_id=? AND account_id=? AND status=?`, model.SendRequestCancelled, nowText(), id, p.AccountID, model.SendRequestPending); err != nil {
+		return nil, err
 	}
 	paths, attTotal, err := draftAttachmentPathsTx(ctx, tx, id)
 	if err != nil {

@@ -43,6 +43,13 @@ type OutboundRecord struct {
 	LastError                                            string
 	DraftID                                              string
 	Attachments                                          []AttachmentInput
+	// SendRequestID, when set, is the draft send request being authorized by
+	// this send. CommitOutbound claims it atomically and records the decision.
+	SendRequestID    string
+	DecisionActor    string
+	DecisionActorID  string
+	DecisionMethod   string
+	DecisionFeedback string
 }
 
 func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Message, model.Event, bool, error) {
