@@ -166,6 +166,34 @@ func (s *Server) apiDomainSendingDeliveries(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, 200, attempts)
 }
 
+// apiDomainReceivingDeliveries lists the receiving side of a domain's two-way
+// log: delivered inbound mail plus inbound mail blocked by the allowed-senders
+// rule, newest first:
+//
+//	GET /v1/admin/domains/{id}/receiving/deliveries
+func (s *Server) apiDomainReceivingDeliveries(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	before := time.Time{}
+	if v := strings.TrimSpace(r.URL.Query().Get("before")); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			before = t
+		}
+	}
+	entries, err := s.Service.Store.ListDomainReceivingLog(r.Context(), p.AccountID, r.PathValue("id"), intParam(r, "limit", 100), before)
+	if err != nil {
+		mapDomainConfigError(w, err)
+		return
+	}
+	// Serialise an empty history as [] rather than null.
+	if entries == nil {
+		entries = []store.DomainLogEntry{}
+	}
+	writeJSON(w, 200, entries)
+}
+
 func (s *Server) domainSendingResponse(domainID string, cfg store.DomainSendingConfig) (domainConfigResponse, error) {
 	dec, err := s.Service.DecryptDomainSendingConfig(cfg)
 	if err != nil {

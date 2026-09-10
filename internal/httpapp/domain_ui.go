@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
@@ -302,8 +303,10 @@ func (s *Server) uiDomainReceivingRegenerate(w http.ResponseWriter, r *http.Requ
 	s.domainNotice(w, r, "Receiving secret regenerated")
 }
 
-// domainDeliveries shows the send history owned by one domain, independent of
-// whichever provider config currently exists.
+// domainDeliveries shows the two-way activity log owned by one domain:
+// outbound delivery attempts plus delivered and blocked inbound mail, merged
+// newest first. It is scoped by domain, independent of whichever provider
+// config currently exists.
 func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -316,35 +319,37 @@ func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "domain not found", 404)
 		return
 	}
-	before := int64(0)
-	if v := r.URL.Query().Get("before"); v != "" {
-		before, _ = strconv.ParseInt(v, 10, 64)
+	var before time.Time
+	if v := strings.TrimSpace(r.URL.Query().Get("before")); v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			before = t
+		}
 	}
-	attempts, err := s.Service.Store.ListDomainDeliveryAttempts(ctx, p.AccountID, d.ID, 51, before)
+	entries, err := s.Service.Store.ListDomainLog(ctx, p.AccountID, d.ID, 51, before)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	hasMore := len(attempts) > 50
+	hasMore := len(entries) > 50
 	if hasMore {
-		attempts = attempts[:50]
+		entries = entries[:50]
 	}
-	nextBefore := int64(0)
-	if len(attempts) > 0 {
-		nextBefore = attempts[len(attempts)-1].ID
+	nextBefore := ""
+	if len(entries) > 0 {
+		nextBefore = entries[len(entries)-1].At.UTC().Format(time.RFC3339Nano)
 	}
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
 	w.Header().Set("Cache-Control", "no-store")
 	s.render(w, domainDeliveriesBody, pageData{
-		Title:            d.Name + " · Delivery history",
-		Tab:              "home",
-		Principal:        p,
-		CSRF:             csrf(r),
-		Account:          acc,
-		Domain:           &d,
-		DeliveryAttempts: attempts,
-		DeliveryHasMore:  hasMore,
-		DeliveryBefore:   nextBefore,
+		Title:      d.Name + " · Domain log",
+		Tab:        "home",
+		Principal:  p,
+		CSRF:       csrf(r),
+		Account:    acc,
+		Domain:     &d,
+		LogEntries: entries,
+		LogHasMore: hasMore,
+		LogBefore:  nextBefore,
 	})
 }
 
@@ -635,4 +640,4 @@ func domainReceivingSteps(provider string) []string {
 }
 
 const domainDeliveriesBody = `<div class="toolbar"><a href="/dashboard?domain={{.Domain.ID}}">← {{.Domain.Name}}</a></div>
-<section class="card"><h1>Delivery history</h1><p class="muted">Every send attempt for messages owned by {{.Domain.Name}}, regardless of which provider is configured now.</p>{{if .DeliveryAttempts}}<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>When</th><th>Address</th><th>Message</th><th>Attempt</th><th>Status</th><th>Provider ID</th><th>Error</th></tr></thead><tbody>{{range .DeliveryAttempts}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .MessageID}}<div>to: {{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</div><div>from: {{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</div>{{else}}<span class="muted">message_deleted</span>{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">{{.MessageID}}</a>{{else}}<span class="muted">—</span>{{end}}</td><td>{{.Attempt}}</td><td>{{if eq .Status "sent"}}<span class="pill">Sent</span>{{else}}<span class="pill danger">Failed</span>{{end}}</td><td class="muted" style="font-size:10px;word-break:break-all">{{.ProviderMessageID}}</td><td class="muted" style="word-break:break-all">{{.ErrorText}}</td></tr>{{end}}</tbody></table></div>{{if .DeliveryHasMore}}<p><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries?before={{.DeliveryBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No delivery attempts yet.</p>{{end}}</section>`
+<section class="card"><h1>Domain log</h1><p class="muted">Two-way activity for {{.Domain.Name}}: delivered and blocked inbound mail, plus every outbound send attempt, newest first. Outbound attempts are retained for about 30 days; received and blocked mail follows normal message retention.</p>{{if .LogEntries}}<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Detail</th><th></th></tr></thead><tbody>{{range .LogEntries}}<tr><td style="white-space:nowrap">{{.At.Format "2006-01-02 15:04"}}</td><td>{{if eq .Kind "sent"}}<span class="pill">Sent</span>{{else if eq .Kind "failed"}}<span class="pill danger">Failed</span>{{else if eq .Kind "received"}}<span class="pill">Received</span>{{else}}<span class="pill amber">Blocked</span>{{end}}</td><td>{{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted" style="font-size:10px;word-break:break-all">{{if eq .Kind "sent"}}attempt {{.Attempt}}{{if .ProviderMessageID}} · {{.ProviderMessageID}}{{end}}{{else if eq .Kind "failed"}}attempt {{.Attempt}}{{if .ErrorText}} · {{.ErrorText}}{{end}}{{else if eq .Kind "blocked"}}{{if .Reason}}{{.Reason}}{{else}}blocked{{end}}{{else}}{{if .Provider}}{{.Provider}}{{end}}{{if .SizeBytes}} · {{bytes .SizeBytes}}{{end}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .LogHasMore}}<p><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries?before={{.LogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No activity yet.</p>{{end}}</section>`
