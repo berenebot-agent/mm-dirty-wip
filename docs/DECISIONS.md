@@ -256,6 +256,33 @@ per-domain configs without re-keying, drops connectors not assigned to any
 domain, and preserves mailbox, auth, message, storage, and delivery-log data.
 See the migration note in the root `DECISIONS.md`.
 
+## D025 — Draft send requests with human approval
+
+**Decision:** An Assistant may draft and request send; an Owner authorizes. A
+send request is recorded as a durable `draft_send_requests` row independent of
+the draft, because a successful send consumes (deletes) the draft. The request
+stores the requester, a fingerprint of the reviewed content, the decision
+(actor, method, optional feedback), and the delivery outcome separately from the
+decision. A draft is frozen (`drafts.status = pending_approval`) while a request
+is outstanding; edits are refused until the request is cancelled. Approving
+claims the pending request in the same transaction that enqueues the outbound
+message, so a request can never authorize two sends. UI approval and eventual
+external approval converge on the existing draft-send/outbound path.
+
+**Requirement:** The product rule is that an agent expresses intent to send but
+cannot self-authorize. The existing draft model had no workflow state, and
+sending deleted the draft atomically, so approval could neither be recorded nor
+reported after the fact. Separating the decision from delivery also satisfies
+the rule that a provider failure must not require a second approval.
+
+**Complexity:** Qualitative. Adds one column and one table (migration 014), a
+store workflow module, service methods, API endpoints, durable `draft.*` events,
+and UI for review and decisions. No new runtime service, dependency, or
+infrastructure: it reuses the existing draft, outbound, event, and storage
+subsystems. External email approval is deliberately out of scope for this phase;
+the request table is shaped so approver identity, a hashed token, and an expiry
+can be added by a later migration.
+
 ## Future extension register
 
 Potential future additions include:

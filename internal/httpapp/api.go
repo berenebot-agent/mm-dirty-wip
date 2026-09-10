@@ -24,7 +24,7 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "outbox", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -53,7 +53,18 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/events/stream?after=evt_...` — SSE\n\n" +
 		"## Drafts\n" +
 		"- `GET/POST /v1/drafts`, `GET/PATCH/DELETE /v1/drafts/{id}` (Assistant/Owner)\n" +
-		"- `POST /v1/drafts/{id}/send` (Owner) — send a draft (copies fields + attachments, deletes the draft)\n\n" +
+		"- `GET/POST /v1/drafts/{id}/attachments`, `DELETE /v1/drafts/{id}/attachments/{attId}` (Assistant/Owner; upload is multipart with field `attachments`)\n" +
+		"- `POST /v1/drafts/{id}/send` (Owner) — send a draft immediately (copies fields + attachments, deletes the draft)\n\n" +
+		"## Draft approval (human-in-the-loop)\n" +
+		"An Assistant can draft and request send; an Owner authorizes. Approvals always apply to the exact frozen draft.\n" +
+		"- `POST /v1/drafts/{id}/request-send` (Assistant) — submit for authorization; the draft becomes `pending_approval` and is frozen.\n" +
+		"- `POST /v1/drafts/{id}/cancel-send-request` (Assistant) — withdraw the request and return the draft to `draft`.\n" +
+		"- `POST /v1/drafts/{id}/approve` (Owner) — approve and enqueue the frozen draft through the normal outbound flow. Optional `{\"feedback\":\"...\"}`.\n" +
+		"- `POST /v1/drafts/{id}/reject` (Owner) — reject with optional `{\"feedback\":\"...\"}`; the draft becomes `rejected`, stays editable, and can be resubmitted.\n" +
+		"- `GET /v1/drafts/{id}/send-request` — the latest request (works after the draft has been sent); `GET /v1/send-requests?inbox={id}&active=true` lists requests.\n" +
+		"- Draft reads include `status` (`draft`, `pending_approval`, `rejected`) and the latest `send_request`.\n" +
+		"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`.\n" +
+		"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
 		"## Send and reply (Owner)\n" +
 		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery.\n" +
 		"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
@@ -132,10 +143,21 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"patch":  map[string]any{"summary": "Update a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
-			"/v1/drafts/{id}/send":  map[string]any{"post": map[string]any{"summary": "Send a draft (Owner)", "description": "Copies the draft's fields and attachments into a new outbound message, then deletes the draft.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox":            map[string]any{"get": map[string]any{"summary": "List pending and failed outbound messages", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox/{id}/retry": map[string]any{"post": map[string]any{"summary": "Re-queue a failed outbound message", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox/{id}":       map[string]any{"delete": map[string]any{"summary": "Cancel a pending send or discard a failed one", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/send":                map[string]any{"post": map[string]any{"summary": "Send a draft (Owner)", "description": "Copies the draft's fields and attachments into a new outbound message, then deletes the draft.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/request-send":        map[string]any{"post": map[string]any{"summary": "Request authorization to send a draft (Assistant)", "description": "Freezes the draft as pending_approval until the request is approved, rejected or cancelled. Optional external approver fields are reserved for a later phase.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/cancel-send-request": map[string]any{"post": map[string]any{"summary": "Cancel a pending send request (Assistant)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/approve":             map[string]any{"post": map[string]any{"summary": "Approve and send a pending draft (Owner)", "description": "Approves the exact frozen draft and enqueues it through the outbound flow. Accepts an optional feedback field.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/reject":              map[string]any{"post": map[string]any{"summary": "Reject a pending send request (Owner)", "description": "Marks the draft rejected and stores optional feedback for the agent.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/send-request":        map[string]any{"get": map[string]any{"summary": "Get the latest send request for a draft", "description": "Returns the workflow record even after the draft has been consumed by an approved send.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/attachments": map[string]any{
+				"get":  map[string]any{"summary": "List draft attachments", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Upload draft attachments (multipart field 'attachments')", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/drafts/{id}/attachments/{attId}": map[string]any{"delete": map[string]any{"summary": "Delete a draft attachment", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/send-requests":                   map[string]any{"get": map[string]any{"summary": "List draft send requests (filter by inbox and active)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox":                          map[string]any{"get": map[string]any{"summary": "List pending and failed outbound messages", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox/{id}/retry":               map[string]any{"post": map[string]any{"summary": "Re-queue a failed outbound message", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/outbox/{id}":                     map[string]any{"delete": map[string]any{"summary": "Cancel a pending send or discard a failed one", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/admin/domains": map[string]any{
 				"get":  map[string]any{"summary": "List domains (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
@@ -740,6 +762,178 @@ func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": res.Message})
+}
+
+// maxFeedbackBytes bounds agent/human feedback stored against a send request.
+const maxFeedbackBytes = 4096
+
+// apiDraftRequestSend records an assistant's request that a draft be authorized
+// and sent. The draft is frozen until the request is decided or cancelled.
+func (s *Server) apiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	var in struct {
+		ApproverEmail string `json:"approver_email"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+	}
+	if strings.TrimSpace(in.ApproverEmail) != "" {
+		writeError(w, 400, "external approver is not supported yet")
+		return
+	}
+	d, err := s.Service.RequestSend(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, d)
+}
+
+// apiDraftCancelSendRequest withdraws an outstanding request and unfreezes the
+// draft.
+func (s *Server) apiDraftCancelSendRequest(w http.ResponseWriter, r *http.Request) {
+	d, err := s.Service.CancelSendRequest(r.Context(), principal(r), r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, d)
+}
+
+// apiDraftApprove authorizes a pending request and enqueues the frozen draft
+// through the existing send flow. Requires owner.
+func (s *Server) apiDraftApprove(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	var in struct {
+		Feedback string `json:"feedback"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+	}
+	if len(in.Feedback) > maxFeedbackBytes {
+		writeError(w, 400, "feedback is too long")
+		return
+	}
+	res, err := s.Service.ApproveDraft(r.Context(), p, r.PathValue("id"), in.Feedback, model.DecisionMethodAPI, idemKey(r))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": res.Message})
+}
+
+// apiDraftReject rejects a pending request with optional feedback. Requires
+// owner.
+func (s *Server) apiDraftReject(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Feedback string `json:"feedback"`
+	}
+	if r.ContentLength != 0 {
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+	}
+	if len(in.Feedback) > maxFeedbackBytes {
+		writeError(w, 400, "feedback is too long")
+		return
+	}
+	d, err := s.Service.RejectDraft(r.Context(), principal(r), r.PathValue("id"), in.Feedback, model.DecisionMethodAPI)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, d)
+}
+
+// apiDraftSendRequest returns the most recent send request for a draft. It
+// works after the draft has been consumed by an approved send.
+func (s *Server) apiDraftSendRequest(w http.ResponseWriter, r *http.Request) {
+	sr, err := s.Service.Store.GetSendRequestByDraft(r.Context(), principal(r), r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, sr)
+}
+
+// apiSendRequests lists send requests, optionally scoped to an inbox or to
+// outstanding requests only.
+func (s *Server) apiSendRequests(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	activeOnly := r.URL.Query().Get("active") == "true"
+	v, err := s.Service.Store.ListSendRequests(r.Context(), p, r.URL.Query().Get("inbox"), activeOnly, intParam(r, "limit", 100))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, v)
+}
+
+// apiDraftAttachments uploads (POST) or lists (GET) a draft's attachments.
+func (s *Server) apiDraftAttachments(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	switch r.Method {
+	case http.MethodGet:
+		v, err := s.Service.Store.ListDraftAttachments(r.Context(), p, id)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, v)
+	case http.MethodPost:
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			writeError(w, 400, "invalid multipart form")
+			return
+		}
+		atts, err := s.formAttachments(r)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
+		if len(atts) == 0 {
+			writeError(w, 400, "no attachments provided")
+			return
+		}
+		out := make([]model.DraftAttachment, 0, len(atts))
+		for _, a := range atts {
+			rawPath := s.draftAttachmentPath()
+			if err = os.MkdirAll(filepath.Dir(rawPath), 0o700); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			if err = os.WriteFile(rawPath, a.Content, 0o600); err != nil {
+				writeError(w, 500, err.Error())
+				return
+			}
+			rel, _ := filepath.Rel(s.Service.Config.DataDir, rawPath)
+			rec, aerr := s.Service.Store.AddDraftAttachment(r.Context(), p, id, model.DraftAttachment{Filename: a.Filename, ContentType: a.ContentType, Size: int64(len(a.Content)), RawPath: filepath.ToSlash(rel)})
+			if aerr != nil {
+				_ = os.Remove(rawPath)
+				mapStoreError(w, aerr)
+				return
+			}
+			out = append(out, rec)
+		}
+		writeJSON(w, 201, out)
+	}
+}
+
+// apiDraftAttachment deletes a single draft attachment.
+func (s *Server) apiDraftAttachment(w http.ResponseWriter, r *http.Request) {
+	raw, err := s.Service.Store.DeleteDraftAttachment(r.Context(), principal(r), r.PathValue("id"), r.PathValue("attId"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if raw != "" {
+		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(raw)))
+	}
+	w.WriteHeader(204)
 }
 
 func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
