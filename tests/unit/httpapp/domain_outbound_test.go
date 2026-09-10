@@ -24,7 +24,7 @@ func TestUIDomainCreateNameOnlyRedirectsToDomainPage(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("create domain %d %s", rr.Code, rr.Body.String())
 	}
-	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/ui/domains/") {
+	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/dashboard") {
 		t.Fatalf("create domain redirect %q", loc)
 	}
 }
@@ -35,7 +35,7 @@ func TestUIDomainSendingConfigWorkflow(t *testing.T) {
 	cookie, csrf := uiSession(t, svc, u.ID)
 
 	// Choosing a provider renders its non-secret form fields.
-	req := httptest.NewRequest("GET", "/ui/domains/"+dom.ID+"?sending=brevo", nil)
+	req := httptest.NewRequest("GET", "/dashboard?domain="+dom.ID+"&kind=sending&provider=brevo", nil)
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

@@ -20,13 +20,14 @@ Inbound provider secrets are no longer environment variables, and there is no
 separate credential to create and then assign. Receiving is configured directly
 on the domain:
 
-1. Open the Admin **Settings** tab and open the domain you receive on.
-2. Under **Receiving**, choose **Cloudflare Worker** and save the form.
+1. On the dashboard, click **Receiving** for the domain you receive on.
+2. Choose **Cloudflare Worker** and save the form.
 3. Gatehouse generates the shared secret, stores it encrypted on that domain,
-   and opens a one-time setup page with the complete Worker code (the generated
-   secret is already embedded) and the Cloudflare steps below. The generated
-   secret is shown only once; use **Regenerate secret** on the domain's
-   receiving section if you lose it, then paste the new Worker code.
+   and shows the complete Worker code (the generated
+   secret is already embedded) and the Cloudflare steps below in a one-time
+   dialog. The generated
+   secret is shown only once; use **Regenerate secret** in the domain's
+   receiving dialog if you lose it, then paste the new Worker code.
 4. Repeat for each domain you receive on. Each domain has its own configuration;
    a normal re-save keeps its existing secret.
 
@@ -91,7 +92,7 @@ as an external credential and regenerate it if it leaks.
 
 ## 2. Copy the generated Worker code
 
-The setup page shows the complete Worker code for your instance. It already
+The one-time dialog shows the complete Worker code for your instance. It already
 contains the ingest URL and the generated shared secret, so you can paste it
 as-is:
 
@@ -110,7 +111,7 @@ Walk through the Cloudflare navigation:
 4. Click **Create application** -> **Worker** -> **Deploy**.
 5. Give the Worker a name, e.g. `oa-gatehouse`.
 6. Click **Deploy** to create a stub Worker, then **Edit code**.
-7. Replace the default stub with the generated code from the setup page.
+7. Replace the default stub with the generated code from the dialog.
 8. Click **Deploy** (top-right) to publish the new code.
 
 ## 4. Enable Email Routing for your domain

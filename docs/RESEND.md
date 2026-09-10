@@ -28,16 +28,16 @@ parsed by the shared ingest core.
   cannot read received mail.
 - The **webhook URL** to register in Resend:
   `https://<your-host>/internal/ingest/resend`, where `<your-host>` is the
-  instance's `BASE_URL`. Gatehouse shows this exact URL in the receiving form
-  and on the setup page.
+  instance's `BASE_URL`. Gatehouse shows this exact URL in the receiving dialog
+  before you save.
 - The Resend **webhook signing secret** (`whsec_...`), created when you add the
   webhook. Resend generates this secret; you paste it into Gatehouse.
 
 ## 1. Add the receiving configuration in Gatehouse Email
 
-In the Admin **Settings** tab, open the domain you receive on:
+On the dashboard, click **Receiving** for the domain you receive on:
 
-1. Under **Receiving**, choose **Resend**. The form shows the exact **Webhook
+1. Choose **Resend**. The form shows the exact **Webhook
    URL** to use before you save.
 2. In Resend, open **Webhooks** → **Add Webhook**, paste that URL, tick
    **email.received** (leave the other events unchecked), and save. Open the
@@ -45,8 +45,7 @@ In the Admin **Settings** tab, open the domain you receive on:
 3. Back in Gatehouse, enter the **Resend API key** (full access) and the
    **Webhook signing secret**. Optionally set **API base URL** (default
    `https://api.resend.com`).
-4. Save. Gatehouse opens the Resend setup page with the webhook URL and the
-   remaining steps.
+4. Save. The remaining setup steps are shown in the dialog before you save.
 
 Repeat for each domain you receive on. Each domain stores its own receiving
 configuration. If several domains share one Resend webhook, enter the same
@@ -67,8 +66,8 @@ curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
 
 ## 2. Add the sending provider in Gatehouse Email
 
-1. On the same domain page, under **Sending**, choose **Resend** and enter the
-   **API key**, then save. (Or `PUT /v1/admin/domains/{id}/sending` with
+1. On the dashboard, click **Sending** for that domain, choose **Resend**, and
+   enter the **API key**, then save. (Or `PUT /v1/admin/domains/{id}/sending` with
    `{"provider":"resend","config":{"api_key":"re_..."}}`.)
 2. The `from` domain must be a verified sending domain in Resend.
 

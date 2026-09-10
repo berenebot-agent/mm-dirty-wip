@@ -25,6 +25,21 @@ func domainGet(t *testing.T, h http.Handler, cookie *http.Cookie, path string) *
 	return rr
 }
 
+// dialogHTML returns the markup of the dialog with the given id, so an
+// assertion can be scoped to one domain's editor instead of the whole page.
+func dialogHTML(t *testing.T, body, id string) string {
+	t.Helper()
+	start := strings.Index(body, `<dialog id="`+id+`"`)
+	if start < 0 {
+		t.Fatalf("dialog %q not found", id)
+	}
+	end := strings.Index(body[start:], "</dialog>")
+	if end < 0 {
+		t.Fatalf("dialog %q not closed", id)
+	}
+	return body[start : start+end]
+}
+
 // domainPost performs an authenticated UI POST with the given CSRF token.
 func domainPost(t *testing.T, h http.Handler, cookie *http.Cookie, path string, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
@@ -44,29 +59,28 @@ func TestUIDomainPagePickersAndInstructions(t *testing.T) {
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
 
-	rr := domainGet(t, h, cookie, "/ui/domains/"+d.ID)
+	rr := domainGet(t, h, cookie, "/dashboard")
 	if rr.Code != 200 {
-		t.Fatalf("domain page %d %s", rr.Code, rr.Body.String())
+		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("domain page cache-control = %q", got)
+		t.Fatalf("dashboard cache-control = %q", got)
 	}
 	body := rr.Body.String()
 	for _, want := range []string{
 		d.Name,
 		"/ui/domains/" + d.ID + "/catchall",
-		`name="sending"`,
-		`name="receiving"`,
+		`name="inbox"`,
 		box.Address,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("domain page missing %q", want)
+			t.Fatalf("dashboard missing %q", want)
 		}
 	}
 
-	// The sending picker continues without JavaScript and renders the provider
-	// schema in a separate save form with no prefilled secret value.
-	rr = domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?sending=resend")
+	// Selecting a provider renders its schema in the sending dialog with no
+	// prefilled secret value.
+	rr = domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending&provider=resend")
 	if rr.Code != 200 {
 		t.Fatalf("sending picker %d %s", rr.Code, rr.Body.String())
 	}
@@ -82,12 +96,12 @@ func TestUIDomainPagePickersAndInstructions(t *testing.T) {
 
 	// Receiving pre-save instructions show the exact Resend webhook URL and the
 	// signing-secret onboarding steps.
-	rr = domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?receiving=resend")
+	rr = domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving&provider=resend")
 	if rr.Code != 200 {
 		t.Fatalf("receiving picker %d %s", rr.Code, rr.Body.String())
 	}
 	body = rr.Body.String()
-	for _, want := range []string{"/internal/ingest/resend", "email.received", `id="setup-webhook-url"`, `name="cfg_resend_api_key"`, `name="cfg_resend_webhook_secret"`} {
+	for _, want := range []string{"/internal/ingest/resend", "email.received", `setup-webhook-url`, `name="cfg_resend_api_key"`, `name="cfg_resend_webhook_secret"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("receiving editor missing %q", want)
 		}
@@ -184,8 +198,8 @@ func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
 	if body = domainGet(t, h, cookie, loc).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("worker code must not be shown after the first view")
 	}
-	if body = domainGet(t, h, cookie, "/ui/domains/"+d.ID).Body.String(); strings.Contains(body, `id="cf-code"`) {
-		t.Fatalf("worker code must not persist on the domain page")
+	if body = domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving").Body.String(); strings.Contains(body, `id="cf-code"`) {
+		t.Fatalf("worker code must not persist on the dashboard")
 	}
 }
 
@@ -268,7 +282,7 @@ func TestUIDomainPageRepeatedViewHidesSecretAndValidatesNumericInput(t *testing.
 	cookie, csrf := uiSession(t, svc, u.ID)
 
 	for i := 0; i < 3; i++ {
-		body := domainGet(t, h, cookie, "/ui/domains/"+d.ID).Body.String()
+		body := domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending").Body.String()
 		if strings.Contains(body, secret) {
 			t.Fatalf("stored secret leaked on full view %d", i)
 		}
@@ -335,14 +349,15 @@ func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
 	if amp := strings.Index(tok, "&"); amp >= 0 {
 		tok = tok[:amp]
 	}
-	flash := "?_flash=" + tok
+	flash := "&_flash=" + tok
+	dash := func(domainID string) string { return "/dashboard?domain=" + domainID + "&kind=receiving" + flash }
 
 	// Same user, different domain: no leak, and the flash must survive.
 	d2, err := svc.Store.CreateDomain(ctx, u.AccountID, "second.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body := domainGet(t, h, cookie, "/ui/domains/"+d2.ID+flash).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookie, dash(d2.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("flash leaked to another domain")
 	}
 
@@ -356,15 +371,15 @@ func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookieB, _ := uiSession(t, svc, b.ID)
-	if body := domainGet(t, h, cookieB, "/ui/domains/"+db.ID+flash).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookieB, dash(db.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("flash leaked across accounts")
 	}
 
 	// The owner still gets the one-time code, exactly once.
-	if body := domainGet(t, h, cookie, "/ui/domains/"+d.ID+flash).Body.String(); !strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookie, dash(d.ID)).Body.String(); !strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("owner flash was consumed by a wrong principal or domain")
 	}
-	if body := domainGet(t, h, cookie, "/ui/domains/"+d.ID+flash).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookie, dash(d.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("worker flash shown more than once")
 	}
 }
@@ -379,11 +394,11 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
-	body := domainGet(t, h, cookie, "/ui/domains/"+d.ID).Body.String()
-	if !strings.Contains(body, "Change receiving provider") || !strings.Contains(body, `<option value="cloudflare"`) {
+	body := domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving").Body.String()
+	if !strings.Contains(body, `<option value="cloudflare"`) {
 		t.Fatalf("cloudflare must remain selectable after it is configured")
 	}
-	body = domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?receiving=cloudflare").Body.String()
+	body = domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving&provider=cloudflare").Body.String()
 	if !strings.Contains(body, `name="provider" value="cloudflare"`) {
 		t.Fatalf("cloudflare editor not reachable after configure")
 	}
@@ -391,7 +406,7 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 		t.Fatalf("generated secret must not render an input")
 	}
 	if strings.Contains(body, "known-cf-secret") {
-		t.Fatalf("stored secret leaked on the domain page")
+		t.Fatalf("stored secret leaked on the dashboard")
 	}
 	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID)
 	if err != nil {
@@ -417,8 +432,8 @@ func TestUIDomainReceivingSetupBeforeSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
-	body := domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?receiving=resend").Body.String()
-	for _, want := range []string{"/internal/ingest/resend", "email.received", `id="setup-webhook-url"`, `name="cfg_resend_api_key"`, `name="cfg_resend_webhook_secret"`} {
+	body := domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=receiving&provider=resend").Body.String()
+	for _, want := range []string{"/internal/ingest/resend", "email.received", `setup-webhook-url`, `name="cfg_resend_api_key"`, `name="cfg_resend_webhook_secret"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("pre-save receiving setup missing %q", want)
 		}
@@ -481,8 +496,10 @@ func TestUIDomainCrossAccountControls(t *testing.T) {
 	}
 	cookieB, csrfB := uiSession(t, svc, b.ID)
 
-	if rr := domainGet(t, h, cookieB, "/ui/domains/"+dom.ID); rr.Code != 404 {
-		t.Fatalf("foreign domain view = %d", rr.Code)
+	// The standalone domain page no longer exists; a foreign account cannot
+	// open another account's domain dialog on its own dashboard.
+	if rr := domainGet(t, h, cookieB, "/dashboard?domain="+dom.ID); rr.Code != 200 {
+		t.Fatalf("foreign dashboard view = %d", rr.Code)
 	}
 	for _, tc := range []struct {
 		path string
@@ -527,16 +544,17 @@ func TestUIDomainNoticeFlashBoundToOwner(t *testing.T) {
 	if idx < 0 {
 		t.Fatalf("validation error redirect missing flash: %q", loc)
 	}
-	flash := "?_flash=" + strings.TrimPrefix(loc[idx:], "_flash=")
+	flash := "&_flash=" + strings.TrimPrefix(loc[idx:], "_flash=")
 
 	d2, err := svc.Store.CreateDomain(ctx, u.AccountID, "other.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body := domainGet(t, h, cookie, "/ui/domains/"+d2.ID+flash).Body.String(); strings.Contains(body, "Port must be a whole number") {
+	foreign := "/dashboard?domain=" + d2.ID + "&kind=sending&provider=smtp" + flash
+	if body := domainGet(t, h, cookie, foreign).Body.String(); strings.Contains(body, "Port must be a whole number") {
 		t.Fatalf("notice flash leaked to another domain")
 	}
-	if body := domainGet(t, h, cookie, "/ui/domains/"+d.ID+flash).Body.String(); !strings.Contains(body, "Port must be a whole number") {
+	if body := domainGet(t, h, cookie, loc).Body.String(); !strings.Contains(body, "Port must be a whole number") {
 		t.Fatalf("owner notice flash was consumed by a wrong domain")
 	}
 }
@@ -568,7 +586,7 @@ func TestUIDomainHistorySurvivesConfigDelete(t *testing.T) {
 		t.Fatalf("delivery history hidden after config delete")
 	}
 	// The sending history link must remain reachable even once unconfigured.
-	if body := domainGet(t, h, cookie, base).Body.String(); !strings.Contains(body, `href="`+base+`/sending/deliveries"`) {
+	if body := domainGet(t, h, cookie, "/dashboard?domain="+dom.ID+"&kind=sending").Body.String(); !strings.Contains(body, `href="`+base+`/sending/deliveries"`) {
 		t.Fatalf("sending history link missing when unconfigured")
 	}
 }
@@ -589,12 +607,7 @@ func TestUIDomainSendingEditorPrefillsStoredNonsecret(t *testing.T) {
 	}
 	cookie, _ := uiSession(t, svc, u.ID)
 
-	body := domainGet(t, h, cookie, "/ui/domains/"+d.ID).Body.String()
-	if !strings.Contains(body, `?sending=smtp`) {
-		t.Fatalf("domain page missing explicit Edit link to the current sending provider")
-	}
-
-	body = domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?sending=smtp").Body.String()
+	body := dialogHTML(t, domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending").Body.String(), "domain-sending-dialog-"+d.ID)
 	for _, want := range []string{
 		`value="smtp.example.com"`,
 		`value="ops"`,
@@ -619,7 +632,7 @@ func TestUIDomainEditorDefaultsOnCreateAndSwitch(t *testing.T) {
 	cookie, _ := uiSession(t, svc, u.ID)
 
 	// A brand-new SMTP editor shows the numeric/select defaults.
-	body := domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?sending=smtp").Body.String()
+	body := dialogHTML(t, domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending&provider=smtp").Body.String(), "domain-sending-dialog-"+d.ID)
 	for _, want := range []string{`value="587"`, `<option value="starttls" selected>`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("new editor missing schema default %q", want)
@@ -633,7 +646,7 @@ func TestUIDomainEditorDefaultsOnCreateAndSwitch(t *testing.T) {
 	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "smtp", map[string]any{"host": "smtp.example.com", "password": "x"}); err != nil {
 		t.Fatal(err)
 	}
-	body = domainGet(t, h, cookie, "/ui/domains/"+d.ID+"?sending=brevo").Body.String()
+	body = dialogHTML(t, domainGet(t, h, cookie, "/dashboard?domain="+d.ID+"&kind=sending&provider=brevo").Body.String(), "domain-sending-dialog-"+d.ID)
 	if !strings.Contains(body, `name="provider" value="brevo"`) {
 		t.Fatalf("switch editor not for brevo")
 	}
@@ -677,7 +690,7 @@ func TestUIDomainWorkerFlashConcurrentSingleUse(t *testing.T) {
 		if rr.Code != 303 {
 			t.Fatalf("round %d regenerate %d %s", round, rr.Code, rr.Body.String())
 		}
-		path := "/ui/domains/" + d.ID + "?_flash=" + flashToken(rr)
+		path := "/dashboard?domain=" + d.ID + "&kind=receiving&_flash=" + flashToken(rr)
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup

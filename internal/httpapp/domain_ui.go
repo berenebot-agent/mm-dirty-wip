@@ -8,34 +8,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
 )
-
-// domainConfigFieldView is one non-secret provider value shown as a read-only
-// summary. Secret values are never placed in a view.
-type domainConfigFieldView struct {
-	Label string
-	Value string
-}
-
-// domainSummaryView is the read-only state of one optional domain config slot.
-type domainSummaryView struct {
-	Configured    bool
-	Provider      string
-	ProviderLabel string
-	Fields        []domainConfigFieldView
-	UpdatedAt     time.Time
-	WebhookURL    string
-	Steps         []string
-	CanRegenerate bool
-	Warning       string
-	LastActivity  string
-}
 
 // domainProviderChoiceView is one selectable provider in a picker.
 type domainProviderChoiceView struct {
@@ -62,6 +40,29 @@ type domainEditorView struct {
 	KeepSecrets bool
 	// Values holds only non-secret field values to prefill the inputs/selects.
 	Values map[string]string
+	// Error is a user-safe validation message shown inside the dialog.
+	Error string
+}
+
+// domainSendingEditor builds the prefilled sending editor for one provider,
+// returning false for an unknown provider.
+func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, provider string) (*domainEditorView, bool) {
+	e, ok := newDomainEditor("sending", provider, s.Service.Config.BaseURL)
+	if !ok {
+		return nil, false
+	}
+	e.Values, e.KeepSecrets = s.sendingEditorState(ctx, accountID, domainID, provider, e.Fields)
+	return e, true
+}
+
+// domainReceivingEditor is the receiving counterpart of domainSendingEditor.
+func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID, provider string) (*domainEditorView, bool) {
+	e, ok := newDomainEditor("receiving", provider, s.Service.Config.BaseURL)
+	if !ok {
+		return nil, false
+	}
+	e.Values, e.KeepSecrets = s.receivingEditorState(ctx, accountID, domainID, provider, e.Fields)
+	return e, true
 }
 
 // domainWorkerFlash carries freshly generated Cloudflare Worker code (which
@@ -91,117 +92,6 @@ type domainNoticeFlash struct {
 	Provider  string
 	Error     string
 	Values    map[string]string
-}
-
-// domainDetail renders the domain-first configuration page. It is the single
-// place a domain's optional sending and receiving slots are managed.
-func (s *Server) domainDetail(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
-	ctx := r.Context()
-	d, err := s.Service.Store.GetDomain(ctx, p.AccountID, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "domain not found", 404)
-		return
-	}
-	boxes, _ := s.Service.Store.ListInboxes(ctx, p)
-	own := make([]model.Inbox, 0, len(boxes))
-	for _, b := range boxes {
-		if b.DomainID == d.ID {
-			own = append(own, b)
-		}
-	}
-	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
-	lastSent, _ := s.Service.Store.LastSentByDomain(ctx, p.AccountID)
-	lastRecv, _ := s.Service.Store.LastReceivedByDomain(ctx, p.AccountID)
-
-	data := pageData{
-		Title:                  d.Name,
-		Tab:                    "settings",
-		Principal:              p,
-		CSRF:                   csrf(r),
-		Account:                acc,
-		Domain:                 &d,
-		DomainInboxes:          own,
-		DomainSendingChoices:   domainSendingChoices(),
-		DomainReceivingChoices: domainReceivingChoices(),
-		DomainSendingSummary:   s.domainSendingSummary(ctx, p.AccountID, d, lastSent[d.ID]),
-		DomainReceivingSummary: s.domainReceivingSummary(ctx, p.AccountID, d, lastRecv[d.ID]),
-		Notice:                 r.URL.Query().Get("notice"),
-	}
-
-	// A flash is peeked first and only consumed when its account/user/domain
-	// binding matches this request, so a wrong principal or domain can neither
-	// read the one-time generated secret nor destroy the real owner's view. The
-	// value is then re-claimed with take and displayed only if take returned the
-	// matching value, so two concurrent authorized GETs cannot both render the
-	// same one-time Worker code.
-	var noticeKind, noticeProvider string
-	var noticeValues map[string]string
-	if tok := r.URL.Query().Get("_flash"); tok != "" {
-		if v, ok := s.flashes.peek(tok); ok {
-			switch f := v.(type) {
-			case domainWorkerFlash:
-				if f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == d.ID {
-					if rc, err := s.Service.Store.GetDomainReceivingConfig(ctx, p.AccountID, d.ID); err == nil && rc.ID == f.ConfigID && rc.Revision == f.Revision {
-						if taken, ok := s.flashes.take(tok); ok {
-							if tf, ok := taken.(domainWorkerFlash); ok && tf.WorkerCode == f.WorkerCode && tf.ConfigID == f.ConfigID && tf.Revision == f.Revision && tf.AccountID == p.AccountID && tf.UserID == p.UserID && tf.DomainID == d.ID {
-								data.DomainWorkerCode = tf.WorkerCode
-								data.DomainWorkerWebhook = tf.WebhookURL
-							}
-						}
-					}
-				}
-			case domainNoticeFlash:
-				if f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == d.ID {
-					if taken, ok := s.flashes.take(tok); ok {
-						if tf, ok := taken.(domainNoticeFlash); ok && tf.AccountID == p.AccountID && tf.UserID == p.UserID && tf.DomainID == d.ID && tf.Error == f.Error {
-							data.Error = tf.Error
-							noticeKind, noticeProvider, noticeValues = tf.Kind, tf.Provider, tf.Values
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if sel := normalizeDomainProvider(r.URL.Query().Get("sending")); sel != "" {
-		if e, ok := newDomainEditor("sending", sel, s.Service.Config.BaseURL); ok {
-			e.Values, e.KeepSecrets = s.sendingEditorState(ctx, p.AccountID, d.ID, sel, e.Fields)
-			if noticeKind == "sending" && noticeProvider == sel {
-				overlayValues(e.Values, noticeValues)
-			}
-			data.DomainSendingEditor = e
-			data.DomainQuerySending = sel
-		} else {
-			data.Error = "Unknown sending provider"
-		}
-	}
-	if sel := normalizeDomainProvider(r.URL.Query().Get("receiving")); sel != "" {
-		if e, ok := newDomainEditor("receiving", sel, s.Service.Config.BaseURL); ok {
-			e.Values, e.KeepSecrets = s.receivingEditorState(ctx, p.AccountID, d.ID, sel, e.Fields)
-			if noticeKind == "receiving" && noticeProvider == sel {
-				overlayValues(e.Values, noticeValues)
-			}
-			data.DomainReceivingEditor = e
-			data.DomainQueryReceiving = sel
-		} else {
-			data.Error = "Unknown receiving provider"
-		}
-	}
-	// Preserve the other selection across a single picker submit.
-	if data.DomainSendingEditor != nil && data.DomainQueryReceiving == "" {
-		data.DomainQueryReceiving = normalizeDomainProvider(r.URL.Query().Get("receiving"))
-	}
-	if data.DomainReceivingEditor != nil && data.DomainQuerySending == "" {
-		data.DomainQuerySending = normalizeDomainProvider(r.URL.Query().Get("sending"))
-	}
-
-	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, domainBody, data)
 }
 
 // uiDomainCatchAll stores the domain's catch-all inbox. Only an inbox that
@@ -234,7 +124,7 @@ func (s *Server) uiDomainCatchAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.domainNotice(w, r, d.ID, "Catch-all inbox updated")
+	s.domainNotice(w, r, "Catch-all inbox updated")
 }
 
 // uiDomainSending creates, replaces or updates the domain's single sending
@@ -267,7 +157,7 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 		s.domainSaveError(w, r, d.ID, "sending", provider, err)
 		return
 	}
-	s.domainNotice(w, r, d.ID, "Sending configuration saved")
+	s.domainNotice(w, r, "Sending configuration saved")
 }
 
 // uiDomainSendingClear removes the domain's sending configuration. Mail for the
@@ -286,7 +176,7 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.domainNotice(w, r, r.PathValue("id"), "Sending configuration removed")
+	s.domainNotice(w, r, "Sending configuration removed")
 }
 
 // uiDomainReceiving creates, replaces or updates the domain's single receiving
@@ -324,7 +214,7 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
 		return
 	}
-	s.domainNotice(w, r, d.ID, "Receiving configuration saved")
+	s.domainNotice(w, r, "Receiving configuration saved")
 }
 
 // uiDomainReceivingClear removes the domain's receiving configuration.
@@ -342,7 +232,7 @@ func (s *Server) uiDomainReceivingClear(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	s.domainNotice(w, r, r.PathValue("id"), "Receiving configuration removed")
+	s.domainNotice(w, r, "Receiving configuration removed")
 }
 
 // uiDomainReceivingRegenerate mints a fresh generated secret for the currently
@@ -390,7 +280,7 @@ func (s *Server) uiDomainReceivingRegenerate(w http.ResponseWriter, r *http.Requ
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
 		return
 	}
-	s.domainNotice(w, r, d.ID, "Receiving secret regenerated")
+	s.domainNotice(w, r, "Receiving secret regenerated")
 }
 
 // domainDeliveries shows the send history owned by one domain, independent of
@@ -428,7 +318,7 @@ func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	s.render(w, domainDeliveriesBody, pageData{
 		Title:            d.Name + " · Delivery history",
-		Tab:              "settings",
+		Tab:              "home",
 		Principal:        p,
 		CSRF:             csrf(r),
 		Account:          acc,
@@ -439,9 +329,9 @@ func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// domainNotice stores a success notice and redirects to the domain page.
-func (s *Server) domainNotice(w http.ResponseWriter, r *http.Request, domainID, notice string) {
-	dest := "/ui/domains/" + url.PathEscape(domainID) + "?" + url.Values{"notice": {notice}}.Encode()
+// domainNotice stores a success notice and redirects back to the dashboard.
+func (s *Server) domainNotice(w http.ResponseWriter, r *http.Request, notice string) {
+	dest := "/dashboard?" + url.Values{"notice": {notice}}.Encode()
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
@@ -452,11 +342,9 @@ func (s *Server) domainNotice(w http.ResponseWriter, r *http.Request, domainID, 
 func (s *Server) domainEditorError(w http.ResponseWriter, r *http.Request, domainID, kind, provider, msg string) {
 	p := principal(r)
 	q := url.Values{}
-	if kind == "sending" {
-		q.Set("sending", provider)
-	} else {
-		q.Set("receiving", provider)
-	}
+	q.Set("domain", domainID)
+	q.Set("kind", kind)
+	q.Set("provider", provider)
 	values := submittedEditorValues(kind, provider, r)
 	size := len(msg) + 32
 	for k, v := range values {
@@ -472,7 +360,7 @@ func (s *Server) domainEditorError(w http.ResponseWriter, r *http.Request, domai
 	if tok := s.flashes.put(f, size); tok != "" {
 		q.Set("_flash", tok)
 	}
-	http.Redirect(w, r, "/ui/domains/"+url.PathEscape(domainID)+"?"+q.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/dashboard?"+q.Encode(), http.StatusSeeOther)
 }
 
 // submittedEditorValues collects the non-secret schema values the operator
@@ -544,9 +432,9 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WorkerCode: code,
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
-	dest := "/ui/domains/" + url.PathEscape(domainID)
+	dest := "/dashboard?domain=" + url.PathEscape(domainID) + "&kind=receiving"
 	if tok := s.flashes.put(f, len(code)+128); tok != "" {
-		dest += "?_flash=" + tok
+		dest += "&_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
@@ -596,72 +484,6 @@ func configFromForm(provider string, fields []transport.ConfigField, r *http.Req
 		cfg[f.Name] = raw
 	}
 	return cfg, nil
-}
-
-func (s *Server) domainSendingSummary(ctx context.Context, accountID string, d model.Domain, lastActivity time.Time) domainSummaryView {
-	v := domainSummaryView{LastActivity: domainActivityLabel(lastActivity)}
-	cfg, err := s.Service.Store.GetDomainSendingConfig(ctx, accountID, d.ID)
-	if err != nil {
-		return v
-	}
-	v.Configured = true
-	v.Provider = cfg.Provider
-	v.ProviderLabel = cfg.Provider
-	v.UpdatedAt = cfg.UpdatedAt
-	if t, ok := transport.LookupOutbound(cfg.Provider); ok {
-		v.ProviderLabel = t.Description()
-		if fp, ok := t.(transport.ConfigSchemaProvider); ok {
-			if dec, err := s.Service.DecryptDomainSendingConfig(cfg); err == nil {
-				v.Fields = domainPublicFields(fp.ConfigFields(), dec)
-			}
-		}
-	}
-	return v
-}
-
-func (s *Server) domainReceivingSummary(ctx context.Context, accountID string, d model.Domain, lastActivity time.Time) domainSummaryView {
-	v := domainSummaryView{LastActivity: domainActivityLabel(lastActivity)}
-	cfg, err := s.Service.Store.GetDomainReceivingConfig(ctx, accountID, d.ID)
-	if err != nil {
-		return v
-	}
-	v.Configured = true
-	v.Provider = cfg.Provider
-	v.ProviderLabel = cfg.Provider
-	v.UpdatedAt = cfg.UpdatedAt
-	if t, ok := transport.LookupInbound(cfg.Provider); ok {
-		v.ProviderLabel = t.Description()
-		v.WebhookURL = domainIngestURL(s.Service.Config.BaseURL, t)
-		v.Steps = domainReceivingSteps(cfg.Provider)
-		for _, f := range t.ConfigFields() {
-			if f.Generated {
-				v.CanRegenerate = true
-			}
-		}
-		if dec, err := s.Service.DecryptDomainReceivingConfig(cfg); err == nil {
-			v.Fields = domainPublicFields(t.ConfigFields(), dec)
-		}
-		if cfg.Provider == "cloudflare" {
-			v.Warning = privateHostWarning(v.WebhookURL)
-		}
-	}
-	return v
-}
-
-// domainPublicFields keeps only non-secret, present schema values for display.
-func domainPublicFields(fields []transport.ConfigField, cfg map[string]any) []domainConfigFieldView {
-	out := []domainConfigFieldView{}
-	for _, f := range fields {
-		if f.Secret {
-			continue
-		}
-		val, ok := cfg[f.Name]
-		if !ok || val == nil {
-			continue
-		}
-		out = append(out, domainConfigFieldView{Label: f.Label, Value: fmt.Sprintf("%v", val)})
-	}
-	return out
 }
 
 func domainSendingChoices() []domainProviderChoiceView {
@@ -809,27 +631,5 @@ func domainReceivingSteps(provider string) []string {
 	}
 }
 
-func domainActivityLabel(t time.Time) string {
-	if t.IsZero() {
-		return "Never"
-	}
-	return t.Format("2006-01-02 15:04")
-}
-
-const domainBody = `<div class="toolbar"><a href="/dashboard?tab=settings">← Domains</a></div>
-{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
-<section class="card"><div class="card-head"><h1>{{.Domain.Name}}</h1><form method="post" action="/ui/domains/{{.Domain.ID}}/delete" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Domain</button></form></div><p class="muted">Created {{.Domain.CreatedAt.Format "2006-01-02 15:04"}}</p></section>
-{{if .DomainWorkerCode}}<section class="card"><h2>Cloudflare Worker code</h2><p class="muted">Paste this into a Cloudflare Worker. It contains the generated shared secret and is shown only on this page.</p><ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Worker</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In Email Routing, add a <b>Send to a Worker</b> rule for each receiving address and choose this Worker.</li></ol><pre class="cf-code" id="cf-code">{{.DomainWorkerCode}}</pre><p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button></div></section>{{end}}
-<div class="grid">
-<section class="card"><h2>Catch-all inbox</h2><p class="muted">Mail sent to an unknown address on this domain is delivered to this inbox. Only inboxes on {{.Domain.Name}} can be selected.</p><form method="post" action="/ui/domains/{{.Domain.ID}}/catchall"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Catch-all inbox</label><select name="inbox"><option value="">No catch-all</option>{{range .DomainInboxes}}<option value="{{.ID}}"{{if eq .ID $.Domain.CatchAllInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select><div class="dialog-actions"><button>Save catch-all</button></div></form></section>
-<section class="card"><h2>Sending</h2>{{with .DomainSendingSummary}}{{if .Configured}}<p><span class="pill">{{.ProviderLabel}}</span> <span class="muted">Updated {{.UpdatedAt.Format "2006-01-02 15:04"}} · Last sent {{.LastActivity}}</span> · <a href="/ui/domains/{{$.Domain.ID}}?sending={{.Provider}}">Edit</a></p>{{if .Fields}}<dl class="cfg-summary">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}<p class="muted small">Configured — delivery is not verified until a message is actually sent.</p><form method="post" action="/ui/domains/{{$.Domain.ID}}/sending/clear" data-confirm="Remove sending configuration for this domain? Mail will queue until a provider is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove sending</button></form>{{else}}<p class="muted">Sending is paused. Mail queues until a provider is configured.</p>{{end}}{{end}}
-<p class="muted"><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries">Delivery history</a></p>
-<h3>{{if .DomainSendingSummary.Configured}}Change sending provider{{else}}Configure sending{{end}}</h3><form method="get" action="/ui/domains/{{.Domain.ID}}" class="provider-picker"><select name="sending"><option value="">Select a provider…</option>{{range .DomainSendingChoices}}<option value="{{.Name}}"{{if eq .Name $.DomainQuerySending}} selected{{end}}>{{.Description}}</option>{{end}}</select>{{if .DomainQueryReceiving}}<input type="hidden" name="receiving" value="{{.DomainQueryReceiving}}">{{end}}<button class="secondary" type="submit">Continue</button></form>
-{{with .DomainSendingEditor}}{{$e := .}}<form method="post" action="/ui/domains/{{$.Domain.ID}}/sending" class="cfg-form" autocomplete="off"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}">{{if .KeepSecrets}}<p class="muted">Saving {{.ProviderLabel}} updates this domain's sending configuration. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted">Saving {{.ProviderLabel}} replaces this domain's sending configuration. Required secrets must be entered.</p>{{end}}{{range .Fields}}{{if not .Generated}}{{if .Options}}<label>{{.Label}}{{if .Required}} *{{end}}</label><select name="cfg_{{$e.Provider}}_{{.Name}}">{{$f := .}}{{range .Options}}<option value="{{.Value}}"{{if eq .Value (index $e.Values $f.Name)}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<label>{{.Label}}{{if .Required}} *{{end}}{{if and .Secret $e.KeepSecrets}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input type="{{.Type}}" name="cfg_{{$e.Provider}}_{{.Name}}" placeholder="{{.Placeholder}}"{{if and .Required (or (not .Secret) (not $e.KeepSecrets))}} required{{end}}{{if .Secret}} autocomplete="off"{{else}} value="{{index $e.Values .Name}}"{{end}}>{{end}}{{end}}{{end}}<div class="dialog-actions"><a class="btn secondary" href="/ui/domains/{{$.Domain.ID}}">Cancel</a><button>Save sending</button></div></form>{{end}}</section>
-<section class="card"><h2>Receiving</h2>{{with .DomainReceivingSummary}}{{if .Configured}}<p><span class="pill">{{.ProviderLabel}}</span> <span class="muted">Updated {{.UpdatedAt.Format "2006-01-02 15:04"}} · Last received {{.LastActivity}}</span> · <a href="/ui/domains/{{$.Domain.ID}}?receiving={{.Provider}}">Edit</a></p>{{if .Fields}}<dl class="cfg-summary">{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}{{if .Warning}}<div class="banner warn">{{.Warning}}</div>{{end}}{{if .WebhookURL}}<p class="muted small">Ingest URL: <code class="wrap">{{.WebhookURL}}</code></p>{{end}}<p class="muted small">Configured — inbound delivery is not verified until a message actually arrives.</p><p class="muted small">Inbound setup is managed by the provider; open Edit for the setup steps.</p><div class="actions-left">{{if .CanRegenerate}}<form method="post" action="/ui/domains/{{$.Domain.ID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="amber">Regenerate secret</button></form>{{end}}<form method="post" action="/ui/domains/{{$.Domain.ID}}/receiving/clear" data-confirm="Remove receiving configuration for this domain? It will stop accepting mail until a receive path is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove receiving</button></form></div>{{else}}<p class="muted">Not configured. This domain does not accept mail yet.</p>{{end}}{{end}}
-<h3>{{if .DomainReceivingSummary.Configured}}Change receiving provider{{else}}Configure receiving{{end}}</h3><form method="get" action="/ui/domains/{{.Domain.ID}}" class="provider-picker"><select name="receiving"><option value="">Select a provider…</option>{{range .DomainReceivingChoices}}<option value="{{.Name}}"{{if eq .Name $.DomainQueryReceiving}} selected{{end}}>{{.Description}}</option>{{end}}</select>{{if .DomainQuerySending}}<input type="hidden" name="sending" value="{{.DomainQuerySending}}">{{end}}<button class="secondary" type="submit">Continue</button></form>
-{{with .DomainReceivingEditor}}{{$e := .}}<form method="post" action="/ui/domains/{{$.Domain.ID}}/receiving" class="cfg-form" autocomplete="off"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="provider" value="{{.Provider}}">{{if .WebhookURL}}{{if not .Generated}}<p class="muted">Register this webhook URL with {{.ProviderLabel}} before saving:</p><div class="secret"><pre id="setup-webhook-url">{{.WebhookURL}}</pre></div><p class="copy-note" id="setup-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the URL above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="setup-copy">Copy webhook URL</button></div>{{end}}{{end}}{{if .Steps}}<ol class="steps">{{range .Steps}}<li>{{.}}</li>{{end}}</ol>{{end}}{{range .Fields}}{{if not .Generated}}{{if .Options}}<label>{{.Label}}{{if .Required}} *{{end}}</label><select name="cfg_{{$e.Provider}}_{{.Name}}">{{$f := .}}{{range .Options}}<option value="{{.Value}}"{{if eq .Value (index $e.Values $f.Name)}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<label>{{.Label}}{{if .Required}} *{{end}}{{if and .Secret $e.KeepSecrets}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input type="{{.Type}}" name="cfg_{{$e.Provider}}_{{.Name}}" placeholder="{{.Placeholder}}"{{if and .Required (or (not .Secret) (not $e.KeepSecrets))}} required{{end}}{{if .Secret}} autocomplete="off"{{else}} value="{{index $e.Values .Name}}"{{end}}>{{end}}{{end}}{{end}}{{if .KeepSecrets}}<p class="muted small">Saving updates this domain's receiving configuration. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted small">Saving replaces this domain's receiving configuration. Required secrets must be entered.</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="/ui/domains/{{$.Domain.ID}}">Cancel</a><button>Save receiving</button></div></form>{{end}}</section>
-</div>`
-
-const domainDeliveriesBody = `<div class="toolbar"><a href="/ui/domains/{{.Domain.ID}}">← {{.Domain.Name}}</a></div>
+const domainDeliveriesBody = `<div class="toolbar"><a href="/dashboard?domain={{.Domain.ID}}">← {{.Domain.Name}}</a></div>
 <section class="card"><h1>Delivery history</h1><p class="muted">Every send attempt for messages owned by {{.Domain.Name}}, regardless of which provider is configured now.</p>{{if .DeliveryAttempts}}<div class="table-wrap"><table style="font-size:12px"><thead><tr><th>When</th><th>Address</th><th>Message</th><th>Attempt</th><th>Status</th><th>Provider ID</th><th>Error</th></tr></thead><tbody>{{range .DeliveryAttempts}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .MessageID}}<div>to: {{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</div><div>from: {{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</div>{{else}}<span class="muted">message_deleted</span>{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">{{.MessageID}}</a>{{else}}<span class="muted">—</span>{{end}}</td><td>{{.Attempt}}</td><td>{{if eq .Status "sent"}}<span class="pill">Sent</span>{{else}}<span class="pill danger">Failed</span>{{end}}</td><td class="muted" style="font-size:10px;word-break:break-all">{{.ProviderMessageID}}</td><td class="muted" style="word-break:break-all">{{.ErrorText}}</td></tr>{{end}}</tbody></table></div>{{if .DeliveryHasMore}}<p><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries?before={{.DeliveryBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No delivery attempts yet.</p>{{end}}</section>`
