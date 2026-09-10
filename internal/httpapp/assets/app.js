@@ -731,3 +731,153 @@
     sync(dlg);
   });
 })();
+
+(function () {
+  var input = document.querySelector('input[type=file][name=attachments]');
+  if (!input || typeof DataTransfer === 'undefined') {
+    return;
+  }
+  var dropZone = document.getElementById('attach-drop');
+  var overlay = document.getElementById('attach-overlay');
+  var list = document.getElementById('attach-list');
+  var dragDepth = 0;
+
+  function files() {
+    return Array.prototype.slice.call(input.files || []);
+  }
+
+  function render() {
+    if (!list) {
+      return;
+    }
+    list.textContent = '';
+    files().forEach(function (file, index) {
+      var li = document.createElement('li');
+
+      var name = document.createElement('span');
+      name.className = 'attach-name';
+      name.textContent = file.name;
+
+      var size = document.createElement('span');
+      size.className = 'attach-size';
+      size.textContent = humanSize(file.size);
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'attach-remove';
+      remove.setAttribute('aria-label', 'Remove ' + file.name);
+      remove.textContent = '\u00d7';
+      remove.addEventListener('click', function () {
+        var next = files();
+        next.splice(index, 1);
+        setFiles(next);
+      });
+
+      li.appendChild(name);
+      li.appendChild(size);
+      li.appendChild(remove);
+      list.appendChild(li);
+    });
+  }
+
+  function setFiles(next) {
+    var dt = new DataTransfer();
+    next.forEach(function (file) {
+      dt.items.add(file);
+    });
+    try {
+      input.files = dt.files;
+    } catch (err) {
+      return;
+    }
+    render();
+  }
+
+  function addFiles(incoming) {
+    var merged = files();
+    Array.prototype.slice.call(incoming).forEach(function (file) {
+      merged.push(file);
+    });
+    setFiles(merged);
+  }
+
+  function humanSize(bytes) {
+    if (bytes < 1024) {
+      return bytes + ' B';
+    }
+    var units = ['KB', 'MB', 'GB'];
+    var value = bytes / 1024;
+    var i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+      value /= 1024;
+      i += 1;
+    }
+    return (value >= 10 ? Math.round(value) : value.toFixed(1)) + ' ' + units[i];
+  }
+
+  function hasFiles(e) {
+    var dt = e.dataTransfer;
+    if (!dt) {
+      return false;
+    }
+    if (dt.types) {
+      return Array.prototype.indexOf.call(dt.types, 'Files') !== -1;
+    }
+    return !!(dt.files && dt.files.length);
+  }
+
+  function showDrop(show) {
+    if (overlay) {
+      overlay.hidden = !show;
+      overlay.classList.toggle('active', show);
+    }
+    if (dropZone) {
+      dropZone.classList.toggle('dragover', show);
+    }
+  }
+
+  input.addEventListener('change', render);
+
+  window.addEventListener('dragenter', function (e) {
+    if (!hasFiles(e)) {
+      return;
+    }
+    e.preventDefault();
+    dragDepth += 1;
+    showDrop(true);
+  });
+
+  window.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) {
+      return;
+    }
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+
+  window.addEventListener('dragleave', function () {
+    if (dragDepth <= 0) {
+      return;
+    }
+    dragDepth -= 1;
+    if (dragDepth === 0) {
+      showDrop(false);
+    }
+  });
+
+  window.addEventListener('drop', function (e) {
+    if (!hasFiles(e)) {
+      return;
+    }
+    e.preventDefault();
+    dragDepth = 0;
+    showDrop(false);
+    if (e.dataTransfer) {
+      addFiles(e.dataTransfer.files);
+    }
+  });
+
+  render();
+})();
