@@ -155,7 +155,7 @@
     adminSnapshot = null;
     sel.disabled = false;
     if (submitBtn) {
-      submitBtn.textContent = 'Create';
+      submitBtn.textContent = 'Add Client';
     }
     if (rotateBtn) {
       rotateBtn.hidden = true;
