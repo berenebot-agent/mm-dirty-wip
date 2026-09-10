@@ -448,6 +448,32 @@ func TestUIComposeCSRFAndSend(t *testing.T) {
 	}
 }
 
+func TestUIComposeAttachmentDropUI(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ui/inboxes/"+box.ID+"/compose", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("compose get %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`id="attach-drop"`,
+		`id="attach-overlay"`,
+		`id="attach-list"`,
+		`for="attachments"`,
+		`name="attachments" multiple`,
+		`enctype="multipart/form-data"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("compose page missing %q", want)
+		}
+	}
+}
+
 func TestUIReplyAndForward(t *testing.T) {
 	svc, h, u, dom, box := httpFixture(t)
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
