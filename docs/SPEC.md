@@ -144,13 +144,16 @@ Permissions are assigned **per mailbox**, using three simple mailbox roles:
 - everything in Read
 - delete messages
 - create and edit drafts
+- request authorization to send a draft
 
 **Owner**
 - everything in Assistant
 - send and reply
+- approve or reject draft send requests
 - manage settings for that mailbox
 
-A single API key may have different roles on different mailboxes.
+A single API key may have different roles on different mailboxes. These roles
+apply to API keys; a human user signed in to the web UI is always an Owner.
 
 Example:
 

@@ -88,7 +88,7 @@ func TestCreateKeyReturnsJSONSecret(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rr.Body.String())
 	}
-	if got["notice"] != "API key created" || got["label"] == "" || got["secret"] == "" {
+	if got["notice"] != "API key created" || !strings.Contains(got["label"], "will not be shown again") || got["secret"] == "" {
 		t.Fatalf("unexpected response %#v", got)
 	}
 }
