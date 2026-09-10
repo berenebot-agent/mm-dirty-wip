@@ -32,7 +32,7 @@ Inbound can also be received via Cloudflare Email Routing through a Worker that 
 
 High-level steps:
 
-1. In the Admin **Settings** tab, open the domain and configure a **Receiving** provider of type **Cloudflare Worker**. Gatehouse generates the shared secret, stores it encrypted on that domain, and opens a one-time setup page with the complete Worker code and Cloudflare steps. The generated secret is shown once; use **Regenerate secret** on the same section if you lose it (this replaces it, and the old Worker stops working until you paste the new code).
+1. On the dashboard, click **Receiving** for the domain and configure a **Receiving** provider of type **Cloudflare Worker**. Gatehouse generates the shared secret, stores it encrypted on that domain, and shows the complete Worker code and Cloudflare steps in a one-time dialog. The generated secret is shown once; use **Regenerate secret** in the same dialog if you lose it (this replaces it, and the old Worker stops working until you paste the new code).
 2. In Cloudflare, create a Worker and paste the generated code (it already contains your ingest URL and secret), then deploy it.
 3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
 4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
@@ -56,8 +56,8 @@ https://your-host.example/internal/ingest/resend
 ```
 
 1. In Resend, verify the domain (including the inbound MX record) and create a **full access** API key. A send-only key cannot read received mail.
-2. On the domain page, under **Receiving**, choose **Resend**. The form shows the exact webhook URL before you save. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), then enter it with the API key and save.
-3. Saving opens a setup page with the URL and steps. Each domain stores its own receiving configuration; if several domains share one Resend webhook, enter the same signing secret on each domain.
+2. On the dashboard, click **Receiving** for that domain and choose **Resend**. The form shows the exact webhook URL before you save. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), then enter it with the API key and save.
+3. Each domain stores its own receiving configuration; if several domains share one Resend webhook, enter the same signing secret on each domain.
 
 Resend also works as a sending provider (see below).
 
