@@ -57,9 +57,26 @@ func TestAPIInboxApproverAndExternalRequest(t *testing.T) {
 	if err := json.Unmarshal(get.Body.Bytes(), &sr); err != nil || sr.ApproverEmail != "approver@outside.test" || sr.TokenExpiresAt == nil {
 		t.Fatalf("send-request %+v err=%v", sr, err)
 	}
+	// The approval email is queued for the approver, but it carries the
+	// one-time approval token, so it is workflow mail: it must not be exposed
+	// through any mailbox read surface, not even to the owner. Otherwise the
+	// assistant that requested the send could read the token and approve its
+	// own request.
+	if sr.ApprovalMessageID == "" {
+		t.Fatalf("approval email was not queued")
+	}
+	if _, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, sr.ApprovalMessageID); err == nil {
+		t.Fatalf("approval email is readable through the mailbox surface")
+	}
 	rr = apiDo(h, "GET", "/v1/outbox?inbox="+box.ID, ownerKey, "")
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Approval required") {
-		t.Fatalf("approval email not queued = %d %s", rr.Code, rr.Body.String())
+	if rr.Code != 200 || strings.Contains(rr.Body.String(), "Approval required") {
+		t.Fatalf("approval email leaked into the outbox = %d %s", rr.Code, rr.Body.String())
+	}
+	for _, key := range []string{ownerKey, asstKey} {
+		rr = apiDo(h, "GET", "/v1/messages?inbox="+box.ID, key, "")
+		if rr.Code != 200 || strings.Contains(rr.Body.String(), "GH-APPROVE") || strings.Contains(rr.Body.String(), "Approval required") {
+			t.Fatalf("approval token leaked to key %q = %d %s", key[:8], rr.Code, rr.Body.String())
+		}
 	}
 
 	// Changing the approver is allowed while a request is pending: the request

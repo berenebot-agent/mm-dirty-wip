@@ -266,6 +266,11 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 		SizeBytes:    int64(len(raw)),
 		LastError:    queuedReason,
 		Attachments:  metadata,
+		// The approval email carries the one-time token, so it is workflow mail:
+		// it is queued in this inbox for delivery to the approver but must not be
+		// readable through the mailbox surface, or the assistant that requested
+		// the send could read the token and approve its own request.
+		Internal: true,
 		NewSendRequest: &store.SendRequestInsert{
 			ID:                  idgen.New("dsr"),
 			DraftID:             d.ID,

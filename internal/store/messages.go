@@ -57,6 +57,10 @@ type OutboundRecord struct {
 	// approval email atomically with the request that authorizes it. The draft
 	// is frozen but not consumed.
 	NewSendRequest *SendRequestInsert
+	// Internal marks workflow mail (the approval-request email) that is queued
+	// in the inbox but hidden from every mailbox read surface, because it
+	// carries the one-time approval token.
+	Internal bool
 }
 
 func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Message, model.Event, bool, error) {
@@ -199,11 +203,12 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var refs, to, cc, bcc, env, created string
 	var received, sent sql.NullString
 	var read, arch int
-	var has int
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey)
+	var has, internal int
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal)
 	if err != nil {
 		return m, err
 	}
+	m.Internal = internal != 0
 	m.References = decodeStrings(refs)
 	m.To = decodeStrings(to)
 	m.CC = decodeStrings(cc)
@@ -218,7 +223,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -253,7 +258,7 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 	if err != nil {
 		return m, err
 	}
-	if !p.CanRead(m.InboxID) {
+	if !p.CanRead(m.InboxID) || m.Internal {
 		return model.Message{}, ErrForbidden
 	}
 	return m, nil
@@ -267,7 +272,7 @@ type MessageFilter struct {
 }
 
 func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
-	q := messageSelect + ` FROM messages m WHERE m.account_id=?`
+	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0`
 	args := []any{p.AccountID}
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
@@ -522,7 +527,7 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id WHERE t.account_id=?`
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 WHERE t.account_id=?`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
@@ -682,7 +687,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	if q == "" {
 		return []model.Message{}, nil
 	}
-	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=?`
+	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
 	args := []any{ftsQuery(q), p.AccountID}
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {

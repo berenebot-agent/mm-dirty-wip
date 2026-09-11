@@ -173,8 +173,13 @@ type Message struct {
 	// Client is the denormalized snapshot of the API key / Hermes credential
 	// that sent an outbound message. It is empty for inbound mail and for sends
 	// with no credential (for example an email-approved send).
-	Client         string     `json:"client,omitempty"`
-	ClientID       string     `json:"-"`
+	Client   string `json:"client,omitempty"`
+	ClientID string `json:"-"`
+	// Internal marks workflow mail (an approval-request email carrying a
+	// one-time approval token) that is queued in an inbox but is not mailbox
+	// content. It is hidden from every read surface so the token it carries is
+	// only ever seen by the nominated approver.
+	Internal       bool       `json:"-"`
 	ReceivedAt     *time.Time `json:"received_at,omitempty"`
 	SentAt         *time.Time `json:"sent_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`

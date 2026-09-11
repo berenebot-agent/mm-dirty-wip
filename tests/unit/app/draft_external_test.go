@@ -56,25 +56,39 @@ func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) st
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := model.Principal{AccountID: accountID, Admin: true}
-	msgs, err := svc.Store.ListOutbox(ctx, p, box.ID, 20)
+	m := queuedApprovalEmail(t, svc, ctx, accountID, box.ID)
+	parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range msgs {
-		if !strings.HasPrefix(m.Subject, "Approval required:") {
-			continue
-		}
-		parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if match := approveTokenRe.FindStringSubmatch(parsed.Text); len(match) == 2 {
-			return match[1]
-		}
+	if match := approveTokenRe.FindStringSubmatch(parsed.Text); len(match) == 2 {
+		return match[1]
 	}
 	t.Fatal("no approval token found in queued approval email")
 	return ""
+}
+
+// queuedApprovalEmail returns the queued approval-request message. Approval
+// mail is workflow mail and is deliberately hidden from the mailbox read
+// surface, so it is located through the send request that queued it.
+func queuedApprovalEmail(t *testing.T, svc *app.Service, ctx context.Context, accountID, inboxID string) model.Message {
+	t.Helper()
+	srs, err := svc.Store.ListSendRequests(ctx, model.Principal{AccountID: accountID, Admin: true}, inboxID, true, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sr := range srs {
+		if sr.ApprovalMessageID == "" {
+			continue
+		}
+		m, err := svc.Store.GetMessageByID(ctx, accountID, sr.ApprovalMessageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	t.Fatal("no queued approval email found")
+	return model.Message{}
 }
 
 // approvalEmailText returns the plain-text body of the latest queued
@@ -86,23 +100,12 @@ func approvalEmailText(t *testing.T, svc *app.Service, accountID, inboxID string
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := model.Principal{AccountID: accountID, Admin: true}
-	msgs, err := svc.Store.ListOutbox(ctx, p, box.ID, 20)
+	m := queuedApprovalEmail(t, svc, ctx, accountID, box.ID)
+	parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range msgs {
-		if !strings.HasPrefix(m.Subject, "Approval required:") {
-			continue
-		}
-		parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return parsed.Text
-	}
-	t.Fatal("no queued approval email found")
-	return ""
+	return parsed.Text
 }
 
 func TestApproverImpliesExternalRequest(t *testing.T) {
