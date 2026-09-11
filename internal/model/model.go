@@ -151,6 +151,27 @@ type Address struct {
 	Address string `json:"address"`
 }
 
+// MaxLabelLength bounds a single free-text label so it cannot bloat rows or
+// responses.
+const MaxLabelLength = 64
+
+// NormalizeLabel trims and collapses a free-text label to its stored form. It
+// returns ok=false for empty labels, labels over MaxLabelLength, or labels
+// containing control characters. Case is preserved for display; the stored
+// column compares NOCASE so matching ignores case.
+func NormalizeLabel(raw string) (string, bool) {
+	v := strings.Join(strings.Fields(raw), " ")
+	if v == "" || len([]rune(v)) > MaxLabelLength {
+		return "", false
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return v, true
+}
+
 type Message struct {
 	ID                string   `json:"id"`
 	AccountID         string   `json:"-"`
@@ -179,15 +200,18 @@ type Message struct {
 	// one-time approval token) that is queued in an inbox but is not mailbox
 	// content. It is hidden from every read surface so the token it carries is
 	// only ever seen by the nominated approver.
-	Internal       bool       `json:"-"`
-	ReceivedAt     *time.Time `json:"received_at,omitempty"`
-	SentAt         *time.Time `json:"sent_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	Read           bool       `json:"read"`
-	Archived       bool       `json:"archived"`
-	HasAttachments bool       `json:"has_attachments"`
-	SizeBytes      int64      `json:"size_bytes"`
-	RawPath        string     `json:"-"`
+	Internal   bool       `json:"-"`
+	ReceivedAt *time.Time `json:"received_at,omitempty"`
+	SentAt     *time.Time `json:"sent_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	Read       bool       `json:"read"`
+	Archived   bool       `json:"archived"`
+	// Labels are free-text tags on the message. There is no account catalogue;
+	// matching ignores case (COLLATE NOCASE) and surrounding whitespace.
+	Labels         []string `json:"labels,omitempty"`
+	HasAttachments bool     `json:"has_attachments"`
+	SizeBytes      int64    `json:"size_bytes"`
+	RawPath        string   `json:"-"`
 	// Outbox state. Status is one of "pending", "sent" or "failed".
 	Status    string `json:"status,omitempty"`
 	Attempts  int    `json:"attempts,omitempty"`
@@ -289,6 +313,9 @@ const (
 	EventDraftSendFailed           = "draft.send_failed"
 	EventDraftApprovalExpired      = "draft.approval_expired"
 )
+
+// Durable message event types.
+const EventMessageLabelsChanged = "message.labels_changed"
 
 type Draft struct {
 	ID               string   `json:"id"`

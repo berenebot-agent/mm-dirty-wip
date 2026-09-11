@@ -24,7 +24,7 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -36,9 +36,9 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
 		"- `POST /v1/inboxes` (Admin) — create an inbox\n\n" +
 		"## Messages\n" +
-		"- `GET /v1/messages?inbox={id}&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages\n" +
+		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages\n" +
 		"- `GET /v1/messages/{id}` — message detail\n" +
-		"- `PATCH /v1/messages/{id}` — set `read`/`archived`\n" +
+		"- `PATCH /v1/messages/{id}` — set `read`/`archived`/`labels`\n" +
 		"- `DELETE /v1/messages/{id}` (Assistant/Owner)\n" +
 		"- `GET /v1/messages/{id}/attachments` — attachment metadata\n" +
 		"- `GET /v1/attachments/{id}` — download attachment bytes\n\n" +
@@ -46,7 +46,12 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/threads?inbox={id}`\n" +
 		"- `GET /v1/threads/{id}` and `GET /v1/threads/{id}/messages`\n\n" +
 		"## Search\n" +
-		"- `GET /v1/search?q=...&inbox={id}&from=...&to=...&has_attachment=true` — FTS5 search\n\n" +
+		"- `GET /v1/search?q=...&inbox={id}&label=...&from=...&to=...&has_attachment=true` — FTS5 search\n\n" +
+		"## Labels\n" +
+		"- Free-text tags shared across the account; a message may have many. Matching ignores case and surrounding whitespace.\n" +
+		"- `GET /v1/labels` — distinct labels currently in use\n" +
+		"- `PATCH /v1/messages/{id}` with `{\"labels\":[\"Invoices\",\"Unpaid\"]}` — replace the label set (`[]` clears; omit the field to leave it unchanged)\n" +
+		"- `GET /v1/messages?label=Invoices&label=Unpaid` — messages carrying all listed labels\n\n" +
 		"## Events (realtime)\n" +
 		"- `GET /v1/events?after=evt_...` — incremental history\n" +
 		"- `GET /v1/events/wait?after=evt_...&timeout=60` — long poll\n" +
@@ -114,14 +119,14 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"get":  map[string]any{"summary": "List identities (openagent.email compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create an identity (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
-			"/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages with filters (inbox, thread, from, to, unread, has_attachment, before)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/messages/wait": map[string]any{
 				"get":  map[string]any{"summary": "Long-poll for a new message", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Long-poll for a new message (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/messages/{id}": map[string]any{
 				"get":    map[string]any{"summary": "Get a message", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update read/archived state", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update read/archived/labels state", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete a message (Assistant/Owner)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/messages/{id}/seen":        map[string]any{"post": map[string]any{"summary": "Mark a message seen (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
@@ -132,6 +137,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			"/v1/threads/{id}":              map[string]any{"get": map[string]any{"summary": "Get a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/threads/{id}/messages":     map[string]any{"get": map[string]any{"summary": "List messages in a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/search":                    map[string]any{"get": map[string]any{"summary": "Search messages (FTS5)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/labels":                    map[string]any{"get": map[string]any{"summary": "List distinct labels in use", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events":                    map[string]any{"get": map[string]any{"summary": "Incremental event history", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/wait":               map[string]any{"get": map[string]any{"summary": "Long-poll for events", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/stream":             map[string]any{"get": map[string]any{"summary": "SSE event stream", "security": []map[string]any{{"bearerAuth": []string{}}}}},
@@ -449,7 +455,7 @@ func firstString(v []string) string {
 
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Limit: intParam(r, "limit", 100)}
+	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Labels: r.URL.Query()["label"], Limit: intParam(r, "limit", 100)}
 	compatAddress := strings.TrimSpace(r.URL.Query().Get("address"))
 	if compatAddress != "" {
 		b, err := inboxByAddress(r.Context(), s.Service.Store, p, compatAddress)
@@ -495,15 +501,34 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, m)
 	case http.MethodPatch:
-		var in struct{ Read, Archived *bool }
+		var in struct {
+			Read     *bool
+			Archived *bool
+			Labels   *[]string
+		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read, in.Archived); err != nil {
+		if in.Read != nil || in.Archived != nil {
+			if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read, in.Archived); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.Labels != nil {
+			ev, err := s.Service.Store.ReplaceMessageLabels(r.Context(), p, id, *in.Labels)
+			if err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+			s.Service.Hub.Publish(ev)
+		}
+		m, err := s.Service.Store.GetMessage(r.Context(), p, id)
+		if err != nil {
 			mapStoreError(w, err)
 			return
 		}
-		m, _ := s.Service.Store.GetMessage(r.Context(), p, id)
 		writeJSON(w, 200, m)
 	case http.MethodDelete:
 		path, _, ev, err := s.Service.Store.DeleteMessage(r.Context(), p, id)
@@ -609,6 +634,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		From:          r.URL.Query().Get("from"),
 		To:            r.URL.Query().Get("to"),
 		Before:        r.URL.Query().Get("before"),
+		Labels:        r.URL.Query()["label"],
 		HasAttachment: boolQuery(r, "has_attachment"),
 		Limit:         intParam(r, "limit", 100),
 	})
@@ -617,6 +643,15 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, items)
+}
+
+func (s *Server) apiLabels(w http.ResponseWriter, r *http.Request) {
+	labels, err := s.Service.Store.ListLabels(r.Context(), principal(r))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, labels)
 }
 
 type stringList []string
