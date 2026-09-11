@@ -679,3 +679,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_internal ON messages(inbox_id, internal)
 // one-time token) is never stored or shown.
 const migration019 = `ALTER TABLE inbound_control_messages ADD COLUMN subject TEXT NOT NULL DEFAULT '';
 `
+
+// migration020 adds free-text message labels ("tags"). There is no label
+// catalogue: a label exists only while at least one message carries it, so
+// there is no definition lifecycle, namespace or orphan state to manage.
+// label is COLLATE NOCASE so "Invoice" and "invoice" are one tag; Go
+// normalizes whitespace before insert. Rows cascade with their message.
+const migration020 = `CREATE TABLE IF NOT EXISTS message_labels (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  label TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(message_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label, message_id);
+`

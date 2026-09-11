@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -200,11 +201,11 @@ func stripHTMLText(v string) string {
 
 func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var m model.Message
-	var refs, to, cc, bcc, env, created string
+	var refs, to, cc, bcc, env, labels, created string
 	var received, sent sql.NullString
 	var read, arch int
 	var has, internal int
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal)
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels)
 	if err != nil {
 		return m, err
 	}
@@ -220,10 +221,14 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	m.SentAt = nullableTime(sent)
 	m.CreatedAt = parseTime(created)
 	m.HasAttachments = has != 0
+	m.Labels = decodeStrings(labels)
+	sort.Slice(m.Labels, func(i, j int) bool {
+		return strings.ToLower(m.Labels[i]) < strings.ToLower(m.Labels[j])
+	})
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]')`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -267,8 +272,11 @@ func (s *Store) GetMessage(ctx context.Context, p model.Principal, id string) (m
 type MessageFilter struct {
 	InboxID, ThreadID, From, To, Direction string
 	Unread, HasAttachment                  *bool
-	Before                                 string
-	Limit                                  int
+	// Labels, when non-empty, restricts results to messages carrying every
+	// listed label (AND). Matching is case-insensitive.
+	Labels []string
+	Before string
+	Limit  int
 }
 
 func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
@@ -317,6 +325,13 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 		} else {
 			q += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
 		}
+	}
+	for _, label := range f.Labels {
+		if label = strings.TrimSpace(label); label == "" {
+			continue
+		}
+		q += ` AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id=m.id AND ml.label=?)`
+		args = append(args, label)
 	}
 	if f.Before != "" {
 		var beforeCreated string
@@ -432,6 +447,90 @@ func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id st
 	}
 	return err
 }
+
+// ReplaceMessageLabels sets the exact label set on a message. It requires
+// Assistant or Owner on the message's inbox. Unknown labels are created
+// implicitly (there is no catalogue); an empty slice clears all labels. It
+// returns the durable message.labels_changed event.
+func (s *Store) ReplaceMessageLabels(ctx context.Context, p model.Principal, id string, labels []string) (model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Event{}, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Event{}, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Event{}, ErrForbidden
+	}
+	seen := map[string]bool{}
+	cleaned := make([]string, 0, len(labels))
+	for _, raw := range labels {
+		v, ok := model.NormalizeLabel(raw)
+		if !ok {
+			return model.Event{}, fmt.Errorf("invalid label: %q", raw)
+		}
+		key := strings.ToLower(v)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		cleaned = append(cleaned, v)
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM message_labels WHERE message_id=?`, id); err != nil {
+		return model.Event{}, err
+	}
+	now := nowText()
+	for _, v := range cleaned {
+		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO message_labels(message_id,label,created_at) VALUES(?,?,?)`, id, v, now); err != nil {
+			return model.Event{}, err
+		}
+	}
+	sort.Strings(cleaned)
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageLabelsChanged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "labels": cleaned})
+	if err != nil {
+		return model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.Event{}, err
+	}
+	return ev, nil
+}
+
+// ListLabels returns the distinct labels visible to the principal, ordered
+// case-insensitively. There is no catalogue; the set is derived from usage.
+func (s *Store) ListLabels(ctx context.Context, p model.Principal) ([]string, error) {
+	q := `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.internal=0`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return []string{}, nil
+		}
+		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` ORDER BY ml.label COLLATE NOCASE`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err = rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -720,6 +819,13 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		} else {
 			sqlq += ` AND NOT EXISTS(SELECT 1 FROM attachments aa WHERE aa.message_id=m.id)`
 		}
+	}
+	for _, label := range f.Labels {
+		if label = strings.TrimSpace(label); label == "" {
+			continue
+		}
+		sqlq += ` AND EXISTS(SELECT 1 FROM message_labels ml WHERE ml.message_id=m.id AND ml.label=?)`
+		args = append(args, label)
 	}
 	if f.Before != "" {
 		var beforeCreated string

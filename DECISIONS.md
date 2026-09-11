@@ -2,6 +2,37 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Free-text message labels (migration 020)
+
+Migration 020 adds `message_labels(message_id, label, created_at)`, a many-to-many
+tag on messages, plus an index on `(label, message_id)`.
+
+- There is deliberately **no label catalogue**. A label exists only while at
+  least one message carries it, so there is no definition lifecycle, namespace,
+  ownership, slug or orphan state to manage. "Creating" a label is just
+  assigning it; "deleting" every occurrence makes it disappear.
+- `label` is `TEXT COLLATE NOCASE` and Go (`model.NormalizeLabel`) trims and
+  collapses whitespace first, so `Invoices`, `invoices` and `" Invoices "` are
+  the same tag. Display casing is the first-assigned form. NOCASE folds ASCII
+  only, which is acceptable for typical tags.
+- Assignment is a replace-set: `PATCH /v1/messages/{id}` with
+  `{"labels":[...]}` sets the exact set, `[]` clears, omission leaves it
+  unchanged. It requires Assistant or Owner on the message's inbox, matching
+  `UpdateMessageState`. Reads require no label-specific role.
+- `GET /v1/messages?label=a&label=b` and the same on `/v1/search` combine labels
+  with AND (every listed label must be present). Labels are not indexed in
+  `message_fts`; the filter is a join, so it composes with full-text search.
+- `GET /v1/labels` derives the distinct in-use labels from `message_labels`,
+  scoped to the caller's authorized inboxes.
+- A label change emits one durable `message.labels_changed` event carrying the
+  resulting set, written in the same transaction as the rows.
+- Account-wide rename and delete are deferred: with no catalogue they are bulk
+  operations rather than object lifecycle, and no V1 requirement needs them yet.
+  Labels carry no color in V1.
+- The assistant UI renders chips on message rows (as `<span>`, not a nested
+  anchor inside the clickable row) and on the message detail, filters the
+  mailbox with `?label=`, and offers message-level and bulk add/remove.
+
 ## Control-message log label (migration 019)
 
 Migration 019 adds `inbound_control_messages.subject`, the reviewed draft's

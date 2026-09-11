@@ -51,7 +51,7 @@ Returns a compact discovery document:
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
   "bootstrap": "/v1/bootstrap",
-  "capabilities": ["inboxes","messages","threads","search","attachments","events","drafts","draft-approval","outbox","send","hermes-relay"]
+  "capabilities": ["inboxes","messages","threads","search","labels","attachments","events","drafts","draft-approval","outbox","send","hermes-relay"]
 }
 ```
 
@@ -97,6 +97,7 @@ Filters may include:
 ```text
 inbox
 thread
+label
 from
 to
 after
@@ -122,7 +123,8 @@ Normalized message:
   "text": "Hi...",
   "has_attachments": true,
   "read": false,
-  "archived": false
+  "archived": false,
+  "labels": ["Invoices", "Unpaid"]
 }
 ```
 
@@ -130,6 +132,40 @@ Outbound messages additionally carry `client`: the name of the API key or
 Hermes credential that sent the message (`UI` for a web-UI send, omitted when
 there is no credential, e.g. an email-approved send). Inbound mail has no
 `client`.
+
+### Labels
+
+Labels are free-text tags on a message. There is no label catalogue: a label
+exists only while at least one message carries it. Labels are shared across the
+account and a message may have many. Matching ignores case and surrounding
+whitespace; the displayed casing is the one first assigned.
+
+```http
+GET /v1/labels
+```
+
+Returns the distinct labels currently in use, scoped to the key's authorized
+inboxes.
+
+Set a message's labels with `PATCH /v1/messages/{id}`:
+
+```json
+{"labels": ["Invoices", "Unpaid"]}
+```
+
+`labels` replaces the whole set; an empty array clears it and omitting the field
+leaves it unchanged. Unknown labels are created implicitly. Requires Assistant
+or Owner on the message's inbox. Label changes emit a durable
+`message.labels_changed` event.
+
+Filter by label with `label` on `/v1/messages` and `/v1/search`:
+
+```text
+GET /v1/messages?inbox={id}&label=Invoices&label=Unpaid
+```
+
+Repeated `label` parameters are combined with AND (a message must carry every
+listed label).
 
 ## 5. Threads
 
@@ -151,6 +187,7 @@ Optional filters:
 
 ```text
 inbox
+label
 from
 to
 after
