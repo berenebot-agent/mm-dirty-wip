@@ -39,8 +39,10 @@ Migration 019 adds `inbound_control_messages.subject`, the reviewed draft's
 subject snapshotted when an approval control message is consumed.
 
 - The dashboard Recent messages list and the per-domain activity log label such
-  rows `Approval: <draft subject>` (bare `Approval` when the request could not be
-  resolved), so an operator can tell which draft a decision was about.
+  rows `Approval: <draft subject>` for approved decisions and
+  `Rejected: <draft subject>` for rejected decisions (bare `Approval`/`Rejected`
+  when the request could not be resolved), so an operator can tell which draft a
+  decision was about and how it went.
 - The subject is snapshotted at decision time because an approved send deletes
   the draft in the same transaction; a later lookup would find nothing.
 - The raw inbound subject is never stored or shown, because it carries the
