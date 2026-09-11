@@ -72,6 +72,7 @@ func migrations(dataDir string) []migration {
 		)},
 		{version: "016", sql: migration016, detect: stateOf(columnAdded("inboxes", "sender_restricted"))},
 		{version: "017", sql: migration017, detect: stateOf(columnAdded("messages", "client_label"))},
+		{version: "018", sql: migration018, detect: stateOf(columnAdded("messages", "internal"))},
 	}
 }
 

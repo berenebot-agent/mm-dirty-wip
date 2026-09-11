@@ -82,7 +82,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	id := idgen.New("msg")
 	// The message is enqueued as pending; the worker marks it sent after the
 	// provider accepts it. sent_at is left NULL until delivery succeeds.
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,internal,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, boolInt(r.Internal), now)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
@@ -314,7 +314,7 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 // ListOutbox lists pending and failed outbound messages for an account,
 // optionally scoped to an inbox.
 func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Message, error) {
-	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.direction='outbound' AND m.status IN ('pending','failed')`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		if !p.CanRead(inboxID) {
@@ -356,7 +356,7 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 // CountOutbox returns the number of pending or failed outbound messages for
 // an inbox (or across all accessible inboxes when inboxID is empty).
 func (s *Store) CountOutbox(ctx context.Context, p model.Principal, inboxID string) (int, error) {
-	q := `SELECT count(*) FROM messages m WHERE m.account_id=? AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	q := `SELECT count(*) FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.direction='outbound' AND m.status IN ('pending','failed')`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		if !p.CanRead(inboxID) {

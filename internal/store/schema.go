@@ -100,12 +100,20 @@ CREATE TABLE IF NOT EXISTS messages (
   is_archived INTEGER NOT NULL DEFAULT 0,
   received_at TEXT,
   sent_at TEXT,
+  -- internal marks workflow mail (e.g. an approval-request email carrying a
+  -- one-time token) that is queued in an inbox but must never be exposed
+  -- through the mailbox read surface.
+  internal INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   UNIQUE(provider, provider_delivery_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_inbox_created ON messages(inbox_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON messages(thread_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_messages_rfc_thread ON messages(account_id, inbox_id, rfc_message_id);
+-- internal marks workflow mail hidden from the mailbox read surface; the read
+-- paths filter on it, so give that filter an index on fresh databases too (the
+-- migration adds it for existing ones).
+CREATE INDEX IF NOT EXISTS idx_messages_internal ON messages(inbox_id, internal);
 
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
@@ -652,4 +660,14 @@ UPDATE inboxes SET sender_restricted=1 WHERE allowed_senders_json IS NOT NULL AN
 // empty default.
 const migration017 = `ALTER TABLE messages ADD COLUMN client_label TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN client_id TEXT NOT NULL DEFAULT '';
+`
+
+// migration018 marks internal workflow mail (currently the draft approval-request
+// email that carries a one-time approval token) so it is never exposed through
+// the mailbox read surface. Approval mail is addressed to the external approver
+// but is queued in the requesting inbox, so without this flag any principal that
+// can read the inbox -- including the assistant that requested the send -- could
+// read the plaintext token and approve its own request.
+const migration018 = `ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_messages_internal ON messages(inbox_id, internal);
 `
