@@ -53,17 +53,27 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	}
 	// Inbox detail shows the send-request section with a quick Send action.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID)
-	body := rr.Body.String()
+	body = rr.Body.String()
 	if rr.Code != 200 || !strings.Contains(body, "Draft send requests") || !strings.Contains(body, "Awaiting approval") {
 		t.Fatalf("inbox send requests %d %s", rr.Code, body)
 	}
 	if !strings.Contains(body, "/drafts/"+draft.ID+"/approve") {
 		t.Fatalf("inbox missing quick approve action")
 	}
+	// Send-request row uses inbox-like columns: To, subject + body start,
+	// request date and size.
+	for _, want := range []string{"friend@example.net", "Proposal", "body", ">Size</span>", ">To</span>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("send-request row missing %q", want)
+		}
+	}
 	// Drafts list flags it pending.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts")
 	if !strings.Contains(rr.Body.String(), "Pending") {
 		t.Fatalf("drafts list missing pending badge")
+	}
+	if strings.Contains(rr.Body.String(), "Request send") {
+		t.Fatalf("drafts list should not offer request-send to the UI user")
 	}
 	// Review page shows the exact draft and decision actions.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts/"+draft.ID+"/edit")
