@@ -96,8 +96,12 @@ func stripTags(s string) string {
 // successful decision publishes the normal draft event.
 func (s *Service) handleControlMessage(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed) error {
 	dir, ok := parseControlSubject(parsed.Subject)
+	// subject is the reviewed draft subject, filled in once the request (and
+	// therefore the draft) is resolved. It is snapshotted because an approved
+	// send deletes the draft before the record is written.
+	subject := ""
 	record := func(requestID, action, outcome, reason string) {
-		_, _ = s.Store.RecordControlMessage(ctx, storeControlRecord(msg, inbox, parsed, requestID, action, outcome, reason))
+		_, _ = s.Store.RecordControlMessage(ctx, storeControlRecord(msg, inbox, parsed, requestID, action, outcome, reason, subject))
 	}
 	if !ok {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_invalid", "malformed approval control subject")
@@ -114,6 +118,9 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_unknown", "no live request for approval token")
 		record("", action, "invalid", "unknown or already decided token")
 		return transport.ErrInboundIgnored
+	}
+	if d, derr := s.Store.GetDraftInternal(ctx, inbox.AccountID, r.DraftID); derr == nil {
+		subject = d.Subject
 	}
 	if !strings.EqualFold(strings.TrimSpace(r.ApproverEmail), strings.TrimSpace(parsed.From.Address)) {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval sender does not match nominated approver")
@@ -144,7 +151,7 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	return transport.ErrInboundIgnored
 }
 
-func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, requestID, action, outcome, reason string) store.ControlMessageRecord {
+func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, requestID, action, outcome, reason, subject string) store.ControlMessageRecord {
 	return store.ControlMessageRecord{
 		AccountID:          inbox.AccountID,
 		InboxID:            inbox.ID,
@@ -157,5 +164,6 @@ func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed 
 		Action:             action,
 		Outcome:            outcome,
 		Reason:             reason,
+		Subject:            subject,
 	}
 }

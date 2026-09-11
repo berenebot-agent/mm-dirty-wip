@@ -151,10 +151,6 @@ func mergeBlockedMessages(msgs []model.Message, blocked []model.BlockedMessage, 
 // message, so the row has no detail view and is read-only, like blocked mail.
 func mergeControlMessages(msgs []model.Message, controls []store.ControlMessage, limit int) []model.Message {
 	for _, c := range controls {
-		status := c.Outcome
-		if status == "" {
-			status = "consumed"
-		}
 		var to []string
 		if c.EnvelopeRecipient != "" {
 			to = []string{c.EnvelopeRecipient}
@@ -166,7 +162,7 @@ func mergeControlMessages(msgs []model.Message, controls []store.ControlMessage,
 			Direction:  "inbound",
 			From:       model.Address{Name: c.FromName, Address: c.FromAddress},
 			To:         to,
-			Subject:    "Approval: " + status,
+			Subject:    store.ApprovalSubjectLabel(c.Subject),
 			Client:     "Control",
 			ReceivedAt: &created,
 			CreatedAt:  created,

@@ -316,7 +316,9 @@ configured approver is always an accepted sender (shown as a locked,
 non-removable entry in the allowed-senders UI).
 Consumed control mail is never stored as a message, FTS-indexed, relayed or
 marked unread; it is recorded in `inbound_control_messages` for the per-domain
-activity log and webhook dedup. A decision is valid only when the token is live
+activity log and webhook dedup, labelled `Approval: <draft subject>` (the raw
+inbound subject, which carries the token, is never stored or shown). A decision
+is valid only when the token is live
 (not expired/decided), the request is pending, the RFC From equals the stored
 approver, and the frozen content fingerprint still matches. A valid approve
 claims the request and enqueues the frozen draft through the shared outbound

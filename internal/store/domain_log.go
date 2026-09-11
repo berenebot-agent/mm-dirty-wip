@@ -175,7 +175,7 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 // appendDomainControl adds consumed approval control messages for the domain's
 // inboxes, so an operator can see that a decision email was consumed.
 func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.created_at
+	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.subject,c.created_at
 		FROM inbound_control_messages c JOIN inboxes i ON i.id=c.inbox_id AND i.account_id=c.account_id
 		WHERE c.account_id=? AND i.domain_id=?`
 	args := []any{accountID, domainID}
@@ -192,13 +192,13 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 	defer rows.Close()
 	for rows.Next() {
 		var e DomainLogEntry
-		var created, outcome string
-		if err := rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &e.RequestID, &e.Action, &outcome, &e.Reason, &created); err != nil {
+		var created, outcome, subject string
+		if err := rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &e.RequestID, &e.Action, &outcome, &e.Reason, &subject, &created); err != nil {
 			return nil, err
 		}
 		e.Kind = "approval"
 		e.Status = outcome
-		e.Subject = e.Action
+		e.Subject = ApprovalSubjectLabel(subject)
 		e.Client = "Control"
 		e.At = parseTime(created)
 		out = append(out, e)
