@@ -693,3 +693,26 @@ const migration020 = `CREATE TABLE IF NOT EXISTS message_labels (
 );
 CREATE INDEX IF NOT EXISTS idx_message_labels_label ON message_labels(label, message_id);
 `
+
+// migration021 adds inbox aliases: alternate inbound addresses that deliver to
+// an existing inbox instead of a separate mailbox. An alias is an
+// address-to-inbox mapping, not a mailbox: it owns no messages, storage or
+// settings. domain_id is the alias's own domain and inbox_id is the delivery
+// target, which may live on a different domain in the same account (an
+// account-internal routing construct). account_id is denormalized for scoped
+// listing. UNIQUE(domain_id, local_part) keeps one address from resolving twice;
+// collisions with a real inbox local_part are enforced in Go because SQLite
+// cannot express a cross-table uniqueness constraint. Rows cascade with the
+// inbox, so deleting a mailbox removes its aliases.
+const migration021 = `CREATE TABLE IF NOT EXISTS inbox_aliases (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  local_part TEXT NOT NULL COLLATE NOCASE,
+  created_at TEXT NOT NULL,
+  UNIQUE(domain_id, local_part)
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_aliases_inbox ON inbox_aliases(inbox_id);
+CREATE INDEX IF NOT EXISTS idx_inbox_aliases_account ON inbox_aliases(account_id);
+`

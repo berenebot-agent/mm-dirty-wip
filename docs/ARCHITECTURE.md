@@ -129,7 +129,7 @@ authenticate provider (before MIME is parsed; Cloudflare before MIME is read)
        ↓
 stream raw MIME to controlled temporary path (bounded)
        ↓
-validate the resolved inbox against the authenticated account/domain
+validate the resolved inbox against the authenticated account (and domain, except on an alias route)
        ↓
 parse required metadata
        ↓
@@ -168,6 +168,13 @@ delivery id is the Resend `email_id`, and event types other than
 
 Thread lookup is always scoped to the same `account_id` and `inbox_id`. Standard `Message-ID`, `In-Reply-To`, and `References` headers select the thread only inside that boundary.
 
+An inbox may carry aliases: alternate `local@domain` addresses that resolve to
+it. Resolution precedence is exact inbox, then an alias on the recipient's
+domain, then the domain catch-all. An alias may live on any domain the account
+owns, so it may deliver across domains within the account; the binding check is
+account-scoped on the alias route and account-plus-domain-scoped otherwise.
+Aliases are inbound only; a reply still sends from the inbox's primary address.
+
 Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 
 ## 5. Persistence
@@ -188,7 +195,7 @@ users
 sessions
 domains
 inboxes
-aliases
+inbox_aliases
 messages
 message_recipients
 threads

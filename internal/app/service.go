@@ -121,17 +121,20 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 // transactionally, then publishes the realtime event. A future SMTP ingress can
 // call the same core with its own authorization context.
 func (s *Service) ingestStaged(ctx context.Context, provider string, msg transport.InboundMessage, binding transport.InboundBinding) (model.Message, bool, error) {
-	inbox, _, err := s.Store.ResolveRecipient(ctx, msg.Recipient)
+	inbox, route, err := s.Store.ResolveRecipient(ctx, msg.Recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			s.auditUnrouted(provider, msg.Recipient)
 		}
 		return model.Message{}, false, err
 	}
-	// The inbox must belong to the exact account/domain that was authenticated.
-	// This also covers catch-all routing, where the inbox address differs from
-	// the original recipient but the domain is the same.
-	if inbox.AccountID != binding.AccountID || inbox.DomainID != binding.DomainID {
+	// The resolved inbox must belong to the account that was authenticated.
+	// Exact and catch-all matches must also stay on the authenticated domain;
+	// only an explicit alias may route across domains within the same account.
+	if inbox.AccountID != binding.AccountID {
+		return model.Message{}, false, transport.ErrInboundUnauthorized
+	}
+	if route != store.RouteAlias && inbox.DomainID != binding.DomainID {
 		return model.Message{}, false, transport.ErrInboundUnauthorized
 	}
 	parsed, err := mailparse.ParseFile(msg.RawPath)

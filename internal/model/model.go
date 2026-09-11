@@ -49,8 +49,13 @@ type Inbox struct {
 	// ApproverEmail optionally nominates a person who may authorize draft
 	// sends by email. When set, the approver address is always accepted as an
 	// inbound sender for this inbox regardless of AllowedSenders.
-	ApproverEmail string    `json:"approver_email,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	ApproverEmail string `json:"approver_email,omitempty"`
+	// Aliases are alternate inbound addresses (full addresses, possibly on a
+	// different domain of the same account) that deliver to this inbox. They
+	// are address-to-inbox mappings, not mailboxes: replies still send from
+	// Address.
+	Aliases   []string  `json:"aliases,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // HasApprover reports whether the inbox has a configured external approver.

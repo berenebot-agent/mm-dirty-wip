@@ -103,6 +103,11 @@ Create, disable, rename, and manage inbox identities quickly.
 
 Support optional catch-all routing while preserving the original envelope recipient.
 
+Give an inbox aliases: alternate addresses that deliver to it. An alias may be
+on any domain the account owns, so an inbox can receive mail at several
+addresses across domains. Aliases are inbound only; replies send from the
+inbox's primary address.
+
 ### Messages and raw MIME
 
 Persist the original MIME message plus normalized metadata.

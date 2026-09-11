@@ -112,7 +112,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			},
 			"/v1/inboxes/{id}": map[string]any{
 				"get":    map[string]any{"summary": "Get an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases)", "description": "aliases replaces the inbox's inbound alias set; each entry is a full local@domain address on any domain the account owns. Aliases route inbound mail to this inbox; replies still send from the inbox's primary address.", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/identities": map[string]any{
@@ -263,6 +263,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			AllowedSenders   *[]string `json:"allowed_senders"`
 			SenderRestricted *bool     `json:"sender_restricted"`
 			ApproverEmail    *string   `json:"approver_email"`
+			Aliases          *[]string `json:"aliases"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -306,6 +307,17 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if restricted != nil {
 			if err := s.Service.Store.SetInboxSenderRestricted(r.Context(), p.AccountID, id, *restricted); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.Aliases != nil {
+			forms, err := normalizeAliasForms(*in.Aliases)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			if err := s.applyInboxAliases(r.Context(), p.AccountID, id, forms); err != nil {
 				mapStoreError(w, err)
 				return
 			}
