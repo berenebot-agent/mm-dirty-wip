@@ -25,7 +25,7 @@ import (
 
 const approverAddress = "ben@approver.test"
 
-var approveTokenRe = regexp.MustCompile(`\[GH-APPROVE:([A-Za-z0-9_-]{20,})\]`)
+var approveTokenRe = regexp.MustCompile(`\[GH-APPROVE:([A-Za-z0-9_-]{16,})\]`)
 
 // mgControlRequest builds a Mailgun multipart webhook with a chosen sender,
 // subject and body so the approval control path can be exercised end to end.
@@ -130,9 +130,17 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	if token == "" {
 		t.Fatal("no approval token in queued email")
 	}
+	if len(token) != 16 {
+		t.Fatalf("token length = %d, want 16", len(token))
+	}
+	text := approvalEmailText(t, svc, u.AccountID, box.ID)
 	// It must tell the approver that feedback does not alter the draft.
-	if text := approvalEmailText(t, svc, u.AccountID, box.ID); !strings.Contains(text, "does not change the email being sent") {
+	if !strings.Contains(text, "does not change the email being sent") {
 		t.Fatalf("approval email missing feedback clarification:\n%s", text)
+	}
+	// The reply subject includes the token and the draft subject.
+	if want := "[GH-APPROVE:" + token + "] auto"; !strings.Contains(text, want) {
+		t.Fatalf("approval email missing reply subject %q:\n%s", want, text)
 	}
 }
 

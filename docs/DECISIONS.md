@@ -305,6 +305,9 @@ approve or reject in the UI).
 
 An inbound message whose decoded subject contains exactly one strict
 `[GH-APPROVE:<token>]` or `[GH-REJECT:<token>]` is consumed as workflow input.
+The token is 96-bit (12 random bytes, 16 base64url characters), stored only as a
+SHA-256 hash, and the reply subject appends the draft subject so the reply links
+back to the draft; the parser tolerates surrounding text.
 Control-format mail is handed to the control handler regardless of the sender
 allow-list, because the handler validates the live token and the exact stored
 approver and because the inbox's approver setting may have changed after the

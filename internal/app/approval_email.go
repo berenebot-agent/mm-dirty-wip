@@ -39,11 +39,23 @@ func controlBody() string {
 	return feedbackBegin + "\r\n\r\n\r\n" + feedbackEnd + "\r\n"
 }
 
+// controlReplySubject is the subject an approver's reply must carry: the strict
+// control token followed by the draft subject, so the reply is easy to link
+// back to the draft. The inbound parser tolerates surrounding text as long as
+// exactly one token is present.
+func controlReplySubject(action, token, draftSubject string) string {
+	subject := fmt.Sprintf("[GH-%s:%s]", action, token)
+	if draftSubject = strings.TrimSpace(draftSubject); draftSubject != "" {
+		subject += " " + draftSubject
+	}
+	return subject
+}
+
 // mailtoControl builds a mailto: URL that opens a new mail to the inbox with
 // the control subject/body pre-filled. Nothing happens until the user sends it.
-func mailtoControl(inboxAddress, action, token string) string {
+func mailtoControl(inboxAddress, action, token, draftSubject string) string {
 	q := url.Values{}
-	q.Set("subject", fmt.Sprintf("[GH-%s:%s]", action, token))
+	q.Set("subject", controlReplySubject(action, token, draftSubject))
 	q.Set("body", controlBody())
 	enc := strings.ReplaceAll(q.Encode(), "+", "%20")
 	return "mailto:" + inboxAddress + "?" + enc
@@ -70,8 +82,8 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	text.WriteString("To approve or reject it, use the buttons in this email (or compose a new email)")
 	text.WriteString(" addressed to " + inbox.Address + " with the exact subject shown, then send it.")
 	text.WriteString(" Nothing changes until you send that email.\r\n\r\n")
-	text.WriteString("Approve - subject line:\r\n" + fmt.Sprintf("[GH-%s:%s]\r\n", controlApprove, token) + "\r\n")
-	text.WriteString("Reject - subject line:\r\n" + fmt.Sprintf("[GH-%s:%s]\r\n", controlReject, token) + "\r\n")
+	text.WriteString("Approve - subject line:\r\n" + controlReplySubject(controlApprove, token, d.Subject) + "\r\n\r\n")
+	text.WriteString("Reject - subject line:\r\n" + controlReplySubject(controlReject, token, d.Subject) + "\r\n")
 	text.WriteString("You may add feedback between the markers below, keeping the markers intact. If you are approving, your feedback is recorded for the agent but does not change the email being sent:\r\n\r\n")
 	text.WriteString(controlBody() + "\r\n")
 	text.WriteString("--- Draft to send ---\r\n")
@@ -85,8 +97,8 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 		text.WriteString("\r\nAttachments:\r\n" + attLines.String())
 	}
 
-	approveURL := mailtoControl(inbox.Address, controlApprove, token)
-	rejectURL := mailtoControl(inbox.Address, controlReject, token)
+	approveURL := mailtoControl(inbox.Address, controlApprove, token, d.Subject)
+	rejectURL := mailtoControl(inbox.Address, controlReject, token, d.Subject)
 	var h strings.Builder
 	h.WriteString("<p>An email draft needs your approval before it is sent.</p>")
 	h.WriteString("<p><strong>" + html.EscapeString(inbox.Address) + "</strong> has asked you to approve the draft below. ")
