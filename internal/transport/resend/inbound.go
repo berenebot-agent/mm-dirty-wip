@@ -36,9 +36,9 @@ func (Transport) Description() string { return "Resend" }
 func (Transport) IngestPath() string  { return "/internal/ingest/resend" }
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
-		{Name: "api_key", Label: "Resend API key (full access)", Type: "password", Required: true, Secret: true, Placeholder: "re_..."},
+		{Name: "api_key", Label: "Resend key (full access)", Type: "password", Required: true, Secret: true, Placeholder: "re_..."},
 		{Name: "webhook_secret", Label: "Webhook signing secret", Type: "password", Required: true, Secret: true, Placeholder: "whsec_..."},
-		{Name: "api_base", Label: "API base URL", Type: "text", Placeholder: "https://api.resend.com"},
+		{Name: "api_base", Label: "Base URL", Type: "text", Placeholder: "https://api.resend.com"},
 	}
 }
 
