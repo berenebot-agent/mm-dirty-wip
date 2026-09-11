@@ -209,6 +209,7 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	if err != nil {
 		return model.Draft{}, err
 	}
+	clientLabel, clientID := clientIdentity(p, actor)
 	body, html, err := s.buildApprovalEmail(d, atts, inbox, token)
 	if err != nil {
 		return model.Draft{}, err
@@ -253,6 +254,8 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 		RFCMessageID: msgID,
 		From:         model.Address{Name: inbox.DisplayName, Address: inbox.Address},
 		To:           []string{inbox.ApproverEmail},
+		ClientLabel:  clientLabel,
+		ClientID:     clientID,
 		Subject:      subject,
 		Text:         body,
 		HTML:         html,

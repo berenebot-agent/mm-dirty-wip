@@ -152,32 +152,37 @@ type Address struct {
 }
 
 type Message struct {
-	ID                string     `json:"id"`
-	AccountID         string     `json:"-"`
-	InboxID           string     `json:"inbox_id"`
-	ThreadID          string     `json:"thread_id"`
-	Direction         string     `json:"direction"`
-	From              Address    `json:"from"`
-	To                []string   `json:"to"`
-	CC                []string   `json:"cc"`
-	BCC               []string   `json:"bcc,omitempty"`
-	Subject           string     `json:"subject"`
-	Text              string     `json:"text"`
-	HTML              string     `json:"html,omitempty"`
-	RFCMessageID      string     `json:"message_id,omitempty"`
-	InReplyTo         string     `json:"in_reply_to,omitempty"`
-	References        []string   `json:"references,omitempty"`
-	Provider          string     `json:"provider,omitempty"`
-	ProviderMessageID string     `json:"provider_message_id,omitempty"`
-	EnvelopeTo        []string   `json:"envelope_to,omitempty"`
-	ReceivedAt        *time.Time `json:"received_at,omitempty"`
-	SentAt            *time.Time `json:"sent_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	Read              bool       `json:"read"`
-	Archived          bool       `json:"archived"`
-	HasAttachments    bool       `json:"has_attachments"`
-	SizeBytes         int64      `json:"size_bytes"`
-	RawPath           string     `json:"-"`
+	ID                string   `json:"id"`
+	AccountID         string   `json:"-"`
+	InboxID           string   `json:"inbox_id"`
+	ThreadID          string   `json:"thread_id"`
+	Direction         string   `json:"direction"`
+	From              Address  `json:"from"`
+	To                []string `json:"to"`
+	CC                []string `json:"cc"`
+	BCC               []string `json:"bcc,omitempty"`
+	Subject           string   `json:"subject"`
+	Text              string   `json:"text"`
+	HTML              string   `json:"html,omitempty"`
+	RFCMessageID      string   `json:"message_id,omitempty"`
+	InReplyTo         string   `json:"in_reply_to,omitempty"`
+	References        []string `json:"references,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	ProviderMessageID string   `json:"provider_message_id,omitempty"`
+	EnvelopeTo        []string `json:"envelope_to,omitempty"`
+	// Client is the denormalized snapshot of the API key / Hermes credential
+	// that sent an outbound message. It is empty for inbound mail and for sends
+	// with no credential (for example an email-approved send).
+	Client         string     `json:"client,omitempty"`
+	ClientID       string     `json:"-"`
+	ReceivedAt     *time.Time `json:"received_at,omitempty"`
+	SentAt         *time.Time `json:"sent_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	Read           bool       `json:"read"`
+	Archived       bool       `json:"archived"`
+	HasAttachments bool       `json:"has_attachments"`
+	SizeBytes      int64      `json:"size_bytes"`
+	RawPath        string     `json:"-"`
 	// Outbox state. Status is one of "pending", "sent" or "failed".
 	Status    string `json:"status,omitempty"`
 	Attempts  int    `json:"attempts,omitempty"`

@@ -644,3 +644,12 @@ CREATE INDEX IF NOT EXISTS idx_inbound_control_request ON inbound_control_messag
 const migration016 = `ALTER TABLE inboxes ADD COLUMN sender_restricted INTEGER NOT NULL DEFAULT 0;
 UPDATE inboxes SET sender_restricted=1 WHERE allowed_senders_json IS NOT NULL AND allowed_senders_json NOT IN ('','[]');
 `
+
+// migration017 records the client that sent an outbound message: the name of
+// the API key / Hermes credential (or the UI marker for a session send), stored
+// as a denormalized label so history survives a key rename or deletion, plus
+// the stable credential id. Inbound mail has no client. Existing rows keep the
+// empty default.
+const migration017 = `ALTER TABLE messages ADD COLUMN client_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN client_id TEXT NOT NULL DEFAULT '';
+`

@@ -2,6 +2,24 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Message client attribution (migration 017)
+
+Migration 017 adds `messages.client_label` and `messages.client_id` so the admin
+Recent messages list and the per-domain activity log can show which client sent
+an outbound message.
+
+- The columns are denormalized snapshots of the sending credential, resolved at
+  enqueue time from the request principal through the same `ActorIdentity`
+  helper the draft send-request flow already uses. A rename or deletion of the
+  key does not rewrite history.
+- A web-UI session send has no credential; it records the literal label `UI`. An
+  email-approved send has no client. Inbound, blocked and consumed control mail
+  have no client.
+- The dashboard renders approval-control rows with the literal label `Control`
+  (there is no sending credential to name), and empty client as `—`.
+- Existing outbound messages keep the empty default; the information simply did
+  not exist before this migration.
+
 ## Explicit sender restriction (migration 016)
 
 Migration 016 makes the inbox allow-list an explicit opt-in. Previously an

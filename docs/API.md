@@ -126,6 +126,11 @@ Normalized message:
 }
 ```
 
+Outbound messages additionally carry `client`: the name of the API key or
+Hermes credential that sent the message (`UI` for a web-UI send, omitted when
+there is no credential, e.g. an email-approved send). Inbound mail has no
+`client`.
+
 ## 5. Threads
 
 ```http
@@ -382,7 +387,8 @@ mail (`kind` `approval`), newest first (`limit`, default `100`, max `200`;
 kind, timestamp, inbox, provider, from/to, subject and size. Blocked rows add
 the reason; approval rows carry the `action` (`approve`/`reject`) as the subject
 and the `status` outcome (`approved`, `rejected`, `invalid` or `error`) plus the
-reason; delivered rows add the click-through `message_id`. The domain's UI log
+reason, and set `client` to `Control`; delivered rows add the click-through
+`message_id`. The domain's UI log
 merges this with the sending side into one two-way timeline. Both logs are
 scoped by domain rather than by the current provider config.
 
