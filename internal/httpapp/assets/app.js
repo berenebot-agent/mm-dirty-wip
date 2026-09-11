@@ -442,16 +442,231 @@
   });
 })();
 
+// initSenderEditor wires an allow-list editor shared by the add and edit
+// inbox dialogs: a list of allowed addresses, an approver address that is
+// always allowed, and a restrict toggle that reveals the list.
+var initSenderEditor = (function () {
+  return function (opts) {
+    var list = opts.list;
+    var input = opts.input;
+    var note = opts.note;
+    var approverEmail = opts.approverEmail;
+    var restrict = opts.restrict;
+    var section = opts.section;
+
+    function approverValue() {
+      return (approverEmail && approverEmail.value || '').trim().toLowerCase();
+    }
+
+    function isRestricted() {
+      return !!(restrict && restrict.checked);
+    }
+
+    function refreshRestrictVisibility() {
+      if (section) {
+        section.hidden = !isRestricted();
+      }
+    }
+
+    function refreshSenderNote() {
+      if (!note || !list) {
+        return;
+      }
+      var count = list.querySelectorAll('input[name=allowed]').length;
+      if (count === 0 && !approverValue()) {
+        note.textContent = 'This inbox currently blocks all senders.';
+      } else if (count === 0) {
+        note.textContent = 'Only the approver can email this inbox.';
+      } else {
+        note.textContent = 'Only these addresses can email this inbox.';
+      }
+    }
+
+    function refreshSenderEmpty() {
+      if (!list) {
+        return;
+      }
+      var empty = list.querySelector('.empty');
+      var hasSenders = list.querySelectorAll('input[name=allowed]').length > 0 || !!approverValue() || !!list.querySelector('.locked');
+      if (!hasSenders) {
+        if (!empty) {
+          var li = document.createElement('li');
+          li.className = 'empty';
+          li.textContent = 'Add an address below to allow it to email this inbox.';
+          list.appendChild(li);
+        }
+      } else if (empty) {
+        empty.remove();
+      }
+    }
+
+    function addLockedApprover(email) {
+      if (!list) {
+        return;
+      }
+      email = (email || '').trim().toLowerCase();
+      if (!email) {
+        return;
+      }
+      var li = document.createElement('li');
+      li.className = 'locked';
+      var label = document.createElement('span');
+      label.className = 'addr';
+      label.textContent = email + ' (approver)';
+      var locked = document.createElement('span');
+      locked.className = 'muted small';
+      locked.textContent = 'always allowed';
+      li.appendChild(label);
+      li.appendChild(locked);
+      list.appendChild(li);
+    }
+
+    function addSender(value) {
+      if (!list) {
+        return;
+      }
+      value = (value || '').trim().toLowerCase();
+      if (!value) {
+        return;
+      }
+      var li = document.createElement('li');
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'allowed';
+      hidden.value = value;
+      var label = document.createElement('span');
+      label.className = 'addr';
+      label.textContent = value;
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary icon-btn';
+      remove.title = 'Remove';
+      remove.setAttribute('aria-label', 'Remove');
+      remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+      remove.addEventListener('click', function () {
+        li.remove();
+        refreshSenderNote();
+        refreshSenderEmpty();
+      });
+      li.appendChild(hidden);
+      li.appendChild(label);
+      li.appendChild(remove);
+      list.appendChild(li);
+      refreshSenderNote();
+      refreshSenderEmpty();
+    }
+
+    function setSenders(raw, approver) {
+      if (!list) {
+        return;
+      }
+      list.innerHTML = '';
+      addLockedApprover(approver);
+      (raw || '').split(',').forEach(function (entry) {
+        if ((entry || '').trim().toLowerCase() === (approver || '').trim().toLowerCase()) {
+          return;
+        }
+        addSender(entry);
+      });
+      refreshSenderNote();
+      refreshSenderEmpty();
+    }
+
+    function setApprover(value) {
+      if (approverEmail) {
+        approverEmail.value = value || '';
+      }
+    }
+
+    function setRestricted(value) {
+      if (restrict) {
+        restrict.checked = !!value;
+      }
+      refreshRestrictVisibility();
+    }
+
+    function clearInput() {
+      if (input) {
+        input.value = '';
+      }
+    }
+
+    function approverEdited() {
+      var current = Array.prototype.map.call(list.querySelectorAll('input[name=allowed]'), function (i) {
+        return i.value;
+      }).join(',');
+      setSenders(current, approverValue());
+    }
+
+    function reset() {
+      if (list) {
+        list.innerHTML = '';
+      }
+      setApprover('');
+      clearInput();
+      setRestricted(false);
+      refreshSenderNote();
+      refreshSenderEmpty();
+    }
+
+    if (opts.addBtn && input) {
+      opts.addBtn.addEventListener('click', function () {
+        addSender(input.value);
+        input.value = '';
+        input.focus();
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addSender(input.value);
+          input.value = '';
+        }
+      });
+    }
+    if (restrict) {
+      restrict.addEventListener('change', refreshRestrictVisibility);
+    }
+    if (approverEmail) {
+      approverEmail.addEventListener('input', approverEdited);
+    }
+
+    reset();
+
+    return {
+      setSenders: setSenders,
+      setApprover: setApprover,
+      setRestricted: setRestricted,
+      clearInput: clearInput,
+      reset: reset
+    };
+  };
+})();
+
 (function () {
   var dlg = document.getElementById('inbox-dialog');
   if (!dlg) {
     return;
   }
   var form = dlg.querySelector('form');
+  var editor = initSenderEditor({
+    list: document.getElementById('inbox-add-sender-list'),
+    input: document.getElementById('inbox-add-sender-input'),
+    note: document.getElementById('inbox-add-sender-note'),
+    approverEmail: document.getElementById('inbox-add-approver-email'),
+    restrict: document.getElementById('inbox-add-sender-restricted'),
+    section: document.getElementById('inbox-add-sender-section'),
+    addBtn: document.getElementById('inbox-add-sender-add')
+  });
   var add = document.getElementById('add-inbox');
   if (add) {
     add.addEventListener('click', function () {
       form.reset();
+      editor.reset();
+      if (dlg._resetTabs) {
+        dlg._resetTabs();
+      }
       dlg.showModal();
     });
   }
@@ -535,118 +750,16 @@
   var deleteForm = document.getElementById('inbox-edit-delete-form');
   var address = document.getElementById('inbox-edit-address');
   var display = form.querySelector('[name=display]');
-  var list = document.getElementById('inbox-sender-list');
-  var input = document.getElementById('inbox-sender-input');
-  var note = document.getElementById('inbox-sender-note');
-  var approverEmail = document.getElementById('inbox-edit-approver-email');
-  var restrict = document.getElementById('inbox-sender-restricted');
-  var section = document.getElementById('inbox-sender-section');
-
-  function approverValue() {
-    return (approverEmail && approverEmail.value || '').trim().toLowerCase();
-  }
-
-  function isRestricted() {
-    return !!(restrict && restrict.checked);
-  }
-
-  function refreshRestrictVisibility() {
-    if (section) {
-      section.hidden = !isRestricted();
-    }
-  }
-
-  function refreshSenderNote() {
-    if (!note) {
-      return;
-    }
-    var count = list.querySelectorAll('input[name=allowed]').length;
-    if (count === 0 && !approverValue()) {
-      note.textContent = 'This inbox currently blocks all senders.';
-    } else if (count === 0) {
-      note.textContent = 'Only the approver can email this inbox.';
-    } else {
-      note.textContent = 'Only these addresses can email this inbox.';
-    }
-  }
-
-  function refreshSenderEmpty() {
-    var empty = list.querySelector('.empty');
-    var hasSenders = list.querySelectorAll('input[name=allowed]').length > 0 || !!approverValue() || !!list.querySelector('.locked');
-    if (!hasSenders) {
-      if (!empty) {
-        var li = document.createElement('li');
-        li.className = 'empty';
-        li.textContent = 'Add an address below to allow it to email this inbox.';
-        list.appendChild(li);
-      }
-    } else if (empty) {
-      empty.remove();
-    }
-  }
-
-  function addLockedApprover(email) {
-    email = (email || '').trim().toLowerCase();
-    if (!email) {
-      return;
-    }
-    var li = document.createElement('li');
-    li.className = 'locked';
-    var label = document.createElement('span');
-    label.className = 'addr';
-    label.textContent = email + ' (approver)';
-    var locked = document.createElement('span');
-    locked.className = 'muted small';
-    locked.textContent = 'always allowed';
-    li.appendChild(label);
-    li.appendChild(locked);
-    list.appendChild(li);
-  }
-
-  function addSender(value) {
-    value = (value || '').trim().toLowerCase();
-    if (!value) {
-      return;
-    }
-    var li = document.createElement('li');
-    var hidden = document.createElement('input');
-    hidden.type = 'hidden';
-    hidden.name = 'allowed';
-    hidden.value = value;
-    var label = document.createElement('span');
-    label.className = 'addr';
-    label.textContent = value;
-    var remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'secondary icon-btn';
-    remove.title = 'Remove';
-    remove.setAttribute('aria-label', 'Remove');
-    remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
-    remove.addEventListener('click', function () {
-      li.remove();
-      refreshSenderNote();
-      refreshSenderEmpty();
-    });
-    li.appendChild(hidden);
-    li.appendChild(label);
-    li.appendChild(remove);
-    list.appendChild(li);
-    refreshSenderNote();
-    refreshSenderEmpty();
-  }
-
-  function setSenders(raw, approver) {
-    list.innerHTML = '';
-    addLockedApprover(approver);
-    (raw || '').split(',').forEach(function (entry) {
-      if ((entry || '').trim().toLowerCase() === (approver || '').trim().toLowerCase()) {
-        return;
-      }
-      addSender(entry);
-    });
-    refreshSenderNote();
-    refreshSenderEmpty();
-  }
+  var usage = document.getElementById('inbox-edit-usage');
+  var editor = initSenderEditor({
+    list: document.getElementById('inbox-sender-list'),
+    input: document.getElementById('inbox-sender-input'),
+    note: document.getElementById('inbox-sender-note'),
+    approverEmail: document.getElementById('inbox-edit-approver-email'),
+    restrict: document.getElementById('inbox-sender-restricted'),
+    section: document.getElementById('inbox-sender-section'),
+    addBtn: document.getElementById('inbox-sender-add')
+  });
 
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -655,53 +768,71 @@
       deleteForm.action = '/ui/inboxes/' + id + '/delete';
       display.value = btn.dataset.name || '';
       address.value = btn.dataset.address || '';
-      if (approverEmail) {
-        approverEmail.value = btn.dataset.approverEmail || '';
+      editor.setApprover(btn.dataset.approverEmail || '');
+      editor.setRestricted(btn.dataset.restricted === '1');
+      editor.setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
+      editor.clearInput();
+      if (usage) {
+        usage.textContent = btn.dataset.usage || '—';
       }
-      if (restrict) {
-        restrict.checked = btn.dataset.restricted === '1';
+      if (dlg._resetTabs) {
+        dlg._resetTabs();
       }
-      setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
-      refreshRestrictVisibility();
-      input.value = '';
       dlg.showModal();
     });
   });
 
-  var add = document.getElementById('inbox-sender-add');
-  if (add) {
-    add.addEventListener('click', function () {
-      addSender(input.value);
-      input.value = '';
-      input.focus();
-    });
-  }
-  if (input) {
-    input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        addSender(input.value);
-        input.value = '';
-      }
-    });
-  }
   var cancel = document.getElementById('inbox-edit-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {
       dlg.close();
     });
   }
-  if (approverEmail) {
-    approverEmail.addEventListener('input', function () {
-      var current = Array.prototype.map.call(list.querySelectorAll('input[name=allowed]'), function (i) {
-        return i.value;
-      }).join(',');
-      setSenders(current, approverValue());
+})();
+
+// Tabbed dialog panels shared by the add and edit inbox dialogs.
+(function () {
+  document.querySelectorAll('[data-inbox-tabs]').forEach(function (bar) {
+    var dlg = bar.closest('dialog');
+    if (!dlg) {
+      return;
+    }
+    var tabs = bar.querySelectorAll('[data-inbox-tab]');
+    var panels = dlg.querySelectorAll('[data-inbox-panel]');
+
+    function activate(name) {
+      tabs.forEach(function (t) {
+        var on = t.getAttribute('data-inbox-tab') === name;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      panels.forEach(function (p) {
+        p.hidden = p.getAttribute('data-inbox-panel') !== name;
+      });
+    }
+
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        activate(t.getAttribute('data-inbox-tab'));
+      });
     });
-  }
-  if (restrict) {
-    restrict.addEventListener('change', refreshRestrictVisibility);
-  }
+
+    dlg._resetTabs = function () {
+      if (tabs.length) {
+        activate(tabs[0].getAttribute('data-inbox-tab'));
+      }
+    };
+
+    var form = dlg.querySelector('form');
+    if (form) {
+      form.addEventListener('invalid', function (e) {
+        var panel = e.target.closest ? e.target.closest('[data-inbox-panel]') : null;
+        if (panel) {
+          activate(panel.getAttribute('data-inbox-panel'));
+        }
+      }, true);
+    }
+  });
 })();
 
 (function () {
