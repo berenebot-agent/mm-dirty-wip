@@ -40,13 +40,17 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	if _, err = svc.RequestSend(ctx, admin, draft.ID); err != nil {
 		t.Fatal(err)
 	}
+	// A plain editable draft must not affect the pending-send count.
+	if _, err = svc.Store.CreateDraft(ctx, admin, model.Draft{InboxID: box.ID, To: []string{"other@example.net"}, Subject: "Notes", Text: "wip"}); err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	// Dashboard shows the drafts count.
+	// Dashboard shows the pending-send count only, styled like unread.
 	rr := uiGet(t, h, cookie, "/dashboard")
 	body := rr.Body.String()
-	if rr.Code != 200 || !strings.Contains(body, `title="Unsent drafts needing attention"`) || !strings.Contains(body, ">Unread</th>") || !strings.Contains(body, ">Drafts</th>") || !strings.Contains(body, ">Size</th>") {
-		t.Fatalf("dashboard drafts column %d", rr.Code)
+	if rr.Code != 200 || !strings.Contains(body, `title="Drafts awaiting approval to send">1<`) || !strings.Contains(body, ">Unread</th>") || !strings.Contains(body, ">Pending send</th>") || !strings.Contains(body, ">Size</th>") {
+		t.Fatalf("dashboard pending-send column %d", rr.Code)
 	}
 	if strings.Contains(body, ">Mailbox size</th>") {
 		t.Fatal("dashboard should use the shorter Size column label")

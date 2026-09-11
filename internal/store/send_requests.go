@@ -410,6 +410,40 @@ func (s *Store) DraftCountsByInbox(ctx context.Context, p model.Principal) (map[
 	return out, rows.Err()
 }
 
+// PendingDraftCountsByInbox returns the number of drafts awaiting approval to
+// send per inbox. A draft is pending exactly while its status is
+// pending_approval, which mirrors an outstanding send request.
+func (s *Store) PendingDraftCountsByInbox(ctx context.Context, p model.Principal) (map[string]int, error) {
+	q := `SELECT inbox_id,COUNT(*) FROM drafts WHERE account_id=? AND status=?`
+	args := []any{p.AccountID, model.DraftStatusPendingApproval}
+	if !p.Admin {
+		ids := assistInboxIDs(p)
+		if len(ids) == 0 {
+			return map[string]int{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY inbox_id`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var inboxID string
+		var n int
+		if err := rows.Scan(&inboxID, &n); err != nil {
+			return nil, err
+		}
+		out[inboxID] = n
+	}
+	return out, rows.Err()
+}
+
 func assistInboxIDs(p model.Principal) []string {
 	ids := make([]string, 0, len(p.MailboxRoles))
 	for id, role := range p.MailboxRoles {
