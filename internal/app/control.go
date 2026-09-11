@@ -16,7 +16,7 @@ import (
 // controlSubjectRe matches the strict approval control subject. It is
 // case-insensitive and tolerates surrounding text such as a Re:/Fwd: prefix.
 // The token is opaque and URL-safe.
-var controlSubjectRe = regexp.MustCompile(`(?i)\[GH-(APPROVE|REJECT):([A-Za-z0-9_-]{20,})\]`)
+var controlSubjectRe = regexp.MustCompile(`(?i)\[GH-(APPROVE|REJECT):([A-Za-z0-9_-]{16,})\]`)
 
 // maxFeedbackRunes bounds stored feedback so a control email cannot grow the
 // request, event or UI without limit.
