@@ -9,24 +9,29 @@ import (
 
 // DomainLogEntry is one row in a domain's two-way activity log. It merges the
 // outbound delivery attempts (Kind "sent"/"failed") with inbound mail received
-// for the domain (Kind "received") and inbound mail rejected by an inbox's
-// allowed-senders rule (Kind "blocked"). The store assembles it at read time
-// from the existing durable tables; nothing new is persisted.
+// for the domain (Kind "received"), inbound mail rejected by an inbox's
+// allowed-senders rule (Kind "blocked"), and consumed approval control mail
+// (Kind "approval"). The store assembles it at read time from the existing
+// durable tables; nothing new is persisted.
 type DomainLogEntry struct {
-	Kind              string    `json:"kind"`
-	ID                string    `json:"id"`
-	At                time.Time `json:"created_at"`
-	InboxID           string    `json:"inbox_id,omitempty"`
-	Provider          string    `json:"provider,omitempty"`
-	FromAddress       string    `json:"from_address,omitempty"`
-	To                []string  `json:"to,omitempty"`
-	Subject           string    `json:"subject,omitempty"`
-	SizeBytes         int64     `json:"size_bytes,omitempty"`
-	ProviderMessageID string    `json:"provider_message_id,omitempty"`
-	Attempt           int       `json:"attempt,omitempty"`
-	Status            string    `json:"status,omitempty"`
-	Reason            string    `json:"reason,omitempty"`
-	ErrorText         string    `json:"error_text,omitempty"`
+	Kind        string    `json:"kind"`
+	ID          string    `json:"id"`
+	At          time.Time `json:"created_at"`
+	InboxID     string    `json:"inbox_id,omitempty"`
+	Provider    string    `json:"provider,omitempty"`
+	FromAddress string    `json:"from_address,omitempty"`
+	To          []string  `json:"to,omitempty"`
+	Subject     string    `json:"subject,omitempty"`
+	// Client names the credential that sent an outbound message, or "Control"
+	// for a consumed approval control message. It is empty for received and
+	// blocked inbound mail.
+	Client            string `json:"client,omitempty"`
+	SizeBytes         int64  `json:"size_bytes,omitempty"`
+	ProviderMessageID string `json:"provider_message_id,omitempty"`
+	Attempt           int    `json:"attempt,omitempty"`
+	Status            string `json:"status,omitempty"`
+	Reason            string `json:"reason,omitempty"`
+	ErrorText         string `json:"error_text,omitempty"`
 	// RequestID/Action are set for consumed approval control messages.
 	RequestID string `json:"request_id,omitempty"`
 	Action    string `json:"action,omitempty"`
@@ -194,6 +199,7 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 		e.Kind = "approval"
 		e.Status = outcome
 		e.Subject = e.Action
+		e.Client = "Control"
 		e.At = parseTime(created)
 		out = append(out, e)
 	}
@@ -202,7 +208,7 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 
 // appendDomainOutbound adds the domain's outbound delivery attempts.
 func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]'),COALESCE(m.subject,''),COALESCE(m.inbox_id,'')
+	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]'),COALESCE(m.subject,''),COALESCE(m.inbox_id,''),COALESCE(m.client_label,'')
 		FROM outbound_delivery_log l LEFT JOIN messages m ON m.id=l.message_id
 		WHERE l.account_id=? AND l.domain_id=?`
 	args := []any{accountID, domainID}
@@ -221,7 +227,7 @@ func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, 
 		var e DomainLogEntry
 		var id int64
 		var created, to string
-		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID); err != nil {
+		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID, &e.Client); err != nil {
 			return nil, err
 		}
 		e.Kind = e.Status

@@ -71,6 +71,7 @@ func migrations(dataDir string) []migration {
 			tableExists("inbound_control_messages"),
 		)},
 		{version: "016", sql: migration016, detect: stateOf(columnAdded("inboxes", "sender_restricted"))},
+		{version: "017", sql: migration017, detect: stateOf(columnAdded("messages", "client_label"))},
 	}
 }
 

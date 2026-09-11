@@ -696,7 +696,36 @@ type SendInput struct {
 	DecisionActorID  string `json:"-"`
 	DecisionMethod   string `json:"-"`
 	DecisionFeedback string `json:"-"`
+	// ClientLabel/ClientID snapshot the credential that enqueued the message.
+	// They are resolved from the principal and never accepted from API JSON.
+	ClientLabel string `json:"-"`
+	ClientID    string `json:"-"`
 }
+
+// clientIdentity resolves the client recorded on a sent message. A web-UI
+// session is recorded as "UI"; an API key or Hermes credential uses its stable
+// name; a principal with no credential (for example an email approval) records
+// nothing.
+func clientIdentity(p model.Principal, actor store.ActorIdentity) (label, id string) {
+	if p.ViaSession {
+		return "UI", p.UserID
+	}
+	if p.APIKeyID != "" {
+		return actor.Label, actor.APIKeyID
+	}
+	return "", ""
+}
+
+// setClient fills the client fields of a send from the request principal.
+func (s *Service) setClient(ctx context.Context, p model.Principal, in *SendInput) error {
+	actor, err := s.Store.ActorIdentity(ctx, p)
+	if err != nil {
+		return err
+	}
+	in.ClientLabel, in.ClientID = clientIdentity(p, actor)
+	return nil
+}
+
 type SendResult struct {
 	Message           model.Message `json:"message"`
 	ProviderMessageID string        `json:"provider_message_id"`
@@ -708,6 +737,9 @@ type SendResult struct {
 func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (SendResult, error) {
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
+	}
+	if err := s.setClient(ctx, p, &in); err != nil {
+		return SendResult{}, err
 	}
 	return s.send(ctx, p.AccountID, in, idem)
 }
@@ -864,7 +896,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
+	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, ClientLabel: in.ClientLabel, ClientID: in.ClientID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -909,6 +941,9 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 		} else {
 			in.DecisionMethod = model.DecisionMethodAPI
 		}
+	}
+	if err := s.setClient(ctx, p, &in); err != nil {
+		return SendResult{}, err
 	}
 	return s.sendDraftCore(ctx, p.AccountID, d, in, idem)
 }
