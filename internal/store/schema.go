@@ -671,3 +671,11 @@ ALTER TABLE messages ADD COLUMN client_id TEXT NOT NULL DEFAULT '';
 const migration018 = `ALTER TABLE messages ADD COLUMN internal INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_messages_internal ON messages(inbox_id, internal);
 `
+
+// migration019 snapshots the reviewed draft's subject on a consumed approval
+// control message. The control record is what the dashboard and domain log
+// display, and the draft is deleted when an approval sends it, so the subject
+// must be captured at decision time. The raw inbound subject (which carries the
+// one-time token) is never stored or shown.
+const migration019 = `ALTER TABLE inbound_control_messages ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+`

@@ -2,6 +2,21 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Control-message log label (migration 019)
+
+Migration 019 adds `inbound_control_messages.subject`, the reviewed draft's
+subject snapshotted when an approval control message is consumed.
+
+- The dashboard Recent messages list and the per-domain activity log label such
+  rows `Approval: <draft subject>` (bare `Approval` when the request could not be
+  resolved), so an operator can tell which draft a decision was about.
+- The subject is snapshotted at decision time because an approved send deletes
+  the draft in the same transaction; a later lookup would find nothing.
+- The raw inbound subject is never stored or shown, because it carries the
+  one-time approval token. The record keeps only From, request, action, outcome,
+  reason and the draft subject.
+- Existing control rows keep the empty default and render as bare `Approval`.
+
 ## Message client attribution (migration 017)
 
 Migration 017 adds `messages.client_label` and `messages.client_id` so the admin

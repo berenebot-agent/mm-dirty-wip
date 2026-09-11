@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"gatehouse-mail/internal/idgen"
@@ -801,6 +802,9 @@ type ControlMessageRecord struct {
 	Action             string
 	Outcome            string
 	Reason             string
+	// Subject is the reviewed draft subject snapshotted at decision time. It is
+	// never the raw inbound subject, which carries the approval token.
+	Subject string
 }
 
 // ControlMessage is a recorded control message for display.
@@ -815,19 +819,31 @@ type ControlMessage struct {
 	Action            string
 	Outcome           string
 	Reason            string
+	Subject           string
 	CreatedAt         time.Time
+}
+
+// ApprovalSubjectLabel is the log label for a consumed approval control message:
+// the reviewed draft subject, prefixed, or a bare "Approval" when the request
+// could not be resolved. The raw inbound subject (which carries the token) is
+// never used.
+func ApprovalSubjectLabel(subject string) string {
+	if s := strings.TrimSpace(subject); s != "" {
+		return "Approval: " + s
+	}
+	return "Approval"
 }
 
 // controlMessageSelect lists the displayable columns shared by the per-inbox
 // and account-wide control-message reads.
-const controlMessageSelect = `SELECT id,inbox_id,provider,from_name,from_address,envelope_recipient,request_id,action,outcome,reason,created_at FROM inbound_control_messages`
+const controlMessageSelect = `SELECT id,inbox_id,provider,from_name,from_address,envelope_recipient,request_id,action,outcome,reason,subject,created_at FROM inbound_control_messages`
 
 func scanControlMessages(rows *sql.Rows) ([]ControlMessage, error) {
 	var out []ControlMessage
 	for rows.Next() {
 		var m ControlMessage
 		var created string
-		if err := rows.Scan(&m.ID, &m.InboxID, &m.Provider, &m.FromName, &m.FromAddress, &m.EnvelopeRecipient, &m.RequestID, &m.Action, &m.Outcome, &m.Reason, &created); err != nil {
+		if err := rows.Scan(&m.ID, &m.InboxID, &m.Provider, &m.FromName, &m.FromAddress, &m.EnvelopeRecipient, &m.RequestID, &m.Action, &m.Outcome, &m.Reason, &m.Subject, &created); err != nil {
 			return nil, err
 		}
 		m.CreatedAt = parseTime(created)
@@ -841,7 +857,7 @@ func scanControlMessages(rows *sql.Rows) ([]ControlMessage, error) {
 // webhook retry is a harmless no-op.
 func (s *Store) RecordControlMessage(ctx context.Context, r ControlMessageRecord) (bool, error) {
 	now := nowText()
-	res, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbound_control_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,request_id,action,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, idgen.New("icm"), r.AccountID, r.InboxID, r.Provider, nullString(r.ProviderDeliveryID), r.EnvelopeRecipient, r.FromName, r.FromAddress, r.RequestID, r.Action, r.Outcome, r.Reason, now)
+	res, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbound_control_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,request_id,action,outcome,reason,subject,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, idgen.New("icm"), r.AccountID, r.InboxID, r.Provider, nullString(r.ProviderDeliveryID), r.EnvelopeRecipient, r.FromName, r.FromAddress, r.RequestID, r.Action, r.Outcome, r.Reason, r.Subject, now)
 	if err != nil {
 		return false, err
 	}
