@@ -60,6 +60,50 @@
     });
   }
 
+  function scopeRadios(scope) {
+    if (!matrix) {
+      return [];
+    }
+    if (scope === 'all') {
+      return rolesRadios();
+    }
+    var group = matrix.querySelector('tbody[data-domain="' + scope + '"]');
+    return group ? group.querySelectorAll('input[type=radio][name^=role_]') : [];
+  }
+
+  // The de-facto role is the single checked value shared by every inbox in the
+  // scope, or undefined when the scope is mixed or has no inboxes.
+  function uniformRole(radios) {
+    var value;
+    var seen = false;
+    for (var i = 0; i < radios.length; i++) {
+      if (!radios[i].checked) {
+        continue;
+      }
+      if (!seen) {
+        value = radios[i].value;
+        seen = true;
+      } else if (value !== radios[i].value) {
+        return undefined;
+      }
+    }
+    return seen ? value : undefined;
+  }
+
+  function syncScopeButtons() {
+    if (!matrix) {
+      return;
+    }
+    document.querySelectorAll('#key-matrix .seg[data-set-scope]').forEach(function (seg) {
+      var role = uniformRole(scopeRadios(seg.getAttribute('data-set-scope')));
+      seg.querySelectorAll('button[data-set-role]').forEach(function (btn) {
+        var on = role !== undefined && btn.getAttribute('data-set-role') === role;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    });
+  }
+
   function syncAdmin() {
     if (!matrix) {
       return;
@@ -88,6 +132,7 @@
       adminSnapshot = null;
     }
     matrix.disabled = on;
+    syncScopeButtons();
   }
 
   function inboxNeedsRiskAck() {
@@ -352,8 +397,12 @@
       } else {
         setAllRoles(btn.getAttribute('data-set-role'));
       }
+      syncScopeButtons();
     });
   });
+  if (matrix) {
+    matrix.addEventListener('change', syncScopeButtons);
+  }
   var add = document.getElementById('add-key');
   if (add) {
     add.addEventListener('click', openCreate);
@@ -369,6 +418,7 @@
       openEdit(btn);
     });
   });
+  syncScopeButtons();
 })();
 
 (function () {
