@@ -1,4 +1,4 @@
-# Gatehouse Email — V1 Architecture
+# Gatehouse Mail — V1 Architecture
 
 ## 1. Runtime topology
 
@@ -11,7 +11,7 @@
                          HTTPS webhook
                                ▼
                   ┌────────────────────────┐
-                  │   Gatehouse Email      │
+                  │   Gatehouse Mail       │
                   │                        │
                   │ Go HTTP server         │
                   │ auth                   │

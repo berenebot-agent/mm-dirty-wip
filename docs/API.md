@@ -1,4 +1,4 @@
-# Gatehouse Email — V1 API Contract
+# Gatehouse Mail — V1 API Contract
 
 This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
 
@@ -45,7 +45,7 @@ Returns a compact discovery document:
 
 ```json
 {
-  "name": "Gatehouse Email",
+  "name": "Gatehouse Mail",
   "api_version": "v1",
   "api_base": "/v1",
   "agent_guide": "/agent",
@@ -470,6 +470,6 @@ Where semantics align naturally, support familiar compatibility operations such 
 
 Compatibility should translate into the canonical model.
 
-Gatehouse Email native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
+Gatehouse Mail native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
 
 Compatibility behaviour requires explicit contract tests.

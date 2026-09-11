@@ -1,11 +1,11 @@
 # Cloudflare Email Routing inbound
 
 This guide sets up Cloudflare Email Routing so incoming mail reaches your
-Gatehouse Email instance over the generic inbound webhook.
+Gatehouse Mail instance over the generic inbound webhook.
 
 Email Routing cannot POST directly to an arbitrary URL - it delivers each
-message to a Cloudflare Worker. Gatehouse Email generates a ready-to-paste
-Worker that streams the raw MIME and the envelope metadata to Gatehouse Email.
+message to a Cloudflare Worker. Gatehouse Mail generates a ready-to-paste
+Worker that streams the raw MIME and the envelope metadata to Gatehouse Mail.
 
 Flow:
 
@@ -14,7 +14,7 @@ Internet email -> Cloudflare MX -> Email Routing -> Worker -> HTTPS POST
     -> /internal/ingest/cloudflare -> logical inbox
 ```
 
-## 1. Add the receiving configuration in Gatehouse Email
+## 1. Add the receiving configuration in Gatehouse Mail
 
 Inbound provider secrets are no longer environment variables, and there is no
 separate credential to create and then assign. Receiving is configured directly

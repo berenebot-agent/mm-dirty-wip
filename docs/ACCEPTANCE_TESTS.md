@@ -1,4 +1,4 @@
-# Gatehouse Email — V1 Acceptance Tests
+# Gatehouse Mail — V1 Acceptance Tests
 
 ## A. Account and authorization
 

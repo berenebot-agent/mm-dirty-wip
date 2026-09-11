@@ -1,11 +1,11 @@
-# Gatehouse Email — V1 Product Specification
+# Gatehouse Mail — V1 Product Specification
 
 **Status:** Implementation-ready V1  
 **Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, free hosted or self-hosted.
 
 ## 1. Pitch
 
-Gatehouse Email is an API-native email inbox platform for autonomous agents.
+Gatehouse Mail is an API-native email inbox platform for autonomous agents.
 
 It gives agents persistent email identities, searchable mail history, attachments, scoped access, realtime delivery, and outbound sending through user-provided credentials.
 
@@ -291,7 +291,7 @@ Internet SMTP
     ↓
 Mailgun, Cloudflare Email Routing, or Resend
     ↓ HTTPS webhook
-Gatehouse Email
+Gatehouse Mail
 ```
 
 One catch-all transport route can serve many logical inbox identities. Each
@@ -350,7 +350,7 @@ The canonical API uses straightforward REST resources for:
 
 Where openagent.email endpoint semantics map naturally to the data model, preserve compatible paths/fields so integrations can migrate with minimal changes.
 
-Gatehouse Email extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
+Gatehouse Mail extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
 
 ## 9. Data and backup
 

@@ -1,6 +1,6 @@
 # Resend inbound and outbound
 
-This guide connects Resend to Gatehouse Email for both directions:
+This guide connects Resend to Gatehouse Mail for both directions:
 
 - **Inbound (receive):** Resend accepts mail for a verified domain and notifies
   Gatehouse over a signed webhook; Gatehouse then fetches the raw MIME from the
@@ -33,7 +33,7 @@ parsed by the shared ingest core.
 - The Resend **webhook signing secret** (`whsec_...`), created when you add the
   webhook. Resend generates this secret; you paste it into Gatehouse.
 
-## 1. Add the receiving configuration in Gatehouse Email
+## 1. Add the receiving configuration in Gatehouse Mail
 
 On the dashboard, click **Receiving** for the domain you receive on:
 
@@ -64,7 +64,7 @@ curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
   -d '{"provider":"resend","config":{"api_key":"re_...","webhook_secret":"whsec_..."}}'
 ```
 
-## 2. Add the sending provider in Gatehouse Email
+## 2. Add the sending provider in Gatehouse Mail
 
 1. On the dashboard, click **Sending** for that domain, choose **Resend**, and
    enter the **API key**, then save. (Or `PUT /v1/admin/domains/{id}/sending` with

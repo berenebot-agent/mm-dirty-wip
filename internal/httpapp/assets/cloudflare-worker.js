@@ -1,6 +1,6 @@
-// Cloudflare Worker: forward Email Routing messages to Gatehouse Email.
+// Cloudflare Worker: forward Email Routing messages to Gatehouse Mail.
 //
-// This file is a template. Gatehouse Email substitutes the two placeholder
+// This file is a template. Gatehouse Mail substitutes the two placeholder
 // values below when it generates your ready-to-paste Worker code in the Admin
 // UI. You do not normally edit this file by hand.
 const WEBHOOK_URL = "__GATEHOUSE_WEBHOOK_URL__";
