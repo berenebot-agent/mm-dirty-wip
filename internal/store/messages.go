@@ -369,6 +369,38 @@ func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string
 	return out, rows.Err()
 }
 
+// MessageSizesByInbox returns the stored message bytes for each inbox.
+func (s *Store) MessageSizesByInbox(ctx context.Context, p model.Principal) (map[string]int64, error) {
+	q := `SELECT inbox_id,COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=?`
+	args := []any{p.AccountID}
+	if !p.Admin {
+		ids := principalInboxIDs(p)
+		if len(ids) == 0 {
+			return map[string]int64{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` GROUP BY inbox_id`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var inboxID string
+		var size int64
+		if err = rows.Scan(&inboxID, &size); err != nil {
+			return nil, err
+		}
+		out[inboxID] = size
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read, archived *bool) error {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
