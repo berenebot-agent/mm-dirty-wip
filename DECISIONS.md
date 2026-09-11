@@ -2,6 +2,58 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Explicit sender restriction (migration 016)
+
+Migration 016 makes the inbox allow-list an explicit opt-in. Previously an
+empty `allowed_senders` list meant "accept all" and a non-empty list meant
+"restrict", so there was no way to express "restricted with no senders" and a
+non-empty list was the only signal that filtering was on. That also made the
+locked approver entry look like it could turn filtering on.
+
+- `inboxes.sender_restricted` (default 0) controls whether the allow-list is
+  enforced. When 0, `allowed_senders` is ignored and any sender is accepted;
+  when 1, only matching senders (plus the approver) are accepted.
+- Existing inboxes with a non-empty list are backfilled to `sender_restricted=1`
+  so their behaviour is unchanged.
+- `PATCH /v1/inboxes/{id}` accepts `sender_restricted`. For compatibility, a
+  request that supplies `allowed_senders` without `sender_restricted` infers
+  restriction from a non-empty list, preserving the old API contract.
+- Setting an approver never enables restriction. The UI now has an explicit
+  "Block senders to this inbox except the allow list below" checkbox and hides
+  the allow-list editor when it is off.
+
+## External email approval (migration 015)
+
+Migration 015 adds external email approval on top of the Phase 1 draft
+workflow. Rationale is in `docs/DECISIONS.md` D026.
+
+- `draft_send_requests` gains `approver_email`, `token_hash`,
+  `token_expires_at` and `approval_message_id`; a request status may now be
+  `expired`.
+- `inboxes` gains `approver_email`. When set, the approver is always an
+  accepted inbound sender and is shown locked in the allowed-senders UI. The
+  approver may be changed at any time; an outstanding request keeps the
+  approver it was created with and that stored approver's control reply is
+  still honoured.
+- `draft_attachments.content_hash` stores each attachment's SHA-256. A Go
+  backfill hashes existing files; the fingerprint covers these bytes and they
+  are re-verified at send.
+- `inbound_control_messages` records every consumed approval control email; it
+  feeds the per-domain receiving log (kind `approval`) and is the webhook dedup
+  key.
+- A configured inbox approver makes `request-send` external automatically and
+  queues the approval email in the same transaction as the request; the
+  optional `{"external": true}` flag is accepted but not required. Approval
+  email failure uses the existing outbox/log surfaces; no separate event is
+  emitted.
+- External approval is a dedicated internal path (not a fabricated Principal);
+  it reuses the shared claim/enqueue primitive, so UI and email decisions race
+  safely and a decision is single-use.
+- Expiry is global (`APPROVAL_EXPIRY_HOURS`, default 48, `0`=never), evaluated
+  lazily on request-send and by a sweep in the outbox worker, emitting
+  `draft.approval_expired`.
+- Sender-authentication (SPF/DKIM/DMARC) capture is deferred.
+
 ## Draft send-request migration (migration 014)
 
 Migration 014 adds the human-in-the-loop draft workflow. Rationale is in

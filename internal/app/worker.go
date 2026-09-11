@@ -51,14 +51,29 @@ func (w *OutboxWorker) run() {
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
 	// Re-scan on startup so pending messages from a previous process resume.
+	w.expireApprovals()
 	w.deliverDue()
 	for {
 		select {
 		case <-w.stop:
 			return
 		case <-ticker.C:
+			w.expireApprovals()
 			w.deliverDue()
 		}
+	}
+}
+
+// expireApprovals lapses external approval requests whose token has passed,
+// unfreezing their drafts and publishing the expiry events.
+func (w *OutboxWorker) expireApprovals() {
+	events, err := w.svc.Store.ExpireApprovalRequests(context.Background(), time.Now().UTC())
+	if err != nil {
+		w.log.Error("approval expiry sweep", "error", err)
+		return
+	}
+	for _, ev := range events {
+		w.svc.Hub.Publish(ev)
 	}
 }
 

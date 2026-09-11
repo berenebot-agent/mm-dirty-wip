@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -137,7 +139,17 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	if err != nil {
 		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
 	}
-	if !inbox.AllowsSender(parsed.From.Address) {
+	// A strict approval control subject is consumed as workflow input before
+	// ordinary delivery, so the token never becomes mailbox content. It is
+	// handed to the control handler regardless of the sender allow-list because
+	// the handler validates the live token and the exact stored approver, and
+	// because an inbox's approver setting may have changed after the request was
+	// created. Invalid control mail is consumed too; only its outcome is
+	// recorded.
+	if looksLikeControl(parsed.Subject) {
+		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed)
+	}
+	if !inbox.AllowsInbound(parsed.From.Address) {
 		blockedFrom := model.Address{Name: parsed.From.Name, Address: parsed.From.Address}
 		blockedAt := parsed.Date
 		if blockedAt.IsZero() {
@@ -693,14 +705,21 @@ type SendResult struct {
 // Send enqueues an outbound message into the outbox and returns immediately
 // with the pending message. The background worker delivers it. If idem is set,
 // the idempotency key is reserved at enqueue time and completed on delivery.
-func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (result SendResult, err error) {
+func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, idem string) (SendResult, error) {
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
+	return s.send(ctx, p.AccountID, in, idem)
+}
+
+// send is the principal-free outbound core. The external email approval path
+// calls it after validating the token and approver; mailbox ownership was
+// already established by the send request itself.
+func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem string) (result SendResult, err error) {
 	if idem != "" {
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
-		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, p.AccountID, idem, in.InboxID)
+		claimed, mid, rerr := s.Store.IdempotencyReserve(ctx, accountID, idem, in.InboxID)
 		if rerr != nil {
 			if errors.Is(rerr, store.ErrConflict) {
 				return SendResult{}, fmt.Errorf("idempotency key %q is already in flight", idem)
@@ -708,13 +727,13 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 			return SendResult{}, rerr
 		}
 		if !claimed {
-			m, gerr := s.Store.GetMessageByID(ctx, p.AccountID, mid)
+			m, gerr := s.Store.GetMessageByID(ctx, accountID, mid)
 			if gerr != nil {
 				return SendResult{}, gerr
 			}
 			// The key is account-wide, so a replay must be scoped to the
-			// mailbox it was used for and the caller must own that mailbox.
-			if m.InboxID != in.InboxID || !p.CanOwn(m.InboxID) {
+			// mailbox it was used for.
+			if m.InboxID != in.InboxID {
 				return SendResult{}, store.ErrConflict
 			}
 			return SendResult{Message: m, ProviderMessageID: m.ProviderMessageID}, nil
@@ -722,11 +741,11 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 		// Release the reservation on any failure so a retry can re-send.
 		defer func() {
 			if err != nil {
-				_ = s.Store.IdempotencyRelease(ctx, p.AccountID, idem)
+				_ = s.Store.IdempotencyRelease(ctx, accountID, idem)
 			}
 		}()
 	}
-	inbox, err := s.Store.GetInboxInternal(ctx, p.AccountID, in.InboxID)
+	inbox, err := s.Store.GetInboxInternal(ctx, accountID, in.InboxID)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -746,7 +765,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	}
 	subject := strings.TrimSpace(in.Subject)
 	if in.ReplyToMessageID != "" {
-		target, err := s.Store.GetMessageByID(ctx, p.AccountID, in.ReplyToMessageID)
+		target, err := s.Store.GetMessageByID(ctx, accountID, in.ReplyToMessageID)
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -771,7 +790,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 		}
 	}
 	if in.ForwardOfMessageID != "" {
-		target, err := s.Store.GetMessageByID(ctx, p.AccountID, in.ForwardOfMessageID)
+		target, err := s.Store.GetMessageByID(ctx, accountID, in.ForwardOfMessageID)
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -786,7 +805,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 		} else {
 			in.Text = strings.TrimRight(in.Text, "\n") + "\n\n" + forwardPrefix(target)
 		}
-		carried, err := s.forwardAttachments(ctx, p, target)
+		carried, err := s.forwardAttachments(ctx, accountID, target)
 		if err != nil {
 			return SendResult{}, err
 		}
@@ -802,7 +821,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	}
 	// A missing provider is not fatal: the message is queued and the outbox
 	// worker holds it until a provider is configured for the domain.
-	sending, cfgErr := s.Store.GetDomainSendingConfig(ctx, p.AccountID, inbox.DomainID)
+	sending, cfgErr := s.Store.GetDomainSendingConfig(ctx, accountID, inbox.DomainID)
 	queuedReason := ""
 	if cfgErr != nil {
 		if !errors.Is(cfgErr, store.ErrNoProvider) {
@@ -824,7 +843,7 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if err != nil {
 		return SendResult{}, err
 	}
-	acc, err := s.Store.GetAccount(ctx, p.AccountID)
+	acc, err := s.Store.GetAccount(ctx, accountID)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -875,19 +894,6 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	if in.InboxID != d.InboxID {
 		return SendResult{}, store.ErrForbidden
 	}
-	atts, err := s.Store.ListDraftAttachments(ctx, p, draftID)
-	if err != nil {
-		return SendResult{}, err
-	}
-	paths := make([]string, 0, len(atts))
-	for _, a := range atts {
-		data, rerr := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(a.RawPath)))
-		if rerr != nil {
-			return SendResult{}, rerr
-		}
-		in.Attachments = append(in.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
-		paths = append(paths, a.RawPath)
-	}
 	// A direct owner send of a pending draft authorizes the outstanding request
 	// as it enqueues; the approval and the message land in one transaction.
 	if in.SendRequestID == "" && d.SendRequest != nil && d.SendRequest.Status == model.SendRequestPending {
@@ -904,8 +910,36 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 			in.DecisionMethod = model.DecisionMethodAPI
 		}
 	}
-	in.DraftID = draftID
-	res, err := s.Send(ctx, p, in, idem)
+	return s.sendDraftCore(ctx, p.AccountID, d, in, idem)
+}
+
+// sendDraftCore adds the draft's stored attachments to the send and enqueues it
+// without a principal. It is shared by the owner send path and the validated
+// external approval path. The draft is consumed atomically at enqueue.
+func (s *Service) sendDraftCore(ctx context.Context, accountID string, d model.Draft, in SendInput, idem string) (SendResult, error) {
+	atts, err := s.Store.ListDraftAttachmentsInternal(ctx, accountID, d.ID)
+	if err != nil {
+		return SendResult{}, err
+	}
+	paths := make([]string, 0, len(atts))
+	for _, a := range atts {
+		data, rerr := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(a.RawPath)))
+		if rerr != nil {
+			return SendResult{}, rerr
+		}
+		// The frozen fingerprint must match the bytes actually sent, even for a
+		// direct owner send of a draft whose file changed out of band.
+		if strings.TrimSpace(a.ContentHash) != "" {
+			sum := sha256.Sum256(data)
+			if !equalTokenHash(a.ContentHash, hex.EncodeToString(sum[:])) {
+				return SendResult{}, store.ErrConflict
+			}
+		}
+		in.Attachments = append(in.Attachments, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: data})
+		paths = append(paths, a.RawPath)
+	}
+	in.DraftID = d.ID
+	res, err := s.send(ctx, accountID, in, idem)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -1172,8 +1206,8 @@ func forwardPrefix(m model.Message) string {
 	b.WriteString(m.Text)
 	return b.String()
 }
-func (s *Service) forwardAttachments(ctx context.Context, p model.Principal, m model.Message) ([]SendAttachment, error) {
-	meta, err := s.Store.ListAttachments(ctx, p, m.ID)
+func (s *Service) forwardAttachments(ctx context.Context, accountID string, m model.Message) ([]SendAttachment, error) {
+	meta, err := s.Store.ListAttachmentsInternal(ctx, accountID, m.ID)
 	if err != nil {
 		return nil, err
 	}

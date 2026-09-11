@@ -28,8 +28,10 @@ type migration struct {
 	detect  func(context.Context, *sql.Conn) (applyState, error)
 }
 
-// migrations returns every migration after the 001 baseline, in order.
-func migrations() []migration {
+// migrations returns every migration after the 001 baseline, in order. dataDir
+// is the on-disk root used by migrations that must read files (for example the
+// attachment content-hash backfill).
+func migrations(dataDir string) []migration {
 	return []migration{
 		{version: "002", sql: migration002, detect: stateOf(columnAdded("accounts", "active_outbound_credential_id"))},
 		{version: "003", sql: migration003, detect: allOf(columnAdded("inboxes", "allowed_senders_json"), tableExists("blocked_messages"))},
@@ -62,6 +64,13 @@ func migrations() []migration {
 			columnAdded("drafts", "status"),
 			tableExists("draft_send_requests"),
 		)},
+		{version: "015", sql: migration015, run: backfillAttachmentHashes(dataDir), detect: allOf(
+			columnAdded("draft_send_requests", "token_hash"),
+			columnAdded("inboxes", "approver_email"),
+			columnAdded("draft_attachments", "content_hash"),
+			tableExists("inbound_control_messages"),
+		)},
+		{version: "016", sql: migration016, detect: stateOf(columnAdded("inboxes", "sender_restricted"))},
 	}
 }
 

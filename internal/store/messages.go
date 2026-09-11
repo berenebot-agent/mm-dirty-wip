@@ -50,6 +50,11 @@ type OutboundRecord struct {
 	DecisionActorID  string
 	DecisionMethod   string
 	DecisionFeedback string
+	// NewSendRequest, when set, creates a draft send request in the same
+	// transaction that enqueues this message. It is used to queue the external
+	// approval email atomically with the request that authorizes it. The draft
+	// is frozen but not consumed.
+	NewSendRequest *SendRequestInsert
 }
 
 func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Message, model.Event, bool, error) {
@@ -479,6 +484,25 @@ func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageI
 	}
 	return out, rows.Err()
 }
+
+// ListAttachmentsInternal lists a message's attachments without a principal.
+func (s *Store) ListAttachmentsInternal(ctx context.Context, accountID, messageID string) ([]model.Attachment, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE message_id=? ORDER BY part_index`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Attachment
+	for rows.Next() {
+		var a model.Attachment
+		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetAttachment(ctx context.Context, p model.Principal, id string) (model.Attachment, model.Message, error) {
 	var a model.Attachment
 	err := s.read.QueryRowContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE id=?`, id).Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID)

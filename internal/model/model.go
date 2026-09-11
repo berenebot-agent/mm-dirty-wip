@@ -34,15 +34,42 @@ type Domain struct {
 }
 
 type Inbox struct {
-	ID             string    `json:"id"`
-	AccountID      string    `json:"account_id"`
-	DomainID       string    `json:"domain_id"`
-	LocalPart      string    `json:"local_part"`
-	Address        string    `json:"address"`
-	DisplayName    string    `json:"display_name"`
-	Enabled        bool      `json:"enabled"`
-	AllowedSenders []string  `json:"allowed_senders,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string   `json:"id"`
+	AccountID      string   `json:"account_id"`
+	DomainID       string   `json:"domain_id"`
+	LocalPart      string   `json:"local_part"`
+	Address        string   `json:"address"`
+	DisplayName    string   `json:"display_name"`
+	Enabled        bool     `json:"enabled"`
+	AllowedSenders []string `json:"allowed_senders,omitempty"`
+	// SenderRestricted enables the allow-list. When false, any sender is
+	// accepted and AllowedSenders is ignored; when true, only AllowedSenders
+	// (and the approver) are accepted.
+	SenderRestricted bool `json:"sender_restricted,omitempty"`
+	// ApproverEmail optionally nominates a person who may authorize draft
+	// sends by email. When set, the approver address is always accepted as an
+	// inbound sender for this inbox regardless of AllowedSenders.
+	ApproverEmail string    `json:"approver_email,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// HasApprover reports whether the inbox has a configured external approver.
+func (i Inbox) HasApprover() bool { return strings.TrimSpace(i.ApproverEmail) != "" }
+
+// AllowsApprover reports whether address is the inbox's configured approver.
+// The approver is always permitted to write to the inbox so an approval reply
+// is never blocked by the sender allowlist.
+func (i Inbox) AllowsApprover(address string) bool {
+	if !i.HasApprover() {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(i.ApproverEmail), strings.ToLower(strings.TrimSpace(address)))
+}
+
+// AllowsInbound reports whether the inbox accepts inbound mail from address,
+// treating the configured approver as always permitted.
+func (i Inbox) AllowsInbound(address string) bool {
+	return i.AllowsSender(address) || i.AllowsApprover(address)
 }
 
 // NormalizeAllowedSender validates and normalizes a single allowed-sender
@@ -104,9 +131,11 @@ func MatchAllowedSender(pattern, address string) bool {
 }
 
 // AllowsSender reports whether the inbox accepts inbound mail from address.
-// An empty allowlist means every sender is accepted.
+// When SenderRestricted is false every sender is accepted; when true, only a
+// matching entry in AllowedSenders is accepted (an empty list blocks everyone
+// except the approver).
 func (i Inbox) AllowsSender(address string) bool {
-	if len(i.AllowedSenders) == 0 {
+	if !i.SenderRestricted {
 		return true
 	}
 	for _, allowed := range i.AllowedSenders {
@@ -218,6 +247,7 @@ const (
 	SendRequestApproved  = "approved"
 	SendRequestRejected  = "rejected"
 	SendRequestCancelled = "cancelled"
+	SendRequestExpired   = "expired"
 )
 
 // Draft send-request delivery states stored on draft_send_requests.delivery_status.
@@ -230,8 +260,9 @@ const (
 
 // Decision methods recorded for a draft send request.
 const (
-	DecisionMethodUI  = "ui"
-	DecisionMethodAPI = "api"
+	DecisionMethodUI    = "ui"
+	DecisionMethodAPI   = "api"
+	DecisionMethodEmail = "email"
 )
 
 // Durable draft workflow event types.
@@ -242,6 +273,7 @@ const (
 	EventDraftRejected             = "draft.rejected"
 	EventDraftSent                 = "draft.sent"
 	EventDraftSendFailed           = "draft.send_failed"
+	EventDraftApprovalExpired      = "draft.approval_expired"
 )
 
 type Draft struct {
@@ -268,35 +300,45 @@ type Draft struct {
 // sent. It is deliberately independent of the draft row so it survives the
 // draft being consumed by a successful send.
 type DraftSendRequest struct {
-	ID                  string     `json:"id"`
-	DraftID             string     `json:"draft_id"`
-	InboxID             string     `json:"inbox_id"`
-	Status              string     `json:"status"`
-	DeliveryStatus      string     `json:"delivery_status"`
-	ContentHash         string     `json:"-"`
-	RequestedAt         time.Time  `json:"requested_at"`
-	RequestedBy         string     `json:"requested_by,omitempty"`
-	RequestedByAPIKeyID string     `json:"requested_by_api_key_id,omitempty"`
-	RequestedByUserID   string     `json:"requested_by_user_id,omitempty"`
-	DecidedAt           *time.Time `json:"decided_at,omitempty"`
-	DecisionActor       string     `json:"decision_actor,omitempty"`
-	DecisionActorID     string     `json:"decision_actor_id,omitempty"`
-	DecisionMethod      string     `json:"decision_method,omitempty"`
-	Feedback            string     `json:"feedback,omitempty"`
-	MessageID           string     `json:"message_id,omitempty"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  string    `json:"id"`
+	DraftID             string    `json:"draft_id"`
+	InboxID             string    `json:"inbox_id"`
+	Status              string    `json:"status"`
+	DeliveryStatus      string    `json:"delivery_status"`
+	ContentHash         string    `json:"-"`
+	RequestedAt         time.Time `json:"requested_at"`
+	RequestedBy         string    `json:"requested_by,omitempty"`
+	RequestedByAPIKeyID string    `json:"requested_by_api_key_id,omitempty"`
+	RequestedByUserID   string    `json:"requested_by_user_id,omitempty"`
+	// External approval fields. ApproverEmail is the nominated address; the
+	// token is never stored in plaintext, only its hash.
+	ApproverEmail     string     `json:"approver_email,omitempty"`
+	TokenHash         string     `json:"-"`
+	TokenExpiresAt    *time.Time `json:"token_expires_at,omitempty"`
+	ApprovalMessageID string     `json:"approval_message_id,omitempty"`
+	DecidedAt         *time.Time `json:"decided_at,omitempty"`
+	DecisionActor     string     `json:"decision_actor,omitempty"`
+	DecisionActorID   string     `json:"decision_actor_id,omitempty"`
+	DecisionMethod    string     `json:"decision_method,omitempty"`
+	Feedback          string     `json:"feedback,omitempty"`
+	MessageID         string     `json:"message_id,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // DraftAttachment is a file attached to a draft. Unlike message attachments
 // (which are extracted from a stored MIME part), draft attachments are stored
 // as raw files on disk and copied to the sent message on send.
 type DraftAttachment struct {
-	ID          string    `json:"id"`
-	DraftID     string    `json:"draft_id"`
-	Filename    string    `json:"filename"`
-	ContentType string    `json:"content_type"`
-	Size        int64     `json:"size"`
+	ID          string `json:"id"`
+	DraftID     string `json:"draft_id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	// ContentHash is the hex SHA-256 of the attachment bytes. It is folded
+	// into the frozen draft fingerprint so an approval binds to the exact
+	// bytes reviewed.
+	ContentHash string    `json:"-"`
 	RawPath     string    `json:"-"`
 	CreatedAt   time.Time `json:"created_at"`
 }

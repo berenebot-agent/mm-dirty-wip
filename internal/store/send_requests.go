@@ -3,18 +3,19 @@ package store
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/model"
 )
 
-const sendRequestSelect = `SELECT id,draft_id,inbox_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,decided_at,decision_actor,decision_actor_id,decision_method,feedback,message_id,created_at,updated_at FROM draft_send_requests`
+const sendRequestSelect = `SELECT id,draft_id,inbox_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,approver_email,token_hash,token_expires_at,approval_message_id,decided_at,decision_actor,decision_actor_id,decision_method,feedback,message_id,created_at,updated_at FROM draft_send_requests`
 
 func scanSendRequest(row interface{ Scan(...any) error }) (model.DraftSendRequest, error) {
 	var r model.DraftSendRequest
 	var requested, created, updated string
-	var decided sql.NullString
-	err := row.Scan(&r.ID, &r.DraftID, &r.InboxID, &r.Status, &r.DeliveryStatus, &r.ContentHash, &requested, &r.RequestedBy, &r.RequestedByAPIKeyID, &r.RequestedByUserID, &decided, &r.DecisionActor, &r.DecisionActorID, &r.DecisionMethod, &r.Feedback, &r.MessageID, &created, &updated)
+	var expires, decided sql.NullString
+	err := row.Scan(&r.ID, &r.DraftID, &r.InboxID, &r.Status, &r.DeliveryStatus, &r.ContentHash, &requested, &r.RequestedBy, &r.RequestedByAPIKeyID, &r.RequestedByUserID, &r.ApproverEmail, &r.TokenHash, &expires, &r.ApprovalMessageID, &decided, &r.DecisionActor, &r.DecisionActorID, &r.DecisionMethod, &r.Feedback, &r.MessageID, &created, &updated)
 	if err != nil {
 		return r, err
 	}
@@ -22,6 +23,7 @@ func scanSendRequest(row interface{ Scan(...any) error }) (model.DraftSendReques
 	r.CreatedAt = parseTime(created)
 	r.UpdatedAt = parseTime(updated)
 	r.DecidedAt = nullableTime(decided)
+	r.TokenExpiresAt = nullableTime(expires)
 	return r, nil
 }
 
@@ -107,6 +109,12 @@ func sendRequestPayload(r model.DraftSendRequest) map[string]any {
 	if r.MessageID != "" {
 		p["message_id"] = r.MessageID
 	}
+	if r.ApproverEmail != "" {
+		p["approver_email"] = r.ApproverEmail
+	}
+	if r.TokenExpiresAt != nil {
+		p["token_expires_at"] = r.TokenExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return p
 }
 
@@ -145,59 +153,255 @@ func (s *Store) attachLatestSendRequests(ctx context.Context, accountID string, 
 	}
 }
 
+// SendRequestInsert is the durable content of a new draft send request. It is
+// shared by the synchronous (no email) path and the external-approval path
+// that queues the approval email in the same transaction.
+type SendRequestInsert struct {
+	ID                  string
+	DraftID             string
+	InboxID             string
+	ContentHash         string
+	RequestedAt         time.Time
+	RequestedBy         string
+	RequestedByAPIKeyID string
+	RequestedByUserID   string
+	ApproverEmail       string
+	TokenHash           string
+	TokenExpiresAt      *time.Time
+}
+
+// createSendRequestTx inserts a send request and freezes its draft inside the
+// caller's transaction. It does not verify that no pending request exists; the
+// caller must have expired any stale request first.
+func createSendRequestTx(ctx context.Context, tx *sql.Tx, accountID string, ins SendRequestInsert) (model.DraftSendRequest, error) {
+	now := nowText()
+	r := model.DraftSendRequest{
+		ID:                  ins.ID,
+		DraftID:             ins.DraftID,
+		InboxID:             ins.InboxID,
+		Status:              model.SendRequestPending,
+		DeliveryStatus:      model.SendDeliveryNone,
+		ContentHash:         ins.ContentHash,
+		RequestedAt:         ins.RequestedAt,
+		RequestedBy:         ins.RequestedBy,
+		RequestedByAPIKeyID: ins.RequestedByAPIKeyID,
+		RequestedByUserID:   ins.RequestedByUserID,
+		ApproverEmail:       ins.ApproverEmail,
+		TokenHash:           ins.TokenHash,
+		TokenExpiresAt:      ins.TokenExpiresAt,
+		CreatedAt:           ins.RequestedAt,
+		UpdatedAt:           ins.RequestedAt,
+	}
+	var expires any
+	if ins.TokenExpiresAt != nil {
+		expires = timeText(*ins.TokenExpiresAt)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO draft_send_requests(id,account_id,inbox_id,draft_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,approver_email,token_hash,token_expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, accountID, r.InboxID, r.DraftID, r.Status, r.DeliveryStatus, r.ContentHash, now, r.RequestedBy, r.RequestedByAPIKeyID, r.RequestedByUserID, r.ApproverEmail, r.TokenHash, expires, now, now); err != nil {
+		return model.DraftSendRequest{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusPendingApproval, now, r.DraftID, accountID); err != nil {
+		return model.DraftSendRequest{}, err
+	}
+	return r, nil
+}
+
+// expireStaleForDraftTx expires any pending request for a draft whose token has
+// passed, unfreezing the draft. It returns the events for the expiries so the
+// caller can publish them.
+func expireStaleForDraftTx(ctx context.Context, tx *sql.Tx, accountID, draftID string, now time.Time) ([]model.Event, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id,inbox_id,draft_id FROM draft_send_requests WHERE account_id=? AND draft_id=? AND status=? AND token_expires_at IS NOT NULL AND token_expires_at<=?`, accountID, draftID, model.SendRequestPending, timeText(now))
+	if err != nil {
+		return nil, err
+	}
+	type stale struct{ id, inboxID, draftID string }
+	var list []stale
+	for rows.Next() {
+		var s stale
+		if err := rows.Scan(&s.id, &s.inboxID, &s.draftID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, s)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var events []model.Event
+	for _, s := range list {
+		nowT := nowText()
+		res, err := tx.ExecContext(ctx, `UPDATE draft_send_requests SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.SendRequestExpired, nowT, s.id, accountID, model.SendRequestPending)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.DraftStatusDraft, nowT, s.draftID, accountID, model.DraftStatusPendingApproval); err != nil {
+			return nil, err
+		}
+		r, err := getSendRequestByIDTx(ctx, tx, accountID, s.id)
+		if err != nil {
+			return nil, err
+		}
+		ev, err := insertEventTx(ctx, tx, accountID, r.InboxID, model.EventDraftApprovalExpired, r.ID, sendRequestPayload(r))
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, ev)
+	}
+	return events, nil
+}
+
+// pendingRequestExistsTx reports whether a draft still has an unexpired pending
+// request inside the caller's transaction.
+func pendingRequestExistsTx(ctx context.Context, tx *sql.Tx, accountID, draftID string) (bool, error) {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM draft_send_requests WHERE account_id=? AND draft_id=? AND status=?`, accountID, draftID, model.SendRequestPending).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ExpireApprovalRequests expires every external approval request whose token has
+// passed, unfreezing the draft, and returns the events to publish. It is called
+// by the background sweep.
+func (s *Store) ExpireApprovalRequests(ctx context.Context, now time.Time) ([]model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id,account_id,inbox_id,draft_id FROM draft_send_requests WHERE status=? AND token_expires_at IS NOT NULL AND token_expires_at<=?`, model.SendRequestPending, timeText(now))
+	if err != nil {
+		return nil, err
+	}
+	type stale struct{ id, accountID, inboxID, draftID string }
+	var list []stale
+	for rows.Next() {
+		var st stale
+		if err := rows.Scan(&st.id, &st.accountID, &st.inboxID, &st.draftID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		list = append(list, st)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var events []model.Event
+	for _, st := range list {
+		nowT := nowText()
+		res, err := tx.ExecContext(ctx, `UPDATE draft_send_requests SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.SendRequestExpired, nowT, st.id, st.accountID, model.SendRequestPending)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.DraftStatusDraft, nowT, st.draftID, st.accountID, model.DraftStatusPendingApproval); err != nil {
+			return nil, err
+		}
+		r, err := getSendRequestByIDTx(ctx, tx, st.accountID, st.id)
+		if err != nil {
+			return nil, err
+		}
+		ev, err := insertEventTx(ctx, tx, st.accountID, r.InboxID, model.EventDraftApprovalExpired, r.ID, sendRequestPayload(r))
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, ev)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+// PendingRequestExists reports whether a draft has an unexpired pending send
+// request.
+func (s *Store) PendingRequestExists(ctx context.Context, accountID, draftID string) (bool, error) {
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM draft_send_requests WHERE account_id=? AND draft_id=? AND status=?`, accountID, draftID, model.SendRequestPending).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ExpireStaleRequestForDraft expires a pending request for a draft whose token
+// has passed and returns the events to publish.
+func (s *Store) ExpireStaleRequestForDraft(ctx context.Context, accountID, draftID string) ([]model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	events, err := expireStaleForDraftTx(ctx, tx, accountID, draftID, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 // CreateSendRequest records an assistant's request that a draft be authorized
 // and sent, freezing the draft while the request is outstanding. The caller
 // must have validated that the draft is sendable (recipient and body present).
-func (s *Store) CreateSendRequest(ctx context.Context, p model.Principal, draftID, contentHash string) (model.DraftSendRequest, model.Event, error) {
+// It returns the requested event plus any expiry event produced by clearing a
+// stale pending request for the same draft.
+func (s *Store) CreateSendRequest(ctx context.Context, p model.Principal, draftID, contentHash string) (model.DraftSendRequest, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+		return model.DraftSendRequest{}, nil, err
 	}
 	defer tx.Rollback()
 	d, err := getDraftTx(ctx, tx, p.AccountID, draftID)
 	if err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+		return model.DraftSendRequest{}, nil, err
 	}
 	if !p.CanAssist(d.InboxID) {
-		return model.DraftSendRequest{}, model.Event{}, ErrForbidden
+		return model.DraftSendRequest{}, nil, ErrForbidden
 	}
-	if d.Status == model.DraftStatusPendingApproval {
-		return model.DraftSendRequest{}, model.Event{}, ErrConflict
+	expired, err := expireStaleForDraftTx(ctx, tx, p.AccountID, draftID, time.Now().UTC())
+	if err != nil {
+		return model.DraftSendRequest{}, nil, err
+	}
+	pending, err := pendingRequestExistsTx(ctx, tx, p.AccountID, draftID)
+	if err != nil {
+		return model.DraftSendRequest{}, nil, err
+	}
+	if pending {
+		return model.DraftSendRequest{}, nil, ErrConflict
 	}
 	actor, err := actorIdentityTx(ctx, tx, p)
 	if err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+		return model.DraftSendRequest{}, nil, err
 	}
-	now := nowText()
-	id := idgen.New("dsr")
-	r := model.DraftSendRequest{
-		ID:                  id,
+	now := time.Now().UTC()
+	r, err := createSendRequestTx(ctx, tx, p.AccountID, SendRequestInsert{
+		ID:                  idgen.New("dsr"),
 		DraftID:             draftID,
 		InboxID:             d.InboxID,
-		Status:              model.SendRequestPending,
-		DeliveryStatus:      model.SendDeliveryNone,
 		ContentHash:         contentHash,
-		RequestedAt:         parseTime(now),
+		RequestedAt:         now,
 		RequestedBy:         actor.Label,
 		RequestedByAPIKeyID: actor.APIKeyID,
 		RequestedByUserID:   actor.UserID,
-		CreatedAt:           parseTime(now),
-		UpdatedAt:           parseTime(now),
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO draft_send_requests(id,account_id,inbox_id,draft_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.ID, p.AccountID, r.InboxID, r.DraftID, r.Status, r.DeliveryStatus, r.ContentHash, now, r.RequestedBy, r.RequestedByAPIKeyID, r.RequestedByUserID, now, now); err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusPendingApproval, now, draftID, p.AccountID); err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+	})
+	if err != nil {
+		return model.DraftSendRequest{}, nil, err
 	}
 	ev, err := insertEventTx(ctx, tx, p.AccountID, r.InboxID, model.EventDraftSendRequested, r.ID, sendRequestPayload(r))
 	if err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+		return model.DraftSendRequest{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
-		return model.DraftSendRequest{}, model.Event{}, err
+		return model.DraftSendRequest{}, nil, err
 	}
-	return r, ev, nil
+	return r, append(expired, ev), nil
 }
 
 // CancelSendRequest withdraws an outstanding request and returns the draft to
@@ -469,7 +673,15 @@ func getSendRequestByIDTx(ctx context.Context, tx *sql.Tx, accountID, id string)
 // and prevents a duplicate send.
 func approveSendRequestTx(ctx context.Context, tx *sql.Tx, accountID, draftID, requestID, actorLabel, actorID, method, feedback, messageID string) (model.Event, error) {
 	now := nowText()
-	res, err := tx.ExecContext(ctx, `UPDATE draft_send_requests SET status=?,delivery_status=?,decided_at=?,decision_actor=?,decision_actor_id=?,decision_method=?,feedback=?,message_id=?,updated_at=? WHERE id=? AND account_id=? AND draft_id=? AND status=?`, model.SendRequestApproved, model.SendDeliveryPending, now, actorLabel, actorID, method, feedback, messageID, now, requestID, accountID, draftID, model.SendRequestPending)
+	q := `UPDATE draft_send_requests SET status=?,delivery_status=?,decided_at=?,decision_actor=?,decision_actor_id=?,decision_method=?,feedback=?,message_id=?,updated_at=? WHERE id=? AND account_id=? AND draft_id=? AND status=?`
+	args := []any{model.SendRequestApproved, model.SendDeliveryPending, now, actorLabel, actorID, method, feedback, messageID, now, requestID, accountID, draftID, model.SendRequestPending}
+	// An email approval must not claim a request whose token has expired, even
+	// if the background sweep has not run yet.
+	if method == model.DecisionMethodEmail {
+		q += ` AND (token_expires_at IS NULL OR token_expires_at>?)`
+		args = append(args, now)
+	}
+	res, err := tx.ExecContext(ctx, q, args...)
 	if err != nil {
 		return model.Event{}, err
 	}
@@ -505,4 +717,139 @@ func sendRequestDeliveryTx(ctx context.Context, tx *sql.Tx, accountID, messageID
 		return nil, err
 	}
 	return &ev, nil
+}
+
+// GetSendRequestInternal loads a send request by id without a principal. It is
+// used by the external email approval path.
+func (s *Store) GetSendRequestInternal(ctx context.Context, accountID, id string) (model.DraftSendRequest, error) {
+	r, err := scanSendRequest(s.read.QueryRowContext(ctx, sendRequestSelect+` WHERE account_id=? AND id=?`, accountID, id))
+	if err == sql.ErrNoRows {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+// FindPendingSendRequestByToken resolves a pending request from a hashed token
+// scoped to its inbox. It returns ErrNotFound when no live request matches.
+func (s *Store) FindPendingSendRequestByToken(ctx context.Context, accountID, inboxID, tokenHash string) (model.DraftSendRequest, error) {
+	r, err := scanSendRequest(s.read.QueryRowContext(ctx, sendRequestSelect+` WHERE account_id=? AND inbox_id=? AND token_hash=? AND status=? COLLATE BINARY`, accountID, inboxID, tokenHash, model.SendRequestPending))
+	if err == sql.ErrNoRows {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+// RejectSendRequestInternal records a rejection without a principal. It is used
+// by the external email approval path after the decision has been validated.
+func (s *Store) RejectSendRequestInternal(ctx context.Context, accountID, requestID, actorLabel, actorID, method, feedback string) (model.DraftSendRequest, model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	defer tx.Rollback()
+	r, err := getSendRequestByIDTx(ctx, tx, accountID, requestID)
+	if err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	now := nowText()
+	q := `UPDATE draft_send_requests SET status=?,decided_at=?,decision_actor=?,decision_actor_id=?,decision_method=?,feedback=?,updated_at=? WHERE id=? AND account_id=? AND status=?`
+	args := []any{model.SendRequestRejected, now, actorLabel, actorID, method, feedback, now, r.ID, accountID, model.SendRequestPending}
+	if method == model.DecisionMethodEmail {
+		q += ` AND (token_expires_at IS NULL OR token_expires_at>?)`
+		args = append(args, now)
+	}
+	res, err := tx.ExecContext(ctx, q, args...)
+	if err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.DraftSendRequest{}, model.Event{}, ErrConflict
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusRejected, now, r.DraftID, accountID); err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	r.Status = model.SendRequestRejected
+	r.DecidedAt = timePtr(parseTime(now))
+	r.DecisionActor = actorLabel
+	r.DecisionActorID = actorID
+	r.DecisionMethod = method
+	r.Feedback = feedback
+	r.UpdatedAt = parseTime(now)
+	ev, err := insertEventTx(ctx, tx, accountID, r.InboxID, model.EventDraftRejected, r.ID, sendRequestPayload(r))
+	if err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	return r, ev, nil
+}
+
+// ControlMessageRecord is one consumed inbound approval control message. It is
+// the durable evidence for the per-domain receiving log and the webhook dedup
+// key.
+type ControlMessageRecord struct {
+	ID                 string
+	AccountID          string
+	InboxID            string
+	Provider           string
+	ProviderDeliveryID string
+	EnvelopeRecipient  string
+	FromName           string
+	FromAddress        string
+	RequestID          string
+	Action             string
+	Outcome            string
+	Reason             string
+}
+
+// ControlMessage is a recorded control message for display.
+type ControlMessage struct {
+	ID          string
+	InboxID     string
+	Provider    string
+	FromName    string
+	FromAddress string
+	RequestID   string
+	Action      string
+	Outcome     string
+	Reason      string
+	CreatedAt   time.Time
+}
+
+// RecordControlMessage persists a consumed approval control message. It returns
+// false when an identical provider delivery has already been recorded, so a
+// webhook retry is a harmless no-op.
+func (s *Store) RecordControlMessage(ctx context.Context, r ControlMessageRecord) (bool, error) {
+	now := nowText()
+	res, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbound_control_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,request_id,action,outcome,reason,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, idgen.New("icm"), r.AccountID, r.InboxID, r.Provider, nullString(r.ProviderDeliveryID), r.EnvelopeRecipient, r.FromName, r.FromAddress, r.RequestID, r.Action, r.Outcome, r.Reason, now)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ListControlMessages returns an inbox's consumed control messages, newest
+// first, for the per-domain activity log.
+func (s *Store) ListControlMessages(ctx context.Context, accountID, inboxID string, limit int) ([]ControlMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT id,inbox_id,provider,from_name,from_address,request_id,action,outcome,reason,created_at FROM inbound_control_messages WHERE account_id=? AND inbox_id=? ORDER BY created_at DESC LIMIT ?`, accountID, inboxID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ControlMessage
+	for rows.Next() {
+		var m ControlMessage
+		var created string
+		if err := rows.Scan(&m.ID, &m.InboxID, &m.Provider, &m.FromName, &m.FromAddress, &m.RequestID, &m.Action, &m.Outcome, &m.Reason, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = parseTime(created)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }

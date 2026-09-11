@@ -63,6 +63,16 @@ func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (mod
 	d.SendRequest, _ = s.latestSendRequestForDraft(ctx, p.AccountID, id)
 	return d, nil
 }
+
+// GetDraftInternal loads a draft without a principal. It is used by the
+// external email approval path, which has already proved the decision.
+func (s *Store) GetDraftInternal(ctx context.Context, accountID, id string) (model.Draft, error) {
+	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, accountID))
+	if err == sql.ErrNoRows {
+		return d, ErrNotFound
+	}
+	return d, err
+}
 func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID string) ([]model.Draft, error) {
 	if inboxID != "" && !p.CanAssist(inboxID) {
 		return nil, ErrForbidden

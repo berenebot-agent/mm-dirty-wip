@@ -2,7 +2,11 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 )
 
 // reconcileIdempotency backfills the mailbox scope on existing idempotency rows
@@ -95,4 +99,42 @@ func backfillDraftStorage(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// backfillAttachmentHashes computes and stores a SHA-256 for every existing
+// draft attachment that predates migration 015. Files that are missing or
+// unreadable are skipped: a later request-send recomputes and persists the
+// hash anyway, and a missing file would fail the send regardless.
+func backfillAttachmentHashes(dataDir string) func(context.Context, *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id,raw_path FROM draft_attachments WHERE content_hash=''`)
+		if err != nil {
+			return err
+		}
+		type att struct{ id, path string }
+		var pending []att
+		for rows.Next() {
+			var a att
+			if err := rows.Scan(&a.id, &a.path); err != nil {
+				rows.Close()
+				return err
+			}
+			pending = append(pending, a)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, a := range pending {
+			data, err := os.ReadFile(filepath.Join(dataDir, filepath.FromSlash(a.path)))
+			if err != nil {
+				continue
+			}
+			sum := sha256.Sum256(data)
+			if _, err := tx.ExecContext(ctx, `UPDATE draft_attachments SET content_hash=? WHERE id=?`, hex.EncodeToString(sum[:]), a.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }

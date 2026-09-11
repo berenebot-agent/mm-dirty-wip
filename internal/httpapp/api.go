@@ -57,13 +57,15 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `POST /v1/drafts/{id}/send` (Owner) — send a draft immediately (copies fields + attachments, deletes the draft)\n\n" +
 		"## Draft approval (human-in-the-loop)\n" +
 		"An Assistant can draft and request send; an Owner authorizes. Approvals always apply to the exact frozen draft.\n" +
-		"- `POST /v1/drafts/{id}/request-send` (Assistant) — submit for authorization; the draft becomes `pending_approval` and is frozen.\n" +
+		"- `POST /v1/drafts/{id}/request-send` (Assistant) — submit for authorization; the draft becomes `pending_approval` and is frozen. If the inbox has an `approver_email` configured, the approval-request email is sent automatically; `{\"external\": true}` is optional and only errors when no approver is configured.\n" +
 		"- `POST /v1/drafts/{id}/cancel-send-request` (Assistant) — withdraw the request and return the draft to `draft`.\n" +
 		"- `POST /v1/drafts/{id}/approve` (Owner) — approve and enqueue the frozen draft through the normal outbound flow. Optional `{\"feedback\":\"...\"}`.\n" +
 		"- `POST /v1/drafts/{id}/reject` (Owner) — reject with optional `{\"feedback\":\"...\"}`; the draft becomes `rejected`, stays editable, and can be resubmitted.\n" +
 		"- `GET /v1/drafts/{id}/send-request` — the latest request (works after the draft has been sent); `GET /v1/send-requests?inbox={id}&active=true` lists requests.\n" +
-		"- Draft reads include `status` (`draft`, `pending_approval`, `rejected`) and the latest `send_request`.\n" +
-		"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`.\n" +
+		"- Draft reads include `status` (`draft`, `pending_approval`, `rejected`) and the latest `send_request`, including `approver_email`, `token_expires_at` and `decision_method` (`ui`, `api` or `email`).\n" +
+		"- External approval: an inbox may configure an `approver_email` (set via `PATCH /v1/inboxes/{id}`). The approver gets an email with Approve/Reject `mailto:` actions and replies to the inbox; Gatehouse consumes the reply, validates the token and sender, and records the decision. A UI decision wins safely over an outstanding email request.\n" +
+		"- External requests expire after `APPROVAL_EXPIRY_HOURS` (default 48, `0` disables); an expired request returns the draft to `draft` and the token is permanently dead.\n" +
+		"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`, `draft.approval_expired`.\n" +
 		"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
 		"## Send and reply (Owner)\n" +
 		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery.\n" +
@@ -144,7 +146,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"delete": map[string]any{"summary": "Delete a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/drafts/{id}/send":                map[string]any{"post": map[string]any{"summary": "Send a draft (Owner)", "description": "Copies the draft's fields and attachments into a new outbound message, then deletes the draft.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/request-send":        map[string]any{"post": map[string]any{"summary": "Request authorization to send a draft (Assistant)", "description": "Freezes the draft as pending_approval until the request is approved, rejected or cancelled. Optional external approver fields are reserved for a later phase.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/drafts/{id}/request-send":        map[string]any{"post": map[string]any{"summary": "Request authorization to send a draft (Assistant)", "description": "Freezes the draft as pending_approval until the request is approved, rejected, cancelled or expired. A configured inbox approver makes the request external automatically (the approval email is sent to them); {\"external\": true} is optional and only errors when no approver is configured.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/drafts/{id}/cancel-send-request": map[string]any{"post": map[string]any{"summary": "Cancel a pending send request (Assistant)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/drafts/{id}/approve":             map[string]any{"post": map[string]any{"summary": "Approve and send a pending draft (Owner)", "description": "Approves the exact frozen draft and enqueues it through the outbound flow. Accepts an optional feedback field.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/drafts/{id}/reject":              map[string]any{"post": map[string]any{"summary": "Reject a pending send request (Owner)", "description": "Marks the draft rejected and stores optional feedback for the agent.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
@@ -245,18 +247,42 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, v)
 	case http.MethodPatch:
+		if !p.CanOwn(id) && !p.Admin {
+			writeError(w, 403, "forbidden")
+			return
+		}
 		var in struct {
-			DisplayName    string    `json:"display_name"`
-			Enabled        *bool     `json:"enabled"`
-			AllowedSenders *[]string `json:"allowed_senders"`
+			DisplayName      *string   `json:"display_name"`
+			Enabled          *bool     `json:"enabled"`
+			AllowedSenders   *[]string `json:"allowed_senders"`
+			SenderRestricted *bool     `json:"sender_restricted"`
+			ApproverEmail    *string   `json:"approver_email"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		if err := s.Service.Store.UpdateInbox(r.Context(), p, id, in.DisplayName, in.Enabled); err != nil {
+		if in.ApproverEmail != nil {
+			normalized, err := normalizeApproverEmail(*in.ApproverEmail)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			if err := s.Service.Store.SetInboxApprover(r.Context(), p.AccountID, id, normalized); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		display := ""
+		if in.DisplayName != nil {
+			display = *in.DisplayName
+		}
+		if err := s.Service.Store.UpdateInbox(r.Context(), p, id, display, in.Enabled); err != nil {
 			mapStoreError(w, err)
 			return
 		}
+		// allowed_senders implies restriction when sender_restricted is absent,
+		// preserving the pre-toggle API contract for older clients.
+		restricted := in.SenderRestricted
 		if in.AllowedSenders != nil {
 			senders, err := normalizeAllowedSenders(*in.AllowedSenders)
 			if err != nil {
@@ -264,6 +290,16 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err = s.Service.Store.SetInboxAllowedSenders(r.Context(), p.AccountID, id, senders); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			if restricted == nil {
+				inferred := len(senders) > 0
+				restricted = &inferred
+			}
+		}
+		if restricted != nil {
+			if err := s.Service.Store.SetInboxSenderRestricted(r.Context(), p.AccountID, id, *restricted); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -771,19 +807,23 @@ const maxFeedbackBytes = 4096
 // and sent. The draft is frozen until the request is decided or cancelled.
 func (s *Server) apiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	key := p.AccountID
+	if p.APIKeyID != "" {
+		key = p.APIKeyID
+	}
+	if !s.sendLimiter.Allow(key) {
+		writeError(w, 429, "send rate limit exceeded")
+		return
+	}
 	var in struct {
-		ApproverEmail string `json:"approver_email"`
+		External bool `json:"external"`
 	}
 	if r.ContentLength != 0 {
 		if !decodeJSON(w, r, &in) {
 			return
 		}
 	}
-	if strings.TrimSpace(in.ApproverEmail) != "" {
-		writeError(w, 400, "external approver is not supported yet")
-		return
-	}
-	d, err := s.Service.RequestSend(r.Context(), p, r.PathValue("id"))
+	d, err := s.Service.RequestSend(r.Context(), p, r.PathValue("id"), in.External)
 	if err != nil {
 		mapStoreError(w, err)
 		return

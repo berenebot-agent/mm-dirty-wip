@@ -75,9 +75,14 @@ func TestMatchAllowedSender(t *testing.T) {
 
 func TestInboxAllowsSender(t *testing.T) {
 	if !(model.Inbox{}).AllowsSender("anyone@example.com") {
-		t.Fatal("empty allowlist must allow all senders")
+		t.Fatal("unrestricted inbox must allow all senders")
 	}
-	box := model.Inbox{AllowedSenders: []string{"alice@example.com", "*@allowed.test", "*@*.corp.test"}}
+	// A non-empty list only restricts when SenderRestricted is set; this keeps
+	// the approver setting from accidentally turning on sender filtering.
+	if !(model.Inbox{AllowedSenders: []string{"alice@example.com"}}).AllowsSender("bob@example.com") {
+		t.Fatal("unrestricted inbox must ignore the allow list")
+	}
+	box := model.Inbox{SenderRestricted: true, AllowedSenders: []string{"alice@example.com", "*@allowed.test", "*@*.corp.test"}}
 	cases := []struct {
 		address string
 		want    bool
@@ -93,5 +98,13 @@ func TestInboxAllowsSender(t *testing.T) {
 		if got := box.AllowsSender(tc.address); got != tc.want {
 			t.Errorf("model.AllowsSender(%q) = %v, want %v", tc.address, got, tc.want)
 		}
+	}
+	// Restricted with an empty list blocks everyone (except the approver, which
+	// AllowsInbound adds).
+	if (model.Inbox{SenderRestricted: true}).AllowsSender("anyone@example.com") {
+		t.Fatal("restricted empty allowlist must block senders")
+	}
+	if !(model.Inbox{SenderRestricted: true, ApproverEmail: "appr@example.com"}).AllowsInbound("appr@example.com") {
+		t.Fatal("approver must be allowed on a restricted inbox")
 	}
 }

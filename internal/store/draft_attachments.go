@@ -33,7 +33,7 @@ func (s *Store) AddDraftAttachment(ctx context.Context, p model.Principal, draft
 	a.ID = idgen.New("dat")
 	a.DraftID = draftID
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO draft_attachments(id,draft_id,filename,content_type,size_bytes,raw_path,created_at) VALUES(?,?,?,?,?,?,?)`, a.ID, draftID, a.Filename, a.ContentType, a.Size, a.RawPath, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO draft_attachments(id,draft_id,filename,content_type,size_bytes,content_hash,raw_path,created_at) VALUES(?,?,?,?,?,?,?,?)`, a.ID, draftID, a.Filename, a.ContentType, a.Size, a.ContentHash, a.RawPath, now); err != nil {
 		return model.DraftAttachment{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -46,7 +46,7 @@ func (s *Store) AddDraftAttachment(ctx context.Context, p model.Principal, draft
 func scanDraftAttachment(row interface{ Scan(...any) error }) (model.DraftAttachment, error) {
 	var a model.DraftAttachment
 	var created string
-	err := row.Scan(&a.ID, &a.DraftID, &a.Filename, &a.ContentType, &a.Size, &a.RawPath, &created)
+	err := row.Scan(&a.ID, &a.DraftID, &a.Filename, &a.ContentType, &a.Size, &a.ContentHash, &a.RawPath, &created)
 	if err != nil {
 		return a, err
 	}
@@ -63,7 +63,12 @@ func (s *Store) ListDraftAttachments(ctx context.Context, p model.Principal, dra
 	if !p.CanAssist(d.InboxID) {
 		return nil, ErrForbidden
 	}
-	rows, err := s.read.QueryContext(ctx, `SELECT id,draft_id,filename,content_type,size_bytes,raw_path,created_at FROM draft_attachments WHERE draft_id=? ORDER BY created_at`, draftID)
+	return s.ListDraftAttachmentsInternal(ctx, p.AccountID, draftID)
+}
+
+// ListDraftAttachmentsInternal lists a draft's attachments without a principal.
+func (s *Store) ListDraftAttachmentsInternal(ctx context.Context, accountID, draftID string) ([]model.DraftAttachment, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,draft_id,filename,content_type,size_bytes,content_hash,raw_path,created_at FROM draft_attachments WHERE draft_id=? ORDER BY created_at`, draftID)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +82,29 @@ func (s *Store) ListDraftAttachments(ctx context.Context, p model.Principal, dra
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// SetDraftAttachmentHashes persists computed content hashes for a draft's
+// attachments, keyed by attachment id. It is used to backfill hashes that were
+// empty when a send request froze the draft.
+func (s *Store) SetDraftAttachmentHashes(ctx context.Context, accountID, draftID string, hashes map[string]string) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := getDraftTx(ctx, tx, accountID, draftID); err != nil {
+		return err
+	}
+	for id, hash := range hashes {
+		if _, err := tx.ExecContext(ctx, `UPDATE draft_attachments SET content_hash=? WHERE id=? AND draft_id=?`, hash, id, draftID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // draftAttachmentPathsTx returns the raw paths and total byte size of a draft's

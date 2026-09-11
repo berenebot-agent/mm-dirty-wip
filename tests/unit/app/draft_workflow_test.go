@@ -29,7 +29,7 @@ func TestRequestSendValidationAndFreeze(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, asst, empty.ID); err == nil {
+	if _, err = svc.RequestSend(ctx, asst, empty.ID, false); err == nil {
 		t.Fatal("request-send accepted a draft with no recipient")
 	}
 
@@ -38,7 +38,7 @@ func TestRequestSendValidationAndFreeze(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := svc.RequestSend(ctx, asst, draft.ID)
+	got, err := svc.RequestSend(ctx, asst, draft.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestApproveDraftSendsStoredContent(t *testing.T) {
 	if _, err = svc.Store.AddDraftAttachment(ctx, asst, draft.ID, model.DraftAttachment{Filename: "a.txt", ContentType: "text/plain", Size: int64(len("attdata")), RawPath: rawRel}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, asst, draft.ID); err != nil {
+	if _, err = svc.RequestSend(ctx, asst, draft.ID, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,7 +138,7 @@ func TestRejectDraftRevisionFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, asst, draft.ID); err != nil {
+	if _, err = svc.RequestSend(ctx, asst, draft.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	rejected, err := svc.RejectDraft(ctx, admin, draft.ID, "fix pricing", model.DecisionMethodUI)
@@ -153,7 +153,7 @@ func TestRejectDraftRevisionFlow(t *testing.T) {
 	if err != nil || edited.Status != model.DraftStatusDraft {
 		t.Fatalf("revise %+v err=%v", edited, err)
 	}
-	resubmitted, err := svc.RequestSend(ctx, asst, draft.ID)
+	resubmitted, err := svc.RequestSend(ctx, asst, draft.ID, false)
 	if err != nil || resubmitted.Status != model.DraftStatusPendingApproval {
 		t.Fatalf("resubmit %+v err=%v", resubmitted, err)
 	}
