@@ -1013,16 +1013,16 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline 
 	}
 }
 
+// inlineImageTypes are the raster image types safe to render inline. Scriptable
+// or vector types (notably image/svg+xml) are deliberately excluded and are only
+// ever served as downloads.
 var inlineImageTypes = map[string]bool{
-	"image/png":                true,
-	"image/jpeg":               true,
-	"image/gif":                true,
-	"image/webp":               true,
-	"image/bmp":                true,
-	"image/avif":               true,
-	"image/svg+xml":            true,
-	"image/x-icon":             true,
-	"image/vnd.microsoft.icon": true,
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+	"image/bmp":  true,
+	"image/avif": true,
 }
 
 func normalizeContentType(ct string) string {
@@ -1065,7 +1065,9 @@ func formAddresses(r *http.Request, name string) []string {
 // paths are accepted to avoid open-redirect.
 func returnTo(r *http.Request, inboxID, fallbackFolder string) string {
 	dest := strings.TrimSpace(r.Form.Get("return_to"))
-	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") {
+	// Reject scheme-relative forms ("//host") and any backslash, which browsers
+	// may normalize to a slash and turn into an off-site redirect.
+	if dest == "" || !strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "//") || strings.Contains(dest, "\\") {
 		dest = "/ui/inboxes/" + inboxID
 		if fallbackFolder != "" {
 			dest += "/" + fallbackFolder

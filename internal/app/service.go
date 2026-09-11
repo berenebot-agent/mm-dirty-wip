@@ -34,7 +34,7 @@ import (
 	_ "gatehouse-mail/internal/transport/mailgun"
 	"gatehouse-mail/internal/transport/netutil"
 	_ "gatehouse-mail/internal/transport/resend"
-	smtpt "gatehouse-mail/internal/transport/smtp"
+	_ "gatehouse-mail/internal/transport/smtp"
 )
 
 type Service struct {
@@ -54,8 +54,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if err = os.MkdirAll(filepath.Join(cfg.DataDir, "messages", ".tmp"), 0o700); err != nil {
 		return nil, err
 	}
-	smtpt.SetHosted(cfg.Mode == "hosted")
-	netutil.SetHosted(cfg.Mode == "hosted")
+	netutil.SetRequirePublic(cfg.RequirePublicOutbound())
 	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
 }
 
@@ -320,6 +319,9 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	if err != nil {
 		return store.DomainSendingConfig{}, err
 	}
+	if err := s.validateProviderBase(merged); err != nil {
+		return store.DomainSendingConfig{}, err
+	}
 	enc, err := s.encryptConfig(merged)
 	if err != nil {
 		return store.DomainSendingConfig{}, err
@@ -365,6 +367,9 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 	}
 	merged, err := validateConfig(fields, cfg, old, sameProvider)
 	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if err := s.validateProviderBase(merged); err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
 	enc, err := s.encryptConfig(merged)
@@ -461,6 +466,20 @@ func applyGeneratedSecrets(fields []transport.ConfigField, cfg map[string]any, s
 		}
 	}
 	return generated, nil
+}
+
+// validateProviderBase rejects a provider API base that is not HTTPS or names a
+// non-public IP literal when public-destination enforcement is active. Host
+// names are resolved and checked at dial time, not here.
+func (s *Service) validateProviderBase(values map[string]any) error {
+	base, _ := values["api_base"].(string)
+	if strings.TrimSpace(base) == "" {
+		return nil
+	}
+	if err := netutil.ValidateBaseURL(base); err != nil {
+		return invalidConfig("Base URL: %s", err.Error())
+	}
+	return nil
 }
 
 // validateConfig expands incoming values against a provider schema. existing
@@ -801,7 +820,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		if err != nil {
 			return SendResult{}, err
 		}
-		if target.InboxID != inbox.ID {
+		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
 		}
 		threadID = target.ThreadID
@@ -826,7 +845,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		if err != nil {
 			return SendResult{}, err
 		}
-		if target.InboxID != inbox.ID {
+		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
 		}
 		if subject == "" {

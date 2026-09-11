@@ -107,11 +107,15 @@ func TestSendErrorsAndEmptyHTML(t *testing.T) {
 	}
 }
 
-func TestHostedRejectsPrivateAPIBase(t *testing.T) {
-	netutil.SetHosted(true)
-	defer netutil.SetHosted(false)
-	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: "http://127.0.0.1:9999"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
+func TestRequirePublicRejectsPrivateAPIBase(t *testing.T) {
+	netutil.SetRequirePublic(true)
+	defer netutil.SetRequirePublic(false)
+	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: "https://127.0.0.1:9999"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "not public-routable") {
-		t.Fatalf("hosted private API base should be rejected: %v", err)
+		t.Fatalf("private API base should be rejected: %v", err)
+	}
+	_, err = brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: "http://api.brevo.com"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
+	if err == nil || !strings.Contains(err.Error(), "must use https") {
+		t.Fatalf("plaintext API base should be rejected: %v", err)
 	}
 }

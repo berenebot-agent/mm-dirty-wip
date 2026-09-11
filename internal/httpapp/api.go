@@ -304,7 +304,11 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		v, _ := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id)
+		v, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
 		writeJSON(w, 200, v)
 	case http.MethodDelete:
 		if !adminOnly(w, p) {

@@ -31,11 +31,16 @@ type Config struct {
 	RelayRequireBearer  bool
 	LoginLimitPerMinute int
 	SendLimitPerMinute  int
-	InboundConcurrency  int
-	MaxMultipartParts   int
-	MaxMIMEDepth        int
-	MaxMIMEParts        int
-	BodyReadTimeout     time.Duration
+	// AllowPrivateOutbound disables the public-routable destination check for
+	// outbound transports in self-hosted mode. It is always ignored in hosted
+	// mode, where destinations must be public. It exists for operators who
+	// intentionally send through a private gateway or local relay.
+	AllowPrivateOutbound bool
+	InboundConcurrency   int
+	MaxMultipartParts    int
+	MaxMIMEDepth         int
+	MaxMIMEParts         int
+	BodyReadTimeout      time.Duration
 	// ApprovalExpiryHours bounds how long an external email approval request
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
@@ -44,26 +49,27 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddr:          env("LISTEN_ADDR", ":8081"),
-		BaseURL:             strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
-		DataDir:             env("DATA_DIR", "/data"),
-		Mode:                strings.ToLower(env("MODE", "selfhosted")),
-		AllowRegistration:   envBool("ALLOW_REGISTRATION", false),
-		TrustProxyHeaders:   envBool("TRUST_PROXY_HEADERS", false),
-		AppEncryptionKey:    strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
-		AdminBootstrapToken: strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
-		MaxMessageBytes:     envInt64("MAX_MESSAGE_BYTES", 30<<20),
-		DefaultQuotaBytes:   envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
-		SessionTTL:          time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
-		RelayRequireBearer:  envBool("RELAY_REQUIRE_CALLER_AUTH", false),
-		LoginLimitPerMinute: envInt("LOGIN_LIMIT_PER_MINUTE", 10),
-		SendLimitPerMinute:  envInt("SEND_LIMIT_PER_MINUTE", 60),
-		InboundConcurrency:  envInt("INBOUND_CONCURRENCY", 32),
-		MaxMultipartParts:   envInt("MAX_MULTIPART_PARTS", 64),
-		MaxMIMEDepth:        envInt("MAX_MIME_DEPTH", 8),
-		MaxMIMEParts:        envInt("MAX_MIME_PARTS", 256),
-		BodyReadTimeout:     time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
-		ApprovalExpiryHours: envInt("APPROVAL_EXPIRY_HOURS", 48),
+		ListenAddr:           env("LISTEN_ADDR", ":8081"),
+		BaseURL:              strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
+		DataDir:              env("DATA_DIR", "/data"),
+		Mode:                 strings.ToLower(env("MODE", "selfhosted")),
+		AllowRegistration:    envBool("ALLOW_REGISTRATION", false),
+		TrustProxyHeaders:    envBool("TRUST_PROXY_HEADERS", false),
+		AppEncryptionKey:     strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
+		AdminBootstrapToken:  strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
+		MaxMessageBytes:      envInt64("MAX_MESSAGE_BYTES", 30<<20),
+		DefaultQuotaBytes:    envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
+		SessionTTL:           time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
+		RelayRequireBearer:   envBool("RELAY_REQUIRE_CALLER_AUTH", false),
+		LoginLimitPerMinute:  envInt("LOGIN_LIMIT_PER_MINUTE", 10),
+		SendLimitPerMinute:   envInt("SEND_LIMIT_PER_MINUTE", 60),
+		AllowPrivateOutbound: envBool("ALLOW_PRIVATE_OUTBOUND", false),
+		InboundConcurrency:   envInt("INBOUND_CONCURRENCY", 32),
+		MaxMultipartParts:    envInt("MAX_MULTIPART_PARTS", 64),
+		MaxMIMEDepth:         envInt("MAX_MIME_DEPTH", 8),
+		MaxMIMEParts:         envInt("MAX_MIME_PARTS", 256),
+		BodyReadTimeout:      time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
+		ApprovalExpiryHours:  envInt("APPROVAL_EXPIRY_HOURS", 48),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
@@ -137,6 +143,13 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 		}
 	}
 	return false
+}
+
+// RequirePublicOutbound reports whether outbound transports must resolve only
+// public-routable destinations. Hosted mode always enforces it; self-hosted
+// mode enforces it unless the operator explicitly opts out.
+func (c Config) RequirePublicOutbound() bool {
+	return c.Mode == "hosted" || !c.AllowPrivateOutbound
 }
 
 func env(name, fallback string) string {

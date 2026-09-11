@@ -125,7 +125,7 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
 	svc, err := app.New(cfg, st, hub)
 	if err != nil {
@@ -204,7 +204,7 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
 	svc, err := app.New(cfg, st, hub)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
 	svc, err := app.New(cfg, st, hub)
 	if err != nil {

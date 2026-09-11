@@ -76,6 +76,9 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	var admin int
 	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &created)
 	if err == sql.ErrNoRows {
+		// Equalize the work done for an unknown account so login timing cannot
+		// be used to enumerate accounts.
+		auth.DummyPasswordCheck(password)
 		return model.User{}, ErrNotFound
 	}
 	if err != nil {

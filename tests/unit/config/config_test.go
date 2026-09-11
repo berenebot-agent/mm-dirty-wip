@@ -31,6 +31,35 @@ func TestListenAddrMustDifferFromInbound(t *testing.T) {
 	}
 }
 
+func TestRequirePublicOutboundByDefault(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("ALLOW_PRIVATE_OUTBOUND", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequirePublicOutbound() {
+		t.Fatal("self-hosted must require public outbound by default")
+	}
+	t.Setenv("ALLOW_PRIVATE_OUTBOUND", "true")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RequirePublicOutbound() {
+		t.Fatal("self-hosted opt-out must disable the requirement")
+	}
+	// Hosted mode ignores the opt-out.
+	t.Setenv("MODE", "hosted")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequirePublicOutbound() {
+		t.Fatal("hosted mode must always require public outbound")
+	}
+}
+
 func TestTrustedProxiesParsing(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.1,192.168.1.0/24,2001:db8::/32")

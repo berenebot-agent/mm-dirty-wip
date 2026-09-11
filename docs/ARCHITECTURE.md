@@ -305,7 +305,7 @@ Brevo HTTP API
 
 Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. Each domain owns at most one optional sending configuration (`domain_sending_configs`); there is no account-level connector pool, no reusable named credential, and no assignment selector, so a domain with no sending configuration queues mail instead of sending through another domain's provider. A queued send resolves the domain's current configuration at worker delivery time; if the domain has none, the message is held without consuming a retry attempt. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
-Hosted-mode generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts.
+Generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts. The same public-routable check guards every HTTP provider client and is on by default in all modes; self-hosted operators who intentionally send through a private gateway can opt out with `ALLOW_PRIVATE_OUTBOUND=true`, which hosted mode ignores.
 
 ## 9. Authentication
 

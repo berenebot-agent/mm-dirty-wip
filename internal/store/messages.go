@@ -383,7 +383,7 @@ func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string
 
 // MessageSizesByInbox returns the stored message bytes for each inbox.
 func (s *Store) MessageSizesByInbox(ctx context.Context, p model.Principal) (map[string]int64, error) {
-	q := `SELECT inbox_id,COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=?`
+	q := `SELECT inbox_id,COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=? AND internal=0`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)

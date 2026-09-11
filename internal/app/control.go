@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"html"
+	"net/mail"
 	"regexp"
 	"strings"
 	"time"
@@ -90,6 +91,20 @@ func stripTags(s string) string {
 	return html.UnescapeString(tagRe.ReplaceAllString(s, " "))
 }
 
+// canonicalSender normalizes an address for comparison, stripping any display
+// name and lowercasing it. It is applied to both the provider-attested envelope
+// sender and the message header sender.
+func canonicalSender(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if a, err := mail.ParseAddress(raw); err == nil {
+		return strings.ToLower(strings.TrimSpace(a.Address))
+	}
+	return strings.ToLower(raw)
+}
+
 // handleControlMessage consumes an inbound approval control message. It returns
 // transport.ErrInboundIgnored so the webhook is acknowledged without the
 // message being stored. Every outcome is recorded for the domain log; a
@@ -122,7 +137,19 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	if d, derr := s.Store.GetDraftInternal(ctx, inbox.AccountID, r.DraftID); derr == nil {
 		subject = d.Subject
 	}
-	if !strings.EqualFold(strings.TrimSpace(r.ApproverEmail), strings.TrimSpace(parsed.From.Address)) {
+	// The provider-attested envelope sender is authoritative: the MIME From
+	// header is attacker-controlled, while the envelope is what the receiving
+	// MTA observed and what SPF covers. Both must match the nominated approver,
+	// and a missing envelope fails closed.
+	approver := strings.ToLower(strings.TrimSpace(r.ApproverEmail))
+	envelopeFrom := canonicalSender(msg.EnvelopeFrom)
+	mimeFrom := canonicalSender(parsed.From.Address)
+	if envelopeFrom == "" {
+		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval envelope sender missing")
+		record(r.ID, action, "invalid", "approval envelope sender missing")
+		return transport.ErrInboundIgnored
+	}
+	if envelopeFrom != approver || mimeFrom != approver {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval sender does not match nominated approver")
 		record(r.ID, action, "invalid", "sender does not match approver")
 		return transport.ErrInboundIgnored

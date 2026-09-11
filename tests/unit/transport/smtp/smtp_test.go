@@ -97,8 +97,8 @@ func TestPlainSMTPAndHostedSSRF(t *testing.T) {
 func TestOutboundAdapterHostedFlagAndRawMIME(t *testing.T) {
 	host, port, got, closeFn := fakeSMTP(t)
 	defer closeFn()
-	smtp.SetHosted(false)
-	defer smtp.SetHosted(false)
+	smtp.SetRequirePublic(false)
+	defer smtp.SetRequirePublic(false)
 	raw := []byte("From: a@b.test\r\nTo: c@d.test\r\nSubject: hi\r\n\r\n-- attachment body --\r\n")
 	if err := smtp.Send(context.Background(), smtp.Config{Host: host, Port: port, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, false); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestOutboundAdapterHostedFlagAndRawMIME(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no message")
 	}
-	smtp.SetHosted(true)
+	smtp.SetRequirePublic(true)
 	err := smtp.Send(context.Background(), smtp.Config{Host: "127.0.0.1", Port: 25, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, true)
 	if err == nil || !strings.Contains(err.Error(), "public-routable") {
 		t.Fatalf("hosted flag not applied: %v", err)
