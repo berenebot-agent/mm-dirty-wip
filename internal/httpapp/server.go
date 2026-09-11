@@ -256,6 +256,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+		w.Header().Set("Link", `</.well-known/gatehouse>; rel="help"; title="Agents: GET /.well-known/gatehouse for API reference"`)
 		next.ServeHTTP(w, r)
 	})
 }
