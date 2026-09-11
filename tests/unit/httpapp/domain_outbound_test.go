@@ -177,8 +177,11 @@ func TestDashboardInboxIssueDot(t *testing.T) {
 	if !strings.Contains(body, `class="issue-dot"`) {
 		t.Fatalf("dashboard missing issue-dot for inbox in unconfigured domain")
 	}
-	if !strings.Contains(body, "Sending paused and not receiving") {
-		t.Fatalf("dashboard missing combined issue tooltip")
+	if !strings.Contains(body, "No Sender Configured for Domain") {
+		t.Fatalf("dashboard missing sender issue tooltip")
+	}
+	if !strings.Contains(body, "No Receiver Configured for Domain") {
+		t.Fatalf("dashboard missing receiver issue tooltip")
 	}
 	for _, banned := range []string{"No sending provider for", "No receive path for"} {
 		if strings.Contains(body, banned) {
@@ -209,7 +212,7 @@ func TestDashboardInboxIssueDotReceiveOnly(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Not receiving — no receive path is configured for this domain.") {
+	if !strings.Contains(body, "No Receiver Configured for Domain") {
 		t.Fatalf("dashboard missing receive-path issue tooltip")
 	}
 }
