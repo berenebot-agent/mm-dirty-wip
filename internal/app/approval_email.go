@@ -72,7 +72,7 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	text.WriteString(" Nothing changes until you send that email.\r\n\r\n")
 	text.WriteString("Approve - subject line:\r\n" + fmt.Sprintf("[GH-%s:%s]\r\n", controlApprove, token) + "\r\n")
 	text.WriteString("Reject - subject line:\r\n" + fmt.Sprintf("[GH-%s:%s]\r\n", controlReject, token) + "\r\n")
-	text.WriteString("You may add feedback between the markers below, keeping the markers intact:\r\n\r\n")
+	text.WriteString("You may add feedback between the markers below, keeping the markers intact. If you are approving, your feedback is recorded for the agent but does not change the email being sent:\r\n\r\n")
 	text.WriteString(controlBody() + "\r\n")
 	text.WriteString("--- Draft to send ---\r\n")
 	text.WriteString("To: " + to + "\r\n")
@@ -93,7 +93,7 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	h.WriteString("Choose an action, then <strong>send the email your client opens</strong>. Nothing changes until you send it.</p>")
 	h.WriteString(`<p><a href="` + html.EscapeString(approveURL) + `" style="display:inline-block;padding:10px 16px;background:#1f6feb;color:#fff;text-decoration:none;border-radius:6px;margin-right:8px">Approve &amp; Send</a>`)
 	h.WriteString(`<a href="` + html.EscapeString(rejectURL) + `" style="display:inline-block;padding:10px 16px;background:#b42318;color:#fff;text-decoration:none;border-radius:6px">Reject</a></p>`)
-	h.WriteString("<p>You may add feedback between the markers in the message body, keeping the markers intact.</p>")
+	h.WriteString("<p>You may add feedback between the markers in the message body, keeping the markers intact. If you are approving, your feedback is recorded for the agent but does not change the email being sent.</p>")
 	h.WriteString("<hr><h3>Draft to send</h3>")
 	h.WriteString("<p><strong>To:</strong> " + html.EscapeString(to) + "<br>")
 	if cc != "" {

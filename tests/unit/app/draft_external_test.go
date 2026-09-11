@@ -77,6 +77,34 @@ func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) st
 	return ""
 }
 
+// approvalEmailText returns the plain-text body of the latest queued
+// approval-request email.
+func approvalEmailText(t *testing.T, svc *app.Service, accountID, inboxID string) string {
+	t.Helper()
+	ctx := context.Background()
+	box, err := svc.Store.GetInboxInternal(ctx, accountID, inboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: accountID, Admin: true}
+	msgs, err := svc.Store.ListOutbox(ctx, p, box.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if !strings.HasPrefix(m.Subject, "Approval required:") {
+			continue
+		}
+		parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed.Text
+	}
+	t.Fatal("no queued approval email found")
+	return ""
+}
+
 func TestApproverImpliesExternalRequest(t *testing.T) {
 	svc, u, _, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
@@ -101,6 +129,10 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	token := approvalToken(t, svc, u.AccountID, box.ID)
 	if token == "" {
 		t.Fatal("no approval token in queued email")
+	}
+	// It must tell the approver that feedback does not alter the draft.
+	if text := approvalEmailText(t, svc, u.AccountID, box.ID); !strings.Contains(text, "does not change the email being sent") {
+		t.Fatalf("approval email missing feedback clarification:\n%s", text)
 	}
 }
 
