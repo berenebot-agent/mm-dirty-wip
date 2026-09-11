@@ -805,16 +805,35 @@ type ControlMessageRecord struct {
 
 // ControlMessage is a recorded control message for display.
 type ControlMessage struct {
-	ID          string
-	InboxID     string
-	Provider    string
-	FromName    string
-	FromAddress string
-	RequestID   string
-	Action      string
-	Outcome     string
-	Reason      string
-	CreatedAt   time.Time
+	ID                string
+	InboxID           string
+	Provider          string
+	FromName          string
+	FromAddress       string
+	EnvelopeRecipient string
+	RequestID         string
+	Action            string
+	Outcome           string
+	Reason            string
+	CreatedAt         time.Time
+}
+
+// controlMessageSelect lists the displayable columns shared by the per-inbox
+// and account-wide control-message reads.
+const controlMessageSelect = `SELECT id,inbox_id,provider,from_name,from_address,envelope_recipient,request_id,action,outcome,reason,created_at FROM inbound_control_messages`
+
+func scanControlMessages(rows *sql.Rows) ([]ControlMessage, error) {
+	var out []ControlMessage
+	for rows.Next() {
+		var m ControlMessage
+		var created string
+		if err := rows.Scan(&m.ID, &m.InboxID, &m.Provider, &m.FromName, &m.FromAddress, &m.EnvelopeRecipient, &m.RequestID, &m.Action, &m.Outcome, &m.Reason, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt = parseTime(created)
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // RecordControlMessage persists a consumed approval control message. It returns
@@ -836,20 +855,24 @@ func (s *Store) ListControlMessages(ctx context.Context, accountID, inboxID stri
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	rows, err := s.read.QueryContext(ctx, `SELECT id,inbox_id,provider,from_name,from_address,request_id,action,outcome,reason,created_at FROM inbound_control_messages WHERE account_id=? AND inbox_id=? ORDER BY created_at DESC LIMIT ?`, accountID, inboxID, limit)
+	rows, err := s.read.QueryContext(ctx, controlMessageSelect+` WHERE account_id=? AND inbox_id=? ORDER BY created_at DESC LIMIT ?`, accountID, inboxID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []ControlMessage
-	for rows.Next() {
-		var m ControlMessage
-		var created string
-		if err := rows.Scan(&m.ID, &m.InboxID, &m.Provider, &m.FromName, &m.FromAddress, &m.RequestID, &m.Action, &m.Outcome, &m.Reason, &created); err != nil {
-			return nil, err
-		}
-		m.CreatedAt = parseTime(created)
-		out = append(out, m)
+	return scanControlMessages(rows)
+}
+
+// ListAccountControlMessages returns an account's consumed control messages,
+// newest first, for the admin dashboard's Recent messages list.
+func (s *Store) ListAccountControlMessages(ctx context.Context, accountID string, limit int) ([]ControlMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
 	}
-	return out, rows.Err()
+	rows, err := s.read.QueryContext(ctx, controlMessageSelect+` WHERE account_id=? ORDER BY created_at DESC LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanControlMessages(rows)
 }

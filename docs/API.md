@@ -375,14 +375,16 @@ attempt id). History is scoped by domain, not by the current config, so removing
 or replacing a provider does not hide past attempts.
 
 `GET .../receiving/deliveries` returns the receiving side of the same domain
-log: delivered inbound mail (`kind` `received`) and inbound mail rejected by an
-inbox's allowed-senders rule (`kind` `blocked`), newest first (`limit`, default
-`100`, max `200`; `before` is a timestamp keyset cursor on `created_at`). Each
-row carries the kind, timestamp, inbox, provider, from/to, subject, size, and
-(for blocked mail) the reason; delivered rows add the click-through
-`message_id`. The domain's UI log merges this with the sending side into one
-two-way timeline. Both logs are scoped by domain rather than by the current
-provider config.
+log: delivered inbound mail (`kind` `received`), inbound mail rejected by an
+inbox's allowed-senders rule (`kind` `blocked`), and consumed approval control
+mail (`kind` `approval`), newest first (`limit`, default `100`, max `200`;
+`before` is a timestamp keyset cursor on `created_at`). Each row carries the
+kind, timestamp, inbox, provider, from/to, subject and size. Blocked rows add
+the reason; approval rows carry the `action` (`approve`/`reject`) as the subject
+and the `status` outcome (`approved`, `rejected`, `invalid` or `error`) plus the
+reason; delivered rows add the click-through `message_id`. The domain's UI log
+merges this with the sending side into one two-way timeline. Both logs are
+scoped by domain rather than by the current provider config.
 
 Domain creation accepts `name` only, and `PATCH /v1/admin/domains/{id}` accepts
 `catch_all_inbox_id` only. The domain object exposes the configured provider
