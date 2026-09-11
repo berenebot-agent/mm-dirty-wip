@@ -187,6 +187,10 @@ type Message struct {
 	// Blocked marks a synthetic Message built for the admin Recent messages log.
 	// Blocked mail is never stored in the messages table; see BlockedMessage.
 	Blocked bool `json:"blocked,omitempty"`
+	// Approval marks a synthetic Message built for the admin Recent messages log
+	// from a consumed approval control message. Control mail is never stored in
+	// the messages table; see ControlMessage.
+	Approval bool `json:"approval,omitempty"`
 }
 
 // BlockedMessage is a metadata-only record of inbound mail rejected by an
