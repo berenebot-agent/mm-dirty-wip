@@ -283,7 +283,95 @@ subsystems. External email approval is deliberately out of scope for this phase;
 the request table is shaped so approver identity, a hashed token, and an expiry
 can be added by a later migration.
 
+## D026 — External email approval for draft sends
+
+**Decision:** Phase 2 lets an external person authorize a draft send entirely
+by email, with no Gatehouse account. An inbox may configure one optional
+`approver_email` (Owner/Admin via `PATCH /v1/inboxes/{id}`). A configured
+approver makes `request-send` external automatically: Gatehouse freezes the
+draft, records a request carrying the approver, a hashed one-time token and an
+expiry, and queues an approval email from the agent inbox through the existing
+outbound path in the same transaction. The optional `{"external": true}` flag
+is accepted for clarity but is not required and only errors when the inbox has
+no approver. The email carries the reviewed draft and its real attachment
+bytes, plus `mailto:` Approve/Reject actions that pre-address a control reply
+to the inbox; nothing happens until the approver sends that reply.
+
+**Trigger:** External approval is a property of the inbox, not the request. An
+agent that simply calls `request-send` gets approval by email whenever the
+inbox has an approver configured; it never has to know the transport. An inbox
+with an approver cannot create a Gatehouse-only request (the owner can still
+approve or reject in the UI).
+
+An inbound message whose decoded subject contains exactly one strict
+`[GH-APPROVE:<token>]` or `[GH-REJECT:<token>]` is consumed as workflow input.
+Control-format mail is handed to the control handler regardless of the sender
+allow-list, because the handler validates the live token and the exact stored
+approver and because the inbox's approver setting may have changed after the
+request was created; non-control mail still passes the allow-list. The
+configured approver is always an accepted sender (shown as a locked,
+non-removable entry in the allowed-senders UI).
+Consumed control mail is never stored as a message, FTS-indexed, relayed or
+marked unread; it is recorded in `inbound_control_messages` for the per-domain
+activity log and webhook dedup. A decision is valid only when the token is live
+(not expired/decided), the request is pending, the RFC From equals the stored
+approver, and the frozen content fingerprint still matches. A valid approve
+claims the request and enqueues the frozen draft through the shared outbound
+primitive; a valid reject stores optional feedback and returns the draft to
+`rejected`. The inbox approver may be changed at any time; an outstanding
+request keeps the approver it was created with.
+
+**Requirement:** The product rule is that an agent expresses intent but cannot
+self-authorize, and that a nominated human approves without needing a Gatehouse
+account. Email is the lowest-friction transport, but a bare subject token is
+weak: it can be guessed, replayed, forwarded or forged. The design therefore
+pairs the secret token with a nominated sender address, enforces single use at
+the same store primitive as UI approval, and keeps expiry (default 48h, global
+`APPROVAL_EXPIRY_HOURS`, `0`=never) actively releasing the draft.
+
+**Complexity:** Qualitative. Adds migration 015 (send-request approver/token/
+expiry columns, inbox approver columns, `draft_attachments.content_hash`, and
+`inbound_control_messages`), a strict control-subject parser and feedback
+extractor, a dedicated internal external-approval entry point, an expiry sweep
+in the outbox worker, an approval-email builder, API/UI approver settings, and
+the `draft.approval_expired` event. No new dependency or runtime service; it
+reuses the outbound, event, storage and SQLite subsystems.
+
+**Out of scope:** sender-authentication (SPF/DKIM/DMARC) evidence capture is
+deferred; provider auth material is not yet plumbed through the inbound
+boundary. Per-request arbitrary approvers and approval-token resend are not
+supported; the approver is an inbox setting and a new request issues a new
+token. Section 20 of `roadmap/roadmap_assistant.md` (arbitrary per-request
+approver) is superseded by the inbox-level setting.
+
+**Integrity fix:** the frozen fingerprint now covers each attachment's SHA-256
+bytes (not just filename/type/size), and the bytes are re-verified at send, so
+an approval binds to the exact content reviewed. This closes a Phase 1 gap.
+
+## D027 — Explicit sender restriction toggle (migration 016)
+
+**Decision:** An inbox's sender allow-list is only enforced when an explicit
+`sender_restricted` flag is set. When it is off, `allowed_senders` is ignored
+and any sender is accepted; when on, only matching senders (plus the configured
+approver) are accepted. The web inbox editor exposes this as a "Block senders
+to this inbox except the allow list below" checkbox and hides the allow-list
+editor while it is off. `PATCH /v1/inboxes/{id}` accepts `sender_restricted`;
+supplying `allowed_senders` without it infers restriction from a non-empty list
+so existing API clients keep working. Migration 016 backfills existing inboxes
+with a non-empty list to restricted.
+
+**Reason:** The previous rule (empty list = open, non-empty = restricted) could
+not distinguish "restricted with no senders" from "open", and made the locked
+approver entry look like it enabled filtering. Setting an approver must never
+restrict general receiving — it did not in practice, but the UI implied it
+could. An explicit flag makes the intent unambiguous in the API, the UI and the
+inbound check.
+
+**Complexity:** One column, one backfill, a store setter, an API field and a UI
+checkbox; no new dependency or runtime service.
+
 ## Future extension register
+
 
 Potential future additions include:
 

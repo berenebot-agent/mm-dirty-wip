@@ -67,6 +67,9 @@ func TestInboundAllowedSenderWildcard(t *testing.T) {
 	if err := svc.Store.SetInboxAllowedSenders(ctx, u.AccountID, box.ID, []string{"*@allowed.test", "*@*.corp.test"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Store.SetInboxSenderRestricted(ctx, u.AccountID, box.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Format(time.RFC1123Z)
 	cases := []struct {
 		from    string

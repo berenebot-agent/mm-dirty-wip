@@ -36,6 +36,10 @@ type Config struct {
 	MaxMIMEDepth        int
 	MaxMIMEParts        int
 	BodyReadTimeout     time.Duration
+	// ApprovalExpiryHours bounds how long an external email approval request
+	// stays valid. Zero disables expiry (the token lives until decided or
+	// cancelled).
+	ApprovalExpiryHours int
 }
 
 func Load() (Config, error) {
@@ -59,6 +63,7 @@ func Load() (Config, error) {
 		MaxMIMEDepth:        envInt("MAX_MIME_DEPTH", 8),
 		MaxMIMEParts:        envInt("MAX_MIME_PARTS", 256),
 		BodyReadTimeout:     time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
+		ApprovalExpiryHours: envInt("APPROVAL_EXPIRY_HOURS", 48),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
@@ -77,6 +82,9 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxMultipartParts < 1 || cfg.MaxMIMEDepth < 1 || cfg.MaxMIMEParts < 1 {
 		return Config{}, fmt.Errorf("MIME/multipart limits must be at least 1")
+	}
+	if cfg.ApprovalExpiryHours < 0 {
+		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
 	}
 	proxies, err := parseTrustedProxies(env("TRUSTED_PROXIES", ""))
 	if err != nil {

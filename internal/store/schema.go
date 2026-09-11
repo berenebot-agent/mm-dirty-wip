@@ -590,3 +590,57 @@ CREATE INDEX IF NOT EXISTS idx_send_requests_inbox ON draft_send_requests(inbox_
 CREATE INDEX IF NOT EXISTS idx_send_requests_draft ON draft_send_requests(draft_id, requested_at DESC);
 CREATE INDEX IF NOT EXISTS idx_send_requests_message ON draft_send_requests(message_id);
 `
+
+// migration015 adds external email approval on top of the Phase 1 draft send
+// workflow. It:
+//   - adds the nominated approver, a hashed one-time token and an expiry to
+//     draft_send_requests;
+//   - adds the optional per-inbox approver to inboxes (the approver is always
+//     an accepted inbound sender);
+//   - adds a content hash to draft_attachments so the frozen fingerprint binds
+//     to attachment bytes, not just metadata;
+//   - adds inbound_control_messages, the durable record of a consumed approval
+//     control email, which both feeds the per-domain receiving log and is the
+//     provider-delivery dedup key.
+//
+// A send request's status may now also be 'expired'. The content-hash backfill
+// runs in Go (the runner's transaction) because it must read attachment files
+// from disk.
+const migration015 = `ALTER TABLE draft_send_requests ADD COLUMN approver_email TEXT NOT NULL DEFAULT '';
+ALTER TABLE draft_send_requests ADD COLUMN token_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE draft_send_requests ADD COLUMN token_expires_at TEXT;
+ALTER TABLE draft_send_requests ADD COLUMN approval_message_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE inboxes ADD COLUMN approver_email TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE draft_attachments ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS inbound_control_messages (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  envelope_recipient TEXT NOT NULL DEFAULT '',
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  request_id TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(account_id, provider, envelope_recipient, provider_delivery_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_control_inbox ON inbound_control_messages(inbox_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inbound_control_request ON inbound_control_messages(request_id);
+`
+
+// migration016 makes the inbox sender allow-list an explicit opt-in. Before
+// this, an empty allowed_senders list meant "accept all" and a non-empty list
+// meant "restrict", so there was no way to distinguish "restricted with no
+// senders" from "open". inboxes.sender_restricted captures that choice; existing
+// inboxes with a non-empty list are backfilled to restricted so their behaviour
+// is unchanged.
+const migration016 = `ALTER TABLE inboxes ADD COLUMN sender_restricted INTEGER NOT NULL DEFAULT 0;
+UPDATE inboxes SET sender_restricted=1 WHERE allowed_senders_json IS NOT NULL AND allowed_senders_json NOT IN ('','[]');
+`

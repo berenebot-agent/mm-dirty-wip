@@ -470,29 +470,69 @@
   var list = document.getElementById('inbox-sender-list');
   var input = document.getElementById('inbox-sender-input');
   var note = document.getElementById('inbox-sender-note');
+  var approverEmail = document.getElementById('inbox-edit-approver-email');
+  var restrict = document.getElementById('inbox-sender-restricted');
+  var section = document.getElementById('inbox-sender-section');
+
+  function approverValue() {
+    return (approverEmail && approverEmail.value || '').trim().toLowerCase();
+  }
+
+  function isRestricted() {
+    return !!(restrict && restrict.checked);
+  }
+
+  function refreshRestrictVisibility() {
+    if (section) {
+      section.hidden = !isRestricted();
+    }
+  }
 
   function refreshSenderNote() {
     if (!note) {
       return;
     }
     var count = list.querySelectorAll('input[name=allowed]').length;
-    note.textContent = count === 0
-      ? 'Anyone can email this inbox. Add an allowed sender to restrict who can email it.'
-      : 'Only these addresses can email this inbox.';
+    if (count === 0 && !approverValue()) {
+      note.textContent = 'This inbox currently blocks all senders.';
+    } else if (count === 0) {
+      note.textContent = 'Only the approver can email this inbox.';
+    } else {
+      note.textContent = 'Only these addresses can email this inbox.';
+    }
   }
 
   function refreshSenderEmpty() {
     var empty = list.querySelector('.empty');
-    if (list.querySelectorAll('input[name=allowed]').length === 0) {
+    var hasSenders = list.querySelectorAll('input[name=allowed]').length > 0 || !!approverValue() || !!list.querySelector('.locked');
+    if (!hasSenders) {
       if (!empty) {
         var li = document.createElement('li');
         li.className = 'empty';
-        li.textContent = 'Anyone can email this inbox. Add an address below to restrict who can email it.';
+        li.textContent = 'Add an address below to allow it to email this inbox.';
         list.appendChild(li);
       }
     } else if (empty) {
       empty.remove();
     }
+  }
+
+  function addLockedApprover(email) {
+    email = (email || '').trim().toLowerCase();
+    if (!email) {
+      return;
+    }
+    var li = document.createElement('li');
+    li.className = 'locked';
+    var label = document.createElement('span');
+    label.className = 'addr';
+    label.textContent = email + ' (approver)';
+    var locked = document.createElement('span');
+    locked.className = 'muted small';
+    locked.textContent = 'always allowed';
+    li.appendChild(label);
+    li.appendChild(locked);
+    list.appendChild(li);
   }
 
   function addSender(value) {
@@ -527,9 +567,13 @@
     refreshSenderEmpty();
   }
 
-  function setSenders(raw) {
+  function setSenders(raw, approver) {
     list.innerHTML = '';
+    addLockedApprover(approver);
     (raw || '').split(',').forEach(function (entry) {
+      if ((entry || '').trim().toLowerCase() === (approver || '').trim().toLowerCase()) {
+        return;
+      }
       addSender(entry);
     });
     refreshSenderNote();
@@ -543,7 +587,14 @@
       deleteForm.action = '/ui/inboxes/' + id + '/delete';
       display.value = btn.dataset.name || '';
       address.value = btn.dataset.address || '';
-      setSenders(btn.dataset.allowed || '');
+      if (approverEmail) {
+        approverEmail.value = btn.dataset.approverEmail || '';
+      }
+      if (restrict) {
+        restrict.checked = btn.dataset.restricted === '1';
+      }
+      setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
+      refreshRestrictVisibility();
       input.value = '';
       dlg.showModal();
     });
@@ -571,6 +622,17 @@
     cancel.addEventListener('click', function () {
       dlg.close();
     });
+  }
+  if (approverEmail) {
+    approverEmail.addEventListener('input', function () {
+      var current = Array.prototype.map.call(list.querySelectorAll('input[name=allowed]'), function (i) {
+        return i.value;
+      }).join(',');
+      setSenders(current, approverValue());
+    });
+  }
+  if (restrict) {
+    restrict.addEventListener('change', refreshRestrictVisibility);
   }
 })();
 

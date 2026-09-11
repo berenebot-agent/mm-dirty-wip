@@ -37,7 +37,7 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, admin, draft.ID); err != nil {
+	if _, err = svc.RequestSend(ctx, admin, draft.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	// A plain editable draft must not affect the pending-send count.
@@ -112,7 +112,7 @@ func TestUIDraftRejectAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, admin, draft.ID); err != nil {
+	if _, err = svc.RequestSend(ctx, admin, draft.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts/"+draft.ID+"/reject", "_csrf="+csrf+"&feedback=fix+the+pricing")
@@ -134,7 +134,7 @@ func TestUIDraftRejectAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = svc.RequestSend(ctx, admin, draft2.ID); err != nil {
+	if _, err = svc.RequestSend(ctx, admin, draft2.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	rr = uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts/"+draft2.ID+"/cancel-send-request", "_csrf="+csrf)

@@ -255,7 +255,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -277,13 +277,14 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	for rows.Next() {
 		var i model.Inbox
 		var domain, allowed, created string
-		var enabled int
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &created); err != nil {
+		var enabled, restricted int
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &created); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
 		i.Enabled = enabled != 0
 		i.AllowedSenders = decodeStrings(allowed)
+		i.SenderRestricted = restricted != 0
 		i.CreatedAt = parseTime(created)
 		out = append(out, i)
 	}
@@ -298,8 +299,8 @@ func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (mod
 func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (model.Inbox, error) {
 	var i model.Inbox
 	var domain, allowed, created string
-	var enabled int
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &created)
+	var enabled, restricted int
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &created)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -309,6 +310,7 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	i.Address = i.LocalPart + "@" + domain
 	i.Enabled = enabled != 0
 	i.AllowedSenders = decodeStrings(allowed)
+	i.SenderRestricted = restricted != 0
 	i.CreatedAt = parseTime(created)
 	return i, nil
 }
@@ -350,6 +352,34 @@ func (s *Store) SetInboxAllowedSenders(ctx context.Context, accountID, inboxID s
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetInboxSenderRestricted toggles whether an inbox enforces its
+// allowed-senders list. When false, any sender is accepted and the list is
+// ignored.
+func (s *Store) SetInboxSenderRestricted(ctx context.Context, accountID, inboxID string, restricted bool) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET sender_restricted=? WHERE id=? AND account_id=?`, boolInt(restricted), inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetInboxApprover replaces an inbox's external approver. An empty email clears
+// the approver. Outstanding send requests keep the approver they were created
+// with, so changing the inbox setting never invalidates a pending decision.
+func (s *Store) SetInboxApprover(ctx context.Context, accountID, inboxID, email string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET approver_email=? WHERE id=? AND account_id=?`, strings.ToLower(strings.TrimSpace(email)), inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -480,12 +510,12 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if err != nil {
 		return model.Inbox{}, false, err
 	}
-	var id, actualLocal, display, allowed, created string
-	var enabled int
-	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &allowed, &created)
+	var id, actualLocal, display, allowed, approverEmail, created string
+	var enabled, restricted int
+	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,approver_email,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &allowed, &restricted, &approverEmail, &created)
 	usedCatch := false
 	if err == sql.ErrNoRows && catch != "" {
-		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &allowed, &created)
+		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,approver_email,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &allowed, &restricted, &approverEmail, &created)
 		usedCatch = true
 	}
 	if err == sql.ErrNoRows {
@@ -497,7 +527,7 @@ func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inb
 	if enabled == 0 {
 		return model.Inbox{}, usedCatch, ErrNotFound
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, AllowedSenders: decodeStrings(allowed), CreatedAt: parseTime(created)}, usedCatch, nil
+	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, AllowedSenders: decodeStrings(allowed), SenderRestricted: restricted != 0, ApproverEmail: approverEmail, CreatedAt: parseTime(created)}, usedCatch, nil
 }
 func placeholders(n int) string {
 	if n <= 0 {

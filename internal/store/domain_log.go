@@ -27,6 +27,9 @@ type DomainLogEntry struct {
 	Status            string    `json:"status,omitempty"`
 	Reason            string    `json:"reason,omitempty"`
 	ErrorText         string    `json:"error_text,omitempty"`
+	// RequestID/Action are set for consumed approval control messages.
+	RequestID string `json:"request_id,omitempty"`
+	Action    string `json:"action,omitempty"`
 	// MessageID is the click-through message id for delivered inbound mail and
 	// for outbound attempts whose message still exists. It is empty for blocked
 	// mail (which has no message row or detail view) and for attempts whose
@@ -78,6 +81,9 @@ func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, l
 		if out, err = s.appendDomainOutbound(ctx, out, accountID, domainID, beforeText, fetch); err != nil {
 			return nil, err
 		}
+	}
+	if out, err = s.appendDomainControl(ctx, out, accountID, domainID, beforeText, fetch); err != nil {
+		return nil, err
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if !out[i].At.Equal(out[j].At) {
@@ -159,6 +165,39 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 		out = append(out, e)
 	}
 	return out, brows.Err()
+}
+
+// appendDomainControl adds consumed approval control messages for the domain's
+// inboxes, so an operator can see that a decision email was consumed.
+func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
+	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.created_at
+		FROM inbound_control_messages c JOIN inboxes i ON i.id=c.inbox_id AND i.account_id=c.account_id
+		WHERE c.account_id=? AND i.domain_id=?`
+	args := []any{accountID, domainID}
+	if beforeText != "" {
+		q += ` AND c.created_at < ?`
+		args = append(args, beforeText)
+	}
+	q += ` ORDER BY c.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e DomainLogEntry
+		var created, outcome string
+		if err := rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &e.RequestID, &e.Action, &outcome, &e.Reason, &created); err != nil {
+			return nil, err
+		}
+		e.Kind = "approval"
+		e.Status = outcome
+		e.Subject = e.Action
+		e.At = parseTime(created)
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // appendDomainOutbound adds the domain's outbound delivery attempts.

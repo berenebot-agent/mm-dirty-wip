@@ -56,6 +56,15 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if quota > 0 && used+r.SizeBytes > quota {
 		return model.Message{}, model.Event{}, ErrQuota
 	}
+	draftEvent := model.Event{}
+	newReqID := ""
+	if r.NewSendRequest != nil {
+		created, cerr := createSendRequestTx(ctx, tx, r.Inbox.AccountID, *r.NewSendRequest)
+		if cerr != nil {
+			return model.Message{}, model.Event{}, cerr
+		}
+		newReqID = created.ID
+	}
 	threadID := r.ThreadID
 	now := nowText()
 	if threadID == "" {
@@ -103,11 +112,26 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	}
 	// An approved send claims its send request in the same transaction that
 	// enqueues the message, so a request can never authorize two sends.
-	var draftEvent model.Event
 	if r.SendRequestID != "" {
 		ev, aerr := approveSendRequestTx(ctx, tx, r.Inbox.AccountID, r.DraftID, r.SendRequestID, r.DecisionActor, r.DecisionActorID, r.DecisionMethod, r.DecisionFeedback, id)
 		if aerr != nil {
 			return model.Message{}, model.Event{}, aerr
+		}
+		draftEvent = ev
+	}
+	// A newly created external request links to its just-queued approval email
+	// and emits the requested event in the same transaction.
+	if newReqID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE draft_send_requests SET approval_message_id=?,updated_at=? WHERE id=? AND account_id=?`, id, now, newReqID, r.Inbox.AccountID); err != nil {
+			return model.Message{}, model.Event{}, err
+		}
+		req, rerr := getSendRequestByIDTx(ctx, tx, r.Inbox.AccountID, newReqID)
+		if rerr != nil {
+			return model.Message{}, model.Event{}, rerr
+		}
+		ev, eerr := insertEventTx(ctx, tx, r.Inbox.AccountID, req.InboxID, model.EventDraftSendRequested, req.ID, sendRequestPayload(req))
+		if eerr != nil {
+			return model.Message{}, model.Event{}, eerr
 		}
 		draftEvent = ev
 	}

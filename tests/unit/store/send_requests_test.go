@@ -32,12 +32,12 @@ func TestSendRequestFreezeCancelReject(t *testing.T) {
 		t.Fatalf("new draft status=%q", d.Status)
 	}
 
-	r, ev, err := s.CreateSendRequest(ctx, asst, d.ID, "hash-1")
+	r, evs, err := s.CreateSendRequest(ctx, asst, d.ID, "hash-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Status != model.SendRequestPending || ev.Type != model.EventDraftSendRequested {
-		t.Fatalf("request=%+v ev=%+v", r, ev)
+	if len(evs) != 1 || r.Status != model.SendRequestPending || evs[0].Type != model.EventDraftSendRequested {
+		t.Fatalf("request=%+v evs=%+v", r, evs)
 	}
 	got, err := s.GetDraft(ctx, asst, d.ID)
 	if err != nil {
@@ -236,5 +236,100 @@ func TestSendRequestDeliveryFailureAndSingleWinner(t *testing.T) {
 	// The failed claim rolled back: the draft is intact.
 	if _, err = s.GetDraft(ctx, asst, d2.ID); err != nil {
 		t.Fatalf("draft lost on failed claim: %v", err)
+	}
+}
+
+func TestExternalRequestExpiryReleasesDraft(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	asst := assistant(box, u.AccountID)
+	d, err := s.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().UTC().Add(-time.Hour)
+	_, ev, err := s.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: box, Provider: "brevo", RFCMessageID: "<ap@test>",
+		From: model.Address{Address: box.Address}, To: []string{"appr@test"},
+		Subject: "Approval required", Text: "x", RawPath: "messages/ap.eml", SizeBytes: 5,
+		NewSendRequest: &store.SendRequestInsert{
+			ID: "dsr_ext", DraftID: d.ID, InboxID: box.ID, ContentHash: "h",
+			RequestedAt: time.Now().UTC(), ApproverEmail: "appr@test", TokenHash: "thash", TokenExpiresAt: &past,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Type != model.EventDraftSendRequested {
+		t.Fatalf("requested event %+v", ev)
+	}
+	if pending, _ := s.PendingRequestExists(ctx, u.AccountID, d.ID); !pending {
+		t.Fatal("request not pending")
+	}
+	events, err := s.ExpireApprovalRequests(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range events {
+		if e.Type == model.EventDraftApprovalExpired {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no expiry event in %+v", events)
+	}
+	got, err := s.GetDraft(ctx, asst, d.ID)
+	if err != nil || got.Status != model.DraftStatusDraft {
+		t.Fatalf("draft not released: %+v err=%v", got, err)
+	}
+	if pending, _ := s.PendingRequestExists(ctx, u.AccountID, d.ID); pending {
+		t.Fatal("expired request still blocks a new request")
+	}
+	sr, err := s.GetSendRequestInternal(ctx, u.AccountID, "dsr_ext")
+	if err != nil || sr.Status != model.SendRequestExpired {
+		t.Fatalf("request status %+v err=%v", sr, err)
+	}
+}
+
+func TestFindByTokenAndRejectInternal(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	asst := assistant(box, u.AccountID)
+	d, err := s.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().UTC().Add(time.Hour)
+	if _, _, err = s.CommitOutbound(ctx, store.OutboundRecord{
+		Inbox: box, RFCMessageID: "<ap2@test>",
+		From: model.Address{Address: box.Address}, To: []string{"appr@test"},
+		Subject: "Approval required", Text: "x", RawPath: "messages/ap2.eml", SizeBytes: 5,
+		NewSendRequest: &store.SendRequestInsert{
+			ID: "dsr_ext2", DraftID: d.ID, InboxID: box.ID, ContentHash: "h",
+			RequestedAt: time.Now().UTC(), ApproverEmail: "appr@test", TokenHash: "tokhash", TokenExpiresAt: &future,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found, err := s.FindPendingSendRequestByToken(ctx, u.AccountID, box.ID, "tokhash")
+	if err != nil || found.ID != "dsr_ext2" {
+		t.Fatalf("token lookup %+v err=%v", found, err)
+	}
+	if _, err = s.FindPendingSendRequestByToken(ctx, u.AccountID, box.ID, "wrong"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("wrong token err=%v", err)
+	}
+	rejected, ev, err := s.RejectSendRequestInternal(ctx, u.AccountID, "dsr_ext2", "appr@test", "", model.DecisionMethodEmail, "fix it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected.Status != model.SendRequestRejected || ev.Type != model.EventDraftRejected {
+		t.Fatalf("reject internal %+v ev=%+v", rejected, ev)
+	}
+	// A second external decision cannot win.
+	if _, _, err = s.RejectSendRequestInternal(ctx, u.AccountID, "dsr_ext2", "appr@test", "", model.DecisionMethodEmail, "again"); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("second reject err=%v", err)
 	}
 }

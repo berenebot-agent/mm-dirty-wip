@@ -67,7 +67,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := bootstrapBaseline(ctx, conn); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-	for _, m := range migrations() {
+	for _, m := range migrations(filepath.Dir(s.path)) {
 		applied, err := migrationMarker(ctx, conn, m.version)
 		if err != nil {
 			return err

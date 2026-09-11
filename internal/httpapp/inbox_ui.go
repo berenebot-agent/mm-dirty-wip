@@ -53,7 +53,7 @@ const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cance
 const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}/drafts">← Back to drafts</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 <section class="card"><h1>Review draft</h1>
-<p><span class="pill amber">Awaiting approval</span> Requested by {{.ReviewDraft.SendRequest.RequestedBy}} · {{mailDate .ReviewDraft.SendRequest.RequestedAt}}</p>
+{{if .ReviewDraft.SendRequest.ApproverEmail}}<p><span class="pill amber">Awaiting approval</span> Requested from {{.ReviewDraft.SendRequest.ApproverEmail}}{{if .ReviewDraft.SendRequest.TokenExpiresAt}} · expires {{mailDate .ReviewDraft.SendRequest.TokenExpiresAt}}{{end}}</p>{{else}}<p><span class="pill amber">Awaiting approval</span> Requested by {{.ReviewDraft.SendRequest.RequestedBy}} · {{mailDate .ReviewDraft.SendRequest.RequestedAt}}</p>{{end}}
 <dl class="draftmeta"><dt>From</dt><dd>{{.Inbox.Address}}</dd><dt>To</dt><dd>{{join .ReviewDraft.To ", "}}</dd>{{if .ReviewDraft.CC}}<dt>Cc</dt><dd>{{join .ReviewDraft.CC ", "}}</dd>{{end}}{{if .ReviewDraft.BCC}}<dt>Bcc</dt><dd>{{join .ReviewDraft.BCC ", "}}</dd>{{end}}<dt>Subject</dt><dd>{{if .ReviewDraft.Subject}}{{.ReviewDraft.Subject}}{{else}}(no subject){{end}}</dd><dt>Attachments</dt><dd>{{if .ComposeNote}}{{.ComposeNote}}{{else}}None{{end}}</dd></dl>
 <label>Message</label>
 <pre class="draftbody">{{.ReviewDraft.Text}}</pre>
@@ -352,7 +352,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if action == "request-send" {
-		if _, err = s.Service.RequestSend(r.Context(), p, d.ID); err != nil {
+		if _, err = s.Service.RequestSend(r.Context(), p, d.ID, false); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -396,7 +396,7 @@ func (s *Server) uiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inbox not found", 404)
 		return
 	}
-	if _, err = s.Service.RequestSend(r.Context(), p, r.PathValue("draftId")); err != nil {
+	if _, err = s.Service.RequestSend(r.Context(), p, r.PathValue("draftId"), false); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
