@@ -44,8 +44,12 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 
 	// Dashboard shows the drafts count.
 	rr := uiGet(t, h, cookie, "/dashboard")
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `title="Unsent drafts needing attention"`) {
+	body := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(body, `title="Unsent drafts needing attention"`) || !strings.Contains(body, ">Unread</th>") || !strings.Contains(body, ">Drafts</th>") || !strings.Contains(body, ">Size</th>") {
 		t.Fatalf("dashboard drafts column %d", rr.Code)
+	}
+	if strings.Contains(body, ">Mailbox size</th>") {
+		t.Fatal("dashboard should use the shorter Size column label")
 	}
 	// Inbox detail shows the send-request section with a quick Send action.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID)
