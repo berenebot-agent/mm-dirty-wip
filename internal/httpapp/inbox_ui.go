@@ -581,8 +581,8 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 		OutboxCount:                outboxCount,
 		OutboundReady:              outErr == nil,
 		InboundReady:               inErr == nil,
-		DomainSendingSettingsURL:   "/dashboard?domain=" + url.PathEscape(box.DomainID) + "&kind=sending",
-		DomainReceivingSettingsURL: "/dashboard?domain=" + url.PathEscape(box.DomainID) + "&kind=receiving",
+		DomainSendingSettingsURL:   "/?domain=" + url.PathEscape(box.DomainID) + "&kind=sending",
+		DomainReceivingSettingsURL: "/?domain=" + url.PathEscape(box.DomainID) + "&kind=receiving",
 		Notice:                     r.URL.Query().Get("notice"),
 	})
 }

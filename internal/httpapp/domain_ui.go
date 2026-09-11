@@ -355,7 +355,7 @@ func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 
 // domainNotice stores a success notice and redirects back to the dashboard.
 func (s *Server) domainNotice(w http.ResponseWriter, r *http.Request, notice string) {
-	dest := "/dashboard?" + url.Values{"notice": {notice}}.Encode()
+	dest := "/?" + url.Values{"notice": {notice}}.Encode()
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
@@ -384,7 +384,7 @@ func (s *Server) domainEditorError(w http.ResponseWriter, r *http.Request, domai
 	if tok := s.flashes.put(f, size); tok != "" {
 		q.Set("_flash", tok)
 	}
-	http.Redirect(w, r, "/dashboard?"+q.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 }
 
 // submittedEditorValues collects the non-secret schema values the operator
@@ -456,7 +456,7 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WorkerCode: code,
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
-	dest := "/dashboard?domain=" + url.PathEscape(domainID)
+	dest := "/?domain=" + url.PathEscape(domainID)
 	if tok := s.flashes.put(f, len(code)+128); tok != "" {
 		dest += "&_flash=" + tok
 	}
@@ -639,5 +639,5 @@ func domainReceivingSteps(provider string) []string {
 	}
 }
 
-const domainDeliveriesBody = `<div class="toolbar"><a href="/dashboard?domain={{.Domain.ID}}">← {{.Domain.Name}}</a></div>
+const domainDeliveriesBody = `<div class="toolbar"><a href="/?domain={{.Domain.ID}}">← {{.Domain.Name}}</a></div>
 <section class="card"><h1>Domain log</h1><p class="muted">Two-way activity for {{.Domain.Name}}: delivered and blocked inbound mail, plus every outbound send attempt, newest first. Outbound attempts are retained for about 30 days; received and blocked mail follows normal message retention.</p>{{if .LogEntries}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Detail</th><th></th></tr></thead><tbody>{{range .LogEntries}}<tr><td style="white-space:nowrap">{{.At.Format "2006-01-02 15:04"}}</td><td>{{if eq .Kind "sent"}}<span class="pill">Sent</span>{{else if eq .Kind "failed"}}<span class="pill danger">Failed</span>{{else if eq .Kind "received"}}<span class="pill">Received</span>{{else}}<span class="pill amber">Blocked</span>{{end}}</td><td>{{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted log-detail">{{if eq .Kind "sent"}}attempt {{.Attempt}}{{if .ProviderMessageID}} · {{.ProviderMessageID}}{{end}}{{else if eq .Kind "failed"}}attempt {{.Attempt}}{{if .ErrorText}} · {{.ErrorText}}{{end}}{{else if eq .Kind "blocked"}}{{if .Reason}}{{.Reason}}{{else}}blocked{{end}}{{else}}{{if .Provider}}{{.Provider}}{{end}}{{if .SizeBytes}} · {{bytes .SizeBytes}}{{end}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .LogHasMore}}<p><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries?before={{.LogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No activity yet.</p>{{end}}</section>`
