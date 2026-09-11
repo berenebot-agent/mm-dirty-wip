@@ -93,7 +93,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/account/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
-	m.HandleFunc("GET /dashboard", s.withSession(s.dashboard))
 	m.HandleFunc("POST /ui/domains", s.withSession(s.withCSRF(s.uiCreateDomain)))
 	m.HandleFunc("POST /ui/domains/{id}/catchall", s.withSession(s.withCSRF(s.uiDomainCatchAll)))
 	m.HandleFunc("POST /ui/domains/{id}/sending", s.withSession(s.withCSRF(s.uiDomainSending)))

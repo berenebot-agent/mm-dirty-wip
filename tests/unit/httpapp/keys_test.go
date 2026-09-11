@@ -47,7 +47,7 @@ func TestHermesEnvBlock(t *testing.T) {
 func TestDashboardRendersKeyDialog(t *testing.T) {
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
-	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

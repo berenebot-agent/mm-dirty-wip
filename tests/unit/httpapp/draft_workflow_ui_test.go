@@ -47,7 +47,7 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	cookie, csrf := uiSession(t, svc, u.ID)
 
 	// Dashboard shows the pending-send count only, styled like unread.
-	rr := uiGet(t, h, cookie, "/dashboard")
+	rr := uiGet(t, h, cookie, "/")
 	body := rr.Body.String()
 	if rr.Code != 200 || !strings.Contains(body, `title="Drafts awaiting approval to send">1<`) || !strings.Contains(body, `class="pill pending-pill"`) || !strings.Contains(body, ">Unread</th>") || !strings.Contains(body, ">Pending send</th>") || !strings.Contains(body, ">Size</th>") {
 		t.Fatalf("dashboard pending-send column %d", rr.Code)
