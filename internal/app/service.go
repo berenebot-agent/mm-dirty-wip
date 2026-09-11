@@ -141,14 +141,15 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	if err != nil {
 		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
 	}
-	// A strict approval control subject is consumed as workflow input before
+	// A strict approval control subject, or a reply quoting the approval email's
+	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
 	// ordinary delivery, so the token never becomes mailbox content. It is
 	// handed to the control handler regardless of the sender allow-list because
 	// the handler validates the live token and the exact stored approver, and
 	// because an inbox's approver setting may have changed after the request was
 	// created. Invalid control mail is consumed too; only its outcome is
 	// recorded.
-	if looksLikeControl(parsed.Subject) {
+	if looksLikeControl(parsed.Subject) || looksLikeControlReply(parsed) {
 		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed)
 	}
 	if !inbox.AllowsInbound(parsed.From.Address) {

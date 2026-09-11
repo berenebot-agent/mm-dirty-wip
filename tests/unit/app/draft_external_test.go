@@ -25,7 +25,7 @@ import (
 
 const approverAddress = "ben@approver.test"
 
-var approveTokenRe = regexp.MustCompile(`\[GH-APPROVE:([A-Za-z0-9_-]{16,})\]`)
+var requestTokenRe = regexp.MustCompile(`\[GH-REQUEST:([A-Za-z0-9_-]{16,})\]`)
 
 // mgControlRequest builds a Mailgun multipart webhook with a chosen sender,
 // subject and body so the approval control path can be exercised end to end.
@@ -58,9 +58,43 @@ func mgControlRequestFrom(t *testing.T, key, deliveryID, recipient, envelopeFrom
 	return r
 }
 
+// mgControlHTMLRequest builds a Mailgun control webhook whose MIME body is a
+// single text/html part, exercising the HTML-only reply path used by webmail.
+func mgControlHTMLRequest(t *testing.T, key, deliveryID, recipient, sender, subject, htmlBody string) *http.Request {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	ts := fmt.Sprintf("%d", time.Now().Unix())
+	raw := "From: " + sender + "\r\nTo: " + recipient + "\r\nSubject: " + subject +
+		"\r\nMessage-ID: <ctl-html@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) +
+		"\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" + htmlBody
+	fields := map[string]string{"timestamp": ts, "token": deliveryID, "signature": mgSig(key, ts, deliveryID), "recipient": recipient, "Message-Id": "<ctl-html@test>", "sender": sender}
+	for k, v := range fields {
+		_ = mw.WriteField(k, v)
+	}
+	p, _ := mw.CreateFormField("body-mime")
+	_, _ = io.WriteString(p, raw)
+	_ = mw.Close()
+	r := httptest.NewRequest("POST", "/internal/ingest/mailgun/raw-mime", &buf)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	return r
+}
+
 // approvalToken reads the latest queued approval-request email and extracts the
-// approve control token from its text body.
+// neutral [GH-REQUEST:<token>] reference token that a plain reply quotes back.
 func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) string {
+	t.Helper()
+	text, _ := approvalEmailParts(t, svc, accountID, inboxID)
+	if match := requestTokenRe.FindStringSubmatch(text); len(match) == 2 {
+		return match[1]
+	}
+	t.Fatal("no approval reference token found in queued approval email")
+	return ""
+}
+
+// approvalEmailParts returns the plain-text and HTML bodies of the latest queued
+// approval-request email.
+func approvalEmailParts(t *testing.T, svc *app.Service, accountID, inboxID string) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	box, err := svc.Store.GetInboxInternal(ctx, accountID, inboxID)
@@ -72,11 +106,7 @@ func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if match := approveTokenRe.FindStringSubmatch(parsed.Text); len(match) == 2 {
-		return match[1]
-	}
-	t.Fatal("no approval token found in queued approval email")
-	return ""
+	return parsed.Text, parsed.HTML
 }
 
 // queuedApprovalEmail returns the queued approval-request message. Approval
@@ -152,9 +182,13 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	if !strings.Contains(text, "does not change the email being sent") {
 		t.Fatalf("approval email missing feedback clarification:\n%s", text)
 	}
-	// The reply subject includes the token and the draft subject.
-	if want := "[GH-APPROVE:" + token + "] auto"; !strings.Contains(text, want) {
-		t.Fatalf("approval email missing reply subject %q:\n%s", want, text)
+	// The body carries the reference line a plain reply quotes back.
+	if want := "[GH-REQUEST:" + token + "]"; !strings.Contains(text, want) {
+		t.Fatalf("approval email missing reference line %q:\n%s", want, text)
+	}
+	_, htmlBody := approvalEmailParts(t, svc, u.AccountID, box.ID)
+	if want := "[GH-REQUEST:" + token + "]"; !strings.Contains(htmlBody, want) {
+		t.Fatalf("approval email HTML missing reference line %q:\n%s", want, htmlBody)
 	}
 }
 
@@ -498,5 +532,201 @@ func TestInternalApprovalMailCannotBeForwarded(t *testing.T) {
 	}
 	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ReplyToMessageID: internalID, To: []string{"leak@outside.test"}, Text: "x"}, ""); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("reply to internal mail err=%v", err)
+	}
+}
+
+// seedExternalRequest configures the approver, creates a draft and requests the
+// send. It returns the draft id and the neutral reference token quoted by a
+// plain reply.
+func seedExternalRequest(t *testing.T, svc *app.Service, u model.User, box model.Inbox) (string, string) {
+	t.Helper()
+	if err := svc.Store.SetInboxApprover(context.Background(), u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d, err := svc.Store.CreateDraft(context.Background(), asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "proposal", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(context.Background(), asst, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	return d.ID, approvalToken(t, svc, u.AccountID, box.ID)
+}
+
+// replyBody quotes the approval email's reference line as a webmail client
+// would when the approver replies.
+func replyBody(firstLine, token string) string {
+	return firstLine + "\r\n\r\nOn Mon, Sep 7 2026, Gatehouse wrote:\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> --- Draft to send ---\r\n"
+}
+
+func TestExternalApprovalApproveByReplyFirstLine(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+
+	req := mgControlRequest(t, testMailgunKey, "ctl-reply-ok", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", replyBody("Approve", token))
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestApproved || sr.DecisionMethod != model.DecisionMethodEmail {
+		t.Fatalf("request after reply approve %+v err=%v", sr, err)
+	}
+	// The reply is consumed, never stored as mailbox content.
+	inbound, err := svc.Store.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "inbound", Limit: 50})
+	if err != nil || len(inbound) != 0 {
+		t.Fatalf("reply control mail became inbox content: %+v err=%v", inbound, err)
+	}
+}
+
+func TestExternalApprovalRejectByReplyFirstLine(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+
+	req := mgControlRequest(t, testMailgunKey, "ctl-reply-rej", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", replyBody("Please hold until Friday.", token))
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestRejected || sr.Feedback != "Please hold until Friday." || sr.DecisionActor != approverAddress {
+		t.Fatalf("request after reply reject %+v err=%v", sr, err)
+	}
+}
+
+// TestExternalApprovalReplyQuoteCannotApprove proves the quoted original, which
+// always contains the word "Approve" and the control tokens, cannot select the
+// action when the approver's own first line is a rejection.
+func TestExternalApprovalReplyQuoteCannotApprove(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+
+	body := "Reject\r\n\r\nOn Mon, Sep 7 2026, Gatehouse wrote:\r\n> Approve & Send\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> [GH-APPROVE:" + token + "]\r\n"
+	req := mgControlRequest(t, testMailgunKey, "ctl-reply-quote", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", body)
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestRejected {
+		t.Fatalf("quoted approve selected the action: %+v err=%v", sr, err)
+	}
+}
+
+func TestExternalApprovalApproveByHTMLReply(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+
+	htmlBody := "<p>Approve</p><p>Reference: [GH-REQUEST:" + token + "]</p>"
+	req := mgControlHTMLRequest(t, testMailgunKey, "ctl-reply-html", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", htmlBody)
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestApproved {
+		t.Fatalf("html-only reply not approved: %+v err=%v", sr, err)
+	}
+}
+
+func TestExternalApprovalReplyFirstLineVariants(t *testing.T) {
+	cases := []struct {
+		name    string
+		first   string
+		approve bool
+	}{
+		{"lowercase", "approve", true},
+		{"uppercase", "APPROVE", true},
+		{"past-tense", "Approved", true},
+		{"punctuated", "Approve.", true},
+		{"combined", "Approve - looks good", true},
+		{"approval-word", "approval requested", false},
+		{"unapproved", "unapproved", false},
+		{"disapprove", "disapprove", false},
+		{"reject", "Reject", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, u, dom, box := testService(t)
+			svc.Config.ApprovalExpiryHours = 48
+			seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+			ctx := context.Background()
+			asst := assistantPrincipal(u.AccountID, box.ID)
+			draftID, token := seedExternalRequest(t, svc, u, box)
+
+			req := mgControlRequest(t, testMailgunKey, "ctl-variant-"+tc.name, box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", replyBody(tc.first, token))
+			if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+				t.Fatalf("control ingest err=%v", err)
+			}
+			sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := model.SendRequestRejected
+			if tc.approve {
+				want = model.SendRequestApproved
+			}
+			if sr.Status != want {
+				t.Fatalf("first line %q: status=%s want=%s", tc.first, sr.Status, want)
+			}
+		})
+	}
+}
+
+func TestExternalApprovalReplySenderMismatchIsConsumed(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+
+	req := mgControlRequest(t, testMailgunKey, "ctl-reply-bad", box.Address, "Mallory <mallory@evil.test>", "Re: Approval required: proposal", replyBody("Approve", token))
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestPending {
+		t.Fatalf("mismatched reply changed state: %+v err=%v", sr, err)
+	}
+	controls, err := svc.Store.ListControlMessages(ctx, u.AccountID, box.ID, 10)
+	if err != nil || len(controls) != 1 || controls[0].Outcome != "invalid" {
+		t.Fatalf("control records %+v err=%v", controls, err)
+	}
+}
+
+// TestExternalApprovalReplySurvivesApproverChange proves a reply is bound to the
+// request's stored approver, not the inbox's current setting.
+func TestExternalApprovalReplySurvivesApproverChange(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	draftID, token := seedExternalRequest(t, svc, u, box)
+	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, "replacement@approver.test"); err != nil {
+		t.Fatal(err)
+	}
+	req := mgControlRequest(t, testMailgunKey, "ctl-reply-old", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", replyBody("Approve", token))
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v", err)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
+	if err != nil || sr.Status != model.SendRequestApproved || sr.DecisionActor != approverAddress {
+		t.Fatalf("reply after approver change %+v err=%v", sr, err)
 	}
 }

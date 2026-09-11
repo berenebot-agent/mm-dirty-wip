@@ -308,6 +308,20 @@ An inbound message whose decoded subject contains exactly one strict
 The token is 96-bit (12 random bytes, 16 base64url characters), stored only as a
 SHA-256 hash, and the reply subject appends the draft subject so the reply links
 back to the draft; the parser tolerates surrounding text.
+An approver may also decide by replying to the approval email directly, without
+using the buttons. The email body carries a visible `[GH-REQUEST:<token>]`
+reference line; a plain-text or HTML reply quotes it, binding the reply to the
+same one-time request whether or not the client honours `mailto:`. The action is
+read only from the first non-empty line of the approver's own text, after
+cutting at the first quoted-history boundary: a first token of
+`Approve`/`Approved` in any case approves, and any other readable line rejects
+(an empty or unreadable reply rejects too). This is the deliberate, narrow
+exception to the rule that a parser must not look for natural-language words
+like "approve": the word is only the action selector, while the token, the
+stored request and the sender binding remain the authentication, and it is read
+solely from the approver's new text so the quoted original — which always
+contains the word "Approve" and the control tokens — can never select it. The
+`mailto:` buttons are retained for clients that open them.
 Control-format mail is handed to the control handler regardless of the sender
 allow-list, because the handler validates the live token and the exact stored
 approver and because the inbox's approver setting may have changed after the
