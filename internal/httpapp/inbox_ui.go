@@ -1008,7 +1008,6 @@ func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
 	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
 	body := rewriteCIDs(m.HTML, atts)
 	body = htmlsanitize.Sanitize(body)
-	body = injectBaseTarget(body)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
@@ -1129,18 +1128,4 @@ func rewriteCIDs(body string, atts []model.Attachment) string {
 		body = strings.ReplaceAll(body, "cid:"+cid, url)
 	}
 	return body
-}
-
-func injectBaseTarget(body string) string {
-	lower := strings.ToLower(body)
-	if i := strings.Index(lower, "<head>"); i >= 0 {
-		return body[:i+6] + `<base target="_blank">` + body[i+6:]
-	}
-	if i := strings.Index(lower, "<head "); i >= 0 {
-		if j := strings.Index(lower[i:], ">"); j >= 0 {
-			pos := i + j + 1
-			return body[:pos] + `<base target="_blank">` + body[pos:]
-		}
-	}
-	return `<base target="_blank">` + body
 }

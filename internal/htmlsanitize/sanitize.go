@@ -31,6 +31,10 @@ func policy() *bluemonday.Policy {
 		// mailto. Also adds rel="nofollow" to links.
 		p.AllowStandardURLs()
 		p.RequireNoReferrerOnLinks(true)
+		// Open fully-qualified links in a new tab. The mail frame CSP sets
+		// base-uri 'none', so a <base target> tag is ignored; the target must
+		// be on each anchor.
+		p.AddTargetBlankToFullyQualifiedLinks(true)
 
 		p.AllowStandardAttributes()
 		p.AllowAttrs("class").Matching(bluemonday.SpaceSeparatedTokens).Globally()
