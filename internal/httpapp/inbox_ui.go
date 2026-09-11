@@ -20,15 +20,35 @@ import (
 
 const inboxPageSize = 50
 
+// SendRequestRow joins a send request with its draft so the inbox
+// send-requests table can show To/Subject/body/Date/Size like messages.
+// SizeBytes is computed server-side like message sizes are stored.
+type SendRequestRow struct {
+	Request   model.DraftSendRequest
+	Draft     model.Draft
+	SizeBytes int64
+}
+
+// draftDisplaySize approximates a draft's size for the UI: subject, bodies,
+// plus attachment bytes.
+func draftDisplaySize(d model.Draft, attachments []model.DraftAttachment) int64 {
+	var size int64
+	size += int64(len(d.Subject) + len(d.Text) + len(d.HTML))
+	for _, a := range attachments {
+		size += a.Size
+	}
+	return size
+}
+
 const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1>{{if .UnreadCount}}<span class="pill unread-pill">{{.UnreadCount}} unread</span>{{end}}</div>
 <div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="btn secondary{{if eq .Folder "inbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}">Inbox</a><a class="btn secondary{{if eq .Folder "drafts"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} ({{.DraftCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "outbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} ({{.OutboxCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "sent"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}"><button name="action" value="read" class="secondary">Mark read</button><button name="action" value="unread" class="secondary">Mark unread</button><button name="action" value="delete" class="secondary danger" data-confirm="Delete messages permanently?">Delete</button></form></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if not .OutboundReady}}<div class="banner warn">Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
-{{if .SendRequests}}<section class="card"><div class="card-head"><h2>Draft send requests</h2></div><div class="mailrows">{{range .SendRequests}}<div class="mailrow"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/edit"><span class="maildot"></span><span class="mailsender">{{if eq .Status "pending"}}<span class="pill amber">Awaiting approval</span>{{else if eq .Status "rejected"}}<span class="pill danger">Rejected</span>{{else}}<span class="pill">Approved</span>{{end}} {{.RequestedBy}}</span><span class="mailsubject">{{if .Feedback}}{{.Feedback}}{{else}}Requested {{mailDate .RequestedAt}}{{end}}</span></a>{{if eq .Status "pending"}}<form class="mailaction" method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}</div>{{end}}</div></section>{{end}}
+{{if .SendRequests}}<section class="card"><div class="card-head"><h2>Draft send requests</h2></div><div class="mailheader sendreq"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .SendRequests}}<div class="mailrow sendreq"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .Draft.To ", "}}</span><span class="mailsubject">{{if eq .Request.Status "pending"}}<span class="pill amber">Awaiting approval</span> {{else if eq .Request.Status "rejected"}}<span class="pill danger">Rejected</span> {{end}}{{if .Draft.Subject}}{{.Draft.Subject}}{{else}}(no subject){{end}}{{if .Draft.Text}} <span class="mailsnippet">— {{snippet .Draft.Text 80}}</span>{{end}}{{if .Request.Feedback}} <span class="muted small">— {{.Request.Feedback}}</span>{{end}}</span><span class="maildate">{{mailDate .Request.RequestedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if .Request.RequestedBy}}<span class="muted small reqby" title="{{.Request.RequestedBy}}">{{.Request.RequestedBy}}</span>{{end}}{{if eq .Request.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}
 <section class="card">{{if .Messages}}<div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>{{if eq .Folder "sent"}}To{{else}}From{{end}}</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq $.Folder "sent"}}{{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><form class="mailaction" method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.BasePath}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this folder yet.</p>{{end}}</section>`
 
-const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button>{{if .ComposeRequestSend}}<button type="submit" name="action" value="request-send" class="secondary">Request Send</button>{{end}}<button type="submit" name="action" value="send">Send</button></div></form></section>`
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
 
 const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}/drafts">← Back to drafts</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
@@ -43,7 +63,7 @@ const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}
 const draftsBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="btn secondary{{if eq .Folder "inbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}">Inbox</a><a class="btn secondary{{if eq .Folder "drafts"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} ({{.DraftCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "outbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} ({{.OutboxCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "sent"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-<section class="card">{{if .Drafts}}<div class="mailheader"><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="pill amber">Pending</span> {{else if eq .SendRequest.Status "rejected"}}<span class="pill danger">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="pill">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{else}}<span class="muted small">Awaiting</span>{{end}}{{else}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/request-send" data-confirm="Request approval to send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Request send</button></form>{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger" data-confirm="Delete this draft?">Delete</button></form></span></div>{{end}}</div>{{else}}<p class="muted">No drafts yet.</p>{{end}}</section>`
+<section class="card">{{if .Drafts}}<div class="mailheader drafts"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="pill amber">Pending</span> {{else if eq .SendRequest.Status "rejected"}}<span class="pill danger">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="pill">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger" data-confirm="Delete this draft?">Delete</button></form></span></div>{{end}}</div>{{else}}<p class="muted">No drafts yet.</p>{{end}}</section>`
 
 const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="btn secondary{{if eq .Folder "inbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}">Inbox</a><a class="btn secondary{{if eq .Folder "drafts"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} ({{.DraftCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "outbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} ({{.OutboxCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "sent"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a></div>
@@ -233,21 +253,20 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 		note += "Rejected: " + d.SendRequest.Feedback
 	}
 	s.render(w, composeBody, pageData{
-		Title:              "Edit Draft",
-		Principal:          p,
-		CSRF:               csrf(r),
-		Account:            acc,
-		ComposeTitle:       "Edit Draft",
-		ComposeAction:      actionWithCSRF("/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save", csrf(r)),
-		ComposeCancel:      "/ui/inboxes/" + box.ID + "/drafts",
-		ComposeTo:          strings.Join(d.To, ", "),
-		ComposeCC:          strings.Join(d.CC, ", "),
-		ComposeBCC:         strings.Join(d.BCC, ", "),
-		ComposeSubject:     d.Subject,
-		ComposeText:        d.Text,
-		ComposeNote:        note,
-		ComposeDraftID:     d.ID,
-		ComposeRequestSend: d.Status == model.DraftStatusDraft || d.Status == model.DraftStatusRejected,
+		Title:          "Edit Draft",
+		Principal:      p,
+		CSRF:           csrf(r),
+		Account:        acc,
+		ComposeTitle:   "Edit Draft",
+		ComposeAction:  actionWithCSRF("/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save", csrf(r)),
+		ComposeCancel:  "/ui/inboxes/" + box.ID + "/drafts",
+		ComposeTo:      strings.Join(d.To, ", "),
+		ComposeCC:      strings.Join(d.CC, ", "),
+		ComposeBCC:     strings.Join(d.BCC, ", "),
+		ComposeSubject: d.Subject,
+		ComposeText:    d.Text,
+		ComposeNote:    note,
+		ComposeDraftID: d.ID,
 	})
 }
 
@@ -529,13 +548,19 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	_, outErr := s.Service.Store.GetDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
 	_, inErr := s.Service.Store.GetDomainReceivingConfig(r.Context(), p.AccountID, box.DomainID)
-	var sendRequests []model.DraftSendRequest
+	var sendRequests []SendRequestRow
 	if folder == "inbox" {
 		if all, lerr := s.Service.Store.ListSendRequests(r.Context(), p, id, false, 20); lerr == nil {
 			for _, sr := range all {
-				if sr.Status == model.SendRequestPending || sr.Status == model.SendRequestRejected {
-					sendRequests = append(sendRequests, sr)
+				if sr.Status != model.SendRequestPending && sr.Status != model.SendRequestRejected {
+					continue
 				}
+				d, gerr := s.Service.Store.GetDraft(r.Context(), p, sr.DraftID)
+				if gerr != nil {
+					continue
+				}
+				atts, _ := s.Service.Store.ListDraftAttachments(r.Context(), p, d.ID)
+				sendRequests = append(sendRequests, SendRequestRow{Request: sr, Draft: d, SizeBytes: draftDisplaySize(d, atts)})
 			}
 		}
 	}
