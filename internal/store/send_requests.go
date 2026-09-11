@@ -824,14 +824,19 @@ type ControlMessage struct {
 }
 
 // ApprovalSubjectLabel is the log label for a consumed approval control message:
-// the reviewed draft subject, prefixed, or a bare "Approval" when the request
-// could not be resolved. The raw inbound subject (which carries the token) is
-// never used.
-func ApprovalSubjectLabel(subject string) string {
-	if s := strings.TrimSpace(subject); s != "" {
-		return "Approval: " + s
+// the reviewed draft subject, prefixed "Rejected" when the decision was a
+// rejection and "Approval" otherwise (approved, invalid or error), or the bare
+// prefix when the request could not be resolved. The raw inbound subject (which
+// carries the token) is never used.
+func ApprovalSubjectLabel(outcome, subject string) string {
+	prefix := "Approval"
+	if outcome == "rejected" {
+		prefix = "Rejected"
 	}
-	return "Approval"
+	if s := strings.TrimSpace(subject); s != "" {
+		return prefix + ": " + s
+	}
+	return prefix
 }
 
 // controlMessageSelect lists the displayable columns shared by the per-inbox

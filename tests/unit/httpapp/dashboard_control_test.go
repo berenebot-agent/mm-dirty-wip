@@ -76,3 +76,62 @@ func TestApprovalControlShowsReceivedWithControlClient(t *testing.T) {
 		t.Fatalf("domain log shows approval control mail as Approval direction instead of Received: %s", log)
 	}
 }
+
+// TestApprovalControlSubjectLabelReflectsOutcome locks in that a consumed
+// approval control message shows its reviewed draft subject prefixed
+// "Approval:" for an approval and "Rejected:" for a rejection, in both the
+// dashboard Recent messages and the domain log.
+func TestApprovalControlSubjectLabelReflectsOutcome(t *testing.T) {
+	svc, h, u, dom, box := httpFixture(t)
+	ctx := context.Background()
+	for _, rec := range []store.ControlMessageRecord{
+		{
+			AccountID:          u.AccountID,
+			InboxID:            box.ID,
+			Provider:           "mailgun",
+			ProviderDeliveryID: "ctl-approved",
+			EnvelopeRecipient:  box.Address,
+			FromName:           "Ben",
+			FromAddress:        "approver@outside.test",
+			RequestID:          "dsr_approved",
+			Action:             "approve",
+			Outcome:            "approved",
+			Subject:            "Revised proposal",
+		},
+		{
+			AccountID:          u.AccountID,
+			InboxID:            box.ID,
+			Provider:           "mailgun",
+			ProviderDeliveryID: "ctl-rejected",
+			EnvelopeRecipient:  box.Address,
+			FromName:           "Ben",
+			FromAddress:        "approver@outside.test",
+			RequestID:          "dsr_rejected",
+			Action:             "reject",
+			Outcome:            "rejected",
+			Subject:            "Revised proposal",
+		},
+	} {
+		if _, err := svc.Store.RecordControlMessage(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	for _, path := range []string{"/", "/ui/domains/" + dom.ID + "/sending/deliveries"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%s", path, rr.Code, rr.Body.String())
+		}
+		body := rr.Body.String()
+		if !strings.Contains(body, "Approval: Revised proposal") {
+			t.Fatalf("%s missing approved subject label: %s", path, body)
+		}
+		if !strings.Contains(body, "Rejected: Revised proposal") {
+			t.Fatalf("%s missing rejected subject label: %s", path, body)
+		}
+	}
+}

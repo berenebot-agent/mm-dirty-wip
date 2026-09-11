@@ -333,3 +333,23 @@ func TestFindByTokenAndRejectInternal(t *testing.T) {
 		t.Fatalf("second reject err=%v", err)
 	}
 }
+
+func TestApprovalSubjectLabel(t *testing.T) {
+	cases := []struct {
+		outcome string
+		subject string
+		want    string
+	}{
+		{"approved", "Q3 report", "Approval: Q3 report"},
+		{"approved", "", "Approval"},
+		{"rejected", "Q3 report", "Rejected: Q3 report"},
+		{"rejected", "", "Rejected"},
+		{"invalid", "Q3 report", "Approval: Q3 report"},
+		{"error", "Q3 report", "Approval: Q3 report"},
+	}
+	for _, c := range cases {
+		if got := store.ApprovalSubjectLabel(c.outcome, c.subject); got != c.want {
+			t.Errorf("ApprovalSubjectLabel(%q, %q) = %q, want %q", c.outcome, c.subject, got, c.want)
+		}
+	}
+}

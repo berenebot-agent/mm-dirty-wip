@@ -198,7 +198,7 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 		}
 		e.Kind = "approval"
 		e.Status = outcome
-		e.Subject = ApprovalSubjectLabel(subject)
+		e.Subject = ApprovalSubjectLabel(outcome, subject)
 		e.Client = "Control"
 		e.At = parseTime(created)
 		out = append(out, e)

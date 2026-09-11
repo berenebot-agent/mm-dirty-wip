@@ -422,9 +422,11 @@ inbox's allowed-senders rule (`kind` `blocked`), and consumed approval control
 mail (`kind` `approval`), newest first (`limit`, default `100`, max `200`;
 `before` is a timestamp keyset cursor on `created_at`). Each row carries the
 kind, timestamp, inbox, provider, from/to, subject and size. Blocked rows add
-the reason; approval rows carry the `action` (`approve`/`reject`) as the subject
-and the `status` outcome (`approved`, `rejected`, `invalid` or `error`) plus the
-reason, and set `client` to `Control`; delivered rows add the click-through
+the reason; approval rows set `subject` to the reviewed draft subject labelled
+`Approval: <subject>` (or `Rejected: <subject>` when the outcome is `rejected`),
+carry the `action` (`approve`/`reject`) and the `status` outcome (`approved`,
+`rejected`, `invalid` or `error`) plus the reason, and set `client` to `Control`;
+delivered rows add the click-through
 `message_id`. The domain's UI log
 merges this with the sending side into one two-way timeline. Both logs are
 scoped by domain rather than by the current provider config.
