@@ -105,7 +105,7 @@
 5. Send external email and verify the Brevo provider message ID is recorded.
 6. Configure generic SMTP as the sending provider on another test account/domain.
 7. Send external email successfully.
-8. In hosted mode, configure SMTP to a loopback/private/link-local target and verify the connection is rejected before dialing.
+8. By default (and always in hosted mode), configure an HTTP provider API base or SMTP host that is loopback/private/link-local and verify the connection is rejected before dialing; then set `ALLOW_PRIVATE_OUTBOUND=true` in self-hosted mode and verify a private gateway is accepted.
 9. Send with a base64-JSON attachment and verify the attachment is delivered and stored, then downloadable from the sent message.
 
 ## J. Send idempotency

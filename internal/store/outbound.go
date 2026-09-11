@@ -161,7 +161,8 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	}
 	defer tx.Rollback()
 	var inboxID, threadID, domainID string
-	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID); err != nil {
+	var internal int
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,i.domain_id,m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID, &internal); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
@@ -174,11 +175,14 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "sent", providerMessageID, ""); err != nil {
 		return model.Message{}, nil, err
 	}
-	ev, err := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
-	if err != nil {
-		return model.Message{}, nil, err
+	events := []model.Event{}
+	if internal == 0 {
+		ev, eerr := insertEventTx(ctx, tx, accountID, inboxID, "message.sent", id, map[string]any{"message_id": id, "inbox_id": inboxID, "thread_id": threadID})
+		if eerr != nil {
+			return model.Message{}, nil, eerr
+		}
+		events = append(events, ev)
 	}
-	events := []model.Event{ev}
 	if dev, derr := sendRequestDeliveryTx(ctx, tx, accountID, id, model.SendDeliverySent, model.EventDraftSent); derr != nil {
 		return model.Message{}, nil, derr
 	} else if dev != nil {
@@ -438,7 +442,7 @@ func (s *Store) IdempotencyRelease(ctx context.Context, accountID, key string) e
 }
 
 func (s *Store) LatestMessageInThread(ctx context.Context, accountID, threadID string) (model.Message, error) {
-	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.thread_id=? ORDER BY m.created_at DESC LIMIT 1`, accountID, threadID))
+	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.thread_id=? AND m.internal=0 ORDER BY m.created_at DESC LIMIT 1`, accountID, threadID))
 	if err == sql.ErrNoRows {
 		return m, ErrNotFound
 	}

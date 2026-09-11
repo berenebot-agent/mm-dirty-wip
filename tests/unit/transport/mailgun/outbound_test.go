@@ -75,11 +75,11 @@ func readMultipart(t *testing.T, r *http.Request) (map[string]string, map[string
 	return fields, files
 }
 
-func TestHostedRejectsPrivateAPIBase(t *testing.T) {
-	netutil.SetHosted(true)
-	defer netutil.SetHosted(false)
-	_, err := mailgun.Send(context.Background(), mailgun.Config{APIKey: "key", Domain: "mg.example.com", APIBase: "http://127.0.0.1:9999"}, mailgun.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
+func TestRequirePublicRejectsPrivateAPIBase(t *testing.T) {
+	netutil.SetRequirePublic(true)
+	defer netutil.SetRequirePublic(false)
+	_, err := mailgun.Send(context.Background(), mailgun.Config{APIKey: "key", Domain: "mg.example.com", APIBase: "https://127.0.0.1:9999"}, mailgun.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "not public-routable") {
-		t.Fatalf("hosted private API base should be rejected: %v", err)
+		t.Fatalf("private API base should be rejected: %v", err)
 	}
 }

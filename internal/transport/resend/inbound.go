@@ -51,10 +51,6 @@ const (
 	// small; the cap only guards against an unexpectedly huge body.
 	maxMetadataBytes = 32 << 20
 	signatureMaxAge  = 5 * time.Minute
-	httpTimeout      = 30 * time.Second
-	// downloadTimeout is generous because the signed raw MIME download can
-	// include large attachments.
-	downloadTimeout = 2 * time.Minute
 )
 
 // Svix signature headers sent with every Resend webhook.
@@ -122,12 +118,11 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	if apiKey == "" {
 		return msg, binding, fmt.Errorf("resend api_key is required")
 	}
-	client := &http.Client{Timeout: httpTimeout}
-	rawURL, err := fetchRawURL(ctx, client, apiBase(binding.Config), apiKey, wh.Data.EmailID)
+	rawURL, err := fetchRawURL(ctx, netutil.HTTPClient(), apiBase(binding.Config), apiKey, wh.Data.EmailID)
 	if err != nil {
 		return msg, binding, err
 	}
-	n, err := downloadToFile(ctx, &http.Client{Timeout: downloadTimeout}, rawURL, tmpPath, maxBytes)
+	n, err := downloadToFile(ctx, netutil.HTTPClientLong(), rawURL, tmpPath, maxBytes)
 	if err != nil {
 		return msg, binding, err
 	}
@@ -208,14 +203,8 @@ func fetchRawURL(ctx context.Context, client *http.Client, base, apiKey, emailID
 	if strings.TrimSpace(emailID) == "" {
 		return "", fmt.Errorf("resend email_id missing")
 	}
-	if netutil.Hosted() {
-		u, err := url.Parse(base)
-		if err != nil {
-			return "", err
-		}
-		if _, err = netutil.ResolvePublicHost(ctx, u.Hostname()); err != nil {
-			return "", err
-		}
+	if err := netutil.ValidateBaseURL(base); err != nil {
+		return "", err
 	}
 	// html_format=cid keeps inline images as cid references instead of base64
 	// data URIs, which otherwise make the response many megabytes and are not
@@ -247,7 +236,7 @@ func fetchRawURL(ctx context.Context, client *http.Client, base, apiKey, emailID
 
 // downloadToFile streams the signed raw MIME URL to tmpPath, bounded by
 // maxBytes. The URL is issued by Resend over HTTPS; the scheme is enforced and
-// hosted mode applies the shared public-routable guard.
+// the shared guarded client applies the public-routable destination check.
 func downloadToFile(ctx context.Context, client *http.Client, rawURL, tmpPath string, maxBytes int64) (int64, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -255,11 +244,6 @@ func downloadToFile(ctx context.Context, client *http.Client, rawURL, tmpPath st
 	}
 	if u.Scheme != "https" {
 		return 0, fmt.Errorf("resend raw download must be https")
-	}
-	if netutil.Hosted() {
-		if _, err = netutil.ResolvePublicHost(ctx, u.Hostname()); err != nil {
-			return 0, err
-		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

@@ -319,10 +319,22 @@ func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display 
 		return ErrForbidden
 	}
 	if display != "" {
-		_, _ = s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE id=? AND account_id=?`, strings.TrimSpace(display), id, p.AccountID)
+		res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE id=? AND account_id=?`, strings.TrimSpace(display), id, p.AccountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
 	}
 	if enabled != nil {
-		_, _ = s.write.ExecContext(ctx, `UPDATE inboxes SET enabled=? WHERE id=? AND account_id=?`, boolInt(*enabled), id, p.AccountID)
+		res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET enabled=? WHERE id=? AND account_id=?`, boolInt(*enabled), id, p.AccountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
 	}
 	return nil
 }

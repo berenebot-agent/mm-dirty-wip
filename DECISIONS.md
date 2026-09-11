@@ -194,11 +194,13 @@ Relay outbound operations also revalidate the connection row.
 
 ## Hardened outbound HTTP client (SEC-01)
 
-Mailgun and Brevo share `netutil.HTTPClient`. In hosted mode it resolves the
-destination inside `DialContext`, connects only to an approved public IP
-(preserving TLS hostname verification via the URL host), disables proxy
-routing, and refuses redirects. Self-hosted mode keeps the default dialer and
-honours proxy environment variables.
+Mailgun, Brevo and Resend share the guarded `netutil` HTTP clients. By default
+(and always in hosted mode) they resolve the destination inside `DialContext`,
+connect only to an approved public IP (preserving TLS hostname verification via
+the URL host), bypass proxy routing, and refuse redirects. Self-hosted mode can
+opt out with `ALLOW_PRIVATE_OUTBOUND=true`, which restores the default dialer and
+proxy environment; hosted ignores the opt-out. Generic SMTP applies the same
+default public-routable check. See `docs/DECISIONS.md` D028.
 
 ## In-transaction hydration (BUG-02)
 

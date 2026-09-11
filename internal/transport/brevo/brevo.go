@@ -82,6 +82,9 @@ func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResul
 	if base == "" {
 		base = "https://api.brevo.com"
 	}
+	if err := netutil.ValidateBaseURL(base); err != nil {
+		return SendResult{}, err
+	}
 	p := payload{
 		Sender:      recipient{Email: m.FromAddress},
 		To:          recipients(m.To),

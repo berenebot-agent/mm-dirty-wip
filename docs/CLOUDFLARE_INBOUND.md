@@ -66,7 +66,10 @@ curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
   - `X-Gatehouse-Recipient` (required) - the envelope recipient; selects the
     domain and its receiving configuration. It is a routing hint and grants no
     authority until the bearer matches.
-  - `X-Gatehouse-Envelope-From` (optional) - the envelope sender.
+  - `X-Gatehouse-Envelope-From` (optional for ordinary mail, **required for
+    draft-approval control mail**) - the envelope sender. The generated Worker
+    sends `message.from`; a custom Worker must set it or approval replies fail
+    closed.
   - `X-Gatehouse-Delivery-ID` (optional, bounded) - a stable id used for
     deduplication. When absent, the server derives one from a SHA-256 hash of
     the raw MIME. Reuse the same id when the Worker retries a delivery.

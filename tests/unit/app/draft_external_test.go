@@ -31,11 +31,22 @@ var approveTokenRe = regexp.MustCompile(`\[GH-APPROVE:([A-Za-z0-9_-]{16,})\]`)
 // subject and body so the approval control path can be exercised end to end.
 func mgControlRequest(t *testing.T, key, deliveryID, recipient, sender, subject, body string) *http.Request {
 	t.Helper()
+	return mgControlRequestFrom(t, key, deliveryID, recipient, sender, sender, subject, body)
+}
+
+// mgControlRequestFrom builds a Mailgun control webhook where the
+// provider-attested envelope sender (the `sender` form field) and the MIME
+// From header can be set independently. An empty envelopeFrom omits the field.
+func mgControlRequestFrom(t *testing.T, key, deliveryID, recipient, envelopeFrom, headerFrom, subject, body string) *http.Request {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	ts := fmt.Sprintf("%d", time.Now().Unix())
-	raw := "From: " + sender + "\r\nTo: " + recipient + "\r\nSubject: " + subject + "\r\nMessage-ID: <ctl@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\n" + body
-	fields := map[string]string{"timestamp": ts, "token": deliveryID, "signature": mgSig(key, ts, deliveryID), "sender": sender, "recipient": recipient, "Message-Id": "<ctl@test>"}
+	raw := "From: " + headerFrom + "\r\nTo: " + recipient + "\r\nSubject: " + subject + "\r\nMessage-ID: <ctl@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\n" + body
+	fields := map[string]string{"timestamp": ts, "token": deliveryID, "signature": mgSig(key, ts, deliveryID), "recipient": recipient, "Message-Id": "<ctl@test>"}
+	if envelopeFrom != "" {
+		fields["sender"] = envelopeFrom
+	}
 	for k, v := range fields {
 		_ = mw.WriteField(k, v)
 	}
@@ -358,5 +369,134 @@ func TestFrozenFingerprintCoversAttachmentBytes(t *testing.T) {
 	}
 	if _, err = svc.ApproveDraft(ctx, admin, d.ID, "", model.DecisionMethodUI, ""); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("approve after byte swap err=%v", err)
+	}
+}
+
+// controlRequestFor builds a pending external request and returns its live token.
+func controlRequestFor(t *testing.T, svc *app.Service, u model.User, box model.Inbox) string {
+	t.Helper()
+	if err := svc.Store.SetInboxApprover(context.Background(), u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d, err := svc.Store.CreateDraft(context.Background(), asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "proposal", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(context.Background(), asst, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	return approvalToken(t, svc, u.AccountID, box.ID)
+}
+
+// TestExternalApprovalEnvelopeBinding proves the approval decision is bound to
+// the provider-attested envelope sender, not the spoofable MIME From header.
+func TestExternalApprovalEnvelopeBinding(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("spoofed MIME From is rejected", func(t *testing.T) {
+		svc, u, dom, box := testService(t)
+		svc.Config.ApprovalExpiryHours = 48
+		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+		token := controlRequestFor(t, svc, u, box)
+		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
+		// Envelope is the attacker; the header claims the approver.
+		req := mgControlRequestFrom(t, testMailgunKey, "ctl-spoof", box.Address, "mallory@evil.test", "Ben <"+approverAddress+">", "[GH-APPROVE:"+token+"]", body)
+		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+			t.Fatalf("ingest err=%v", err)
+		}
+		if !pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("spoofed MIME From authorized the request")
+		}
+	})
+
+	t.Run("spoofed header with approver envelope is rejected", func(t *testing.T) {
+		svc, u, dom, box := testService(t)
+		svc.Config.ApprovalExpiryHours = 48
+		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+		token := controlRequestFor(t, svc, u, box)
+		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
+		req := mgControlRequestFrom(t, testMailgunKey, "ctl-hdr", box.Address, approverAddress, "Mallory <mallory@evil.test>", "[GH-APPROVE:"+token+"]", body)
+		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+			t.Fatalf("ingest err=%v", err)
+		}
+		if !pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("spoofed header authorized the request")
+		}
+	})
+
+	t.Run("missing envelope is rejected", func(t *testing.T) {
+		svc, u, dom, box := testService(t)
+		svc.Config.ApprovalExpiryHours = 48
+		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+		token := controlRequestFor(t, svc, u, box)
+		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
+		req := mgControlRequestFrom(t, testMailgunKey, "ctl-none", box.Address, "", "Ben <"+approverAddress+">", "[GH-APPROVE:"+token+"]", body)
+		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+			t.Fatalf("ingest err=%v", err)
+		}
+		if !pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("missing envelope authorized the request")
+		}
+	})
+
+	t.Run("matching envelope and header approves", func(t *testing.T) {
+		svc, u, dom, box := testService(t)
+		svc.Config.ApprovalExpiryHours = 48
+		seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+		token := controlRequestFor(t, svc, u, box)
+		body := "[GH-FEEDBACK-BEGIN]\r\n\r\n[GH-FEEDBACK-END]"
+		req := mgControlRequestFrom(t, testMailgunKey, "ctl-ok", box.Address, approverAddress, "Ben <"+approverAddress+">", "[GH-APPROVE:"+token+"]", body)
+		if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
+			t.Fatalf("ingest err=%v", err)
+		}
+		if pendingRequestStillOpen(t, svc, u, box) {
+			t.Fatal("valid envelope did not authorize the request")
+		}
+	})
+}
+
+// pendingRequestStillOpen reports whether the most recent send request for the
+// inbox is still awaiting a decision.
+func pendingRequestStillOpen(t *testing.T, svc *app.Service, u model.User, box model.Inbox) bool {
+	t.Helper()
+	srs, err := svc.Store.ListSendRequests(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, false, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(srs) == 0 {
+		t.Fatal("no send request found")
+	}
+	for _, sr := range srs {
+		if sr.Status == model.SendRequestPending {
+			return true
+		}
+	}
+	return false
+}
+
+// TestInternalApprovalMailCannotBeForwarded proves the hidden approval email
+// cannot be exfiltrated through the reply/forward send path.
+func TestInternalApprovalMailCannotBeForwarded(t *testing.T) {
+	svc, u, _, box := testService(t)
+	ctx := context.Background()
+	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d, err := svc.Store.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "proposal", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(ctx, asst, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	internalID := queuedApprovalEmail(t, svc, ctx, u.AccountID, box.ID).ID
+	owner := ownerPrincipal(u.AccountID, box.ID)
+	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ForwardOfMessageID: internalID, To: []string{"leak@outside.test"}, Text: "x"}, ""); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("forward of internal mail err=%v", err)
+	}
+	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ReplyToMessageID: internalID, To: []string{"leak@outside.test"}, Text: "x"}, ""); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("reply to internal mail err=%v", err)
 	}
 }

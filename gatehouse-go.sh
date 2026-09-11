@@ -14,8 +14,8 @@
 #   gobuild = ~/.cache/gatehouse-go/build    compiled package cache (/root/.cache/go-build)
 #
 # Toolchain image:
-#   Base is pinned to match the Dockerfile build stage (golang:1.23-bookworm).
-#   The wrapper builds a local cached image (gatehouse-go:1.23) with
+#   Base is pinned to match the Dockerfile build stage (golang:1.27-bookworm).
+#   The wrapper builds a local cached image (gatehouse-go:1.27) with
 #   libsqlite3-dev preinstalled on first use, then reuses it. Override with
 #   GATEHOUSE_GO_IMAGE to point at another image (e.g. the bare base).
 #
@@ -26,8 +26,8 @@
 
 set -eu
 
-GO_BASE="golang:1.23-bookworm"
-GO_IMAGE="${GATEHOUSE_GO_IMAGE:-gatehouse-go:1.23}"
+GO_BASE="golang:1.27-bookworm"
+GO_IMAGE="${GATEHOUSE_GO_IMAGE:-gatehouse-go:1.27}"
 CACHE_DIR="${GATEHOUSE_GO_CACHE:-$HOME/.cache/gatehouse-go}"
 MOD_CACHE="$CACHE_DIR/mod"
 BUILD_CACHE="$CACHE_DIR/build"

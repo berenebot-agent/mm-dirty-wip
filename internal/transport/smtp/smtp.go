@@ -34,7 +34,7 @@ type outboundTransport struct{}
 
 func init() { transport.RegisterOutbound(outboundTransport{}) }
 
-func SetHosted(hosted bool) { netutil.SetHosted(hosted) }
+func SetRequirePublic(v bool) { netutil.SetRequirePublic(v) }
 
 func (outboundTransport) Name() string        { return "smtp" }
 func (outboundTransport) Description() string { return "SMTP" }
@@ -55,13 +55,13 @@ func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transpo
 		return transport.OutboundResult{}, err
 	}
 	all := append(append(append([]string{}, m.To...), m.CC...), m.BCC...)
-	if err := Send(ctx, c, SendRequest{From: m.FromAddress, To: all, Raw: m.RawMIME}, netutil.Hosted()); err != nil {
+	if err := Send(ctx, c, SendRequest{From: m.FromAddress, To: all, Raw: m.RawMIME}, netutil.RequirePublic()); err != nil {
 		return transport.OutboundResult{}, err
 	}
 	return transport.OutboundResult{ProviderMessageID: "smtp"}, nil
 }
 
-func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
+func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) error {
 	if c.Host == "" {
 		return fmt.Errorf("smtp host required")
 	}
@@ -84,7 +84,7 @@ func Send(ctx context.Context, c Config, m SendRequest, hosted bool) error {
 	}
 	var last error
 	for _, ip := range ips {
-		if hosted && !netutil.PublicIP(ip) {
+		if requirePublic && !netutil.PublicIP(ip) {
 			last = fmt.Errorf("smtp destination is not public-routable")
 			continue
 		}

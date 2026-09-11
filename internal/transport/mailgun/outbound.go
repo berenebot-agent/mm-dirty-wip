@@ -66,6 +66,9 @@ func Send(ctx context.Context, c Config, m SendRequest) (SendResult, error) {
 	if base == "" {
 		base = "https://api.mailgun.net"
 	}
+	if err := netutil.ValidateBaseURL(base); err != nil {
+		return SendResult{}, err
+	}
 	if c.APIKey == "" || c.Domain == "" {
 		return SendResult{}, fmt.Errorf("mailgun api_key and domain are required")
 	}

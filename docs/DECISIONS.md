@@ -342,9 +342,11 @@ in the outbox worker, an approval-email builder, API/UI approver settings, and
 the `draft.approval_expired` event. No new dependency or runtime service; it
 reuses the outbound, event, storage and SQLite subsystems.
 
-**Out of scope:** sender-authentication (SPF/DKIM/DMARC) evidence capture is
-deferred; provider auth material is not yet plumbed through the inbound
-boundary. Per-request arbitrary approvers and approval-token resend are not
+**Sender binding:** the decision is bound to the provider-attested envelope
+sender (`transport.InboundMessage.EnvelopeFrom`) rather than the attacker-
+controlled MIME `From:` header; both must equal the stored approver and a
+missing envelope is rejected (see D029). Full SPF/DKIM/DMARC evidence capture
+remains deferred. Per-request arbitrary approvers and approval-token resend are not
 supported; the approver is an inbox setting and a new request issues a new
 token. Section 20 of `roadmap/roadmap_assistant.md` (arbitrary per-request
 approver) is superseded by the inbox-level setting.
@@ -374,6 +376,48 @@ inbound check.
 
 **Complexity:** One column, one backfill, a store setter, an API field and a UI
 checkbox; no new dependency or runtime service.
+
+## D028 — Public-routable outbound destinations by default
+
+**Decision:** Every outbound transport (HTTP provider clients and generic SMTP)
+must resolve its destination to a public-routable address before connecting,
+in all modes. `MODE=hosted` always enforces this. A self-hosted operator can opt
+out with `ALLOW_PRIVATE_OUTBOUND=true` for a private gateway or local relay; the
+opt-out is ignored in hosted mode. Provider HTTP API bases must also be HTTPS
+and must not name a loopback, private or link-local IP literal when enforcement
+is on. The shared `netutil` client validates inside `DialContext` (so DNS cannot
+rebind between validation and connection), refuses redirects, and bypasses the
+proxy environment while enforcement is active; enforcement off restores the
+default transport and proxy behaviour.
+
+**Reason:** The previous guard was gated behind `MODE=hosted`, so the default
+self-hosted deployment skipped it and an account Administrator could point a
+provider's `api_base` at loopback, RFC1918 or the cloud metadata address and
+read the upstream response through the delivery log. The control belongs on by
+default; the operator, not the mode default, should decide to weaken it. Turning
+the proxy off while enforcing closes the proxy escape hatch.
+
+**Complexity:** One config flag, a shared `netutil` gate, and adapter wiring; no
+new dependency or runtime service.
+
+## D029 — Approval sender bound to the provider envelope sender
+
+**Decision:** An email approval is accepted only when the provider-attested
+envelope sender presented in the inbound webhook equals the stored approver
+address, and the message's MIME `From:` header equals it too. A missing or
+mismatched envelope is consumed and recorded as invalid, never as a decision.
+
+**Reason:** The MIME `From:` header is attacker-controlled, so binding a
+one-time-token decision to it let a token holder spoof the approver. The
+envelope sender is what the receiving provider observed and what SPF covers.
+The token is additionally hidden from the mailbox read surface (the workflow-mail
+`internal` flag); this decision keeps the human-in-the-loop boundary intact even
+if a token leaks by another channel.
+
+**Boundary:** The envelope sender is already normalized across the Mailgun,
+Cloudflare and Resend adapters (`transport.InboundMessage.EnvelopeFrom`).
+Providers that do not supply it fail closed; the generated Cloudflare Worker
+sends it. Full SPF/DKIM/DMARC evidence capture remains a future extension.
 
 ## Future extension register
 

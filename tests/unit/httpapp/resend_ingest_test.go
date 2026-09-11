@@ -38,7 +38,7 @@ func resendIngestFixture(t *testing.T) (*app.Service, *httpapp.Server, model.Pri
 	}
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{
-		DataDir: dir, Mode: "selfhosted", BaseURL: "http://example.test",
+		DataDir: dir, Mode: "selfhosted", AllowPrivateOutbound: true, BaseURL: "http://example.test",
 		AppEncryptionKey: "01234567890123456789012345678901",
 		MaxMessageBytes:  5 << 20, DefaultQuotaBytes: 50 << 20,
 	}

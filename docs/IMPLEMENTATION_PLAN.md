@@ -149,7 +149,7 @@ A client disconnects after event N, receives events N+1..N+K after reconnect, an
 - outbound transport registry and interface
 - Mailgun HTTP sender
 - Brevo HTTP sender
-- generic SMTP sender with hosted-mode public-destination validation
+- generic SMTP sender with default public-destination validation
 - outbound attachment support with per-provider translation
 - outbound-send rate limiting
 - draft CRUD

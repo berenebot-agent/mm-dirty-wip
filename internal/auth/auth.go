@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const defaultPasswordIterations = 310000
@@ -73,6 +74,21 @@ func CheckPassword(encoded, password string) bool {
 	}
 	got := pbkdf2SHA256([]byte(password), salt, iterations, len(want))
 	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+var (
+	dummyHashOnce sync.Once
+	dummyHash     string
+)
+
+// DummyPasswordCheck performs a password hash comparison against a fixed dummy
+// hash. It is used on the unknown-account path so login timing cannot be used to
+// confirm whether an account exists.
+func DummyPasswordCheck(password string) {
+	dummyHashOnce.Do(func() {
+		dummyHash, _ = HashPassword("gatehouse-dummy-password")
+	})
+	_ = CheckPassword(dummyHash, password)
 }
 
 // pbkdf2SHA256 implements PBKDF2-HMAC-SHA256 as specified by RFC 8018.
