@@ -69,7 +69,7 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 	}
 	// Drafts list flags it pending.
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/drafts")
-	if !strings.Contains(rr.Body.String(), "Pending") {
+	if !strings.Contains(rr.Body.String(), "Pending Send") || !strings.Contains(rr.Body.String(), `class="draft-status pending"`) {
 		t.Fatalf("drafts list missing pending badge")
 	}
 	if strings.Contains(rr.Body.String(), "Request send") {
