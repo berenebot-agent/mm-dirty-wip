@@ -314,8 +314,13 @@ reference line; a plain-text or HTML reply quotes it, binding the reply to the
 same one-time request whether or not the client honours `mailto:`. The action is
 read only from the first non-empty line of the approver's own text, after
 cutting at the first quoted-history boundary: a first token of
-`Approve`/`Approved` in any case approves, and any other readable line rejects
-(an empty or unreadable reply rejects too). This is the deliberate, narrow
+`Approve`/`Approved` or a common affirmative (`yes`, `yep`, `yeah`, `ok`,
+`okay`, `accept`/`accepted`, `confirm`/`confirmed`, `authorize`/`authorized`/
+`authorised`, `lgtm`, `y`) in any case approves, and any other readable line
+rejects (an empty or unreadable reply rejects too). A first affirmative is
+honoured even when the rest of the line qualifies it ("Yes, don't approve"),
+because no negation is parsed; the emailed instruction names the exact word and
+the gate remains the nominated approver's reply. This is the deliberate, narrow
 exception to the rule that a parser must not look for natural-language words
 like "approve": the word is only the action selector, while the token, the
 stored request and the sender binding remain the authentication, and it is read
