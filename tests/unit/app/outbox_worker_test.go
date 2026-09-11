@@ -54,6 +54,76 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 	t.Fatalf("worker did not deliver; calls=%d", calls.Load())
 }
 
+// TestSaveSendingConfigRequeuesPending verifies that saving a domain's sending
+// configuration resets pending messages (held for lack of a provider, or in
+// retry backoff) so the worker delivers them immediately instead of waiting out
+// the hold or backoff timer.
+func TestSaveSendingConfigRequeuesPending(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+
+	var calls atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<requeued>"}`)
+	}))
+	defer api.Close()
+
+	// A message that has already consumed a retry and is backing off for an hour.
+	backingOff, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "backoff", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = svc.Store.MarkFailed(ctx, u.AccountID, backingOff.Message.ID, "down", time.Now().UTC().Add(time.Hour), 6, "brevo"); err != nil {
+		t.Fatal(err)
+	}
+	// A message held because the domain has no sending provider.
+	held, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "held", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.HoldPending(ctx, u.AccountID, held.Message.ID, "no provider", time.Now().UTC().Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	w := app.NewOutboxWorker(svc, nil)
+	w.SetPeriod(10 * time.Millisecond)
+	w.Start()
+	defer w.Stop()
+
+	// Neither message is due for at least five minutes, so the worker must not
+	// deliver either one while the old hold/backoff stands.
+	time.Sleep(300 * time.Millisecond)
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("delivered before config save: calls=%d", n)
+	}
+
+	// Saving the sender resets both pending messages to retry immediately.
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		a, err := svc.Store.GetMessageByID(ctx, u.AccountID, backingOff.Message.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := svc.Store.GetMessageByID(ctx, u.AccountID, held.Message.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.Status == "sent" && b.Status == "sent" {
+			if n := calls.Load(); n != 2 {
+				t.Fatalf("calls=%d, want 2", n)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("pending messages not delivered after config save; calls=%d", calls.Load())
+}
+
 func TestDraftSendFlow(t *testing.T) {
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()

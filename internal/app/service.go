@@ -334,7 +334,19 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	if exists {
 		expected = store.ConfigVersion{ID: existing.ID, Revision: existing.Revision}
 	}
-	return s.Store.SaveDomainSendingConfig(ctx, accountID, domainID, provider, enc, expected)
+	saved, err := s.Store.SaveDomainSendingConfig(ctx, accountID, domainID, provider, enc, expected)
+	if err != nil {
+		return store.DomainSendingConfig{}, err
+	}
+	// A new or rotated sender is a reason to retry every pending message for the
+	// domain immediately with a fresh attempt budget, rather than leaving them
+	// waiting on the no-provider hold or a backoff earned against the old config.
+	if n, rerr := s.Store.RequeuePendingForDomain(ctx, accountID, domainID); rerr != nil {
+		s.Log.Warn("requeue pending mail after sending config save", "domain_id", domainID, "error", rerr)
+	} else if n > 0 {
+		s.Log.Info("requeued pending mail after sending config save", "domain_id", domainID, "messages", n)
+	}
+	return saved, nil
 }
 
 // SaveDomainReceivingConfig validates, encrypts and persists the single

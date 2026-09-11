@@ -299,6 +299,20 @@ func (s *Store) MessageClaimOwner(ctx context.Context, accountID, id string) (st
 	return owner, err
 }
 
+// RequeuePendingForDomain resets every pending outbound message for a domain so
+// it retries immediately after the domain's sending configuration is saved.
+// Attempts, retry backoff, the no-provider hold and any claim lease are all
+// cleared, restoring the full retry budget. Sent and failed messages are
+// untouched; failed messages still require an explicit retry.
+func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID string) (int64, error) {
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND direction='outbound' AND status='pending' AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)`, accountID, domainID, accountID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // RequeueFailed resets a failed message to pending for a manual retry.
 func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string) error {
 	m, err := s.GetMessage(ctx, p, id)
