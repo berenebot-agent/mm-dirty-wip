@@ -80,9 +80,16 @@ Example:
   "id": "in_01K...",
   "address": "hermes@example.com",
   "display_name": "Hermes",
-  "enabled": true
+  "enabled": true,
+  "aliases": ["sales@example.com", "billing@other.com"]
 }
 ```
+
+`PATCH /v1/inboxes/{id}` accepts `aliases` as a replace-set: each entry is a
+full `local@domain` address on any domain the account owns. An alias delivers
+inbound mail to this inbox (resolution precedence: exact inbox, alias, then
+domain catch-all). Aliases are inbound only — replies send from the inbox's
+primary `address`. Sending `[]` clears the set.
 
 ## 4. Messages
 

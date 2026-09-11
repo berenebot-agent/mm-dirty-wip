@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 
 	"gatehouse-mail/internal/idgen"
 	"gatehouse-mail/internal/model"
@@ -246,6 +247,13 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	if _, err := mail.ParseAddress(addr); err != nil {
 		return model.Inbox{}, fmt.Errorf("invalid address: %w", err)
 	}
+	var aliasCollision int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM inbox_aliases WHERE domain_id=? AND local_part=?`, domainID, localPart).Scan(&aliasCollision); err != nil {
+		return model.Inbox{}, err
+	}
+	if aliasCollision != 0 {
+		return model.Inbox{}, fmt.Errorf("address is already an alias")
+	}
 	id := idgen.New("in")
 	now := nowText()
 	_, err := s.write.ExecContext(ctx, `INSERT INTO inboxes(id,account_id,domain_id,local_part,display_name,created_at) VALUES(?,?,?,?,?,?)`, id, accountID, domainID, localPart, strings.TrimSpace(display), now)
@@ -288,8 +296,31 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		i.CreatedAt = parseTime(created)
 		out = append(out, i)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(out) > 0 {
+		aliases, aerr := s.ListInboxAliases(ctx, p.AccountID)
+		if aerr != nil {
+			return nil, aerr
+		}
+		for i := range out {
+			out[i].Aliases = aliasAddresses(aliases[out[i].ID])
+		}
+	}
+	return out, nil
 }
+
+// aliasAddresses flattens alias rows into the full addresses an inbox displays.
+func aliasAddresses(aliases []InboxAlias) []string {
+	out := make([]string, 0, len(aliases))
+	for _, a := range aliases {
+		out = append(out, a.Address)
+	}
+	return out
+}
+
 func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (model.Inbox, error) {
 	if !p.CanRead(id) {
 		return model.Inbox{}, ErrForbidden
@@ -312,6 +343,21 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	i.AllowedSenders = decodeStrings(allowed)
 	i.SenderRestricted = restricted != 0
 	i.CreatedAt = parseTime(created)
+	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
+	if err != nil {
+		return i, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var local, aliasDomain string
+		if err = rows.Scan(&local, &aliasDomain); err != nil {
+			return i, err
+		}
+		i.Aliases = append(i.Aliases, local+"@"+aliasDomain)
+	}
+	if err = rows.Err(); err != nil {
+		return i, err
+	}
 	return i, nil
 }
 func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display string, enabled *bool) error {
@@ -395,6 +441,114 @@ func (s *Store) SetInboxApprover(ctx context.Context, accountID, inboxID, email 
 		return ErrNotFound
 	}
 	return nil
+}
+
+// maxInboxAliases bounds the aliases a single inbox may carry so a bad client
+// cannot grow the table without limit.
+const maxInboxAliases = 100
+
+// InboxAlias is an alternate inbound address that delivers to an inbox. It is
+// an address-to-inbox mapping, not a mailbox: the target may live on a
+// different domain of the same account.
+type InboxAlias struct {
+	ID        string    `json:"id"`
+	AccountID string    `json:"account_id"`
+	DomainID  string    `json:"domain_id"`
+	InboxID   string    `json:"inbox_id"`
+	LocalPart string    `json:"local_part"`
+	Address   string    `json:"address"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AliasInput is one desired alias on SetInboxAliases: a local part and the id
+// of the domain it lives on (which may differ from the target inbox's domain).
+type AliasInput struct {
+	DomainID  string
+	LocalPart string
+}
+
+// ListInboxAliases returns every alias in an account grouped by target inbox id.
+func (s *Store) ListInboxAliases(ctx context.Context, accountID string) (map[string][]InboxAlias, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT a.id,a.account_id,a.domain_id,a.inbox_id,a.local_part,d.name,a.created_at FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.account_id=? ORDER BY d.name,a.local_part`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]InboxAlias{}
+	for rows.Next() {
+		var a InboxAlias
+		var domain, created string
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.InboxID, &a.LocalPart, &domain, &created); err != nil {
+			return nil, err
+		}
+		a.Address = a.LocalPart + "@" + domain
+		a.CreatedAt = parseTime(created)
+		out[a.InboxID] = append(out[a.InboxID], a)
+	}
+	return out, rows.Err()
+}
+
+// SetInboxAliases replaces an inbox's alias set transactionally. Every alias
+// domain must belong to the account, every local part must be valid and must
+// not shadow an existing mailbox on the same domain, and no two aliases may
+// share an address. A missing or foreign inbox is ErrNotFound.
+func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, aliases []AliasInput) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var n int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_aliases WHERE account_id=? AND inbox_id=?`, accountID, inboxID); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, in := range aliases {
+		local := normalizeLocal(in.LocalPart)
+		if local == "" || strings.ContainsAny(local, "@ <>\t\r\n") {
+			return fmt.Errorf("invalid alias local part")
+		}
+		var domainName string
+		if err = tx.QueryRowContext(ctx, `SELECT name FROM domains WHERE id=? AND account_id=?`, in.DomainID, accountID).Scan(&domainName); err == sql.ErrNoRows {
+			return ErrForbidden
+		} else if err != nil {
+			return err
+		}
+		if _, err = mail.ParseAddress(local + "@" + domainName); err != nil {
+			return fmt.Errorf("invalid alias address: %w", err)
+		}
+		key := in.DomainID + "\x00" + local
+		if seen[key] {
+			return fmt.Errorf("duplicate alias %s@%s", local, domainName)
+		}
+		seen[key] = true
+		var collision int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE domain_id=? AND local_part=?`, in.DomainID, local).Scan(&collision); err != nil {
+			return err
+		}
+		if collision != 0 {
+			return fmt.Errorf("alias %s@%s is already a mailbox", local, domainName)
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_aliases WHERE domain_id=? AND local_part=?`, in.DomainID, local).Scan(&collision); err != nil {
+			return err
+		}
+		if collision != 0 {
+			return fmt.Errorf("alias %s@%s is already in use", local, domainName)
+		}
+		if len(seen) > maxInboxAliases {
+			return fmt.Errorf("too many aliases")
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_aliases(id,account_id,domain_id,inbox_id,local_part,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("al"), accountID, in.DomainID, inboxID, local, nowText()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // PurgeInbox permanently deletes an inbox and every row it owns, returning the
@@ -507,39 +661,96 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 	return paths, nil
 }
 
-func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inbox, bool, error) {
+// RecipientRoute reports how ResolveRecipient matched an address, so the
+// ingest core can apply the right binding check: exact and catch-all matches
+// must stay inside the authenticated domain, while an alias may cross domains
+// within the account.
+type RecipientRoute int
+
+const (
+	// RouteNone means the address did not resolve.
+	RouteNone RecipientRoute = iota
+	// RouteInbox is a direct match on a real inbox address.
+	RouteInbox
+	// RouteAlias is a match on an alias that delivers to another inbox.
+	RouteAlias
+	// RouteCatchAll is a match on the domain catch-all inbox.
+	RouteCatchAll
+)
+
+const inboxSelectCols = `i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.created_at`
+
+func scanResolvedInbox(sc interface {
+	Scan(dest ...any) error
+}) (model.Inbox, error) {
+	var i model.Inbox
+	var domain, allowed, created string
+	var enabled, restricted int
+	if err := sc.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &created); err != nil {
+		return model.Inbox{}, err
+	}
+	i.Address = i.LocalPart + "@" + domain
+	i.Enabled = enabled != 0
+	i.AllowedSenders = decodeStrings(allowed)
+	i.SenderRestricted = restricted != 0
+	i.CreatedAt = parseTime(created)
+	return i, nil
+}
+
+// ResolveRecipient maps an address to its delivery inbox, in precedence order:
+// exact inbox, then an alias on the address's domain, then the domain
+// catch-all. The returned route tells the caller which match was used. A
+// disabled inbox is treated as unresolved.
+func (s *Store) ResolveRecipient(ctx context.Context, address string) (model.Inbox, RecipientRoute, error) {
 	address = normalizeAddress(address)
 	parts := strings.Split(address, "@")
 	if len(parts) != 2 {
-		return model.Inbox{}, false, ErrNotFound
+		return model.Inbox{}, RouteNone, ErrNotFound
 	}
 	local, domain := parts[0], parts[1]
 	var accountID, domainID, domainName, catch string
 	err := s.read.QueryRowContext(ctx, `SELECT account_id,id,name,COALESCE(catch_all_inbox_id,'') FROM domains WHERE name=?`, domain).Scan(&accountID, &domainID, &domainName, &catch)
 	if err == sql.ErrNoRows {
-		return model.Inbox{}, false, ErrNotFound
+		return model.Inbox{}, RouteNone, ErrNotFound
 	}
 	if err != nil {
-		return model.Inbox{}, false, err
+		return model.Inbox{}, RouteNone, err
 	}
-	var id, actualLocal, display, allowed, approverEmail, created string
-	var enabled, restricted int
-	err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,approver_email,created_at FROM inboxes WHERE domain_id=? AND local_part=?`, domainID, local).Scan(&id, &actualLocal, &display, &enabled, &allowed, &restricted, &approverEmail, &created)
-	usedCatch := false
-	if err == sql.ErrNoRows && catch != "" {
-		err = s.read.QueryRowContext(ctx, `SELECT id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,approver_email,created_at FROM inboxes WHERE id=? AND domain_id=?`, catch, domainID).Scan(&id, &actualLocal, &display, &enabled, &allowed, &restricted, &approverEmail, &created)
-		usedCatch = true
+	inbox, err := scanResolvedInbox(s.read.QueryRowContext(ctx, `SELECT `+inboxSelectCols+` FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.domain_id=? AND i.local_part=?`, domainID, local))
+	if err == nil {
+		if !inbox.Enabled {
+			return model.Inbox{}, RouteNone, ErrNotFound
+		}
+		return inbox, RouteInbox, nil
 	}
-	if err == sql.ErrNoRows {
-		return model.Inbox{}, false, ErrNotFound
+	if err != sql.ErrNoRows {
+		return model.Inbox{}, RouteNone, err
 	}
-	if err != nil {
-		return model.Inbox{}, false, err
+	// An alias lives on the address's own domain but delivers to its target
+	// inbox, which may be on a different domain of the same account.
+	inbox, err = scanResolvedInbox(s.read.QueryRowContext(ctx, `SELECT `+inboxSelectCols+` FROM inbox_aliases a JOIN inboxes i ON i.id=a.inbox_id JOIN domains d ON d.id=i.domain_id WHERE a.domain_id=? AND a.local_part=?`, domainID, local))
+	if err == nil {
+		if !inbox.Enabled {
+			return model.Inbox{}, RouteNone, ErrNotFound
+		}
+		return inbox, RouteAlias, nil
 	}
-	if enabled == 0 {
-		return model.Inbox{}, usedCatch, ErrNotFound
+	if err != sql.ErrNoRows {
+		return model.Inbox{}, RouteNone, err
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: actualLocal, Address: actualLocal + "@" + domainName, DisplayName: display, Enabled: true, AllowedSenders: decodeStrings(allowed), SenderRestricted: restricted != 0, ApproverEmail: approverEmail, CreatedAt: parseTime(created)}, usedCatch, nil
+	if catch != "" {
+		inbox, err = scanResolvedInbox(s.read.QueryRowContext(ctx, `SELECT `+inboxSelectCols+` FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.domain_id=?`, catch, domainID))
+		if err == nil {
+			if !inbox.Enabled {
+				return model.Inbox{}, RouteNone, ErrNotFound
+			}
+			return inbox, RouteCatchAll, nil
+		}
+		if err != sql.ErrNoRows {
+			return model.Inbox{}, RouteNone, err
+		}
+	}
+	return model.Inbox{}, RouteNone, ErrNotFound
 }
 func placeholders(n int) string {
 	if n <= 0 {

@@ -644,6 +644,121 @@ var initSenderEditor = (function () {
   };
 })();
 
+// initAliasEditor wires the alias list in the add and edit inbox dialogs. Each
+// alias is a local part plus a domain chosen from the account's domains, and is
+// submitted as a repeated `alias` field holding the full address.
+var initAliasEditor = (function () {
+  return function (opts) {
+    var list = opts.list;
+    var input = opts.input;
+    var domain = opts.domain;
+
+    function refreshEmpty() {
+      if (!list) {
+        return;
+      }
+      var empty = list.querySelector('.empty');
+      var hasAliases = list.querySelectorAll('input[name=alias]').length > 0;
+      if (!hasAliases) {
+        if (!empty) {
+          var li = document.createElement('li');
+          li.className = 'empty';
+          li.textContent = 'No aliases.';
+          list.appendChild(li);
+        }
+      } else if (empty) {
+        empty.remove();
+      }
+    }
+
+    function addAlias(value) {
+      if (!list) {
+        return;
+      }
+      var local = (value || '').trim().toLowerCase();
+      var dom = (domain && domain.value || '').trim().toLowerCase();
+      if (!local || !dom || local.indexOf('@') !== -1 || local.indexOf(' ') !== -1) {
+        return;
+      }
+      var addr = local + '@' + dom;
+      var existing = Array.prototype.map.call(list.querySelectorAll('input[name=alias]'), function (i) {
+        return i.value;
+      });
+      if (existing.indexOf(addr) !== -1) {
+        return;
+      }
+      var li = document.createElement('li');
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.name = 'alias';
+      hidden.value = addr;
+      var label = document.createElement('span');
+      label.className = 'addr';
+      label.textContent = addr;
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'secondary icon-btn';
+      remove.title = 'Remove';
+      remove.setAttribute('aria-label', 'Remove');
+      remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+      remove.addEventListener('click', function () {
+        li.remove();
+        refreshEmpty();
+      });
+      li.appendChild(hidden);
+      li.appendChild(label);
+      li.appendChild(remove);
+      list.appendChild(li);
+      refreshEmpty();
+    }
+
+    function setAliases(raw) {
+      if (!list) {
+        return;
+      }
+      list.innerHTML = '';
+      (raw || '').split(',').forEach(function (entry) {
+        addAlias(entry);
+      });
+      refreshEmpty();
+    }
+
+    function reset() {
+      if (list) {
+        list.innerHTML = '';
+      }
+      if (input) {
+        input.value = '';
+      }
+      refreshEmpty();
+    }
+
+    if (opts.addBtn && input) {
+      opts.addBtn.addEventListener('click', function () {
+        addAlias(input.value);
+        input.value = '';
+        input.focus();
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addAlias(input.value);
+          input.value = '';
+        }
+      });
+    }
+
+    refreshEmpty();
+
+    return {
+      setAliases: setAliases,
+      reset: reset
+    };
+  };
+})();
+
 (function () {
   var dlg = document.getElementById('inbox-dialog');
   if (!dlg) {
@@ -659,11 +774,18 @@ var initSenderEditor = (function () {
     section: document.getElementById('inbox-add-sender-section'),
     addBtn: document.getElementById('inbox-add-sender-add')
   });
+  var aliasEditor = initAliasEditor({
+    list: document.getElementById('inbox-add-alias-list'),
+    input: document.getElementById('inbox-add-alias-input'),
+    domain: document.getElementById('inbox-add-alias-domain'),
+    addBtn: document.getElementById('inbox-add-alias-add')
+  });
   var add = document.getElementById('add-inbox');
   if (add) {
     add.addEventListener('click', function () {
       form.reset();
       editor.reset();
+      aliasEditor.reset();
       if (dlg._resetTabs) {
         dlg._resetTabs();
       }
@@ -760,6 +882,12 @@ var initSenderEditor = (function () {
     section: document.getElementById('inbox-sender-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
+  var aliasEditor = initAliasEditor({
+    list: document.getElementById('inbox-alias-list'),
+    input: document.getElementById('inbox-alias-input'),
+    domain: document.getElementById('inbox-alias-domain'),
+    addBtn: document.getElementById('inbox-alias-add')
+  });
 
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -772,6 +900,7 @@ var initSenderEditor = (function () {
       editor.setRestricted(btn.dataset.restricted === '1');
       editor.setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
       editor.clearInput();
+      aliasEditor.setAliases(btn.dataset.aliases || '');
       if (usage) {
         usage.textContent = btn.dataset.usage || '—';
       }

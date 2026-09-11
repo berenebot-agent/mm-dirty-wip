@@ -420,6 +420,40 @@ Cloudflare and Resend adapters (`transport.InboundMessage.EnvelopeFrom`).
 Providers that do not supply it fail closed; the generated Cloudflare Worker
 sends it. Full SPF/DKIM/DMARC evidence capture remains a future extension.
 
+## D030 — Inbox aliases: inbound address routing (migration 021)
+
+**Decision:** An inbox may carry aliases: alternate inbound addresses
+(`local@domain`) that deliver to that inbox instead of creating a separate
+mailbox. An alias owns no messages, storage or settings; it is a pure
+address-to-inbox mapping. Aliases may live on any domain the account owns, so an
+alias on one domain can deliver to an inbox on another domain of the same
+account. Resolution precedence per envelope recipient is: exact inbox, then
+alias on the recipient's domain, then the domain catch-all. Resolution returns
+the matched route, and the ingest core applies a route-aware binding check:
+exact and catch-all matches must stay on the authenticated domain and account
+(unchanged), while an alias only must belong to the authenticated account. The
+alias set is replaced wholesale via `PATCH /v1/inboxes/{id}` (`aliases`) and the
+inbox add/edit dialog's Aliases tab; collisions with a real mailbox local part
+are rejected in Go because SQLite cannot express cross-table uniqueness. Aliases
+are inbound-only: replies still send from the inbox's primary address.
+
+**Reason:** Cross-domain routing and address consolidation are common agent
+needs (many public addresses → one working inbox). Modelling them as a
+mailbox-to-mailbox forward would have required a second delivery path, loop
+detection, and a fan-out/dedup model change, and would have split mailbox
+settings between source and target. An address-to-inbox alias reuses the
+existing resolver, threads, events, quota, FTS and Relay unchanged, and lets the
+target inbox's allow-list/approver rules apply uniformly. Cross-domain is safe
+because the mail still authenticates against the recipient domain's receiving
+provider and both domains belong to the same account; relaxing only the alias
+route keeps the stricter domain binding on the exact and catch-all paths.
+
+**Complexity:** Qualitative. Adds migration 021 (`inbox_aliases`), a
+route-aware `ResolveRecipient`, transactional alias set/reconcile, an Aliases
+tab with an alias editor and a flag-column indicator, and the `aliases` API
+field. No new dependency or runtime service. Reply-as-alias (send-as) is
+deferred; aliases are inbound only.
+
 ## Future extension register
 
 
