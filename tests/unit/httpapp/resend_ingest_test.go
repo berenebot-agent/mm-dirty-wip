@@ -80,6 +80,21 @@ func resendWebhookRequest() *http.Request {
 	return r
 }
 
+// resendSignedRequest builds a correctly Svix-signed webhook for an arbitrary
+// event body.
+func resendSignedRequest(t *testing.T, body string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, "/internal/ingest/resend", strings.NewReader(body))
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	mac := hmac.New(sha256.New, []byte(resendFixtureKey))
+	mac.Write([]byte("evt_signed." + ts + "." + body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("svix-id", "evt_signed")
+	r.Header.Set("svix-timestamp", ts)
+	r.Header.Set("svix-signature", "v1,"+base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	return r
+}
+
 type resendRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f resendRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -194,6 +209,60 @@ func TestResendIngestSurvivesWebhookCancellation(t *testing.T) {
 					t.Fatalf("staged files=%v err=%v", staged, err)
 				}
 			})
+		}
+	}
+}
+
+// TestResendNonReceivedEventRequiresSignature proves the provider is
+// authenticated before an event type is acknowledged, so an unauthenticated
+// caller cannot get a 200 for a non-mail event.
+func TestResendNonReceivedEventRequiresSignature(t *testing.T) {
+	_, server, _, _ := resendIngestFixture(t)
+	body := `{"type":"email.delivered","data":{"email_id":"x","to":["hermes@example.com"]}}`
+	r := httptest.NewRequest(http.MethodPost, "/internal/ingest/resend", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("svix-id", "evt_x")
+	r.Header.Set("svix-timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	r.Header.Set("svix-signature", "v1,invalid")
+	rr := httptest.NewRecorder()
+	server.InboundHandler().ServeHTTP(rr, r)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated non-received event status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	// With a valid signature the same event is acknowledged as ignored.
+	rr = httptest.NewRecorder()
+	server.InboundHandler().ServeHTTP(rr, resendSignedRequest(t, body))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "ignored") {
+		t.Fatalf("valid non-received event status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestResendFansOutToAllRecipients proves a single Resend delivery addressed to
+// several Gatehouse inboxes is delivered to each, exactly once.
+func TestResendFansOutToAllRecipients(t *testing.T) {
+	svc, server, principal, box := resendIngestFixture(t)
+	ctx := context.Background()
+	second, err := svc.Store.CreateInbox(ctx, box.AccountID, box.DomainID, "sales", "Sales")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "From: sender@outside.test\r\nTo: hermes@example.com, sales@example.com\r\nSubject: Fanout\r\nMessage-ID: <fanout@test>\r\n\r\nbody"
+	setResendRoundTripper(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "resend-api.example.test" {
+			return resendFixtureResponse(r, http.StatusOK, `{"raw":{"download_url":"https://resend-raw.example.test/message.eml"}}`), nil
+		}
+		return resendFixtureResponse(r, http.StatusOK, raw), nil
+	})
+	body := `{"type":"email.received","data":{"email_id":"fanout-1","from":"sender@outside.test","to":["hermes@example.com","sales@example.com"],"message_id":"<fanout@test>"}}`
+	rr := httptest.NewRecorder()
+	server.InboundHandler().ServeHTTP(rr, resendSignedRequest(t, body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("fanout status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, id := range []string{box.ID, second.ID} {
+		msgs, err := svc.Store.ListMessages(ctx, principal, store.MessageFilter{InboxID: id})
+		if err != nil || len(msgs) != 1 || msgs[0].Subject != "Fanout" {
+			t.Fatalf("inbox %s messages=%+v err=%v", id, msgs, err)
 		}
 	}
 }

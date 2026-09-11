@@ -143,6 +143,28 @@ func TestParseRejectsTooManyParts(t *testing.T) {
 	}
 }
 
+// TestParseHonoursConfiguredLimits proves the traversal bounds are wired from
+// configuration rather than the package defaults.
+func TestParseHonoursConfiguredLimits(t *testing.T) {
+	// Two levels of nesting is fine by default but rejected when the configured
+	// depth is 1.
+	var b strings.Builder
+	b.WriteString("Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n")
+	b.WriteString("Content-Type: text/plain\r\n\r\npart\r\n--x--\r\n")
+	raw := "From: a@b.test\r\nTo: c@d.test\r\n" + b.String()
+	path := t.TempDir() + "/configured.eml"
+	os.WriteFile(path, []byte(raw), 0600)
+	if _, err := mailparse.ParseFile(path); err != nil {
+		t.Fatalf("default limits rejected a shallow message: %v", err)
+	}
+	if _, err := mailparse.ParseFile(path, mailparse.Limits{MaxDepth: 1}); err == nil || !strings.Contains(err.Error(), "nesting too deep") {
+		t.Fatalf("configured depth not honoured: %v", err)
+	}
+	if _, err := mailparse.ParseFile(path, mailparse.Limits{MaxParts: 1}); err == nil || !strings.Contains(err.Error(), "too many mime parts") {
+		t.Fatalf("configured part cap not honoured: %v", err)
+	}
+}
+
 // TestBuildMessageRejectsHeaderInjection guards against CRLF smuggling: no
 // address or header-bound value may carry a CR/LF into the generated message.
 func TestBuildMessageRejectsHeaderInjection(t *testing.T) {

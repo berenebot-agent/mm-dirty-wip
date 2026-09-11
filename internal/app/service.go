@@ -58,10 +58,14 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
 }
 
-// auditUnrouted records a rejected unknown-recipient delivery, rate-limited per
-// recipient so random spam cannot grow the audit log without bound.
+// auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
+// keyed on the receiving domain rather than the full recipient, so random local
+// parts on a Gatehouse-controlled domain cannot each produce an audit row; the
+// offending recipient is still recorded in the detail for operational
+// visibility.
 func (s *Service) auditUnrouted(provider, recipient string) {
-	if !s.unroutedLim.Allow(recipient) {
+	key := provider + "|" + domainOf(recipient)
+	if !s.unroutedLim.Allow(key) {
 		return
 	}
 	s.Store.Audit(context.Background(), "", provider+".unrouted", recipient)
@@ -70,6 +74,24 @@ func (s *Service) auditUnrouted(provider, recipient string) {
 func (s *Service) messagePath() string {
 	id := idgen.New("raw")
 	return filepath.Join(s.Config.DataDir, "messages", id[4:6], id[6:8], id+".eml")
+}
+
+// mimeLimits returns the configured MIME traversal bounds so operators can tune
+// them rather than relying on package hard-coded defaults.
+func (s *Service) mimeLimits() mailparse.Limits {
+	return mailparse.Limits{MaxDepth: s.Config.MaxMIMEDepth, MaxParts: s.Config.MaxMIMEParts}
+}
+
+// MaxMultipartParts implements transport.MultipartLimitProvider so inbound
+// adapters honour the configured cap.
+func (s *Service) MaxMultipartParts() int { return s.Config.MaxMultipartParts }
+
+// workflowPath returns a fresh path for workflow (system) mail raw MIME. It is
+// kept under its own tree so mailbox cleanup never touches it and retention can
+// be swept independently.
+func (s *Service) workflowPath() string {
+	id := idgen.New("raw")
+	return filepath.Join(s.Config.DataDir, "workflow", id[4:6], id[6:8], id+".eml")
 }
 
 // ResolveInboundBinding implements transport.BindingResolver. It maps an
@@ -116,31 +138,94 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 }
 
 // ingestStaged is the protocol-independent mailbox core. It resolves the inbox
-// for the canonical envelope recipient, validates the authenticated binding,
-// parses MIME, applies sender rules and quota, persists the message/event
+// for each envelope recipient, validates the authenticated binding, parses
+// MIME, applies sender rules and quota, persists the message/event
 // transactionally, then publishes the realtime event. A future SMTP ingress can
 // call the same core with its own authorization context.
+//
+// A provider event may address several Gatehouse recipients (Resend carries the
+// full To list). Each distinct inbox is delivered to once, under its own
+// sender-allow-list and quota rules; a delivery to one inbox never suppresses
+// or duplicates another.
 func (s *Service) ingestStaged(ctx context.Context, provider string, msg transport.InboundMessage, binding transport.InboundBinding) (model.Message, bool, error) {
-	inbox, route, err := s.Store.ResolveRecipient(ctx, msg.Recipient)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			s.auditUnrouted(provider, msg.Recipient)
-		}
-		return model.Message{}, false, err
-	}
-	// The resolved inbox must belong to the account that was authenticated.
-	// Exact and catch-all matches must also stay on the authenticated domain;
-	// only an explicit alias may route across domains within the same account.
-	if inbox.AccountID != binding.AccountID {
-		return model.Message{}, false, transport.ErrInboundUnauthorized
-	}
-	if route != store.RouteAlias && inbox.DomainID != binding.DomainID {
-		return model.Message{}, false, transport.ErrInboundUnauthorized
-	}
-	parsed, err := mailparse.ParseFile(msg.RawPath)
+	parsed, err := mailparse.ParseFile(msg.RawPath, s.mimeLimits())
 	if err != nil {
 		return model.Message{}, false, fmt.Errorf("parse MIME: %w", err)
 	}
+	targets := msg.Recipients
+	if len(targets) == 0 {
+		targets = []string{msg.Recipient}
+	}
+	single := len(targets) == 1
+
+	var (
+		first     model.Message
+		anyDup    bool
+		delivered int
+		firstErr  error
+	)
+	seen := map[string]bool{}
+	for _, rcpt := range targets {
+		rcpt = strings.TrimSpace(rcpt)
+		if rcpt == "" {
+			continue
+		}
+		inbox, route, rerr := s.Store.ResolveRecipient(ctx, rcpt)
+		if rerr != nil {
+			if errors.Is(rerr, store.ErrNotFound) {
+				s.auditUnrouted(provider, rcpt)
+			}
+			if firstErr == nil {
+				firstErr = rerr
+			}
+			continue
+		}
+		// The resolved inbox must belong to the account that was authenticated.
+		// Exact and catch-all matches must also stay on the authenticated
+		// domain; only an explicit alias may route across domains within the
+		// same account. An extra recipient on another domain is not covered by
+		// the signature we verified, so it is rejected for that target only.
+		if inbox.AccountID != binding.AccountID || (route != store.RouteAlias && inbox.DomainID != binding.DomainID) {
+			if firstErr == nil {
+				firstErr = transport.ErrInboundUnauthorized
+			}
+			continue
+		}
+		if seen[inbox.ID] {
+			continue
+		}
+		seen[inbox.ID] = true
+		target := msg
+		target.Recipient = rcpt
+		m, dup, derr := s.deliverStaged(ctx, provider, target, inbox, parsed, single)
+		if derr != nil {
+			if firstErr == nil {
+				firstErr = derr
+			}
+			continue
+		}
+		if delivered == 0 {
+			first = m
+		}
+		if dup {
+			anyDup = true
+		}
+		delivered++
+	}
+	if delivered == 0 {
+		if firstErr != nil {
+			return model.Message{}, false, firstErr
+		}
+		return model.Message{}, false, store.ErrNotFound
+	}
+	return first, anyDup, nil
+}
+
+// deliverStaged persists one recipient's copy of an already-parsed inbound
+// message, applying the control-mail, allow-list and quota rules for that inbox.
+// When single is true the staged temp file is moved into place (the common
+// case); for fan-out a copy is made so each inbox owns its raw MIME.
+func (s *Service) deliverStaged(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, single bool) (model.Message, bool, error) {
 	// A strict approval control subject, or a reply quoting the approval email's
 	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
 	// ordinary delivery, so the token never becomes mailbox content. It is
@@ -170,10 +255,14 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 		return model.Message{ID: bm.ID, InboxID: bm.InboxID, Direction: "inbound", From: bm.From, To: bm.To, Subject: bm.Subject, SizeBytes: bm.SizeBytes, ReceivedAt: bm.ReceivedAt, CreatedAt: bm.CreatedAt, Blocked: true}, dup, nil
 	}
 	final := s.messagePath()
-	if err = os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(final), 0o700); err != nil {
 		return model.Message{}, false, err
 	}
-	if err = os.Rename(msg.RawPath, final); err != nil {
+	if single {
+		if err := os.Rename(msg.RawPath, final); err != nil {
+			return model.Message{}, false, err
+		}
+	} else if err := copyFile(msg.RawPath, final); err != nil {
 		return model.Message{}, false, err
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, final)
@@ -198,6 +287,25 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To)
 	s.Hub.Publish(ev)
 	return m, false, nil
+}
+
+// copyFile copies src to dst with 0600 permissions, used to give each
+// fan-out recipient its own raw MIME copy.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func firstNonEmpty(vs ...string) string {
@@ -341,6 +449,9 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	// A new or rotated sender is a reason to retry every pending message for the
 	// domain immediately with a fresh attempt budget, rather than leaving them
 	// waiting on the no-provider hold or a backoff earned against the old config.
+	if _, rerr := s.Store.RequeuePendingWorkflowForDomain(ctx, accountID, domainID); rerr != nil {
+		s.Log.Warn("requeue pending workflow after sending config save", "domain_id", domainID, "error", rerr)
+	}
 	if n, rerr := s.Store.RequeuePendingForDomain(ctx, accountID, domainID); rerr != nil {
 		s.Log.Warn("requeue pending mail after sending config save", "domain_id", domainID, "error", rerr)
 	} else if n > 0 {
@@ -910,6 +1021,12 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	if err != nil {
 		return SendResult{}, err
 	}
+	// The earlier attachment check is a fast preflight; base64 encoding, MIME
+	// boundaries and headers can expand the final message, so enforce the limit
+	// on the bytes actually submitted to the provider.
+	if int64(len(raw)) > s.Config.MaxMessageBytes {
+		return SendResult{}, fmt.Errorf("message exceeds the maximum message size")
+	}
 	acc, err := s.Store.GetAccount(ctx, accountID)
 	if err != nil {
 		return SendResult{}, err
@@ -1144,6 +1261,155 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 	return err
 }
 
+// AccountIDForWorkflow resolves the account id for a workflow job id. The
+// worker claims jobs without a principal, so it needs a way to look up the
+// account.
+func (s *Service) AccountIDForWorkflow(ctx context.Context, workflowID string) (string, error) {
+	return s.Store.WorkflowAccountID(ctx, workflowID)
+}
+
+// DeliverWorkflow performs the provider send for a pending workflow job. It is
+// the workflow-queue analogue of Deliver: the job is not mailbox content, so
+// success only marks the job sent (starting the approval expiry clock) and
+// failure updates the request's notification state. Attachments are
+// reconstructed from the retained raw MIME for HTTP adapters.
+func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, owner string) error {
+	w, err := s.Store.GetWorkflowInternal(ctx, accountID, workflowID)
+	if err != nil {
+		return err
+	}
+	if w.Status != model.WorkflowPending {
+		return nil
+	}
+	if owner != "" {
+		current, err := s.Store.WorkflowClaimOwner(ctx, accountID, workflowID)
+		if err != nil {
+			return err
+		}
+		if current != owner {
+			return fmt.Errorf("workflow %s is claimed by another worker", workflowID)
+		}
+	}
+	outcomeCtx, cancelOutcome := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelOutcome()
+	sending, err := s.Store.DomainSendingConfigForWorkflow(ctx, accountID, workflowID)
+	if err != nil {
+		if errors.Is(err, store.ErrNoProvider) {
+			return s.Store.HoldWorkflow(outcomeCtx, accountID, workflowID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute))
+		}
+		return s.failWorkflow(outcomeCtx, w, err, "")
+	}
+	cfg, err := s.DecryptDomainSendingConfig(sending)
+	if err != nil {
+		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath)))
+	if err != nil {
+		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+	}
+	provider, ok := transport.LookupOutbound(sending.Provider)
+	if !ok {
+		return s.failWorkflow(outcomeCtx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+	}
+	outbound := transport.OutboundMessage{
+		FromName:    w.From.Name,
+		FromAddress: w.From.Address,
+		To:          w.To,
+		CC:          w.CC,
+		BCC:         w.BCC,
+		Subject:     w.Subject,
+		Text:        w.Text,
+		HTML:        w.HTML,
+		RawMIME:     raw,
+	}
+	if !prefersRawMIME(provider) {
+		atts, aerr := s.workflowAttachments(w)
+		if aerr != nil {
+			return s.failWorkflow(outcomeCtx, w, aerr, sending.Provider)
+		}
+		outbound.Attachments = atts
+	}
+	providerResult, err := provider.Send(ctx, cfg, outbound)
+	if err != nil {
+		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+	}
+	tokenExpiry := time.Duration(s.Config.ApprovalExpiryHours) * time.Hour
+	events, err := s.Store.MarkWorkflowSent(outcomeCtx, accountID, workflowID, providerResult.ProviderMessageID, sending.Provider, tokenExpiry)
+	if err != nil {
+		return err
+	}
+	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To)
+	for _, ev := range events {
+		s.Hub.Publish(ev)
+	}
+	return nil
+}
+
+// failWorkflow records a failed workflow handoff with exponential backoff. A
+// permanent provider error is terminal immediately.
+func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error, provider string) error {
+	if transport.IsPermanent(err) {
+		events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), time.Time{}, 1, provider)
+		if ferr != nil {
+			return ferr
+		}
+		for _, ev := range events {
+			s.Hub.Publish(ev)
+		}
+		return err
+	}
+	backoff := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 4 * time.Hour}
+	attempt := w.Attempts
+	if attempt < 0 || attempt >= len(backoff) {
+		attempt = len(backoff) - 1
+	}
+	next := time.Now().UTC().Add(backoff[attempt])
+	events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), next, len(backoff)+1, provider)
+	if ferr != nil {
+		return ferr
+	}
+	for _, ev := range events {
+		s.Hub.Publish(ev)
+	}
+	return err
+}
+
+// redactWorkflow removes approval control tokens from a terminal workflow
+// job's stored bodies and retained raw MIME. It is idempotent.
+func (s *Service) redactWorkflow(w store.Workflow) error {
+	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath))
+	if raw, err := os.ReadFile(path); err == nil {
+		redacted := redactWorkflowTokens(string(raw))
+		if redacted != string(raw) {
+			if werr := os.WriteFile(path, []byte(redacted), 0o600); werr != nil {
+				return werr
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return s.Store.UpdateWorkflowBodies(context.Background(), w.AccountID, w.ID, redactWorkflowTokens(w.Text), redactWorkflowTokens(w.HTML))
+}
+
+// workflowAttachments reconstructs attachment bytes from a workflow job's
+// retained raw MIME so HTTP adapters send the same content.
+func (s *Service) workflowAttachments(w store.Workflow) ([]transport.OutboundAttachment, error) {
+	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath))
+	var out []transport.OutboundAttachment
+	err := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, r); err != nil {
+			return err
+		}
+		out = append(out, transport.OutboundAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
+		return nil
+	}, s.mimeLimits())
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WaitForDelivery blocks until the message reaches a terminal state (sent or
 // failed) or the timeout elapses. It is used by the synchronous ?wait=true path.
 func (s *Service) WaitForDelivery(ctx context.Context, accountID, msgID string, timeout time.Duration) (model.Message, error) {
@@ -1293,7 +1559,7 @@ func (s *Service) forwardAttachments(ctx context.Context, accountID string, m mo
 		}
 		out = append(out, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
 		return nil
-	})
+	}, s.mimeLimits())
 	if err != nil {
 		return nil, err
 	}
@@ -1319,7 +1585,7 @@ func (s *Service) deliveryAttachments(m model.Message) ([]transport.OutboundAtta
 		}
 		out = append(out, transport.OutboundAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
 		return nil
-	})
+	}, s.mimeLimits())
 	if err != nil {
 		return nil, err
 	}

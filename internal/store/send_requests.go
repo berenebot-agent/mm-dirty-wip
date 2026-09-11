@@ -10,13 +10,13 @@ import (
 	"gatehouse-mail/internal/model"
 )
 
-const sendRequestSelect = `SELECT id,draft_id,inbox_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,approver_email,token_hash,token_expires_at,approval_message_id,decided_at,decision_actor,decision_actor_id,decision_method,feedback,message_id,created_at,updated_at FROM draft_send_requests`
+const sendRequestSelect = `SELECT id,draft_id,inbox_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,approver_email,token_hash,token_expires_at,approval_message_id,approval_workflow_id,notification_status,decided_at,decision_actor,decision_actor_id,decision_method,feedback,message_id,created_at,updated_at FROM draft_send_requests`
 
 func scanSendRequest(row interface{ Scan(...any) error }) (model.DraftSendRequest, error) {
 	var r model.DraftSendRequest
 	var requested, created, updated string
 	var expires, decided sql.NullString
-	err := row.Scan(&r.ID, &r.DraftID, &r.InboxID, &r.Status, &r.DeliveryStatus, &r.ContentHash, &requested, &r.RequestedBy, &r.RequestedByAPIKeyID, &r.RequestedByUserID, &r.ApproverEmail, &r.TokenHash, &expires, &r.ApprovalMessageID, &decided, &r.DecisionActor, &r.DecisionActorID, &r.DecisionMethod, &r.Feedback, &r.MessageID, &created, &updated)
+	err := row.Scan(&r.ID, &r.DraftID, &r.InboxID, &r.Status, &r.DeliveryStatus, &r.ContentHash, &requested, &r.RequestedBy, &r.RequestedByAPIKeyID, &r.RequestedByUserID, &r.ApproverEmail, &r.TokenHash, &expires, &r.ApprovalMessageID, &r.ApprovalWorkflowID, &r.NotificationStatus, &decided, &r.DecisionActor, &r.DecisionActorID, &r.DecisionMethod, &r.Feedback, &r.MessageID, &created, &updated)
 	if err != nil {
 		return r, err
 	}
@@ -112,6 +112,9 @@ func sendRequestPayload(r model.DraftSendRequest) map[string]any {
 	}
 	if r.ApproverEmail != "" {
 		p["approver_email"] = r.ApproverEmail
+	}
+	if r.NotificationStatus != "" && r.NotificationStatus != model.NotificationNone {
+		p["notification_status"] = r.NotificationStatus
 	}
 	if r.TokenExpiresAt != nil {
 		p["token_expires_at"] = r.TokenExpiresAt.UTC().Format(time.RFC3339)
@@ -241,6 +244,9 @@ func expireStaleForDraftTx(ctx context.Context, tx *sql.Tx, accountID, draftID s
 		if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.DraftStatusDraft, nowT, s.draftID, accountID, model.DraftStatusPendingApproval); err != nil {
 			return nil, err
 		}
+		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='approval request expired',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, nowT, accountID, s.id); err != nil {
+			return nil, err
+		}
 		r, err := getSendRequestByIDTx(ctx, tx, accountID, s.id)
 		if err != nil {
 			return nil, err
@@ -302,6 +308,9 @@ func (s *Store) ExpireApprovalRequests(ctx context.Context, now time.Time) ([]mo
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=? AND status=?`, model.DraftStatusDraft, nowT, st.draftID, st.accountID, model.DraftStatusPendingApproval); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='approval request expired',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, nowT, st.accountID, st.id); err != nil {
 			return nil, err
 		}
 		r, err := getSendRequestByIDTx(ctx, tx, st.accountID, st.id)
@@ -438,6 +447,9 @@ func (s *Store) CancelSendRequest(ctx context.Context, p model.Principal, draftI
 	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusDraft, now, draftID, p.AccountID); err != nil {
 		return model.DraftSendRequest{}, model.Event{}, err
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='request cancelled',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, now, p.AccountID, r.ID); err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
 	r.Status = model.SendRequestCancelled
 	r.UpdatedAt = parseTime(now)
 	ev, err := insertEventTx(ctx, tx, p.AccountID, r.InboxID, model.EventDraftSendRequestCancelled, r.ID, sendRequestPayload(r))
@@ -485,6 +497,9 @@ func (s *Store) RejectSendRequest(ctx context.Context, p model.Principal, draftI
 		return model.DraftSendRequest{}, model.Event{}, ErrConflict
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusRejected, now, draftID, p.AccountID); err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='request rejected',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, now, p.AccountID, r.ID); err != nil {
 		return model.DraftSendRequest{}, model.Event{}, err
 	}
 	r.Status = model.SendRequestRejected
@@ -689,6 +704,9 @@ func approveSendRequestTx(ctx context.Context, tx *sql.Tx, accountID, draftID, r
 	if n, _ := res.RowsAffected(); n == 0 {
 		return model.Event{}, ErrConflict
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='request decided',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, now, accountID, requestID); err != nil {
+		return model.Event{}, err
+	}
 	r, err := getSendRequestByIDTx(ctx, tx, accountID, requestID)
 	if err != nil {
 		return model.Event{}, err
@@ -767,6 +785,9 @@ func (s *Store) RejectSendRequestInternal(ctx context.Context, accountID, reques
 		return model.DraftSendRequest{}, model.Event{}, ErrConflict
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusRejected, now, r.DraftID, accountID); err != nil {
+		return model.DraftSendRequest{}, model.Event{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error='request rejected',terminal_at=?,claim_owner='',claim_expires_at='',next_attempt_at='' WHERE account_id=? AND request_id=? AND status='pending'`, now, accountID, r.ID); err != nil {
 		return model.DraftSendRequest{}, model.Event{}, err
 	}
 	r.Status = model.SendRequestRejected

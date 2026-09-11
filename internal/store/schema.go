@@ -716,3 +716,58 @@ const migration021 = `CREATE TABLE IF NOT EXISTS inbox_aliases (
 CREATE INDEX IF NOT EXISTS idx_inbox_aliases_inbox ON inbox_aliases(inbox_id);
 CREATE INDEX IF NOT EXISTS idx_inbox_aliases_account ON inbox_aliases(account_id);
 `
+
+// migration022 moves workflow mail (the approval-request email carrying a
+// one-time token) out of the messages table into its own outbound queue. It:
+//   - adds outbound_workflow, a durable queue for non-mailbox system mail with
+//     its own status/attempts/claim columns. Workflow mail never becomes a
+//     mailbox message: it creates no thread, is invisible to the mailbox read
+//     surface, and never counts against account storage quota;
+//   - adds draft_send_requests.approval_workflow_id and notification_status so
+//     the request can report whether the approver was actually notified
+//     (none|queued|sent|failed) before the draft is presented as pending;
+//   - adds outbound_delivery_log.workflow_id so a workflow attempt is attributed
+//     in the per-domain activity log without a messages row.
+//
+// Raw MIME for workflow mail is stored under $DATA_DIR/workflow/ and retained
+// for a fixed 30 days after the job reaches a terminal state, then swept. Token
+// markers are redacted from the retained copy on terminal state. The request
+// audit row is never swept.
+const migration022 = `CREATE TABLE IF NOT EXISTS outbound_workflow (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT '',
+  provider TEXT NOT NULL DEFAULT '',
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  cc_json TEXT NOT NULL DEFAULT '[]',
+  bcc_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  text_body TEXT NOT NULL DEFAULT '',
+  html_body TEXT NOT NULL DEFAULT '',
+  raw_path TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  next_attempt_at TEXT NOT NULL DEFAULT '',
+  claim_owner TEXT NOT NULL DEFAULT '',
+  claim_expires_at TEXT NOT NULL DEFAULT '',
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  redacted INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  sent_at TEXT,
+  terminal_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_workflow_status ON outbound_workflow(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_outbound_workflow_request ON outbound_workflow(request_id);
+
+ALTER TABLE draft_send_requests ADD COLUMN approval_workflow_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE draft_send_requests ADD COLUMN notification_status TEXT NOT NULL DEFAULT 'none';
+
+ALTER TABLE outbound_delivery_log ADD COLUMN workflow_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_outbound_log_workflow ON outbound_delivery_log(workflow_id);
+`

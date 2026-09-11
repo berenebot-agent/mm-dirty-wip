@@ -2,6 +2,49 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Workflow mail has its own outbound queue (migration 022)
+
+The draft approval-request email (and any future system mail) is **not mailbox
+content**. It now lives in `outbound_workflow`, a small queue with its own
+status/attempts/claim columns, instead of a `messages` row flagged `internal`.
+
+- **Why:** the `internal` flag leaked through the mailbox model. Workflow mail
+  consumed account storage quota, created a user-visible thread when it was the
+  only message in one (a "ghost thread"), and its delivery was never reflected
+  on the send request — so a draft could be shown as "awaiting approval" even
+  when the notification was never delivered. A separate queue removes that whole
+  class of bugs by construction.
+- **No thread, no quota, no read surface:** workflow mail creates no `threads`
+  row, never touches `accounts.storage_used_bytes`, and is invisible to every
+  mailbox read path. It carries no `messages.id`, so it cannot be used as a
+  forward/reply source. Raw MIME is stored under `$DATA_DIR/workflow/`.
+- **Truthful notification state:** `draft_send_requests.notification_status`
+  moves `none` → `queued` → `sent`/`failed`. The approval token's expiry clock
+  starts only on `sent` (the provider accepted the handoff), so a request whose
+  notification failed does not silently lapse; the failure is surfaced to the
+  API/UI and the agent.
+- **Retention and redaction:** terminal workflow jobs are kept for a fixed 30
+  days (matching the outbound delivery log), then swept row + raw file. On
+  terminal state the worker redacts `[GH-REQUEST|APPROVE|REJECT:<token>]`
+  markers from the retained copy; the token is already dead, this is
+  defense-in-depth. The `draft_send_requests` audit row is never swept.
+- **Delivery log:** `outbound_delivery_log.workflow_id` attributes a workflow
+  attempt in the per-domain log without a `messages` row.
+- The `messages.internal` column and its filters remain for backward
+  compatibility with already-migrated rows, but new code never writes it.
+
+## In-process privilege drop (no gosu, bind-mounted ./data)
+
+The container image has no `USER` and installs no `gosu`. It boots as root so
+`internal/privdrop` can recursively `Lchown` a fresh, root-owned `./data` bind
+mount to the runtime UID/GID, then `Setgroups`/`Setgid`/`Setuid` before the
+database is opened. `GATEHOUSE_RUN_UID`/`GATEHOUSE_RUN_GID` (default
+65532:65532) select the runtime user; the drop is a no-op when the process is
+already non-root, so the opt-in hardened compose (`user:`, `cap_drop: [ALL]`)
+needs no setuid capability. This mirrors the sibling router service: no host `chown` step,
+and the compose ships `read_only`, `tmpfs /tmp` and `no-new-privileges` by
+default.
+
 ## Free-text message labels (migration 020)
 
 Migration 020 adds `message_labels(message_id, label, created_at)`, a many-to-many

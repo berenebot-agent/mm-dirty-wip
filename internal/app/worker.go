@@ -3,10 +3,17 @@ package app
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"gatehouse-mail/internal/idgen"
 )
+
+// workflowRetention is how long a terminal workflow job (and its retained raw
+// MIME) is kept before the sweep removes it. It matches the outbound delivery
+// log's 30-day floor.
+const workflowRetention = 30 * 24 * time.Hour
 
 // OutboxWorker delivers pending outbound messages in the background. It is a
 // single goroutine that polls the outbox on an interval, claiming one due
@@ -48,19 +55,89 @@ func (w *OutboxWorker) run() {
 	if err := w.svc.Store.RecoverAbandonedClaims(context.Background()); err != nil {
 		w.log.Error("outbox claim recovery", "error", err)
 	}
+	if err := w.svc.Store.RecoverAbandonedWorkflowClaims(context.Background()); err != nil {
+		w.log.Error("workflow claim recovery", "error", err)
+	}
+	if n, err := w.svc.Store.RecoverStaleIdempotency(context.Background(), time.Now().UTC()); err != nil {
+		w.log.Error("stale idempotency recovery", "error", err)
+	} else if n > 0 {
+		w.log.Info("reclaimed stale idempotency reservations", "count", n)
+	}
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
 	// Re-scan on startup so pending messages from a previous process resume.
 	w.expireApprovals()
+	w.sweepWorkflows()
 	w.deliverDue()
+	w.deliverWorkflowDue()
 	for {
 		select {
 		case <-w.stop:
 			return
 		case <-ticker.C:
 			w.expireApprovals()
+			w.sweepWorkflows()
 			w.deliverDue()
+			w.deliverWorkflowDue()
 		}
+	}
+}
+
+// sweepWorkflows redacts token markers from terminal workflow copies, then
+// removes jobs (and their raw files) whose terminal state is older than the
+// retention window.
+func (w *OutboxWorker) sweepWorkflows() {
+	w.redactWorkflows()
+	paths, err := w.svc.Store.SweepWorkflows(context.Background(), time.Now().UTC().Add(-workflowRetention))
+	if err != nil {
+		w.log.Error("workflow sweep", "error", err)
+		return
+	}
+	for _, p := range paths {
+		_ = os.Remove(filepath.Join(w.svc.Config.DataDir, filepath.FromSlash(p)))
+	}
+}
+
+// redactWorkflows removes approval control tokens from the stored bodies and
+// raw MIME of terminal workflow jobs. The token is already dead once the
+// request is terminal, but removing it from the retained copy is cheap
+// defense-in-depth.
+func (w *OutboxWorker) redactWorkflows() {
+	jobs, err := w.svc.Store.TerminalUnredactedWorkflows(context.Background())
+	if err != nil {
+		w.log.Error("workflow redact list", "error", err)
+		return
+	}
+	for _, job := range jobs {
+		if err := w.svc.redactWorkflow(job); err != nil {
+			w.log.Warn("workflow redact", "workflow_id", job.ID, "error", err)
+		}
+	}
+}
+
+func (w *OutboxWorker) deliverWorkflowDue() {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		workflowID, err := w.svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
+		if err != nil {
+			cancel()
+			w.log.Error("workflow claim", "error", err)
+			return
+		}
+		if workflowID == "" {
+			cancel()
+			return
+		}
+		accountID, err := w.svc.AccountIDForWorkflow(ctx, workflowID)
+		if err != nil {
+			cancel()
+			w.log.Error("workflow account lookup", "workflow_id", workflowID, "error", err)
+			continue
+		}
+		if err := w.svc.DeliverWorkflow(ctx, accountID, workflowID, w.owner); err != nil {
+			w.log.Warn("workflow delivery failed", "workflow_id", workflowID, "error", err)
+		}
+		cancel()
 	}
 }
 

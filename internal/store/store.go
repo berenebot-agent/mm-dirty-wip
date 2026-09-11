@@ -165,6 +165,27 @@ func normalizeLocal(v string) string { return strings.ToLower(strings.TrimSpace(
 func (s *Store) Audit(ctx context.Context, accountID, kind, detail string) {
 	_, _ = s.write.ExecContext(ctx, `INSERT INTO audit_log(account_id,kind,detail,created_at) VALUES(?,?,?,?)`, nullString(accountID), kind, detail, nowText())
 }
+
+// CountAudit returns the number of audit rows for an account and kind. It is
+// used to verify coalescing/rate-limiting behavior.
+func (s *Store) CountAudit(ctx context.Context, accountID, kind string) (int, error) {
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_log WHERE account_id=? AND kind=?`, accountID, kind).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// CountAuditKind returns the number of audit rows of a kind across all accounts.
+// Unrouted deliveries have no resolvable account, so their audit rows carry a
+// NULL account_id.
+func (s *Store) CountAuditKind(ctx context.Context, kind string) (int, error) {
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM audit_log WHERE kind=?`, kind).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
 func nullString(v string) any {
 	if strings.TrimSpace(v) == "" {
 		return nil

@@ -203,16 +203,13 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	if err != nil {
 		return model.Draft{}, err
 	}
-	var expiresAt *time.Time
-	if s.Config.ApprovalExpiryHours > 0 {
-		e := time.Now().UTC().Add(time.Duration(s.Config.ApprovalExpiryHours) * time.Hour)
-		expiresAt = &e
-	}
+	// The token expiry clock is deliberately NOT started here. It starts when
+	// the approval-request email is actually handed to the outbound path, so a
+	// request whose notification was never delivered does not silently lapse.
 	actor, err := s.Store.ActorIdentity(ctx, p)
 	if err != nil {
 		return model.Draft{}, err
 	}
-	clientLabel, clientID := clientIdentity(p, actor)
 	body, html, err := s.buildApprovalEmail(d, atts, inbox, token)
 	if err != nil {
 		return model.Draft{}, err
@@ -225,7 +222,12 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	if size := attachmentsSize(attachments); size > s.Config.MaxMessageBytes {
 		return model.Draft{}, fmt.Errorf("draft exceeds the maximum message size")
 	}
-	path := s.messagePath()
+	// The final built MIME is what the provider sees, so it — not just the
+	// attachment payloads — must fit the configured limit.
+	if int64(len(raw)) > s.Config.MaxMessageBytes {
+		return model.Draft{}, fmt.Errorf("approval message exceeds the maximum message size")
+	}
+	path := s.workflowPath()
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return model.Draft{}, err
 	}
@@ -246,31 +248,18 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	} else {
 		provider = sending.Provider
 	}
-	metadata := make([]store.AttachmentInput, 0, len(attachments))
-	for i, a := range attachments {
-		metadata = append(metadata, store.AttachmentInput{Filename: a.Filename, ContentType: a.ContentType, Size: int64(len(a.Content)), PartIndex: i + 1})
-	}
-	subject := approvalEmailSubject(d.Subject)
-	_, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{
-		Inbox:        inbox,
-		Provider:     provider,
-		RFCMessageID: msgID,
-		From:         model.Address{Name: inbox.DisplayName, Address: inbox.Address},
-		To:           []string{inbox.ApproverEmail},
-		ClientLabel:  clientLabel,
-		ClientID:     clientID,
-		Subject:      subject,
-		Text:         body,
-		HTML:         html,
-		RawPath:      filepath.ToSlash(rel),
-		SizeBytes:    int64(len(raw)),
-		LastError:    queuedReason,
-		Attachments:  metadata,
-		// The approval email carries the one-time token, so it is workflow mail:
-		// it is queued in this inbox for delivery to the approver but must not be
-		// readable through the mailbox surface, or the assistant that requested
-		// the send could read the token and approve its own request.
-		Internal: true,
+	_, draftEvent, err := s.Store.CommitWorkflow(ctx, store.WorkflowRecord{
+		Inbox:     inbox,
+		Kind:      model.WorkflowKindApprovalRequest,
+		Provider:  provider,
+		From:      model.Address{Name: inbox.DisplayName, Address: inbox.Address},
+		To:        []string{inbox.ApproverEmail},
+		Subject:   approvalEmailSubject(d.Subject),
+		Text:      body,
+		HTML:      html,
+		RawPath:   filepath.ToSlash(rel),
+		SizeBytes: int64(len(raw)),
+		LastError: queuedReason,
 		NewSendRequest: &store.SendRequestInsert{
 			ID:                  idgen.New("dsr"),
 			DraftID:             d.ID,
@@ -282,13 +271,15 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 			RequestedByUserID:   actor.UserID,
 			ApproverEmail:       strings.ToLower(strings.TrimSpace(inbox.ApproverEmail)),
 			TokenHash:           tokenHash,
-			TokenExpiresAt:      expiresAt,
 		},
 	})
 	if err != nil {
 		_ = os.Remove(path)
 		return model.Draft{}, err
 	}
+	// The request starts in notification_status 'queued' (set by CommitWorkflow)
+	// and only becomes 'sent' once the worker hands the job off, so the draft is
+	// never presented as successfully awaiting approval before delivery.
 	s.publish(draftEvent)
 	return s.Store.GetDraft(ctx, p, d.ID)
 }

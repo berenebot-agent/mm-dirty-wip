@@ -60,7 +60,7 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	)
 	switch {
 	case media == "multipart/form-data":
-		form, binding, err = receiveMultipart(ctx, r, resolver, params["boundary"], tmpPath, maxBytes)
+		form, binding, err = receiveMultipart(ctx, r, resolver, params["boundary"], tmpPath, maxBytes, resolverMultipartLimit(resolver))
 	case media == "application/x-www-form-urlencoded" || media == "":
 		form, binding, err = receiveURLEncoded(ctx, r, resolver, tmpPath, maxBytes)
 	default:
@@ -115,10 +115,13 @@ func authReady(form InboundForm) bool {
 // receiveMultipart streams the Mailgun multipart webhook. It verifies as soon
 // as the auth and recipient fields are available; if the MIME part arrives
 // first it is staged to disk but not parsed or committed until verification.
-func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.BindingResolver, boundary, tmpPath string, maxBytes int64) (InboundForm, transport.InboundBinding, error) {
+func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.BindingResolver, boundary, tmpPath string, maxBytes int64, maxParts int) (InboundForm, transport.InboundBinding, error) {
 	var form InboundForm
 	if boundary == "" {
 		return form, transport.InboundBinding{}, fmt.Errorf("invalid multipart boundary")
+	}
+	if maxParts <= 0 {
+		maxParts = maxMultipartParts
 	}
 	mr := multipart.NewReader(r.Body, boundary)
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -142,7 +145,7 @@ func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.B
 			return form, transport.InboundBinding{}, err
 		}
 		parts++
-		if parts > maxMultipartParts {
+		if parts > maxParts {
 			p.Close()
 			return form, transport.InboundBinding{}, fmt.Errorf("too many multipart parts")
 		}
@@ -259,6 +262,15 @@ const (
 	maxFormFields     = 64
 	maxFieldBytes     = 1 << 20
 )
+
+// resolverMultipartLimit returns the operator-configured multipart part cap
+// when the resolver exposes one, or 0 to use the adapter default.
+func resolverMultipartLimit(resolver transport.BindingResolver) int {
+	if p, ok := resolver.(transport.MultipartLimitProvider); ok {
+		return p.MaxMultipartParts()
+	}
+	return 0
+}
 
 func isSingletonField(name string) bool {
 	switch name {

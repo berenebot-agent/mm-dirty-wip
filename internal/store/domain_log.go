@@ -208,8 +208,11 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 
 // appendDomainOutbound adds the domain's outbound delivery attempts.
 func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]'),COALESCE(m.subject,''),COALESCE(m.inbox_id,''),COALESCE(m.client_label,'')
-		FROM outbound_delivery_log l LEFT JOIN messages m ON m.id=l.message_id
+	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,''),COALESCE(m.inbox_id,w.inbox_id,''),COALESCE(m.client_label,'')
+		FROM outbound_delivery_log l
+		LEFT JOIN messages m ON m.id=l.message_id
+		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
 		WHERE l.account_id=? AND l.domain_id=?`
 	args := []any{accountID, domainID}
 	if beforeText != "" {
