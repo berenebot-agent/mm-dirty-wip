@@ -1,4 +1,4 @@
-# Gatehouse Email — V1 Decision Register
+# Gatehouse Mail — V1 Decision Register
 
 This file records architectural decisions the implementation should treat as settled unless a concrete requirement justifies revision.
 
@@ -101,7 +101,7 @@ A domain with no credential is valid: mail is still accepted and queued as `pend
 
 **Reason:** Familiar integration and easier migration.
 
-**Boundary:** Native Gatehouse Email models remain authoritative for richer features.
+**Boundary:** Native Gatehouse Mail models remain authoritative for richer features.
 
 ## D012 — Lightweight web UI
 

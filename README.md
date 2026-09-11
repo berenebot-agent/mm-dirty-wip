@@ -1,4 +1,4 @@
-# Gatehouse Email
+# Gatehouse Mail
 
 Open email infrastructure for AI agents: lightweight inbox identities, searchable message history, replayable realtime events, scoped mailbox roles, BYO outbound delivery, and Hermes Relay.
 
@@ -24,7 +24,7 @@ Persistent state is stored in `./data`.
 https://your-host.example/internal/ingest/mailgun/raw-mime
 ```
 
-Gatehouse Email resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
+Gatehouse Mail resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Cloudflare Email Routing inbound
 
@@ -201,7 +201,7 @@ Or use the tiered runner (CI parity): `./tests/run.sh`.
 
 ## Licence
 
-Gatehouse Email is licensed under the GNU Affero General Public License v3.0
+Gatehouse Mail is licensed under the GNU Affero General Public License v3.0
 (AGPL-3.0). See [LICENSE](LICENSE).
 
 Third-party components and their licences are listed in

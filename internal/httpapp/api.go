@@ -24,11 +24,11 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Gatehouse Email", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{"name": "Gatehouse Mail", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	guide := "# Gatehouse Email\n\n" +
+	guide := "# Gatehouse Mail\n\n" +
 		"Authenticate with `Authorization: Bearer <key>`.\n\n" +
 		"Start with `GET /v1/bootstrap` to discover accessible inboxes and mailbox roles.\n\n" +
 		"## Inboxes\n" +
@@ -102,7 +102,7 @@ func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"openapi": "3.0.3",
-		"info":    map[string]any{"title": "Gatehouse Email", "version": "v1"},
+		"info":    map[string]any{"title": "Gatehouse Mail", "version": "v1"},
 		"servers": []map[string]string{{"url": s.Service.Config.BaseURL}},
 		"paths": map[string]any{
 			"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities and accessible inboxes", "security": []map[string]any{{"bearerAuth": []string{}}}}},

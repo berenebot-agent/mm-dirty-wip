@@ -38,6 +38,8 @@ func TestInboundHandlerExposesOnlyConnector(t *testing.T) {
 		{"GET", "/v1/bootstrap", http.StatusNotFound},
 		{"GET", "/relay", http.StatusNotFound},
 		{"GET", "/assets/app.js", http.StatusNotFound},
+		{"GET", "/assets/logo-horizontal.png", http.StatusNotFound},
+		{"GET", "/favicon.ico", http.StatusNotFound},
 		{"GET", "/openapi.json", http.StatusNotFound},
 		{"GET", "/internal/ingest/mailgun", http.StatusMethodNotAllowed},
 	} {

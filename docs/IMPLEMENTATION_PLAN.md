@@ -1,4 +1,4 @@
-# Gatehouse Email — V1 Implementation Plan
+# Gatehouse Mail — V1 Implementation Plan
 
 Each phase should leave the application runnable and tested.
 

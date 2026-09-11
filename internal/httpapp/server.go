@@ -30,6 +30,18 @@ var appJS []byte
 //go:embed assets/cloudflare-worker.js
 var cloudflareWorkerTemplate []byte
 
+//go:embed assets/logo-horizontal.png
+var logoHorizontalPNG []byte
+
+//go:embed assets/favicon.ico
+var faviconICO []byte
+
+//go:embed assets/favicon.svg
+var faviconSVG []byte
+
+//go:embed assets/apple-touch-icon.png
+var appleTouchIconPNG []byte
+
 type Server struct {
 	Service         *app.Service
 	Relay           *hermesrelay.Server
@@ -52,7 +64,11 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	sum := sha256.Sum256(appJS)
+	h := sha256.New()
+	for _, b := range [][]byte{appJS, logoHorizontalPNG, faviconICO, faviconSVG, appleTouchIconPNG} {
+		_, _ = h.Write(b)
+	}
+	sum := h.Sum(nil)
 	conc := svc.Config.InboundConcurrency
 	if conc < 1 {
 		conc = 32
@@ -77,6 +93,10 @@ func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	s.registerInbound(m)
 	m.HandleFunc("GET /assets/app.js", s.asset)
+	m.HandleFunc("GET /assets/logo-horizontal.png", s.showLogo)
+	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
+	m.HandleFunc("GET /favicon.svg", s.showFaviconSVG)
+	m.HandleFunc("GET /apple-touch-icon.png", s.showAppleTouchIcon)
 	m.HandleFunc("POST /relay/enroll", s.Relay.Enroll)
 	m.HandleFunc("GET /relay", s.Relay.ServeWebSocket)
 
@@ -266,6 +286,25 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	_, _ = w.Write(appJS)
+}
+
+func serveBlob(w http.ResponseWriter, contentType, cacheControl string, body []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", cacheControl)
+	_, _ = w.Write(body)
+}
+
+func (s *Server) showLogo(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=31536000, immutable", logoHorizontalPNG)
+}
+func (s *Server) showFaviconICO(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/x-icon", "public, max-age=86400", faviconICO)
+}
+func (s *Server) showFaviconSVG(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/svg+xml", "public, max-age=86400", faviconSVG)
+}
+func (s *Server) showAppleTouchIcon(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=86400", appleTouchIconPNG)
 }
 
 func principal(r *http.Request) model.Principal {

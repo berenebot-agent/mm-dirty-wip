@@ -1,6 +1,6 @@
 # Third-party notices
 
-Gatehouse Email is licensed under the GNU Affero General Public License v3.0
+Gatehouse Mail is licensed under the GNU Affero General Public License v3.0
 (see [LICENSE](LICENSE)). It bundles or links the following third-party
 components; their notices are reproduced as required.
 
