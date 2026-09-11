@@ -24,8 +24,9 @@ var controlSubjectRe = regexp.MustCompile(`(?i)\[GH-(APPROVE|REJECT):([A-Za-z0-9
 const maxFeedbackRunes = 2000
 
 type controlDirective struct {
-	action string // APPROVE or REJECT
+	action string // "approve" or "reject"
 	token  string
+	reply  bool // true when derived from a body reference line, not a subject
 }
 
 // looksLikeControl reports whether the subject contains any approval control
@@ -42,7 +43,153 @@ func parseControlSubject(subject string) (controlDirective, bool) {
 	if len(m) != 1 {
 		return controlDirective{}, false
 	}
-	return controlDirective{action: strings.ToUpper(m[0][1]), token: m[0][2]}, true
+	return controlDirective{action: strings.ToLower(m[0][1]), token: m[0][2]}, true
+}
+
+// controlRequestRe matches the neutral reference line embedded in an approval
+// email body. A plain reply quotes it, binding the reply to the same one-time
+// request the mailto buttons target.
+var controlRequestRe = regexp.MustCompile(`\[GH-REQUEST:([A-Za-z0-9_-]{16,})\]`)
+
+// replyBody returns the reply's readable body. The plain-text part is preferred;
+// an HTML-only reply falls back to a tag-stripped version.
+func replyBody(parsed mailparse.Parsed) string {
+	if strings.TrimSpace(parsed.Text) != "" {
+		return parsed.Text
+	}
+	if parsed.HTML != "" {
+		return stripTags(parsed.HTML)
+	}
+	return ""
+}
+
+// looksLikeControlReply reports whether the body carries any control reference
+// line, even a malformed or duplicated one. Such mail is consumed rather than
+// delivered so the token can never leak into mailbox content. A cheap substring
+// pre-check keeps this off the tag-stripping path for ordinary HTML mail.
+func looksLikeControlReply(parsed mailparse.Parsed) bool {
+	if strings.Contains(parsed.Text, "[GH-REQUEST:") {
+		return controlRequestRe.MatchString(parsed.Text)
+	}
+	if parsed.HTML != "" && strings.Contains(parsed.HTML, "[GH-REQUEST:") {
+		return controlRequestRe.MatchString(stripTags(parsed.HTML))
+	}
+	return false
+}
+
+// controlReplyToken returns the single control-request token in a reply body.
+// Repeated occurrences of the same token (nested quoting) collapse to one; two
+// different tokens are ambiguous and rejected.
+func controlReplyToken(parsed mailparse.Parsed) (string, bool) {
+	matches := controlRequestRe.FindAllStringSubmatch(replyBody(parsed), -1)
+	token := ""
+	for _, m := range matches {
+		if token == "" {
+			token = m[1]
+			continue
+		}
+		if m[1] != token {
+			return "", false
+		}
+	}
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+// parseControlReply derives a directive from a body reference line. The action
+// comes from the approver's first line of new text, so quoted content (which
+// always contains the word "Approve") can never select the action.
+func parseControlReply(parsed mailparse.Parsed) (controlDirective, bool) {
+	token, ok := controlReplyToken(parsed)
+	if !ok {
+		return controlDirective{}, false
+	}
+	return controlDirective{action: firstLineAction(replyNewText(replyBody(parsed))), token: token, reply: true}, true
+}
+
+// replyNewText returns the approver's own text at the top of a reply, cut at the
+// first quoted-history boundary. It deliberately does not implement full
+// client-specific quote parsing: it only needs to stop before the quoted
+// original so the decision and feedback never come from quoted content.
+func replyNewText(body string) string {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
+	lines := strings.Split(body, "\n")
+	end := len(lines)
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isQuoteBoundary(trimmed) {
+			end = i
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[:end], "\n"))
+}
+
+// isQuoteBoundary reports whether a line begins quoted history rather than the
+// approver's new text.
+func isQuoteBoundary(line string) bool {
+	if strings.HasPrefix(line, ">") || strings.HasPrefix(line, "<") {
+		return true
+	}
+	lower := strings.ToLower(line)
+	switch {
+	case strings.HasPrefix(lower, "on ") && strings.Contains(lower, " wrote:"):
+		return true
+	case strings.HasPrefix(lower, "from:"), strings.HasPrefix(lower, "sent:"),
+		strings.HasPrefix(lower, "to:"), strings.HasPrefix(lower, "subject:"),
+		strings.HasPrefix(lower, "cc:"), strings.HasPrefix(lower, "reference:"):
+		return true
+	case strings.HasPrefix(lower, "-----original message"), strings.HasPrefix(lower, "________"):
+		return true
+	}
+	return false
+}
+
+// approveFirstLineRe matches the only first lines that approve. The word must be
+// the whole first token, so "approval", "unapproved" and "disapprove" reject.
+var approveFirstLineRe = regexp.MustCompile(`(?i)^(approve|approved)\b`)
+
+// firstLineAction reads the decision from the first non-empty line of the
+// approver's new text. Only the exact approve word (any case, optionally
+// followed by punctuation or more text) approves; everything else rejects.
+func firstLineAction(newText string) string {
+	for _, line := range strings.Split(newText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if approveFirstLineRe.MatchString(strings.Trim(line, "\"'.,:;!*-` ")) {
+			return "approve"
+		}
+		return "reject"
+	}
+	return "reject"
+}
+
+// replyFeedback returns the approver's typed feedback. For an approval the
+// decision line is dropped; a rejection keeps the whole text because the reason
+// is often the first line. It is capped like the marker-based feedback.
+func replyFeedback(newText, action string) string {
+	if strings.TrimSpace(newText) == "" {
+		return ""
+	}
+	lines := strings.Split(newText, "\n")
+	if action == "approve" {
+		for i, line := range lines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			lines = lines[i+1:]
+			break
+		}
+	}
+	return capFeedback(strings.TrimSpace(strings.Join(lines, "\n")))
 }
 
 // extractFeedback returns the deliberate feedback inside the first
@@ -111,6 +258,9 @@ func canonicalSender(raw string) string {
 // successful decision publishes the normal draft event.
 func (s *Service) handleControlMessage(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed) error {
 	dir, ok := parseControlSubject(parsed.Subject)
+	if !ok {
+		dir, ok = parseControlReply(parsed)
+	}
 	// subject is the reviewed draft subject, filled in once the request (and
 	// therefore the draft) is resolved. It is snapshotted because an approved
 	// send deletes the draft before the record is written.
@@ -123,10 +273,7 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 		record("", "", "invalid", "malformed control subject")
 		return transport.ErrInboundIgnored
 	}
-	action := "reject"
-	if dir.action == "APPROVE" {
-		action = "approve"
-	}
+	action := dir.action
 	hash := hashApprovalToken(dir.token)
 	r, err := s.Store.FindPendingSendRequestByToken(ctx, inbox.AccountID, inbox.ID, hash)
 	if err != nil {
@@ -160,7 +307,10 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 		return transport.ErrInboundIgnored
 	}
 	feedback := extractFeedback(parsed)
-	if dir.action == "APPROVE" {
+	if dir.reply && strings.TrimSpace(feedback) == "" {
+		feedback = replyFeedback(replyNewText(replyBody(parsed)), action)
+	}
+	if action == "approve" {
 		if _, err := s.ApproveExternal(ctx, inbox.AccountID, inbox.ID, r.ID, parsed.From.Address, feedback); err != nil {
 			s.Store.Audit(ctx, inbox.AccountID, provider+".control_approve_failed", err.Error())
 			record(r.ID, action, "error", err.Error())
