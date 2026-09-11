@@ -399,8 +399,8 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src https:") || strings.Contains(csp, "script-src") {
 		t.Fatalf("html csp %q", csp)
 	}
-	if !strings.Contains(rr.Body.String(), `<base target="_blank">`) {
-		t.Fatal("html should inject a base target")
+	if strings.Contains(rr.Body.String(), `<base target="_blank">`) {
+		t.Fatal("html should not inject a base target")
 	}
 }
 
