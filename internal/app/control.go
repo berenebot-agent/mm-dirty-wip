@@ -151,9 +151,10 @@ func isQuoteBoundary(line string) bool {
 	return false
 }
 
-// approveFirstLineRe matches the only first lines that approve. The word must be
-// the whole first token, so "approval", "unapproved" and "disapprove" reject.
-var approveFirstLineRe = regexp.MustCompile(`(?i)^(approve|approved)\b`)
+// approveFirstLineRe matches the first lines that approve: the approve words
+// plus common affirmatives, any case. The word must be the whole first token,
+// so "approval", "unapproved", "disapprove" and "no" reject.
+var approveFirstLineRe = regexp.MustCompile(`(?i)^(approve|approved|yes|yep|yeah|ok|okay|accept|accepted|confirm|confirmed|authorize|authorized|authorised|lgtm|y)\b`)
 
 // firstLineAction reads the decision from the first non-empty line of the
 // approver's new text. Only the exact approve word (any case, optionally
