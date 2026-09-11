@@ -31,8 +31,16 @@ var (
 // Provider auth material (e.g. Mailgun's timestamp/token/signature) stays
 // internal to the adapter and is never exposed here.
 type InboundMessage struct {
-	Provider          string
-	Recipient         string
+	Provider string
+	// Recipient is the canonical primary envelope recipient, used for the
+	// authenticated binding and, for single-recipient providers, as the only
+	// delivery target.
+	Recipient string
+	// Recipients lists every Gatehouse-controlled recipient the provider
+	// addressed. It is used by providers (Resend) whose events carry all
+	// recipients and must fan a single delivery out to each distinct inbox.
+	// When empty, Recipient is the sole target.
+	Recipients        []string
 	EnvelopeFrom      string
 	RawPath           string
 	Size              int64
@@ -62,6 +70,15 @@ type InboundBinding struct {
 // domains exist.
 type BindingResolver interface {
 	ResolveInboundBinding(ctx context.Context, provider, recipient string) (InboundBinding, error)
+}
+
+// MultipartLimitProvider is optionally implemented by a BindingResolver to
+// expose an operator-configured cap on multipart webhook parts. Adapters that
+// parse multipart bodies consult it so MAX_MULTIPART_PARTS is honoured rather
+// than a package constant; when the resolver does not implement it, the
+// adapter's own default applies.
+type MultipartLimitProvider interface {
+	MaxMultipartParts() int
 }
 
 // InboundTransport is implemented by every provider adapter. Receive owns

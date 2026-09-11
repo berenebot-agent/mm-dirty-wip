@@ -301,6 +301,27 @@ const (
 	SendDeliveryFailed  = "failed"
 )
 
+// Workflow notification states stored on draft_send_requests.notification_status.
+// They report whether the approval-request email was actually handed to the
+// outbound path, so a request is only presented as "awaiting approval" once the
+// approver has really been notified.
+const (
+	NotificationNone   = "none"
+	NotificationQueued = "queued"
+	NotificationSent   = "sent"
+	NotificationFailed = "failed"
+)
+
+// Outbound workflow job states stored on outbound_workflow.status.
+const (
+	WorkflowPending = "pending"
+	WorkflowSent    = "sent"
+	WorkflowFailed  = "failed"
+)
+
+// WorkflowKindApprovalRequest is the kind of the draft approval-request email.
+const WorkflowKindApprovalRequest = "approval_request"
+
 // Decision methods recorded for a draft send request.
 const (
 	DecisionMethodUI    = "ui"
@@ -317,6 +338,8 @@ const (
 	EventDraftSent                 = "draft.sent"
 	EventDraftSendFailed           = "draft.send_failed"
 	EventDraftApprovalExpired      = "draft.approval_expired"
+	EventDraftNotificationSent     = "draft.notification_sent"
+	EventDraftNotificationFailed   = "draft.notification_failed"
 )
 
 // Durable message event types.
@@ -361,15 +384,21 @@ type DraftSendRequest struct {
 	ApproverEmail     string     `json:"approver_email,omitempty"`
 	TokenHash         string     `json:"-"`
 	TokenExpiresAt    *time.Time `json:"token_expires_at,omitempty"`
-	ApprovalMessageID string     `json:"approval_message_id,omitempty"`
-	DecidedAt         *time.Time `json:"decided_at,omitempty"`
-	DecisionActor     string     `json:"decision_actor,omitempty"`
-	DecisionActorID   string     `json:"decision_actor_id,omitempty"`
-	DecisionMethod    string     `json:"decision_method,omitempty"`
-	Feedback          string     `json:"feedback,omitempty"`
-	MessageID         string     `json:"message_id,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ApprovalMessageID string     `json:"-"`
+	// ApprovalWorkflowID links the request to its queued workflow job. It is an
+	// opaque non-secret id, exposed so a client can correlate the notification.
+	ApprovalWorkflowID string `json:"approval_workflow_id,omitempty"`
+	// NotificationStatus reports whether the approval-request email was queued,
+	// handed to the outbound path, or failed (NotificationNone|Queued|Sent|Failed).
+	NotificationStatus string     `json:"notification_status,omitempty"`
+	DecidedAt          *time.Time `json:"decided_at,omitempty"`
+	DecisionActor      string     `json:"decision_actor,omitempty"`
+	DecisionActorID    string     `json:"decision_actor_id,omitempty"`
+	DecisionMethod     string     `json:"decision_method,omitempty"`
+	Feedback           string     `json:"feedback,omitempty"`
+	MessageID          string     `json:"message_id,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 // DraftAttachment is a file attached to a draft. Unlike message attachments

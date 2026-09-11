@@ -15,6 +15,7 @@ import (
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
 	"gatehouse-mail/internal/httpapp"
+	"gatehouse-mail/internal/privdrop"
 	"gatehouse-mail/internal/store"
 )
 
@@ -28,6 +29,16 @@ func main() {
 	if cfg.TrustProxyHeaders && len(cfg.TrustedProxies) == 0 {
 		log.Warn("TRUST_PROXY_HEADERS=true trusts X-Forwarded-* headers from any peer; prefer TRUSTED_PROXIES with your reverse proxy's address")
 	}
+	// Fix up the data directory and shed root before opening the database, so
+	// the SQLite files and the message tree are owned by the runtime user. When
+	// the process is already non-root (the opt-in hardened posture) this is a
+	// no-op and never needs chown or setuid capabilities.
+	dropped, runUID, runGID, err := privdrop.DropToRuntimeUser(cfg.DataDir)
+	if err != nil {
+		log.Error("privilege drop failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("runtime identity", "uid", runUID, "gid", runGID, "dropped", dropped)
 	st, err := store.Open(cfg.DataDir)
 	if err != nil {
 		log.Error("database open failed", "error", err)

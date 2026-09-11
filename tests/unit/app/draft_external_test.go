@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
@@ -80,10 +79,14 @@ func mgControlHTMLRequest(t *testing.T, key, deliveryID, recipient, sender, subj
 	return r
 }
 
-// approvalToken reads the latest queued approval-request email and extracts the
-// neutral [GH-REQUEST:<token>] reference token that a plain reply quotes back.
+// approvalToken reads the latest queued approval-request workflow job and
+// extracts the neutral [GH-REQUEST:<token>] reference token that a plain reply
+// quotes back.
 func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) string {
 	t.Helper()
+	// A token is only live once the notification has been handed off, so tests
+	// that go on to decide by email first run the outbound handoff.
+	handOffWorkflow(t, svc, accountID, inboxID)
 	text, _ := approvalEmailParts(t, svc, accountID, inboxID)
 	if match := requestTokenRe.FindStringSubmatch(text); len(match) == 2 {
 		return match[1]
@@ -93,60 +96,53 @@ func approvalToken(t *testing.T, svc *app.Service, accountID, inboxID string) st
 }
 
 // approvalEmailParts returns the plain-text and HTML bodies of the latest queued
-// approval-request email.
+// approval-request workflow job.
 func approvalEmailParts(t *testing.T, svc *app.Service, accountID, inboxID string) (string, string) {
 	t.Helper()
-	ctx := context.Background()
-	box, err := svc.Store.GetInboxInternal(ctx, accountID, inboxID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := queuedApprovalEmail(t, svc, ctx, accountID, box.ID)
-	parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed.Text, parsed.HTML
+	w := queuedApprovalWorkflow(t, svc, context.Background(), accountID, inboxID)
+	return w.Text, w.HTML
 }
 
-// queuedApprovalEmail returns the queued approval-request message. Approval
-// mail is workflow mail and is deliberately hidden from the mailbox read
-// surface, so it is located through the send request that queued it.
-func queuedApprovalEmail(t *testing.T, svc *app.Service, ctx context.Context, accountID, inboxID string) model.Message {
+// queuedApprovalWorkflow returns the queued approval-request workflow job.
+// Approval mail is workflow mail: it is not a mailbox message and is located
+// through the send request that queued it.
+func queuedApprovalWorkflow(t *testing.T, svc *app.Service, ctx context.Context, accountID, inboxID string) store.Workflow {
 	t.Helper()
 	srs, err := svc.Store.ListSendRequests(ctx, model.Principal{AccountID: accountID, Admin: true}, inboxID, true, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, sr := range srs {
-		if sr.ApprovalMessageID == "" {
+		if sr.ApprovalWorkflowID == "" {
 			continue
 		}
-		m, err := svc.Store.GetMessageByID(ctx, accountID, sr.ApprovalMessageID)
+		w, err := svc.Store.GetWorkflowInternal(ctx, accountID, sr.ApprovalWorkflowID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return m
+		return w
 	}
-	t.Fatal("no queued approval email found")
-	return model.Message{}
+	t.Fatal("no queued approval workflow found")
+	return store.Workflow{}
 }
 
 // approvalEmailText returns the plain-text body of the latest queued
-// approval-request email.
+// approval-request workflow job.
 func approvalEmailText(t *testing.T, svc *app.Service, accountID, inboxID string) string {
 	t.Helper()
-	ctx := context.Background()
-	box, err := svc.Store.GetInboxInternal(ctx, accountID, inboxID)
-	if err != nil {
-		t.Fatal(err)
+	return queuedApprovalWorkflow(t, svc, context.Background(), accountID, inboxID).Text
+}
+
+// handOffWorkflow delivers the queued approval-request workflow job through the
+// outbound path, as the background worker would, so the notification is marked
+// sent and the token expiry clock starts. Tests that then present a decision
+// token must call this first.
+func handOffWorkflow(t *testing.T, svc *app.Service, accountID, inboxID string) {
+	t.Helper()
+	w := queuedApprovalWorkflow(t, svc, context.Background(), accountID, inboxID)
+	if err := svc.DeliverWorkflow(context.Background(), accountID, w.ID, ""); err != nil {
+		t.Fatalf("deliver workflow: %v", err)
 	}
-	m := queuedApprovalEmail(t, svc, ctx, accountID, box.ID)
-	parsed, err := mailparse.ParseFile(filepath.Join(svc.Config.DataDir, filepath.FromSlash(m.RawPath)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed.Text
 }
 
 func TestApproverImpliesExternalRequest(t *testing.T) {
@@ -166,8 +162,14 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SendRequest == nil || got.SendRequest.ApproverEmail != approverAddress || got.SendRequest.TokenExpiresAt == nil {
+	if got.SendRequest == nil || got.SendRequest.ApproverEmail != approverAddress || got.SendRequest.ApprovalWorkflowID == "" {
 		t.Fatalf("request not external: %+v", got.SendRequest)
+	}
+	// The notification is queued but not yet delivered, so the request is not
+	// presented as successfully awaiting approval and the expiry clock has not
+	// started.
+	if got.SendRequest.NotificationStatus != model.NotificationQueued || got.SendRequest.TokenExpiresAt != nil {
+		t.Fatalf("request notification state = %q expiry=%v, want queued and nil", got.SendRequest.NotificationStatus, got.SendRequest.TokenExpiresAt)
 	}
 	// The approval email is queued and carries the control token.
 	token := approvalToken(t, svc, u.AccountID, box.ID)
@@ -223,9 +225,11 @@ func TestExternalApprovalApproveByEmail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SendRequest == nil || got.SendRequest.ApproverEmail != approverAddress || got.SendRequest.TokenExpiresAt == nil {
+	if got.SendRequest == nil || got.SendRequest.ApproverEmail != approverAddress || got.SendRequest.ApprovalWorkflowID == "" {
 		t.Fatalf("request %+v", got.SendRequest)
 	}
+	// The approval email must be handed off before the token is live.
+	handOffWorkflow(t, svc, u.AccountID, box.ID)
 	token := approvalToken(t, svc, u.AccountID, box.ID)
 
 	body := "[GH-FEEDBACK-BEGIN]\r\n\r\n\r\n[GH-FEEDBACK-END]\r\n"
@@ -509,9 +513,10 @@ func pendingRequestStillOpen(t *testing.T, svc *app.Service, u model.User, box m
 	return false
 }
 
-// TestInternalApprovalMailCannotBeForwarded proves the hidden approval email
-// cannot be exfiltrated through the reply/forward send path.
-func TestInternalApprovalMailCannotBeForwarded(t *testing.T) {
+// TestWorkflowMailIsNotMailboxContent proves the approval email is not a
+// mailbox message: it cannot be read, listed or used as a forward/reply source,
+// so the token cannot be exfiltrated through the mailbox surface.
+func TestWorkflowMailIsNotMailboxContent(t *testing.T) {
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
@@ -525,13 +530,24 @@ func TestInternalApprovalMailCannotBeForwarded(t *testing.T) {
 	if _, err = svc.RequestSend(ctx, asst, d.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	internalID := queuedApprovalEmail(t, svc, ctx, u.AccountID, box.ID).ID
-	owner := ownerPrincipal(u.AccountID, box.ID)
-	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ForwardOfMessageID: internalID, To: []string{"leak@outside.test"}, Text: "x"}, ""); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("forward of internal mail err=%v", err)
+	w := queuedApprovalWorkflow(t, svc, ctx, u.AccountID, box.ID)
+	// The workflow id is not a message id.
+	if _, err := svc.Store.GetMessageByID(ctx, u.AccountID, w.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("workflow id resolved as a message: %v", err)
 	}
-	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ReplyToMessageID: internalID, To: []string{"leak@outside.test"}, Text: "x"}, ""); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("reply to internal mail err=%v", err)
+	owner := ownerPrincipal(u.AccountID, box.ID)
+	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ForwardOfMessageID: w.ID, To: []string{"leak@outside.test"}, Text: "x"}, ""); err == nil {
+		t.Fatal("forward of workflow mail unexpectedly succeeded")
+	}
+	if _, err = svc.Send(ctx, owner, app.SendInput{InboxID: box.ID, ReplyToMessageID: w.ID, To: []string{"leak@outside.test"}, Text: "x"}, ""); err == nil {
+		t.Fatal("reply to workflow mail unexpectedly succeeded")
+	}
+	msgs, err := svc.Store.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("workflow mail leaked into mailbox: %+v", msgs)
 	}
 }
 

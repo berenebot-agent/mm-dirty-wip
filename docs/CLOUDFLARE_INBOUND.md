@@ -130,18 +130,28 @@ Walk through the Cloudflare navigation:
 
 ## 5. Add a routing rule that sends mail to the Worker
 
+Gatehouse's model is built around cheap, unlimited logical inbox identities, so
+the recommended setup is **one catch-all rule for the whole receiving
+domain/subdomain**, not one rule per address. Gatehouse then routes every local
+part internally (to an inbox, an alias, or the domain catch-all), and adding a
+new inbox never requires touching Cloudflare again.
+
 1. Still under **Email Routing**, open the **Routing rules** tab.
 2. Click **Create rule**.
 3. Choose **Send to a Worker**.
-4. Give the rule a **Custom email address** that matches an inbox in Gatehouse
-   Email (e.g. `hermes@example.com`).
+4. Give the rule the catch-all address (the `@` local part, i.e. all addresses).
 5. For **Action**, select your Worker name (e.g. `oa-gatehouse`) from the
    "Send to a Worker" dropdown.
 6. Click **Save**.
 
-Repeat for each inbox address you want to receive on. For a catch-all, add a
-rule with the `@` local part (all addresses) and send it to the Worker; the
-server routes unknown local parts according to the domain catch-all setting.
+The server routes each local part according to the domain catch-all setting: a
+matching inbox or alias is delivered there, and anything else goes to the
+domain's configured catch-all inbox.
+
+If you cannot dedicate a full domain/subdomain to Gatehouse, per-address rules
+remain available as a fallback: repeat steps 2–6 with a **Custom email address**
+matching a specific inbox (e.g. `hermes@example.com`). Prefer the catch-all
+whenever possible.
 
 ## Verification
 

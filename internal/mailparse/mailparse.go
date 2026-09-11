@@ -35,7 +35,35 @@ type Parsed struct {
 	Attachments             []Attachment
 }
 
-func ParseFile(path string) (Parsed, error) {
+// Limits bounds MIME traversal. A zero field falls back to the package
+// default, so callers that do not supply limits keep the fixed behavior.
+type Limits struct {
+	MaxDepth int
+	MaxParts int
+}
+
+func (l Limits) depth() int {
+	if l.MaxDepth > 0 {
+		return l.MaxDepth
+	}
+	return maxMIMEDepth
+}
+
+func (l Limits) parts() int {
+	if l.MaxParts > 0 {
+		return l.MaxParts
+	}
+	return maxMIMEParts
+}
+
+func resolveLimits(in []Limits) Limits {
+	if len(in) > 0 {
+		return in[0]
+	}
+	return Limits{}
+}
+
+func ParseFile(path string, limits ...Limits) (Parsed, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return Parsed{}, err
@@ -45,9 +73,9 @@ func ParseFile(path string) (Parsed, error) {
 	if err != nil {
 		return Parsed{}, err
 	}
-	return parseMessage(msg)
+	return parseMessage(msg, resolveLimits(limits))
 }
-func parseMessage(msg *mail.Message) (Parsed, error) {
+func parseMessage(msg *mail.Message, limits Limits) (Parsed, error) {
 	var p Parsed
 	dec := new(mime.WordDecoder)
 	p.Subject, _ = dec.DecodeHeader(msg.Header.Get("Subject"))
@@ -65,7 +93,7 @@ func parseMessage(msg *mail.Message) (Parsed, error) {
 		p.Date = time.Now().UTC()
 	}
 	state := parseState{}
-	if err := walkMIME(textproto.MIMEHeader(msg.Header), msg.Body, state.collect); err != nil {
+	if err := walkMIME(textproto.MIMEHeader(msg.Header), msg.Body, state.collect, limits); err != nil {
 		return Parsed{}, err
 	}
 	p.Text = strings.TrimSpace(strings.Join(state.text, "\n\n"))
@@ -100,28 +128,30 @@ type partInfo struct {
 }
 
 type walker struct {
-	fn    func(partInfo, io.Reader) error
-	depth int
-	parts int
+	fn       func(partInfo, io.Reader) error
+	depth    int
+	parts    int
+	maxDepth int
+	maxParts int
 }
 
 // walkMIME performs one bounded traversal of a MIME entity. Container parts are
 // recursed; every leaf part is passed to fn with its metadata and a reader at
 // the undecoded content. Parsing and extraction share this so their attachment
 // ordering and classification can never diverge.
-func walkMIME(h textproto.MIMEHeader, r io.Reader, fn func(partInfo, io.Reader) error) error {
-	w := &walker{fn: fn}
+func walkMIME(h textproto.MIMEHeader, r io.Reader, fn func(partInfo, io.Reader) error, limits Limits) error {
+	w := &walker{fn: fn, maxDepth: limits.depth(), maxParts: limits.parts()}
 	return w.walk(h, r)
 }
 
 func (w *walker) walk(h textproto.MIMEHeader, r io.Reader) error {
 	w.depth++
 	defer func() { w.depth-- }()
-	if w.depth > maxMIMEDepth {
+	if w.depth > w.maxDepth {
 		return fmt.Errorf("mime nesting too deep")
 	}
 	w.parts++
-	if w.parts > maxMIMEParts {
+	if w.parts > w.maxParts {
 		return fmt.Errorf("too many mime parts")
 	}
 	ct := h.Get("Content-Type")
@@ -264,7 +294,7 @@ func windows1252Rune(b byte) rune {
 // errWalkStop lets a callback end the traversal early once its target is found.
 var errWalkStop = errors.New("mime walk stopped")
 
-func ExtractAttachment(path string, index int, w io.Writer) error {
+func ExtractAttachment(path string, index int, w io.Writer, limits ...Limits) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -289,7 +319,7 @@ func ExtractAttachment(path string, index int, w io.Writer) error {
 		}
 		found = true
 		return errWalkStop
-	})
+	}, resolveLimits(limits))
 	if err != nil && !errors.Is(err, errWalkStop) {
 		return err
 	}
@@ -301,7 +331,7 @@ func ExtractAttachment(path string, index int, w io.Writer) error {
 
 // ExtractAllAttachments extracts every attachment in one traversal. The
 // callback must consume the reader before returning.
-func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error) error {
+func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error, limits ...Limits) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -319,7 +349,7 @@ func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error) er
 		target++
 		meta := Attachment{Filename: safeFilename(info.Filename, target, info.Media), ContentType: info.Media, ContentID: info.ContentID, PartIndex: target}
 		return fn(meta, decodeTransfer(info.Transfer, r))
-	})
+	}, resolveLimits(limits))
 }
 
 // HasControlChars reports whether s contains a CR, LF, or another C0/DEL

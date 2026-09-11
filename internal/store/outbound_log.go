@@ -17,12 +17,14 @@ type DeliveryAttempt struct {
 	DomainID          string    `json:"domain_id,omitempty"`
 	Provider          string    `json:"provider,omitempty"`
 	MessageID         string    `json:"message_id,omitempty"`
+	WorkflowID        string    `json:"workflow_id,omitempty"`
 	Attempt           int       `json:"attempt"`
 	Status            string    `json:"status"`
 	ProviderMessageID string    `json:"provider_message_id,omitempty"`
 	ErrorText         string    `json:"error_text,omitempty"`
 	FromAddress       string    `json:"from_address,omitempty"`
 	To                []string  `json:"to,omitempty"`
+	Subject           string    `json:"subject,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -126,9 +128,11 @@ func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domai
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,COALESCE(m.from_address,''),COALESCE(m.to_json,'[]')
+	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
+		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
 		WHERE l.account_id=? AND l.domain_id=?`
 	args := []any{accountID, domainID}
 	if beforeID > 0 {
@@ -146,7 +150,7 @@ func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domai
 	for rows.Next() {
 		var a DeliveryAttempt
 		var created, to string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.Provider, &a.MessageID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to); err != nil {
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.Provider, &a.MessageID, &a.WorkflowID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to, &a.Subject); err != nil {
 			return nil, err
 		}
 		a.To = decodeStrings(to)

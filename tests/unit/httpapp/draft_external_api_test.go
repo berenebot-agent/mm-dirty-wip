@@ -48,25 +48,28 @@ func TestAPIInboxApproverAndExternalRequest(t *testing.T) {
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"status":"pending_approval"`) || !strings.Contains(rr.Body.String(), `"approver_email":"approver@outside.test"`) {
 		t.Fatalf("external request-send = %d %s", rr.Code, rr.Body.String())
 	}
-	// The approval email is queued and the request records an expiry.
+	// The approval email is queued for handoff, so the request reports a queued
+	// notification and does not yet claim a live expiry.
 	var sr model.DraftSendRequest
 	get := apiDo(h, "GET", "/v1/drafts/"+draft.ID+"/send-request", asstKey, "")
 	if get.Code != 200 {
 		t.Fatalf("get send-request = %d %s", get.Code, get.Body.String())
 	}
-	if err := json.Unmarshal(get.Body.Bytes(), &sr); err != nil || sr.ApproverEmail != "approver@outside.test" || sr.TokenExpiresAt == nil {
+	if err := json.Unmarshal(get.Body.Bytes(), &sr); err != nil || sr.ApproverEmail != "approver@outside.test" {
 		t.Fatalf("send-request %+v err=%v", sr, err)
 	}
-	// The approval email is queued for the approver, but it carries the
-	// one-time approval token, so it is workflow mail: it must not be exposed
-	// through any mailbox read surface, not even to the owner. Otherwise the
-	// assistant that requested the send could read the token and approve its
-	// own request.
-	if sr.ApprovalMessageID == "" {
+	if sr.NotificationStatus != model.NotificationQueued || sr.TokenExpiresAt != nil {
+		t.Fatalf("notification=%q expiry=%v, want queued and nil", sr.NotificationStatus, sr.TokenExpiresAt)
+	}
+	// The approval email carries the one-time approval token, so it is workflow
+	// mail: it must not be exposed through any mailbox read surface, not even to
+	// the owner. Otherwise the assistant that requested the send could read the
+	// token and approve its own request.
+	if sr.ApprovalWorkflowID == "" {
 		t.Fatalf("approval email was not queued")
 	}
-	if _, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, sr.ApprovalMessageID); err == nil {
-		t.Fatalf("approval email is readable through the mailbox surface")
+	if _, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, sr.ApprovalWorkflowID); err == nil {
+		t.Fatalf("approval workflow id resolved as a mailbox message")
 	}
 	rr = apiDo(h, "GET", "/v1/outbox?inbox="+box.ID, ownerKey, "")
 	if rr.Code != 200 || strings.Contains(rr.Body.String(), "Approval required") {

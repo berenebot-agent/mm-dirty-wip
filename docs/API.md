@@ -262,8 +262,15 @@ GET  /v1/send-requests?inbox={id}&active=true
   editable.
 - Approval and delivery are separate: approval enqueues a pending message;
   `delivery_status` moves `none` → `pending` → `sent`/`failed`.
+- If the inbox has a configured `approver_email`, `request-send` is external:
+  the request records `notification_status` (`queued` → `sent`/`failed`) and a
+  one-time token is emailed to that approver. The approver is an inbox setting,
+  not a per-request argument. Expiry begins only when the notification is handed
+  to the outbound path, so a request whose notification could not be sent is
+  reported as `failed` rather than silently awaiting approval.
 - Workflow events: `draft.send_requested`, `draft.send_request_cancelled`,
-  `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`.
+  `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`,
+  `draft.notification_sent`, `draft.notification_failed`.
 
 Human users in the web UI are always Owners. Mailbox roles apply to API keys.
 Hermes Relay sends as an owner directly and does not use the draft workflow.

@@ -100,12 +100,11 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	if err = json.Unmarshal(body, &wh); err != nil {
 		return msg, binding, fmt.Errorf("invalid webhook json: %w", err)
 	}
-	// Events other than email.received need no ingest. Acknowledge them so
-	// Resend does not retry; no signature check or fetch is performed and no
-	// state changes.
-	if wh.Type != eventReceived {
-		return msg, binding, transport.ErrInboundIgnored
-	}
+	// Authenticate the provider before trusting the event classification. The
+	// signature is bound to the whole body, but verifying it requires the
+	// domain's secret, which is selected by a recipient. Events that carry no
+	// recipient (or a non-mail event) are resolved against the configured
+	// domains; an unresolvable webhook is unauthorized.
 	binding, err = resolveBinding(ctx, resolver, wh.Data.To)
 	if err != nil {
 		return msg, binding, err
@@ -113,6 +112,12 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	secret := configString(binding.Config, "webhook_secret")
 	if !verifySignature(secret, r.Header, body) {
 		return msg, binding, transport.ErrInboundUnauthorized
+	}
+	// Events other than email.received need no ingest. Acknowledge them so
+	// Resend does not retry; no provider content is fetched and no state
+	// changes.
+	if wh.Type != eventReceived {
+		return msg, binding, transport.ErrInboundIgnored
 	}
 	apiKey := configString(binding.Config, "api_key")
 	if apiKey == "" {
@@ -129,12 +134,29 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	return transport.InboundMessage{
 		Provider:          "resend",
 		Recipient:         binding.Recipient,
+		Recipients:        canonicalRecipients(wh.Data.To),
 		EnvelopeFrom:      wh.Data.From,
 		RawPath:           tmpPath,
 		Size:              n,
 		DeliveryID:        wh.Data.EmailID,
 		ProviderMessageID: wh.Data.MessageID,
 	}, binding, nil
+}
+
+// canonicalRecipients normalizes and de-duplicates every recipient in a Resend
+// event, preserving order.
+func canonicalRecipients(recipients []string) []string {
+	out := make([]string, 0, len(recipients))
+	seen := map[string]bool{}
+	for _, rcpt := range recipients {
+		c := canonicalRecipient(rcpt)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
 }
 
 // resolveBinding returns the receive connection for the first recipient that

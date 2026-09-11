@@ -38,6 +38,8 @@
 8. Verify the `draft.*` events appear in `GET /v1/events`.
 9. Verify upload/list/delete of draft attachments, that uploads are frozen while pending, and that an approved send carries the attachments.
 10. In the web UI, verify the dashboard unsent-drafts count, the inbox Draft send requests section with a quick Send action, and the review page Approve/Reject/Cancel actions.
+11. With an inbox approver configured, request send and verify the request reports `notification_status=queued` before handoff and `sent` with a `token_expires_at` after the worker delivers the approval email. Verify the approval email creates no thread, consumes no account storage, and is absent from `/v1/messages` and `/v1/outbox`.
+12. Verify that when the domain has no outbound provider, the approval notification is not marked `sent` and the draft is not presented as successfully awaiting approval.
 
 ## B. Inbound Mailgun delivery
 

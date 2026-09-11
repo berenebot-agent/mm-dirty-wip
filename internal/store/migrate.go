@@ -76,6 +76,12 @@ func migrations(dataDir string) []migration {
 		{version: "019", sql: migration019, detect: stateOf(columnAdded("inbound_control_messages", "subject"))},
 		{version: "020", sql: migration020, detect: stateOf(tableExists("message_labels"))},
 		{version: "021", sql: migration021, detect: stateOf(tableExists("inbox_aliases"))},
+		{version: "022", sql: migration022, detect: allOf(
+			tableExists("outbound_workflow"),
+			columnAdded("draft_send_requests", "approval_workflow_id"),
+			columnAdded("draft_send_requests", "notification_status"),
+			columnAdded("outbound_delivery_log", "workflow_id"),
+		)},
 	}
 }
 

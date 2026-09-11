@@ -187,6 +187,25 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 		return nil, err
 	}
 	attRows.Close()
+	wfRows, err := tx.QueryContext(ctx, `SELECT w.raw_path FROM outbound_workflow w JOIN inboxes i ON i.id=w.inbox_id WHERE i.account_id=? AND i.domain_id=?`, accountID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	for wfRows.Next() {
+		var path string
+		if err = wfRows.Scan(&path); err != nil {
+			wfRows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+	}
+	if err = wfRows.Err(); err != nil {
+		wfRows.Close()
+		return nil, err
+	}
+	wfRows.Close()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, domainID); err != nil {
 		return nil, err
 	}
@@ -631,6 +650,25 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 		return nil, err
 	}
 	attRows.Close()
+	wfRows, err := tx.QueryContext(ctx, `SELECT raw_path FROM outbound_workflow WHERE account_id=? AND inbox_id=?`, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	for wfRows.Next() {
+		var path string
+		if err = wfRows.Scan(&path); err != nil {
+			wfRows.Close()
+			return nil, err
+		}
+		if strings.TrimSpace(path) != "" {
+			paths = append(paths, path)
+		}
+	}
+	if err = wfRows.Err(); err != nil {
+		wfRows.Close()
+		return nil, err
+	}
+	wfRows.Close()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, id); err != nil {
 		return nil, err
 	}

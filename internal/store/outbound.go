@@ -415,25 +415,46 @@ func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id s
 	return s.DeleteMessage(ctx, p, id)
 }
 
+// idempotencyLease bounds how long a pending reservation may block the same
+// key before it is treated as abandoned by a crashed process. It is generous
+// relative to a provider send so a slow in-flight send is never reclaimed.
+const idempotencyLease = 15 * time.Minute
+
 // IdempotencyReserve atomically claims an idempotency key for an in-flight
 // send. It returns (true, "", nil) if this caller won the reservation and may
 // proceed to enqueue. It returns (false, messageID, nil) if the key was already
 // completed, so the caller can return the existing message. It returns
 // (false, "", ErrConflict) if another request currently holds the reservation
 // (in-flight), which the caller should treat as a retryable conflict.
+//
+// A pending reservation older than idempotencyLease with no message linked to
+// it is treated as abandoned (the process crashed between reserving and
+// enqueueing) and is reclaimed, so a legitimate retry is not blocked forever.
+// A reservation whose message exists is never reclaimed, because the send was
+// durably enqueued and replaying it would be wrong.
 func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID string) (bool, string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return false, "", err
 	}
 	defer tx.Rollback()
-	var mid, status string
-	err = tx.QueryRowContext(ctx, `SELECT message_id,status FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status)
+	var mid, status, created string
+	err = tx.QueryRowContext(ctx, `SELECT message_id,status,created_at FROM outbound_idempotency WHERE account_id=? AND idem_key=?`, accountID, key).Scan(&mid, &status, &created)
 	if err == nil {
 		if status == "done" {
 			return false, mid, nil
 		}
-		// pending: another request is in flight.
+		// Pending. Reclaim it only when it is stale and has no enqueued message.
+		if mid == "" && !parseTime(created).IsZero() && time.Since(parseTime(created)) > idempotencyLease {
+			if _, err = tx.ExecContext(ctx, `UPDATE outbound_idempotency SET status='pending',inbox_id=?,created_at=? WHERE account_id=? AND idem_key=? AND status='pending' AND message_id=''`, inboxID, nowText(), accountID, key); err != nil {
+				return false, "", err
+			}
+			if err = tx.Commit(); err != nil {
+				return false, "", err
+			}
+			return true, "", nil
+		}
+		// Another request is in flight.
 		return false, "", ErrConflict
 	}
 	if err != sql.ErrNoRows {
@@ -453,6 +474,18 @@ func (s *Store) IdempotencyReserve(ctx context.Context, accountID, key, inboxID 
 func (s *Store) IdempotencyRelease(ctx context.Context, accountID, key string) error {
 	_, err := s.write.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND idem_key=? AND status='pending'`, accountID, key)
 	return err
+}
+
+// RecoverStaleIdempotency deletes pending reservations left by a crashed
+// process: a pending key with no linked message older than the lease. Keys with
+// an enqueued message are preserved (the send is durable and replayable).
+func (s *Store) RecoverStaleIdempotency(ctx context.Context, now time.Time) (int64, error) {
+	res, err := s.write.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE status='pending' AND message_id='' AND created_at<=?`, timeText(now.Add(-idempotencyLease)))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 func (s *Store) LatestMessageInThread(ctx context.Context, accountID, threadID string) (model.Message, error) {

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,18 @@ import (
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/transport"
 )
+
+// workflowTokenRe matches any approval control token marker (request reference
+// or decision subject) so the dead token can be redacted from a retained
+// workflow copy once the request is terminal.
+var workflowTokenRe = regexp.MustCompile(`\[GH-(REQUEST|APPROVE|REJECT):[A-Za-z0-9_-]+\]`)
+
+// redactWorkflowTokens replaces every control token marker with a redacted
+// placeholder. The token is dead once the request is terminal, but removing it
+// from the retained copy is cheap defense-in-depth.
+func redactWorkflowTokens(s string) string {
+	return workflowTokenRe.ReplaceAllString(s, "[GH-$1:REDACTED]")
+}
 
 // controlSubjectPrefixes are the strict subjects an approval control email must
 // contain. They are parsed by the inbound control handler.
