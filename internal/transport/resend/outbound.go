@@ -48,11 +48,11 @@ type outboundTransport struct{}
 func init() { transport.RegisterOutbound(outboundTransport{}) }
 
 func (outboundTransport) Name() string        { return "resend" }
-func (outboundTransport) Description() string { return "Resend API" }
+func (outboundTransport) Description() string { return "Resend" }
 func (outboundTransport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
-		{Name: "api_key", Label: "API key", Type: "password", Required: true, Secret: true, Placeholder: "re_..."},
-		{Name: "api_base", Label: "API base URL", Type: "text", Placeholder: "https://api.resend.com"},
+		{Name: "api_key", Label: "Resend key", Type: "password", Required: true, Secret: true, Placeholder: "re_..."},
+		{Name: "api_base", Label: "Base URL", Type: "text", Placeholder: "https://api.resend.com"},
 	}
 }
 func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {

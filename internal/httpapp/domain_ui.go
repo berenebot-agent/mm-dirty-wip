@@ -621,7 +621,7 @@ func domainReceivingSteps(provider string) []string {
 			"Paste the webhook URL shown here.",
 			"Under events, tick email.received only.",
 			"Click Add, reopen the webhook, and copy its signing secret (whsec_...).",
-			"Paste the signing secret and a full-access Resend API key below, then save.",
+			"Paste the signing secret and a full-access Resend key below, then save.",
 		}
 	case "cloudflare":
 		return []string{
