@@ -47,6 +47,19 @@
     });
   }
 
+  function setDomainRoles(domainID, value) {
+    if (!matrix) {
+      return;
+    }
+    var group = matrix.querySelector('tbody[data-domain="' + domainID + '"]');
+    if (!group) {
+      return;
+    }
+    group.querySelectorAll('input[type=radio][name^=role_]').forEach(function (el) {
+      el.checked = el.value === value;
+    });
+  }
+
   function syncAdmin() {
     if (!matrix) {
       return;
@@ -333,7 +346,12 @@
   }
   document.querySelectorAll('#key-matrix [data-set-role]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      setAllRoles(btn.getAttribute('data-set-role'));
+      var domain = btn.getAttribute('data-domain');
+      if (domain) {
+        setDomainRoles(domain, btn.getAttribute('data-set-role'));
+      } else {
+        setAllRoles(btn.getAttribute('data-set-role'));
+      }
     });
   });
   var add = document.getElementById('add-key');
