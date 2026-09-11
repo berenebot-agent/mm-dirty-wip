@@ -677,6 +677,11 @@ var initAliasEditor = (function () {
       }
       var local = (value || '').trim().toLowerCase();
       var dom = (domain && domain.value || '').trim().toLowerCase();
+      var at = local.lastIndexOf('@');
+      if (at !== -1) {
+        dom = local.slice(at + 1);
+        local = local.slice(0, at);
+      }
       if (!local || !dom || local.indexOf('@') !== -1 || local.indexOf(' ') !== -1) {
         return;
       }
