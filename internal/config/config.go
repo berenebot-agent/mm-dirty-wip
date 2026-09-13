@@ -75,13 +75,13 @@ type Config struct {
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
 	ApprovalExpiryHours int
-	// MXMode selects the optional direct-SMTP (MX) deployment: off, local
-	// (edge embedded in this container as a separate-uid child) or remote (edge
-	// runs as a separate container/host and shares MX_EDGE_KEYS). It is the
-	// single user-facing MX switch; MXReceiveEnabled/MXEmbedded are derived.
+	// MXMode selects the optional direct-SMTP (MX) deployment: off, true (edge
+	// embedded in this container as a separate-uid child) or remote (edge runs
+	// as a separate container/host and shares MX_EDGE_KEYS). It is the single
+	// user-facing MX switch; MXReceiveEnabled/MXEmbedded are derived.
 	MXMode MXMode
 	// MXReceiveEnabled turns on the direct-SMTP ingress endpoints on the inbound
-	// listener. Derived: true for local and remote.
+	// listener. Derived: true for embedded and remote.
 	MXReceiveEnabled bool
 	// MXEdgeKeys maps an operator edge key ID to its HMAC secret. MX requests
 	// are authenticated by key ID, not by a self-reported edge name. Overlapping
