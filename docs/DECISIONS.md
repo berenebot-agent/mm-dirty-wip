@@ -473,6 +473,86 @@ tab with an alias editor and a flag-column indicator, and the `aliases` API
 field. No new dependency or runtime service. Reply-as-alias (send-as) is
 deferred; aliases are inbound only.
 
+## D031 — Optional Go SMTP (MX) edge with signed core handoff
+
+**Decision:** Direct internet mail on TCP port 25 is received by an optional Go
+sidecar, `cmd/mx`, built from this repo into the same image as `cmd/server` and
+run as a separate non-root process (an explicit exception to
+[D003](#d003--single-container-runtime); one image is not one process). The
+edge owns SMTP framing, bounded staging of the original bytes, and
+SPF/DKIM/DMARC computation; it is policy-free. All routing authorization,
+policy, quota and durable storage stay in the core behind two authenticated
+endpoints on the inbound connector:
+
+```http
+POST /internal/mx/resolve   # bounded recipient list -> per-recipient routing
+POST /internal/mx/ingest    # one recipient + original MIME -> durable disposition
+```
+
+The edge holds no domain/policy snapshot, no database mount and no
+`APP_ENCRYPTION_KEY`. Authentication failures are a durable Spam delivery, not
+an SMTP rejection. Authentication-based SMTP rejection and `on_auth_fail=delete`
+are deferred. Per-domain `enforcement=moderate|hard` selects the local Spam
+disposition; the published DMARC policy is preserved and displayed, not
+pretended to be enforced.
+
+**Reason:** The provider-webhook architecture (D006) has no way to receive mail
+for a domain that does not already route through Mailgun/Cloudflare/Resend, and
+those providers are the wrong trust and cost model for a self-hosted operator
+who owns the domain. An in-repo Go edge reuses the existing module, build and
+image, keeps one artifact to ship, and stays small (standard library plus three
+narrow, MIT-licensed protocol libraries). Keeping policy and durable state in
+the core means the edge cannot authorize a domain, grant quota or forge durable
+truth, and a compromised edge credential is separately revocable.
+
+**Dependencies:** `github.com/emersion/go-smtp` v0.25.0 (MIT),
+`github.com/emersion/go-msgauth` v0.7.0 (MIT) and `blitiri.com.ar/go/spf`
+v1.6.0 (MIT), with transitive `go-sasl`, `go-message`, `go-milter` and the
+test-only `yaml.v3`. Recorded in `THIRD_PARTY_NOTICES.md`; approved in the root
+`AGENTS.md`.
+
+**Wire contract:** HMAC-SHA256 over a bounded, exact-bytes JSON envelope
+(protocol version, timestamp, request ID, key ID, recipient, envelope sender,
+client IP, HELO, normalized auth evidence, content digest, size) with
+constant-time verification and overlapping accepted keys for rotation. Key IDs
+map to configured operator credentials; remote links require verified TLS.
+Timestamp skew bounds replay duration, not replay itself; request IDs are bound
+to the authenticated fingerprint and conflicting reuse is rejected. Replayed
+retries return the recorded durable disposition.
+
+**Retry identity (refines [D016](#d016--mail-integrity-boundaries)):** the
+edge delivery fingerprint is a versioned digest over canonical envelope sender,
+canonical recipient and SHA-256 of the original incoming MIME, computed before
+any local trace/header change. RFC Message-ID is descriptive metadata, never the
+delivery token. Core deduplicates with durable, bounded delivery receipts scoped
+by account, provider and envelope recipient, serialized with message/quota/event
+persistence so concurrent MX nodes cannot duplicate side effects. Receipts are
+retained **7 days**, which covers the supported sender retry window, HTTP replay
+window and expected outage recovery, survive message deletion for that horizon,
+and are swept by the existing worker.
+
+**Spam:** `is_spam` is a computed view over `messages` (not a separate table),
+with bounded `auth_results_json` and a classification reason. Spam counts toward
+quota and retains MIME, attachments, identity and recovery. Every read/action
+path (lists, unread counts, default search, threads, replies, message waits,
+Relay payload rebuilds) excludes or revalidates Spam consistently, and release
+commits a durable `message.spam_state_changed` state-change event with old/new
+state.
+
+**Complexity:** Qualitative. Adds `internal/mxwire`, a pure policy engine and
+normalized auth types, a `mx` receiving provider, an explicit authenticated MX
+service entry point, migrations for receipts/`is_spam`/`auth_results_json`, the
+`cmd/mx` edge with `MX_VERIFY_SPF|DKIM|DMARC` toggles, and Spam UI/API/Relay
+handling. It stays within the existing SQLite store, event bus and filesystem
+MIME store. No new runtime service beyond the optional edge; no caching, ARC,
+BIMI, supervisor, durable edge queue or SMTP rejection in V1.
+
+**Deferrals:** authentication-based SMTP rejection / `on_auth_fail=delete`; ARC
+verification and trusted-forwarder policy; BIMI; all-in-one supervisor; a
+Haraka/mailauth alternate edge; policy snapshots and local rejection; durable
+edge queue and end-to-end HA; scoped credential-to-domain binding; reputation
+and content filtering; DMARC report generation; authenticated submission/relay.
+
 ## Future extension register
 
 
