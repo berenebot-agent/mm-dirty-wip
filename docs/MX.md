@@ -83,8 +83,8 @@ INBOUND_TLS_KEY_FILE=/certs/inbound.key
 
 ## 2. Run the edge
 
-The mode chooses how the edge runs. **true** (embedded) is the default and needs no second
-service.
+The mode chooses how the edge runs. `true` (embedded) is the default and needs
+no second service.
 
 ### true (single container, default)
 
