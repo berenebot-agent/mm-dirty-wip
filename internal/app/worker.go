@@ -45,11 +45,18 @@ func (w *OutboxWorker) Start() {
 // SetPeriod overrides the poll interval (used by tests).
 func (w *OutboxWorker) SetPeriod(d time.Duration) { w.period = d }
 
-// Stop signals the worker to stop after the current delivery completes.
+// Stop signals the worker to stop promptly. The delivery loops observe the
+// signal between messages (not only after a full backlog), so shutdown is fast
+// even under load.
 func (w *OutboxWorker) Stop() {
 	close(w.stop)
 	<-w.done
 }
+
+// maintenanceEvery is how many delivery ticks pass between maintenance sweeps.
+// Delivery runs on the short poll interval while expiry/cleanup run far less
+// often, so a large hosted database is not churned every few seconds.
+const maintenanceEvery = 12
 
 func (w *OutboxWorker) run() {
 	defer close(w.done)
@@ -68,21 +75,39 @@ func (w *OutboxWorker) run() {
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
 	// Re-scan on startup so pending messages from a previous process resume.
-	w.tick()
-	for {
+	w.deliver()
+	w.maintain()
+	for i := 1; ; i++ {
 		select {
 		case <-w.stop:
 			return
 		case <-ticker.C:
-			w.tick()
+			w.deliver()
+			if i%maintenanceEvery == 0 {
+				w.maintain()
+			}
 		}
 	}
 }
 
-// tick runs one maintenance and delivery pass. Each step is independently
-// panic-guarded so a fault in a sweep or one poison message cannot exit the
-// process (and with it every other inbox); the guard logs and the pass moves on.
-func (w *OutboxWorker) tick() {
+// deliver runs the per-tick delivery passes. Each step is independently
+// panic-guarded so a fault in one poison message cannot exit the process (and
+// with it every other inbox); the guard logs and the pass moves on.
+func (w *OutboxWorker) deliver() {
+	for _, step := range []struct {
+		name string
+		fn   func()
+	}{
+		{"deliverDue", w.deliverDue},
+		{"deliverWorkflowDue", w.deliverWorkflowDue},
+	} {
+		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// maintain runs the infrequent maintenance sweeps: approval expiry, terminal
+// workflow redaction/retention and MX receipt sweeping.
+func (w *OutboxWorker) maintain() {
 	for _, step := range []struct {
 		name string
 		fn   func()
@@ -90,10 +115,19 @@ func (w *OutboxWorker) tick() {
 		{"expireApprovals", w.expireApprovals},
 		{"sweepWorkflows", w.sweepWorkflows},
 		{"sweepMXReceipts", w.sweepMXReceipts},
-		{"deliverDue", w.deliverDue},
-		{"deliverWorkflowDue", w.deliverWorkflowDue},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// stopping reports whether Stop has been signalled, so a long delivery drain
+// can yield promptly instead of working through an entire backlog first.
+func (w *OutboxWorker) stopping() bool {
+	select {
+	case <-w.stop:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -164,6 +198,9 @@ func (w *OutboxWorker) redactWorkflows() {
 
 func (w *OutboxWorker) deliverWorkflowDue() {
 	for {
+		if w.stopping() {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		workflowID, err := w.svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
 		if err != nil {
@@ -177,6 +214,7 @@ func (w *OutboxWorker) deliverWorkflowDue() {
 		}
 		accountID, err := w.svc.AccountIDForWorkflow(ctx, workflowID)
 		if err != nil {
+			_ = w.svc.Store.ReleaseWorkflowClaim(ctx, workflowID, w.owner)
 			cancel()
 			w.log.Error("workflow account lookup", "workflow_id", workflowID, "error", err)
 			continue
@@ -234,6 +272,10 @@ func (w *OutboxWorker) expireApprovals() {
 
 func (w *OutboxWorker) deliverDue() {
 	for {
+		// Stop promptly on shutdown instead of draining a whole backlog first.
+		if w.stopping() {
+			return
+		}
 		// Each message gets its own deadline so one slow delivery cannot consume
 		// the whole loop's budget.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -249,6 +291,9 @@ func (w *OutboxWorker) deliverDue() {
 		}
 		accountID, err := w.svc.AccountIDForMessage(ctx, msgID)
 		if err != nil {
+			// Release the claim so the message is retried immediately rather
+			// than idling until the lease expires.
+			_ = w.svc.Store.ReleaseMessageClaim(ctx, msgID, w.owner)
 			cancel()
 			w.log.Error("outbox account lookup", "message_id", msgID, "error", err)
 			continue

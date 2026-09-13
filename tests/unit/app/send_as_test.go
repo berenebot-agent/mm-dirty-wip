@@ -62,9 +62,10 @@ func TestSendRejectsUnknownAliasSender(t *testing.T) {
 	}
 }
 
-// TestDraftFromFrozenInApproval verifies the draft's sender and display name are
-// frozen into the approval fingerprint: changing the alias name after the
-// request is made blocks the approval.
+// TestDraftFromFrozenInApproval verifies the draft's sender and display name
+// are frozen at creation: renaming the alias afterwards does not change the
+// already-reviewed draft, and the approved send uses the frozen name exactly as
+// the approver saw it.
 func TestDraftFromFrozenInApproval(t *testing.T) {
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
@@ -83,12 +84,23 @@ func TestDraftFromFrozenInApproval(t *testing.T) {
 	if _, err := svc.RequestSend(ctx, p, draft.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	// Renaming the alias changes the resolved name, so the frozen fingerprint no
-	// longer matches and the approval is refused.
+	// Renaming the alias after the request does not change the frozen draft, so
+	// the approval still matches and proceeds with the reviewed name.
 	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "sales", DisplayName: "Other Name"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ApproveDraft(ctx, p, draft.ID, "", model.DecisionMethodUI, ""); err == nil {
-		t.Fatal("approval accepted after frozen sender name changed")
+	refetched, err := svc.Store.GetDraft(ctx, p, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refetched.FromName != "Acme Sales" {
+		t.Fatalf("frozen draft name changed to %q", refetched.FromName)
+	}
+	res, err := svc.ApproveDraft(ctx, p, draft.ID, "", model.DecisionMethodUI, "")
+	if err != nil {
+		t.Fatalf("approval refused after alias rename: %v", err)
+	}
+	if res.Message.From.Name != "Acme Sales" || res.Message.From.Address != "sales@example.com" {
+		t.Fatalf("approved send from %+v, want frozen Acme Sales <sales@example.com>", res.Message.From)
 	}
 }

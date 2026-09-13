@@ -12,9 +12,12 @@ import (
 
 type HermesConnection struct {
 	ID, AccountID, InboxID, Name, GatewayID, SecretEncrypted, DeliveryKeyEncrypted string
-	LastAckEventID                                                                 int64
-	CreatedAt                                                                      time.Time
-	LastConnectedAt                                                                *time.Time
+	// OutboundRole is "owner" (relay sends directly) or "assistant" (the relay
+	// creates a draft and requests approval instead of sending).
+	OutboundRole    string
+	LastAckEventID  int64
+	CreatedAt       time.Time
+	LastConnectedAt *time.Time
 }
 
 func (s *Store) CreateHermesEnrollToken(ctx context.Context, accountID, inboxID, name string, ttl time.Duration) (string, error) {
@@ -112,29 +115,32 @@ func (s *Store) upsertHermesConnectionTx(ctx context.Context, tx *sql.Tx, r Enro
 }
 
 func hermesConnectionFrom(id string, r EnrollRecord, gatewayID, secretEnc, deliveryEnc, now string) HermesConnection {
-	return HermesConnection{ID: id, AccountID: r.AccountID, InboxID: r.InboxID, Name: r.Name, GatewayID: gatewayID, SecretEncrypted: secretEnc, DeliveryKeyEncrypted: deliveryEnc, CreatedAt: parseTime(now)}
+	return HermesConnection{ID: id, AccountID: r.AccountID, InboxID: r.InboxID, Name: r.Name, GatewayID: gatewayID, SecretEncrypted: secretEnc, DeliveryKeyEncrypted: deliveryEnc, OutboundRole: "owner", CreatedAt: parseTime(now)}
 }
 func scanHermes(row interface{ Scan(...any) error }) (HermesConnection, error) {
 	var h HermesConnection
 	var cr string
 	var lc sql.NullString
-	err := row.Scan(&h.ID, &h.AccountID, &h.InboxID, &h.Name, &h.GatewayID, &h.SecretEncrypted, &h.DeliveryKeyEncrypted, &h.LastAckEventID, &cr, &lc)
+	err := row.Scan(&h.ID, &h.AccountID, &h.InboxID, &h.Name, &h.GatewayID, &h.SecretEncrypted, &h.DeliveryKeyEncrypted, &h.LastAckEventID, &cr, &lc, &h.OutboundRole)
 	if err != nil {
 		return h, err
+	}
+	if h.OutboundRole == "" {
+		h.OutboundRole = "owner"
 	}
 	h.CreatedAt = parseTime(cr)
 	h.LastConnectedAt = nullableTime(lc)
 	return h, nil
 }
 func (s *Store) GetHermesConnectionByGateway(ctx context.Context, gatewayID string) (HermesConnection, error) {
-	h, err := scanHermes(s.read.QueryRowContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at FROM hermes_connections WHERE gateway_id=?`, gatewayID))
+	h, err := scanHermes(s.read.QueryRowContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at,outbound_role FROM hermes_connections WHERE gateway_id=?`, gatewayID))
 	if err == sql.ErrNoRows {
 		return h, ErrNotFound
 	}
 	return h, err
 }
 func (s *Store) ListHermesConnections(ctx context.Context, accountID string) ([]HermesConnection, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at FROM hermes_connections WHERE account_id=? ORDER BY created_at DESC`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at,outbound_role FROM hermes_connections WHERE account_id=? ORDER BY created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +169,23 @@ func (s *Store) UpdateHermesConnectionName(ctx context.Context, accountID, id, n
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetHermesOutboundRole sets a relay connection's outbound authority. Only
+// "owner" and "assistant" are accepted; anything else is rejected.
+func (s *Store) SetHermesOutboundRole(ctx context.Context, accountID, id, role string) error {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role != "owner" && role != "assistant" {
+		return ErrForbidden
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET outbound_role=? WHERE id=? AND account_id=?`, role, id, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
 	return nil

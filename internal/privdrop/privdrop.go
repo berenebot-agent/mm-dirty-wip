@@ -124,11 +124,23 @@ func envID(name string, fallback int) (int, error) {
 }
 
 // chownRecursive uses Lchown to avoid following symlinks, which could point
-// outside the data directory.
+// outside the data directory. It skips entries that already carry the target
+// uid/gid, so a restart over a large, already-correct mail store performs no
+// writes per file; only the first boot (or files created by root) actually
+// changes ownership.
 func chownRecursive(root string, uid, gid int) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			if int(st.Uid) == uid && int(st.Gid) == gid {
+				return nil
+			}
 		}
 		return os.Lchown(path, uid, gid)
 	})

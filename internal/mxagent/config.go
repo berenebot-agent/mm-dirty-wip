@@ -33,9 +33,12 @@ type Config struct {
 	// HealthAddr is an optional health/readiness listener, e.g. :8090. Empty
 	// disables it.
 	HealthAddr string
-	// TLSCertFile/TLSKeyFile optionally enable STARTTLS.
+	// TLSCertFile/TLSKeyFile optionally enable STARTTLS. RequireTLS refuses
+	// plaintext sessions so a deployment can guarantee opportunistic senders
+	// encrypt (at the cost of bouncing those that cannot).
 	TLSCertFile string
 	TLSKeyFile  string
+	RequireTLS  bool
 
 	// Verification toggles. Core policy consumes whatever the edge supplies.
 	VerifySPF   bool
@@ -73,6 +76,7 @@ func Load() (Config, error) {
 		HealthAddr:      env("MX_HEALTH_ADDR", ""),
 		TLSCertFile:     strings.TrimSpace(os.Getenv("MX_TLS_CERT")),
 		TLSKeyFile:      strings.TrimSpace(os.Getenv("MX_TLS_KEY")),
+		RequireTLS:      envBool("MX_REQUIRE_TLS", false),
 		VerifySPF:       envBool("MX_VERIFY_SPF", true),
 		VerifyDKIM:      envBool("MX_VERIFY_DKIM", true),
 		VerifyDMARC:     envBool("MX_VERIFY_DMARC", true),
@@ -103,6 +107,9 @@ func Load() (Config, error) {
 	}
 	if (cfg.TLSCertFile == "") != (cfg.TLSKeyFile == "") {
 		return Config{}, fmt.Errorf("MX_TLS_CERT and MX_TLS_KEY must be set together")
+	}
+	if cfg.RequireTLS && cfg.TLSCertFile == "" {
+		return Config{}, fmt.Errorf("MX_REQUIRE_TLS needs MX_TLS_CERT and MX_TLS_KEY so STARTTLS can be offered")
 	}
 	return cfg, nil
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -48,11 +49,53 @@ func RequirePublic() bool { return requirePublic.Load() }
 // lookupIP is overridable in tests.
 var lookupIP = net.DefaultResolver.LookupIP
 
+// nonPublicPrefixes are special-use ranges that net.IP's IsPrivate/IsLoopback
+// helpers do not cover. They must not be treated as public Internet targets.
+var nonPublicPrefixes = func() []netip.Prefix {
+	raw := []string{
+		"0.0.0.0/8",       // "this network"
+		"100.64.0.0/10",   // CGNAT (RFC 6598)
+		"192.0.0.0/24",    // IETF protocol assignments
+		"192.0.2.0/24",    // TEST-NET-1
+		"198.18.0.0/15",   // benchmarking (RFC 2544)
+		"198.51.100.0/24", // TEST-NET-2
+		"203.0.113.0/24",  // TEST-NET-3
+		"240.0.0.0/4",     // reserved / future use
+		"::/128",          // unspecified
+		"::1/128",         // loopback
+		"64:ff9b::/96",    // NAT64 well-known prefix
+		"100::/64",        // discard-only
+		"2001:db8::/32",   // documentation
+		"2002::/16",       // 6to4
+		"fc00::/7",        // unique local
+		"fe80::/10",       // link-local
+	}
+	out := make([]netip.Prefix, 0, len(raw))
+	for _, s := range raw {
+		p, err := netip.ParsePrefix(s)
+		if err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}()
+
 // PublicIP reports whether ip is a public-routable address. Loopback, private,
-// link-local, multicast, unspecified and documentation ranges are rejected.
+// link-local, multicast, unspecified, documentation, CGNAT, benchmarking and
+// other special-use ranges are rejected.
 func PublicIP(ip net.IP) bool {
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return false
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range nonPublicPrefixes {
+		if p.Contains(addr) {
+			return false
+		}
 	}
 	return true
 }

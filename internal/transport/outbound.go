@@ -15,6 +15,11 @@ type OutboundMessage struct {
 	References            []string
 	RawMIME               []byte
 	Attachments           []OutboundAttachment
+	// IdempotencyKey, when set, is a stable key for the logical send (the local
+	// message id). Adapters whose provider supports idempotency keys pass it so
+	// a retry after a lost success response does not deliver a duplicate. It is
+	// empty when unknown; adapters without provider-side support ignore it.
+	IdempotencyKey string
 }
 
 type OutboundAttachment struct {

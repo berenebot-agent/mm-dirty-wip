@@ -60,6 +60,17 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, a DeliveryAttempt) er
 	return tx.Commit()
 }
 
+// messageExistsTx reports whether a message row still exists within the caller's
+// transaction. It is used to detect a message cancelled between reading and
+// writing its outcome, so outcome bookkeeping never references a deleted row.
+func messageExistsTx(ctx context.Context, tx *sql.Tx, accountID, id string) (bool, error) {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // insertDeliveryAttemptTx appends one attempt row and prunes the log within an
 // existing transaction, so the attempt is durable with the message state change.
 func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, domainID, provider, messageID, status, providerMessageID, errorText string) error {

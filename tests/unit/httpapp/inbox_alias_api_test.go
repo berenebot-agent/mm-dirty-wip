@@ -110,6 +110,7 @@ func TestInboxAliasNamesREST(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("clear alias name %d %s", rr.Code, rr.Body.String())
 	}
+	got = model.Inbox{}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}

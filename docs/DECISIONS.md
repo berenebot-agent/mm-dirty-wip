@@ -651,6 +651,76 @@ name that will be shown.
 set/draft storage and the send path, the `alias_names` API field, and a name
 input on the alias editor. No new dependency or runtime service.
 
+## D034 — External review remediation (security, correctness, UX)
+
+**Decision:** A consolidated review of the V1 tree produced a batch of fixes
+across the approval boundary, MX edge, outbound queue, crypto and UI:
+
+- **Approval preview is the exact sendable message.** The approval-request
+  email and the UI review page now show Bcc (which the generated MIME never
+  carries) and both the text and HTML body alternatives. The HTML alternative
+  is included as escaped source in the email and never rendered inside
+  Gatehouse's own approval mail; only the sandboxed UI view renders it.
+- **Approval/rejection processing is retry-safe.** A transient store failure
+  while recording a decision is returned, so the webhook provider re-delivers
+  and the MX edge answers a temporary SMTP failure; only terminal outcomes
+  (already decided, expired, forbidden, not found) are acknowledged and
+  consumed.
+- **MX ingest authenticates before staging.** The declared `content_digest` is
+  part of the signed canonical string, so the core verifies the HMAC from the
+  bounded metadata prelude before writing any body byte; the streamed body is
+  then checked against that digest. No wire change was needed.
+- **DMARC organizational domain uses the full Public Suffix List.**
+  `golang.org/x/net/publicsuffix` replaces the hand-maintained approximation, so
+  multi-label, wildcard and private suffixes (and therefore two tenants of a
+  hosted suffix such as `*.github.io`) are handled correctly.
+- **Sender allow-listing is described honestly.** It matches the spoofable
+  RFC5322.From address and the UI/API copy says so. An opt-in MX-only
+  `require_authenticated` inbox flag additionally requires a DMARC pass or an
+  aligned SPF/DKIM pass; it has no effect on webhook providers.
+- **MX supervisor shutdown is non-blocking and idempotent.** The child exit is a
+  closed broadcast channel plus a stored error, so the monitor and `Stop` can
+  both observe it; the forced-kill path waits with a bounded deadline.
+- **MX staging is cancellable.** A DATA timeout cancels the reader so the
+  staging goroutine cannot outlive the transaction and the RAM-budget release
+  remains accurate; the buffer is zeroed before release.
+- **MX protects per-source IPs** with a concurrency cap, and can require
+  STARTTLS (`MX_REQUIRE_TLS`).
+- **MX alias fan-out deduplicates by resolved inbox**, matching the webhook
+  path, while still returning one result per envelope recipient.
+- **Outbox cancellation vs in-flight delivery** is handled by tolerating a row
+  deleted mid-send: the provider may still have accepted the mail (which no
+  local action can recall), but the message is not resurrected and the outcome
+  is logged as ambiguous rather than retried.
+- **Resend sends an `Idempotency-Key`** so a retry after a lost success
+  response does not duplicate; SMTP/Mailgun/Brevo have no provider idempotency,
+  and that residual ambiguity is documented.
+- **Tooling hygiene:** a 16-byte approval token, fail-closed RNG for ids and
+  the embedded edge credential, a versioned PBKDF2 key derivation with legacy
+  fallback, special-use SSRF ranges, lazy startup chown, an authenticated
+  MX-only Hermes outbound role, per-mailbox UI role checks, a bounded
+  attachment-upload body, remote-image opt-in, and a slower maintenance ticker
+  than the delivery poll.
+
+**Reason:** The review identified the approval preview and decision durability,
+the unauthenticated MX staging write, the public-suffix approximation and the
+supervisor deadlock as release-gating, and the remainder as material hygiene or
+UX risks. Each fix preserves the existing security defaults (fail-closed
+approval, token hygiene, public-routable outbound) or makes them opt-in.
+
+**Deliberately unchanged:** Control-mail replies whose token is stale/invalid
+are still consumed rather than delivered, and a reply whose first line is not an
+explicit approval still rejects. These are intentional fail-closed/token-hygiene
+choices; changing them was judged riskier than the UX they would improve.
+
+**Dependencies:** `golang.org/x/net` (publicsuffix) and `golang.org/x/crypto`
+(pbkdf2) are promoted from indirect to direct. Both are BSD-3-Clause Go
+sub-repositories already present in the module graph; notices updated in
+`THIRD_PARTY_NOTICES.md`.
+
+**Complexity:** Qualitative; migrations 026 (inbox `require_authenticated`) and
+027 (Hermes `outbound_role`). No new runtime service.
+
 ## Future extension register
 
 

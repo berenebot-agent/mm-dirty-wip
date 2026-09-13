@@ -176,8 +176,8 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 	if token == "" {
 		t.Fatal("no approval token in queued email")
 	}
-	if len(token) != 16 {
-		t.Fatalf("token length = %d, want 16", len(token))
+	if len(token) != 22 {
+		t.Fatalf("token length = %d, want 22 (base64url of 16 random bytes)", len(token))
 	}
 	text := approvalEmailText(t, svc, u.AccountID, box.ID)
 	// It must tell the approver that feedback does not alter the draft.
@@ -761,5 +761,52 @@ func TestExternalApprovalReplySurvivesApproverChange(t *testing.T) {
 	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, draftID)
 	if err != nil || sr.Status != model.SendRequestApproved || sr.DecisionActor != approverAddress {
 		t.Fatalf("reply after approver change %+v err=%v", sr, err)
+	}
+}
+
+// TestApprovalEmailShowsBccAndHTMLAlternative proves the approval preview is the
+// exact sendable message: the hidden Bcc recipients and the HTML alternative
+// (shown as source, never rendered) are present, alongside the text body.
+func TestApprovalEmailShowsBccAndHTMLAlternative(t *testing.T) {
+	svc, u, _, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	ctx := context.Background()
+	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	_, err := svc.Store.CreateDraft(ctx, asst, model.Draft{
+		InboxID: box.ID,
+		To:      []string{"to@outside.test"},
+		CC:      []string{"cc@outside.test"},
+		BCC:     []string{"hidden@outside.test"},
+		Subject: "preview",
+		Text:    "plain body",
+		HTML:    "<p>html <b>body</b></p>",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CreateDraft returns the resolved draft; request the send.
+	drafts, err := svc.Store.ListDrafts(ctx, asst, box.ID)
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("drafts %d err=%v", len(drafts), err)
+	}
+	if _, err := svc.RequestSend(ctx, asst, drafts[0].ID, false); err != nil {
+		t.Fatal(err)
+	}
+	text, html := approvalEmailParts(t, svc, u.AccountID, box.ID)
+	if !strings.Contains(text, "Bcc: hidden@outside.test") {
+		t.Fatalf("approval text omits Bcc:\n%s", text)
+	}
+	if !strings.Contains(text, "plain body") || !strings.Contains(text, "HTML alternative (source)") || !strings.Contains(text, "<p>html <b>body</b></p>") {
+		t.Fatalf("approval text does not show both bodies:\n%s", text)
+	}
+	if !strings.Contains(html, "hidden@outside.test") {
+		t.Fatalf("approval html omits Bcc")
+	}
+	// The HTML alternative must be escaped, not rendered as live markup.
+	if strings.Contains(html, "<b>body</b>") || !strings.Contains(html, "&lt;p&gt;html") {
+		t.Fatalf("approval html rendered the draft HTML instead of escaping it")
 	}
 }

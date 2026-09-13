@@ -97,6 +97,8 @@ func migrations(dataDir string) []migration {
 			columnAdded("inbox_aliases", "display_name"),
 			columnAdded("drafts", "from_name"),
 		)},
+		{version: "026", sql: migration026, detect: stateOf(columnAdded("inboxes", "require_authenticated"))},
+		{version: "027", sql: migration027, detect: stateOf(columnAdded("hermes_connections", "outbound_role"))},
 	}
 }
 

@@ -9,21 +9,30 @@ import (
 
 func TestResolveEdgeCredentialPicksDeterministic(t *testing.T) {
 	keys := map[string]string{"edge-2": "b", "edge-1": "a", "edge-10": "c"}
-	id, secret := launcher.ResolveEdgeCredential(keys)
+	id, secret, err := launcher.ResolveEdgeCredential(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if id != "edge-1" || secret != "a" {
 		t.Fatalf("got %q/%q, want edge-1/a", id, secret)
 	}
 }
 
 func TestResolveEdgeCredentialGenerates(t *testing.T) {
-	id, secret := launcher.ResolveEdgeCredential(nil)
+	id, secret, err := launcher.ResolveEdgeCredential(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if id != "edge-1" {
 		t.Fatalf("generated key id %q", id)
 	}
 	if len(secret) != 64 {
 		t.Fatalf("generated secret length %d", len(secret))
 	}
-	_, secret2 := launcher.ResolveEdgeCredential(nil)
+	_, secret2, err := launcher.ResolveEdgeCredential(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if secret == secret2 {
 		t.Fatal("generated secrets should differ")
 	}

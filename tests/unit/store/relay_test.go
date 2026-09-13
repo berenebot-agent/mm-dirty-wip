@@ -82,3 +82,30 @@ func TestHermesEnrollSameAccountRotates(t *testing.T) {
 		t.Fatalf("secrets not rotated: %#v", second)
 	}
 }
+
+// TestHermesOutboundRoleSetAndValidate proves the role defaults to owner,
+// accepts assistant, and rejects anything else.
+func TestHermesOutboundRoleSetAndValidate(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	conn, err := s.CreateHermesConnection(ctx, store.EnrollRecord{AccountID: u.AccountID, InboxID: b[0].ID, Name: "gw"}, "gw-role", "sec", "del")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.OutboundRole != "owner" {
+		t.Fatalf("default role %q, want owner", conn.OutboundRole)
+	}
+	if err := s.SetHermesOutboundRole(ctx, u.AccountID, conn.ID, "ASSISTANT"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetHermesConnectionByGateway(ctx, "gw-role")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OutboundRole != "assistant" {
+		t.Fatalf("role after set %q", got.OutboundRole)
+	}
+	if err := s.SetHermesOutboundRole(ctx, u.AccountID, conn.ID, "admin"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("invalid role err=%v, want forbidden", err)
+	}
+}

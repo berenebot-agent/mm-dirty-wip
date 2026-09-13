@@ -45,8 +45,15 @@ type Inbox struct {
 	AllowedSenders []string `json:"allowed_senders,omitempty"`
 	// SenderRestricted enables the allow-list. When false, any sender is
 	// accepted and AllowedSenders is ignored; when true, only AllowedSenders
-	// (and the approver) are accepted.
+	// (and the approver) are accepted. The allow-list matches the RFC5322.From
+	// address, which is spoofable; it is a filter, not authenticated trust.
 	SenderRestricted bool `json:"sender_restricted,omitempty"`
+	// RequireAuthenticated, when set, additionally requires that MX-delivered
+	// mail be authenticated: the From domain must pass DMARC, or have an
+	// aligned SPF or DKIM pass, as evaluated by the authenticated MX edge. It
+	// has no effect on webhook providers, which carry no auth evidence, and is
+	// only meaningful alongside SenderRestricted.
+	RequireAuthenticated bool `json:"require_authenticated,omitempty"`
 	// ApproverEmail optionally nominates a person who may authorize draft
 	// sends by email. When set, the approver address is always accepted as an
 	// inbound sender for this inbox regardless of AllowedSenders.

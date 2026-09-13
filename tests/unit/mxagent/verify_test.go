@@ -36,11 +36,23 @@ func TestOrganizationalDomain(t *testing.T) {
 		"mail.example.com":  "example.com",
 		"a.b.co.uk":         "b.co.uk",
 		"sub.example.co.uk": "example.co.uk",
+		// Private/hosted suffixes from the full PSL must not collapse two
+		// tenants of the same platform into one organization.
+		"alice.github.io": "alice.github.io",
+		"bob.github.io":   "bob.github.io",
+		"a.herokuapp.com": "a.herokuapp.com",
+		// A bare public suffix (or a lone label) has no registrable domain and
+		// is returned unchanged.
+		"co.uk":     "co.uk",
+		"localhost": "localhost",
 	}
 	for in, want := range cases {
 		if got := mxagent.OrganizationalDomain(in); got != want {
 			t.Fatalf("OrganizationalDomain(%q)=%q want %q", in, got, want)
 		}
+	}
+	if mxagent.DomainsAlign("alice.github.io", "bob.github.io", false) {
+		t.Fatal("relaxed alignment must not treat two github.io tenants as one organization")
 	}
 }
 

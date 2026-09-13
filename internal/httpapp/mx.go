@@ -218,20 +218,14 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 	if bodyCap <= 0 {
 		bodyCap = mxwire.DefaultMaxBodyBytes
 	}
-	// Stream the metadata prelude, then the raw MIME to a temp file while
-	// hashing. Neither side buffers the whole message: the signature is over
-	// the metadata and body digests.
+	// Read the bounded metadata prelude first. The declared ContentDigest is
+	// part of the signed canonical string, so the HMAC can be verified before a
+	// single byte of the body is written to disk. This keeps unauthenticated
+	// callers from forcing staging writes: only a request carrying a valid
+	// signature and replay identity proceeds to the body.
 	metaBytes, err := mxwire.ReadPrelude(r.Body)
 	if err != nil {
 		writeError(w, 400, "invalid metadata prelude")
-		return
-	}
-	tmp, size, digest, ok := s.stageMXStream(w, r, bodyCap)
-	if !ok {
-		return
-	}
-	defer removeFile(tmp)
-	if !s.verifyMXSignature(w, r, metaBytes, mxwire.MetaDigest(metaBytes), digest) {
 		return
 	}
 	var meta mxwire.IngestMetadata
@@ -243,6 +237,16 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "no recipients")
 		return
 	}
+	// Verify against the digest the edge declared and signed; the body is then
+	// streamed and checked against it, so a mismatch is still caught after.
+	if !s.verifyMXSignature(w, r, metaBytes, mxwire.MetaDigest(metaBytes), meta.ContentDigest) {
+		return
+	}
+	tmp, size, digest, ok := s.stageMXStream(w, r, bodyCap)
+	if !ok {
+		return
+	}
+	defer removeFile(tmp)
 	if size != meta.Size {
 		writeError(w, 400, "size mismatch")
 		return

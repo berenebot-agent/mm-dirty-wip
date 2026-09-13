@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"html"
 	"net/mail"
 	"regexp"
@@ -278,6 +280,14 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	hash := hashApprovalToken(dir.token)
 	r, err := s.Store.FindPendingSendRequestByToken(ctx, inbox.AccountID, inbox.ID, hash)
 	if err != nil {
+		// Distinguish a genuinely unknown/decided token from a transient store
+		// fault. The former is terminal and acknowledged; the latter is
+		// returned so the delivery is retried rather than silently dropped.
+		if !errors.Is(err, store.ErrNotFound) {
+			s.Store.Audit(ctx, inbox.AccountID, provider+".control_lookup_failed", err.Error())
+			record("", action, "error", err.Error())
+			return fmt.Errorf("approval token lookup failed: %w", err)
+		}
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_unknown", "no live request for approval token")
 		record("", action, "invalid", "unknown or already decided token")
 		return transport.ErrInboundIgnored
@@ -313,20 +323,39 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	}
 	if action == "approve" {
 		if _, err := s.ApproveExternal(ctx, inbox.AccountID, inbox.ID, r.ID, parsed.From.Address, feedback); err != nil {
-			s.Store.Audit(ctx, inbox.AccountID, provider+".control_approve_failed", err.Error())
-			record(r.ID, action, "error", err.Error())
-			return transport.ErrInboundIgnored
+			return s.controlDecisionError(ctx, inbox.AccountID, provider, action, r.ID, "approve", err, record)
 		}
 		record(r.ID, action, "approved", "")
 		return transport.ErrInboundIgnored
 	}
 	if err := s.RejectExternal(ctx, inbox.AccountID, inbox.ID, r.ID, parsed.From.Address, feedback); err != nil {
-		s.Store.Audit(ctx, inbox.AccountID, provider+".control_reject_failed", err.Error())
-		record(r.ID, action, "error", err.Error())
-		return transport.ErrInboundIgnored
+		return s.controlDecisionError(ctx, inbox.AccountID, provider, action, r.ID, "reject", err, record)
 	}
 	record(r.ID, action, "rejected", "")
 	return transport.ErrInboundIgnored
+}
+
+// controlDecisionError classifies a failed approval/rejection. A terminal
+// outcome (the request was already decided, expired, withdrawn or no longer
+// exists) is recorded and acknowledged so the sender stops retrying. Any other
+// failure — a transient database or filesystem fault — is recorded but
+// returned, so the webhook provider re-delivers and the MX edge answers a
+// temporary SMTP failure, and the human's decision is not silently lost.
+func (s *Service) controlDecisionError(ctx context.Context, accountID, provider, action, requestID, verb string, err error, record func(requestID, action, outcome, reason string)) error {
+	s.Store.Audit(ctx, accountID, provider+".control_"+verb+"_failed", err.Error())
+	record(requestID, action, "error", err.Error())
+	if isTerminalControlError(err) {
+		return transport.ErrInboundIgnored
+	}
+	return fmt.Errorf("approval %s could not be processed: %w", verb, err)
+}
+
+// isTerminalControlError reports whether a decision error means the request can
+// never be decided successfully on a retry, as opposed to a transient fault.
+func isTerminalControlError(err error) bool {
+	return errors.Is(err, store.ErrConflict) ||
+		errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, store.ErrForbidden)
 }
 
 func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, requestID, action, outcome, reason, subject string) store.ControlMessageRecord {

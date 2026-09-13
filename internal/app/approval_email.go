@@ -85,11 +85,14 @@ func mailtoControl(inboxAddress, action, token, draftSubject string) string {
 }
 
 // buildApprovalEmail renders the plain-text and HTML bodies of an approval
-// request. Agent/owner-provided draft content is escaped before it is embedded
-// in the HTML alternative.
+// request. The approval must show the exact message that will be sent, so the
+// full recipient set (including Bcc, which the generated MIME never carries)
+// and both body alternatives are shown when present. Agent/owner-provided
+// content is escaped before it is embedded in the HTML alternative.
 func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment, inbox model.Inbox, token string) (string, string, error) {
 	to := strings.Join(d.To, ", ")
 	cc := strings.Join(d.CC, ", ")
+	bcc := strings.Join(d.BCC, ", ")
 	from := strings.TrimSpace(d.FromAddress)
 	if from == "" {
 		from = inbox.Address
@@ -97,10 +100,8 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	if name := strings.TrimSpace(d.FromName); name != "" {
 		from = name + " <" + from + ">"
 	}
-	body := strings.TrimSpace(d.Text)
-	if body == "" {
-		body = strings.TrimSpace(d.HTML)
-	}
+	textBody := strings.TrimSpace(d.Text)
+	htmlBody := strings.TrimSpace(d.HTML)
 	var attLines strings.Builder
 	for _, a := range atts {
 		fmt.Fprintf(&attLines, "- %s (%s)\n", a.Filename, humanBytes(a.Size))
@@ -123,8 +124,11 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	if cc != "" {
 		text.WriteString("Cc: " + cc + "\r\n")
 	}
+	if bcc != "" {
+		text.WriteString("Bcc: " + bcc + "\r\n")
+	}
 	text.WriteString("Subject: " + d.Subject + "\r\n\r\n")
-	text.WriteString(body + "\r\n")
+	writeApprovalBodies(&text, textBody, htmlBody)
 	if attLines.Len() > 0 {
 		text.WriteString("\r\nAttachments:\r\n" + attLines.String())
 	}
@@ -146,8 +150,11 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	if cc != "" {
 		h.WriteString("<strong>Cc:</strong> " + html.EscapeString(cc) + "<br>")
 	}
+	if bcc != "" {
+		h.WriteString("<strong>Bcc:</strong> " + html.EscapeString(bcc) + "<br>")
+	}
 	h.WriteString("<strong>Subject:</strong> " + html.EscapeString(d.Subject) + "</p>")
-	h.WriteString("<pre style=\"white-space:pre-wrap;font-family:inherit\">" + html.EscapeString(body) + "</pre>")
+	writeApprovalBodiesHTML(&h, textBody, htmlBody)
 	if len(atts) > 0 {
 		h.WriteString("<p><strong>Attachments:</strong></p><ul>")
 		for _, a := range atts {
@@ -156,6 +163,46 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 		h.WriteString("</ul>")
 	}
 	return text.String(), h.String(), nil
+}
+
+// writeApprovalBodies writes the draft's body alternatives to the plain-text
+// approval message. Both alternatives are shown when present because the
+// recipient receives both; a text-only draft is shown once. The HTML is shown
+// as source, never interpreted.
+func writeApprovalBodies(w *strings.Builder, textBody, htmlBody string) {
+	switch {
+	case textBody == "" && htmlBody == "":
+		w.WriteString("(empty message body)\r\n")
+	case textBody == "":
+		w.WriteString(htmlBody + "\r\n")
+	case htmlBody == "":
+		w.WriteString(textBody + "\r\n")
+	default:
+		w.WriteString(textBody + "\r\n\r\n")
+		w.WriteString("--- HTML alternative (source) ---\r\n")
+		w.WriteString(htmlBody + "\r\n")
+	}
+}
+
+// writeApprovalBodiesHTML renders both body alternatives escaped into the HTML
+// approval body. The HTML alternative is included as escaped source in a <pre>
+// block and deliberately not rendered, so agent-authored markup cannot present
+// a different, deceptive document inside Gatehouse's own approval email.
+func writeApprovalBodiesHTML(w *strings.Builder, textBody, htmlBody string) {
+	pre := func(s string) string {
+		return "<pre style=\"white-space:pre-wrap;font-family:inherit;border:1px solid #ddd;padding:8px\">" + html.EscapeString(s) + "</pre>"
+	}
+	switch {
+	case textBody == "" && htmlBody == "":
+		w.WriteString("<p class=\"muted\">(empty message body)</p>")
+	case textBody == "":
+		w.WriteString("<p><strong>HTML body (source):</strong></p>" + pre(htmlBody))
+	case htmlBody == "":
+		w.WriteString(pre(textBody))
+	default:
+		w.WriteString("<p><strong>Text body:</strong></p>" + pre(textBody))
+		w.WriteString("<p><strong>HTML alternative (source):</strong></p>" + pre(htmlBody))
+	}
 }
 
 // buildApprovalMessage renders the full MIME message, attaching the draft's

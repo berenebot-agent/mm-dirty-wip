@@ -37,6 +37,7 @@ type Server struct {
 
 	sem      chan struct{}
 	staging  *byteBudget
+	iplim    *ipLimiter
 	active   int64
 	accepted int64
 	spam     int64
@@ -57,7 +58,47 @@ func NewServer(cfg Config, log *slog.Logger) *Server {
 		cfg: cfg, core: NewCoreClient(cfg), verify: NewVerifier(cfg), log: log,
 		sem:     make(chan struct{}, cfg.MaxConnections),
 		staging: newByteBudget(stagingBytes),
+		iplim:   newIPLimiter(defaultMaxPerIP),
 	}
+}
+
+// defaultMaxPerIP bounds concurrent connections from one source IP. The global
+// cap (MX_MAX_CONNECTIONS, default 256) bounds the total; the per-IP cap keeps
+// one abusive sender from consuming all of it.
+const defaultMaxPerIP = 16
+
+// ipLimiter bounds concurrent sessions per source IP.
+type ipLimiter struct {
+	mu    sync.Mutex
+	limit int
+	n     map[string]int
+}
+
+func newIPLimiter(limit int) *ipLimiter {
+	if limit <= 0 {
+		limit = defaultMaxPerIP
+	}
+	return &ipLimiter{limit: limit, n: map[string]int{}}
+}
+
+func (l *ipLimiter) acquire(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.n[ip] >= l.limit {
+		return false
+	}
+	l.n[ip]++
+	return true
+}
+
+func (l *ipLimiter) release(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.n[ip] <= 1 {
+		delete(l.n, ip)
+		return
+	}
+	l.n[ip]--
 }
 
 // byteBudget is a weighted semaphore bounding the total bytes staged in memory
@@ -115,9 +156,22 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	}
 	atomic.AddInt64(&b.s.active, 1)
 	ip := PeerIP(c.Conn().RemoteAddr())
+	_, isTLS := c.TLSConnectionState()
+	ipKey := ipString(ip)
+	if !b.s.iplim.acquire(ipKey) {
+		select {
+		case <-b.s.sem:
+		default:
+		}
+		atomic.AddInt64(&b.s.active, -1)
+		b.s.log.Warn("mx connection rejected: too many from source", "peer", ipKey)
+		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections from your address"}
+	}
 	return &session{
 		srv:    b.s,
 		peerIP: ip,
+		ipKey:  ipKey,
+		tls:    isTLS,
 		helo:   strings.TrimSuffix(c.Hostname(), "."),
 	}, nil
 }
@@ -139,6 +193,8 @@ func PeerIP(addr net.Addr) net.IP {
 type session struct {
 	srv     *Server
 	peerIP  net.IP
+	ipKey   string
+	tls     bool
 	helo    string
 	from    string
 	hasFrom bool
@@ -147,6 +203,10 @@ type session struct {
 	// though go-smtp may call Logout more than once (on STARTTLS re-greet and on
 	// connection close).
 	releaseOnce sync.Once
+	// dataCancel cancels an in-flight DATA read when the DATA deadline fires, so
+	// a timed-out slow reader cannot keep filling the staging buffer (and
+	// holding the RAM-budget reservation) after the transaction has failed.
+	dataCancel context.CancelFunc
 }
 
 type acceptedRcpt struct {
@@ -155,6 +215,10 @@ type acceptedRcpt struct {
 }
 
 func (s *session) Reset() {
+	if s.dataCancel != nil {
+		s.dataCancel()
+		s.dataCancel = nil
+	}
 	s.from = ""
 	s.hasFrom = false
 	s.rcpts = nil
@@ -166,13 +230,15 @@ func (s *session) Logout() error {
 	return nil
 }
 
-// release returns the concurrency slot acquired in NewSession.
+// release returns the global and per-source concurrency slots acquired in
+// NewSession.
 func (s *session) release() {
 	s.releaseOnce.Do(func() {
 		select {
 		case <-s.srv.sem:
 		default:
 		}
+		s.srv.iplim.release(s.ipKey)
 		atomic.AddInt64(&s.srv.active, -1)
 	})
 }
@@ -180,6 +246,9 @@ func (s *session) release() {
 func (s *session) Mail(from string, opts *smtp.MailOptions) error {
 	// No relay: accept any MAIL FROM including the null path, but never
 	// advertise or permit AUTH/submission.
+	if s.srv.cfg.RequireTLS && !s.tls {
+		return &smtp.SMTPError{Code: 530, EnhancedCode: smtp.EnhancedCode{5, 7, 0}, Message: "Must issue a STARTTLS command first"}
+	}
 	s.from = from
 	s.hasFrom = true
 	_ = opts
@@ -243,16 +312,27 @@ func (s *session) Data(r io.Reader) error {
 		atomic.AddInt64(&s.srv.authTemp, 1)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Server busy, try again later"}
 	}
-	defer s.srv.staging.release(s.srv.cfg.MaxMessageBytes)
-
-	raw, size, digest, err := StageMessage(r, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
+	// The reservation is released by the staging copy goroutine when it exits,
+	// not when Data returns: a timed-out read may outlive the transaction, and
+	// releasing early would misstate the aggregate in-memory staging.
+	raw, size, digest, err := StageMessageCtx(r, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout, func() {
+		s.srv.staging.release(s.srv.cfg.MaxMessageBytes)
+	}, &s.dataCancel)
 	if err != nil {
 		if errors.Is(err, ErrTooLarge) {
 			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: fmt.Sprintf("Message too large: maximum size is %d bytes", s.srv.cfg.MaxMessageBytes)}
 		}
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
-	defer func() { raw = nil }()
+	// Zero the staging buffer (and drop the reference) once the transaction
+	// completes, so the message bytes do not linger in this long-lived SMTP
+	// process until GC.
+	defer func() {
+		for i := range raw {
+			raw[i] = 0
+		}
+		raw = nil
+	}()
 
 	fromDomain := FromHeaderDomain(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
@@ -328,15 +408,39 @@ var ErrTooLarge = errors.New("message too large")
 // scratch, never a durable accepted-mail queue. The caller bounds the aggregate
 // across concurrent transactions (MX_STAGING_BYTES).
 func StageMessage(r io.Reader, maxBytes int64, timeout time.Duration) ([]byte, int64, string, error) {
+	return StageMessageCtx(r, maxBytes, timeout, nil, nil)
+}
+
+// StageMessageCtx is StageMessage with a cancellable read. When timeout fires,
+// the reader handed to the copy is cancelled, so the stranded goroutine stops
+// promptly instead of continuing to fill the freed staging buffer. cancelOut
+// may be nil; when non-nil it receives the cancel function for the read, which
+// the caller must invoke (or hand lifecycle to a session Reset) once done.
+// onDone, when non-nil, runs once when the copy goroutine exits, so a caller
+// can release a resource (the RAM budget) the goroutine still holds.
+func StageMessageCtx(r io.Reader, maxBytes int64, timeout time.Duration, onDone func(), cancelOut *context.CancelFunc) ([]byte, int64, string, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	if onDone == nil {
+		onDone = func() {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if cancelOut != nil {
+		*cancelOut = cancel
+	}
+	// Cancellation of the read also releases go-smtp's DATA flow, so the
+	// goroutine cannot outlast the transaction.
+	r, readerCancel := readerWithCancel(ctx, r)
+	defer readerCancel()
 	type result struct {
 		b   []byte
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
+		defer onDone()
 		var buf bytes.Buffer
 		h := sha256.New()
 		// Read one byte past the cap so an oversize message is detected rather
@@ -368,9 +472,43 @@ func StageMessage(r io.Reader, maxBytes int64, timeout time.Duration) ([]byte, i
 		sum := sha256.Sum256(res.b)
 		return res.b, int64(len(res.b)), hex.EncodeToString(sum[:]), nil
 	case <-time.After(timeout):
-		// The reader goroutine will finish once go-smtp drains the data reader.
+		// Cancel the read first so the goroutine releases the budget-protected
+		// memory promptly, then wait a bounded moment for it to exit before
+		// the caller's deferred release makes the budget available again.
+		cancel()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case res := <-ch:
+			if res.err != nil {
+				return nil, 0, "", res.err
+			}
+			sum := sha256.Sum256(res.b)
+			return res.b, int64(len(res.b)), hex.EncodeToString(sum[:]), nil
+		case <-timer.C:
+		}
 		return nil, 0, "", fmt.Errorf("data read timeout")
 	}
+}
+
+// cancelReader is an io.Reader that fails fast once ctx is cancelled.
+type cancelReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *cancelReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+// readerWithCancel wraps r so reads fail once ctx is cancelled. The returned
+// cancel mirrors the ctx cancel for callers that want one handle.
+func readerWithCancel(ctx context.Context, r io.Reader) (io.Reader, context.CancelFunc) {
+	cancelCtx, cancel := context.WithCancel(ctx)
+	return &cancelReader{ctx: cancelCtx, r: r}, cancel
 }
 
 func ipString(ip net.IP) string {

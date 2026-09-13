@@ -226,3 +226,38 @@ func TestConcurrentDeleteSubtractsOnce(t *testing.T) {
 		t.Fatalf("storage delta %d, want %d", before.StorageUsedBytes-after.StorageUsedBytes, m.SizeBytes)
 	}
 }
+
+// TestReleaseMessageClaim proves a claim held for a message can be released so
+// another worker can pick it up immediately, and that the guard prevents
+// clearing someone else's claim.
+func TestReleaseMessageClaim(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<rel@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	m, _, err := s.CommitOutbound(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	// A different owner must not clear the claim.
+	if err := s.ReleaseMessageClaim(ctx, m.ID, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if owner, _ := s.MessageClaimOwner(ctx, u.AccountID, m.ID); owner != "w1" {
+		t.Fatalf("claim owner changed to %q", owner)
+	}
+	// The owning worker releases it, and it becomes claimable again.
+	if err := s.ReleaseMessageClaim(ctx, m.ID, "w1"); err != nil {
+		t.Fatal(err)
+	}
+	if owner, _ := s.MessageClaimOwner(ctx, u.AccountID, m.ID); owner != "" {
+		t.Fatalf("claim not released: %q", owner)
+	}
+	id, err := s.ClaimNextPending(ctx, time.Now().UTC(), "w2", time.Minute)
+	if err != nil || id != m.ID {
+		t.Fatalf("re-claim id=%q err=%v", id, err)
+	}
+}

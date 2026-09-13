@@ -18,7 +18,6 @@ import (
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/cryptox"
 	"gatehouse-mail/internal/events"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
@@ -90,12 +89,12 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	secEnc, err := cryptox.Encrypt(s.Service.EncryptionKey, []byte(secret))
+	secEnc, err := s.Service.EncryptSecret([]byte(secret))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	delEnc, err := cryptox.Encrypt(s.Service.EncryptionKey, []byte(delivery))
+	delEnc, err := s.Service.EncryptSecret([]byte(delivery))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
@@ -184,7 +183,7 @@ func (s *Server) ServeWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown gateway", http.StatusUnauthorized)
 		return
 	}
-	secret, err := cryptox.Decrypt(s.Service.EncryptionKey, h.SecretEncrypted)
+	secret, err := s.Service.DecryptSecret(h.SecretEncrypted)
 	if err != nil {
 		http.Error(w, "relay credential error", http.StatusUnauthorized)
 		return
@@ -451,6 +450,26 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 		target, err := s.Store.LatestInboundMessageInThread(ctx, h.AccountID, h.InboxID, thread)
 		if err != nil {
 			_ = wr.JSON(outboundResult(requestID, false, "email thread not found", ""))
+			return
+		}
+		// A connection may be held to the Assistant boundary: instead of
+		// sending with Owner authority, it creates a draft and requests
+		// approval, so a human authorizes the send exactly as with an Assistant
+		// API key. Existing connections default to owner.
+		if strings.EqualFold(h.OutboundRole, "assistant") {
+			p := model.Principal{AccountID: h.AccountID, MailboxRoles: map[string]string{h.InboxID: "assistant"}}
+			draft, derr := s.Store.CreateDraft(ctx, p, model.Draft{InboxID: h.InboxID, ReplyToMessageID: target.ID, To: []string{target.From.Address}, Subject: app.ReplySubject(target.Subject), Text: content})
+			if derr != nil {
+				_ = wr.JSON(outboundResult(requestID, false, derr.Error(), ""))
+				return
+			}
+			if _, derr = s.Service.RequestSend(ctx, p, draft.ID, false); derr != nil {
+				s.Log.Warn("relay assistant draft request failed", "gateway_id", h.GatewayID, "request_id", requestID, "error", derr)
+				_ = wr.JSON(outboundResult(requestID, false, derr.Error(), ""))
+				return
+			}
+			s.Log.Info("relay outbound requested approval", "gateway_id", h.GatewayID, "request_id", requestID, "draft_id", draft.ID)
+			_ = wr.JSON(outboundResult(requestID, true, "", draft.ID))
 			return
 		}
 		p := model.Principal{AccountID: h.AccountID, MailboxRoles: map[string]string{h.InboxID: "owner"}}

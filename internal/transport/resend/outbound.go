@@ -116,6 +116,12 @@ func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResul
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	// Resend honours an Idempotency-Key header: retrying the same logical send
+	// after a lost success response returns the original result instead of
+	// delivering a duplicate.
+	if m.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", m.IdempotencyKey)
+	}
 	if err := netutil.ValidateBaseURL(base); err != nil {
 		return SendResult{}, err
 	}

@@ -257,6 +257,10 @@
       if (inbox && btn.dataset.inbox) {
         inbox.value = btn.dataset.inbox;
       }
+      var roleSel = form.querySelector('.key-fields[data-type=hermes] select[name=role]');
+      if (roleSel) {
+        roleSel.value = btn.dataset.role || 'owner';
+      }
     }
     sync();
     syncAdmin();
@@ -452,6 +456,7 @@ var initSenderEditor = (function () {
     var note = opts.note;
     var approverEmail = opts.approverEmail;
     var restrict = opts.restrict;
+    var requireAuth = opts.requireAuth;
     var section = opts.section;
 
     function approverValue() {
@@ -478,7 +483,7 @@ var initSenderEditor = (function () {
       } else if (count === 0) {
         note.textContent = 'Only the approver can email this inbox.';
       } else {
-        note.textContent = 'Only these addresses can email this inbox.';
+        note.textContent = 'Only these From addresses are accepted. The From header can be spoofed, so this is a filter, not proof of identity.';
       }
     }
 
@@ -585,6 +590,12 @@ var initSenderEditor = (function () {
       refreshRestrictVisibility();
     }
 
+    function setRequireAuth(value) {
+      if (requireAuth) {
+        requireAuth.checked = !!value;
+      }
+    }
+
     function clearInput() {
       if (input) {
         input.value = '';
@@ -605,6 +616,7 @@ var initSenderEditor = (function () {
       setApprover('');
       clearInput();
       setRestricted(false);
+      setRequireAuth(false);
       refreshSenderNote();
       refreshSenderEmpty();
     }
@@ -638,6 +650,7 @@ var initSenderEditor = (function () {
       setSenders: setSenders,
       setApprover: setApprover,
       setRestricted: setRestricted,
+      setRequireAuth: setRequireAuth,
       clearInput: clearInput,
       reset: reset
     };
@@ -833,6 +846,7 @@ function currentAliasValues(list) {
     note: document.getElementById('inbox-add-sender-note'),
     approverEmail: document.getElementById('inbox-add-approver-email'),
     restrict: document.getElementById('inbox-add-sender-restricted'),
+    requireAuth: document.getElementById('inbox-add-require-auth'),
     section: document.getElementById('inbox-add-sender-section'),
     addBtn: document.getElementById('inbox-add-sender-add')
   });
@@ -951,6 +965,7 @@ function currentAliasValues(list) {
     note: document.getElementById('inbox-sender-note'),
     approverEmail: document.getElementById('inbox-edit-approver-email'),
     restrict: document.getElementById('inbox-sender-restricted'),
+    requireAuth: document.getElementById('inbox-require-auth'),
     section: document.getElementById('inbox-sender-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
@@ -979,6 +994,7 @@ function currentAliasValues(list) {
       address.value = btn.dataset.address || '';
       editor.setApprover(btn.dataset.approverEmail || '');
       editor.setRestricted(btn.dataset.restricted === '1');
+      editor.setRequireAuth(btn.dataset.requireAuth === '1');
       editor.setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
       editor.clearInput();
       editPrimary = btn.dataset.address || '';
@@ -1086,6 +1102,30 @@ function currentAliasValues(list) {
       window.history.replaceState(null, '', url.pathname + url.search + url.hash);
     }
   }
+})();
+
+(function () {
+  var frame = document.querySelector('[data-mailframe]');
+  var show = document.querySelector('[data-remote-img-show]');
+  var banner = document.querySelector('#remote-img-banner');
+  if (!frame || !show) {
+    return;
+  }
+  // The banner is rendered server-side only when the message has remote images.
+  // Clicking it reloads the frame with ?remote=1, relaxing the CSP to fetch them.
+  show.addEventListener('click', function () {
+    try {
+      var url = new URL(frame.getAttribute('src'), window.location.origin);
+      url.searchParams.set('remote', '1');
+      frame.dataset.remoteOptIn = '1';
+      frame.src = url.toString();
+      if (banner) {
+        banner.hidden = true;
+      }
+    } catch (e) {
+      // ignore
+    }
+  });
 })();
 
 (function () {
