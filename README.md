@@ -72,21 +72,24 @@ Resend also works as a sending provider (see below).
 ## Direct SMTP (MX) inbound — optional
 
 Instead of a webhook provider you can receive mail straight on port 25 with the
-optional `gatehouse-mx` edge, built into the same image. It speaks SMTP at the
-edge and calls the core over signed HMAC endpoints, keeping routing, policy,
-quota and storage in the core. The edge holds no `/data` access and no
-`APP_ENCRYPTION_KEY`, and stages messages in memory only.
+optional MX edge. One setting, `MX_ENABLE`, selects the mode:
 
-### Minimum setup (embedded, one container)
+- **`false`** (default) — no MX; receive via a webhook provider only.
+- **`true`** — receive on port 25 with the edge embedded in the app container as
+  a separate, unprivileged uid. This is the default `docker-compose.yml`; the
+  edge credential is generated automatically.
+- **`remote`** — receive on port 25 with the edge in its own container/image
+  (`gatehouse-mx`, via `docker-compose.mx-sidecar.yml`) or on another host. Needs
+  a shared `MX_EDGE_SECRET`.
 
-The default `docker-compose.yml` runs the app and the edge in the same
-container: the app spawns the edge under a separate unprivileged uid, then drops
-its own privileges. No secret to set — the edge credential is generated
-automatically.
+The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages
+messages in memory only.
+
+### true (one container, default)
 
 ```bash
-# .env — the only MX addition to a normal app install
-MX_RECEIVE_ENABLED=true
+# .env
+MX_ENABLE=true
 #MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 
@@ -94,20 +97,21 @@ MX_RECEIVE_ENABLED=true
 docker compose up -d --build
 ```
 
-Then, in the Admin UI, open the domain and set **Receiving → Gatehouse MX
-(direct SMTP)**. Point the domain's MX record at `MX_HOSTNAME` and publish SPF.
-The domain is only an MX receiver once you set this in the UI; a domain left on
-a webhook provider is unaffected.
+Then, in the Admin UI, open the domain and set **Receiving → MX**. Point the
+domain's MX record at `MX_HOSTNAME` and publish SPF. The domain is only an MX
+receiver once you set this in the UI; a domain left on a webhook provider is
+unaffected.
 
-Embedded mode requires the container to start as root (it must spawn the edge
-under a different uid before dropping). A strict compose `user:` or
+`true` (embedded) requires the container to start as root (it must spawn the
+edge under a different uid before dropping). A strict compose `user:` or
 `cap_drop: [ALL]` disables that; startup then refuses with a clear error — use
-the sidecar instead. This is DAC + separate-uid isolation, not namespaces.
+`MX_ENABLE=remote` instead.
+This is DAC + separate-uid isolation, not namespaces.
 
-### Sidecar (two containers, strongest isolation)
+### remote (separate edge container/image, strongest isolation)
 
-The edge gets its own filesystem and network namespace. Recommended when you can
-run two containers:
+The edge runs from its own minimal image (`Dockerfile.mx`) in its own filesystem
+and network namespace. Recommended when you can run two containers:
 
 ```bash
 # .env
@@ -115,7 +119,9 @@ MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
 docker compose -f docker-compose.mx-sidecar.yml up -d
 ```
 
-The sidecar edge does not boot as root and needs no writable filesystem.
+The sidecar file sets `MX_ENABLE=remote` on the core and runs the `gatehouse-mx`
+image for the edge. The edge does not boot as root and needs no writable
+filesystem.
 
 That is the whole required setup. Everything below is optional tuning.
 
@@ -131,7 +137,7 @@ Core service (`gatehouse-mail`):
 | `MX_UID` / `MX_GID` | `65533` | Uid/gid the embedded edge runs as (must differ from the app's). |
 | `MX_SIGNATURE_SKEW_SECONDS` | `600` | How old a signed edge request may be (replay window bound). |
 | `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
-| `MX_EDGE_KEYS` | auto-generated | Override the edge credential (`key_id:secret`, comma-separated for rotation). |
+| `MX_EDGE_KEYS` | auto-generated (embedded) | Override the edge credential (`key_id:secret`, comma-separated for rotation). Required for `remote`. |
 | `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
 
 Edge service (`gatehouse-mx`):
@@ -174,7 +180,7 @@ The server always listens on two ports:
 - `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
 - `:8082` is a dedicated listener that serves **only** the inbound webhook and MX
   routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`,
-  and, when `MX_RECEIVE_ENABLED=true`, `/internal/mx/resolve` and
+  and, when `MX_ENABLE=true|remote`, `/internal/mx/resolve` and
   `/internal/mx/ingest`) plus `/healthz`.
 
 To keep the API and UI off the public internet, expose only `:8082` to your

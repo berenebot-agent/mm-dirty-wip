@@ -4,11 +4,6 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    environment:
-      # Run the direct-SMTP (MX) edge inside this container. Turn receiving on
-      # with MX_RECEIVE_ENABLED=true in .env; set MX_EMBEDDED=false here for a
-      # sidecar/remote core that runs the edge separately.
-      MX_EMBEDDED: ${MX_EMBEDDED:-true}
     volumes:
       - ./data:/data
     ports:

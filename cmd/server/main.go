@@ -46,10 +46,9 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Embedded MX: when asked, spawn the edge as a separate process under a
-	// different uid before dropping privileges, then supervise it. This is the
-	// single-container mode. Sidecar/remote deployments leave MX_EMBEDDED off
-	// and run cmd/mx themselves.
+	// Embedded MX: in embedded mode, spawn the edge as a separate process under a
+	// different uid before dropping privileges, then supervise it. Remote mode
+	// leaves MXEmbedded false and the edge runs separately.
 	var edge *launcher.Edge
 	if cfg.MXReceiveEnabled && cfg.MXEmbedded {
 		edge, err = startEmbeddedEdge(cfg, runUID, runGID, log)
@@ -167,8 +166,11 @@ func edgeExit(edge *launcher.Edge) <-chan error {
 // the operator supplied none, exports MX_EDGE_KEYS so config.Load accepts it.
 // The derived credential is also stashed in an env var the spawner reads, so
 // both the core and the child agree without the operator setting anything.
+// Only embedded mode (MX_ENABLE=true) embeds an edge.
 func installEmbeddedCredential(log *slog.Logger) {
-	if !envBool("MX_RECEIVE_ENABLED", false) || !envBool("MX_EMBEDDED", false) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MX_ENABLE"))) {
+	case "true", "local", "on", "1", "yes":
+	default:
 		return
 	}
 	keyID, secret := launcher.ResolveEdgeCredential(parseEnvEdgeKeys(os.Getenv("MX_EDGE_KEYS")))
@@ -185,8 +187,8 @@ func installEmbeddedCredential(log *slog.Logger) {
 // runtime uid, with the two concrete remedies.
 func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
 	if os.Getuid() != 0 {
-		return nil, fmt.Errorf("MX_EMBEDDED=true requires the container to start as root so the edge can run under a separate uid; " +
-			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or set MX_RECEIVE_ENABLED=false and use the sidecar (docker-compose.mx-sidecar.yml) for hard isolation")
+		return nil, fmt.Errorf("MX_ENABLE=true requires the container to start as root so the edge can run under a separate uid; " +
+			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or set MX_ENABLE=remote and run the gatehouse-mx container (docker-compose.mx-sidecar.yml) for hard isolation")
 	}
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
@@ -221,16 +223,6 @@ func parseEnvEdgeKeys(raw string) map[string]string {
 		}
 	}
 	return out
-}
-
-func envBool(name string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-	return fallback
 }
 
 func edgeHostname() string {

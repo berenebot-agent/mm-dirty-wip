@@ -11,12 +11,10 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mail ./cmd/server
-# The optional MX edge is built into the same image. It runs one of two ways:
-#   - embedded (default compose): the app spawns this binary as a child under a
-#     separate uid when MX_RECEIVE_ENABLED=true, then drops privileges;
-#   - sidecar/remote (docker-compose.mx-sidecar.yml): the operator runs it with
-#     an explicit `entrypoint` override, because the image's default ENTRYPOINT
-#     is the app and a bare `command:` would be passed to the app as an argument.
+# The optional MX edge is built into the same image so the embedded mode
+# (MX_ENABLE=local) can spawn it. The sidecar/remote deployments use the
+# separate, minimal gatehouse-mx image instead (Dockerfile.mx), and select it
+# with MX_ENABLE=remote.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mx ./cmd/mx

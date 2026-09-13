@@ -4,12 +4,14 @@ Architectural decisions that are not obvious from the code alone. Newest first.
 
 ## Embedded MX: single-container mode with a separate-uid child
 
-`MX_RECEIVE_ENABLED=true` with `MX_EMBEDDED=true` makes `cmd/server` spawn
-`gatehouse-mx` as a child process in the same container, under a different
-uid/gid (`MX_UID`/`MX_GID`, default 65533) with a scrubbed environment, then
-drop its own privileges to the app runtime user (default 65532). The edge has
-no `/data` access, no `APP_ENCRYPTION_KEY`, no `DATA_DIR` and no `MX_EDGE_KEYS`,
-and stages messages in memory. This is the default compose mode.
+`MX_ENABLE=true` makes `cmd/server` spawn `gatehouse-mx` as a child process in
+the same container, under a different uid/gid (`MX_UID`/`MX_GID`, default 65533)
+with a scrubbed environment, then drop its own privileges to the app runtime
+user (default 65532). The edge has no `/data` access, no `APP_ENCRYPTION_KEY`,
+no `DATA_DIR` and no `MX_EDGE_KEYS`, and stages messages in memory. This is the
+default compose mode. The single switch `MX_ENABLE` has three values: `false`
+(no MX), `true` (embedded, above), and `remote` (edge runs as its own
+container/image, `gatehouse-mx`, or on another host, sharing `MX_EDGE_KEYS`).
 
 - **Why:** operators want `docker compose up -d` to receive mail directly with
   no second service, while still keeping the edge out of the app's data and
@@ -23,12 +25,12 @@ and stages messages in memory. This is the default compose mode.
   write pipe and closing it (EOF) tells the edge to stop (`MX_SHUTDOWN_FD`).
 - **Refuses rather than degrading:** if the container cannot start as root to
   spawn the child (strict `user:` or `cap_drop: [ALL]`), startup fails with the
-  two remedies (remove the hardening, or disable embedded MX and use the
-  sidecar). Silent same-uid degradation would defeat the isolation.
-- **Isolation is weaker than the sidecar:** DAC + separate uid, no mount or
-  network namespaces. `docker-compose.mx-sidecar.yml` remains the recommended
-  mode when two containers are acceptable; the embedded mode trades namespace
-  isolation for a one-container deployment.
+  two remedies (remove the hardening, or use `MX_ENABLE=remote` with the
+  separate edge image). Silent same-uid degradation would defeat the isolation.
+- **Isolation is weaker than `remote`:** DAC + separate uid, no mount or
+  network namespaces. `docker-compose.mx-sidecar.yml` (the `gatehouse-mx` image)
+  remains the recommended mode when two containers are acceptable; the embedded
+  mode trades namespace isolation for a one-container deployment.
 - **In-memory staging, capped:** the edge holds the original bytes in RAM for
   one transaction and releases them after the core ingest, bounded by
   `MX_STAGING_BYTES` (default 256 MiB) across concurrent transactions. A
@@ -41,8 +43,24 @@ and stages messages in memory. This is the default compose mode.
 - **Credential:** the operator normally sets no secret; the embedded mode
   generates one and shares it with its own core in-process. Supplying
   `MX_EDGE_KEYS` overrides it (the lexicographically smallest key id is used,
-  deterministically). The sidecar/remote modes still require `MX_EDGE_KEYS`,
-  since the core cannot generate a secret the operator's edge would know.
+  deterministically). `MX_ENABLE=remote` requires `MX_EDGE_KEYS`, since the core
+  cannot generate a secret the operator's separate edge would know.
+
+## Separate edge image for remote/sidecar MX (Dockerfile.mx)
+
+The sidecar/remote edge runs from its own image, `gatehouse-mx` (`Dockerfile.mx`),
+not the app image with an entrypoint override. The app image still builds the
+edge binary for `MX_ENABLE=true`; the separate image is edge-only.
+
+- **Why:** "which container is this?" should be obvious. A standalone MX host or
+  sidecar previously ran the full app image (including `gatehouse-mail` and
+  `libsqlite3`) with a different entrypoint. The edge links no SQLite and opens
+  no files, so the edge image builds `CGO_ENABLED=0` static, ships only
+  ca-certificates/tzdata, and runs as a non-root user with no `/data` volume.
+- **Debuggable base:** `debian:bookworm-slim` (not distroless) so the container
+  has a shell and tools when diagnosing DNS/TLS issues.
+- **Credential unchanged:** `remote` still requires `MX_EDGE_KEYS` shared with
+  the edge (`MX_EDGE_SECRET` in the sidecar compose).
 
 ## Minimal default Compose, opt-in hardening (docker-compose.advanced.yml)
 
@@ -59,11 +77,11 @@ two-container sidecar deployment.
   `internal/mxagent` defaults made the shipped compose look far more complex
   than the actual minimum. The default now shows the real minimum; operators who
   want the hardening opt in with one `-f`.
-- **MX minimum is one variable:** `MX_RECEIVE_ENABLED=true`. The embedded edge
-  credential is generated automatically, so no secret is required.
+- **MX minimum is one variable:** `MX_ENABLE=true`. The edge credential is
+  generated automatically, so no secret is required.
 - **Embedded privilege model:** the app chowns `/data`, spawns the edge under
   `MX_UID`/`MX_GID`, then self-drops. `cap_drop: [ALL]`/`user:` disable this;
-  embedded MX refuses to start and points at the sidecar.
+  embedded (`true`) MX refuses to start and points at `MX_ENABLE=remote`.
 
 
 ## Workflow mail has its own outbound queue (migration 022)
