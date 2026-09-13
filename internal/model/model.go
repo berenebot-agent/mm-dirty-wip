@@ -56,6 +56,10 @@ type Inbox struct {
 	// chosen as the From address when sending. They are address-to-inbox
 	// mappings, not mailboxes.
 	Aliases []string `json:"aliases,omitempty"`
+	// AliasNames maps an alias address to its optional sender display name. An
+	// address absent from the map (or with an empty name) falls back to the
+	// inbox DisplayName when sending.
+	AliasNames map[string]string `json:"alias_names,omitempty"`
 	// DefaultSender is the full address compose/reply preselects as From. It is
 	// the primary Address or one of Aliases; empty means the primary.
 	DefaultSender string    `json:"default_sender,omitempty"`
@@ -365,8 +369,10 @@ type Draft struct {
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 	// FromAddress is the chosen sender (the inbox primary or one of its
 	// aliases). Empty means the inbox primary. It is frozen into the approval
-	// fingerprint and used by the approved send.
+	// fingerprint and used by the approved send. FromName is the display name
+	// resolved for that sender at draft time.
 	FromAddress string   `json:"from_address,omitempty"`
+	FromName    string   `json:"from_name,omitempty"`
 	To          []string `json:"to"`
 	CC          []string `json:"cc,omitempty"`
 	BCC         []string `json:"bcc,omitempty"`

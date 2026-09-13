@@ -96,6 +96,13 @@ alias).
 From — the primary `address` or one of `aliases`; `""` clears it to the primary.
 An invalid value is rejected. The response includes `default_sender` when set.
 
+`alias_names` (optional) maps an alias address to its sender display name, e.g.
+`{"sales@example.com":"Acme Sales"}`. When present without `aliases`, the
+existing alias set is kept and only the names are applied; with `aliases`, the
+names for the supplied addresses are set. An empty name clears it (the sender
+falls back to the inbox `display_name`). The response includes `alias_names`
+for aliases that have a name.
+
 ## 4. Messages
 
 ```http
@@ -313,9 +320,11 @@ Idempotency-Key: <caller-generated-key>
 
 `sender` (optional) selects the From identity: the inbox's primary address or
 one of its aliases. When it is an alias on another domain, the sending provider
-is resolved from that alias domain's configuration. An address that is neither
-the primary nor an alias is rejected with `403`. Omit `sender` to send from the
-inbox primary (or its `default_sender`, when set for UI compose).
+is resolved from that alias domain's configuration. The From display name is the
+alias's `alias_names` entry, falling back to the inbox `display_name`. An
+address that is neither the primary nor an alias is rejected with `403`. Omit
+`sender` to send from the inbox primary (or its `default_sender`, when set for
+UI compose).
 
 ### Reply
 

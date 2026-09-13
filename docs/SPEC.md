@@ -106,9 +106,10 @@ Support optional catch-all routing while preserving the original envelope recipi
 Give an inbox aliases: alternate addresses that deliver to it and can be chosen
 as the From address when sending. An alias may be on any domain the account
 owns, so an inbox can send and receive at several addresses across domains; a
-send-as-alias uses the alias domain's own sending configuration. An inbox has an
-optional default sender that preselects the From address; when unset, sends use
-the inbox's primary address.
+send-as-alias uses the alias domain's own sending configuration. An alias may
+carry its own sender display name, falling back to the inbox name. An inbox has
+an optional default sender that preselects the From address; when unset, sends
+use the inbox's primary address.
 
 ### Messages and raw MIME
 

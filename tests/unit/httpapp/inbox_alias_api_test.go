@@ -74,3 +74,51 @@ func TestInboxAliasREST(t *testing.T) {
 		t.Fatalf("unknown domain %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestInboxAliasNamesREST exercises alias sender display names: setting them
+// alongside an alias, reading them back, and clearing one with an empty string.
+func TestInboxAliasNamesREST(t *testing.T) {
+	svc, h, u, dom, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PATCH", "/v1/inboxes/"+box.ID, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	addr := "sales@" + dom.Name
+	rr := do(`{"aliases":["` + addr + `"],"alias_names":{"` + addr + `":"Acme Sales"}}`)
+	if rr.Code != 200 {
+		t.Fatalf("set alias name %d %s", rr.Code, rr.Body.String())
+	}
+	var got model.Inbox
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AliasNames[addr] != "Acme Sales" {
+		t.Fatalf("alias names %#v", got.AliasNames)
+	}
+
+	// A names-only update keeps the alias set and clears the name.
+	rr = do(`{"alias_names":{"` + addr + `":""}}`)
+	if rr.Code != 200 {
+		t.Fatalf("clear alias name %d %s", rr.Code, rr.Body.String())
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Aliases) != 1 || got.Aliases[0] != addr || got.AliasNames[addr] != "" {
+		t.Fatalf("after clear aliases=%#v names=%#v", got.Aliases, got.AliasNames)
+	}
+
+	// A comma in a name is rejected.
+	if rr = do(`{"alias_names":{"` + addr + `":"a,b"}}`); rr.Code != 400 {
+		t.Fatalf("comma name %d %s", rr.Code, rr.Body.String())
+	}
+}

@@ -94,6 +94,9 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	if from == "" {
 		from = inbox.Address
 	}
+	if name := strings.TrimSpace(d.FromName); name != "" {
+		from = name + " <" + from + ">"
+	}
 	body := strings.TrimSpace(d.Text)
 	if body == "" {
 		body = strings.TrimSpace(d.HTML)

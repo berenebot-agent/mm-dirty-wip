@@ -622,6 +622,35 @@ worker goroutine with the process still running, stalling all mail.
 `internal/app/worker.go` and `failMessagePanic`/`failWorkflowPanic` helpers; no
 schema change, no new dependency, no new runtime service.
 
+## D033 — Alias sender display names (migration 025)
+
+**Decision:** Each inbox alias may carry an optional sender display name.
+Sending from an alias uses `Name <alias@domain>` when a name is set, and falls
+back to the inbox's `display_name` when it is not; the primary address always
+uses the inbox display name. A draft records the resolved name
+(`drafts.from_name`), it is part of the draft's frozen approval fingerprint, and
+the approval-request body shows the intended `Name <address>`. Names are
+operator-controlled: alias management is already Owner/Admin-only (the inbox
+`PATCH` requires Owner or Admin, the UI is Admin), so an agent cannot set a
+display name. Names may not contain commas, newlines or control characters and
+are length-capped at 128. The API adds a `alias_names` object map (address →
+name) alongside the existing `aliases` array, so older clients that send only
+`aliases` are unaffected.
+
+**Reason:** The display name is a property of the sending identity, not the
+mailbox: every major provider (Gmail "send mail as", Fastmail identities)
+supports a per-address name. Without it, a role alias like `sales@` sends as the
+inbox's personal name, which reads wrong and is a common cause of misfiled mail.
+Routing and SPF/DKIM/DMARC key off the address/domain, so the name is purely
+cosmetic — but it is still a phishing surface, which is why it stays
+operator-only and is frozen into the approval so an approver reviews the exact
+name that will be shown.
+
+**Complexity:** Qualitative. Adds migration 025
+(`inbox_aliases.display_name`, `drafts.from_name`), name plumbing through alias
+set/draft storage and the send path, the `alias_names` API field, and a name
+input on the alias editor. No new dependency or runtime service.
+
 ## Future extension register
 
 
