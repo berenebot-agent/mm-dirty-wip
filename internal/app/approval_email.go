@@ -90,6 +90,10 @@ func mailtoControl(inboxAddress, action, token, draftSubject string) string {
 func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment, inbox model.Inbox, token string) (string, string, error) {
 	to := strings.Join(d.To, ", ")
 	cc := strings.Join(d.CC, ", ")
+	from := strings.TrimSpace(d.FromAddress)
+	if from == "" {
+		from = inbox.Address
+	}
 	body := strings.TrimSpace(d.Text)
 	if body == "" {
 		body = strings.TrimSpace(d.HTML)
@@ -111,6 +115,7 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	text.WriteString("Prefer to leave feedback? Add it after the first line, or between the markers below keeping them intact. If you are approving, your feedback is recorded for the agent but does not change the email being sent:\r\n\r\n")
 	text.WriteString(controlBody() + "\r\n")
 	text.WriteString("--- Draft to send ---\r\n")
+	text.WriteString("From: " + from + "\r\n")
 	text.WriteString("To: " + to + "\r\n")
 	if cc != "" {
 		text.WriteString("Cc: " + cc + "\r\n")
@@ -133,7 +138,8 @@ func (s *Service) buildApprovalEmail(d model.Draft, atts []model.DraftAttachment
 	h.WriteString("<p>Reference: " + html.EscapeString(controlRequestMarker(token)) + "</p>")
 	h.WriteString("<p>You may add feedback after the first line, or between the markers in the message body, keeping the markers intact. If you are approving, your feedback is recorded for the agent but does not change the email being sent.</p>")
 	h.WriteString("<hr><h3>Draft to send</h3>")
-	h.WriteString("<p><strong>To:</strong> " + html.EscapeString(to) + "<br>")
+	h.WriteString("<p><strong>From:</strong> " + html.EscapeString(from) + "<br>")
+	h.WriteString("<strong>To:</strong> " + html.EscapeString(to) + "<br>")
 	if cc != "" {
 		h.WriteString("<strong>Cc:</strong> " + html.EscapeString(cc) + "<br>")
 	}

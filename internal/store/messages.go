@@ -49,14 +49,19 @@ type OutboundRecord struct {
 	Provider, ProviderMessageID, RFCMessageID, InReplyTo string
 	References                                           []string
 	From                                                 model.Address
-	To, CC, BCC                                          []string
-	Subject, Text, HTML, RawPath                         string
-	SizeBytes                                            int64
-	SentAt                                               time.Time
-	ThreadID                                             string
-	IdemKey                                              string
-	LastError                                            string
-	DraftID                                              string
+	// SendingDomainID is the domain whose sending configuration was used to
+	// enqueue this message. It is the alias's own domain for a send-as-alias,
+	// and may differ from the inbox's domain. Empty falls back to the inbox
+	// domain at delivery time.
+	SendingDomainID              string
+	To, CC, BCC                  []string
+	Subject, Text, HTML, RawPath string
+	SizeBytes                    int64
+	SentAt                       time.Time
+	ThreadID                     string
+	IdemKey                      string
+	LastError                    string
+	DraftID                      string
 	// ClientLabel/ClientID snapshot the credential that enqueued the message.
 	ClientLabel, ClientID string
 	Attachments           []AttachmentInput

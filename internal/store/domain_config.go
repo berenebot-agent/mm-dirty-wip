@@ -76,12 +76,14 @@ func (s *Store) DeleteDomainReceivingConfig(ctx context.Context, accountID, doma
 	return s.deleteDomainConfig(ctx, domainReceivingTable, accountID, domainID)
 }
 
-// DomainSendingConfigForMessage resolves the sending configuration for the
-// domain of an existing message. A missing message or foreign account is
-// ErrNotFound; a message whose domain has no config is ErrNoProvider.
+// DomainSendingConfigForMessage resolves the sending configuration for an
+// existing message. It uses the message's recorded sending domain (the alias's
+// own domain for a send-as-alias), falling back to the inbox's domain for
+// messages enqueued before that column existed. A missing message or foreign
+// account is ErrNotFound; a message whose domain has no config is ErrNoProvider.
 func (s *Store) DomainSendingConfigForMessage(ctx context.Context, accountID, messageID string) (DomainSendingConfig, error) {
 	var domainID string
-	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)
 	if err == sql.ErrNoRows {
 		return DomainSendingConfig{}, ErrNotFound
 	}

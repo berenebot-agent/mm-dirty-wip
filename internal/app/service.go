@@ -864,7 +864,12 @@ type SendAttachment struct {
 }
 
 type SendInput struct {
-	InboxID            string           `json:"inbox_id"`
+	InboxID string `json:"inbox_id"`
+	// FromAddress selects the sender: the inbox primary (empty or matching) or
+	// one of its aliases. The provider is resolved from the chosen address's
+	// domain, which may differ from the inbox's. It is never accepted from API
+	// JSON; handlers map their own field onto it.
+	FromAddress        string           `json:"-"`
 	To                 []string         `json:"to,omitempty"`
 	CC                 []string         `json:"cc,omitempty"`
 	BCC                []string         `json:"bcc,omitempty"`
@@ -969,6 +974,13 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	if err != nil {
 		return SendResult{}, err
 	}
+	// Resolve the sender before anything is built. The chosen address may be an
+	// alias on another domain of the account, in which case that domain's
+	// sending configuration and DKIM identity are used.
+	fromAddress, sendingDomainID, err := s.Store.ResolveInboxSender(ctx, accountID, inbox.ID, in.FromAddress)
+	if err != nil {
+		return SendResult{}, err
+	}
 	var threadID, inReply string
 	refs := []string{}
 	to, err := cleanAddresses(in.To)
@@ -1050,8 +1062,8 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		return SendResult{}, fmt.Errorf("message body is required")
 	}
 	// A missing provider is not fatal: the message is queued and the outbox
-	// worker holds it until a provider is configured for the domain.
-	sending, cfgErr := s.Store.GetDomainSendingConfig(ctx, accountID, inbox.DomainID)
+	// worker holds it until a provider is configured for the sending domain.
+	sending, cfgErr := s.Store.GetDomainSendingConfig(ctx, accountID, sendingDomainID)
 	queuedReason := ""
 	if cfgErr != nil {
 		if !errors.Is(cfgErr, store.ErrNoProvider) {
@@ -1059,7 +1071,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		}
 		queuedReason = "no outbound provider configured for this domain"
 	}
-	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(inbox.Address, "@", 2)[1])
+	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(fromAddress, "@", 2)[1])
 	now := time.Now().UTC()
 	html := in.HTML
 	attachments, err := outboundAttachments(in.Attachments)
@@ -1069,7 +1081,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	if size := attachmentsSize(attachments); size > s.Config.MaxMessageBytes {
 		return SendResult{}, fmt.Errorf("attachments exceed maximum message size")
 	}
-	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: inbox.Address}, to, cc, bcc, subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
+	raw, err := mailparse.BuildMessage(mailparse.Address{Name: inbox.DisplayName, Address: fromAddress}, to, cc, bcc, subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -1100,7 +1112,7 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: inbox.Address}, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, ClientLabel: in.ClientLabel, ClientID: in.ClientID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
+	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: model.Address{Name: inbox.DisplayName, Address: fromAddress}, SendingDomainID: sendingDomainID, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, ClientLabel: in.ClientLabel, ClientID: in.ClientID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -1129,6 +1141,10 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	}
 	if in.InboxID != d.InboxID {
 		return SendResult{}, store.ErrForbidden
+	}
+	// The draft remembers its chosen sender; an explicit input overrides it.
+	if in.FromAddress == "" {
+		in.FromAddress = d.FromAddress
 	}
 	// A direct owner send of a pending draft authorizes the outstanding request
 	// as it enqueues; the approval and the message land in one transaction.

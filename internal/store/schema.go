@@ -802,3 +802,21 @@ ALTER TABLE draft_send_requests ADD COLUMN notification_status TEXT NOT NULL DEF
 ALTER TABLE outbound_delivery_log ADD COLUMN workflow_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_outbound_log_workflow ON outbound_delivery_log(workflow_id);
 `
+
+// migration024 adds send-as-alias (outbound identity). An inbox may send from
+// any address in its alias set, not just its primary address:
+//   - inboxes.default_sender is the address compose/reply preselects. Empty
+//     means the inbox primary. It is validated in Go against the primary and
+//     the inbox's aliases, and cleared when the alias set no longer contains it.
+//   - drafts.from_address remembers the chosen sender so an approved send uses
+//     it, and it is folded into the approval content fingerprint.
+//   - messages.sending_domain_id records the domain whose sending configuration
+//     was used at enqueue. For an alias sender this is the alias's own domain
+//     (which may differ from the inbox's), so delivery, per-domain log
+//     attribution and requeue-on-save resolve the correct provider. NULL falls
+//     back to the inbox domain, preserving every pre-024 message.
+const migration024 = `ALTER TABLE inboxes ADD COLUMN default_sender TEXT NOT NULL DEFAULT '';
+ALTER TABLE drafts ADD COLUMN from_address TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN sending_domain_id TEXT REFERENCES domains(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_sending_domain ON messages(sending_domain_id);
+`

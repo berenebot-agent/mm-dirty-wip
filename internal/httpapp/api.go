@@ -34,7 +34,8 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"## Inboxes\n" +
 		"- `GET /v1/inboxes` — list inboxes you can access\n" +
 		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
-		"- `POST /v1/inboxes` (Admin) — create an inbox\n\n" +
+		"- `POST /v1/inboxes` (Admin) — create an inbox\n" +
+		"- `PATCH /v1/inboxes/{id}` (Owner) — set display name, allowed senders, approver, aliases and `default_sender`\n\n" +
 		"## Messages\n" +
 		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages (Spam excluded; `spam=true` lists only Spam, `include_spam=true` includes it)\n" +
 		"- `GET /v1/messages/{id}` — message detail\n" +
@@ -73,7 +74,7 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`, `draft.approval_expired`.\n" +
 		"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
 		"## Send and reply (Owner)\n" +
-		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery.\n" +
+		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery. Add `\"sender\":\"sales@example.com\"` to send as one of the inbox's aliases (provider resolved from that alias's domain).\n" +
 		"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
 		"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
 		"- Use an `Idempotency-Key` header to make sends retry-safe.\n\n" +
@@ -112,7 +113,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			},
 			"/v1/inboxes/{id}": map[string]any{
 				"get":    map[string]any{"summary": "Get an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases)", "description": "aliases replaces the inbox's inbound alias set; each entry is a full local@domain address on any domain the account owns. Aliases route inbound mail to this inbox; replies still send from the inbox's primary address.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, default_sender)", "description": "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. Aliases route inbound mail to this inbox and may be chosen as the From address when sending. default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/identities": map[string]any{
@@ -131,7 +132,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			},
 			"/v1/messages/{id}/seen":        map[string]any{"post": map[string]any{"summary": "Mark a message seen (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/messages/{id}/attachments": map[string]any{"get": map[string]any{"summary": "List message attachments", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/messages/{id}/reply":       map[string]any{"post": map[string]any{"summary": "Reply to a message (Owner)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/messages/{id}/reply":       map[string]any{"post": map[string]any{"summary": "Reply to a message (Owner); optional sender chooses the From identity", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/attachments/{id}":          map[string]any{"get": map[string]any{"summary": "Download an attachment", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/threads":                   map[string]any{"get": map[string]any{"summary": "List threads", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/threads/{id}":              map[string]any{"get": map[string]any{"summary": "Get a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
@@ -141,7 +142,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			"/v1/events":                    map[string]any{"get": map[string]any{"summary": "Incremental event history", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/wait":               map[string]any{"get": map[string]any{"summary": "Long-poll for events", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/events/stream":             map[string]any{"get": map[string]any{"summary": "SSE event stream", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Enqueues into the outbox and returns immediately. Add ?wait=true to block until delivery. Accepts JSON attachments with filename, content_type, and base64-encoded content fields.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Enqueues into the outbox and returns immediately. Add ?wait=true to block until delivery. Accepts JSON attachments with filename, content_type, and base64-encoded content fields. Optional sender chooses a From identity (the inbox primary or one of its aliases); the sending provider is resolved from that address's domain.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/drafts": map[string]any{
 				"get":  map[string]any{"summary": "List drafts", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
@@ -264,6 +265,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			SenderRestricted *bool     `json:"sender_restricted"`
 			ApproverEmail    *string   `json:"approver_email"`
 			Aliases          *[]string `json:"aliases"`
+			DefaultSender    *string   `json:"default_sender"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -318,6 +320,13 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err := s.applyInboxAliases(r.Context(), p.AccountID, id, forms); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.DefaultSender != nil {
+			// Apply after aliases so a sender may reference a just-set alias.
+			if err := s.Service.Store.SetInboxDefaultSender(r.Context(), p.AccountID, id, *in.DefaultSender); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -711,8 +720,11 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		InboxID     string               `json:"inbox_id"`
+		InboxID string `json:"inbox_id"`
+		// From selects the inbox when inbox_id is omitted; Sender chooses the
+		// sending identity (primary or an alias) once the inbox is known.
 		From        string               `json:"from"`
+		Sender      string               `json:"sender"`
 		To          stringList           `json:"to"`
 		CC          stringList           `json:"cc,omitempty"`
 		BCC         stringList           `json:"bcc,omitempty"`
@@ -747,7 +759,7 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "inbox_id or from is required")
 		return
 	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: in.InboxID, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: in.InboxID, FromAddress: in.Sender, To: []string(in.To), CC: []string(in.CC), BCC: []string(in.BCC), Subject: in.Subject, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -772,6 +784,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		Sender      string               `json:"sender"`
 		Text        string               `json:"text"`
 		HTML        string               `json:"html,omitempty"`
 		Attachments []app.SendAttachment `json:"attachments,omitempty"`
@@ -779,7 +792,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), principal(r), app.SendInput{InboxID: m.InboxID, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), principal(r), app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -860,7 +873,7 @@ func (s *Server) apiDraftSend(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, store.ErrForbidden)
 		return
 	}
-	res, err := s.Service.SendDraft(r.Context(), p, id, app.SendInput{InboxID: d.InboxID, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}, idemKey(r))
+	res, err := s.Service.SendDraft(r.Context(), p, id, app.SendInput{InboxID: d.InboxID, FromAddress: d.FromAddress, ReplyToMessageID: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return

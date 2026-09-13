@@ -562,6 +562,42 @@ edge; policy snapshots and local rejection; durable edge queue and end-to-end
 HA; scoped credential-to-domain binding; reputation and content filtering; DMARC
 report generation; authenticated submission/relay.
 
+## D032 — Send-as-alias: outbound identity (migration 024)
+
+**Decision:** An inbox may send from any address in its alias set, not only its
+primary address. The sender is chosen per message (`sender` on `POST /v1/send`
+and on reply; a `From` select in the UI compose/reply form), with a per-inbox
+`default_sender` that preselects it. A draft stores its chosen sender
+(`drafts.from_address`) so an approved send uses it; the sender is folded into
+the draft's approval content fingerprint, and the approval-request notification
+continues to send from the inbox primary while stating the intended From in its
+body. The sending provider is resolved from the **chosen address's own domain**:
+for an alias this is the alias's domain, which may differ from the inbox's.
+`messages.sending_domain_id` records that domain at enqueue so delivery,
+per-domain log attribution and requeue-on-save resolve the correct config
+without re-parsing MIME (NULL falls back to the inbox domain for pre-024 rows).
+Assistants may set a draft's sender (they can draft), but executing a send —
+and therefore any non-primary send — remains Owner-only under the existing send
+authorization path. This revisits D030's "aliases are inbound only; reply-as-
+alias (send-as) is deferred".
+
+**Reason:** Aliases already exist as account-controlled addresses; letting them
+send completes the identity, so a consolidated inbox can correspond as `sales@`
+or `billing@` rather than only its primary. Resolving the provider by the From
+domain is what makes cross-domain aliases deliverable: the provider credentials
+and DKIM identity must match the domain on the envelope, not the inbox's. A
+recorded `sending_domain_id` keeps the durable log, quota and retry semantics
+correct when the sender differs from the inbox domain, and keeps
+`RequeuePendingForDomain` working when the alias domain's config is (re)saved.
+
+**Complexity:** Qualitative. Adds migration 024
+(`inboxes.default_sender`, `drafts.from_address`,
+`messages.sending_domain_id`), sender resolution in the store, sender plumbing
+through `SendInput`/draft approval, the `sender`/`default_sender` API fields, and
+the UI From select plus default-sender cascade. No new dependency, no new
+runtime service, no new transport adapter. Hermes Relay send-as remains
+deferred (the Relay send protocol has no sender field yet).
+
 ## Future extension register
 
 
