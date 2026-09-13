@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"gatehouse-mail/internal/mxagent"
+	"gatehouse-mail/internal/privdrop"
 )
 
 func main() {
@@ -21,6 +22,15 @@ func main() {
 		log.Error("invalid mx configuration", "error", err)
 		os.Exit(2)
 	}
+	// The image has no USER, so the edge boots as root only to fix up its
+	// staging directory for the runtime user and then shed privileges before
+	// serving. When the process is already non-root this is a no-op.
+	dropped, runUID, runGID, err := privdrop.DropToRuntimeUser(cfg.StagingDir)
+	if err != nil {
+		log.Error("privilege drop failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("runtime identity", "uid", runUID, "gid", runGID, "dropped", dropped)
 	if err := mxagent.EnsureStaging(cfg.StagingDir); err != nil {
 		log.Error("cannot prepare staging directory", "error", err)
 		os.Exit(1)

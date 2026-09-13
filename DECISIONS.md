@@ -27,6 +27,12 @@ block, `GATEHOUSE_RUN_UID`/`GID`, and the MX staging tmpfs with
   `mxagent.EnsureStaging` creates the default `/tmp/gatehouse-mx` staging
   directory on the image's writable root filesystem. The hardened file is the
   only place that needs the explicit staging tmpfs.
+- **The edge self-drops via `internal/privdrop`:** like the app, `cmd/mx` boots
+  as root only to chown its staging directory to the runtime user and then shed
+  privileges before serving. So the default compose needs no `user:`/`cap_drop:`
+  hardcoding to be safe, and the advanced edge no longer sets them either
+  (they conflict with the built-in drop). `GATEHOUSE_RUN_UID`/`GID` select the
+  runtime user for both the app and the edge.
 - `docker-compose.advanced.yml` is standalone (not an overlay): run
   `docker compose -f docker-compose.advanced.yml up -d`.
 
