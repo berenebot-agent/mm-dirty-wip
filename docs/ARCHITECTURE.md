@@ -5,10 +5,12 @@
 ```text
                          INTERNET EMAIL
                                │
-                            Mailgun
-                         SMTP / MX edge
-                               │
-                         HTTPS webhook
+                     ┌─────────┴─────────┐
+                  Mailgun/CF/Resend   optional gatehouse-mx
+                   SMTP / MX edge       direct SMTP :25 edge
+                     │                      │ signed HMAC
+                  HTTPS webhook              │
+                     └───────────┬────────────┘
                                ▼
                   ┌────────────────────────┐
                   │   Gatehouse Mail       │
@@ -28,6 +30,11 @@
                              │
                            /data
 ```
+
+The optional `gatehouse-mx` edge is built into the same image but runs as a
+separate, non-root process with no `/data` mount and no encryption key; it is
+the only exception to the one-process topology (decision `D031`). See
+[MX.md](MX.md).
 
 Production runtime:
 
@@ -313,6 +320,17 @@ Brevo HTTP API
 Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. Each domain owns at most one optional sending configuration (`domain_sending_configs`); there is no account-level connector pool, no reusable named credential, and no assignment selector, so a domain with no sending configuration queues mail instead of sending through another domain's provider. A queued send resolves the domain's current configuration at worker delivery time; if the domain has none, the message is held without consuming a retry attempt. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
 Generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts. The same public-routable check guards every HTTP provider client and is on by default in all modes; self-hosted operators who intentionally send through a private gateway can opt out with `ALLOW_PRIVATE_OUTBOUND=true`, which hosted mode ignores.
+
+### Optional MX receiving edge
+
+An operator may enable direct-SMTP ingress. The `gatehouse-mx` edge (same
+module and image, separate non-root process) terminates SMTP, strictly frames
+and stages the original bytes, computes SPF/DKIM/DMARC evidence, and calls two
+HMAC-authenticated core endpoints. It holds no policy snapshot, database access
+or encryption key. Auth failure becomes a durable Spam delivery rather than an
+SMTP rejection. Durable per-recipient receipts (7 days) make sender retries
+idempotent, including after the original message is deleted. See
+[MX.md](MX.md).
 
 ## 9. Authentication
 

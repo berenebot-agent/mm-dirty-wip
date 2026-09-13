@@ -111,7 +111,14 @@ after
 before
 unread
 has_attachment
+spam
+include_spam
 ```
+
+`spam=true` lists only Spam; `include_spam=true` includes Spam and non-Spam.
+By default (neither set) Spam is excluded from ordinary reads. `PATCH
+/v1/messages/{id}` also accepts `spam` to release (`false`) or quarantine
+(`true`) a message, which commits a durable `message.spam_state_changed` event.
 
 Normalized message:
 
@@ -131,9 +138,14 @@ Normalized message:
   "has_attachments": true,
   "read": false,
   "archived": false,
+  "is_spam": false,
   "labels": ["Invoices", "Unpaid"]
 }
 ```
+
+Messages received through the optional MX edge carry `spam_reason` (a bounded
+classification string) and `auth_results` (bounded normalized SPF/DKIM/DMARC
+evidence).
 
 Outbound messages additionally carry `client`: the name of the API key or
 Hermes credential that sent the message (`UI` for a web-UI send, omitted when
@@ -375,6 +387,21 @@ domain catch-all when configured; otherwise the endpoint returns `406`. Missing
 receiving configuration, unknown domains, and bad authentication return `401`.
 Resend event types other than `email.received` are acknowledged with `200` and
 ignored.
+
+Optional MX (direct SMTP) ingest uses two authenticated endpoints on the same
+inbound listener, called only by the `gatehouse-mx` edge with an operator
+HMAC edge key (not a provider webhook and not a tenant credential):
+
+```http
+POST /internal/mx/resolve
+POST /internal/mx/ingest
+```
+
+`resolve` maps a bounded recipient list to routing decisions (distinguishing an
+unknown recipient from a transient internal failure); `ingest` persists one
+recipient's original MIME and returns a durable disposition (`stored`, `spam`,
+or a typed error). Duplicate delivery fingerprints return the recorded
+disposition. See [MX.md](MX.md).
 
 Sending and receiving are configured per domain. A domain owns at most one
 optional sending configuration and at most one optional receiving

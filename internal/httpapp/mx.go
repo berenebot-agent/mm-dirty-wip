@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -92,7 +93,7 @@ func (s *Server) verifyMXRequest(w http.ResponseWriter, r *http.Request, maxBody
 	}
 	var env struct {
 		Metadata string `json:"metadata"`
-		Body     string `json:"body"`
+		BodyB64  string `json:"body_b64"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		writeError(w, 400, "invalid envelope")
@@ -113,7 +114,11 @@ func (s *Server) verifyMXRequest(w http.ResponseWriter, r *http.Request, maxBody
 		writeError(w, 400, "invalid metadata")
 		return nil, nil, false
 	}
-	bodyBytes := []byte(env.Body)
+	bodyBytes, err := base64.StdEncoding.DecodeString(env.BodyB64)
+	if err != nil {
+		writeError(w, 400, "invalid body encoding")
+		return nil, nil, false
+	}
 	key, ok := s.mxKey(meta.KeyID)
 	if !ok {
 		writeError(w, 401, "unauthorized")
@@ -195,9 +200,15 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 	if bodyCap <= 0 {
 		bodyCap = mxwire.DefaultMaxBodyBytes
 	}
-	// Envelope overhead + metadata sits above the body cap.
-	metaBytes, bodyBytes, ok := s.verifyMXRequest(w, r, bodyCap+mxwire.MaxMetadataBytes+64<<10)
+	// The body is base64 in the envelope, so allow 4/3 expansion plus metadata
+	// and JSON overhead before the decoded-size check rejects oversize.
+	readCap := bodyCap*4/3 + mxwire.MaxMetadataBytes + 64<<10
+	metaBytes, bodyBytes, ok := s.verifyMXRequest(w, r, readCap)
 	if !ok {
+		return
+	}
+	if int64(len(bodyBytes)) > bodyCap {
+		writeError(w, 413, "message too large")
 		return
 	}
 	var meta mxwire.IngestMetadata

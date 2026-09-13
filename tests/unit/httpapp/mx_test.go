@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func mxFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Doma
 	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, d.ID, "mx", map[string]any{"enforcement": "moderate"}, false); err != nil {
 		t.Fatal(err)
 	}
-	return svc, httpapp.New(svc, nil).Handler(), u, d, b
+	return svc, httpapp.New(svc, nil).InboundHandler(), u, d, b
 }
 
 func mxEnvelope(t *testing.T, path, meta string, body []byte, keyID string) *http.Request {
@@ -68,7 +69,7 @@ func mxEnvelope(t *testing.T, path, meta string, body []byte, keyID string) *htt
 		t.Fatal(err)
 	}
 	sig := mxwire.Sign([]byte("secret"), mxwire.ProtocolVersion, keyID, m.Timestamp, m.RequestID, "POST", path, []byte(meta), body)
-	payload, err := json.Marshal(map[string]string{"metadata": meta, "body": string(body)})
+	payload, err := json.Marshal(map[string]string{"metadata": meta, "body_b64": base64.StdEncoding.EncodeToString(body)})
 	if err != nil {
 		t.Fatal(err)
 	}

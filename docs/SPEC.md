@@ -279,7 +279,7 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, or Resend) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
+The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional Gatehouse MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
 Self-hosted setup uses a first-run Admin bootstrap. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -289,7 +289,14 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 ### Inbound
 
-V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as inbound transports.
+V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as
+inbound transports, plus the optional Gatehouse MX direct-SMTP edge (see
+[MX.md](MX.md)). Provider webhook mail never carries trusted authentication
+evidence; only the authenticated MX edge supplies SPF/DKIM/DMARC evidence, and
+its per-domain policy can classify a message as Spam. Spam is a computed view
+over `messages.is_spam`, counts toward quota, is excluded from ordinary reads
+and message waits, and is recoverable through an explicit Spam view with a
+release action and a durable `message.spam_state_changed` event.
 
 ```text
 Internet SMTP
