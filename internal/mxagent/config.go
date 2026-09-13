@@ -47,45 +47,39 @@ type Config struct {
 	DNSResolver string
 
 	// Bounds.
-	MaxMessageBytes    int64
-	MaxRecipients      int
-	MaxConnections     int
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	DataTimeout        time.Duration
-	DNSTimeout         time.Duration
-	StagingDir         string
-	VerificationBudget time.Duration
-	// TLSRequired rejects MAIL when STARTTLS was not negotiated, unless the
-	// connection arrived on a trusted private network. Off by default.
-	TLSRequired bool
+	MaxMessageBytes int64
+	MaxRecipients   int
+	MaxConnections  int
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	DataTimeout     time.Duration
+	DNSTimeout      time.Duration
+	StagingDir      string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		IngestURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("GATEHOUSE_INGEST_URL")), "/"),
-		KeyID:              strings.TrimSpace(os.Getenv("MX_EDGE_KEY_ID")),
-		Secret:             strings.TrimSpace(os.Getenv("MX_EDGE_SECRET")),
-		EdgeName:           env("MX_EDGE_NAME", "mx-1"),
-		Hostname:           env("MX_HOSTNAME", "localhost"),
-		ListenAddr:         env("MX_LISTEN_ADDR", ":2525"),
-		HealthAddr:         env("MX_HEALTH_ADDR", ""),
-		TLSCertFile:        strings.TrimSpace(os.Getenv("MX_TLS_CERT")),
-		TLSKeyFile:         strings.TrimSpace(os.Getenv("MX_TLS_KEY")),
-		VerifySPF:          envBool("MX_VERIFY_SPF", true),
-		VerifyDKIM:         envBool("MX_VERIFY_DKIM", true),
-		VerifyDMARC:        envBool("MX_VERIFY_DMARC", true),
-		DNSResolver:        strings.TrimSpace(os.Getenv("MX_DNS_RESOLVER")),
-		MaxMessageBytes:    envInt64("MX_MAX_MESSAGE_BYTES", 30<<20),
-		MaxRecipients:      envInt("MX_MAX_RECIPIENTS", 100),
-		MaxConnections:     envInt("MX_MAX_CONNECTIONS", 256),
-		ReadTimeout:        time.Duration(envInt("MX_READ_TIMEOUT_SECONDS", 60)) * time.Second,
-		WriteTimeout:       time.Duration(envInt("MX_WRITE_TIMEOUT_SECONDS", 60)) * time.Second,
-		DataTimeout:        time.Duration(envInt("MX_DATA_TIMEOUT_SECONDS", 300)) * time.Second,
-		DNSTimeout:         time.Duration(envInt("MX_DNS_TIMEOUT_SECONDS", 10)) * time.Second,
-		StagingDir:         env("MX_STAGING_DIR", "/tmp/gatehouse-mx"),
-		VerificationBudget: time.Duration(envInt("MX_VERIFY_BUDGET_SECONDS", 30)) * time.Second,
-		TLSRequired:        envBool("MX_TLS_REQUIRED", false),
+		IngestURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("GATEHOUSE_INGEST_URL")), "/"),
+		KeyID:           strings.TrimSpace(os.Getenv("MX_EDGE_KEY_ID")),
+		Secret:          strings.TrimSpace(os.Getenv("MX_EDGE_SECRET")),
+		EdgeName:        env("MX_EDGE_NAME", "mx-1"),
+		Hostname:        env("MX_HOSTNAME", "localhost"),
+		ListenAddr:      env("MX_LISTEN_ADDR", ":2525"),
+		HealthAddr:      env("MX_HEALTH_ADDR", ""),
+		TLSCertFile:     strings.TrimSpace(os.Getenv("MX_TLS_CERT")),
+		TLSKeyFile:      strings.TrimSpace(os.Getenv("MX_TLS_KEY")),
+		VerifySPF:       envBool("MX_VERIFY_SPF", true),
+		VerifyDKIM:      envBool("MX_VERIFY_DKIM", true),
+		VerifyDMARC:     envBool("MX_VERIFY_DMARC", true),
+		DNSResolver:     strings.TrimSpace(os.Getenv("MX_DNS_RESOLVER")),
+		MaxMessageBytes: envInt64("MX_MAX_MESSAGE_BYTES", 30<<20),
+		MaxRecipients:   envInt("MX_MAX_RECIPIENTS", 100),
+		MaxConnections:  envInt("MX_MAX_CONNECTIONS", 256),
+		ReadTimeout:     time.Duration(envInt("MX_READ_TIMEOUT_SECONDS", 60)) * time.Second,
+		WriteTimeout:    time.Duration(envInt("MX_WRITE_TIMEOUT_SECONDS", 60)) * time.Second,
+		DataTimeout:     time.Duration(envInt("MX_DATA_TIMEOUT_SECONDS", 300)) * time.Second,
+		DNSTimeout:      time.Duration(envInt("MX_DNS_TIMEOUT_SECONDS", 10)) * time.Second,
+		StagingDir:      env("MX_STAGING_DIR", "/tmp/gatehouse-mx"),
 	}
 	if cfg.IngestURL == "" {
 		return Config{}, fmt.Errorf("GATEHOUSE_INGEST_URL is required")

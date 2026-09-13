@@ -37,19 +37,25 @@ on the sending MTA to retry.
 
 ## 1. Configure the core
 
-Generate one or more edge credentials (operator-managed; never tenant values).
-Each is a key ID and a long random secret:
+Generate one edge secret (operator-managed; never a tenant value):
 
 ```bash
 openssl rand -hex 32
 ```
 
-In the app environment:
+The minimum is three values:
 
 ```env
 MX_RECEIVE_ENABLED=true
-MX_EDGE_KEYS=edge-1:<secret>
-# Optional: rotate by overlapping keys, then remove the old one.
+MX_EDGE_SECRET=<secret>          # shared with the edge service
+MX_HOSTNAME=mail.example.com
+```
+
+The shipped compose derives `MX_EDGE_KEYS=edge-1:<secret>` for the core and
+`MX_EDGE_KEY_ID=edge-1` for the edge from that one secret. To use custom key
+ids or overlap keys for zero-downtime rotation, set `MX_EDGE_KEYS` yourself:
+
+```env
 #MX_EDGE_KEYS=edge-1:<old>,edge-2:<new>
 ```
 
@@ -86,7 +92,7 @@ Give the edge its own environment (never the app `.env`):
 ```env
 GATEHOUSE_INGEST_URL=http://gatehouse-mail:8082
 MX_EDGE_KEY_ID=edge-1
-MX_EDGE_SECRET=<same secret as MX_EDGE_KEYS>
+MX_EDGE_SECRET=<same secret as the core>
 MX_EDGE_NAME=mx-1
 MX_HOSTNAME=mail.example.com
 MX_LISTEN_ADDR=:2525
