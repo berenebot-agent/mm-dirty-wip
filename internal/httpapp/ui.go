@@ -77,6 +77,7 @@ type pageData struct {
 	Unread         map[string]int
 	MailboxSizes   map[string]int64
 	UnreadCount    int
+	SpamCount      int
 	DraftCount     int
 	OutboxCount    int
 	HasMore        bool

@@ -82,6 +82,12 @@ func migrations(dataDir string) []migration {
 			columnAdded("draft_send_requests", "notification_status"),
 			columnAdded("outbound_delivery_log", "workflow_id"),
 		)},
+		{version: "023", sql: migration023, detect: allOf(
+			columnAdded("messages", "is_spam"),
+			columnAdded("messages", "auth_results_json"),
+			columnAdded("messages", "spam_reason"),
+			tableExists("mx_receipts"),
+		)},
 	}
 }
 

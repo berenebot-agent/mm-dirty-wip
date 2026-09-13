@@ -468,6 +468,11 @@ func firstString(v []string) string {
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Labels: r.URL.Query()["label"], Limit: intParam(r, "limit", 100)}
+	if b := boolQuery(r, "spam"); b != nil && *b {
+		f.SpamOnly = true
+	} else if b := boolQuery(r, "include_spam"); b != nil && *b {
+		f.IncludeSpam = true
+	}
 	compatAddress := strings.TrimSpace(r.URL.Query().Get("address"))
 	if compatAddress != "" {
 		b, err := inboxByAddress(r.Context(), s.Service.Store, p, compatAddress)
@@ -517,6 +522,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			Read     *bool
 			Archived *bool
 			Labels   *[]string
+			Spam     *bool
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -525,6 +531,17 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read, in.Archived); err != nil {
 				mapStoreError(w, err)
 				return
+			}
+		}
+		if in.Spam != nil {
+			_, ev, err := s.Service.Store.SetMessageSpam(r.Context(), p, id, *in.Spam)
+			if err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			if ev != nil {
+				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+				s.Service.Hub.Publish(*ev)
 			}
 		}
 		if in.Labels != nil {
@@ -1180,6 +1197,10 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 	fromContains := ""
 	subjectContains := ""
 	compat := false
+	includeSpam := false
+	if b := boolQuery(r, "include_spam"); b != nil {
+		includeSpam = *b
+	}
 	if r.Method == http.MethodPost {
 		var in struct {
 			After           string `json:"after"`
@@ -1189,6 +1210,7 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			FromContains    string `json:"fromContains"`
 			SubjectContains string `json:"subjectContains"`
 			TimeoutSec      int    `json:"timeoutSec"`
+			IncludeSpam     *bool  `json:"include_spam"`
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in)
 		if in.After != "" {
@@ -1211,6 +1233,9 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 		}
 		fromContains = strings.ToLower(in.FromContains)
 		subjectContains = strings.ToLower(in.SubjectContains)
+		if in.IncludeSpam != nil {
+			includeSpam = *in.IncludeSpam
+		}
 		if in.TimeoutSec > 0 {
 			timeoutSec = in.TimeoutSec
 			compat = true
@@ -1241,6 +1266,12 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			}
 			m, err := s.Service.Store.GetMessage(r.Context(), p, e.EntityID)
 			if err != nil {
+				continue
+			}
+			// Default message waits skip Spam (progressing the cursor) so an
+			// automated consumer is not fed quarantine. An explicit
+			// include_spam=true opts in.
+			if m.Spam && !includeSpam {
 				continue
 			}
 			if fromContains != "" && !strings.Contains(strings.ToLower(m.From.Address), fromContains) {

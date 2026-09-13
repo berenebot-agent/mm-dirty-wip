@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -29,6 +30,17 @@ type InboundRecord struct {
 	SizeBytes                                       int64
 	ReceivedAt                                      time.Time
 	Attachments                                     []AttachmentInput
+	// Spam is the local auth-policy disposition for MX mail. SpamReason is the
+	// bounded reason and AuthResults is the bounded normalized evidence. All
+	// three are empty/false for provider webhook mail.
+	Spam        bool
+	SpamReason  string
+	AuthResults string
+	// DeliveryFingerprint, when set, is the versioned MX retry identity. It is
+	// recorded as a durable receipt in the same transaction so a retry after
+	// the message is deleted still deduplicates. Empty for webhook providers,
+	// which rely on provider_delivery_id alone.
+	DeliveryFingerprint string
 }
 type OutboundRecord struct {
 	Inbox                                                model.Inbox
@@ -100,7 +112,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
@@ -121,9 +133,25 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
-	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.received", id, map[string]any{"message_id": id, "inbox_id": r.Inbox.ID, "thread_id": threadID})
+	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.received", id, receivedPayload(id, r.Inbox.ID, threadID, r.Spam, r.SpamReason, r.AuthResults))
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
+	}
+	if strings.TrimSpace(r.DeliveryFingerprint) != "" {
+		disp := string(DispositionStored)
+		if r.Spam {
+			disp = string(DispositionSpam)
+		}
+		reason := r.SpamReason
+		if reason == "" {
+			reason = "accepted"
+		}
+		if err = recordMXReceiptTx(ctx, tx, MXReceipt{
+			AccountID: r.Inbox.AccountID, Provider: r.Provider, EnvelopeRecipient: r.EnvelopeRecipient,
+			DeliveryFingerprint: r.DeliveryFingerprint, Disposition: disp, MessageID: id, Reason: reason,
+		}); err != nil {
+			return model.Message{}, model.Event{}, false, err
+		}
 	}
 	m, err := s.getMessageTx(ctx, tx, r.Inbox.AccountID, id)
 	if err != nil {
@@ -166,6 +194,29 @@ func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply s
 	return thread, err
 }
 
+func firstJSON(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "{}"
+	}
+	return v
+}
+
+// receivedPayload builds the message.received event payload, including the
+// Spam flag and auth evidence so durable consumers and Relay can opt out of
+// automated processing for Spam (Relay rebuilds its own payload from the
+// message, so the flag is also persisted on the row).
+func receivedPayload(messageID, inboxID, threadID string, spam bool, reason, authResults string) map[string]any {
+	p := map[string]any{"message_id": messageID, "inbox_id": inboxID, "thread_id": threadID}
+	if spam {
+		p["is_spam"] = true
+		p["spam_reason"] = reason
+	}
+	if strings.TrimSpace(authResults) != "" && authResults != "{}" {
+		p["auth_results"] = json.RawMessage(authResults)
+	}
+	return p
+}
+
 func insertEventTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, typ, entity string, payload map[string]any) (model.Event, error) {
 	now := nowText()
 	res, err := tx.ExecContext(ctx, `INSERT INTO events(account_id,inbox_id,type,entity_id,payload_json,created_at) VALUES(?,?,?,?,?,?)`, accountID, nullString(inboxID), typ, entity, jsonString(payload), now)
@@ -204,12 +255,17 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var refs, to, cc, bcc, env, labels, created string
 	var received, sent sql.NullString
 	var read, arch int
-	var has, internal int
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels)
+	var has, internal, spam int
+	var authResults string
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason)
 	if err != nil {
 		return m, err
 	}
 	m.Internal = internal != 0
+	m.Spam = spam != 0
+	if strings.TrimSpace(authResults) != "" && authResults != "{}" {
+		m.AuthResults = json.RawMessage(authResults)
+	}
 	m.References = decodeStrings(refs)
 	m.To = decodeStrings(to)
 	m.CC = decodeStrings(cc)
@@ -228,7 +284,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]')`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -275,13 +331,19 @@ type MessageFilter struct {
 	// Labels, when non-empty, restricts results to messages carrying every
 	// listed label (AND). Matching is case-insensitive.
 	Labels []string
-	Before string
-	Limit  int
+	// SpamOnly lists only Spam messages; IncludeSpam includes both. The default
+	// (both false) excludes Spam from ordinary reads. The explicit Spam view
+	// sets SpamOnly.
+	SpamOnly    bool
+	IncludeSpam bool
+	Before      string
+	Limit       int
 }
 
 func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
 	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0`
 	args := []any{p.AccountID}
+	q += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden
@@ -365,8 +427,19 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 	return out, rows.Err()
 }
 
+// CountSpam returns the number of Spam messages in an inbox, used by the
+// mailbox Spam tab count.
+func (s *Store) CountSpam(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	if !p.CanRead(inboxID) {
+		return 0, ErrForbidden
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND is_spam=1`, p.AccountID, inboxID).Scan(&n)
+	return n, err
+}
+
 func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
-	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0 AND direction='inbound'`
+	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0 AND direction='inbound' AND is_spam=0`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -570,6 +643,54 @@ func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string)
 	return m.RawPath, m.SizeBytes, ev, nil
 }
 
+// SetMessageSpam moves a message between Spam and non-Spam and commits the
+// durable state-change event with old/new state. It requires Assistant or Owner
+// on the message's inbox. A no-op transition still returns the current message
+// with no event.
+func (s *Store) SetMessageSpam(ctx context.Context, p model.Principal, id string, spam bool) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.Spam == spam {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	reason := ""
+	if spam {
+		reason = "manual"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_spam=?,spam_reason=? WHERE id=? AND account_id=?`, boolInt(spam), reason, id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageSpamChanged, id, map[string]any{
+		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+		"old": m.Spam, "new": spam, "is_spam": spam,
+	})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.Spam = spam
+	m.SpamReason = reason
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
 func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageID string) ([]model.Attachment, error) {
 	m, err := s.GetMessage(ctx, p, messageID)
 	if err != nil {
@@ -622,11 +743,15 @@ func (s *Store) GetAttachment(ctx context.Context, p model.Principal, id string)
 	return a, m, err
 }
 
+// ListThreads returns threads with their non-internal, non-Spam message count
+// and latest activity. Spam-only threads are suppressed (the LEFT JOIN count
+// excludes them and the thread is dropped when it has no visible message);
+// hidden Spam must not bump normal thread ordering or choose a visible subject.
 func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Thread, error) {
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 WHERE t.account_id=?`
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 WHERE t.account_id=?`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
@@ -641,7 +766,7 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 			args = append(args, id)
 		}
 	}
-	q += ` GROUP BY t.id ORDER BY t.updated_at DESC LIMIT ?`
+	q += ` GROUP BY t.id HAVING count(m.id) > 0 ORDER BY MAX(m.created_at) DESC LIMIT ?`
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
@@ -662,6 +787,25 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// spamClause returns the SQL fragment that applies the Spam visibility rule:
+// an explicit Spam view selects only Spam, an "include" read selects
+// everything, and the ordinary path excludes Spam. alias is the messages table
+// alias (or empty).
+func spamClause(alias string, spamOnly, includeSpam bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	switch {
+	case spamOnly:
+		return " AND " + prefix + "is_spam=1"
+	case includeSpam:
+		return ""
+	default:
+		return " AND " + prefix + "is_spam=0"
+	}
 }
 
 func ftsQuery(q string) string {
@@ -788,6 +932,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	}
 	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
 	args := []any{ftsQuery(q), p.AccountID}
+	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden

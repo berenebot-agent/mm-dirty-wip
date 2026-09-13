@@ -68,6 +68,7 @@ func (w *OutboxWorker) run() {
 	// Re-scan on startup so pending messages from a previous process resume.
 	w.expireApprovals()
 	w.sweepWorkflows()
+	w.sweepMXReceipts()
 	w.deliverDue()
 	w.deliverWorkflowDue()
 	for {
@@ -77,9 +78,26 @@ func (w *OutboxWorker) run() {
 		case <-ticker.C:
 			w.expireApprovals()
 			w.sweepWorkflows()
+			w.sweepMXReceipts()
 			w.deliverDue()
 			w.deliverWorkflowDue()
 		}
+	}
+}
+
+// sweepMXReceipts removes MX delivery receipts past their retention horizon.
+// Receipts are the retry dedup key; once expired a delivery is treated as new.
+func (w *OutboxWorker) sweepMXReceipts() {
+	if !w.svc.Config.MXReceiveEnabled {
+		return
+	}
+	n, err := w.svc.Store.SweepMXReceipts(context.Background(), time.Now().UTC())
+	if err != nil {
+		w.log.Error("mx receipt sweep", "error", err)
+		return
+	}
+	if n > 0 {
+		w.log.Info("swept expired mx receipts", "count", n)
 	}
 }
 

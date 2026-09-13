@@ -337,6 +337,16 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				after = ev.ID
 				continue
 			}
+			// A message that is currently Spam is not delivered as an actionable
+			// inbound event: the durable received event is flagged, but Relay
+			// revalidates current state so a replayed or stale event cannot push
+			// quarantine as fresh mail. Advance the cursor so a skipped Spam
+			// message never stalls the relay.
+			if m.Spam {
+				_ = s.Store.AckHermesEvent(ctx, h.ID, ev.ID)
+				after = ev.ID
+				continue
+			}
 			if err := wr.JSON(map[string]any{"type": "inbound", "event": messageEvent(m), "bufferId": ev.Cursor}); err != nil {
 				return err
 			}
@@ -397,7 +407,7 @@ func messageEvent(m model.Message) map[string]any {
 	return map[string]any{
 		"text": display, "message_type": "text", "user_id": m.From.Address, "user_name": name, "message_id": m.ID,
 		"source":     map[string]any{"platform": "email", "chat_id": m.ThreadID, "chat_type": "thread", "chat_name": m.Subject, "user_id": m.From.Address, "user_name": name, "thread_id": m.ThreadID, "chat_topic": nil, "message_id": m.ID},
-		"metadata":   map[string]any{"email_message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "from": m.From.Address, "subject": m.Subject},
+		"metadata":   map[string]any{"email_message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "from": m.From.Address, "subject": m.Subject, "is_spam": m.Spam, "spam_reason": m.SpamReason},
 		"provenance": map[string]any{"source": "email", "trust": "external_untrusted", "authenticated_sender": false},
 		"timestamp":  ts.UTC().Format(time.RFC3339Nano), "allow_gateway_control": false,
 	}

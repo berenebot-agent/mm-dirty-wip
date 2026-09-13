@@ -717,6 +717,37 @@ CREATE INDEX IF NOT EXISTS idx_inbox_aliases_inbox ON inbox_aliases(inbox_id);
 CREATE INDEX IF NOT EXISTS idx_inbox_aliases_account ON inbox_aliases(account_id);
 `
 
+// migration023 adds the optional MX edge's durable state:
+//   - is_spam/auth_results_json/spam_reason on messages. Spam is a computed
+//     view over messages.is_spam, not a separate table, so Spam still counts
+//     toward quota and retains MIME, attachments and recovery. auth_results_json
+//     holds the bounded normalized evidence supplied by the authenticated edge.
+//   - mx_receipts, the durable per-recipient delivery receipt that records the
+//     successful disposition for a delivery fingerprint. Receipts are scoped by
+//     account/provider/envelope recipient and survive message deletion for their
+//     retention horizon (7 days), so a retry after the message was deleted still
+//     deduplicates. message_id is a plain opaque reference, not a foreign key.
+const migration023 = `ALTER TABLE messages ADD COLUMN is_spam INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN auth_results_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE messages ADD COLUMN spam_reason TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_messages_spam ON messages(inbox_id, is_spam);
+
+CREATE TABLE IF NOT EXISTS mx_receipts (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'mx',
+  envelope_recipient TEXT NOT NULL COLLATE NOCASE,
+  delivery_fingerprint TEXT NOT NULL,
+  disposition TEXT NOT NULL DEFAULT '',
+  message_id TEXT NOT NULL DEFAULT '',
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  UNIQUE(account_id, provider, envelope_recipient, delivery_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_mx_receipts_expires ON mx_receipts(expires_at);
+`
+
 // migration022 moves workflow mail (the approval-request email carrying a
 // one-time token) out of the messages table into its own outbound queue. It:
 //   - adds outbound_workflow, a durable queue for non-mailbox system mail with
