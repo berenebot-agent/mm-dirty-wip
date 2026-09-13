@@ -78,6 +78,15 @@ func (s *Store) SweepMXReceipts(ctx context.Context, now time.Time) (int, error)
 // outage recovery.
 const DefaultMXReceiptTTL = 7 * 24 * time.Hour
 
+// receiptExpiry returns the receipt expiry for a caller TTL, falling back to
+// the default. A zero TTL means the operator kept the default.
+func receiptExpiry(ttl time.Duration) time.Time {
+	if ttl <= 0 {
+		ttl = DefaultMXReceiptTTL
+	}
+	return time.Now().UTC().Add(ttl)
+}
+
 // Receipt dispositions mirror the mxwire disposition vocabulary. They are
 // duplicated here so the provider-neutral store does not import the MX wire
 // package.

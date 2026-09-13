@@ -88,73 +88,122 @@ func recipientAuthorizedForBinding(inbox model.Inbox, route store.RecipientRoute
 }
 
 // MXIngestInput is one authenticated ingest request: the staged original MIME
-// plus the signed metadata the core already verified.
+// plus the signed metadata the core already verified. Recipients is the whole
+// accepted envelope recipient set for this one message.
 type MXIngestInput struct {
-	Recipient           string
-	EnvelopeFrom        string
-	RawPath             string
-	Size                int64
-	DeliveryFingerprint string
-	AuthResults         mxwire.AuthResults
-	TrustedAuth         bool
-	ProviderMessageID   string
+	Recipients []string
+	// Recipient is a single-recipient convenience; when Recipients is empty it
+	// is used as the recipient set.
+	Recipient    string
+	EnvelopeFrom string
+	RawPath      string
+	Size         int64
+	// ContentDigest is the hex SHA-256 of the original MIME, used to derive each
+	// recipient's delivery fingerprint.
+	ContentDigest     string
+	AuthResults       mxwire.AuthResults
+	TrustedAuth       bool
+	ProviderMessageID string
 }
 
-// MXIngestResult is the durable outcome returned to the edge.
+// MXIngestResult is the durable outcome returned to the edge: one result per
+// accepted recipient.
 type MXIngestResult struct {
-	Disposition mxwire.Disposition
-	Code        mxwire.MachineCode
-	MessageID   string
-	Reason      string
-	Duplicate   bool
+	PerRecipient []mxwire.RecipientIngestResult
+	MessageID    string
 }
 
-// IngestMX persists one accepted recipient's MX message through the shared
-// staged mailbox pipeline, applying the per-domain auth policy. A duplicate
-// delivery fingerprint returns the recorded disposition without a second
-// message, quota charge or event. Auth failure is a durable Spam delivery, not
-// a rejection. It must not be reached through provider webhook dispatch.
+// IngestMX persists an MX message for the whole accepted recipient set through
+// the shared staged mailbox pipeline, applying the per-domain auth policy per
+// recipient. The MIME is parsed once and fanned out internally; the edge never
+// streams a copy per recipient. A duplicate delivery fingerprint returns the
+// recorded disposition without a second message, quota charge or event. Auth
+// failure is a durable Spam delivery, not a rejection. It must not be reached
+// through provider webhook dispatch.
 func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResult, error) {
 	if !s.Config.MXReceiveEnabled {
 		return MXIngestResult{}, ErrMXDisabled
 	}
-	recipient := strings.ToLower(strings.TrimSpace(in.Recipient))
-	if recipient == "" {
-		return MXIngestResult{Code: mxwire.CodeInvalid}, nil
+	recipients := in.Recipients
+	if len(recipients) == 0 && strings.TrimSpace(in.Recipient) != "" {
+		recipients = []string{in.Recipient}
 	}
+	out := MXIngestResult{}
+	if len(recipients) == 0 {
+		return out, nil
+	}
+	// Resolve the set once, de-duplicating case-insensitively while preserving
+	// order.
+	seen := map[string]bool{}
+	ordered := make([]string, 0, len(recipients))
+	for _, raw := range recipients {
+		r := strings.ToLower(strings.TrimSpace(raw))
+		if r == "" || seen[r] {
+			continue
+		}
+		seen[r] = true
+		ordered = append(ordered, r)
+	}
+	if len(ordered) == 0 {
+		return out, nil
+	}
+
+	// Parse the MIME once; a malformed message is a permanent per-recipient
+	// invalid outcome, not a retryable one.
+	parsed, perr := mailparse.ParseFile(in.RawPath, s.mimeLimits())
+	if perr != nil {
+		for _, r := range ordered {
+			out.PerRecipient = append(out.PerRecipient, mxwire.RecipientIngestResult{Recipient: r, MachineCode: mxwire.CodeInvalid})
+		}
+		return out, nil
+	}
+
+	single := len(ordered) == 1
+	for _, recipient := range ordered {
+		res := s.ingestMXRecipient(ctx, in, recipient, parsed, single)
+		if out.MessageID == "" && res.MessageID != "" {
+			out.MessageID = res.MessageID
+		}
+		out.PerRecipient = append(out.PerRecipient, res)
+	}
+	return out, nil
+}
+
+// ingestMXRecipient resolves, authorizes and persists one recipient. Each
+// envelope recipient gets its own durable message and receipt, so a retry of the
+// same recipient set deduplicates per recipient.
+func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recipient string, parsed mailparse.Parsed, single bool) mxwire.RecipientIngestResult {
 	binding, err := s.Store.ResolveInboundBinding(ctx, mxProvider, recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return MXIngestResult{Code: mxwire.CodeUnknownRecipient}, nil
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
 		}
-		return MXIngestResult{Code: mxwire.CodeTempFail}, err
+		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
 	}
+	fingerprint := mxwire.DeliveryFingerprint(in.EnvelopeFrom, recipient, in.ContentDigest)
 	// Duplicate check happens before touching MIME: a recorded receipt is the
 	// durable truth and must survive the original message's deletion.
-	if fp := strings.TrimSpace(in.DeliveryFingerprint); fp != "" {
-		rec, rerr := s.Store.LookupMXReceipt(ctx, binding.AccountID, mxProvider, recipient, fp)
-		switch {
-		case rerr == nil:
-			return MXIngestResult{
-				Disposition: mxwire.Disposition(rec.Disposition),
-				Code:        mxwire.CodeDuplicate,
-				MessageID:   rec.MessageID,
-				Reason:      rec.Reason,
-				Duplicate:   true,
-			}, nil
-		case !errors.Is(rerr, store.ErrNotFound):
-			return MXIngestResult{Code: mxwire.CodeTempFail}, rerr
+	if rec, rerr := s.Store.LookupMXReceipt(ctx, binding.AccountID, mxProvider, recipient, fingerprint); rerr == nil {
+		return mxwire.RecipientIngestResult{
+			Recipient:   recipient,
+			Disposition: mxwire.Disposition(rec.Disposition),
+			MachineCode: mxwire.CodeDuplicate,
+			MessageID:   rec.MessageID,
+			Reason:      rec.Reason,
+			Duplicate:   true,
 		}
+	} else if !errors.Is(rerr, store.ErrNotFound) {
+		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
 	}
 	inbox, route, err := s.Store.ResolveRecipient(ctx, recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return MXIngestResult{Code: mxwire.CodeUnknownRecipient}, nil
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
 		}
-		return MXIngestResult{Code: mxwire.CodeTempFail}, err
+		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
 	}
 	if !recipientAuthorizedForBinding(inbox, route, binding.AccountID, binding.DomainID) {
-		return MXIngestResult{Code: mxwire.CodeUnknownRecipient}, nil
+		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
 	}
 
 	enforcement := s.domainEnforcement(ctx, binding.AccountID, binding.DomainID)
@@ -166,54 +215,51 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 		}
 	}
 
-	parsed, err := mailparse.ParseFile(in.RawPath, s.mimeLimits())
-	if err != nil {
-		return MXIngestResult{Code: mxwire.CodeInvalid}, nil
-	}
 	msg := transport.InboundMessage{
 		Provider:            mxProvider,
 		Recipient:           recipient,
 		EnvelopeFrom:        in.EnvelopeFrom,
 		RawPath:             in.RawPath,
 		Size:                in.Size,
-		DeliveryID:          in.DeliveryFingerprint,
-		EnvelopeFingerprint: in.DeliveryFingerprint,
+		DeliveryID:          fingerprint,
+		EnvelopeFingerprint: fingerprint,
 		ProviderMessageID:   in.ProviderMessageID,
 		AuthResults:         in.AuthResults,
 		TrustedAuth:         in.TrustedAuth,
 	}
-	m, dup, err := s.deliverStaged(ctx, mxProvider, msg, inbox, parsed, true, &mxDeliverAuth{
+	m, dup, err := s.deliverStaged(ctx, mxProvider, msg, inbox, parsed, single, &mxDeliverAuth{
 		Spam:        class.Spam,
 		Reason:      class.Reason,
 		AuthJSON:    authJSON,
-		Fingerprint: in.DeliveryFingerprint,
+		Fingerprint: fingerprint,
+		ReceiptTTL:  s.Config.MXReceiptRetention,
 	})
-	if err != nil {
-		switch {
-		case errors.Is(err, transport.ErrInboundIgnored):
-			// Consumed control mail (an approval decision) is a durable, terminal
-			// outcome: acknowledge it so the edge returns 250 and the sender does
-			// not retry. The control handler records its own dedup key.
-			return MXIngestResult{Disposition: mxwire.DispositionControl, Code: mxwire.CodeOK}, nil
-		case errors.Is(err, store.ErrQuota):
-			return MXIngestResult{Code: mxwire.CodeQuota}, nil
-		case errors.Is(err, store.ErrNotFound), errors.Is(err, transport.ErrInboundUnauthorized):
-			return MXIngestResult{Code: mxwire.CodeUnknownRecipient}, nil
-		case isTerminalAppError(err):
-			return MXIngestResult{Code: mxwire.CodeInvalid}, nil
-		default:
-			return MXIngestResult{Code: mxwire.CodeTempFail}, err
-		}
-	}
 	disp := mxwire.DispositionStored
 	if class.Spam {
 		disp = mxwire.DispositionSpam
+	}
+	if err != nil {
+		switch {
+		case errors.Is(err, transport.ErrInboundIgnored):
+			// Consumed control mail (an approval decision) is a durable,
+			// terminal outcome: acknowledge it so the edge returns 250 and the
+			// sender does not retry.
+			return mxwire.RecipientIngestResult{Recipient: recipient, Disposition: mxwire.DispositionControl, MachineCode: mxwire.CodeOK}
+		case errors.Is(err, store.ErrQuota):
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeQuota}
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, transport.ErrInboundUnauthorized):
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
+		case isTerminalAppError(err):
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeInvalid}
+		default:
+			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
+		}
 	}
 	code := mxwire.CodeOK
 	if dup {
 		code = mxwire.CodeDuplicate
 	}
-	return MXIngestResult{Disposition: disp, Code: code, MessageID: m.ID, Reason: class.Reason, Duplicate: dup}, nil
+	return mxwire.RecipientIngestResult{Recipient: recipient, Disposition: disp, MachineCode: code, MessageID: m.ID, Reason: class.Reason, Duplicate: dup}
 }
 
 // domainEnforcement reads the per-domain auth enforcement mode, defaulting to

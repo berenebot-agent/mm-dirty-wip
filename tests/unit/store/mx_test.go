@@ -65,6 +65,28 @@ func TestMXReceiptSweep(t *testing.T) {
 	}
 }
 
+// TestMXReceiptCustomTTL verifies the configured MXReceiptRetention is honored:
+// a short TTL expires well before the 7-day default.
+func TestMXReceiptCustomTTL(t *testing.T) {
+	st, u, _, boxes := testStore(t)
+	ctx := context.Background()
+	box := boxes[0]
+	fp := "mxfp-v1:short"
+	_, _, _, err := st.CommitInbound(ctx, store.InboundRecord{
+		Inbox: box, Provider: "mx", ProviderDeliveryID: fp, EnvelopeRecipient: box.Address,
+		From: model.Address{Address: "s@outside.test"}, To: []string{box.Address},
+		Subject: "short ttl", Text: "body", RawPath: "messages/x.eml", SizeBytes: 10,
+		ReceivedAt: time.Now().UTC(), DeliveryFingerprint: fp, ReceiptTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.SweepMXReceipts(ctx, time.Now().UTC().Add(2*time.Hour)); err != nil || n != 1 {
+		t.Fatalf("short-TTL receipt should sweep: n=%d err=%v", n, err)
+	}
+	_ = u
+}
+
 // TestSpamVisibility verifies Spam is excluded from normal lists and unread
 // counts, and included only in the explicit Spam view.
 func TestSpamVisibility(t *testing.T) {

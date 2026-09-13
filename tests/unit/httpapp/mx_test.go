@@ -1,13 +1,12 @@
 package httpapp_test
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -58,23 +57,20 @@ func mxFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Doma
 	return svc, httpapp.New(svc, nil).InboundHandler(), u, d, b
 }
 
-func mxEnvelope(t *testing.T, path, meta string, body []byte, keyID string) *http.Request {
-	t.Helper()
+// mxRequest builds a framed, signed MX request with the given metadata JSON and
+// body.
+func mxRequest(path, meta string, body []byte, keyID string) *http.Request {
 	var m struct {
-		Version   string `json:"version"`
 		Timestamp int64  `json:"timestamp"`
 		RequestID string `json:"request_id"`
 	}
-	if err := json.Unmarshal([]byte(meta), &m); err != nil {
-		t.Fatal(err)
-	}
-	sig := mxwire.Sign([]byte("secret"), mxwire.ProtocolVersion, keyID, m.Timestamp, m.RequestID, "POST", path, []byte(meta), body)
-	payload, err := json.Marshal(map[string]string{"metadata": meta, "body_b64": base64.StdEncoding.EncodeToString(body)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest("POST", path, strings.NewReader(string(payload)))
-	req.Header.Set("Content-Type", "application/json")
+	_ = json.Unmarshal([]byte(meta), &m)
+	sig := mxwire.Sign([]byte("secret"), mxwire.ProtocolVersion, keyID, m.Timestamp, m.RequestID, "POST", path, mxwire.MetaDigest([]byte(meta)), mxwire.BodyDigest(body))
+	var buf bytes.Buffer
+	_ = mxwire.WritePrelude(&buf, []byte(meta))
+	buf.Write(body)
+	req := httptest.NewRequest("POST", path, bytes.NewReader(buf.Bytes()))
+	req.Header.Set("Content-Type", mxwire.IngestContentType)
 	req.Header.Set("X-Gatehouse-MX-Signature", sig)
 	return req
 }
@@ -84,7 +80,7 @@ func TestMXResolveEndpoint(t *testing.T) {
 	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` +
 		itoa(time.Now().Unix()) + `,"request_id":"r1","edge":"mx-1"}`
 	body := []byte(`{"recipients":["` + box.Address + `","nobody@example.com"]}`)
-	req := mxEnvelope(t, mxwire.PathResolve, meta, body, "edge")
+	req := mxRequest(mxwire.PathResolve, meta, body, "edge")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 {
@@ -107,9 +103,9 @@ func TestMXIngestEndpointAndDigestMismatch(t *testing.T) {
 	raw := []byte("From: s@outside.test\r\nTo: " + box.Address + "\r\nSubject: hi\r\n\r\nbody")
 	digest := mxwire.BodyDigest(raw)
 	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` + itoa(time.Now().Unix()) +
-		`,"request_id":"r2","edge":"mx-1","recipient":"` + box.Address + `","envelope_from":"s@outside.test","content_digest":"` + digest +
-		`","size":` + itoa(int64(len(raw))) + `,"delivery_fingerprint":"` + mxwire.DeliveryFingerprint("s@outside.test", box.Address, digest) + `","auth_results":{}}`
-	req := mxEnvelope(t, mxwire.PathIngest, meta, raw, "edge")
+		`,"request_id":"r2","edge":"mx-1","recipients":["` + box.Address + `"],"envelope_from":"s@outside.test","content_digest":"` + digest +
+		`","size":` + itoa(int64(len(raw))) + `,"auth_results":{}}`
+	req := mxRequest(mxwire.PathIngest, meta, raw, "edge")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 {
@@ -119,13 +115,14 @@ func TestMXIngestEndpointAndDigestMismatch(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Disposition != mxwire.DispositionStored || out.MachineCode != mxwire.CodeOK {
+	if len(out.PerRecipient) != 1 || out.PerRecipient[0].MachineCode != mxwire.CodeOK ||
+		out.PerRecipient[0].Disposition != mxwire.DispositionStored {
 		t.Fatalf("unexpected %+v", out)
 	}
 	// Tampered body fails the digest recheck.
 	bad := append([]byte{}, raw...)
 	bad = append(bad, 'x')
-	req2 := mxEnvelope(t, mxwire.PathIngest, meta, bad, "edge")
+	req2 := mxRequest(mxwire.PathIngest, meta, bad, "edge")
 	rr2 := httptest.NewRecorder()
 	h.ServeHTTP(rr2, req2)
 	if rr2.Code == 200 {
@@ -137,12 +134,39 @@ func TestMXBadSignatureRejected(t *testing.T) {
 	_, h, _, _, box := mxFixture(t)
 	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` + itoa(time.Now().Unix()) + `,"request_id":"r3"}`
 	body := []byte(`{"recipients":["` + box.Address + `"]}`)
-	req := mxEnvelope(t, mxwire.PathResolve, meta, body, "edge")
+	req := mxRequest(mxwire.PathResolve, meta, body, "edge")
 	req.Header.Set("X-Gatehouse-MX-Signature", "deadbeef")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 401 {
 		t.Fatalf("bad signature accepted: %d", rr.Code)
+	}
+}
+
+// TestMXReplayConflictRejected verifies an identical signed retry is allowed
+// through to the idempotent path, while the same request ID bound to different
+// content is rejected.
+func TestMXReplayConflictRejected(t *testing.T) {
+	_, h, _, _, box := mxFixture(t)
+	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` + itoa(time.Now().Unix()) +
+		`,"request_id":"replay-1","edge":"mx-1"}`
+	body := []byte(`{"recipients":["` + box.Address + `"]}`)
+	send := func(b []byte) int {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, mxRequest(mxwire.PathResolve, meta, b, "edge"))
+		return rr.Code
+	}
+	if code := send(body); code != 200 {
+		t.Fatalf("first resolve: %d", code)
+	}
+	// Identical retry is idempotent, not a conflict.
+	if code := send(body); code != 200 {
+		t.Fatalf("identical retry rejected: %d", code)
+	}
+	// Same request ID, different body: conflicting reuse.
+	other := []byte(`{"recipients":["other@example.com"]}`)
+	if code := send(other); code != 409 {
+		t.Fatalf("conflicting replay accepted: %d", code)
 	}
 }
 

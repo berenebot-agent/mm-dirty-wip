@@ -39,8 +39,10 @@ type InboundRecord struct {
 	// DeliveryFingerprint, when set, is the versioned MX retry identity. It is
 	// recorded as a durable receipt in the same transaction so a retry after
 	// the message is deleted still deduplicates. Empty for webhook providers,
-	// which rely on provider_delivery_id alone.
+	// which rely on provider_delivery_id alone. ReceiptTTL overrides the default
+	// receipt retention when non-zero.
 	DeliveryFingerprint string
+	ReceiptTTL          time.Duration
 }
 type OutboundRecord struct {
 	Inbox                                                model.Inbox
@@ -149,6 +151,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		if err = recordMXReceiptTx(ctx, tx, MXReceipt{
 			AccountID: r.Inbox.AccountID, Provider: r.Provider, EnvelopeRecipient: r.EnvelopeRecipient,
 			DeliveryFingerprint: r.DeliveryFingerprint, Disposition: disp, MessageID: id, Reason: reason,
+			ExpiresAt: receiptExpiry(r.ReceiptTTL),
 		}); err != nil {
 			return model.Message{}, model.Event{}, false, err
 		}

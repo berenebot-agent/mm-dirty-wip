@@ -1,8 +1,8 @@
 package mxagent
 
 import (
-	"bytes"
 	"context"
+	"io"
 	"net"
 	"strings"
 
@@ -38,8 +38,10 @@ func NewVerifier(cfg Config) *Verifier {
 }
 
 // Verify computes the evidence. A nil/empty result is "no evidence": it must
-// never be turned into a definitive failure.
-func (v *Verifier) Verify(ctx context.Context, raw []byte, peerIP net.IP, helo, mailFrom, fromDomain string) mxwire.AuthResults {
+// never be turned into a definitive failure. raw streams the original bytes and
+// is rewound before each verification pass, so a large message is never held in
+// memory.
+func (v *Verifier) Verify(ctx context.Context, raw io.ReadSeeker, peerIP net.IP, helo, mailFrom, fromDomain string) mxwire.AuthResults {
 	var out mxwire.AuthResults
 	out.Source = "edge"
 	out.Evaluator = "gatehouse-mx/1"
@@ -101,12 +103,13 @@ func (v *Verifier) verifySPF(ctx context.Context, peerIP net.IP, helo, mailFrom 
 
 // verifyDKIM verifies every signature on the original bytes, capped at
 // MaxDKIMSignatures. A valid but unaligned signature remains pass with
-// aligned=false; it is never reported as fail.
-func (v *Verifier) verifyDKIM(ctx context.Context, raw []byte, fromDomain string, lookupTXT func(string) ([]string, error)) []mxwire.DKIMEvidence {
-	if len(raw) == 0 {
-		return nil
+// aligned=false; it is never reported as fail. raw is read from the start and
+// rewound first so it can be reused.
+func (v *Verifier) verifyDKIM(ctx context.Context, raw io.ReadSeeker, fromDomain string, lookupTXT func(string) ([]string, error)) []mxwire.DKIMEvidence {
+	if _, err := raw.Seek(0, io.SeekStart); err != nil {
+		return []mxwire.DKIMEvidence{{Result: "temperror", Error: "rewind"}}
 	}
-	verifs, err := dkim.VerifyWithOptions(bytes.NewReader(raw), &dkim.VerifyOptions{
+	verifs, err := dkim.VerifyWithOptions(raw, &dkim.VerifyOptions{
 		MaxVerifications: mxwire.MaxDKIMSignatures,
 		LookupTXT:        lookupTXT,
 	})

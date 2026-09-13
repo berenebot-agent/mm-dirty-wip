@@ -229,6 +229,7 @@ type mxDeliverAuth struct {
 	Reason      string
 	AuthJSON    string
 	Fingerprint string
+	ReceiptTTL  time.Duration
 }
 
 func (m *mxDeliverAuth) spam() bool { return m != nil && m.Spam }
@@ -249,6 +250,12 @@ func (m *mxDeliverAuth) fingerprint() string {
 		return ""
 	}
 	return m.Fingerprint
+}
+func (m *mxDeliverAuth) receiptTTL() time.Duration {
+	if m == nil {
+		return 0
+	}
+	return m.ReceiptTTL
 }
 
 // deliverStaged persists one recipient's copy of an already-parsed inbound
@@ -306,7 +313,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint()})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err

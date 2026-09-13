@@ -10,9 +10,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
@@ -25,6 +27,67 @@ const (
 	PathResolve = "/internal/mx/resolve"
 	PathIngest  = "/internal/mx/ingest"
 )
+
+// Ingest framing. The ingest request body is a raw two-part stream, not JSON:
+//
+//	[4-byte big-endian metadata length][metadata JSON][raw original MIME]
+//
+// The raw MIME is never base64-encoded or JSON-escaped, so both ends can stream
+// it with bounded memory and no 8-bit corruption. The signature covers
+// SHA-256(metadata) and SHA-256(raw MIME), so it is independent of this framing.
+const (
+	// IngestPreludeLen is the fixed size of the metadata-length prefix.
+	IngestPreludeLen = 4
+	// IngestContentType is the Content-Type of a framed ingest request body.
+	IngestContentType = "application/octet-stream"
+)
+
+// WritePrelude writes the 4-byte big-endian metadata length followed by the
+// metadata JSON. It does not write the body.
+func WritePrelude(w io.Writer, meta []byte) error {
+	if len(meta) == 0 || len(meta) > MaxMetadataBytes {
+		return fmt.Errorf("mxwire: metadata length %d out of range", len(meta))
+	}
+	var hdr [IngestPreludeLen]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(meta)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(meta)
+	return err
+}
+
+// ReadPrelude reads the 4-byte length and the metadata JSON from r, leaving r
+// positioned at the first body byte. It fails if the length is zero or exceeds
+// MaxMetadataBytes.
+func ReadPrelude(r io.Reader) ([]byte, error) {
+	var hdr [IngestPreludeLen]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(hdr[:])
+	if n == 0 || n > MaxMetadataBytes {
+		return nil, fmt.Errorf("mxwire: metadata length %d out of range", n)
+	}
+	meta := make([]byte, n)
+	if _, err := io.ReadFull(r, meta); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+// SplitPreludeBytes splits an already-buffered framed body into metadata and
+// body. It is used for small bodies (resolve) where buffering is fine.
+func SplitPreludeBytes(raw []byte) ([]byte, []byte, error) {
+	if len(raw) < IngestPreludeLen {
+		return nil, nil, fmt.Errorf("mxwire: short prelude")
+	}
+	n := binary.BigEndian.Uint32(raw[:IngestPreludeLen])
+	if n == 0 || n > MaxMetadataBytes || int(n) > len(raw)-IngestPreludeLen {
+		return nil, nil, fmt.Errorf("mxwire: metadata length %d out of range", n)
+	}
+	return raw[IngestPreludeLen : IngestPreludeLen+n], raw[IngestPreludeLen+n:], nil
+}
 
 // Bounds. These are the package defaults; the core may apply a tighter
 // configured body cap. Metadata must stay well under typical proxy header
@@ -264,7 +327,9 @@ type ResolveResponse struct {
 
 // IngestMetadata is the signed metadata for one POST /internal/mx/ingest. Its
 // exact transmitted JSON bytes are hashed into the signature; core never reads
-// routing or auth material from unsigned headers.
+// routing or auth material from unsigned headers. One ingest carries the whole
+// accepted recipient set and the original MIME once; the core fans out
+// internally so the edge never streams a copy per recipient.
 type IngestMetadata struct {
 	Version string `json:"version"`
 	KeyID   string `json:"key_id"`
@@ -272,26 +337,34 @@ type IngestMetadata struct {
 	Timestamp int64  `json:"timestamp"`
 	RequestID string `json:"request_id"`
 	Edge      string `json:"edge,omitempty"`
-	// Recipient is the canonical envelope recipient this ingest is for.
-	Recipient string `json:"recipient"`
+	// Recipients is the accepted envelope recipient set this ingest covers.
+	Recipients []string `json:"recipients"`
 	// EnvelopeFrom is the SMTP MAIL FROM (may be empty for the null path).
 	EnvelopeFrom string `json:"envelope_from,omitempty"`
 	ClientIP     string `json:"client_ip,omitempty"`
 	HELO         string `json:"helo,omitempty"`
 	// ContentDigest is the hex SHA-256 of the original MIME bytes.
-	ContentDigest string `json:"content_digest"`
-	Size          int64  `json:"size"`
-	// DeliveryFingerprint is the versioned retry identity over canonical
-	// envelope sender, recipient and MIME digest.
-	DeliveryFingerprint string      `json:"delivery_fingerprint"`
-	AuthResults         AuthResults `json:"auth_results"`
-	ProviderMessageID   string      `json:"provider_message_id,omitempty"`
+	ContentDigest     string      `json:"content_digest"`
+	Size              int64       `json:"size"`
+	AuthResults       AuthResults `json:"auth_results"`
+	ProviderMessageID string      `json:"provider_message_id,omitempty"`
 }
 
-// IngestResponse is the durable outcome for one recipient. A duplicate carries
-// the originally recorded disposition and entity reference.
+// IngestResponse is the durable outcome for one ingest request. PerRecipient
+// carries the outcome for each accepted recipient; the edge aggregates these
+// into the single SMTP transaction response.
 type IngestResponse struct {
-	Version     string      `json:"version"`
+	Version      string                  `json:"version"`
+	MachineCode  MachineCode             `json:"machine_code"`
+	PerRecipient []RecipientIngestResult `json:"per_recipient,omitempty"`
+	// MessageID is the first stored message, for logs and simple callers.
+	MessageID string `json:"message_id,omitempty"`
+}
+
+// RecipientIngestResult is the durable outcome for one recipient. A duplicate
+// carries the originally recorded disposition and entity reference.
+type RecipientIngestResult struct {
+	Recipient   string      `json:"recipient"`
 	Disposition Disposition `json:"disposition"`
 	MachineCode MachineCode `json:"machine_code"`
 	MessageID   string      `json:"message_id,omitempty"`
@@ -300,17 +373,19 @@ type IngestResponse struct {
 }
 
 // CanonicalString builds the exact string that is signed. method and path are
-// fixed by the endpoint; metaBytes and bodyBytes are the exact transmitted
-// bytes (metadata JSON and, for ingest, the original MIME).
-func CanonicalString(version, keyID string, ts int64, requestID, method, path string, metaBytes, bodyBytes []byte) string {
+// fixed by the endpoint; metaDigest and bodyDigest are the hex SHA-256 digests
+// of the exact transmitted metadata and body. Signing digests rather than raw
+// bytes lets both ends stream a large body through the hash without holding it
+// in memory.
+func CanonicalString(version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest string) string {
 	return version + "\n" +
 		fmt.Sprintf("%d", ts) + "\n" +
 		requestID + "\n" +
 		keyID + "\n" +
 		method + "\n" +
 		path + "\n" +
-		hexHash(metaBytes) + "\n" +
-		hexHash(bodyBytes)
+		metaDigest + "\n" +
+		bodyDigest
 }
 
 func hexHash(b []byte) string {
@@ -318,20 +393,22 @@ func hexHash(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Sign returns the hex HMAC-SHA256 over the canonical string.
-func Sign(key []byte, version, keyID string, ts int64, requestID, method, path string, metaBytes, bodyBytes []byte) string {
+// Sign returns the hex HMAC-SHA256 over the canonical string built from the
+// metadata and body digests.
+func Sign(key []byte, version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest string) string {
 	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(CanonicalString(version, keyID, ts, requestID, method, path, metaBytes, bodyBytes)))
+	_, _ = mac.Write([]byte(CanonicalString(version, keyID, ts, requestID, method, path, metaDigest, bodyDigest)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Verify checks version, timestamp skew, key id and constant-time signature.
-// Callers supply the resolved key for keyID and the clock/skew.
-func Verify(key []byte, version, expectedKeyID, keyID string, ts int64, requestID, method, path string, metaBytes, bodyBytes []byte, signature string, now time.Time, skew time.Duration) error {
+// Verify checks version, timestamp skew, key id and constant-time signature over
+// the supplied metadata and body digests. Callers supply the resolved key for
+// keyID and the clock/skew.
+func Verify(key []byte, version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest, signature string, now time.Time, skew time.Duration) error {
 	if version != ProtocolVersion {
 		return fmt.Errorf("%w: %q", ErrVersion, version)
 	}
-	if expectedKeyID == "" || keyID != expectedKeyID {
+	if keyID == "" {
 		return fmt.Errorf("%w: unknown key id", ErrSignature)
 	}
 	if skew <= 0 {
@@ -341,7 +418,7 @@ func Verify(key []byte, version, expectedKeyID, keyID string, ts int64, requestI
 	if delta < -skew || delta > skew {
 		return ErrSkew
 	}
-	want, err := hex.DecodeString(Sign(key, version, keyID, ts, requestID, method, path, metaBytes, bodyBytes))
+	want, err := hex.DecodeString(Sign(key, version, keyID, ts, requestID, method, path, metaDigest, bodyDigest))
 	if err != nil {
 		return ErrSignature
 	}
@@ -354,6 +431,10 @@ func Verify(key []byte, version, expectedKeyID, keyID string, ts int64, requestI
 	}
 	return nil
 }
+
+// MetaDigest and BodyDigest return the hex SHA-256 digests used in the signed
+// canonical string.
+func MetaDigest(b []byte) string { return hexHash(b) }
 
 // BodyDigest returns the hex SHA-256 of b, the content digest carried in the
 // signed metadata and re-checked against the streamed body.

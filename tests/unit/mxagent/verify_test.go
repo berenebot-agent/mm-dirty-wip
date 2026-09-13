@@ -7,24 +7,8 @@ import (
 	"testing"
 
 	"gatehouse-mail/internal/mxagent"
+	"gatehouse-mail/internal/mxwire"
 )
-
-func TestFromHeaderDomain(t *testing.T) {
-	cases := []struct {
-		raw  string
-		want string
-	}{
-		{"From: Sender <sender@outside.test>\r\nTo: x@y\r\n\r\nbody", "outside.test"},
-		{"From: sender@example.com\r\n\r\nbody", "example.com"},
-		{"From: \"Weird, Name\" <a@sub.example.com>\r\n\r\nbody", "sub.example.com"},
-		{"To: x@y\r\n\r\nno from", ""},
-	}
-	for _, tc := range cases {
-		if got := mxagent.FromHeaderDomain([]byte(tc.raw)); got != tc.want {
-			t.Fatalf("FromHeaderDomain(%q)=%q want %q", tc.raw, got, tc.want)
-		}
-	}
-}
 
 func TestDomainsAlign(t *testing.T) {
 	cases := []struct {
@@ -60,16 +44,46 @@ func TestOrganizationalDomain(t *testing.T) {
 	}
 }
 
-func TestStageMessageBounds(t *testing.T) {
-	raw := strings.Repeat("A", 1000)
-	b, err := mxagent.StageMessage(strings.NewReader(raw), t.TempDir(), 2000, 5_000_000_000)
-	if err != nil || string(b) != raw {
-		t.Fatalf("stage ok: err=%v len=%d", err, len(b))
+func TestFromHeaderDomain(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"From: Sender <sender@outside.test>\r\nTo: x@y\r\n\r\nbody", "outside.test"},
+		{"From: sender@example.com\r\n\r\nbody", "example.com"},
+		{"From: \"Weird, Name\" <a@sub.example.com>\r\n\r\nbody", "sub.example.com"},
+		{"To: x@y\r\n\r\nno from", ""},
+		// RFC 5322 comment must not be mistaken for the address.
+		{"From: attacker@evil.com (ceo@bank.com)\r\n\r\nbody", "evil.com"},
+		// Folded From header: address on the continuation line.
+		{"From: Sender <\r\n\tsender@outside.test>\r\n\r\nbody", "outside.test"},
+		// Angle address with a comment inside the display name.
+		{"From: \"a (b)\" <real@domain.test>\r\n\r\nbody", "domain.test"},
 	}
-	if _, err := mxagent.StageMessage(strings.NewReader(raw), t.TempDir(), 100, 5_000_000_000); err != mxagent.ErrTooLarge {
+	for _, tc := range cases {
+		if got := mxagent.FromHeaderDomain([]byte(tc.raw)); got != tc.want {
+			t.Fatalf("FromHeaderDomain(%q)=%q want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestStageMessageBounds(t *testing.T) {
+	dir := t.TempDir()
+	raw := strings.Repeat("A", 1000)
+	_, size, digest, err := mxagent.StageMessage(strings.NewReader(raw), dir, 2000, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("stage err=%v", err)
+	}
+	if size != int64(len(raw)) {
+		t.Fatalf("stage size=%d want %d", size, len(raw))
+	}
+	if digest != mxwire.BodyDigest([]byte(raw)) {
+		t.Fatalf("stage digest %q", digest)
+	}
+	if _, _, _, err := mxagent.StageMessage(strings.NewReader(raw), dir, 100, 5_000_000_000); err != mxagent.ErrTooLarge {
 		t.Fatalf("expected too large, got %v", err)
 	}
-	if _, err := mxagent.StageMessage(bytes.NewReader(nil), t.TempDir(), 100, 5_000_000_000); err == nil {
+	if _, _, _, err := mxagent.StageMessage(bytes.NewReader(nil), dir, 100, 5_000_000_000); err == nil {
 		t.Fatal("expected empty error")
 	}
 }

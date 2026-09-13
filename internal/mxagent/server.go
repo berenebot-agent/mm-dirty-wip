@@ -3,7 +3,9 @@ package mxagent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,8 +13,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/mail"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,9 +26,10 @@ import (
 )
 
 // Server is the policy-free SMTP edge. It enforces connection/recipient/size
-// bounds and strict framing, stages the original bytes, computes auth evidence
-// and issues one signed ingest per accepted recipient. It never returns SMTP
-// success until the core has durably handled every accepted recipient.
+// bounds and strict framing, streams the original message to bounded staging,
+// computes auth evidence and issues one signed ingest for the whole accepted
+// recipient set. The core fans out internally. It never returns SMTP success
+// until the core has durably handled every accepted recipient.
 type Server struct {
 	cfg    Config
 	core   *CoreClient
@@ -69,19 +74,9 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	ip := PeerIP(c.Conn().RemoteAddr())
 	return &session{
 		srv:    b.s,
-		conn:   c,
 		peerIP: ip,
 		helo:   strings.TrimSuffix(c.Hostname(), "."),
-		start:  time.Now(),
 	}, nil
-}
-
-func (b *SMTPBackend) release() {
-	select {
-	case <-b.s.sem:
-	default:
-	}
-	atomic.AddInt64(&b.s.active, -1)
 }
 
 func PeerIP(addr net.Addr) net.IP {
@@ -96,16 +91,19 @@ func PeerIP(addr net.Addr) net.IP {
 }
 
 // session is one SMTP transaction. It is policy-free: RCPT resolution asks the
-// core, and DATA stages, verifies and fans out one signed ingest per recipient.
+// core, and DATA stages, verifies and hands the whole accepted recipient set to
+// the core in one signed request.
 type session struct {
 	srv     *Server
-	conn    *smtp.Conn
 	peerIP  net.IP
 	helo    string
-	start   time.Time
 	from    string
 	hasFrom bool
 	rcpts   []acceptedRcpt
+	// releaseOnce guarantees the connection slot is returned exactly once even
+	// though go-smtp may call Logout more than once (on STARTTLS re-greet and on
+	// connection close).
+	releaseOnce sync.Once
 }
 
 type acceptedRcpt struct {
@@ -121,7 +119,19 @@ func (s *session) Reset() {
 
 func (s *session) Logout() error {
 	s.Reset()
+	s.release()
 	return nil
+}
+
+// release returns the concurrency slot acquired in NewSession.
+func (s *session) release() {
+	s.releaseOnce.Do(func() {
+		select {
+		case <-s.srv.sem:
+		default:
+		}
+		atomic.AddInt64(&s.srv.active, -1)
+	})
 }
 
 func (s *session) Mail(from string, opts *smtp.MailOptions) error {
@@ -166,12 +176,12 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "Unknown recipient"}
 }
 
-// Data stages the whole original message before any fan-out, computes auth
-// evidence once, then delivers each accepted recipient through its own
-// authorized core request. One final SMTP response covers the transaction:
-// 250 only when every accepted recipient has a durable success or a recorded
-// duplicate; a transient failure makes the whole transaction temporary so the
-// sender retries and committed recipients deduplicate.
+// Data streams the whole original message to bounded staging, computes auth
+// evidence once, then hands the accepted recipient set to the core in one
+// signed request which fans out internally. One final SMTP response covers the
+// transaction: 250 only when every accepted recipient has a durable success or
+// a recorded duplicate; a transient failure makes the whole transaction
+// temporary so the sender retries and committed recipients deduplicate.
 func (s *session) Data(r io.Reader) error {
 	if !s.hasFrom {
 		return &smtp.SMTPError{Code: 503, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "Need MAIL before DATA"}
@@ -179,104 +189,136 @@ func (s *session) Data(r io.Reader) error {
 	if len(s.rcpts) == 0 {
 		return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "No valid recipients"}
 	}
-	raw, err := StageMessage(r, s.srv.cfg.StagingDir, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
+	path, size, digest, err := StageMessage(r, s.srv.cfg.StagingDir, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
 	if err != nil {
 		if errors.Is(err, ErrTooLarge) {
 			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: "Message too large"}
 		}
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
-	digest := mxwire.BodyDigest(raw)
-	fromDomain := FromHeaderDomain(raw)
-	ctx := context.Background()
-	auth := s.srv.verify.Verify(ctx, raw, s.peerIP, s.helo, s.from, fromDomain)
+	defer os.Remove(path)
 
-	var transientFail bool
-	var quotaFail bool
+	f, err := os.Open(path)
+	if err != nil {
+		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
+	}
+	defer f.Close()
+
+	fromDomain := FromHeaderDomainOf(path)
+	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
+	defer cancel()
+	auth := s.srv.verify.Verify(ctx, f, s.peerIP, s.helo, s.from, fromDomain)
+
+	recipients := make([]string, 0, len(s.rcpts))
 	for _, rcpt := range s.rcpts {
-		meta := mxwire.IngestMetadata{
-			Recipient:           rcpt.address,
-			EnvelopeFrom:        s.from,
-			ClientIP:            ipString(s.peerIP),
-			HELO:                s.helo,
-			ContentDigest:       digest,
-			Size:                int64(len(raw)),
-			DeliveryFingerprint: mxwire.DeliveryFingerprint(s.from, rcpt.address, digest),
-			AuthResults:         auth,
-		}
-		resp, err := s.srv.core.Ingest(ctx, meta, raw)
-		if err != nil {
-			transientFail = true
-			s.srv.log.Warn("mx ingest failed", "recipient", rcpt.address, "error", err)
-			continue
-		}
-		switch resp.MachineCode {
+		recipients = append(recipients, rcpt.address)
+	}
+	meta := mxwire.IngestMetadata{
+		Recipients:   recipients,
+		EnvelopeFrom: s.from,
+		ClientIP:     ipString(s.peerIP),
+		HELO:         s.helo,
+		AuthResults:  auth,
+	}
+	accepted := len(s.rcpts)
+	resp, err := s.srv.core.Ingest(ctx, meta, f, size, digest)
+	s.Reset()
+	if err != nil {
+		atomic.AddInt64(&s.srv.authTemp, 1)
+		s.srv.log.Warn("mx ingest failed", "recipients", accepted, "error", err)
+		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
+	}
+
+	var transientFail, quotaFail, delivered int
+	for _, rr := range resp.PerRecipient {
+		switch rr.MachineCode {
 		case mxwire.CodeOK, mxwire.CodeDuplicate:
-			if resp.Disposition == mxwire.DispositionSpam {
+			delivered++
+			if rr.Disposition == mxwire.DispositionSpam {
 				atomic.AddInt64(&s.srv.spam, 1)
 			}
-			if resp.MachineCode == mxwire.CodeDuplicate {
+			if rr.MachineCode == mxwire.CodeDuplicate {
 				atomic.AddInt64(&s.srv.dup, 1)
 			}
-			continue
 		case mxwire.CodeQuota:
-			quotaFail = true
-		case mxwire.CodeTempFail:
-			transientFail = true
-		case mxwire.CodeUnknownRecipient, mxwire.CodeUnauthorized, mxwire.CodeTooLarge, mxwire.CodeInvalid:
-			// A previously accepted recipient the core now rejects is not a
-			// reason to permanently drop the whole transaction; retry so a
-			// subsequent RCPT round resolves current routing.
-			transientFail = true
+			quotaFail++
 		default:
-			transientFail = true
+			// Unknown recipient, unauthorized, too large, invalid or a
+			// transient failure: retry so a later RCPT round resolves current
+			// routing; recipients already committed deduplicate.
+			transientFail++
 		}
 	}
-	s.Reset()
-	if quotaFail {
+	// Any recipient the core did not report is treated as transient so the
+	// sender retries rather than silently dropping it.
+	if delivered+quotaFail+transientFail < accepted {
+		transientFail += accepted - (delivered + quotaFail + transientFail)
+	}
+	atomic.AddInt64(&s.srv.accepted, int64(delivered))
+	if quotaFail > 0 {
 		return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 2, 2}, Message: "Insufficient storage"}
 	}
-	if transientFail {
+	if transientFail > 0 {
 		atomic.AddInt64(&s.srv.authTemp, 1)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
 	}
-	atomic.AddInt64(&s.srv.accepted, int64(len(s.rcpts)))
 	return nil
 }
 
 var ErrTooLarge = errors.New("message too large")
 
-// StageMessage reads all of r with a hard bound and a wall-clock deadline,
-// returning the exact original bytes. The message is bounded by MaxMessageBytes
-// and the edge's staging area is scratch, never a durable accepted-mail queue.
-func StageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration) ([]byte, error) {
+// StageMessage streams r to a 0600 temp file under dir, bounded by maxBytes and
+// a wall-clock deadline, returning the file path, size and hex SHA-256 digest.
+// The message is never held in memory and the staging area is scratch, never a
+// durable accepted-mail queue. On error the temp file is removed.
+func StageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration) (string, int64, string, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", 0, "", err
+	}
+	f, err := os.CreateTemp(dir, "mx-*.eml")
+	if err != nil {
+		return "", 0, "", err
+	}
+	path := f.Name()
 	type result struct {
-		b   []byte
-		err error
+		size int64
+		sum  [sha256.Size]byte
+		err  error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		var buf bytes.Buffer
-		_, err := io.Copy(&buf, io.LimitReader(r, maxBytes+1))
-		ch <- result{b: buf.Bytes(), err: err}
+		defer f.Close()
+		h := sha256.New()
+		n, cerr := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, maxBytes+1))
+		var res result
+		res.size = n
+		res.err = cerr
+		copy(res.sum[:], h.Sum(nil))
+		ch <- res
 	}()
 	select {
 	case res := <-ch:
 		if res.err != nil {
-			return nil, res.err
+			os.Remove(path)
+			return "", 0, "", res.err
 		}
-		if int64(len(res.b)) > maxBytes {
-			return nil, ErrTooLarge
+		if res.size > maxBytes {
+			os.Remove(path)
+			return "", 0, "", ErrTooLarge
 		}
-		if len(res.b) == 0 {
-			return nil, fmt.Errorf("empty message")
+		if res.size == 0 {
+			os.Remove(path)
+			return "", 0, "", fmt.Errorf("empty message")
 		}
-		return res.b, nil
+		return path, res.size, hex.EncodeToString(res.sum[:]), nil
 	case <-time.After(timeout):
-		return nil, fmt.Errorf("data read timeout")
+		// The reader goroutine will finish once go-smtp drains the data reader;
+		// removing the path now is safe on Unix even while it is still open.
+		os.Remove(path)
+		return "", 0, "", fmt.Errorf("data read timeout")
 	}
 }
 
@@ -285,6 +327,19 @@ func ipString(ip net.IP) string {
 		return ""
 	}
 	return ip.String()
+}
+
+// FromHeaderDomainOf reads a bounded header prefix from the staged file and
+// extracts the From domain. It never loads the whole message.
+func FromHeaderDomainOf(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	buf := make([]byte, 64<<10)
+	n, _ := io.ReadFull(f, buf)
+	return FromHeaderDomain(buf[:n])
 }
 
 // FromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
@@ -300,6 +355,10 @@ func FromHeaderDomain(raw []byte) string {
 	if idx >= 0 {
 		headers = raw[:idx]
 	}
+	// Unfold continuation lines so a wrapped From: header is parsed whole.
+	headers = bytes.ReplaceAll(headers, []byte("\r\n"), []byte("\n"))
+	headers = bytes.ReplaceAll(headers, []byte("\n "), []byte(" "))
+	headers = bytes.ReplaceAll(headers, []byte("\n\t"), []byte(" "))
 	for _, line := range bytes.Split(headers, []byte("\n")) {
 		l := bytes.TrimSpace(line)
 		if len(l) < 5 || !bytes.EqualFold(l[:5], []byte("From:")) {
@@ -311,7 +370,15 @@ func FromHeaderDomain(raw []byte) string {
 	return ""
 }
 
+// addressDomain extracts the domain from a From header value. It prefers
+// net/mail (which handles display names, angle addresses and RFC 5322 comments)
+// and falls back to a bounded heuristic only when parsing fails.
 func addressDomain(v string) string {
+	if addr, err := mail.ParseAddress(v); err == nil {
+		if at := strings.LastIndex(addr.Address, "@"); at >= 0 {
+			return strings.ToLower(strings.TrimSpace(addr.Address[at+1:]))
+		}
+	}
 	v = strings.TrimSpace(v)
 	lt := strings.LastIndex(v, "<")
 	gt := strings.LastIndex(v, ">")
