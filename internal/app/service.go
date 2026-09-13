@@ -44,11 +44,14 @@ type Service struct {
 	Hub           *events.Hub
 	Log           *slog.Logger
 	EncryptionKey []byte
-	unroutedLim   *rateLimiter
+	// encryptionKeys holds the primary key first and any legacy derivation
+	// after it, so decrypting pre-upgrade ciphertext still works.
+	encryptionKeys [][]byte
+	unroutedLim    *rateLimiter
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
-	key, err := cryptox.DeriveKey(cfg.AppEncryptionKey)
+	key, keys, err := cryptox.DeriveKeys(cfg.AppEncryptionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +59,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 		return nil, err
 	}
 	netutil.SetRequirePublic(cfg.RequirePublicOutbound())
-	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute)}, nil
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute)}, nil
 }
 
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
@@ -230,7 +233,13 @@ type mxDeliverAuth struct {
 	AuthJSON    string
 	Fingerprint string
 	ReceiptTTL  time.Duration
+	// Authenticated reports whether the edge's evidence establishes that the
+	// From domain is authenticated (a DMARC pass, or an aligned SPF/DKIM pass).
+	// It gates the inbox's MX-only authenticated-sender requirement.
+	Authenticated bool
 }
+
+func (m *mxDeliverAuth) authenticated() bool { return m != nil && m.Authenticated }
 
 func (m *mxDeliverAuth) spam() bool { return m != nil && m.Spam }
 func (m *mxDeliverAuth) reason() string {
@@ -275,7 +284,18 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if looksLikeControl(parsed.Subject) || looksLikeControlReply(parsed) {
 		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed)
 	}
+	// The allow-list matches the spoofable RFC5322.From address. When the inbox
+	// additionally requires an authenticated sender, MX mail whose edge evidence
+	// does not establish From-domain authentication is blocked. Webhook
+	// providers carry no auth evidence, so the requirement does not apply to
+	// them (mx is nil / not trusted).
+	blockReason := ""
 	if !inbox.AllowsInbound(parsed.From.Address) {
+		blockReason = "sender not allowed"
+	} else if inbox.RequireAuthenticated && provider == mxProvider && !mx.authenticated() {
+		blockReason = "sender not authenticated"
+	}
+	if blockReason != "" {
 		blockedFrom := model.Address{Name: parsed.From.Name, Address: parsed.From.Address}
 		blockedAt := parsed.Date
 		if blockedAt.IsZero() {
@@ -285,7 +305,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 			AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
 			ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
 			From: blockedFrom, To: parsed.To,
-			Subject: parsed.Subject, Reason: "sender not allowed", SizeBytes: msg.Size, ReceivedAt: blockedAt,
+			Subject: parsed.Subject, Reason: blockReason, SizeBytes: msg.Size, ReceivedAt: blockedAt,
 		})
 		if err != nil {
 			return model.Message{}, false, err
@@ -796,8 +816,19 @@ func wholeFloat(v float64) (int, error) {
 	return int(v), nil
 }
 
+// DecryptSecret decrypts a stored secret with any key that can still read it,
+// so data written before a key-derivation upgrade remains readable.
+func (s *Service) DecryptSecret(encrypted string) ([]byte, error) {
+	return cryptox.DecryptFirst(s.encryptionKeys, encrypted)
+}
+
+// EncryptSecret encrypts a secret with the current primary key.
+func (s *Service) EncryptSecret(plaintext []byte) (string, error) {
+	return cryptox.Encrypt(s.EncryptionKey, plaintext)
+}
+
 func (s *Service) decryptConfig(encrypted string) (map[string]any, error) {
-	b, err := cryptox.Decrypt(s.EncryptionKey, encrypted)
+	b, err := s.DecryptSecret(encrypted)
 	if err != nil {
 		return nil, err
 	}
@@ -965,10 +996,15 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 			}
 			return SendResult{Message: m, ProviderMessageID: m.ProviderMessageID}, nil
 		}
-		// Release the reservation on any failure so a retry can re-send.
+		// Release the reservation on any failure so a retry can re-send. Use a
+		// cancellation-independent context: if the client disconnects, the
+		// request context is cancelled and a release on it would silently fail,
+		// leaving the key reserved for the stale-lease interval.
 		defer func() {
 			if err != nil {
-				_ = s.Store.IdempotencyRelease(ctx, accountID, idem)
+				relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				_ = s.Store.IdempotencyRelease(relCtx, accountID, idem)
 			}
 		}()
 	}
@@ -1257,18 +1293,19 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 		return s.fail(outcomeCtx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
 	}
 	outbound := transport.OutboundMessage{
-		FromName:    m.From.Name,
-		FromAddress: m.From.Address,
-		To:          m.To,
-		CC:          m.CC,
-		BCC:         m.BCC,
-		Subject:     m.Subject,
-		Text:        m.Text,
-		HTML:        m.HTML,
-		MessageID:   m.RFCMessageID,
-		InReplyTo:   m.InReplyTo,
-		References:  m.References,
-		RawMIME:     raw,
+		FromName:       m.From.Name,
+		FromAddress:    m.From.Address,
+		To:             m.To,
+		CC:             m.CC,
+		BCC:            m.BCC,
+		Subject:        m.Subject,
+		Text:           m.Text,
+		HTML:           m.HTML,
+		MessageID:      m.RFCMessageID,
+		InReplyTo:      m.InReplyTo,
+		References:     m.References,
+		RawMIME:        raw,
+		IdempotencyKey: m.ID,
 	}
 	// HTTP adapters build their request from structured fields, so the
 	// attachment bytes must be reconstructed from the stored MIME. Transports
@@ -1286,6 +1323,15 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	}
 	_, events, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// The queued message was cancelled (deleted) while the provider
+			// call was in flight. The provider may still have accepted it, and
+			// no local action can recall it; the message must not be
+			// resurrected. Log the ambiguity rather than treating it as an
+			// error to retry.
+			s.Log.Warn("outbound message cancelled during delivery; provider may still have accepted it", "message_id", m.ID, "to", m.To)
+			return nil
+		}
 		return err
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)

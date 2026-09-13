@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -127,6 +129,33 @@ func TestMXIngestEndpointAndDigestMismatch(t *testing.T) {
 	h.ServeHTTP(rr2, req2)
 	if rr2.Code == 200 {
 		t.Fatalf("digest mismatch accepted: %s", rr2.Body.String())
+	}
+}
+
+// TestMXIngestRejectsBadSignatureBeforeStaging proves the HMAC is checked
+// against the signed declared digest before any body byte is written, so an
+// unauthenticated caller cannot force staging I/O.
+func TestMXIngestRejectsBadSignatureBeforeStaging(t *testing.T) {
+	svc, h, _, _, box := mxFixture(t)
+	raw := []byte("From: s@outside.test\r\nTo: " + box.Address + "\r\nSubject: hi\r\n\r\nbody")
+	digest := mxwire.BodyDigest(raw)
+	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` + itoa(time.Now().Unix()) +
+		`,"request_id":"preauth","edge":"mx-1","recipients":["` + box.Address + `"],"envelope_from":"s@outside.test","content_digest":"` + digest +
+		`","size":` + itoa(int64(len(raw))) + `,"auth_results":{}}`
+	req := mxRequest(mxwire.PathIngest, meta, raw, "edge")
+	req.Header.Set("X-Gatehouse-MX-Signature", "deadbeef")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 401 {
+		t.Fatalf("bad signature accepted: %d", rr.Code)
+	}
+	dir := filepath.Join(svc.Config.DataDir, "messages", ".tmp")
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unauthenticated request staged %d file(s) before signature verification", len(entries))
 	}
 }
 

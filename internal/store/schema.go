@@ -830,3 +830,21 @@ CREATE INDEX IF NOT EXISTS idx_messages_sending_domain ON messages(sending_domai
 const migration025 = `ALTER TABLE inbox_aliases ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE drafts ADD COLUMN from_name TEXT NOT NULL DEFAULT '';
 `
+
+// migration026 adds an opt-in authenticated-sender requirement for the optional
+// MX edge. The sender allow-list matches the RFC5322.From address, which is
+// attacker-controlled and spoofable; only MX delivery carries SPF/DKIM/DMARC
+// evidence computed by the authenticated edge. When require_authenticated is
+// set, MX mail to the inbox is accepted only when the From domain is
+// authenticated (a DMARC pass, or an aligned SPF/DKIM pass). It is off by
+// default and has no effect on webhook providers, which carry no such evidence.
+const migration026 = `ALTER TABLE inboxes ADD COLUMN require_authenticated INTEGER NOT NULL DEFAULT 0;
+`
+
+// migration027 gives a Hermes relay connection an outbound role. Today relay
+// outbound always sends with Owner authority; setting outbound_role=assistant
+// makes the relay create a draft and request send instead, so a Hermes agent
+// can be held to the same human-approval boundary as an Assistant API key.
+// Default 'owner' preserves existing connections' behaviour.
+const migration027 = `ALTER TABLE hermes_connections ADD COLUMN outbound_role TEXT NOT NULL DEFAULT 'owner';
+`

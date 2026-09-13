@@ -31,6 +31,27 @@ func TestLoadStagingDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestLoadRequireTLSValidation(t *testing.T) {
+	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
+	t.Setenv("MX_EDGE_KEY_ID", "edge")
+	t.Setenv("MX_EDGE_SECRET", "secret")
+	t.Setenv("MX_REQUIRE_TLS", "true")
+	t.Setenv("MX_TLS_CERT", "")
+	t.Setenv("MX_TLS_KEY", "")
+	if _, err := mxagent.Load(); err == nil {
+		t.Fatal("MX_REQUIRE_TLS without a certificate must be rejected")
+	}
+	t.Setenv("MX_TLS_CERT", "/tmp/cert.pem")
+	t.Setenv("MX_TLS_KEY", "/tmp/key.pem")
+	cfg, err := mxagent.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequireTLS {
+		t.Fatal("RequireTLS not parsed")
+	}
+}
+
 func TestWatchShutdownFDCancelsOnEOF(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"blitiri.com.ar/go/spf"
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/emersion/go-msgauth/dmarc"
+	"golang.org/x/net/publicsuffix"
 
 	"gatehouse-mail/internal/mxwire"
 )
@@ -255,25 +256,27 @@ func DomainsAlign(fromDomain, checked string, strict bool) bool {
 	return OrganizationalDomain(from) == OrganizationalDomain(got)
 }
 
-// OrganizationalDomain is a deliberately small public-suffix approximation: it
-// treats the last two labels as the organizational domain for the common case
-// and keeps three for known two-label public suffixes. Full PSL data is a
-// future refinement; this matches how the policy is consumed locally and never
-// by itself authorizes a decision.
+// OrganizationalDomain returns the registrable organization domain for DMARC
+// relaxed alignment, using the embedded Public Suffix List so multi-label
+// suffixes (*.co.uk), wildcard and private suffixes (*.github.io,
+// *.herokuapp.com) and IDN forms are handled correctly rather than by a small
+// hand-maintained approximation. It never authorizes a decision on its own; it
+// only aligns the checked and From domains for local spam scoring.
+//
+// A domain that is itself a public suffix (or otherwise has no registrable
+// label) is returned unchanged, so alignment compares it exactly and two
+// tenants of the same hosted suffix are never treated as one organization.
 func OrganizationalDomain(domain string) string {
 	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
-	labels := strings.Split(domain, ".")
-	if len(labels) <= 2 {
+	if domain == "" {
+		return ""
+	}
+	// EffectiveTLDPlusOne returns an error for a public suffix or a lone
+	// label; fall back to the input so alignment stays strict rather than
+	// over-broad.
+	org, err := publicsuffix.EffectiveTLDPlusOne(domain)
+	if err != nil {
 		return domain
 	}
-	twoLabelSuffixes := map[string]bool{
-		"co.uk": true, "org.uk": true, "gov.uk": true, "ac.uk": true,
-		"com.au": true, "net.au": true, "org.au": true,
-		"co.jp": true, "co.nz": true, "com.br": true, "com.cn": true,
-	}
-	suffix := labels[len(labels)-2] + "." + labels[len(labels)-1]
-	if twoLabelSuffixes[suffix] && len(labels) >= 3 {
-		return labels[len(labels)-3] + "." + suffix
-	}
-	return suffix
+	return org
 }

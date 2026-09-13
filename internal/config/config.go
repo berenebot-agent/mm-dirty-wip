@@ -46,21 +46,22 @@ func parseMXMode(raw string) (MXMode, error) {
 }
 
 type Config struct {
-	ListenAddr          string
-	BaseURL             string
-	DataDir             string
-	Mode                string
-	AllowRegistration   bool
-	TrustProxyHeaders   bool
-	TrustedProxies      []netip.Prefix
-	AppEncryptionKey    string
-	AdminBootstrapToken string
-	MaxMessageBytes     int64
-	DefaultQuotaBytes   int64
-	SessionTTL          time.Duration
-	RelayRequireBearer  bool
-	LoginLimitPerMinute int
-	SendLimitPerMinute  int
+	ListenAddr             string
+	BaseURL                string
+	DataDir                string
+	Mode                   string
+	AllowRegistration      bool
+	TrustProxyHeaders      bool
+	TrustedProxies         []netip.Prefix
+	AppEncryptionKey       string
+	AdminBootstrapToken    string
+	MaxMessageBytes        int64
+	DefaultQuotaBytes      int64
+	SessionTTL             time.Duration
+	RelayRequireBearer     bool
+	LoginLimitPerMinute    int
+	SendLimitPerMinute     int
+	RegisterLimitPerMinute int
 	// AllowPrivateOutbound disables the public-routable destination check for
 	// outbound transports in self-hosted mode. It is always ignored in hosted
 	// mode, where destinations must be public. It exists for operators who
@@ -113,37 +114,38 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		ListenAddr:           env("LISTEN_ADDR", ":8081"),
-		BaseURL:              strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
-		DataDir:              env("DATA_DIR", "/data"),
-		Mode:                 strings.ToLower(env("MODE", "selfhosted")),
-		AllowRegistration:    envBool("ALLOW_REGISTRATION", false),
-		TrustProxyHeaders:    envBool("TRUST_PROXY_HEADERS", false),
-		AppEncryptionKey:     strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
-		AdminBootstrapToken:  strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
-		MaxMessageBytes:      envInt64("MAX_MESSAGE_BYTES", 30<<20),
-		DefaultQuotaBytes:    envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
-		SessionTTL:           time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
-		RelayRequireBearer:   envBool("RELAY_REQUIRE_CALLER_AUTH", false),
-		LoginLimitPerMinute:  envInt("LOGIN_LIMIT_PER_MINUTE", 10),
-		SendLimitPerMinute:   envInt("SEND_LIMIT_PER_MINUTE", 60),
-		AllowPrivateOutbound: envBool("ALLOW_PRIVATE_OUTBOUND", false),
-		InboundConcurrency:   envInt("INBOUND_CONCURRENCY", 32),
-		MaxMultipartParts:    envInt("MAX_MULTIPART_PARTS", 64),
-		MaxMIMEDepth:         envInt("MAX_MIME_DEPTH", 8),
-		MaxMIMEParts:         envInt("MAX_MIME_PARTS", 256),
-		BodyReadTimeout:      time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
-		ApprovalExpiryHours:  envInt("APPROVAL_EXPIRY_HOURS", 48),
-		MXMode:               mxMode,
-		MXReceiveEnabled:     mxMode != MXOff,
-		MXEmbedded:           mxMode == MXLocal,
-		MXEdgeKeys:           parseEdgeKeys(env("MX_EDGE_KEYS", "")),
-		MXSignatureSkew:      time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
-		MXReceiptRetention:   time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
-		MXUID:                envInt("MX_UID", 65533),
-		MXGID:                envInt("MX_GID", 65533),
-		InboundTLSCertFile:   strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
-		InboundTLSKeyFile:    strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
+		ListenAddr:             env("LISTEN_ADDR", ":8081"),
+		BaseURL:                strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
+		DataDir:                env("DATA_DIR", "/data"),
+		Mode:                   strings.ToLower(env("MODE", "selfhosted")),
+		AllowRegistration:      envBool("ALLOW_REGISTRATION", false),
+		TrustProxyHeaders:      envBool("TRUST_PROXY_HEADERS", false),
+		AppEncryptionKey:       strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
+		AdminBootstrapToken:    strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
+		MaxMessageBytes:        envInt64("MAX_MESSAGE_BYTES", 30<<20),
+		DefaultQuotaBytes:      envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
+		SessionTTL:             time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
+		RelayRequireBearer:     envBool("RELAY_REQUIRE_CALLER_AUTH", false),
+		LoginLimitPerMinute:    envInt("LOGIN_LIMIT_PER_MINUTE", 10),
+		SendLimitPerMinute:     envInt("SEND_LIMIT_PER_MINUTE", 60),
+		RegisterLimitPerMinute: envInt("REGISTER_LIMIT_PER_MINUTE", 5),
+		AllowPrivateOutbound:   envBool("ALLOW_PRIVATE_OUTBOUND", false),
+		InboundConcurrency:     envInt("INBOUND_CONCURRENCY", 32),
+		MaxMultipartParts:      envInt("MAX_MULTIPART_PARTS", 64),
+		MaxMIMEDepth:           envInt("MAX_MIME_DEPTH", 8),
+		MaxMIMEParts:           envInt("MAX_MIME_PARTS", 256),
+		BodyReadTimeout:        time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
+		ApprovalExpiryHours:    envInt("APPROVAL_EXPIRY_HOURS", 48),
+		MXMode:                 mxMode,
+		MXReceiveEnabled:       mxMode != MXOff,
+		MXEmbedded:             mxMode == MXLocal,
+		MXEdgeKeys:             parseEdgeKeys(env("MX_EDGE_KEYS", "")),
+		MXSignatureSkew:        time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
+		MXReceiptRetention:     time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
+		MXUID:                  envInt("MX_UID", 65533),
+		MXGID:                  envInt("MX_GID", 65533),
+		InboundTLSCertFile:     strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
+		InboundTLSKeyFile:      strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")

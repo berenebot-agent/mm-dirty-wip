@@ -259,14 +259,15 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			DisplayName      *string            `json:"display_name"`
-			Enabled          *bool              `json:"enabled"`
-			AllowedSenders   *[]string          `json:"allowed_senders"`
-			SenderRestricted *bool              `json:"sender_restricted"`
-			ApproverEmail    *string            `json:"approver_email"`
-			Aliases          *[]string          `json:"aliases"`
-			AliasNames       *map[string]string `json:"alias_names"`
-			DefaultSender    *string            `json:"default_sender"`
+			DisplayName          *string            `json:"display_name"`
+			Enabled              *bool              `json:"enabled"`
+			AllowedSenders       *[]string          `json:"allowed_senders"`
+			SenderRestricted     *bool              `json:"sender_restricted"`
+			RequireAuthenticated *bool              `json:"require_authenticated"`
+			ApproverEmail        *string            `json:"approver_email"`
+			Aliases              *[]string          `json:"aliases"`
+			AliasNames           *map[string]string `json:"alias_names"`
+			DefaultSender        *string            `json:"default_sender"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -310,6 +311,12 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		}
 		if restricted != nil {
 			if err := s.Service.Store.SetInboxSenderRestricted(r.Context(), p.AccountID, id, *restricted); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.RequireAuthenticated != nil {
+			if err := s.Service.Store.SetInboxRequireAuthenticated(r.Context(), p.AccountID, id, *in.RequireAuthenticated); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -1048,6 +1055,12 @@ func (s *Server) apiDraftAttachments(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, v)
 	case http.MethodPost:
+		// Bound the request body before multipart parsing: ParseMultipartForm
+		// spills oversized parts to temp files, so without a cap an
+		// authenticated caller could exhaust disk before the per-attachment
+		// size check runs. The ceiling allows the configured message size plus
+		// multipart overhead.
+		r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes*2+1<<20)
 		if err := r.ParseMultipartForm(4 << 20); err != nil {
 			writeError(w, 400, "invalid multipart form")
 			return
@@ -1491,17 +1504,38 @@ func (s *Server) apiHermesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type item struct {
-		ID, InboxID, Name, GatewayID string
-		LastAckEventID               int64
-		CreatedAt                    time.Time
-		LastConnectedAt              *time.Time
+		ID, InboxID, Name, GatewayID, OutboundRole string
+		LastAckEventID                             int64
+		CreatedAt                                  time.Time
+		LastConnectedAt                            *time.Time
 	}
 	out := []item{}
 	for _, h := range v {
-		out = append(out, item{h.ID, h.InboxID, h.Name, h.GatewayID, h.LastAckEventID, h.CreatedAt, h.LastConnectedAt})
+		out = append(out, item{h.ID, h.InboxID, h.Name, h.GatewayID, h.OutboundRole, h.LastAckEventID, h.CreatedAt, h.LastConnectedAt})
 	}
 	writeJSON(w, 200, out)
 }
+
+// apiHermesConnection updates a relay connection's outbound role. An Assistant
+// role makes the relay draft-and-request-approval instead of sending.
+func (s *Server) apiHermesConnection(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		Role string `json:"role"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := s.Service.Store.SetHermesOutboundRole(r.Context(), p.AccountID, r.PathValue("id"), in.Role); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"status": "ok", "role": strings.ToLower(strings.TrimSpace(in.Role))})
+}
+
 func (s *Server) apiHermesDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !adminOnly(w, p) {

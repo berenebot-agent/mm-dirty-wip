@@ -1,6 +1,7 @@
 package netutil_test
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,6 +18,25 @@ func TestHTTPClientRejectsPrivateHosted(t *testing.T) {
 	defer netutil.SetRequirePublic(false)
 	if _, err := netutil.HTTPClient().Get(ts.URL); err == nil {
 		t.Fatal("expected a private destination to be rejected in hosted mode")
+	}
+}
+
+func TestPublicIPRejectsSpecialUseRanges(t *testing.T) {
+	for _, s := range []string{
+		"127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.1.1",
+		"0.0.0.0", "100.64.0.1", "192.0.0.1", "192.0.2.1",
+		"198.18.0.1", "198.51.100.1", "203.0.113.1", "240.0.0.1",
+		"::1", "fc00::1", "fe80::1", "2001:db8::1",
+	} {
+		ip := net.ParseIP(s)
+		if netutil.PublicIP(ip) {
+			t.Fatalf("PublicIP(%s) = true, want false", s)
+		}
+	}
+	for _, s := range []string{"8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"} {
+		if !netutil.PublicIP(net.ParseIP(s)) {
+			t.Fatalf("PublicIP(%s) = false, want true", s)
+		}
 	}
 }
 

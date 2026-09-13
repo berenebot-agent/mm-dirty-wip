@@ -133,7 +133,10 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 		return out, nil
 	}
 	// Resolve the set once, de-duplicating case-insensitively while preserving
-	// order.
+	// order, then map each recipient to its delivery inbox. Aliases that target
+	// the same inbox collapse to one stored message (like the webhook fan-out),
+	// with one result returned per envelope recipient so the edge's transaction
+	// accounting stays exact.
 	seen := map[string]bool{}
 	ordered := make([]string, 0, len(recipients))
 	for _, raw := range recipients {
@@ -158,13 +161,68 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 		return out, nil
 	}
 
-	single := len(ordered) == 1
+	type inboundTarget struct {
+		inboxID   string
+		recipient string
+	}
+	byInbox := map[string]string{}
+	targets := make([]inboundTarget, 0, len(ordered))
 	for _, recipient := range ordered {
-		res := s.ingestMXRecipient(ctx, in, recipient, parsed, single)
+		inbox, route, rerr := s.Store.ResolveRecipient(ctx, recipient)
+		if rerr != nil || inbox.ID == "" {
+			targets = append(targets, inboundTarget{recipient: recipient})
+			continue
+		}
+		_ = route
+		if _, ok := byInbox[inbox.ID]; !ok {
+			byInbox[inbox.ID] = recipient
+		}
+		targets = append(targets, inboundTarget{inboxID: inbox.ID, recipient: recipient})
+	}
+	// One physical commit per distinct inbox; the staged file is moved only for
+	// a single-inbox message and copied per inbox otherwise.
+	single := len(byInbox) == 1
+	committed := make([]mxwire.RecipientIngestResult, len(targets))
+	seenInbox := map[string]bool{}
+	for i, t := range targets {
+		if t.inboxID == "" {
+			res := s.ingestMXRecipient(ctx, in, t.recipient, parsed, single)
+			committed[i] = res
+			if out.MessageID == "" && res.MessageID != "" {
+				out.MessageID = res.MessageID
+			}
+			continue
+		}
+		if seenInbox[t.inboxID] {
+			continue
+		}
+		seenInbox[t.inboxID] = true
+		res := s.ingestMXRecipient(ctx, in, t.recipient, parsed, single)
+		committed[i] = res
 		if out.MessageID == "" && res.MessageID != "" {
 			out.MessageID = res.MessageID
 		}
-		out.PerRecipient = append(out.PerRecipient, res)
+	}
+	// Fan mirrored per-recipient results out of the inbox's canonical result so
+	// each envelope recipient reports the same durable outcome.
+	for i, t := range targets {
+		if t.inboxID == "" || committed[i].Recipient != "" {
+			out.PerRecipient = append(out.PerRecipient, committed[i])
+			continue
+		}
+		for _, c := range committed {
+			if c.Recipient != "" {
+				anchor, _, _ := s.Store.ResolveRecipient(ctx, c.Recipient)
+				if anchor.ID == t.inboxID {
+					mirror := c
+					mirror.Recipient = t.recipient
+					mirror.Duplicate = true
+					mirror.MachineCode = mxwire.CodeDuplicate
+					out.PerRecipient = append(out.PerRecipient, mirror)
+					break
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -214,6 +272,7 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 			authJSON = string(b)
 		}
 	}
+	authenticated := in.TrustedAuth && mxAuthenticated(in.AuthResults)
 
 	msg := transport.InboundMessage{
 		Provider:            mxProvider,
@@ -228,11 +287,12 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 		TrustedAuth:         in.TrustedAuth,
 	}
 	m, dup, err := s.deliverStaged(ctx, mxProvider, msg, inbox, parsed, single, &mxDeliverAuth{
-		Spam:        class.Spam,
-		Reason:      class.Reason,
-		AuthJSON:    authJSON,
-		Fingerprint: fingerprint,
-		ReceiptTTL:  s.Config.MXReceiptRetention,
+		Spam:          class.Spam,
+		Reason:        class.Reason,
+		AuthJSON:      authJSON,
+		Fingerprint:   fingerprint,
+		ReceiptTTL:    s.Config.MXReceiptRetention,
+		Authenticated: authenticated,
 	})
 	disp := mxwire.DispositionStored
 	if class.Spam {
@@ -285,6 +345,28 @@ func mxAuthPtr(a mxwire.AuthResults, trusted bool) *mxwire.AuthResults {
 		return nil
 	}
 	return &a
+}
+
+// mxAuthenticated reports whether the edge evidence establishes that the
+// RFC5322.From domain is authenticated: a DMARC pass, or an SPF or DKIM pass
+// that aligns with the From domain. It is deliberately conservative: absent,
+// neutral, softfail, temperror and permerror never count, and an unaligned pass
+// of a lookalike domain never counts. It is only consulted when the edge's
+// evidence is trusted.
+func mxAuthenticated(a mxwire.AuthResults) bool {
+	if a.DMARC != nil && strings.EqualFold(strings.TrimSpace(a.DMARC.Result), "pass") {
+		return true
+	}
+	if a.SPF != nil && strings.EqualFold(strings.TrimSpace(a.SPF.Result), "pass") &&
+		a.SPF.Aligned {
+		return true
+	}
+	for _, d := range a.DKIM {
+		if strings.EqualFold(strings.TrimSpace(d.Result), "pass") && d.Aligned {
+			return true
+		}
+	}
+	return false
 }
 
 // isTerminalAppError reports whether an MX ingest error is permanent and the

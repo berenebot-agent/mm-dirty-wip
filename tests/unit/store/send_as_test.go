@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,8 +34,9 @@ func TestResolveInboxSender(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Empty and primary both resolve to the primary with the inbox name/domain.
-	for _, requested := range []string{"", box.Address, "HERMES@EXAMPLE.COM"} {
+	// Empty and primary (in any case) both resolve to the primary with the
+	// inbox name/domain.
+	for _, requested := range []string{"", box.Address, strings.ToUpper(box.Address)} {
 		from, domainID, err := s.ResolveInboxSender(ctx, u.AccountID, box.ID, requested)
 		if err != nil || from.Address != box.Address || from.Name != "Acme" || domainID != d.ID {
 			t.Fatalf("primary %q -> %+v domain=%s err=%v", requested, from, domainID, err)

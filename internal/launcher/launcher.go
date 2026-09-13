@@ -42,19 +42,23 @@ type Spec struct {
 // ResolveEdgeCredential picks the edge credential. When the operator supplied
 // MX_EDGE_KEYS, the lexicographically smallest key id is used (deterministic
 // across restarts); otherwise a fresh key is generated. The core is told the
-// same credential via EdgeKeysEnv.
-func ResolveEdgeCredential(edgeKeys map[string]string) (keyID, secret string) {
+// same credential via EdgeKeysEnv. A random-generation failure is returned
+// rather than ignored: continuing with a weak or zero secret would silently
+// weaken the edge authentication boundary.
+func ResolveEdgeCredential(edgeKeys map[string]string) (keyID, secret string, err error) {
 	if len(edgeKeys) > 0 {
 		ids := make([]string, 0, len(edgeKeys))
 		for id := range edgeKeys {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		return ids[0], edgeKeys[ids[0]]
+		return ids[0], edgeKeys[ids[0]], nil
 	}
 	var b [32]byte
-	_, _ = rand.Read(b[:])
-	return "edge-1", hex.EncodeToString(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", "", fmt.Errorf("launcher: generate edge credential: %w", err)
+	}
+	return "edge-1", hex.EncodeToString(b[:]), nil
 }
 
 // EdgeEnv builds the child's environment. It is an allowlist: the edge never
@@ -78,7 +82,7 @@ func EdgeEnv(hostname, keyID, secret string, shutdownFD int) []string {
 	// secrets or paths.
 	for _, name := range []string{
 		"MX_EDGE_NAME",
-		"MX_TLS_CERT", "MX_TLS_KEY",
+		"MX_TLS_CERT", "MX_TLS_KEY", "MX_REQUIRE_TLS",
 		"MX_VERIFY_SPF", "MX_VERIFY_DKIM", "MX_VERIFY_DMARC",
 		"MX_DNS_RESOLVER", "MX_DNS_TIMEOUT_SECONDS",
 		"MX_MAX_MESSAGE_BYTES", "MX_STAGING_BYTES",

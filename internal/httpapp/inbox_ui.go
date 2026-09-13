@@ -55,8 +55,10 @@ const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}
 <section class="card"><h1>Review draft</h1>
 {{if .ReviewDraft.SendRequest.ApproverEmail}}{{if eq .ReviewDraft.SendRequest.NotificationStatus "failed"}}<p><span class="pill danger">Notification failed</span> The approval email to {{.ReviewDraft.SendRequest.ApproverEmail}} could not be delivered.</p>{{else if eq .ReviewDraft.SendRequest.NotificationStatus "queued"}}<p><span class="pill amber">Notification queued</span> The approval email to {{.ReviewDraft.SendRequest.ApproverEmail}} has not been handed to the outbound path yet.</p>{{else}}<p><span class="pill amber">Awaiting approval</span> Requested from {{.ReviewDraft.SendRequest.ApproverEmail}}{{if .ReviewDraft.SendRequest.TokenExpiresAt}} · expires {{mailDate .ReviewDraft.SendRequest.TokenExpiresAt}}{{end}}</p>{{end}}{{else}}<p><span class="pill amber">Awaiting approval</span> Requested by {{.ReviewDraft.SendRequest.RequestedBy}} · {{mailDate .ReviewDraft.SendRequest.RequestedAt}}</p>{{end}}
 <dl class="draftmeta"><dt>From</dt><dd>{{if .ReviewDraft.FromAddress}}{{.ReviewDraft.FromAddress}}{{else}}{{.Inbox.Address}}{{end}}</dd><dt>To</dt><dd>{{join .ReviewDraft.To ", "}}</dd>{{if .ReviewDraft.CC}}<dt>Cc</dt><dd>{{join .ReviewDraft.CC ", "}}</dd>{{end}}{{if .ReviewDraft.BCC}}<dt>Bcc</dt><dd>{{join .ReviewDraft.BCC ", "}}</dd>{{end}}<dt>Subject</dt><dd>{{if .ReviewDraft.Subject}}{{.ReviewDraft.Subject}}{{else}}(no subject){{end}}</dd><dt>Attachments</dt><dd>{{if .ComposeNote}}{{.ComposeNote}}{{else}}None{{end}}</dd></dl>
-<label>Message</label>
-<pre class="draftbody">{{.ReviewDraft.Text}}</pre>
+<label>Text body</label>
+<pre class="draftbody">{{if .ReviewDraft.Text}}{{.ReviewDraft.Text}}{{else}}(empty){{end}}</pre>
+{{if .ReviewDraft.HTML}}<label>HTML alternative (source)</label>
+<pre class="draftbody">{{.ReviewDraft.HTML}}</pre>{{end}}
 <div class="dialog-actions"><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/reject"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="feedback" placeholder="Feedback to agent (optional)"><button class="secondary danger">Reject</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Cancel approval &amp; edit</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Approve &amp; send</button></form></div>
 </section>`
 
@@ -1050,10 +1052,9 @@ func (s *Server) uiMessageSpam(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
+	// GetMessage enforces the per-mailbox Read role and DeleteMessage the
+	// Assistant/Owner role, so a non-admin mailbox user can act on their own
+	// mail without the account-wide Admin flag.
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
@@ -1078,20 +1079,29 @@ func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
+	// GetMessage enforces the per-mailbox Read role, so any user with access to
+	// the message can view its sanitized HTML, not only account Admins.
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
 		return
 	}
+	// Remote images load only when the viewer explicitly opts in (?remote=1);
+	// the default blocks them so opening mail cannot phone the sender. CID
+	// inlines (same-origin) and data: images always load.
+	remote := r.URL.Query().Get("remote") == "1"
 	atts, _ := s.Service.Store.ListAttachments(r.Context(), p, m.ID)
 	body := rewriteCIDs(m.HTML, atts)
 	body = htmlsanitize.Sanitize(body)
+	if !remote {
+		body = htmlsanitize.StripRemoteImages(body)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src https: http: data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
+	imgSrc := "img-src 'self' data:"
+	if remote {
+		imgSrc = "img-src 'self' https: http: data:"
+	}
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "+imgSrc+"; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "private, max-age=300")
@@ -1108,10 +1118,8 @@ func (s *Server) uiAttachmentInline(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline bool) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
+	// GetAttachment resolves the owning message under the per-mailbox Read
+	// role, so access is scoped to the mailbox rather than the Admin flag.
 	a, m, err := s.Service.Store.GetAttachment(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "attachment not found", 404)

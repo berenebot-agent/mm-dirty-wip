@@ -172,6 +172,14 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
 		return model.Message{}, nil, err
 	}
+	// A message cancelled (deleted) between the initial read and this write is
+	// gone: do not append an unattributable delivery-log row, and report it as
+	// not-found so the caller can distinguish cancellation from a send error.
+	if ok, exErr := messageExistsTx(ctx, tx, accountID, id); exErr != nil {
+		return model.Message{}, nil, exErr
+	} else if !ok {
+		return model.Message{}, nil, ErrNotFound
+	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "sent", providerMessageID, ""); err != nil {
 		return model.Message{}, nil, err
 	}
@@ -231,6 +239,13 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
 		return model.Message{}, nil, err
 	}
+	// A message cancelled (deleted) between the initial read and this write is
+	// gone; do not append an unattributable delivery-log row for it.
+	if ok, exErr := messageExistsTx(ctx, tx, accountID, id); exErr != nil {
+		return model.Message{}, nil, exErr
+	} else if !ok {
+		return model.Message{}, nil, ErrNotFound
+	}
 	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, id, "failed", "", errText); err != nil {
 		return model.Message{}, nil, err
 	}
@@ -286,6 +301,14 @@ func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner strin
 // single-process model every outstanding claim at startup is abandoned.
 func (s *Store) RecoverAbandonedClaims(ctx context.Context) error {
 	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!=''`)
+	return err
+}
+
+// ReleaseMessageClaim clears a claim held by owner so the message can be
+// retried immediately instead of waiting for the lease to expire. The status
+// and ownership guard make it a no-op for a re-claimed or resolved message.
+func (s *Store) ReleaseMessageClaim(ctx context.Context, id, owner string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
 	return err
 }
 

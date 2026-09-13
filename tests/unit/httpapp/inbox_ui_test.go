@@ -366,7 +366,7 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "html-1", RFCMessageID: "<html@test>",
 		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address},
 		EnvelopeTo: []string{box.Address}, Subject: "HTML", Text: "plain",
-		HTML:    `<p>Hello <img src="cid:logo@test"></p>`,
+		HTML:    `<p>Hello <img src="cid:logo@test"><img src="https://tracker.example/pixel.png"></p>`,
 		RawPath: "messages/test.eml", SizeBytes: 10, ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -396,11 +396,31 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 	if rr.Header().Get("X-Frame-Options") != "SAMEORIGIN" {
 		t.Fatalf("html frame options %q", rr.Header().Get("X-Frame-Options"))
 	}
-	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src https:") || strings.Contains(csp, "script-src") {
-		t.Fatalf("html csp %q", csp)
+	// Remote images are blocked by default so opening mail cannot track the
+	// reader; the banner offers an explicit opt-in.
+	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' data:") || strings.Contains(csp, "script-src") {
+		t.Fatalf("default html csp %q", csp)
 	}
 	if strings.Contains(rr.Body.String(), `<base target="_blank">`) {
 		t.Fatal("html should not inject a base target")
+	}
+	if strings.Contains(rr.Body.String(), "tracker.example") {
+		t.Fatal("remote image should be stripped by default")
+	}
+	if !strings.Contains(body, "data-remote-img-show") {
+		t.Fatal("message view should offer a show-images control when remote images exist")
+	}
+
+	// Opting in relaxes the CSP and keeps the remote image.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/ui/messages/"+m.ID+"/html?remote=1", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if csp := rr.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self' https: http: data:") {
+		t.Fatalf("opt-in html csp %q", csp)
+	}
+	if !strings.Contains(rr.Body.String(), "tracker.example") {
+		t.Fatal("remote image should load after opt-in")
 	}
 }
 

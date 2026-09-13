@@ -231,6 +231,80 @@ func TestMXFanOutToTwoRecipients(t *testing.T) {
 	}
 }
 
+// TestMXAliasFanOutDeduplicatesByInbox verifies two aliases resolving to the
+// same inbox store one message, while still returning a result per envelope
+// recipient so the edge's transaction accounting is exact.
+func TestMXAliasFanOutDeduplicatesByInbox(t *testing.T) {
+	svc, u, dom, box := mxService(t)
+	ctx := context.Background()
+	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Replace(goodRaw, "hermes@example.com", "sales@example.com", 1)
+	in := mxInput(t, svc, box.Address, raw, mxwire.AuthResults{})
+	in.Recipients = []string{box.Address, "sales@example.com"}
+	res, err := svc.IngestMX(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.PerRecipient) != 2 {
+		t.Fatalf("expected two results, got %+v", res)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	msgs, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("aliases to one inbox stored %d messages, want 1", len(msgs))
+	}
+}
+
+// TestMXRequireAuthenticatedSender verifies the inbox-level authenticated
+// sender requirement: MX mail from an allow-listed but unauthenticated sender
+// is blocked, while an authenticated one is stored.
+func TestMXRequireAuthenticatedSender(t *testing.T) {
+	svc, u, _, box := mxService(t)
+	ctx := context.Background()
+	if err := svc.Store.SetInboxAllowedSenders(ctx, u.AccountID, box.ID, []string{"sender@outside.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetInboxSenderRestricted(ctx, u.AccountID, box.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetInboxRequireAuthenticated(ctx, u.AccountID, box.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+
+	// No auth evidence: the From address matches the allow-list but the sender
+	// is not authenticated, so the message is blocked (not stored).
+	if _, err := svc.IngestMX(ctx, mxInput(t, svc, box.Address, goodRaw, mxwire.AuthResults{})); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("unauthenticated sender stored %d messages, want 0", len(msgs))
+	}
+
+	// A DMARC pass admits it.
+	auth := mxwire.AuthResults{DMARC: &mxwire.DMARCEvidence{Result: "pass", Policy: "none"}}
+	raw := strings.Replace(goodRaw, "Message-ID: <mx@test>", "Message-ID: <mx2@test>", 1)
+	if _, err := svc.IngestMX(ctx, mxInput(t, svc, box.Address, raw, auth)); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err = svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("authenticated sender stored %d messages, want 1", len(msgs))
+	}
+}
+
 // TestMXDisabled verifies app-only deployments reject MX ingest.
 func TestMXDisabled(t *testing.T) {
 	svc, _, _, box := mxService(t)

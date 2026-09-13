@@ -50,6 +50,7 @@ type Server struct {
 	sendLimiter     *limiter
 	unroutedLim     *limiter
 	passwordLimiter *limiter
+	registerLimiter *limiter
 	flashes         *flashStore
 	assetVersion    string
 	inboundSem      chan struct{}
@@ -79,6 +80,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		sendLimiter:     newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
 		unroutedLim:     newLimiter(1, time.Minute),
 		passwordLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		registerLimiter: newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
 		flashes:         newFlashStore(64, 64<<20),
 		assetVersion:    fmt.Sprintf("%x", sum[:6]),
 		inboundSem:      make(chan struct{}, conc)}
@@ -239,6 +241,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /v1/admin/domains/{id}/receiving/deliveries", api(s.apiDomainReceivingDeliveries))
 	m.HandleFunc("POST /v1/admin/hermes/enroll", api(s.apiHermesEnroll))
 	m.HandleFunc("GET /v1/admin/hermes", api(s.apiHermesList))
+	m.HandleFunc("PUT /v1/admin/hermes/{id}", api(s.apiHermesConnection))
 	m.HandleFunc("DELETE /v1/admin/hermes/{id}", api(s.apiHermesDelete))
 
 	return s.securityHeaders(s.recoverer(m))

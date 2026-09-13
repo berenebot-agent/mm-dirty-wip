@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
 	"gatehouse-mail/internal/httpapp"
@@ -87,6 +88,7 @@ func main() {
 		os.Exit(1)
 	}
 	svc.Log = log
+	ensureBootstrapToken(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
 	defer worker.Stop()
@@ -138,11 +140,11 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case <-stop:
-	case err := <-edgeExit(edge):
+	case <-edgeExit(edge):
 		// An unexpected edge exit is fatal: the core would keep running and
 		// silently stop receiving direct SMTP. Stop so the container restarts
 		// or the operator notices.
-		log.Error("embedded mx edge exited unexpectedly", "error", err)
+		log.Error("embedded mx edge exited unexpectedly", "error", edge.ExitError())
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -153,9 +155,36 @@ func main() {
 	}
 }
 
+// ensureBootstrapToken generates and logs a one-time setup token when this is a
+// fresh installation (no users yet) and the operator did not set
+// ADMIN_BOOTSTRAP_TOKEN. Without it, a fresh instance exposed on 8081 before
+// setup could be claimed by the first internet visitor. The token is only
+// required by the /setup form, and is not persisted, so it does not survive a
+// restart; an operator who has not completed setup will get a new one.
+func ensureBootstrapToken(svc *app.Service, log *slog.Logger) {
+	if svc.Config.AdminBootstrapToken != "" {
+		return
+	}
+	hasUsers, err := svc.Store.HasUsers(context.Background())
+	if err != nil {
+		log.Warn("cannot determine whether setup is complete; leaving setup open", "error", err)
+		return
+	}
+	if hasUsers {
+		return
+	}
+	tok, err := auth.RandomToken(24)
+	if err != nil {
+		log.Error("cannot generate admin bootstrap token; setup remains open", "error", err)
+		return
+	}
+	svc.Config.AdminBootstrapToken = tok
+	log.Warn("no admin exists yet: a one-time setup token was generated; open /setup and enter it to claim this instance", "bootstrap_token", tok)
+}
+
 // edgeExit returns the edge's exit channel, or a nil channel (blocks forever)
 // when no embedded edge is running, so the select only wakes for signals.
-func edgeExit(edge *launcher.Edge) <-chan error {
+func edgeExit(edge *launcher.Edge) <-chan struct{} {
 	if edge == nil {
 		return nil
 	}
@@ -173,7 +202,11 @@ func installEmbeddedCredential(log *slog.Logger) {
 	default:
 		return
 	}
-	keyID, secret := launcher.ResolveEdgeCredential(parseEnvEdgeKeys(os.Getenv("MX_EDGE_KEYS")))
+	keyID, secret, err := launcher.ResolveEdgeCredential(parseEnvEdgeKeys(os.Getenv("MX_EDGE_KEYS")))
+	if err != nil {
+		log.Error("cannot generate embedded mx edge credential", "error", err)
+		os.Exit(1)
+	}
 	if v := os.Getenv("MX_EDGE_KEYS"); v == "" {
 		_ = os.Setenv("MX_EDGE_KEYS", keyID+":"+secret)
 		log.Info("embedded mx edge credential generated", "key_id", keyID)
@@ -193,7 +226,10 @@ func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) 
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
 	}
-	keyID, secret := launcher.ResolveEdgeCredential(cfg.MXEdgeKeys)
+	keyID, secret, err := launcher.ResolveEdgeCredential(cfg.MXEdgeKeys)
+	if err != nil {
+		return nil, err
+	}
 	hostname := edgeHostname()
 	spec := launcher.Spec{
 		Binary:   launcher.ResolveBinary(),

@@ -188,6 +188,13 @@ func (s *Store) ClaimNextWorkflow(ctx context.Context, now time.Time, owner stri
 	return id, nil
 }
 
+// ReleaseWorkflowClaim clears a claim held by owner so the job can be retried
+// immediately instead of waiting for the lease to expire.
+func (s *Store) ReleaseWorkflowClaim(ctx context.Context, id, owner string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
+	return err
+}
+
 // WorkflowClaimOwner returns the current claim owner for a workflow job.
 func (s *Store) WorkflowClaimOwner(ctx context.Context, accountID, id string) (string, error) {
 	var owner string

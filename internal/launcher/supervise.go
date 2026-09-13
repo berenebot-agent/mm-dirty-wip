@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -16,7 +17,13 @@ type Edge struct {
 	cmd    *exec.Cmd
 	writer *os.File // parent's end of the shutdown pipe
 	log    *slog.Logger
-	done   chan error
+	// done is closed exactly once when the child exits. A closed channel is a
+	// broadcast, so the main monitor and Stop can both observe the exit without
+	// racing for a single channel value (which could strand a waiter).
+	done chan struct{}
+	once sync.Once
+	mu   sync.Mutex
+	err  error
 }
 
 // Start spawns the edge as a child under spec.UID/GID using SysProcAttr.
@@ -51,34 +58,58 @@ func Start(ctx context.Context, spec Spec, log *slog.Logger) (*Edge, error) {
 		return nil, fmt.Errorf("launcher: start edge: %w", err)
 	}
 	r.Close() // the child owns the read end now
-	e := &Edge{cmd: cmd, writer: w, log: log, done: make(chan error, 1)}
-	go func() { e.done <- cmd.Wait() }()
+	e := &Edge{cmd: cmd, writer: w, log: log, done: make(chan struct{})}
+	go func() {
+		err := cmd.Wait()
+		e.mu.Lock()
+		e.err = err
+		e.mu.Unlock()
+		e.once.Do(func() { close(e.done) })
+	}()
 	log.Info("embedded mx edge started", "pid", cmd.Process.Pid, "uid", spec.UID, "binary", spec.Binary)
 	return e, nil
 }
 
 // Stop asks the edge to shut down by closing the pipe, then waits bounded for
-// it to exit. It returns the child's exit error, if any.
+// it to exit. It returns the child's exit error, if any. It is safe to call
+// after the child has already exited and safe to call more than once: the exit
+// channel is closed once, so a waiter can never block on a value already
+// consumed elsewhere.
 func (e *Edge) Stop(ctx context.Context) error {
 	// Closing the write end gives the child EOF on fd 3, which it treats as a
 	// shutdown request. This is the only cross-uid channel available after the
 	// parent drops privileges.
 	_ = e.writer.Close()
 	select {
-	case err := <-e.done:
-		return err
+	case <-e.done:
+		return e.ExitError()
 	case <-ctx.Done():
-		// The edge did not stop in time; signal is not permitted across uids,
-		// so escalate to SIGKILL of the child pid.
+		// The edge did not stop in time. Signalling across uids is often not
+		// permitted (the parent dropped privileges), so escalate to SIGKILL of
+		// the child pid best-effort, then wait a short bounded time for the
+		// reaper to observe the exit. Never wait without a deadline: a failed
+		// kill must not hang shutdown.
 		_ = e.cmd.Process.Kill()
-		<-e.done
+		select {
+		case <-e.done:
+		case <-time.After(2 * time.Second):
+			e.log.Warn("embedded mx edge did not exit after kill", "pid", e.cmd.Process.Pid)
+		}
 		return ctx.Err()
 	}
 }
 
-// Wait returns a channel that receives the child's exit. It is used by the
+// Wait returns a channel closed when the child exits. It is used by the
 // parent's reaper so an unexpected edge exit is observed.
-func (e *Edge) Wait() <-chan error { return e.done }
+func (e *Edge) Wait() <-chan struct{} { return e.done }
+
+// ExitError returns the child's exit error, or nil if it has not exited or
+// exited cleanly. It is safe to call from any goroutine.
+func (e *Edge) ExitError() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.err
+}
 
 // StopTimeout is the grace window for the edge to drain in-flight SMTP before
 // it is force-killed.

@@ -3,10 +3,31 @@
 package htmlsanitize
 
 import (
+	"regexp"
 	"sync"
 
 	"github.com/microcosm-cc/bluemonday"
 )
+
+// remoteImgRe matches <img> tags whose src is an absolute remote URL. The
+// sanitize policy allows remote images through; StripRemoteImages removes them
+// from the default (non-opt-in) rendering so opening mail cannot phone the
+// sender. CID rewrites are same-origin and untouched, as are data: images.
+var remoteImgRe = regexp.MustCompile(`(?i)<img\b[^>]*\bsrc\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)[^>]*>`)
+
+// StripRemoteImages removes remote-src <img> tags from already-sanitized HTML.
+func StripRemoteImages(s string) string {
+	if s == "" {
+		return ""
+	}
+	return remoteImgRe.ReplaceAllString(s, "")
+}
+
+// HasRemoteImages reports whether the HTML references any remote image, so the
+// UI can offer the "show images" opt-in only when it would do something.
+func HasRemoteImages(s string) bool {
+	return s != "" && remoteImgRe.MatchString(s)
+}
 
 var (
 	policyOnce sync.Once

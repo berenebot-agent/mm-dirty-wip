@@ -89,11 +89,11 @@ func (s *Service) ensureAttachmentHashes(ctx context.Context, accountID, draftID
 
 // newApprovalToken returns a URL-safe random token and its stored hash. The
 // plaintext is only ever placed in the approval email; only the hash is kept.
-// 12 bytes (96 bits) is used so the token stays short in an email subject while
-// remaining infeasible to guess; the decision is additionally bound to the
-// approver address, single use and an expiry.
+// 16 bytes (128 bits) comfortably exceeds the prior 96 bits at negligible cost,
+// while remaining short enough for an email subject; the decision is
+// additionally bound to the approver address, single use and an expiry.
 func newApprovalToken() (string, string, error) {
-	b := make([]byte, 12)
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", "", err
 	}
