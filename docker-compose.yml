@@ -17,6 +17,8 @@ services:
 
   # Optional direct-SMTP (MX) ingress:  docker compose --profile mx up -d
   # Runs the same image with the MX entrypoint; holds no /data and no app key.
+  # Boots as root only to fix up its staging dir, then drops to the runtime user
+  # in-process (internal/privdrop) before serving mail.
   gatehouse-mx:
     profiles: ["mx"]
     image: gatehouse-mail:latest

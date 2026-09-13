@@ -93,10 +93,14 @@ The compose service overrides `entrypoint` explicitly. Do **not** use
 `command:` alone — the image has a fixed `ENTRYPOINT`, so a command would be
 passed as an argument to the application instead of starting the edge.
 
-The default compose passes only the three required edge variables
-(`GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`) and leaves the rest
-at their code defaults; `docker-compose.advanced.yml` carries the full tuning
-set. Give the edge its own environment (never the app `.env`):
+The edge boots as root only to chown its staging directory to the runtime user
+and then drops privileges in-process (`internal/privdrop`) before serving mail,
+so the compose needs no `user:`/`cap_drop:` and `GATEHOUSE_RUN_UID`/`GID` select
+the runtime user exactly as they do for the app. It then listens on an
+unprivileged internal port. The default compose passes only the three required
+edge variables (`GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`) and
+leaves the rest at their code defaults; `docker-compose.advanced.yml` carries the
+full tuning set. Give the edge its own environment (never the app `.env`):
 
 ```env
 GATEHOUSE_INGEST_URL=http://gatehouse-mail:8082

@@ -1,9 +1,11 @@
-// Package privdrop covers the deployment case where Gatehouse Mail is started
-// as root — for example the default image (no Dockerfile USER, so the
+// Package privdrop covers the deployment case where a Gatehouse process is
+// started as root — for example the default image (no Dockerfile USER, so the
 // container boots as root) or `user: "0:0"` in Compose — so a Docker-created
-// bind-mount data directory can be fixed up without host-side chown commands.
-// It hands the data directory to the image's non-root runtime user and then
-// drops privileges before the database is opened or any request is served.
+// bind-mount directory can be fixed up without host-side chown commands. It
+// hands the runtime directory to the image's non-root runtime user and then
+// drops privileges before the database is opened or any request is served. The
+// application passes its data directory; the MX edge passes its staging
+// directory, which is its only writable path.
 //
 // When the process is already non-root — the opt-in hardened posture with a
 // strict `user:` in compose — it is a no-op, so the read-only / caps-dropped
@@ -25,12 +27,12 @@ const (
 	DefaultGID = 65532
 )
 
-// DropToRuntimeUser chowns dataDir (recursively) to the runtime UID/GID and
+// DropToRuntimeUser chowns dir (recursively) to the runtime UID/GID and
 // switches the running process to that user. It reports whether a drop
 // actually happened and the UID/GID that was applied (whether dropped or
 // no-op, so callers can log the runtime identity without re-reading the
 // environment). Once dropped, privileges cannot be regained.
-func DropToRuntimeUser(dataDir string) (dropped bool, uid int, gid int, err error) {
+func DropToRuntimeUser(dir string) (dropped bool, uid int, gid int, err error) {
 	uid, err = envID("GATEHOUSE_RUN_UID", DefaultUID)
 	if err != nil {
 		return false, 0, 0, err
@@ -43,12 +45,12 @@ func DropToRuntimeUser(dataDir string) (dropped bool, uid int, gid int, err erro
 		return false, uid, gid, nil
 	}
 	// The bind mount may be a fresh, empty root-owned directory; create it (as
-	// root) before the walk so a missing ./data does not fail the chown.
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return false, uid, gid, fmt.Errorf("create data directory: %w", err)
+	// root) before the walk so a missing directory does not fail the chown.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false, uid, gid, fmt.Errorf("create runtime directory: %w", err)
 	}
-	if err := chownRecursive(dataDir, uid, gid); err != nil {
-		return false, uid, gid, fmt.Errorf("chown data directory: %w", err)
+	if err := chownRecursive(dir, uid, gid); err != nil {
+		return false, uid, gid, fmt.Errorf("chown runtime directory: %w", err)
 	}
 	// Supplementary groups, then group, then user: each call permanently
 	// sheds the privileges the next one depends on, so the order matters.

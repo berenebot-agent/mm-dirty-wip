@@ -85,12 +85,12 @@ services:
       - gatehouse-mail
     # Dedicated bounded writable staging (memory-backed tmpfs is bounded here,
     # and the edge is told to keep its staging under /staging). The root
-    # filesystem is read-only.
+    # filesystem is read-only. The edge boots as root only to chown /staging to
+    # the runtime user and then drops in-process (internal/privdrop), so no
+    # compose `user:` / `cap_drop:` is needed and the chown capability is shed
+    # before any mail is handled.
     read_only: true
     tmpfs:
       - /staging:rw,noexec,nosuid,nodev,size=256m,mode=0700
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
-    user: "65532:65532"

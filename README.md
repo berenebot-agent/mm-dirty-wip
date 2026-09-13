@@ -75,7 +75,8 @@ Instead of a webhook provider you can receive mail straight on port 25 with the
 optional `gatehouse-mx` edge, built into the same image. It speaks SMTP at the
 edge and calls the core over signed HMAC endpoints, keeping routing, policy,
 quota and storage in the core. The edge holds no `/data` mount and no
-`APP_ENCRYPTION_KEY`.
+`APP_ENCRYPTION_KEY`, and like the app it drops to the non-root runtime user
+in-process before serving mail.
 
 ### Minimum setup
 
