@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+
+	"gatehouse-mail/internal/mxwire"
 )
 
 var (
@@ -46,6 +48,20 @@ type InboundMessage struct {
 	Size              int64
 	DeliveryID        string
 	ProviderMessageID string
+	// EnvelopeFingerprint, when set, is the versioned MX retry identity over
+	// canonical envelope sender, canonical recipient and the SHA-256 of the
+	// original MIME. It is recorded as a durable delivery receipt so a retry
+	// (including one after the message row is deleted) deduplicates. Empty for
+	// webhook providers, whose adapter supplies DeliveryID instead.
+	EnvelopeFingerprint string
+	// AuthResults is bounded, normalized authentication evidence supplied by an
+	// authenticated adapter (the MX edge). The policy engine consumes only this;
+	// incoming Authentication-Results/Received-SPF headers are never trusted as
+	// a substitute. It is zero for webhook providers.
+	AuthResults mxwire.AuthResults
+	// TrustedAuth marks AuthResults as computed by an authenticated adapter.
+	// Without it, the core must not apply authentication-based Spam policy.
+	TrustedAuth bool
 }
 
 // InboundBinding is the account/domain/credential tuple a provider webhook

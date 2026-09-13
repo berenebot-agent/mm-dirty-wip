@@ -53,6 +53,7 @@ type Server struct {
 	flashes         *flashStore
 	assetVersion    string
 	inboundSem      chan struct{}
+	mxReplay        *mxReplayCache
 }
 
 type ctxKey int
@@ -134,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
+	m.HandleFunc("GET /ui/inboxes/{id}/spam", s.withSession(s.uiSpam))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts", s.withSession(s.uiDrafts))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts/{draftId}/edit", s.withSession(s.uiDraftEdit))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/save", s.withSession(s.withCSRF(s.uiDraftSave)))
@@ -154,6 +156,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/messages/{id}/forward", s.withSession(s.withCSRF(s.uiForwardSend)))
 	m.HandleFunc("POST /ui/messages/{id}/delete", s.withSession(s.withCSRF(s.uiMessageDelete)))
 	m.HandleFunc("POST /ui/messages/{id}/read", s.withSession(s.withCSRF(s.uiMessageRead)))
+	m.HandleFunc("POST /ui/messages/{id}/spam", s.withSession(s.withCSRF(s.uiMessageSpam)))
 	m.HandleFunc("POST /ui/messages/{id}/labels", s.withSession(s.withCSRF(s.uiMessageLabels)))
 	m.HandleFunc("GET /ui/messages/{id}/html", s.withSession(s.uiMessageHTML))
 	m.HandleFunc("GET /ui/attachments/{id}", s.withSession(s.uiAttachment))
@@ -256,6 +259,7 @@ func (s *Server) registerInbound(m *http.ServeMux) {
 	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
 	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
+	s.registerMX(m)
 }
 
 func (s *Server) recoverer(next http.Handler) http.Handler {

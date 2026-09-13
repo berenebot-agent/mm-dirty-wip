@@ -634,6 +634,13 @@ func domainReceivingSteps(provider string) []string {
 			"In Mailgun, add this URL as the inbound route for raw MIME delivery.",
 			"Paste the HTTP webhook signing key below, then save.",
 		}
+	case "mx":
+		return []string{
+			"Point this domain's MX record at your Gatehouse MX edge hostname.",
+			"Run the optional gatehouse-mx sidecar (or a remote edge) and register its key id and secret with the core.",
+			"Publish an SPF record for the domain; DKIM and DMARC are computed at the edge.",
+			"Choose an enforcement mode below (moderate is the default), then save.",
+		}
 	default:
 		return []string{"Register the webhook URL above with the provider, then fill in the fields below and save."}
 	}

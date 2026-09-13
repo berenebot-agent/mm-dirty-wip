@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/mail"
 	"strings"
@@ -205,12 +206,21 @@ type Message struct {
 	// one-time approval token) that is queued in an inbox but is not mailbox
 	// content. It is hidden from every read surface so the token it carries is
 	// only ever seen by the nominated approver.
-	Internal   bool       `json:"-"`
-	ReceivedAt *time.Time `json:"received_at,omitempty"`
-	SentAt     *time.Time `json:"sent_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Read       bool       `json:"read"`
-	Archived   bool       `json:"archived"`
+	Internal bool `json:"-"`
+	// Spam marks an inbound message classified as Spam by the per-domain auth
+	// policy. Spam is a computed view over this flag (never a separate table),
+	// counts toward quota, and retains MIME, attachments and recovery.
+	Spam bool `json:"is_spam"`
+	// SpamReason is the bounded classification reason. AuthResults is the
+	// bounded normalized authentication evidence supplied by the authenticated
+	// MX edge; it is empty for provider webhook mail.
+	SpamReason  string          `json:"spam_reason,omitempty"`
+	AuthResults json.RawMessage `json:"auth_results,omitempty"`
+	ReceivedAt  *time.Time      `json:"received_at,omitempty"`
+	SentAt      *time.Time      `json:"sent_at,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
+	Read        bool            `json:"read"`
+	Archived    bool            `json:"archived"`
 	// Labels are free-text tags on the message. There is no account catalogue;
 	// matching ignores case (COLLATE NOCASE) and surrounding whitespace.
 	Labels         []string `json:"labels,omitempty"`
@@ -344,6 +354,7 @@ const (
 
 // Durable message event types.
 const EventMessageLabelsChanged = "message.labels_changed"
+const EventMessageSpamChanged = "message.spam_state_changed"
 
 type Draft struct {
 	ID               string   `json:"id"`

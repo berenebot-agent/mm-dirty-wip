@@ -32,6 +32,7 @@ import (
 	_ "gatehouse-mail/internal/transport/brevo"
 	_ "gatehouse-mail/internal/transport/cloudflare"
 	_ "gatehouse-mail/internal/transport/mailgun"
+	_ "gatehouse-mail/internal/transport/mx"
 	"gatehouse-mail/internal/transport/netutil"
 	_ "gatehouse-mail/internal/transport/resend"
 	_ "gatehouse-mail/internal/transport/smtp"
@@ -197,7 +198,7 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 		seen[inbox.ID] = true
 		target := msg
 		target.Recipient = rcpt
-		m, dup, derr := s.deliverStaged(ctx, provider, target, inbox, parsed, single)
+		m, dup, derr := s.deliverStaged(ctx, provider, target, inbox, parsed, single, nil)
 		if derr != nil {
 			if firstErr == nil {
 				firstErr = derr
@@ -221,11 +222,41 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	return first, anyDup, nil
 }
 
+// mxDeliverAuth carries the MX-only disposition through the shared delivery
+// primitive without widening the transport type for webhook providers.
+type mxDeliverAuth struct {
+	Spam        bool
+	Reason      string
+	AuthJSON    string
+	Fingerprint string
+}
+
+func (m *mxDeliverAuth) spam() bool { return m != nil && m.Spam }
+func (m *mxDeliverAuth) reason() string {
+	if m == nil {
+		return ""
+	}
+	return m.Reason
+}
+func (m *mxDeliverAuth) authJSON() string {
+	if m == nil {
+		return ""
+	}
+	return m.AuthJSON
+}
+func (m *mxDeliverAuth) fingerprint() string {
+	if m == nil {
+		return ""
+	}
+	return m.Fingerprint
+}
+
 // deliverStaged persists one recipient's copy of an already-parsed inbound
 // message, applying the control-mail, allow-list and quota rules for that inbox.
 // When single is true the staged temp file is moved into place (the common
-// case); for fan-out a copy is made so each inbox owns its raw MIME.
-func (s *Service) deliverStaged(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, single bool) (model.Message, bool, error) {
+// case); for fan-out a copy is made so each inbox owns its raw MIME. mx carries
+// the optional MX auth-policy disposition; it is nil for provider webhook mail.
+func (s *Service) deliverStaged(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, single bool, mx *mxDeliverAuth) (model.Message, bool, error) {
 	// A strict approval control subject, or a reply quoting the approval email's
 	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
 	// ordinary delivery, so the token never becomes mailbox content. It is
@@ -275,7 +306,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint()})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err
@@ -356,6 +387,10 @@ func (l *rateLimiter) Allow(k string) bool {
 // error. HTTP callers map it to a 400 response; any other error returned by the
 // Save methods is an internal fault and must be redacted.
 var ErrInvalidConfig = errors.New("invalid config")
+
+// ErrReplyFromSpam is returned when a send or draft would use a Spam message as
+// its reply source. The message must be released from Spam first.
+var ErrReplyFromSpam = errors.New("message is in spam; release it before replying")
 
 // invalidConfig builds a validation error without ever including a secret
 // value: only field labels and option names are reported.
@@ -949,6 +984,11 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		}
 		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
+		}
+		// A Spam message must be released before it can be a reply source, so a
+		// quarantined message cannot be used to trigger outbound mail.
+		if target.Spam {
+			return SendResult{}, ErrReplyFromSpam
 		}
 		threadID = target.ThreadID
 		inReply = target.RFCMessageID

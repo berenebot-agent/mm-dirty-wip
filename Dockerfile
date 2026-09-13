@@ -11,6 +11,13 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mail ./cmd/server
+# The optional MX edge is built into the same image. The default ENTRYPOINT
+# remains the application; an operator overrides `entrypoint` (not `command`)
+# for a sidecar to launch the edge, because a bare `command` would be passed as
+# an argument to the app.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mx ./cmd/mx
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 && rm -rf /var/lib/apt/lists/*
@@ -24,6 +31,7 @@ ARG GATEHOUSE_GID=65532
 RUN mkdir -p /data && chown ${GATEHOUSE_UID}:${GATEHOUSE_GID} /data
 
 COPY --from=build /out/gatehouse-mail /usr/local/bin/gatehouse-mail
+COPY --from=build /out/gatehouse-mx /usr/local/bin/gatehouse-mx
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/gatehouse-mail/
 VOLUME ["/data"]
 EXPOSE 8081 8082

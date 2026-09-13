@@ -45,6 +45,25 @@ type Config struct {
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
 	ApprovalExpiryHours int
+	// MXReceiveEnabled turns on the optional direct-SMTP (MX) ingress endpoints
+	// on the inbound listener. App-only deployments leave it off.
+	MXReceiveEnabled bool
+	// MXEdgeKeys maps an operator edge key ID to its HMAC secret. MX requests
+	// are authenticated by key ID, not by a self-reported edge name. Overlapping
+	// keys are accepted so a credential can be rotated without downtime.
+	MXEdgeKeys map[string]string
+	// MXSignatureSkew bounds how old a signed MX request may be.
+	MXSignatureSkew time.Duration
+	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
+	// must cover the supported sender retry window and expected outage recovery.
+	MXReceiptRetention time.Duration
+	// MXEdgeHosts optionally names the edge hostnames accepted in the signed
+	// metadata (informational; empty accepts any authenticated edge).
+	MXEdgeHosts []string
+	// InboundTLSCertFile/InboundTLSKeyFile optionally serve the inbound listener
+	// over TLS, so a remote MX edge can reach it over verified TLS.
+	InboundTLSCertFile string
+	InboundTLSKeyFile  string
 }
 
 func Load() (Config, error) {
@@ -70,6 +89,13 @@ func Load() (Config, error) {
 		MaxMIMEParts:         envInt("MAX_MIME_PARTS", 256),
 		BodyReadTimeout:      time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
 		ApprovalExpiryHours:  envInt("APPROVAL_EXPIRY_HOURS", 48),
+		MXReceiveEnabled:     envBool("MX_RECEIVE_ENABLED", false),
+		MXEdgeKeys:           parseEdgeKeys(env("MX_EDGE_KEYS", "")),
+		MXSignatureSkew:      time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
+		MXReceiptRetention:   time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
+		MXEdgeHosts:          splitCSV(env("MX_EDGE_HOSTS", "")),
+		InboundTLSCertFile:   strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
+		InboundTLSKeyFile:    strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
@@ -92,12 +118,59 @@ func Load() (Config, error) {
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
 	}
+	if cfg.MXReceiveEnabled && len(cfg.MXEdgeKeys) == 0 {
+		return Config{}, fmt.Errorf("MX_RECEIVE_ENABLED requires at least one MX_EDGE_KEYS entry")
+	}
+	if cfg.MXSignatureSkew < 0 {
+		return Config{}, fmt.Errorf("MX_SIGNATURE_SKEW_SECONDS must be zero or greater")
+	}
+	if cfg.MXReceiptRetention <= 0 {
+		return Config{}, fmt.Errorf("MX_RECEIPT_RETENTION_HOURS must be positive")
+	}
+	if (cfg.InboundTLSCertFile == "") != (cfg.InboundTLSKeyFile == "") {
+		return Config{}, fmt.Errorf("INBOUND_TLS_CERT_FILE and INBOUND_TLS_KEY_FILE must be set together")
+	}
 	proxies, err := parseTrustedProxies(env("TRUSTED_PROXIES", ""))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.TrustedProxies = proxies
 	return cfg, nil
+}
+
+// parseEdgeKeys parses MX_EDGE_KEYS, a comma-separated list of
+// "key_id:secret" pairs. Both halves are required; a malformed entry is
+// ignored so one bad pair cannot silently disable the rest. The secret is never
+// logged.
+func parseEdgeKeys(raw string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, secret, ok := strings.Cut(part, ":")
+		id = strings.TrimSpace(id)
+		secret = strings.TrimSpace(secret)
+		if !ok || id == "" || secret == "" {
+			continue
+		}
+		out[id] = secret
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func splitCSV(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // parseTrustedProxies parses a comma-separated list of IP addresses or CIDR

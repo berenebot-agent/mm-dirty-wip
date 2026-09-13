@@ -40,3 +40,52 @@ services:
     #
     #   cap_drop: [ALL]
     #   user: "${GATEHOUSE_RUN_UID:-65532}:${GATEHOUSE_RUN_GID:-65532}"
+
+  # Optional direct-SMTP (MX) sidecar. It is gated behind the `mx` compose
+  # profile so an app-only deployment never starts it:
+  #
+  #   docker compose --profile mx up -d
+  #
+  # It runs the same image with the MX entrypoint overridden explicitly. Do NOT
+  # use `command:` alone: the image has a fixed ENTRYPOINT, so a command would be
+  # passed as an argument to the application instead of starting the edge.
+  #
+  # The edge holds no /data mount, no APP_ENCRYPTION_KEY and no tenant secret.
+  # Only MX_* / GATEHOUSE_INGEST_URL from the environment are honoured; it must
+  # not inherit the app's .env, so secrets are listed explicitly.
+  gatehouse-mx:
+    profiles: ["mx"]
+    image: gatehouse-mail:latest
+    build: .
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/gatehouse-mx"]
+    environment:
+      GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse-mail:8082}
+      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID}
+      MX_EDGE_SECRET: ${MX_EDGE_SECRET}
+      MX_EDGE_NAME: ${MX_EDGE_NAME:-mx-1}
+      MX_HOSTNAME: ${MX_HOSTNAME:-mail.example.com}
+      # Bind to an unprivileged port internally; publish host :25 -> :2525.
+      MX_LISTEN_ADDR: ":2525"
+      MX_TLS_CERT: ${MX_TLS_CERT:-}
+      MX_TLS_KEY: ${MX_TLS_KEY:-}
+      MX_VERIFY_SPF: ${MX_VERIFY_SPF:-true}
+      MX_VERIFY_DKIM: ${MX_VERIFY_DKIM:-true}
+      MX_VERIFY_DMARC: ${MX_VERIFY_DMARC:-true}
+      MX_MAX_MESSAGE_BYTES: ${MX_MAX_MESSAGE_BYTES:-31457280}
+      MX_STAGING_DIR: /staging
+    ports:
+      - "0.0.0.0:25:2525"
+    depends_on:
+      - gatehouse-mail
+    # Dedicated bounded writable staging (memory-backed tmpfs is bounded here,
+    # and the edge is told to keep its staging under /staging). The root
+    # filesystem is read-only.
+    read_only: true
+    tmpfs:
+      - /staging:rw,noexec,nosuid,nodev,size=256m,mode=0700
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
