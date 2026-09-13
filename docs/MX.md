@@ -19,7 +19,7 @@ core. See decision `D031` in [DECISIONS.md](DECISIONS.md).
 Internet TCP :25
        |
        v
-gatehouse-mx (non-root, bounded staging, SMTP + SPF/DKIM/DMARC)
+gatehouse-mx (non-root, in-memory staging, SMTP + SPF/DKIM/DMARC)
        | RCPT: POST /internal/mx/resolve
        | DATA: POST /internal/mx/ingest   (one request per message)
        v
@@ -39,23 +39,17 @@ temporary failures return `451`/`452` and rely on the sending MTA to retry.
 
 ## 1. Configure the core
 
-Generate one edge secret (operator-managed; never a tenant value):
-
-```bash
-openssl rand -hex 32
-```
-
-The minimum is three values:
+The default deployment embeds the edge in the same container, so there is
+nothing to configure beyond switching MX on:
 
 ```env
 MX_RECEIVE_ENABLED=true
-MX_EDGE_SECRET=<secret>          # shared with the edge service
-MX_HOSTNAME=mail.example.com
+#MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 
-The shipped compose derives `MX_EDGE_KEYS=edge-1:<secret>` for the core and
-`MX_EDGE_KEY_ID=edge-1` for the edge from that one secret. To use custom key
-ids or overlap keys for zero-downtime rotation, set `MX_EDGE_KEYS` yourself:
+No secret is required: the embedded edge credential is generated automatically
+and shared with the core in-process. To use a fixed or rotating credential,
+set `MX_EDGE_KEYS` yourself:
 
 ```env
 #MX_EDGE_KEYS=edge-1:<old>,edge-2:<new>
@@ -82,54 +76,57 @@ INBOUND_TLS_KEY_FILE=/certs/inbound.key
 
 ## 2. Run the edge
 
-Same-image sidecar (profile-gated):
+There are three modes. **Embedded** is the default and needs no second service.
+
+### Embedded (single container, default)
 
 ```bash
-docker compose --profile mx up -d
-# hardened stack: docker compose -f docker-compose.advanced.yml --profile mx up -d
+docker compose up -d --build
 ```
 
-The compose service overrides `entrypoint` explicitly. Do **not** use
-`command:` alone — the image has a fixed `ENTRYPOINT`, so a command would be
-passed as an argument to the application instead of starting the edge.
+The app spawns `gatehouse-mx` as a child under a separate uid (`MX_UID`/`MX_GID`,
+default 65533) with a scrubbed environment, then drops its own privileges to the
+app runtime uid (65532). The edge has no `/data` access and no
+`APP_ENCRYPTION_KEY`, and writes nothing to disk (staging is in memory). This is
+DAC + separate-uid isolation, not namespaces. Because it must spawn the child
+before dropping, the container **must start as root**: a strict compose `user:`
+or `cap_drop: [ALL]` disables the uid separation and startup refuses with a
+clear error. In that case use the sidecar.
 
-The edge boots as root only to chown its staging directory to the runtime user
-and then drops privileges in-process (`internal/privdrop`) before serving mail,
-so the compose needs no `user:`/`cap_drop:` and `GATEHOUSE_RUN_UID`/`GID` select
-the runtime user exactly as they do for the app. It then listens on an
-unprivileged internal port. The default compose passes only the three required
-edge variables (`GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`) and
-leaves the rest at their code defaults; `docker-compose.advanced.yml` carries the
-full tuning set. Give the edge its own environment (never the app `.env`):
+The embedded edge is told to stop by closing an inherited pipe (the dropped
+parent cannot signal a child owned by a different uid).
+
+### Sidecar (`docker-compose.mx-sidecar.yml`)
+
+Two containers from the same image; the edge gets its own filesystem and network
+namespace. This is the strongest isolation and is recommended when you can run
+two containers:
+
+```bash
+docker compose -f docker-compose.mx-sidecar.yml up -d
+```
+
+Set a shared secret in `.env`; compose derives the core's key list and the
+edge's key id from it:
 
 ```env
-GATEHOUSE_INGEST_URL=http://gatehouse-mail:8082
-MX_EDGE_KEY_ID=edge-1
-MX_EDGE_SECRET=<same secret as the core>
-#MX_EDGE_NAME=mx-1
-#MX_HOSTNAME=mail.example.com
-#MX_LISTEN_ADDR=:2525
-#MX_STAGING_DIR=/tmp/gatehouse-mx
-#MX_HEALTH_ADDR=:8090
-#MX_TLS_CERT=/certs/mx.crt
-#MX_TLS_KEY=/certs/mx.key
-#MX_VERIFY_SPF=true
-#MX_VERIFY_DKIM=true
-#MX_VERIFY_DMARC=true
+MX_EDGE_SECRET=<long random secret>
 ```
 
-Publish host `25:2525` because the edge binds an unprivileged port internally.
-The default deployment runs it on the image's writable root filesystem and the
-edge's default staging directory; the hardened `docker-compose.advanced.yml`
-runs it as a non-root user with a read-only root filesystem and a dedicated
-bounded tmpfs staging area (`MX_STAGING_DIR=/staging`).
+The sidecar edge does **not** boot as root: staging is in memory and it holds no
+`/data`, so it needs no writable filesystem or privilege. It listens on an
+unprivileged internal port; publish host `25:2525`.
+
+### Remote
+
+The same `gatehouse-mx` binary on another host, pointed at the core's public
+HTTPS inbound address. No cert files are needed if a reverse proxy terminates
+TLS: the signature covers the method and path only, not the host or scheme.
+Forward to the core's `:8082` **without rewriting the path**.
 
 Set `MX_HEALTH_ADDR` to expose `/healthz` (liveness plus counters) and
 `/readyz` (readiness, which reflects usable core connectivity) on a separate
 port.
-
-A **remote** edge is the same binary and protocol, pointed at the core's public
-inbound TLS address.
 
 ## 3. DNS and domain setup
 

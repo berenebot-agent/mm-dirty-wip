@@ -57,6 +57,16 @@ type Config struct {
 	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
 	// must cover the supported sender retry window and expected outage recovery.
 	MXReceiptRetention time.Duration
+	// MXEmbedded is set by the container entrypoint when the app should spawn
+	// the MX edge as a child in the same container. When true with
+	// MXReceiveEnabled, cmd/server starts the edge under MXUID/MXGID. It never
+	// causes an in-process start in the sidecar/remote deployments.
+	MXEmbedded bool
+	// MXUID/MXGID are the uid/gid the embedded edge process runs as, separate
+	// from the app's runtime user, so the edge cannot read /data or the app's
+	// encryption key.
+	MXUID int
+	MXGID int
 	// InboundTLSCertFile/InboundTLSKeyFile optionally serve the inbound listener
 	// over TLS, so a remote MX edge can reach it over verified TLS.
 	InboundTLSCertFile string
@@ -90,6 +100,9 @@ func Load() (Config, error) {
 		MXEdgeKeys:           parseEdgeKeys(env("MX_EDGE_KEYS", "")),
 		MXSignatureSkew:      time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
 		MXReceiptRetention:   time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
+		MXEmbedded:           envBool("MX_EMBEDDED", false),
+		MXUID:                envInt("MX_UID", 65533),
+		MXGID:                envInt("MX_GID", 65533),
 		InboundTLSCertFile:   strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
 		InboundTLSKeyFile:    strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 	}
@@ -114,8 +127,13 @@ func Load() (Config, error) {
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
 	}
-	if cfg.MXReceiveEnabled && len(cfg.MXEdgeKeys) == 0 {
-		return Config{}, fmt.Errorf("MX_RECEIVE_ENABLED requires at least one MX_EDGE_KEYS entry")
+	// Embedded mode auto-generates an edge credential, so keys are only
+	// required for the sidecar/remote deployments that share an operator secret.
+	if cfg.MXReceiveEnabled && !cfg.MXEmbedded && len(cfg.MXEdgeKeys) == 0 {
+		return Config{}, fmt.Errorf("MX_RECEIVE_ENABLED requires at least one MX_EDGE_KEYS entry (or set MX_EMBEDDED=true to auto-generate)")
+	}
+	if cfg.MXEmbedded && (cfg.MXUID <= 0 || cfg.MXGID <= 0) {
+		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")
 	}
 	if cfg.MXSignatureSkew < 0 {
 		return Config{}, fmt.Errorf("MX_SIGNATURE_SKEW_SECONDS must be zero or greater")

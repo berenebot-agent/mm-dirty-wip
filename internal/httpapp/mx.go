@@ -266,12 +266,23 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "mx disabled")
 			return
 		}
+		s.Log.Warn("mx ingest failed", "recipients", meta.Recipients, "from", meta.EnvelopeFrom, "edge", meta.Edge, "error", err)
 		writeError(w, 500, "ingest failed")
 		return
 	}
+	code := aggregateIngestCode(res.PerRecipient)
+	if code == mxwire.CodeOK {
+		s.Log.Info("mx ingest accepted", "recipients", meta.Recipients, "from", meta.EnvelopeFrom, "edge", meta.Edge, "size", meta.Size, "message_id", res.MessageID)
+	} else {
+		reasons := make([]string, 0, len(res.PerRecipient))
+		for _, rr := range res.PerRecipient {
+			reasons = append(reasons, rr.Recipient+"="+string(rr.MachineCode))
+		}
+		s.Log.Warn("mx ingest rejected", "recipients", meta.Recipients, "from", meta.EnvelopeFrom, "edge", meta.Edge, "codes", reasons)
+	}
 	writeJSON(w, 200, mxwire.IngestResponse{
 		Version:      mxwire.ProtocolVersion,
-		MachineCode:  aggregateIngestCode(res.PerRecipient),
+		MachineCode:  code,
 		MessageID:    res.MessageID,
 		PerRecipient: res.PerRecipient,
 	})

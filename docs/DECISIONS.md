@@ -551,13 +551,16 @@ service entry point, migrations for receipts/`is_spam`/`auth_results_json`, the
 `cmd/mx` edge with `MX_VERIFY_SPF|DKIM|DMARC` toggles, and Spam UI/API/Relay
 handling. It stays within the existing SQLite store, event bus and filesystem
 MIME store. No new runtime service beyond the optional edge; no caching, ARC,
-BIMI, supervisor, durable edge queue or SMTP rejection in V1.
+BIMI, durable edge queue or SMTP rejection in V1. A separate embedded
+single-container mode later superseded the "all-in-one supervisor" deferral:
+`cmd/server` spawns the edge as a separate-uid child before dropping; see the
+root `DECISIONS.md` ("Embedded MX").
 
 **Deferrals:** authentication-based SMTP rejection / `on_auth_fail=delete`; ARC
-verification and trusted-forwarder policy; BIMI; all-in-one supervisor; a
-Haraka/mailauth alternate edge; policy snapshots and local rejection; durable
-edge queue and end-to-end HA; scoped credential-to-domain binding; reputation
-and content filtering; DMARC report generation; authenticated submission/relay.
+verification and trusted-forwarder policy; BIMI; a Haraka/mailauth alternate
+edge; policy snapshots and local rejection; durable edge queue and end-to-end
+HA; scoped credential-to-domain binding; reputation and content filtering; DMARC
+report generation; authenticated submission/relay.
 
 ## Future extension register
 

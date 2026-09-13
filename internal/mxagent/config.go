@@ -48,13 +48,18 @@ type Config struct {
 
 	// Bounds.
 	MaxMessageBytes int64
+	// MaxStagingBytes caps the total bytes of messages staged in memory across
+	// concurrent transactions. A new DATA that would exceed it is refused with a
+	// temporary failure rather than risking an OOM kill. Staging is RAM-only:
+	// the original bytes are held in memory for the duration of one transaction
+	// and released as soon as the core ingest completes.
+	MaxStagingBytes int64
 	MaxRecipients   int
 	MaxConnections  int
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
 	DataTimeout     time.Duration
 	DNSTimeout      time.Duration
-	StagingDir      string
 }
 
 func Load() (Config, error) {
@@ -73,13 +78,13 @@ func Load() (Config, error) {
 		VerifyDMARC:     envBool("MX_VERIFY_DMARC", true),
 		DNSResolver:     strings.TrimSpace(os.Getenv("MX_DNS_RESOLVER")),
 		MaxMessageBytes: envInt64("MX_MAX_MESSAGE_BYTES", 30<<20),
+		MaxStagingBytes: envInt64("MX_STAGING_BYTES", 256<<20),
 		MaxRecipients:   envInt("MX_MAX_RECIPIENTS", 100),
 		MaxConnections:  envInt("MX_MAX_CONNECTIONS", 256),
 		ReadTimeout:     time.Duration(envInt("MX_READ_TIMEOUT_SECONDS", 60)) * time.Second,
 		WriteTimeout:    time.Duration(envInt("MX_WRITE_TIMEOUT_SECONDS", 60)) * time.Second,
 		DataTimeout:     time.Duration(envInt("MX_DATA_TIMEOUT_SECONDS", 300)) * time.Second,
 		DNSTimeout:      time.Duration(envInt("MX_DNS_TIMEOUT_SECONDS", 10)) * time.Second,
-		StagingDir:      env("MX_STAGING_DIR", "/tmp/gatehouse-mx"),
 	}
 	if cfg.IngestURL == "" {
 		return Config{}, fmt.Errorf("GATEHOUSE_INGEST_URL is required")
@@ -89,6 +94,9 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MX_MAX_MESSAGE_BYTES is too small")
+	}
+	if cfg.MaxStagingBytes < cfg.MaxMessageBytes {
+		return Config{}, fmt.Errorf("MX_STAGING_BYTES must be at least MX_MAX_MESSAGE_BYTES")
 	}
 	if cfg.MaxRecipients < 1 || cfg.MaxConnections < 1 {
 		return Config{}, fmt.Errorf("MX_MAX_RECIPIENTS and MX_MAX_CONNECTIONS must be at least 1")

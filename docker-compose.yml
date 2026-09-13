@@ -1,35 +1,21 @@
 services:
-  gatehouse-mail:
+  gatehouse:
     image: gatehouse-mail:latest
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
-      # Derives the core's MX edge credential from MX_EDGE_SECRET so the
-      # optional edge below needs only one shared secret. Harmless when MX is off.
-      MX_EDGE_KEYS: ${MX_EDGE_KEYS:-edge-1:${MX_EDGE_SECRET:-}}
+      # Run the direct-SMTP (MX) edge inside this container. Turn receiving on
+      # with MX_RECEIVE_ENABLED=true in .env; set MX_EMBEDDED=false here for a
+      # sidecar/remote core that runs the edge separately.
+      MX_EMBEDDED: ${MX_EMBEDDED:-true}
     volumes:
       - ./data:/data
     ports:
-      # :8081 = API + web UI; :8082 = inbound webhooks only.
+      # :8081 = API + web UI + webhook delivery connector.
       - "0.0.0.0:8081:8081"
+      # :8082 = inbound webhook connector for delivery only. 
+      # If using Web+API on LAN only can increase security by only exposing this to public internet.
       - "0.0.0.0:8082:8082"
-
-  # Optional direct-SMTP (MX) ingress:  docker compose --profile mx up -d
-  # Runs the same image with the MX entrypoint; holds no /data and no app key.
-  # Boots as root only to fix up its staging dir, then drops to the runtime user
-  # in-process (internal/privdrop) before serving mail.
-  gatehouse-mx:
-    profiles: ["mx"]
-    image: gatehouse-mail:latest
-    build: .
-    restart: unless-stopped
-    entrypoint: ["/usr/local/bin/gatehouse-mx"]
-    environment:
-      GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse-mail:8082}
-      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
-      MX_EDGE_SECRET: ${MX_EDGE_SECRET}
-    ports:
+      # :25 = direct smtp if using this as mx receiver
       - "0.0.0.0:25:2525"
-    depends_on:
-      - gatehouse-mail

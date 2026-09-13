@@ -28,7 +28,7 @@ type Transport struct{}
 func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string        { return Provider }
-func (Transport) Description() string { return "Gatehouse MX (direct SMTP)" }
+func (Transport) Description() string { return "MX Direct SMTP to Gatehouse on Port 25" }
 
 // ConfigFields exposes the per-domain auth enforcement mode. There is no
 // secret: MX is enabled by the operator edge configuration, and credentials are

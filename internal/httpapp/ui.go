@@ -558,7 +558,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		for _, e := range recvEditors {
 			if e.Provider == recvProvider {
 				e.Selected = true
-				receivingLabel[d.ID] = e.ProviderLabel
+				if e.Provider == "mx" {
+					receivingLabel[d.ID] = "MX"
+				} else {
+					receivingLabel[d.ID] = e.ProviderLabel
+				}
 				receivingRegenerate[d.ID] = e.Generated
 			}
 		}

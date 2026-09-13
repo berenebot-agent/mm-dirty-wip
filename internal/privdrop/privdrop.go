@@ -44,29 +44,55 @@ func DropToRuntimeUser(dir string) (dropped bool, uid int, gid int, err error) {
 	if os.Getuid() != 0 {
 		return false, uid, gid, nil
 	}
+	if err := ChownDataDir(dir, uid, gid); err != nil {
+		return false, uid, gid, err
+	}
+	if err := DropTo(uid, gid); err != nil {
+		return false, uid, gid, err
+	}
+	return true, uid, gid, nil
+}
+
+// ChownDataDir creates dir if absent, chowns it recursively to uid/gid, and
+// forces the top-level directory to 0700. The mode is set explicitly because a
+// bind-mounted directory keeps whatever mode the host gave it (commonly 0755),
+// which would let the embedded edge's uid traverse /data even though it does
+// not own it. 0700 on the root blocks traversal for any other uid; individual
+// files inside remain 0600 from the app. Callers must already be root.
+func ChownDataDir(dir string, uid, gid int) error {
 	// The bind mount may be a fresh, empty root-owned directory; create it (as
 	// root) before the walk so a missing directory does not fail the chown.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return false, uid, gid, fmt.Errorf("create runtime directory: %w", err)
+		return fmt.Errorf("create runtime directory: %w", err)
 	}
 	if err := chownRecursive(dir, uid, gid); err != nil {
-		return false, uid, gid, fmt.Errorf("chown runtime directory: %w", err)
+		return fmt.Errorf("chown runtime directory: %w", err)
 	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return fmt.Errorf("secure runtime directory: %w", err)
+	}
+	return nil
+}
+
+// DropTo permanently sheds privileges to uid/gid (supplementary groups, then
+// group, then user). Callers must already be root. Once dropped, privileges
+// cannot be regained.
+func DropTo(uid, gid int) error {
 	// Supplementary groups, then group, then user: each call permanently
 	// sheds the privileges the next one depends on, so the order matters.
 	if err := syscall.Setgroups([]int{gid}); err != nil {
-		return false, uid, gid, fmt.Errorf("setgroups: %w", err)
+		return fmt.Errorf("setgroups: %w", err)
 	}
 	if err := syscall.Setgid(gid); err != nil {
-		return false, uid, gid, fmt.Errorf("setgid %d: %w", gid, err)
+		return fmt.Errorf("setgid %d: %w", gid, err)
 	}
 	if err := syscall.Setuid(uid); err != nil {
-		return false, uid, gid, fmt.Errorf("setuid %d: %w", uid, err)
+		return fmt.Errorf("setuid %d: %w", uid, err)
 	}
 	if actualUID := os.Getuid(); actualUID != uid {
-		return false, uid, gid, fmt.Errorf("setuid %d succeeded but process UID is %d", uid, actualUID)
+		return fmt.Errorf("setuid %d succeeded but process UID is %d", uid, actualUID)
 	}
-	return true, uid, gid, nil
+	return nil
 }
 
 // ResolvedIdentity returns the UID and GID the running process would be

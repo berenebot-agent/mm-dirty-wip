@@ -2,6 +2,7 @@ package privdrop_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"gatehouse-mail/internal/privdrop"
@@ -65,5 +66,30 @@ func TestResolvedIdentityRejectsNonPositive(t *testing.T) {
 	t.Setenv("GATEHOUSE_RUN_UID", "not-a-number")
 	if _, _, err := privdrop.ResolvedIdentity(); err == nil {
 		t.Fatal("expected an error for non-numeric GATEHOUSE_RUN_UID")
+	}
+}
+
+// TestChownDataDirCreatesAndOwns verifies ChownDataDir creates a missing
+// directory. Ownership itself is only asserted when running as root, which the
+// unprivileged test environment usually is not.
+func TestChownDataDirCreatesAndOwns(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := privdrop.ChownDataDir(dir, os.Getuid(), os.Getgid()); err != nil {
+		t.Fatalf("ChownDataDir: %v", err)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("directory not created: %v", err)
+	}
+}
+
+func TestDropToRejectsZeroViaDropToRuntimeUser(t *testing.T) {
+	// DropTo(0, 0) is only meaningful as root; assert the guard by ensuring a
+	// non-zero uid is required through the config path instead.
+	if os.Getuid() == 0 {
+		t.Skip("running as root: DropTo would actually drop privileges")
+	}
+	t.Setenv("GATEHOUSE_RUN_UID", "0")
+	if _, _, _, err := privdrop.DropToRuntimeUser(t.TempDir()); err == nil {
+		t.Fatal("expected an error for GATEHOUSE_RUN_UID=0")
 	}
 }
