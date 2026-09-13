@@ -118,7 +118,7 @@ func (v *Verifier) verifyDKIM(ctx context.Context, raw []byte, fromDomain string
 		ev := mxwire.DKIMEvidence{Domain: strings.ToLower(strings.TrimSpace(sig.Domain)), Selector: ""}
 		if sig.Err == nil {
 			ev.Result = "pass"
-			ev.Aligned = domainsAlign(fromDomain, sig.Domain, false)
+			ev.Aligned = DomainsAlign(fromDomain, sig.Domain, false)
 		} else {
 			ev.Result = dkimResult(sig.Err)
 			ev.Error = classifyDKIMErr(sig.Err)
@@ -183,10 +183,10 @@ func (v *Verifier) verifyDMARC(ctx context.Context, fromDomain string, spfEv *mx
 	}
 	ev.Policy = string(rec.Policy)
 	strict := rec.SPFAlignment == dmarc.AlignmentStrict
-	spfAligned := spfEv != nil && strings.EqualFold(spfEv.Result, "pass") && domainsAlign(fromDomain, spfEv.Domain, strict)
+	spfAligned := spfEv != nil && strings.EqualFold(spfEv.Result, "pass") && DomainsAlign(fromDomain, spfEv.Domain, strict)
 	dkimAligned := false
 	for _, d := range dkimEvs {
-		if strings.EqualFold(d.Result, "pass") && domainsAlign(fromDomain, d.Domain, rec.DKIMAlignment == dmarc.AlignmentStrict) {
+		if strings.EqualFold(d.Result, "pass") && DomainsAlign(fromDomain, d.Domain, rec.DKIMAlignment == dmarc.AlignmentStrict) {
 			dkimAligned = true
 			break
 		}
@@ -206,7 +206,7 @@ func (v *Verifier) verifyDMARC(ctx context.Context, fromDomain string, spfEv *mx
 // domain.
 func lookupDMARCPolicy(domain string, lookupTXT func(string) ([]string, error)) (*dmarc.Record, string, error) {
 	candidates := []string{domain}
-	if org := organizationalDomain(domain); org != "" && org != domain {
+	if org := OrganizationalDomain(domain); org != "" && org != domain {
 		candidates = append(candidates, org)
 	}
 	var lastErr error
@@ -237,10 +237,10 @@ func lookupDMARCPolicy(domain string, lookupTXT func(string) ([]string, error)) 
 	return nil, candidates[len(candidates)-1], dmarc.ErrNoPolicy
 }
 
-// domainsAlign reports whether a checked domain aligns with the From domain.
+// DomainsAlign reports whether a checked domain aligns with the From domain.
 // Relaxed alignment compares organizational domains; strict requires an exact
 // match.
-func domainsAlign(fromDomain, checked string, strict bool) bool {
+func DomainsAlign(fromDomain, checked string, strict bool) bool {
 	from := strings.ToLower(strings.TrimSpace(fromDomain))
 	got := strings.ToLower(strings.TrimSpace(checked))
 	if from == "" || got == "" {
@@ -249,15 +249,15 @@ func domainsAlign(fromDomain, checked string, strict bool) bool {
 	if strict {
 		return from == got
 	}
-	return organizationalDomain(from) == organizationalDomain(got)
+	return OrganizationalDomain(from) == OrganizationalDomain(got)
 }
 
-// organizationalDomain is a deliberately small public-suffix approximation: it
+// OrganizationalDomain is a deliberately small public-suffix approximation: it
 // treats the last two labels as the organizational domain for the common case
 // and keeps three for known two-label public suffixes. Full PSL data is a
 // future refinement; this matches how the policy is consumed locally and never
 // by itself authorizes a decision.
-func organizationalDomain(domain string) string {
+func OrganizationalDomain(domain string) string {
 	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 	labels := strings.Split(domain, ".")
 	if len(labels) <= 2 {

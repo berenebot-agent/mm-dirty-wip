@@ -61,13 +61,40 @@ https://your-host.example/internal/ingest/resend
 
 Resend also works as a sending provider (see below).
 
+## Direct SMTP (MX) inbound — optional
+
+Instead of a webhook provider you can receive mail straight on port 25 with the
+optional `gatehouse-mx` edge, built into the same image. It speaks SMTP at the
+edge and calls the core over signed HMAC endpoints, keeping routing, policy,
+quota and storage in the core. The edge holds no `/data` mount and no
+`APP_ENCRYPTION_KEY`.
+
+1. Enable MX in the app environment and register an operator edge key:
+   `MX_RECEIVE_ENABLED=true` and `MX_EDGE_KEYS=edge-1:<secret>`.
+2. Run the edge (profile-gated sidecar):
+
+   ```bash
+   docker compose --profile mx up -d
+   ```
+
+   Give it `GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`,
+   `MX_HOSTNAME` and (for STARTTLS) `MX_TLS_CERT`/`MX_TLS_KEY`.
+3. Point the domain's MX record at the edge hostname and publish SPF.
+4. In the Admin UI, set the domain's receiving provider to **Gatehouse MX (direct
+   SMTP)** and choose an enforcement mode (moderate default, or hard).
+
+Full details, the wire contract, authentication policy, Spam handling and retry
+semantics are in [docs/MX.md](docs/MX.md).
+
 ## Dedicated inbound listener
 
 The server always listens on two ports:
 
 - `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
-- `:8082` is a dedicated listener that serves **only** the inbound webhook routes
-  (`/internal/ingest/mailgun/raw-mime` and `/internal/ingest/{provider}`) plus `/healthz`.
+- `:8082` is a dedicated listener that serves **only** the inbound webhook and MX
+  routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`,
+  and, when `MX_RECEIVE_ENABLED=true`, `/internal/mx/resolve` and
+  `/internal/mx/ingest`) plus `/healthz`.
 
 To keep the API and UI off the public internet, expose only `:8082` to your
 reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by

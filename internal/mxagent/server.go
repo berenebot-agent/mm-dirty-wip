@@ -64,7 +64,7 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections"}
 	}
 	atomic.AddInt64(&b.s.active, 1)
-	ip := peerIP(c.Conn().RemoteAddr())
+	ip := PeerIP(c.Conn().RemoteAddr())
 	return &session{
 		srv:    b.s,
 		conn:   c,
@@ -82,7 +82,7 @@ func (b *SMTPBackend) release() {
 	atomic.AddInt64(&b.s.active, -1)
 }
 
-func peerIP(addr net.Addr) net.IP {
+func PeerIP(addr net.Addr) net.IP {
 	if addr == nil {
 		return nil
 	}
@@ -177,15 +177,15 @@ func (s *session) Data(r io.Reader) error {
 	if len(s.rcpts) == 0 {
 		return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "No valid recipients"}
 	}
-	raw, err := stageMessage(r, s.srv.cfg.StagingDir, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
+	raw, err := StageMessage(r, s.srv.cfg.StagingDir, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
 	if err != nil {
-		if errors.Is(err, errTooLarge) {
+		if errors.Is(err, ErrTooLarge) {
 			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: "Message too large"}
 		}
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
 	digest := mxwire.BodyDigest(raw)
-	fromDomain := fromHeaderDomain(raw)
+	fromDomain := FromHeaderDomain(raw)
 	ctx := context.Background()
 	auth := s.srv.verify.Verify(ctx, raw, s.peerIP, s.helo, s.from, fromDomain)
 
@@ -242,12 +242,12 @@ func (s *session) Data(r io.Reader) error {
 	return nil
 }
 
-var errTooLarge = errors.New("message too large")
+var ErrTooLarge = errors.New("message too large")
 
-// stageMessage reads all of r with a hard bound and a wall-clock deadline,
+// StageMessage reads all of r with a hard bound and a wall-clock deadline,
 // returning the exact original bytes. The message is bounded by MaxMessageBytes
 // and the edge's staging area is scratch, never a durable accepted-mail queue.
-func stageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration) ([]byte, error) {
+func StageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
@@ -267,7 +267,7 @@ func stageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration
 			return nil, res.err
 		}
 		if int64(len(res.b)) > maxBytes {
-			return nil, errTooLarge
+			return nil, ErrTooLarge
 		}
 		if len(res.b) == 0 {
 			return nil, fmt.Errorf("empty message")
@@ -285,10 +285,10 @@ func ipString(ip net.IP) string {
 	return ip.String()
 }
 
-// fromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
+// FromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
 // message's own From, which is exactly what DMARC is evaluated against; it is
 // never used as an authenticated identity.
-func fromHeaderDomain(raw []byte) string {
+func FromHeaderDomain(raw []byte) string {
 	// Bounded scan of the header block only.
 	idx := bytes.Index(raw, []byte("\r\n\r\n"))
 	if idx < 0 {

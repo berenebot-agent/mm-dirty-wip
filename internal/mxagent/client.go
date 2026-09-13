@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,7 +41,12 @@ func NewCoreClient(cfg Config) *CoreClient {
 
 type envelope struct {
 	Metadata string `json:"metadata"`
-	Body     string `json:"body"`
+	// BodyB64 carries the raw body bytes (original MIME, or the resolve JSON)
+	// base64-encoded. It must not be sent as a plain JSON string: original
+	// 8-bit MIME is not valid UTF-8 and json.Marshal would silently replace
+	// invalid bytes with U+FFFD, corrupting the message and breaking the
+	// content digest. The signature covers the decoded raw bytes.
+	BodyB64 string `json:"body_b64"`
 }
 
 func newRequestID() string {
@@ -58,7 +64,7 @@ func (c *CoreClient) post(ctx context.Context, path string, metaBytes, bodyBytes
 		return nil, 0, err
 	}
 	sig := mxwire.Sign(c.secret, meta.Version, c.keyID, meta.Timestamp, meta.RequestID, http.MethodPost, path, metaBytes, bodyBytes)
-	payload, err := json.Marshal(envelope{Metadata: string(metaBytes), Body: string(bodyBytes)})
+	payload, err := json.Marshal(envelope{Metadata: string(metaBytes), BodyB64: base64.StdEncoding.EncodeToString(bodyBytes)})
 	if err != nil {
 		return nil, 0, err
 	}

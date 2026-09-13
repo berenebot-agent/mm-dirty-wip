@@ -1015,6 +1015,11 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
 		}
+		// Forwarding shares the reply rule: a Spam message is not a send source
+		// until it is released.
+		if target.Spam {
+			return SendResult{}, ErrReplyFromSpam
+		}
 		if subject == "" {
 			subject = ForwardSubject(target.Subject)
 		}

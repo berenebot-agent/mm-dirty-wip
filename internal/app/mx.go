@@ -190,6 +190,11 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 	})
 	if err != nil {
 		switch {
+		case errors.Is(err, transport.ErrInboundIgnored):
+			// Consumed control mail (an approval decision) is a durable, terminal
+			// outcome: acknowledge it so the edge returns 250 and the sender does
+			// not retry. The control handler records its own dedup key.
+			return MXIngestResult{Disposition: mxwire.DispositionControl, Code: mxwire.CodeOK}, nil
 		case errors.Is(err, store.ErrQuota):
 			return MXIngestResult{Code: mxwire.CodeQuota}, nil
 		case errors.Is(err, store.ErrNotFound), errors.Is(err, transport.ErrInboundUnauthorized):

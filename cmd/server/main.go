@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -61,10 +62,18 @@ func main() {
 		name string
 		srv  *http.Server
 	}
-	start := func(name, addr string, handler http.Handler) (*listener, error) {
+	start := func(name, addr string, handler http.Handler, tlsCert, tlsKey string) (*listener, error) {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, fmt.Errorf("%s listener: %w", name, err)
+		}
+		if tlsCert != "" && tlsKey != "" {
+			cert, cerr := tls.LoadX509KeyPair(tlsCert, tlsKey)
+			if cerr != nil {
+				ln.Close()
+				return nil, fmt.Errorf("%s listener TLS: %w", name, cerr)
+			}
+			ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
 		}
 		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.BodyReadTimeout, IdleTimeout: 90 * time.Second}
 		go func() {
@@ -77,12 +86,14 @@ func main() {
 		return &listener{name: name, srv: srv}, nil
 	}
 
-	mainListener, err := start("main", cfg.ListenAddr, h.Handler())
+	mainListener, err := start("main", cfg.ListenAddr, h.Handler(), "", "")
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)
 	}
-	inboundListener, err := start("inbound", config.InboundAddr, h.InboundHandler())
+	// The inbound connector can optionally serve TLS so a remote MX edge reaches
+	// it over verified TLS.
+	inboundListener, err := start("inbound", config.InboundAddr, h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)

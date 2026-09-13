@@ -251,6 +251,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) InboundHandler() http.Handler {
 	m := http.NewServeMux()
 	s.registerInbound(m)
+	// MX routes are only on the dedicated inbound connector, never the main
+	// API/UI listener, so an operator can expose just the connector to the edge.
+	s.registerMX(m)
 	return s.securityHeaders(s.recoverer(m))
 }
 
@@ -259,7 +262,6 @@ func (s *Server) registerInbound(m *http.ServeMux) {
 	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
 	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
-	s.registerMX(m)
 }
 
 func (s *Server) recoverer(next http.Handler) http.Handler {

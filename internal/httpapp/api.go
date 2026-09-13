@@ -36,9 +36,9 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
 		"- `POST /v1/inboxes` (Admin) — create an inbox\n\n" +
 		"## Messages\n" +
-		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages\n" +
+		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages (Spam excluded; `spam=true` lists only Spam, `include_spam=true` includes it)\n" +
 		"- `GET /v1/messages/{id}` — message detail\n" +
-		"- `PATCH /v1/messages/{id}` — set `read`/`archived`/`labels`\n" +
+		"- `PATCH /v1/messages/{id}` — set `read`/`archived`/`labels`/`spam`\n" +
 		"- `DELETE /v1/messages/{id}` (Assistant/Owner)\n" +
 		"- `GET /v1/messages/{id}/attachments` — attachment metadata\n" +
 		"- `GET /v1/attachments/{id}` — download attachment bytes\n\n" +
@@ -1470,6 +1470,12 @@ func (s *Server) ingestInbound(w http.ResponseWriter, r *http.Request) {
 	// The legacy /internal/ingest/mailgun alias was removed. Mailgun must use
 	// the raw-MIME endpoint, whose suffix is protocol-significant.
 	if provider == "mailgun" {
+		http.NotFound(w, r)
+		return
+	}
+	// The MX provider does not accept webhook dispatch; its mail arrives through
+	// the signed /internal/mx endpoints.
+	if provider == "mx" {
 		http.NotFound(w, r)
 		return
 	}
