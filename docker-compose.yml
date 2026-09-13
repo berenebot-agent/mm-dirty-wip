@@ -74,6 +74,7 @@ services:
       MX_VERIFY_DMARC: ${MX_VERIFY_DMARC:-true}
       MX_MAX_MESSAGE_BYTES: ${MX_MAX_MESSAGE_BYTES:-31457280}
       MX_STAGING_DIR: /staging
+      MX_HEALTH_ADDR: ":8090"
     ports:
       - "0.0.0.0:25:2525"
     depends_on:

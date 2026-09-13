@@ -34,6 +34,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if cfg.HealthAddr != "" {
+		go func() {
+			if err := srv.ServeHealth(ctx, cfg.HealthAddr); err != nil {
+				log.Warn("mx health listener stopped", "error", err)
+			}
+		}()
+	}
 	if err := srv.ListenAndServe(ctx, ln); err != nil && ctx.Err() == nil {
 		log.Error("mx edge stopped", "error", err)
 		os.Exit(1)

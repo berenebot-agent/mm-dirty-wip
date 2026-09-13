@@ -91,6 +91,7 @@ MX_EDGE_NAME=mx-1
 MX_HOSTNAME=mail.example.com
 MX_LISTEN_ADDR=:2525
 MX_STAGING_DIR=/staging
+#MX_HEALTH_ADDR=:8090
 #MX_TLS_CERT=/certs/mx.crt
 #MX_TLS_KEY=/certs/mx.key
 #MX_VERIFY_SPF=true
@@ -101,6 +102,10 @@ MX_STAGING_DIR=/staging
 Publish host `25:2525` because the edge binds an unprivileged port internally
 and runs as a non-root user with a read-only root filesystem and a dedicated
 bounded tmpfs staging area.
+
+Set `MX_HEALTH_ADDR` to expose `/healthz` (liveness plus counters) and
+`/readyz` (readiness, which reflects usable core connectivity) on a separate
+port.
 
 A **remote** edge is the same binary and protocol, pointed at the core's public
 inbound TLS address.
