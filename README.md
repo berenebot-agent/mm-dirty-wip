@@ -15,7 +15,7 @@ Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser
 Persistent state is stored in `./data`.
 
 This is the minimal deployment. For a hardened stack (read-only root
-filesystem, dropped capabilities, a dedicated MX staging tmpfs), use
+filesystem, a /tmp tmpfs, dropped capabilities), use
 `docker-compose.advanced.yml`:
 
 ```bash
@@ -74,39 +74,48 @@ Resend also works as a sending provider (see below).
 Instead of a webhook provider you can receive mail straight on port 25 with the
 optional `gatehouse-mx` edge, built into the same image. It speaks SMTP at the
 edge and calls the core over signed HMAC endpoints, keeping routing, policy,
-quota and storage in the core. The edge holds no `/data` mount and no
-`APP_ENCRYPTION_KEY`, and like the app it drops to the non-root runtime user
-in-process before serving mail.
+quota and storage in the core. The edge holds no `/data` access and no
+`APP_ENCRYPTION_KEY`, and stages messages in memory only.
 
-### Minimum setup
+### Minimum setup (embedded, one container)
 
-Two services, same image, one shared secret. The shipped `docker-compose.yml`
-already contains both; the edge is gated behind the `mx` profile:
+The default `docker-compose.yml` runs the app and the edge in the same
+container: the app spawns the edge under a separate unprivileged uid, then drops
+its own privileges. No secret to set — the edge credential is generated
+automatically.
 
 ```bash
-# .env — the MX additions to a normal app install
-APP_ENCRYPTION_KEY=<long random secret>
-BASE_URL=https://mail.example.com
+# .env — the only MX addition to a normal app install
 MX_RECEIVE_ENABLED=true
-MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
+#MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 
 ```bash
-docker compose --profile mx up -d
-# hardened stack: docker compose -f docker-compose.advanced.yml --profile mx up -d
+docker compose up -d --build
 ```
 
-`MX_HOSTNAME` is optional: set it to the edge's mail hostname if you want the
-SMTP greeting to use one instead of the built-in fallback. The compose derives
-both sides of the credential from `MX_EDGE_SECRET` (`MX_EDGE_KEYS=edge-1:<secret>`
-on the core, `MX_EDGE_KEY_ID=edge-1` on the edge), so you set one secret. To use
-custom key ids or overlap keys for rotation, set `MX_EDGE_KEYS` (and
-`MX_EDGE_KEY_ID`) yourself.
-
-Finally, in the Admin UI, open the domain and set **Receiving → Gatehouse MX
-(direct SMTP)**. Point the domain's MX record at the edge host and publish SPF.
+Then, in the Admin UI, open the domain and set **Receiving → Gatehouse MX
+(direct SMTP)**. Point the domain's MX record at `MX_HOSTNAME` and publish SPF.
 The domain is only an MX receiver once you set this in the UI; a domain left on
 a webhook provider is unaffected.
+
+Embedded mode requires the container to start as root (it must spawn the edge
+under a different uid before dropping). A strict compose `user:` or
+`cap_drop: [ALL]` disables that; startup then refuses with a clear error — use
+the sidecar instead. This is DAC + separate-uid isolation, not namespaces.
+
+### Sidecar (two containers, strongest isolation)
+
+The edge gets its own filesystem and network namespace. Recommended when you can
+run two containers:
+
+```bash
+# .env
+MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
+docker compose -f docker-compose.mx-sidecar.yml up -d
+```
+
+The sidecar edge does not boot as root and needs no writable filesystem.
 
 That is the whole required setup. Everything below is optional tuning.
 
@@ -119,21 +128,23 @@ Core service (`gatehouse-mail`):
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `MX_UID` / `MX_GID` | `65533` | Uid/gid the embedded edge runs as (must differ from the app's). |
 | `MX_SIGNATURE_SKEW_SECONDS` | `600` | How old a signed edge request may be (replay window bound). |
 | `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
+| `MX_EDGE_KEYS` | auto-generated | Override the edge credential (`key_id:secret`, comma-separated for rotation). |
 | `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
 
 Edge service (`gatehouse-mx`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GATEHOUSE_INGEST_URL` | `http://gatehouse-mail:8082` | Core URL (a public HTTPS proxy for a remote edge). |
+| `GATEHOUSE_INGEST_URL` | `http://127.0.0.1:8082` | Core URL (a public HTTPS proxy for a remote edge). |
 | `MX_EDGE_NAME` | `mx-1` | Edge name shown in logs and signed metadata. |
 | `MX_LISTEN_ADDR` | `:2525` | SMTP listener (unprivileged internally; publish host `25`). |
 | `MX_TLS_CERT` / `MX_TLS_KEY` | empty | Optional STARTTLS; set both or neither. |
-| `MX_STAGING_DIR` | `/tmp/gatehouse-mx` | Bounded scratch for the original message; not a durable queue. |
 | `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
-| `MX_MAX_MESSAGE_BYTES` | `31457280` | Largest message the edge stages. |
+| `MX_MAX_MESSAGE_BYTES` | `31457280` | Largest message the edge accepts. Advertised to senders as the ESMTP `SIZE` value at `EHLO` and echoed in the oversize `552` rejection. |
+| `MX_STAGING_BYTES` | `268435456` (256 MiB) | Total in-memory staging across concurrent transactions; a burst above it returns a temporary failure. |
 | `MX_MAX_RECIPIENTS` / `MX_MAX_CONNECTIONS` | `100` / `256` | Recipients per transaction and concurrent connections. |
 | `MX_READ_TIMEOUT_SECONDS` / `MX_WRITE_TIMEOUT_SECONDS` / `MX_DATA_TIMEOUT_SECONDS` | `60` / `60` / `300` | Command, write and DATA read timeouts. |
 | `MX_DNS_RESOLVER` / `MX_DNS_TIMEOUT_SECONDS` | system / `10` | Optional resolver `host:port` for SPF/DKIM/DMARC. |

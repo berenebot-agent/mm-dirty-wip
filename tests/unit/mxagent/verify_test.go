@@ -68,11 +68,13 @@ func TestFromHeaderDomain(t *testing.T) {
 }
 
 func TestStageMessageBounds(t *testing.T) {
-	dir := t.TempDir()
 	raw := strings.Repeat("A", 1000)
-	_, size, digest, err := mxagent.StageMessage(strings.NewReader(raw), dir, 2000, 5_000_000_000)
+	buf, size, digest, err := mxagent.StageMessage(strings.NewReader(raw), 2000, 5_000_000_000)
 	if err != nil {
 		t.Fatalf("stage err=%v", err)
+	}
+	if string(buf) != raw {
+		t.Fatalf("staged bytes differ")
 	}
 	if size != int64(len(raw)) {
 		t.Fatalf("stage size=%d want %d", size, len(raw))
@@ -80,10 +82,10 @@ func TestStageMessageBounds(t *testing.T) {
 	if digest != mxwire.BodyDigest([]byte(raw)) {
 		t.Fatalf("stage digest %q", digest)
 	}
-	if _, _, _, err := mxagent.StageMessage(strings.NewReader(raw), dir, 100, 5_000_000_000); err != mxagent.ErrTooLarge {
+	if _, _, _, err := mxagent.StageMessage(strings.NewReader(raw), 100, 5_000_000_000); err != mxagent.ErrTooLarge {
 		t.Fatalf("expected too large, got %v", err)
 	}
-	if _, _, _, err := mxagent.StageMessage(bytes.NewReader(nil), dir, 100, 5_000_000_000); err == nil {
+	if _, _, _, err := mxagent.StageMessage(bytes.NewReader(nil), 100, 5_000_000_000); err == nil {
 		t.Fatal("expected empty error")
 	}
 }

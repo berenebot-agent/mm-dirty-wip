@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,6 +36,7 @@ type Server struct {
 	log    *slog.Logger
 
 	sem      chan struct{}
+	staging  *byteBudget
 	active   int64
 	accepted int64
 	spam     int64
@@ -49,10 +49,53 @@ func NewServer(cfg Config, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	stagingBytes := cfg.MaxStagingBytes
+	if stagingBytes < cfg.MaxMessageBytes {
+		stagingBytes = cfg.MaxMessageBytes
+	}
 	return &Server{
 		cfg: cfg, core: NewCoreClient(cfg), verify: NewVerifier(cfg), log: log,
-		sem: make(chan struct{}, cfg.MaxConnections),
+		sem:     make(chan struct{}, cfg.MaxConnections),
+		staging: newByteBudget(stagingBytes),
 	}
+}
+
+// byteBudget is a weighted semaphore bounding the total bytes staged in memory
+// across concurrent transactions. It exists so in-memory staging cannot grow
+// without limit and trigger an OOM kill; a reservation that would exceed the
+// budget is refused and the caller returns a temporary SMTP failure.
+type byteBudget struct {
+	mu    sync.Mutex
+	limit int64
+	used  int64
+}
+
+func newByteBudget(limit int64) *byteBudget { return &byteBudget{limit: limit} }
+
+// tryAcquire reserves n bytes, reporting whether the reservation fit.
+func (b *byteBudget) tryAcquire(n int64) bool {
+	if n < 0 {
+		n = 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+n > b.limit {
+		return false
+	}
+	b.used += n
+	return true
+}
+
+func (b *byteBudget) release(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	b.mu.Lock()
+	b.used -= n
+	if b.used < 0 {
+		b.used = 0
+	}
+	b.mu.Unlock()
 }
 
 // SMTPBackend implements smtp.Backend. NewSession captures the connection
@@ -158,6 +201,7 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	resp, err := s.srv.core.Resolve(ctx, []string{to})
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
+		s.srv.log.Warn("mx rcpt temporary failure", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary routing failure"}
 	}
 	for _, r := range resp.Results {
@@ -169,10 +213,12 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			return nil
 		}
 		if r.Temporary {
+			s.srv.log.Warn("mx rcpt temporary failure", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
 			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary routing failure"}
 		}
 	}
 	atomic.AddInt64(&s.srv.reject, 1)
+	s.srv.log.Warn("mx recipient rejected", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
 	return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "Unknown recipient"}
 }
 
@@ -189,25 +235,29 @@ func (s *session) Data(r io.Reader) error {
 	if len(s.rcpts) == 0 {
 		return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "No valid recipients"}
 	}
-	path, size, digest, err := StageMessage(r, s.srv.cfg.StagingDir, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
+	// Reserve the maximum this message could consume before reading it, so
+	// concurrent in-memory staging cannot exceed MX_STAGING_BYTES. If the
+	// reservation does not fit, fail the transaction temporarily rather than
+	// risk unbounded memory growth.
+	if !s.srv.staging.tryAcquire(s.srv.cfg.MaxMessageBytes) {
+		atomic.AddInt64(&s.srv.authTemp, 1)
+		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Server busy, try again later"}
+	}
+	defer s.srv.staging.release(s.srv.cfg.MaxMessageBytes)
+
+	raw, size, digest, err := StageMessage(r, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout)
 	if err != nil {
 		if errors.Is(err, ErrTooLarge) {
-			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: "Message too large"}
+			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: fmt.Sprintf("Message too large: maximum size is %d bytes", s.srv.cfg.MaxMessageBytes)}
 		}
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
-	defer os.Remove(path)
+	defer func() { raw = nil }()
 
-	f, err := os.Open(path)
-	if err != nil {
-		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
-	}
-	defer f.Close()
-
-	fromDomain := FromHeaderDomainOf(path)
+	fromDomain := FromHeaderDomain(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
 	defer cancel()
-	auth := s.srv.verify.Verify(ctx, f, s.peerIP, s.helo, s.from, fromDomain)
+	auth := s.srv.verify.Verify(ctx, bytes.NewReader(raw), s.peerIP, s.helo, s.from, fromDomain)
 
 	recipients := make([]string, 0, len(s.rcpts))
 	for _, rcpt := range s.rcpts {
@@ -221,20 +271,22 @@ func (s *session) Data(r io.Reader) error {
 		AuthResults:  auth,
 	}
 	accepted := len(s.rcpts)
-	resp, err := s.srv.core.Ingest(ctx, meta, f, size, digest)
+	from := s.from
+	resp, err := s.srv.core.Ingest(ctx, meta, bytes.NewReader(raw), size, digest)
 	s.Reset()
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
-		s.srv.log.Warn("mx ingest failed", "recipients", accepted, "error", err)
+		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "error", err)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
 	}
 
-	var transientFail, quotaFail, delivered int
+	var transientFail, quotaFail, delivered, spamCount int
 	for _, rr := range resp.PerRecipient {
 		switch rr.MachineCode {
 		case mxwire.CodeOK, mxwire.CodeDuplicate:
 			delivered++
 			if rr.Disposition == mxwire.DispositionSpam {
+				spamCount++
 				atomic.AddInt64(&s.srv.spam, 1)
 			}
 			if rr.MachineCode == mxwire.CodeDuplicate {
@@ -256,69 +308,68 @@ func (s *session) Data(r io.Reader) error {
 	}
 	atomic.AddInt64(&s.srv.accepted, int64(delivered))
 	if quotaFail > 0 {
+		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "reason", "quota")
 		return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 2, 2}, Message: "Insufficient storage"}
 	}
 	if transientFail > 0 {
 		atomic.AddInt64(&s.srv.authTemp, 1)
+		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "reason", "transient")
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
 	}
+	s.srv.log.Info("mx message accepted", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "delivered", delivered, "spam", spamCount)
 	return nil
 }
 
 var ErrTooLarge = errors.New("message too large")
 
-// StageMessage streams r to a 0600 temp file under dir, bounded by maxBytes and
-// a wall-clock deadline, returning the file path, size and hex SHA-256 digest.
-// The message is never held in memory and the staging area is scratch, never a
-// durable accepted-mail queue. On error the temp file is removed.
-func StageMessage(r io.Reader, dir string, maxBytes int64, timeout time.Duration) (string, int64, string, error) {
+// StageMessage reads the whole message into memory, bounded by maxBytes and a
+// wall-clock deadline, returning the original bytes, size and hex SHA-256.
+// Staging is RAM-only and released when the transaction completes; it is
+// scratch, never a durable accepted-mail queue. The caller bounds the aggregate
+// across concurrent transactions (MX_STAGING_BYTES).
+func StageMessage(r io.Reader, maxBytes int64, timeout time.Duration) ([]byte, int64, string, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", 0, "", err
-	}
-	f, err := os.CreateTemp(dir, "mx-*.eml")
-	if err != nil {
-		return "", 0, "", err
-	}
-	path := f.Name()
 	type result struct {
-		size int64
-		sum  [sha256.Size]byte
-		err  error
+		b   []byte
+		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		defer f.Close()
+		var buf bytes.Buffer
 		h := sha256.New()
-		n, cerr := io.Copy(io.MultiWriter(f, h), io.LimitReader(r, maxBytes+1))
-		var res result
-		res.size = n
-		res.err = cerr
-		copy(res.sum[:], h.Sum(nil))
-		ch <- res
+		// Read one byte past the cap so an oversize message is detected rather
+		// than silently truncated.
+		n, err := io.Copy(io.MultiWriter(&buf, h), io.LimitReader(r, maxBytes+1))
+		if err == nil && n > maxBytes {
+			err = ErrTooLarge
+		}
+		// go-smtp's DATA reader enforces the same cap and surfaces its own
+		// sentinel once the cap is reached; normalize it so the caller maps
+		// both paths to the same permanent 552.
+		if errors.Is(err, smtp.ErrDataTooLarge) {
+			err = ErrTooLarge
+		}
+		if err == nil && n == 0 {
+			err = fmt.Errorf("empty message")
+		}
+		if err != nil {
+			ch <- result{err: err}
+			return
+		}
+		ch <- result{b: buf.Bytes()}
 	}()
 	select {
 	case res := <-ch:
 		if res.err != nil {
-			os.Remove(path)
-			return "", 0, "", res.err
+			return nil, 0, "", res.err
 		}
-		if res.size > maxBytes {
-			os.Remove(path)
-			return "", 0, "", ErrTooLarge
-		}
-		if res.size == 0 {
-			os.Remove(path)
-			return "", 0, "", fmt.Errorf("empty message")
-		}
-		return path, res.size, hex.EncodeToString(res.sum[:]), nil
+		sum := sha256.Sum256(res.b)
+		return res.b, int64(len(res.b)), hex.EncodeToString(sum[:]), nil
 	case <-time.After(timeout):
-		// The reader goroutine will finish once go-smtp drains the data reader;
-		// removing the path now is safe on Unix even while it is still open.
-		os.Remove(path)
-		return "", 0, "", fmt.Errorf("data read timeout")
+		// The reader goroutine will finish once go-smtp drains the data reader.
+		return nil, 0, "", fmt.Errorf("data read timeout")
 	}
 }
 
@@ -327,19 +378,6 @@ func ipString(ip net.IP) string {
 		return ""
 	}
 	return ip.String()
-}
-
-// FromHeaderDomainOf reads a bounded header prefix from the staged file and
-// extracts the From domain. It never loads the whole message.
-func FromHeaderDomainOf(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	buf := make([]byte, 64<<10)
-	n, _ := io.ReadFull(f, buf)
-	return FromHeaderDomain(buf[:n])
 }
 
 // FromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
@@ -398,6 +436,9 @@ func addressDomain(v string) string {
 func (s *Server) ListenAndServe(ctx context.Context, ln net.Listener) error {
 	backend := &SMTPBackend{s: s}
 	srv := smtp.NewServer(backend)
+	// Route go-smtp's internal errors through the prefixed logger so the
+	// container stream never carries unlabelled stdlib log lines.
+	srv.ErrorLog = slog.NewLogLogger(s.log.Handler(), slog.LevelWarn)
 	srv.Domain = s.cfg.Hostname
 	srv.MaxRecipients = s.cfg.MaxRecipients
 	srv.MaxMessageBytes = s.cfg.MaxMessageBytes
@@ -483,12 +524,4 @@ func (s *Server) ServeHealth(ctx context.Context, addr string) error {
 	case err := <-errCh:
 		return err
 	}
-}
-
-// EnsureStaging creates the bounded staging directory with 0700 permissions.
-func EnsureStaging(dir string) error {
-	if strings.TrimSpace(dir) == "" {
-		return fmt.Errorf("staging dir is empty")
-	}
-	return os.MkdirAll(dir, 0o700)
 }

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -120,10 +119,10 @@ func (c *CoreClient) Resolve(ctx context.Context, recipients []string) (mxwire.R
 	return out, nil
 }
 
-// Ingest streams one staged message file to the core for the whole accepted
+// Ingest streams one staged message body to the core for the whole accepted
 // recipient set. The core fans out internally; the response carries one result
-// per recipient. file is not closed by Ingest.
-func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, file *os.File, size int64, digest string) (mxwire.IngestResponse, error) {
+// per recipient. body is read once from its current position.
+func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, body io.Reader, size int64, digest string) (mxwire.IngestResponse, error) {
 	meta.Version = mxwire.ProtocolVersion
 	meta.KeyID = c.keyID
 	meta.Timestamp = time.Now().Unix()
@@ -135,14 +134,11 @@ func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, fil
 	}
 	meta.Size = size
 	meta.ContentDigest = digest
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return mxwire.IngestResponse{}, err
-	}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}
-	b, status, err := c.post(ctx, mxwire.PathIngest, metaBytes, file, size, digest)
+	b, status, err := c.post(ctx, mxwire.PathIngest, metaBytes, body, size, digest)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}

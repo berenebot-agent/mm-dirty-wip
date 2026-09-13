@@ -322,7 +322,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 		_ = os.Remove(final)
 		return m, true, nil
 	}
-	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To)
+	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", provider)
 	s.Hub.Publish(ev)
 	return m, false, nil
 }

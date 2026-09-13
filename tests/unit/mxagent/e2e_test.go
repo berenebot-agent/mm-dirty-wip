@@ -63,12 +63,9 @@ func startEdgeWithConns(t *testing.T, coreURL string, maxConns int) (addr string
 	t.Helper()
 	cfg := mxagent.Config{
 		IngestURL: coreURL, KeyID: "edge", Secret: "secret", EdgeName: "test", Hostname: "mx.example.test",
-		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxRecipients: 10, MaxConnections: maxConns,
+		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxStagingBytes: 64 << 20, MaxRecipients: 10, MaxConnections: maxConns,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, DataTimeout: 10 * time.Second,
-		DNSTimeout: 2 * time.Second, StagingDir: t.TempDir(),
-	}
-	if err := mxagent.EnsureStaging(cfg.StagingDir); err != nil {
-		t.Fatal(err)
+		DNSTimeout: 2 * time.Second,
 	}
 	ln, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {

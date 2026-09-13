@@ -2,39 +2,69 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Embedded MX: single-container mode with a separate-uid child
+
+`MX_RECEIVE_ENABLED=true` with `MX_EMBEDDED=true` makes `cmd/server` spawn
+`gatehouse-mx` as a child process in the same container, under a different
+uid/gid (`MX_UID`/`MX_GID`, default 65533) with a scrubbed environment, then
+drop its own privileges to the app runtime user (default 65532). The edge has
+no `/data` access, no `APP_ENCRYPTION_KEY`, no `DATA_DIR` and no `MX_EDGE_KEYS`,
+and stages messages in memory. This is the default compose mode.
+
+- **Why:** operators want `docker compose up -d` to receive mail directly with
+  no second service, while still keeping the edge out of the app's data and
+  secrets. A separate process under a separate uid gives that with DAC, without
+  a new binary or a supervisor package.
+- **No separate supervisor, no `GATEHOUSE_ROLE`:** the existing app process is
+  already PID 1, so it spawns the child before its privilege drop and keeps
+  running to coordinate shutdown. There is no `cmd/gatehouse`.
+- **Shutdown is a pipe, not a signal:** after the parent drops uid it cannot
+  signal a child owned by a different uid, so the parent passes an inherited
+  write pipe and closing it (EOF) tells the edge to stop (`MX_SHUTDOWN_FD`).
+- **Refuses rather than degrading:** if the container cannot start as root to
+  spawn the child (strict `user:` or `cap_drop: [ALL]`), startup fails with the
+  two remedies (remove the hardening, or disable embedded MX and use the
+  sidecar). Silent same-uid degradation would defeat the isolation.
+- **Isolation is weaker than the sidecar:** DAC + separate uid, no mount or
+  network namespaces. `docker-compose.mx-sidecar.yml` remains the recommended
+  mode when two containers are acceptable; the embedded mode trades namespace
+  isolation for a one-container deployment.
+- **In-memory staging, capped:** the edge holds the original bytes in RAM for
+  one transaction and releases them after the core ingest, bounded by
+  `MX_STAGING_BYTES` (default 256 MiB) across concurrent transactions. A
+  reservation that would exceed the budget fails the transaction temporarily
+  (SMTP `451`) rather than risking an OOM kill; a single oversize message is a
+  permanent `552`, with the configured limit advertised to senders as the ESMTP
+  `SIZE` value at `EHLO` and echoed in the rejection text. This is a deliberate
+  reversal of the earlier disk-staging design, and it means the
+  sidecar/embedded edge needs no writable filesystem and no privilege at all.
+- **Credential:** the operator normally sets no secret; the embedded mode
+  generates one and shares it with its own core in-process. Supplying
+  `MX_EDGE_KEYS` overrides it (the lexicographically smallest key id is used,
+  deterministically). The sidecar/remote modes still require `MX_EDGE_KEYS`,
+  since the core cannot generate a secret the operator's edge would know.
+
 ## Minimal default Compose, opt-in hardening (docker-compose.advanced.yml)
 
-`docker-compose.yml` is the minimal default: the app plus the profile-gated MX
-edge, with no hardening keys. A separate, self-contained
-`docker-compose.advanced.yml` carries the previous hardened stack verbatim
+`docker-compose.yml` is the minimal default: one service running the app with
+the MX edge embedded (or a plain app when MX is off), no hardening keys. A
+separate, self-contained `docker-compose.advanced.yml` adds the hardened stack
 (`read_only`, `/tmp` tmpfs, `no-new-privileges`, the optional `cap_drop`/`user`
-block, `GATEHOUSE_RUN_UID`/`GID`, and the MX staging tmpfs with
-`MX_STAGING_DIR=/staging`).
+block, `GATEHOUSE_RUN_UID`/`GID`). `docker-compose.mx-sidecar.yml` is the
+two-container sidecar deployment.
 
 - **Why:** the hardening was the default but is not required to run. Defaults
   that restate code defaults (the app's privilege drop already defaults to
-  `65532:65532`) and the many MX keys whose values matched `internal/config` and
+  `65532:65532`) and MX keys whose values matched `internal/config` and
   `internal/mxagent` defaults made the shipped compose look far more complex
   than the actual minimum. The default now shows the real minimum; operators who
   want the hardening opt in with one `-f`.
-- **MX minimum is three edge variables:** the edge requires only
-  `GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID` and `MX_EDGE_SECRET` (the first two
-  are defaulted by compose from `MX_INGEST_URL` / `edge-1`, so the operator
-  supplies one secret). Everything else has a code default. `MX_HOSTNAME` is
-  optional and omitted from the minimal service; the edge falls back to its
-  built-in greeting hostname.
-- **No Go changes:** the minimal service relies on existing defaults, and
-  `mxagent.EnsureStaging` creates the default `/tmp/gatehouse-mx` staging
-  directory on the image's writable root filesystem. The hardened file is the
-  only place that needs the explicit staging tmpfs.
-- **The edge self-drops via `internal/privdrop`:** like the app, `cmd/mx` boots
-  as root only to chown its staging directory to the runtime user and then shed
-  privileges before serving. So the default compose needs no `user:`/`cap_drop:`
-  hardcoding to be safe, and the advanced edge no longer sets them either
-  (they conflict with the built-in drop). `GATEHOUSE_RUN_UID`/`GID` select the
-  runtime user for both the app and the edge.
-- `docker-compose.advanced.yml` is standalone (not an overlay): run
-  `docker compose -f docker-compose.advanced.yml up -d`.
+- **MX minimum is one variable:** `MX_RECEIVE_ENABLED=true`. The embedded edge
+  credential is generated automatically, so no secret is required.
+- **Embedded privilege model:** the app chowns `/data`, spawns the edge under
+  `MX_UID`/`MX_GID`, then self-drops. `cap_drop: [ALL]`/`user:` disable this;
+  embedded MX refuses to start and points at the sidecar.
+
 
 ## Workflow mail has its own outbound queue (migration 022)
 

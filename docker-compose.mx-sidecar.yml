@@ -1,0 +1,45 @@
+# Sidecar MX deployment: the edge in its own container, no /data mount and no
+# app key. This is the strongest isolation (separate mount and network
+# namespaces). Recommended over the embedded single-container mode when you can
+# run two containers.
+#
+#   docker compose -f docker-compose.mx-sidecar.yml up -d
+#
+# The app service is the shipped minimal default; the edge is added here.
+services:
+  gatehouse:
+    image: gatehouse-mail:latest
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Sidecar mode: never embed the edge, but enable the core MX endpoints.
+      MX_EMBEDDED: "false"
+      MX_RECEIVE_ENABLED: ${MX_RECEIVE_ENABLED:-true}
+      # Accept the edge's credential. Compose derives it from MX_EDGE_SECRET.
+      MX_EDGE_KEYS: ${MX_EDGE_KEYS:-edge-1:${MX_EDGE_SECRET:-}}
+    volumes:
+      - ./data:/data
+    ports:
+      - "0.0.0.0:8081:8081"
+      - "0.0.0.0:8082:8082"
+
+  gatehouse-mx:
+    image: gatehouse-mail:latest
+    build: .
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/gatehouse-mx"]
+    environment:
+      GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse:8082}
+      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
+      MX_EDGE_SECRET: ${MX_EDGE_SECRET}
+      MX_HOSTNAME: ${MX_HOSTNAME:-gatehouse-mx}
+    ports:
+      - "0.0.0.0:25:2525"
+    depends_on:
+      - gatehouse
+    # The edge stages in memory and holds no /data, so it needs no volume and
+    # no privileges. A read-only root filesystem is safe.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
