@@ -162,6 +162,15 @@ func (s *Server) mxResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 405, "method not allowed")
 		return
 	}
+	// Share the single bounded ingress budget with provider webhooks so MX is
+	// not an unbounded alternate path.
+	select {
+	case s.inboundSem <- struct{}{}:
+		defer func() { <-s.inboundSem }()
+	case <-r.Context().Done():
+		writeError(w, 499, "request cancelled")
+		return
+	}
 	metaBytes, bodyBytes, ok := s.verifyMXRequest(w, r, maxBody)
 	if !ok {
 		return
@@ -194,6 +203,15 @@ func (s *Server) mxResolve(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, 405, "method not allowed")
+		return
+	}
+	// Share the single bounded ingress budget with provider webhooks so MX is
+	// not an unbounded alternate path.
+	select {
+	case s.inboundSem <- struct{}{}:
+		defer func() { <-s.inboundSem }()
+	case <-r.Context().Done():
+		writeError(w, 499, "request cancelled")
 		return
 	}
 	bodyCap := s.Service.Config.MaxMessageBytes

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -370,6 +372,49 @@ func (s *Server) Stats() map[string]int64 {
 		"duplicates":         atomic.LoadInt64(&s.dup),
 		"rejected":           atomic.LoadInt64(&s.reject),
 		"transient":          atomic.LoadInt64(&s.authTemp),
+	}
+}
+
+// HealthHandler serves the edge's health and readiness. Readiness reflects
+// usable core connectivity: it calls the core resolve endpoint with an empty
+// recipient list, which the core accepts without side effects.
+func (s *Server) HealthHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "stats": s.Stats()})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		if _, err := s.core.Resolve(ctx, nil); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "degraded", "error": "core unreachable"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready"})
+	})
+	return mux
+}
+
+// ServeHealth serves the health handler until ctx is cancelled.
+func (s *Server) ServeHealth(ctx context.Context, addr string) error {
+	srv := &http.Server{Handler: s.HealthHandler(), ReadHeaderTimeout: 5 * time.Second}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ln) }()
+	select {
+	case <-ctx.Done():
+		shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shCtx)
+		return nil
+	case err := <-errCh:
+		return err
 	}
 }
 

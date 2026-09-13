@@ -30,6 +30,9 @@ type Config struct {
 	Hostname string
 	// ListenAddr is the SMTP listener, e.g. :2525 internally, published as :25.
 	ListenAddr string
+	// HealthAddr is an optional health/readiness listener, e.g. :8090. Empty
+	// disables it.
+	HealthAddr string
 	// TLSCertFile/TLSKeyFile optionally enable STARTTLS.
 	TLSCertFile string
 	TLSKeyFile  string
@@ -66,6 +69,7 @@ func Load() (Config, error) {
 		EdgeName:           env("MX_EDGE_NAME", "mx-1"),
 		Hostname:           env("MX_HOSTNAME", "localhost"),
 		ListenAddr:         env("MX_LISTEN_ADDR", ":2525"),
+		HealthAddr:         env("MX_HEALTH_ADDR", ""),
 		TLSCertFile:        strings.TrimSpace(os.Getenv("MX_TLS_CERT")),
 		TLSKeyFile:         strings.TrimSpace(os.Getenv("MX_TLS_KEY")),
 		VerifySPF:          envBool("MX_VERIFY_SPF", true),
