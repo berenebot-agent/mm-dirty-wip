@@ -1288,10 +1288,27 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 }
 
 // hold defers a pending message that has no outbound provider yet, without
-// counting an attempt. The message stays queued and delivers once a provider is
-// assigned to its domain (or account).
+// counting an attempt. The message stays queued and delivers once a provider
+// is assigned to its domain (or account).
 func (s *Service) hold(ctx context.Context, m model.Message) error {
 	return s.Store.HoldPending(ctx, m.AccountID, m.ID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute))
+}
+
+// failMessagePanic records a delivery panic as a failed attempt so a poison
+// message backs off rather than being reclaimed and re-panicking. It fails
+// closed: any error reading the message or writing the outcome is returned to
+// the caller, never raised, so it cannot escape the worker's own recovery.
+func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID string, cause error) error {
+	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
+	if err != nil {
+		return err
+	}
+	// Only a still-pending message is ours to fail; a concurrent delivery may
+	// have already resolved it.
+	if m.Direction != "outbound" || m.Status != "pending" {
+		return nil
+	}
+	return s.fail(ctx, m, cause, m.Provider)
 }
 
 // fail records a failed delivery attempt with exponential backoff, returning
@@ -1440,6 +1457,20 @@ func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error,
 		s.Hub.Publish(ev)
 	}
 	return err
+}
+
+// failWorkflowPanic records a workflow delivery panic as a failed attempt so a
+// poison job backs off instead of re-panicking. It fails closed: errors are
+// returned, never raised, so nothing escapes the worker's own recovery.
+func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID string, cause error) error {
+	w, err := s.Store.GetWorkflowInternal(ctx, accountID, workflowID)
+	if err != nil {
+		return err
+	}
+	if w.Status != model.WorkflowPending {
+		return nil
+	}
+	return s.failWorkflow(ctx, w, cause, w.Provider)
 }
 
 // redactWorkflow removes approval control tokens from a terminal workflow

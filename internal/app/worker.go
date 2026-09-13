@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"gatehouse-mail/internal/idgen"
@@ -66,23 +68,50 @@ func (w *OutboxWorker) run() {
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
 	// Re-scan on startup so pending messages from a previous process resume.
-	w.expireApprovals()
-	w.sweepWorkflows()
-	w.sweepMXReceipts()
-	w.deliverDue()
-	w.deliverWorkflowDue()
+	w.tick()
 	for {
 		select {
 		case <-w.stop:
 			return
 		case <-ticker.C:
-			w.expireApprovals()
-			w.sweepWorkflows()
-			w.sweepMXReceipts()
-			w.deliverDue()
-			w.deliverWorkflowDue()
+			w.tick()
 		}
 	}
+}
+
+// tick runs one maintenance and delivery pass. Each step is independently
+// panic-guarded so a fault in a sweep or one poison message cannot exit the
+// process (and with it every other inbox); the guard logs and the pass moves on.
+func (w *OutboxWorker) tick() {
+	for _, step := range []struct {
+		name string
+		fn   func()
+	}{
+		{"expireApprovals", w.expireApprovals},
+		{"sweepWorkflows", w.sweepWorkflows},
+		{"sweepMXReceipts", w.sweepMXReceipts},
+		{"deliverDue", w.deliverDue},
+		{"deliverWorkflowDue", w.deliverWorkflowDue},
+	} {
+		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// recoverUnit runs fn, converting a panic into a logged error instead of a
+// process exit. It is the outer backstop for a whole pass; per-message delivery
+// additionally records the affected unit as failed (deliverOneMessage /
+// deliverOneWorkflow). The panic value is never logged, only its type and the
+// goroutine stack, matching the HTTP recoverer's secret-safety rule (a stack
+// holds frames, not request or credential values).
+func (w *OutboxWorker) recoverUnit(name string, fn func()) (panicked error) {
+	defer func() {
+		if x := recover(); x != nil {
+			w.log.Error("worker panic recovered", "unit", name, "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
+			panicked = fmt.Errorf("panic in %s: %T", name, x)
+		}
+	}()
+	fn()
+	return nil
 }
 
 // sweepMXReceipts removes MX delivery receipts past their retention horizon.
@@ -152,11 +181,42 @@ func (w *OutboxWorker) deliverWorkflowDue() {
 			w.log.Error("workflow account lookup", "workflow_id", workflowID, "error", err)
 			continue
 		}
-		if err := w.svc.DeliverWorkflow(ctx, accountID, workflowID, w.owner); err != nil {
-			w.log.Warn("workflow delivery failed", "workflow_id", workflowID, "error", err)
-		}
+		w.deliverOneWorkflow(ctx, accountID, workflowID)
 		cancel()
 	}
+}
+
+// deliverOneWorkflow delivers a single claimed workflow job. A panic is caught
+// per job and recorded as a failed attempt, so a poison job backs off instead
+// of exiting the process or being reclaimed and re-panicking in a tight loop.
+func (w *OutboxWorker) deliverOneWorkflow(ctx context.Context, accountID, workflowID string) {
+	defer func() {
+		if x := recover(); x != nil {
+			w.log.Error("workflow delivery panic recovered", "workflow_id", workflowID, "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
+			// Recording the outcome must never itself escape: it runs inside an
+			// active recover, and a second panic here would still exit.
+			w.safeFail("workflow delivery", func(outcomeCtx context.Context) {
+				_ = w.svc.failWorkflowPanic(outcomeCtx, accountID, workflowID, fmt.Errorf("panic during workflow delivery: %T", x))
+			})
+		}
+	}()
+	if err := w.svc.DeliverWorkflow(ctx, accountID, workflowID, w.owner); err != nil {
+		w.log.Warn("workflow delivery failed", "workflow_id", workflowID, "error", err)
+	}
+}
+
+// safeFail runs fail with a bounded, cancellation-independent context and
+// absorbs any secondary panic, so a fault while recording a recovered panic
+// cannot itself terminate the process.
+func (w *OutboxWorker) safeFail(what string, fail func(context.Context)) {
+	defer func() {
+		if x := recover(); x != nil {
+			w.log.Error("panic while recording recovered failure", "unit", what, "type", fmt.Sprintf("%T", x))
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	fail(ctx)
 }
 
 // expireApprovals lapses external approval requests whose token has passed,
@@ -193,9 +253,26 @@ func (w *OutboxWorker) deliverDue() {
 			w.log.Error("outbox account lookup", "message_id", msgID, "error", err)
 			continue
 		}
-		if err := w.svc.Deliver(ctx, accountID, msgID, w.owner); err != nil {
-			w.log.Warn("outbox delivery failed", "message_id", msgID, "error", err)
-		}
+		w.deliverOneMessage(ctx, accountID, msgID)
 		cancel()
+	}
+}
+
+// deliverOneMessage delivers a single claimed message. A panic is caught per
+// message and recorded as a failed attempt so a poison message backs off
+// instead of exiting the process or being reclaimed and re-panicking hot.
+func (w *OutboxWorker) deliverOneMessage(ctx context.Context, accountID, msgID string) {
+	defer func() {
+		if x := recover(); x != nil {
+			w.log.Error("outbox delivery panic recovered", "message_id", msgID, "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
+			// Recording the outcome must never itself escape: it runs inside an
+			// active recover, and a second panic here would still exit.
+			w.safeFail("outbox delivery", func(outcomeCtx context.Context) {
+				_ = w.svc.failMessagePanic(outcomeCtx, accountID, msgID, fmt.Errorf("panic during delivery: %T", x))
+			})
+		}
+	}()
+	if err := w.svc.Deliver(ctx, accountID, msgID, w.owner); err != nil {
+		w.log.Warn("outbox delivery failed", "message_id", msgID, "error", err)
 	}
 }
