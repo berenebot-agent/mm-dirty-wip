@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -17,8 +17,8 @@ import (
 )
 
 // CoreClient talks to the core's authenticated MX endpoints. Every request
-// carries an HMAC-SHA256 signature over a bounded JSON envelope whose exact
-// transmitted metadata and body bytes are hashed.
+// carries an HMAC-SHA256 signature over the metadata and body digests, so both
+// ends can stream a large message through its hash without buffering it.
 type CoreClient struct {
 	base    string
 	keyID   string
@@ -39,40 +39,37 @@ func NewCoreClient(cfg Config) *CoreClient {
 	}
 }
 
-type envelope struct {
-	Metadata string `json:"metadata"`
-	// BodyB64 carries the raw body bytes (original MIME, or the resolve JSON)
-	// base64-encoded. It must not be sent as a plain JSON string: original
-	// 8-bit MIME is not valid UTF-8 and json.Marshal would silently replace
-	// invalid bytes with U+FFFD, corrupting the message and breaking the
-	// content digest. The signature covers the decoded raw bytes.
-	BodyB64 string `json:"body_b64"`
-}
-
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 
-// post signs and sends one request. metaBytes and bodyBytes are the exact bytes
-// that will be transmitted in the envelope, so the signature matches byte for
-// byte on the server.
-func (c *CoreClient) post(ctx context.Context, path string, metaBytes, bodyBytes []byte) ([]byte, int, error) {
+const mxSignatureHeader = "X-Gatehouse-MX-Signature"
+
+// post signs and sends one framed request: a 4-byte metadata length, the
+// metadata JSON and then the raw body stream. metaBytes and bodyDigest are the
+// exact transmitted metadata and the SHA-256 of the transmitted body, so the
+// signature matches byte for byte on the server. bodyLen is the body size.
+func (c *CoreClient) post(ctx context.Context, path string, metaBytes []byte, body io.Reader, bodyLen int64, bodyDigest string) ([]byte, int, error) {
 	var meta mxMeta
 	if err := json.Unmarshal(metaBytes, &meta); err != nil {
 		return nil, 0, err
 	}
-	sig := mxwire.Sign(c.secret, meta.Version, c.keyID, meta.Timestamp, meta.RequestID, http.MethodPost, path, metaBytes, bodyBytes)
-	payload, err := json.Marshal(envelope{Metadata: string(metaBytes), BodyB64: base64.StdEncoding.EncodeToString(bodyBytes)})
+	sig := mxwire.Sign(c.secret, meta.Version, c.keyID, meta.Timestamp, meta.RequestID, http.MethodPost, path, mxwire.MetaDigest(metaBytes), bodyDigest)
+
+	var prelude bytes.Buffer
+	if err := mxwire.WritePrelude(&prelude, metaBytes); err != nil {
+		return nil, 0, err
+	}
+	payload := io.MultiReader(bytes.NewReader(prelude.Bytes()), body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, payload)
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(payload))
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	// A known length avoids chunked transfer encoding through reverse proxies.
+	req.ContentLength = int64(prelude.Len()) + bodyLen
+	req.Header.Set("Content-Type", mxwire.IngestContentType)
 	req.Header.Set(mxSignatureHeader, sig)
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -94,24 +91,22 @@ type mxMeta struct {
 	RequestID string `json:"request_id"`
 }
 
-const mxSignatureHeader = "X-Gatehouse-MX-Signature"
-
-// Resolve asks the core for routing decisions for the given recipients.
+// Resolve asks the core for routing decisions for the given recipients. The
+// request body is tiny and framed like ingest for one code path.
 func (c *CoreClient) Resolve(ctx context.Context, recipients []string) (mxwire.ResolveResponse, error) {
 	meta := mxwire.ResolveRequest{
 		Version: mxwire.ProtocolVersion, KeyID: c.keyID, Timestamp: time.Now().Unix(),
 		RequestID: newRequestID(), Edge: c.edge,
 	}
-	body := mxwire.ResolveBody{Recipients: recipients}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
 		return mxwire.ResolveResponse{}, err
 	}
-	bodyBytes, err := json.Marshal(body)
+	bodyBytes, err := json.Marshal(mxwire.ResolveBody{Recipients: recipients})
 	if err != nil {
 		return mxwire.ResolveResponse{}, err
 	}
-	b, status, err := c.post(ctx, mxwire.PathResolve, metaBytes, bodyBytes)
+	b, status, err := c.post(ctx, mxwire.PathResolve, metaBytes, bytes.NewReader(bodyBytes), int64(len(bodyBytes)), mxwire.BodyDigest(bodyBytes))
 	if err != nil {
 		return mxwire.ResolveResponse{}, err
 	}
@@ -125,10 +120,10 @@ func (c *CoreClient) Resolve(ctx context.Context, recipients []string) (mxwire.R
 	return out, nil
 }
 
-// Ingest hands one recipient's original MIME to the core. body is the raw
-// message; the metadata carries the digest and normalized evidence. A duplicate
-// returns the recorded disposition (MachineCode duplicate).
-func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, body []byte) (mxwire.IngestResponse, error) {
+// Ingest streams one staged message file to the core for the whole accepted
+// recipient set. The core fans out internally; the response carries one result
+// per recipient. file is not closed by Ingest.
+func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, file *os.File, size int64, digest string) (mxwire.IngestResponse, error) {
 	meta.Version = mxwire.ProtocolVersion
 	meta.KeyID = c.keyID
 	meta.Timestamp = time.Now().Unix()
@@ -138,11 +133,16 @@ func (c *CoreClient) Ingest(ctx context.Context, meta mxwire.IngestMetadata, bod
 	if meta.Edge == "" {
 		meta.Edge = c.edge
 	}
+	meta.Size = size
+	meta.ContentDigest = digest
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return mxwire.IngestResponse{}, err
+	}
 	metaBytes, err := json.Marshal(meta)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}
-	b, status, err := c.post(ctx, mxwire.PathIngest, metaBytes, body)
+	b, status, err := c.post(ctx, mxwire.PathIngest, metaBytes, file, size, digest)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}

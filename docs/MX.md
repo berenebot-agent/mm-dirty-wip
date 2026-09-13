@@ -21,19 +21,21 @@ Internet TCP :25
        v
 gatehouse-mx (non-root, bounded staging, SMTP + SPF/DKIM/DMARC)
        | RCPT: POST /internal/mx/resolve
-       | DATA: POST /internal/mx/ingest   (one request per accepted recipient)
+       | DATA: POST /internal/mx/ingest   (one request per message)
        v
 gatehouse-mail inbound connector :8082
        | HMAC-verified edge identity + recipient binding
-       | per-domain auth policy + existing mailbox rules
+       | core fans out per accepted recipient: per-domain auth policy + mailbox rules
        v
 SQLite + raw MIME under /data -> durable events -> API / UI / Relay
 ```
 
-The edge returns SMTP success only after the core has durably handled every
-accepted recipient. Auth failure is a durable **Spam** delivery, not a rejection.
-There is no local durable queue: temporary failures return `451`/`452` and rely
-on the sending MTA to retry.
+The edge stages the original MIME once and sends the whole accepted recipient
+set in a single signed ingest; the core parses once and fans out internally, so
+neither side holds a full copy per recipient. The edge returns SMTP success only
+after the core has durably handled every accepted recipient. Auth failure is a
+durable **Spam** delivery, not a rejection. There is no local durable queue:
+temporary failures return `451`/`452` and rely on the sending MTA to retry.
 
 ## 1. Configure the core
 
@@ -60,9 +62,12 @@ ids or overlap keys for zero-downtime rotation, set `MX_EDGE_KEYS` yourself:
 ```
 
 The core then serves `POST /internal/mx/resolve` and
-`POST /internal/mx/ingest` on the inbound listener (`:8082`). These use
-HMAC-SHA256 over a bounded JSON envelope; unsupported versions, stale
-timestamps, replayed request IDs and unsigned fields are rejected.
+`POST /internal/mx/ingest` on the inbound listener (`:8082`). Both use
+HMAC-SHA256 over the SHA-256 digests of the request metadata and body; the
+ingest body is a raw two-part stream (a 4-byte metadata length, the metadata
+JSON, then the original MIME), so the message is streamed and hashed, never
+buffered. Unsupported versions, stale timestamps, replayed request IDs and
+unsigned fields are rejected.
 
 For a **remote** edge, terminate TLS at the core (or a proxy in front of it) so
 the edge reaches `:8082` over verified TLS. HMAC is always required even on a

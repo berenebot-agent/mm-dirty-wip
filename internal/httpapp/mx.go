@@ -2,7 +2,6 @@ package httpapp
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,34 +23,48 @@ import (
 // service path and return its recorded outcome.
 type mxReplayCache struct {
 	mu  sync.Mutex
-	m   map[string]string
+	m   map[string]replayEntry
 	seq int
 }
 
-func newMXReplayCache() *mxReplayCache { return &mxReplayCache{m: map[string]string{}} }
+type replayEntry struct {
+	fingerprint string
+	seenAt      time.Time
+}
+
+func newMXReplayCache() *mxReplayCache { return &mxReplayCache{m: map[string]replayEntry{}} }
 
 // check records requestID->fingerprint and reports whether this is a conflicting
-// reuse. Identical fingerprints (the same signed request retried) are allowed.
-func (c *mxReplayCache) check(requestID, fingerprint string) bool {
+// reuse. Identical fingerprints (the same signed request retried) are allowed,
+// including when the prior entry is older than the skew window.
+func (c *mxReplayCache) check(requestID, fingerprint string, now time.Time, skew time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq++
 	if c.seq%1024 == 0 {
-		c.sweepLocked()
+		c.sweepLocked(now, skew)
 	}
 	if prev, ok := c.m[requestID]; ok {
-		return prev != fingerprint
+		return prev.fingerprint != fingerprint
 	}
-	c.m[requestID] = fingerprint
+	c.m[requestID] = replayEntry{fingerprint: fingerprint, seenAt: now}
 	return false
 }
 
-func (c *mxReplayCache) sweepLocked() {
-	// Bounded: the cache is small and the skew window is minutes. Keep the map
-	// from growing without limit under a request-ID flood by clearing it when it
-	// gets large; IDs are only meaningful within the skew window anyway.
+// sweepLocked drops entries older than the skew window (they can no longer be
+// replayed) and keeps the map from growing without limit under a request-ID
+// flood.
+func (c *mxReplayCache) sweepLocked(now time.Time, skew time.Duration) {
+	if skew <= 0 {
+		skew = mxwire.MaxSignatureSkew
+	}
+	for id, e := range c.m {
+		if now.Sub(e.seenAt) > skew {
+			delete(c.m, id)
+		}
+	}
 	if len(c.m) > 1<<16 {
-		c.m = map[string]string{}
+		c.m = map[string]replayEntry{}
 	}
 }
 
@@ -77,74 +90,67 @@ func (s *Server) mxKey(keyID string) ([]byte, bool) {
 	return []byte(secret), ok
 }
 
-// verifyMXRequest reads the bounded metadata field, verifies the HMAC over the
-// exact transmitted metadata bytes and, when present, the body bytes, and
-// enforces replay/version rules. It returns the metadata bytes and the body.
-// The body is bounded by maxBody.
-func (s *Server) verifyMXRequest(w http.ResponseWriter, r *http.Request, maxBody int64) ([]byte, []byte, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+// mxSignedMeta is the shared signed prefix every MX request carries.
+type mxSignedMeta struct {
+	Version   string `json:"version"`
+	KeyID     string `json:"key_id"`
+	Timestamp int64  `json:"timestamp"`
+	RequestID string `json:"request_id"`
+}
+
+// verifyMXResolve reads and verifies a bounded resolve request (a framed
+// metadata prelude plus a small JSON body).
+func (s *Server) verifyMXResolve(w http.ResponseWriter, r *http.Request) ([]byte, []byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, mxwire.MaxMetadataBytes+64<<10))
 	if err != nil {
 		writeError(w, 400, "request read failed")
 		return nil, nil, false
 	}
-	if int64(len(body)) > maxBody {
-		writeError(w, 413, "request too large")
-		return nil, nil, false
-	}
-	var env struct {
-		Metadata string `json:"metadata"`
-		BodyB64  string `json:"body_b64"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		writeError(w, 400, "invalid envelope")
-		return nil, nil, false
-	}
-	metaBytes := []byte(env.Metadata)
-	if len(metaBytes) == 0 || len(metaBytes) > mxwire.MaxMetadataBytes {
-		writeError(w, 400, "invalid metadata length")
-		return nil, nil, false
-	}
-	var meta struct {
-		Version   string `json:"version"`
-		KeyID     string `json:"key_id"`
-		Timestamp int64  `json:"timestamp"`
-		RequestID string `json:"request_id"`
-	}
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		writeError(w, 400, "invalid metadata")
-		return nil, nil, false
-	}
-	bodyBytes, err := base64.StdEncoding.DecodeString(env.BodyB64)
+	metaBytes, bodyBytes, err := mxwire.SplitPreludeBytes(body)
 	if err != nil {
-		writeError(w, 400, "invalid body encoding")
+		writeError(w, 400, err.Error())
 		return nil, nil, false
 	}
-	key, ok := s.mxKey(meta.KeyID)
-	if !ok {
-		writeError(w, 401, "unauthorized")
-		return nil, nil, false
-	}
-	sig := strings.TrimSpace(r.Header.Get(mxSignatureHeader))
-	now := time.Now()
-	if err := mxwire.Verify(key, meta.Version, meta.KeyID, meta.KeyID, meta.Timestamp, meta.RequestID, r.Method, r.URL.Path, metaBytes, bodyBytes, sig, now, s.Service.Config.MXSignatureSkew); err != nil {
-		if errors.Is(err, mxwire.ErrVersion) || errors.Is(err, mxwire.ErrSkew) {
-			writeError(w, 400, err.Error())
-			return nil, nil, false
-		}
-		// A bad signature is a temporary condition for the edge (retryable), but
-		// also warrants an operator alarm. Do not leak which check failed.
-		writeError(w, 401, "unauthorized")
-		return nil, nil, false
-	}
-	fp := requestFingerprint(r.Method, r.URL.Path, metaBytes, bodyBytes)
-	if s.mxReplay.check(meta.RequestID, fp) {
-		writeError(w, 409, "replayed request id")
+	if !s.verifyMXSignature(w, r, metaBytes, mxwire.MetaDigest(metaBytes), mxwire.BodyDigest(bodyBytes)) {
 		return nil, nil, false
 	}
 	return metaBytes, bodyBytes, true
 }
 
-func requestFingerprint(method, path string, meta, body []byte) string {
+// verifyMXSignature validates version/skew/key/signature and the replay rule
+// over the supplied digests. It writes the error response itself.
+func (s *Server) verifyMXSignature(w http.ResponseWriter, r *http.Request, metaBytes []byte, metaDigest, bodyDigest string) bool {
+	var meta mxSignedMeta
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		writeError(w, 400, "invalid metadata")
+		return false
+	}
+	key, ok := s.mxKey(meta.KeyID)
+	if !ok {
+		writeError(w, 401, "unauthorized")
+		return false
+	}
+	sig := strings.TrimSpace(r.Header.Get(mxSignatureHeader))
+	now := time.Now()
+	if err := mxwire.Verify(key, meta.Version, meta.KeyID, meta.Timestamp, meta.RequestID, r.Method, r.URL.Path, metaDigest, bodyDigest, sig, now, s.Service.Config.MXSignatureSkew); err != nil {
+		if errors.Is(err, mxwire.ErrVersion) || errors.Is(err, mxwire.ErrSkew) {
+			writeError(w, 400, err.Error())
+			return false
+		}
+		// A bad signature is a temporary condition for the edge (retryable), but
+		// also warrants an operator alarm. Do not leak which check failed.
+		writeError(w, 401, "unauthorized")
+		return false
+	}
+	fp := requestFingerprint(r.Method, r.URL.Path, metaBytes, bodyDigest)
+	if s.mxReplay.check(meta.RequestID, fp, now, s.Service.Config.MXSignatureSkew) {
+		writeError(w, 409, "replayed request id")
+		return false
+	}
+	return true
+}
+
+func requestFingerprint(method, path string, meta []byte, bodyDigest string) string {
 	h := sha256.New()
 	h.Write([]byte(method))
 	h.Write([]byte{0})
@@ -152,12 +158,11 @@ func requestFingerprint(method, path string, meta, body []byte) string {
 	h.Write([]byte{0})
 	h.Write(meta)
 	h.Write([]byte{0})
-	h.Write(body)
+	h.Write([]byte(bodyDigest))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Server) mxResolve(w http.ResponseWriter, r *http.Request) {
-	const maxBody = mxwire.MaxMetadataBytes + 64<<10
 	if r.Method != http.MethodPost {
 		writeError(w, 405, "method not allowed")
 		return
@@ -171,13 +176,8 @@ func (s *Server) mxResolve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 499, "request cancelled")
 		return
 	}
-	metaBytes, bodyBytes, ok := s.verifyMXRequest(w, r, maxBody)
+	_, bodyBytes, ok := s.verifyMXResolve(w, r)
 	if !ok {
-		return
-	}
-	var meta mxwire.ResolveRequest
-	if err := json.Unmarshal(metaBytes, &meta); err != nil {
-		writeError(w, 400, "invalid metadata")
 		return
 	}
 	var rb mxwire.ResolveBody
@@ -218,15 +218,20 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 	if bodyCap <= 0 {
 		bodyCap = mxwire.DefaultMaxBodyBytes
 	}
-	// The body is base64 in the envelope, so allow 4/3 expansion plus metadata
-	// and JSON overhead before the decoded-size check rejects oversize.
-	readCap := bodyCap*4/3 + mxwire.MaxMetadataBytes + 64<<10
-	metaBytes, bodyBytes, ok := s.verifyMXRequest(w, r, readCap)
+	// Stream the metadata prelude, then the raw MIME to a temp file while
+	// hashing. Neither side buffers the whole message: the signature is over
+	// the metadata and body digests.
+	metaBytes, err := mxwire.ReadPrelude(r.Body)
+	if err != nil {
+		writeError(w, 400, "invalid metadata prelude")
+		return
+	}
+	tmp, size, digest, ok := s.stageMXStream(w, r, bodyCap)
 	if !ok {
 		return
 	}
-	if int64(len(bodyBytes)) > bodyCap {
-		writeError(w, 413, "message too large")
+	defer removeFile(tmp)
+	if !s.verifyMXSignature(w, r, metaBytes, mxwire.MetaDigest(metaBytes), digest) {
 		return
 	}
 	var meta mxwire.IngestMetadata
@@ -234,31 +239,27 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid metadata")
 		return
 	}
-	if int64(len(bodyBytes)) != meta.Size {
+	if len(meta.Recipients) == 0 {
+		writeError(w, 400, "no recipients")
+		return
+	}
+	if size != meta.Size {
 		writeError(w, 400, "size mismatch")
 		return
 	}
-	// Re-check the declared digest over the actual body bytes before any trusted
-	// side effect, so a metadata/body mismatch cannot be ingested.
-	if got := mxwire.BodyDigest(bodyBytes); got != meta.ContentDigest {
+	if digest != meta.ContentDigest {
 		writeError(w, 400, "content digest mismatch")
 		return
 	}
-	tmp, err := s.stageMXBody(bodyBytes)
-	if err != nil {
-		writeError(w, 500, "staging failed")
-		return
-	}
-	defer removeFile(tmp)
 	res, err := s.Service.IngestMX(r.Context(), app.MXIngestInput{
-		Recipient:           meta.Recipient,
-		EnvelopeFrom:        meta.EnvelopeFrom,
-		RawPath:             tmp,
-		Size:                meta.Size,
-		DeliveryFingerprint: meta.DeliveryFingerprint,
-		AuthResults:         meta.AuthResults,
-		TrustedAuth:         true,
-		ProviderMessageID:   meta.ProviderMessageID,
+		Recipients:        meta.Recipients,
+		EnvelopeFrom:      meta.EnvelopeFrom,
+		RawPath:           tmp,
+		Size:              meta.Size,
+		ContentDigest:     digest,
+		AuthResults:       meta.AuthResults,
+		TrustedAuth:       true,
+		ProviderMessageID: meta.ProviderMessageID,
 	})
 	if err != nil {
 		if errors.Is(err, app.ErrMXDisabled) {
@@ -269,34 +270,61 @@ func (s *Server) mxIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, mxwire.IngestResponse{
-		Version: mxwire.ProtocolVersion, Disposition: res.Disposition, MachineCode: res.Code,
-		MessageID: res.MessageID, Reason: res.Reason, Duplicate: res.Duplicate,
+		Version:      mxwire.ProtocolVersion,
+		MachineCode:  aggregateIngestCode(res.PerRecipient),
+		MessageID:    res.MessageID,
+		PerRecipient: res.PerRecipient,
 	})
 }
 
-// stageMXBody writes the already-buffered original MIME to a 0600 temp file
-// under the messages staging tree, matching the provider adapters' staging
-// contract. The file lives under DATA_DIR so the shared delivery primitive's
-// single-recipient os.Rename stays on one filesystem.
-func (s *Server) stageMXBody(body []byte) (string, error) {
+// aggregateIngestCode summarizes a fan-out result: a quota failure dominates, a
+// transient/unknown failure makes the whole request temporary, otherwise OK.
+func aggregateIngestCode(results []mxwire.RecipientIngestResult) mxwire.MachineCode {
+	code := mxwire.CodeOK
+	for _, r := range results {
+		switch r.MachineCode {
+		case mxwire.CodeOK, mxwire.CodeDuplicate:
+		case mxwire.CodeQuota:
+			if code != mxwire.CodeTempFail {
+				code = mxwire.CodeQuota
+			}
+		default:
+			code = mxwire.CodeTempFail
+		}
+	}
+	return code
+}
+
+// stageMXStream writes the post-prelude request body to a 0600 temp file under
+// the messages staging tree, bounded by maxBytes, returning its path, size and
+// hex SHA-256. It mirrors the provider adapters' staging contract so the shared
+// delivery primitive's os.Rename stays on one filesystem.
+func (s *Server) stageMXStream(w http.ResponseWriter, r *http.Request, maxBytes int64) (string, int64, string, bool) {
 	dir := filepath.Join(s.Service.Config.DataDir, "messages", ".tmp")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		writeError(w, 500, "staging failed")
+		return "", 0, "", false
 	}
 	f, err := os.CreateTemp(dir, "mx-*.eml")
 	if err != nil {
-		return "", err
+		writeError(w, 500, "staging failed")
+		return "", 0, "", false
 	}
-	if _, err = f.Write(body); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
+	path := f.Name()
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(r.Body, maxBytes+1))
+	cerr := f.Close()
+	if err != nil || cerr != nil {
+		os.Remove(path)
+		writeError(w, 400, "request read failed")
+		return "", 0, "", false
 	}
-	if err = f.Close(); err != nil {
-		os.Remove(f.Name())
-		return "", err
+	if n > maxBytes {
+		os.Remove(path)
+		writeError(w, 413, "request too large")
+		return "", 0, "", false
 	}
-	return f.Name(), nil
+	return path, n, hex.EncodeToString(h.Sum(nil)), true
 }
 
 func removeFile(path string) { _ = os.Remove(path) }

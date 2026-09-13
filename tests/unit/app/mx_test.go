@@ -77,14 +77,23 @@ func mxInput(t *testing.T, svc *app.Service, recipient, raw string, auth mxwire.
 	t.Helper()
 	digest := mxwire.BodyDigest([]byte(raw))
 	return app.MXIngestInput{
-		Recipient:           recipient,
-		EnvelopeFrom:        "sender@outside.test",
-		RawPath:             stageMX(t, svc, raw),
-		Size:                int64(len(raw)),
-		DeliveryFingerprint: mxwire.DeliveryFingerprint("sender@outside.test", recipient, digest),
-		AuthResults:         auth,
-		TrustedAuth:         true,
+		Recipients:    []string{recipient},
+		EnvelopeFrom:  "sender@outside.test",
+		RawPath:       stageMX(t, svc, raw),
+		Size:          int64(len(raw)),
+		ContentDigest: digest,
+		AuthResults:   auth,
+		TrustedAuth:   true,
 	}
+}
+
+// mxResult returns the single per-recipient result, failing if absent.
+func mxResult(t *testing.T, res app.MXIngestResult) mxwire.RecipientIngestResult {
+	t.Helper()
+	if len(res.PerRecipient) != 1 {
+		t.Fatalf("expected one recipient result, got %+v", res)
+	}
+	return res.PerRecipient[0]
 }
 
 const goodRaw = "From: Sender <sender@outside.test>\r\nTo: hermes@example.com\r\nSubject: direct smtp\r\nMessage-ID: <mx@test>\r\nDate: Mon, 07 Sep 2026 10:00:00 +0000\r\n\r\nbody via mx"
@@ -99,7 +108,8 @@ func TestMXIngestStoresAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Disposition != mxwire.DispositionStored || res.Code != mxwire.CodeOK {
+	r1 := mxResult(t, res)
+	if r1.Disposition != mxwire.DispositionStored || r1.MachineCode != mxwire.CodeOK {
 		t.Fatalf("unexpected result %+v", res)
 	}
 	in2 := in
@@ -108,7 +118,8 @@ func TestMXIngestStoresAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res2.Duplicate || res2.Code != mxwire.CodeDuplicate || res2.MessageID != res.MessageID {
+	r2 := mxResult(t, res2)
+	if !r2.Duplicate || r2.MachineCode != mxwire.CodeDuplicate || r2.MessageID != r1.MessageID {
 		t.Fatalf("expected duplicate, got %+v", res2)
 	}
 }
@@ -139,7 +150,7 @@ func TestMXAuthFailureGoesToSpam(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.Disposition != mxwire.DispositionSpam {
+			if r := mxResult(t, res); r.Disposition != mxwire.DispositionSpam {
 				t.Fatalf("expected spam, got %+v", res)
 			}
 		})
@@ -159,7 +170,7 @@ func TestMXModerateKeepsAlignedPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Disposition != mxwire.DispositionStored {
+	if r := mxResult(t, res); r.Disposition != mxwire.DispositionStored {
 		t.Fatalf("expected stored, got %+v", res)
 	}
 }
@@ -172,8 +183,51 @@ func TestMXUnknownRecipient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Code != mxwire.CodeUnknownRecipient {
+	if r := mxResult(t, res); r.MachineCode != mxwire.CodeUnknownRecipient {
 		t.Fatalf("expected unknown recipient, got %+v", res)
+	}
+}
+
+// TestMXFanOutToTwoRecipients verifies one ingest with two accepted recipients
+// stores one message per recipient and reports both.
+func TestMXFanOutToTwoRecipients(t *testing.T) {
+	svc, u, dom, box := mxService(t)
+	ctx := context.Background()
+	second, err := svc.Store.CreateInbox(ctx, u.AccountID, dom.ID, "ops", "Ops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := goodRaw
+	digest := mxwire.BodyDigest([]byte(raw))
+	in := app.MXIngestInput{
+		Recipients:    []string{box.Address, second.Address},
+		EnvelopeFrom:  "sender@outside.test",
+		RawPath:       stageMX(t, svc, raw),
+		Size:          int64(len(raw)),
+		ContentDigest: digest,
+		TrustedAuth:   true,
+	}
+	res, err := svc.IngestMX(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.PerRecipient) != 2 {
+		t.Fatalf("expected two results, got %+v", res)
+	}
+	for _, r := range res.PerRecipient {
+		if r.MachineCode != mxwire.CodeOK {
+			t.Fatalf("recipient %s: %+v", r.Recipient, r)
+		}
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	for _, b := range []model.Inbox{box, second} {
+		msgs, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: b.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("inbox %s stored %d messages, want 1", b.Address, len(msgs))
+		}
 	}
 }
 
@@ -196,6 +250,7 @@ func TestMXSpamNotInNormalListAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	msgID := mxResult(t, res).MessageID
 	normal, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -207,10 +262,10 @@ func TestMXSpamNotInNormalListAndRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(spam) != 1 || spam[0].ID != res.MessageID {
+	if len(spam) != 1 || spam[0].ID != msgID {
 		t.Fatalf("expected one spam message, got %d", len(spam))
 	}
-	if _, ev, err := svc.Store.SetMessageSpam(ctx, p, res.MessageID, false); err != nil || ev == nil {
+	if _, ev, err := svc.Store.SetMessageSpam(ctx, p, msgID, false); err != nil || ev == nil {
 		t.Fatalf("release: %v ev=%v", err, ev)
 	} else if ev.Type != model.EventMessageSpamChanged {
 		t.Fatalf("event type %s", ev.Type)

@@ -511,14 +511,20 @@ v1.6.0 (MIT), with transitive `go-sasl`, `go-message`, `go-milter` and the
 test-only `yaml.v3`. Recorded in `THIRD_PARTY_NOTICES.md`; approved in the root
 `AGENTS.md`.
 
-**Wire contract:** HMAC-SHA256 over a bounded, exact-bytes JSON envelope
-(protocol version, timestamp, request ID, key ID, recipient, envelope sender,
-client IP, HELO, normalized auth evidence, content digest, size) with
-constant-time verification and overlapping accepted keys for rotation. Key IDs
-map to configured operator credentials; remote links require verified TLS.
-Timestamp skew bounds replay duration, not replay itself; request IDs are bound
-to the authenticated fingerprint and conflicting reuse is rejected. Replayed
-retries return the recorded durable disposition.
+**Wire contract:** HMAC-SHA256 over the SHA-256 digests of the request metadata
+and body (protocol version, timestamp, request ID, key ID, envelope sender,
+client IP, HELO, normalized auth evidence, content digest, size, accepted
+recipient set) with constant-time verification and overlapping accepted keys
+for rotation. Signing digests lets both ends stream a large body through its
+hash with bounded memory. The ingest body is a raw two-part stream (a 4-byte
+metadata length, the metadata JSON, then the original MIME), so the message is
+never base64-buffered or JSON-escaped; resolve, being tiny, uses the same framing
+for one code path. The core parses the MIME once and fans out internally to the
+accepted recipient set, so neither side holds a copy per recipient. Key IDs map
+to configured operator credentials; remote links require verified TLS. Timestamp
+skew bounds replay duration, not replay itself; request IDs are bound to the
+authenticated fingerprint and conflicting reuse is rejected. Replayed retries
+return the recorded durable disposition.
 
 **Retry identity (refines [D016](#d016--mail-integrity-boundaries)):** the
 edge delivery fingerprint is a versioned digest over canonical envelope sender,

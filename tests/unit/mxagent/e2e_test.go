@@ -59,11 +59,11 @@ func mxCore(t *testing.T) (*app.Service, *httptest.Server, model.Inbox) {
 	return svc, srv, b
 }
 
-func startEdge(t *testing.T, coreURL string) (addr string, stop func()) {
+func startEdgeWithConns(t *testing.T, coreURL string, maxConns int) (addr string, stop func()) {
 	t.Helper()
 	cfg := mxagent.Config{
 		IngestURL: coreURL, KeyID: "edge", Secret: "secret", EdgeName: "test", Hostname: "mx.example.test",
-		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxRecipients: 10, MaxConnections: 16,
+		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxRecipients: 10, MaxConnections: maxConns,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, DataTimeout: 10 * time.Second,
 		DNSTimeout: 2 * time.Second, StagingDir: t.TempDir(),
 	}
@@ -79,6 +79,51 @@ func startEdge(t *testing.T, coreURL string) (addr string, stop func()) {
 	done := make(chan struct{})
 	go func() { _ = srv.ListenAndServe(ctx, ln); close(done) }()
 	return ln.Addr().String(), func() { cancel(); <-done }
+}
+
+func startEdge(t *testing.T, coreURL string) (addr string, stop func()) {
+	return startEdgeWithConns(t, coreURL, 16)
+}
+
+// TestEdgeConnectionSlotsReleased verifies the per-connection slot is returned
+// when a session ends, so more than MaxConnections sequential sessions all
+// succeed instead of the edge wedging with 421.
+func TestEdgeConnectionSlotsReleased(t *testing.T) {
+	_, core, box := mxCore(t)
+	addr, stop := startEdgeWithConns(t, core.URL, 2)
+	defer stop()
+
+	for i := 0; i < 5; i++ {
+		c, err := smtp.Dial(addr)
+		if err != nil {
+			t.Fatalf("session %d dial: %v", i, err)
+		}
+		if err := c.Hello("client.test"); err != nil {
+			c.Close()
+			t.Fatalf("session %d hello (slot leaked?): %v", i, err)
+		}
+		if err := c.Mail("sender@outside.test", nil); err != nil {
+			c.Close()
+			t.Fatalf("session %d mail: %v", i, err)
+		}
+		if err := c.Rcpt(box.Address, nil); err != nil {
+			c.Close()
+			t.Fatalf("session %d rcpt: %v", i, err)
+		}
+		w, err := c.Data()
+		if err != nil {
+			c.Close()
+			t.Fatalf("session %d data: %v", i, err)
+		}
+		_, _ = io.WriteString(w, "From: Sender <sender@outside.test>\r\nTo: "+box.Address+"\r\nSubject: slot\r\n\r\nbody")
+		if err := w.Close(); err != nil {
+			c.Close()
+			t.Fatalf("session %d close data: %v", i, err)
+		}
+		if err := c.Quit(); err != nil {
+			t.Fatalf("session %d quit: %v", i, err)
+		}
+	}
 }
 
 // TestEdgeSMTPSessionDeliversAndRejects performs a real SMTP transaction and

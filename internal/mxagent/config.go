@@ -1,10 +1,10 @@
 // Package mxagent implements the optional policy-free SMTP edge (cmd/mx). The
 // edge terminates SMTP on port 25, strictly frames and stages the original
 // message, computes SPF/DKIM/DMARC evidence, and hands one signed ingest
-// request per accepted recipient to the core. It holds no domain/policy
-// snapshot, no database access and no application encryption key: routing,
-// policy, quota and durable storage all live in the core behind authenticated
-// endpoints.
+// request per message (carrying the whole accepted recipient set) to the core.
+// It holds no domain/policy snapshot, no database access and no application
+// encryption key: routing, policy, quota and durable storage all live in the
+// core behind authenticated endpoints.
 package mxagent
 
 import (

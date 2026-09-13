@@ -1,6 +1,8 @@
 package mxwire_test
 
 import (
+	"bytes"
+	"io"
 	"testing"
 	"time"
 
@@ -11,25 +13,60 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	key := []byte("s3cret")
 	meta := []byte(`{"version":"mx-v1","key_id":"edge"}`)
 	body := []byte("From: a@b\r\n\r\nhi")
-	sig := mxwire.Sign(key, mxwire.ProtocolVersion, "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, body)
-	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, body, sig, time.Unix(1000, 0), time.Minute); err != nil {
+	md, bd := mxwire.MetaDigest(meta), mxwire.BodyDigest(body)
+	sig := mxwire.Sign(key, mxwire.ProtocolVersion, "edge", 1000, "req1", "POST", mxwire.PathIngest, md, bd)
+	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", 1000, "req1", "POST", mxwire.PathIngest, md, bd, sig, time.Unix(1000, 0), time.Minute); err != nil {
 		t.Fatalf("valid signature rejected: %v", err)
 	}
 	// Tampered body.
-	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, []byte("tampered"), sig, time.Unix(1000, 0), time.Minute); err == nil {
+	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", 1000, "req1", "POST", mxwire.PathIngest, md, mxwire.BodyDigest([]byte("tampered")), sig, time.Unix(1000, 0), time.Minute); err == nil {
 		t.Fatal("tampered body accepted")
 	}
 	// Wrong key id.
-	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "other", "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, body, sig, time.Unix(1000, 0), time.Minute); err == nil {
+	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "other", 1000, "req1", "POST", mxwire.PathIngest, md, bd, sig, time.Unix(1000, 0), time.Minute); err == nil {
 		t.Fatal("wrong key id accepted")
 	}
 	// Skew.
-	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, body, sig, time.Unix(100000, 0), time.Minute); err == nil {
+	if err := mxwire.Verify(key, mxwire.ProtocolVersion, "edge", 1000, "req1", "POST", mxwire.PathIngest, md, bd, sig, time.Unix(100000, 0), time.Minute); err == nil {
 		t.Fatal("stale timestamp accepted")
 	}
 	// Wrong version.
-	if err := mxwire.Verify(key, "mx-v2", "edge", "edge", 1000, "req1", "POST", mxwire.PathIngest, meta, body, sig, time.Unix(1000, 0), time.Minute); err == nil {
+	if err := mxwire.Verify(key, "mx-v2", "edge", 1000, "req1", "POST", mxwire.PathIngest, md, bd, sig, time.Unix(1000, 0), time.Minute); err == nil {
 		t.Fatal("unknown version accepted")
+	}
+}
+
+func TestPreludeRoundTrip(t *testing.T) {
+	meta := []byte(`{"version":"mx-v1","recipients":["a@b"]}`)
+	body := []byte("From: a@b\r\n\r\nhi")
+	var buf bytes.Buffer
+	if err := mxwire.WritePrelude(&buf, meta); err != nil {
+		t.Fatal(err)
+	}
+	buf.Write(body)
+	gotMeta, err := mxwire.ReadPrelude(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotMeta, meta) {
+		t.Fatalf("meta=%q", gotMeta)
+	}
+	rest, _ := io.ReadAll(&buf)
+	if !bytes.Equal(rest, body) {
+		t.Fatalf("body=%q", rest)
+	}
+	// SplitPreludeBytes agrees on the framed bytes.
+	var framed bytes.Buffer
+	if err := mxwire.WritePrelude(&framed, meta); err != nil {
+		t.Fatal(err)
+	}
+	framed.Write(body)
+	sm, sb, err := mxwire.SplitPreludeBytes(framed.Bytes())
+	if err != nil || !bytes.Equal(sm, meta) || !bytes.Equal(sb, body) {
+		t.Fatalf("split err=%v sm=%q sb=%q", err, sm, sb)
+	}
+	if _, _, err := mxwire.SplitPreludeBytes([]byte{0}); err == nil {
+		t.Fatal("short prelude accepted")
 	}
 }
 
