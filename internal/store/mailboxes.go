@@ -327,6 +327,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		}
 		for i := range out {
 			out[i].Aliases = aliasAddresses(aliases[out[i].ID])
+			out[i].AliasNames = aliasNames(aliases[out[i].ID])
 		}
 	}
 	return out, nil
@@ -337,6 +338,21 @@ func aliasAddresses(aliases []InboxAlias) []string {
 	out := make([]string, 0, len(aliases))
 	for _, a := range aliases {
 		out = append(out, a.Address)
+	}
+	return out
+}
+
+// aliasNames maps an inbox's alias addresses to their sender display names,
+// omitting aliases with no name.
+func aliasNames(aliases []InboxAlias) map[string]string {
+	out := map[string]string{}
+	for _, a := range aliases {
+		if a.DisplayName != "" {
+			out[a.Address] = a.DisplayName
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -363,17 +379,24 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	i.AllowedSenders = decodeStrings(allowed)
 	i.SenderRestricted = restricted != 0
 	i.CreatedAt = parseTime(created)
-	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name,a.display_name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
 	if err != nil {
 		return i, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var local, aliasDomain string
-		if err = rows.Scan(&local, &aliasDomain); err != nil {
+		var local, aliasDomain, aliasName string
+		if err = rows.Scan(&local, &aliasDomain, &aliasName); err != nil {
 			return i, err
 		}
-		i.Aliases = append(i.Aliases, local+"@"+aliasDomain)
+		addr := local + "@" + aliasDomain
+		i.Aliases = append(i.Aliases, addr)
+		if aliasName != "" {
+			if i.AliasNames == nil {
+				i.AliasNames = map[string]string{}
+			}
+			i.AliasNames[addr] = aliasName
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return i, err
@@ -471,25 +494,55 @@ const maxInboxAliases = 100
 // an address-to-inbox mapping, not a mailbox: the target may live on a
 // different domain of the same account.
 type InboxAlias struct {
-	ID        string    `json:"id"`
-	AccountID string    `json:"account_id"`
-	DomainID  string    `json:"domain_id"`
-	InboxID   string    `json:"inbox_id"`
-	LocalPart string    `json:"local_part"`
-	Address   string    `json:"address"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	AccountID   string    `json:"account_id"`
+	DomainID    string    `json:"domain_id"`
+	InboxID     string    `json:"inbox_id"`
+	LocalPart   string    `json:"local_part"`
+	Address     string    `json:"address"`
+	DisplayName string    `json:"display_name,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // AliasInput is one desired alias on SetInboxAliases: a local part and the id
-// of the domain it lives on (which may differ from the target inbox's domain).
+// of the domain it lives on (which may differ from the target inbox's domain),
+// plus an optional sender display name.
 type AliasInput struct {
-	DomainID  string
-	LocalPart string
+	DomainID    string
+	LocalPart   string
+	DisplayName string
+}
+
+// maxAliasDisplayName bounds an alias's sender display name.
+const maxAliasDisplayName = 128
+
+// NormalizeAliasDisplayName trims and validates an alias's sender display name.
+// An empty value clears it (falling back to the inbox name). Control characters
+// and commas are rejected: control characters would corrupt the From header,
+// and commas are significant to the parallel-field UI encoding and to RFC 5322
+// address lists.
+func NormalizeAliasDisplayName(raw string) (string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return "", nil
+	}
+	if len([]rune(v)) > maxAliasDisplayName {
+		return "", fmt.Errorf("alias display name is too long")
+	}
+	if strings.ContainsAny(v, ",\r\n") {
+		return "", fmt.Errorf("alias display name may not contain commas or newlines")
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("alias display name contains control characters")
+		}
+	}
+	return v, nil
 }
 
 // ListInboxAliases returns every alias in an account grouped by target inbox id.
 func (s *Store) ListInboxAliases(ctx context.Context, accountID string) (map[string][]InboxAlias, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT a.id,a.account_id,a.domain_id,a.inbox_id,a.local_part,d.name,a.created_at FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.account_id=? ORDER BY d.name,a.local_part`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT a.id,a.account_id,a.domain_id,a.inbox_id,a.local_part,d.name,a.display_name,a.created_at FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.account_id=? ORDER BY d.name,a.local_part`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +551,7 @@ func (s *Store) ListInboxAliases(ctx context.Context, accountID string) (map[str
 	for rows.Next() {
 		var a InboxAlias
 		var domain, created string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.InboxID, &a.LocalPart, &domain, &created); err != nil {
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.InboxID, &a.LocalPart, &domain, &a.DisplayName, &created); err != nil {
 			return nil, err
 		}
 		a.Address = a.LocalPart + "@" + domain
@@ -564,7 +617,11 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 		if len(seen) > maxInboxAliases {
 			return fmt.Errorf("too many aliases")
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_aliases(id,account_id,domain_id,inbox_id,local_part,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("al"), accountID, in.DomainID, inboxID, local, nowText()); err != nil {
+		displayName, err := NormalizeAliasDisplayName(in.DisplayName)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_aliases(id,account_id,domain_id,inbox_id,local_part,display_name,created_at) VALUES(?,?,?,?,?,?,?)`, idgen.New("al"), accountID, in.DomainID, inboxID, local, displayName, nowText()); err != nil {
 			return err
 		}
 	}
@@ -594,38 +651,40 @@ type senderQueryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// resolveSenderQuery maps a requested sender address to its canonical address
-// and the id of the domain whose sending configuration must be used. An empty
-// request, or one matching the inbox primary address, resolves to the primary
-// and the inbox's own domain. Any other address must match one of the inbox's
-// aliases, whose own domain (which may differ) is returned. A request that is
-// neither is ErrForbidden.
-func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (string, string, error) {
-	var primary, domainID string
-	if err := q.QueryRowContext(ctx, `SELECT i.local_part||'@'||d.name,i.domain_id FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID).Scan(&primary, &domainID); err != nil {
+// resolveSenderQuery maps a requested sender address to its canonical From
+// identity (display name plus address) and the id of the domain whose sending
+// configuration must be used. An empty request, or one matching the inbox
+// primary address, resolves to the primary and the inbox's own domain, using
+// the inbox display name. Any other address must match one of the inbox's
+// aliases, whose own domain (which may differ) and display name (falling back
+// to the inbox display name) are returned. A request that is neither is
+// ErrForbidden.
+func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, string, error) {
+	var primaryName, primary, domainID string
+	if err := q.QueryRowContext(ctx, `SELECT i.display_name,i.local_part||'@'||d.name,i.domain_id FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID).Scan(&primaryName, &primary, &domainID); err != nil {
 		if err == sql.ErrNoRows {
-			return "", "", ErrNotFound
+			return model.Address{}, "", ErrNotFound
 		}
-		return "", "", err
+		return model.Address{}, "", err
 	}
 	requested = strings.ToLower(strings.TrimSpace(requested))
 	if requested == "" || requested == strings.ToLower(primary) {
-		return primary, domainID, nil
+		return model.Address{Name: primaryName, Address: primary}, domainID, nil
 	}
-	var alias, aliasDomainID string
-	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID)
+	var alias, aliasDomainID, aliasName string
+	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id,COALESCE(NULLIF(a.display_name,''),i.display_name) FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id JOIN inboxes i ON i.id=a.inbox_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID, &aliasName)
 	if err == sql.ErrNoRows {
-		return "", "", ErrForbidden
+		return model.Address{}, "", ErrForbidden
 	}
 	if err != nil {
-		return "", "", err
+		return model.Address{}, "", err
 	}
-	return alias, aliasDomainID, nil
+	return model.Address{Name: aliasName, Address: alias}, aliasDomainID, nil
 }
 
-// ResolveInboxSender maps a requested sender to its canonical address and
-// sending domain (see resolveSenderQuery).
-func (s *Store) ResolveInboxSender(ctx context.Context, accountID, inboxID, requested string) (string, string, error) {
+// ResolveInboxSender maps a requested sender to its canonical From identity
+// (display name and address) and sending domain (see resolveSenderQuery).
+func (s *Store) ResolveInboxSender(ctx context.Context, accountID, inboxID, requested string) (model.Address, string, error) {
 	return resolveSenderQuery(ctx, s.read, accountID, inboxID, requested)
 }
 

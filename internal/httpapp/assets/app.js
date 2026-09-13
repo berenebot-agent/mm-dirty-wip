@@ -674,7 +674,7 @@ var initAliasEditor = (function () {
       }
     }
 
-    function addAlias(value) {
+    function addAlias(value, name) {
       if (!list) {
         return;
       }
@@ -703,6 +703,13 @@ var initAliasEditor = (function () {
       var label = document.createElement('span');
       label.className = 'addr';
       label.textContent = addr;
+      var nameInput = document.createElement('input');
+      nameInput.type = 'text';
+      nameInput.name = 'alias_name';
+      nameInput.className = 'alias-name';
+      nameInput.placeholder = 'Display name (optional)';
+      nameInput.value = (name || '').trim();
+      nameInput.maxLength = 128;
       var remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'secondary icon-btn';
@@ -715,18 +722,23 @@ var initAliasEditor = (function () {
       });
       li.appendChild(hidden);
       li.appendChild(label);
+      li.appendChild(nameInput);
       li.appendChild(remove);
       list.appendChild(li);
       refreshEmpty();
     }
 
-    function setAliases(raw) {
+    // setAliases takes the comma-joined address list and an optional parallel
+    // comma-joined name list (both emitted in the same order by the server).
+    function setAliases(raw, rawNames) {
       if (!list) {
         return;
       }
       list.innerHTML = '';
-      (raw || '').split(',').forEach(function (entry) {
-        addAlias(entry);
+      var addresses = (raw || '').split(',');
+      var names = (rawNames || '').split(',');
+      addresses.forEach(function (entry, i) {
+        addAlias(entry, names[i] || '');
       });
       refreshEmpty();
     }
@@ -971,7 +983,7 @@ function currentAliasValues(list) {
       editor.clearInput();
       editPrimary = btn.dataset.address || '';
       editDesired = btn.dataset.defaultSender || '';
-      aliasEditor.setAliases(btn.dataset.aliases || '');
+      aliasEditor.setAliases(btn.dataset.aliases || '', btn.dataset.aliasNames || '');
       buildDefaultSenderSelect(editDefault, editPrimary, currentAliasValues(editAliasList), editDesired);
       editDesired = '';
       if (usage) {

@@ -183,7 +183,8 @@ account-scoped on the alias route and account-plus-domain-scoped otherwise.
 Aliases are also sendable identities: a send or reply may choose the primary or
 any alias as its From address, and the outbound provider is resolved from the
 chosen address's own domain (`messages.sending_domain_id`, falling back to the
-inbox domain). A per-inbox `default_sender` preselects it.
+inbox domain). A per-inbox `default_sender` preselects it, and each alias may
+carry its own sender display name (falling back to the inbox name).
 
 Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 

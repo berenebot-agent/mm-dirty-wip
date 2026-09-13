@@ -35,7 +35,7 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 		"- `GET /v1/inboxes` — list inboxes you can access\n" +
 		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
 		"- `POST /v1/inboxes` (Admin) — create an inbox\n" +
-		"- `PATCH /v1/inboxes/{id}` (Owner) — set display name, allowed senders, approver, aliases and `default_sender`\n\n" +
+		"- `PATCH /v1/inboxes/{id}` (Owner) — set display name, allowed senders, approver, aliases, `alias_names` and `default_sender`\n\n" +
 		"## Messages\n" +
 		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages (Spam excluded; `spam=true` lists only Spam, `include_spam=true` includes it)\n" +
 		"- `GET /v1/messages/{id}` — message detail\n" +
@@ -113,7 +113,7 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 			},
 			"/v1/inboxes/{id}": map[string]any{
 				"get":    map[string]any{"summary": "Get an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, default_sender)", "description": "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. Aliases route inbound mail to this inbox and may be chosen as the From address when sending. default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender)", "description": "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. aliases route inbound mail to this inbox and may be chosen as the From address when sending; alias_names maps an alias address to its optional sender display name (falling back to the inbox display_name). default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"delete": map[string]any{"summary": "Delete an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/identities": map[string]any{
@@ -259,13 +259,14 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			DisplayName      *string   `json:"display_name"`
-			Enabled          *bool     `json:"enabled"`
-			AllowedSenders   *[]string `json:"allowed_senders"`
-			SenderRestricted *bool     `json:"sender_restricted"`
-			ApproverEmail    *string   `json:"approver_email"`
-			Aliases          *[]string `json:"aliases"`
-			DefaultSender    *string   `json:"default_sender"`
+			DisplayName      *string            `json:"display_name"`
+			Enabled          *bool              `json:"enabled"`
+			AllowedSenders   *[]string          `json:"allowed_senders"`
+			SenderRestricted *bool              `json:"sender_restricted"`
+			ApproverEmail    *string            `json:"approver_email"`
+			Aliases          *[]string          `json:"aliases"`
+			AliasNames       *map[string]string `json:"alias_names"`
+			DefaultSender    *string            `json:"default_sender"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -313,11 +314,51 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if in.Aliases != nil {
-			forms, err := normalizeAliasForms(*in.Aliases)
-			if err != nil {
-				writeError(w, 400, err.Error())
-				return
+		if in.Aliases != nil || in.AliasNames != nil {
+			var forms []aliasForm
+			if in.Aliases != nil {
+				var err error
+				forms, err = normalizeAliasForms(*in.Aliases)
+				if err != nil {
+					writeError(w, 400, err.Error())
+					return
+				}
+			} else {
+				// Names-only update: keep the existing alias set and apply the
+				// supplied display names.
+				box, gerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id)
+				if gerr != nil {
+					mapStoreError(w, gerr)
+					return
+				}
+				for _, addr := range box.Aliases {
+					at := strings.LastIndex(addr, "@")
+					if at <= 0 {
+						continue
+					}
+					forms = append(forms, aliasForm{
+						LocalPart:   strings.ToLower(addr[:at]),
+						DomainName:  strings.ToLower(addr[at+1:]),
+						DisplayName: box.AliasNames[addr],
+					})
+				}
+			}
+			if in.AliasNames != nil {
+				names := map[string]string{}
+				for addr, name := range *in.AliasNames {
+					normalized, nerr := store.NormalizeAliasDisplayName(name)
+					if nerr != nil {
+						writeError(w, 400, nerr.Error())
+						return
+					}
+					names[strings.ToLower(strings.TrimSpace(addr))] = normalized
+				}
+				for i := range forms {
+					key := strings.ToLower(forms[i].LocalPart + "@" + forms[i].DomainName)
+					if name, ok := names[key]; ok {
+						forms[i].DisplayName = name
+					}
+				}
 			}
 			if err := s.applyInboxAliases(r.Context(), p.AccountID, id, forms); err != nil {
 				mapStoreError(w, err)

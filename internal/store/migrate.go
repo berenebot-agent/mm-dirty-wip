@@ -93,6 +93,10 @@ func migrations(dataDir string) []migration {
 			columnAdded("drafts", "from_address"),
 			columnAdded("messages", "sending_domain_id"),
 		)},
+		{version: "025", sql: migration025, detect: allOf(
+			columnAdded("inbox_aliases", "display_name"),
+			columnAdded("drafts", "from_name"),
+		)},
 	}
 }
 

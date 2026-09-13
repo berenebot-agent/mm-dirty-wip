@@ -40,17 +40,18 @@ func draftContentHash(d model.Draft, atts []model.DraftAttachment) string {
 	}
 	sort.Slice(fps, func(i, j int) bool { return fps[i].ID < fps[j].ID })
 	payload := struct {
-		InboxID string           `json:"inbox_id"`
-		From    string           `json:"from_address"`
-		ReplyTo string           `json:"reply_to_message_id"`
-		To      []string         `json:"to"`
-		CC      []string         `json:"cc"`
-		BCC     []string         `json:"bcc"`
-		Subject string           `json:"subject"`
-		Text    string           `json:"text"`
-		HTML    string           `json:"html"`
-		Attach  []attFingerprint `json:"attachments"`
-	}{InboxID: d.InboxID, From: d.FromAddress, ReplyTo: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML, Attach: fps}
+		InboxID  string           `json:"inbox_id"`
+		From     string           `json:"from_address"`
+		FromName string           `json:"from_name"`
+		ReplyTo  string           `json:"reply_to_message_id"`
+		To       []string         `json:"to"`
+		CC       []string         `json:"cc"`
+		BCC      []string         `json:"bcc"`
+		Subject  string           `json:"subject"`
+		Text     string           `json:"text"`
+		HTML     string           `json:"html"`
+		Attach   []attFingerprint `json:"attachments"`
+	}{InboxID: d.InboxID, From: d.FromAddress, FromName: d.FromName, ReplyTo: d.ReplyToMessageID, To: d.To, CC: d.CC, BCC: d.BCC, Subject: d.Subject, Text: d.Text, HTML: d.HTML, Attach: fps}
 	b, _ := json.Marshal(payload)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -332,6 +333,7 @@ func (s *Service) ApproveDraft(ctx context.Context, p model.Principal, draftID, 
 	in := SendInput{
 		InboxID:          d.InboxID,
 		FromAddress:      d.FromAddress,
+		FromName:         d.FromName,
 		To:               d.To,
 		CC:               d.CC,
 		BCC:              d.BCC,
@@ -400,6 +402,7 @@ func (s *Service) ApproveExternal(ctx context.Context, accountID, inboxID, reque
 	in := SendInput{
 		InboxID:          d.InboxID,
 		FromAddress:      d.FromAddress,
+		FromName:         d.FromName,
 		To:               d.To,
 		CC:               d.CC,
 		BCC:              d.BCC,

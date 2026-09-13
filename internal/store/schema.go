@@ -820,3 +820,13 @@ ALTER TABLE drafts ADD COLUMN from_address TEXT NOT NULL DEFAULT '';
 ALTER TABLE messages ADD COLUMN sending_domain_id TEXT REFERENCES domains(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_sending_domain ON messages(sending_domain_id);
 `
+
+// migration025 gives each alias an optional sender display name, so a role
+// address can send with its own From name (for example "Acme Billing
+// <billing@example.com>") rather than the inbox's name. An empty name falls
+// back to the inbox display name. A draft records the resolved name
+// (drafts.from_name) so it can be frozen into the approval fingerprint and used
+// by the approved send. The name is operator-controlled (Owner/Admin only).
+const migration025 = `ALTER TABLE inbox_aliases ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE drafts ADD COLUMN from_name TEXT NOT NULL DEFAULT '';
+`
