@@ -2,6 +2,34 @@
 
 Architectural decisions that are not obvious from the code alone. Newest first.
 
+## Minimal default Compose, opt-in hardening (docker-compose.advanced.yml)
+
+`docker-compose.yml` is the minimal default: the app plus the profile-gated MX
+edge, with no hardening keys. A separate, self-contained
+`docker-compose.advanced.yml` carries the previous hardened stack verbatim
+(`read_only`, `/tmp` tmpfs, `no-new-privileges`, the optional `cap_drop`/`user`
+block, `GATEHOUSE_RUN_UID`/`GID`, and the MX staging tmpfs with
+`MX_STAGING_DIR=/staging`).
+
+- **Why:** the hardening was the default but is not required to run. Defaults
+  that restate code defaults (the app's privilege drop already defaults to
+  `65532:65532`) and the many MX keys whose values matched `internal/config` and
+  `internal/mxagent` defaults made the shipped compose look far more complex
+  than the actual minimum. The default now shows the real minimum; operators who
+  want the hardening opt in with one `-f`.
+- **MX minimum is three edge variables:** the edge requires only
+  `GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID` and `MX_EDGE_SECRET` (the first two
+  are defaulted by compose from `MX_INGEST_URL` / `edge-1`, so the operator
+  supplies one secret). Everything else has a code default. `MX_HOSTNAME` is
+  optional and omitted from the minimal service; the edge falls back to its
+  built-in greeting hostname.
+- **No Go changes:** the minimal service relies on existing defaults, and
+  `mxagent.EnsureStaging` creates the default `/tmp/gatehouse-mx` staging
+  directory on the image's writable root filesystem. The hardened file is the
+  only place that needs the explicit staging tmpfs.
+- `docker-compose.advanced.yml` is standalone (not an overlay): run
+  `docker compose -f docker-compose.advanced.yml up -d`.
+
 ## Workflow mail has its own outbound queue (migration 022)
 
 The draft approval-request email (and any future system mail) is **not mailbox
@@ -42,8 +70,8 @@ database is opened. `GATEHOUSE_RUN_UID`/`GATEHOUSE_RUN_GID` (default
 65532:65532) select the runtime user; the drop is a no-op when the process is
 already non-root, so the opt-in hardened compose (`user:`, `cap_drop: [ALL]`)
 needs no setuid capability. This mirrors the sibling router service: no host `chown` step,
-and the compose ships `read_only`, `tmpfs /tmp` and `no-new-privileges` by
-default.
+and the hardened `docker-compose.advanced.yml` ships `read_only`, `tmpfs /tmp`
+and `no-new-privileges`.
 
 ## Free-text message labels (migration 020)
 

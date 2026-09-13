@@ -86,22 +86,26 @@ Same-image sidecar (profile-gated):
 
 ```bash
 docker compose --profile mx up -d
+# hardened stack: docker compose -f docker-compose.advanced.yml --profile mx up -d
 ```
 
 The compose service overrides `entrypoint` explicitly. Do **not** use
 `command:` alone — the image has a fixed `ENTRYPOINT`, so a command would be
 passed as an argument to the application instead of starting the edge.
 
-Give the edge its own environment (never the app `.env`):
+The default compose passes only the three required edge variables
+(`GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`) and leaves the rest
+at their code defaults; `docker-compose.advanced.yml` carries the full tuning
+set. Give the edge its own environment (never the app `.env`):
 
 ```env
 GATEHOUSE_INGEST_URL=http://gatehouse-mail:8082
 MX_EDGE_KEY_ID=edge-1
 MX_EDGE_SECRET=<same secret as the core>
-MX_EDGE_NAME=mx-1
-MX_HOSTNAME=mail.example.com
-MX_LISTEN_ADDR=:2525
-MX_STAGING_DIR=/staging
+#MX_EDGE_NAME=mx-1
+#MX_HOSTNAME=mail.example.com
+#MX_LISTEN_ADDR=:2525
+#MX_STAGING_DIR=/tmp/gatehouse-mx
 #MX_HEALTH_ADDR=:8090
 #MX_TLS_CERT=/certs/mx.crt
 #MX_TLS_KEY=/certs/mx.key
@@ -110,9 +114,11 @@ MX_STAGING_DIR=/staging
 #MX_VERIFY_DMARC=true
 ```
 
-Publish host `25:2525` because the edge binds an unprivileged port internally
-and runs as a non-root user with a read-only root filesystem and a dedicated
-bounded tmpfs staging area.
+Publish host `25:2525` because the edge binds an unprivileged port internally.
+The default deployment runs it on the image's writable root filesystem and the
+edge's default staging directory; the hardened `docker-compose.advanced.yml`
+runs it as a non-root user with a read-only root filesystem and a dedicated
+bounded tmpfs staging area (`MX_STAGING_DIR=/staging`).
 
 Set `MX_HEALTH_ADDR` to expose `/healthz` (liveness plus counters) and
 `/readyz` (readiness, which reflects usable core connectivity) on a separate

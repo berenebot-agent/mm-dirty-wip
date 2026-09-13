@@ -5,58 +5,18 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # The app starts as root and drops to the runtime user at boot, chown'ing
-      # ./data to that user first — so a fresh ./data works with no `sudo chown`
-      # step. GATEHOUSE_RUN_UID/GID select the user the app runs as (default
-      # 65532:65532, matching the image's build-time args). Leave unset unless
-      # you need the data directory run as your own uid:gid.
-      GATEHOUSE_RUN_UID: ${GATEHOUSE_RUN_UID:-65532}
-      GATEHOUSE_RUN_GID: ${GATEHOUSE_RUN_GID:-65532}
-      # MX (optional): derive the core edge-credential from MX_EDGE_SECRET so
-      # the operator sets one secret for both services. Set MX_EDGE_KEYS in
-      # .env instead to use custom key ids or overlapping rotation keys.
+      # Derives the core's MX edge credential from MX_EDGE_SECRET so the
+      # optional edge below needs only one shared secret. Harmless when MX is off.
       MX_EDGE_KEYS: ${MX_EDGE_KEYS:-edge-1:${MX_EDGE_SECRET:-}}
     volumes:
       - ./data:/data
     ports:
-      #8081 port exposes the full inbound webhook endpoint, API and web ui
+      # :8081 = API + web UI; :8082 = inbound webhooks only.
       - "0.0.0.0:8081:8081"
-      #8092 port exposes only the inbound webhook endpoint.
-      #For more security only expose this port to the internet to receive mail
       - "0.0.0.0:8082:8082"
-    # Default hardening. The image starts as root so the in-process privilege
-    # drop can chown a fresh root-owned ./data and shed to the runtime user
-    # before the database is opened. read_only + /tmp tmpfs +
-    # no-new-privileges are compatible with that flow: the only filesystem
-    # writes are under the bind-mounted ./data and under /tmp, and no setuid
-    # binaries are exec'd after the drop.
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-    # Hardenable, not required: for an internet-exposed deployment you may also
-    # drop all capabilities and force a strict non-root user. These two are
-    # opt-in because they conflict with the in-process root-then-drop: a strict
-    # `user:` skips the boot chown and a fresh rootful-Docker ./data would fail
-    # to open, and `cap_drop: [ALL]` removes the setuid/setgid/chown
-    # capabilities the drop requires.
-    #
-    #   cap_drop: [ALL]
-    #   user: "${GATEHOUSE_RUN_UID:-65532}:${GATEHOUSE_RUN_GID:-65532}"
 
-  # Optional direct-SMTP (MX) sidecar. It is gated behind the `mx` compose
-  # profile so an app-only deployment never starts it:
-  #
-  #   docker compose --profile mx up -d
-  #
-  # It runs the same image with the MX entrypoint overridden explicitly. Do NOT
-  # use `command:` alone: the image has a fixed ENTRYPOINT, so a command would be
-  # passed as an argument to the application instead of starting the edge.
-  #
-  # The edge holds no /data mount, no APP_ENCRYPTION_KEY and no tenant secret.
-  # Only MX_* / GATEHOUSE_INGEST_URL from the environment are honoured; it must
-  # not inherit the app's .env, so secrets are listed explicitly.
+  # Optional direct-SMTP (MX) ingress:  docker compose --profile mx up -d
+  # Runs the same image with the MX entrypoint; holds no /data and no app key.
   gatehouse-mx:
     profiles: ["mx"]
     image: gatehouse-mail:latest
@@ -67,30 +27,7 @@ services:
       GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse-mail:8082}
       MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
       MX_EDGE_SECRET: ${MX_EDGE_SECRET}
-      MX_EDGE_NAME: ${MX_EDGE_NAME:-mx-1}
-      MX_HOSTNAME: ${MX_HOSTNAME:-mail.example.com}
-      # Bind to an unprivileged port internally; publish host :25 -> :2525.
-      MX_LISTEN_ADDR: ":2525"
-      MX_TLS_CERT: ${MX_TLS_CERT:-}
-      MX_TLS_KEY: ${MX_TLS_KEY:-}
-      MX_VERIFY_SPF: ${MX_VERIFY_SPF:-true}
-      MX_VERIFY_DKIM: ${MX_VERIFY_DKIM:-true}
-      MX_VERIFY_DMARC: ${MX_VERIFY_DMARC:-true}
-      MX_MAX_MESSAGE_BYTES: ${MX_MAX_MESSAGE_BYTES:-31457280}
-      MX_STAGING_DIR: /staging
-      MX_HEALTH_ADDR: ":8090"
     ports:
       - "0.0.0.0:25:2525"
     depends_on:
       - gatehouse-mail
-    # Dedicated bounded writable staging (memory-backed tmpfs is bounded here,
-    # and the edge is told to keep its staging under /staging). The root
-    # filesystem is read-only.
-    read_only: true
-    tmpfs:
-      - /staging:rw,noexec,nosuid,nodev,size=256m,mode=0700
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    user: "65532:65532"
