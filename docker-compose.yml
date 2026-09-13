@@ -12,6 +12,10 @@ services:
       # you need the data directory run as your own uid:gid.
       GATEHOUSE_RUN_UID: ${GATEHOUSE_RUN_UID:-65532}
       GATEHOUSE_RUN_GID: ${GATEHOUSE_RUN_GID:-65532}
+      # MX (optional): derive the core edge-credential from MX_EDGE_SECRET so
+      # the operator sets one secret for both services. Set MX_EDGE_KEYS in
+      # .env instead to use custom key ids or overlapping rotation keys.
+      MX_EDGE_KEYS: ${MX_EDGE_KEYS:-edge-1:${MX_EDGE_SECRET:-}}
     volumes:
       - ./data:/data
     ports:
@@ -61,7 +65,7 @@ services:
     entrypoint: ["/usr/local/bin/gatehouse-mx"]
     environment:
       GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse-mail:8082}
-      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID}
+      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
       MX_EDGE_SECRET: ${MX_EDGE_SECRET}
       MX_EDGE_NAME: ${MX_EDGE_NAME:-mx-1}
       MX_HOSTNAME: ${MX_HOSTNAME:-mail.example.com}

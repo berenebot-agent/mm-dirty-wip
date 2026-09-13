@@ -57,9 +57,6 @@ type Config struct {
 	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
 	// must cover the supported sender retry window and expected outage recovery.
 	MXReceiptRetention time.Duration
-	// MXEdgeHosts optionally names the edge hostnames accepted in the signed
-	// metadata (informational; empty accepts any authenticated edge).
-	MXEdgeHosts []string
 	// InboundTLSCertFile/InboundTLSKeyFile optionally serve the inbound listener
 	// over TLS, so a remote MX edge can reach it over verified TLS.
 	InboundTLSCertFile string
@@ -93,7 +90,6 @@ func Load() (Config, error) {
 		MXEdgeKeys:           parseEdgeKeys(env("MX_EDGE_KEYS", "")),
 		MXSignatureSkew:      time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
 		MXReceiptRetention:   time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
-		MXEdgeHosts:          splitCSV(env("MX_EDGE_HOSTS", "")),
 		InboundTLSCertFile:   strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
 		InboundTLSKeyFile:    strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 	}
@@ -159,16 +155,6 @@ func parseEdgeKeys(raw string) map[string]string {
 	}
 	if len(out) == 0 {
 		return nil
-	}
-	return out
-}
-
-func splitCSV(raw string) []string {
-	var out []string
-	for _, part := range strings.Split(raw, ",") {
-		if part = strings.TrimSpace(part); part != "" {
-			out = append(out, part)
-		}
 	}
 	return out
 }

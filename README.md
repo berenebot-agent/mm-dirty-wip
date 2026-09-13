@@ -69,22 +69,81 @@ edge and calls the core over signed HMAC endpoints, keeping routing, policy,
 quota and storage in the core. The edge holds no `/data` mount and no
 `APP_ENCRYPTION_KEY`.
 
-1. Enable MX in the app environment and register an operator edge key:
-   `MX_RECEIVE_ENABLED=true` and `MX_EDGE_KEYS=edge-1:<secret>`.
-2. Run the edge (profile-gated sidecar):
+### Minimum setup
 
-   ```bash
-   docker compose --profile mx up -d
-   ```
+Two services, same image, one shared secret. The shipped `docker-compose.yml`
+already contains both; the edge is gated behind the `mx` profile:
 
-   Give it `GATEHOUSE_INGEST_URL`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`,
-   `MX_HOSTNAME` and (for STARTTLS) `MX_TLS_CERT`/`MX_TLS_KEY`.
-3. Point the domain's MX record at the edge hostname and publish SPF.
-4. In the Admin UI, set the domain's receiving provider to **Gatehouse MX (direct
-   SMTP)** and choose an enforcement mode (moderate default, or hard).
+```bash
+# .env — the MX additions to a normal app install
+APP_ENCRYPTION_KEY=<long random secret>
+BASE_URL=https://mail.example.com
+MX_RECEIVE_ENABLED=true
+MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
+MX_HOSTNAME=mail.example.com
+```
+
+```bash
+docker compose --profile mx up -d
+```
+
+The compose derives both sides of the credential from `MX_EDGE_SECRET`
+(`MX_EDGE_KEYS=edge-1:<secret>` on the core, `MX_EDGE_KEY_ID=edge-1` on the
+edge), so you set one secret. To use custom key ids or overlap keys for
+rotation, set `MX_EDGE_KEYS` (and `MX_EDGE_KEY_ID`) yourself.
+
+Finally, in the Admin UI, open the domain and set **Receiving → Gatehouse MX
+(direct SMTP)**. Point the domain's MX record at `MX_HOSTNAME` and publish SPF.
+The domain is only an MX receiver once you set this in the UI; a domain left on
+a webhook provider is unaffected.
+
+That is the whole required setup. Everything below is optional tuning.
+
+### Advanced options (all optional — defaults shown)
+
+You do not need to set any of these to run MX. They exist to tune limits or
+enable TLS/resolver overrides.
+
+Core service (`gatehouse-mail`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MX_SIGNATURE_SKEW_SECONDS` | `600` | How old a signed edge request may be (replay window bound). |
+| `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
+| `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
+
+Edge service (`gatehouse-mx`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GATEHOUSE_INGEST_URL` | `http://gatehouse-mail:8082` | Core URL (a public HTTPS proxy for a remote edge). |
+| `MX_EDGE_NAME` | `mx-1` | Edge name shown in logs and signed metadata. |
+| `MX_LISTEN_ADDR` | `:2525` | SMTP listener (unprivileged internally; publish host `25`). |
+| `MX_TLS_CERT` / `MX_TLS_KEY` | empty | Optional STARTTLS; set both or neither. |
+| `MX_STAGING_DIR` | `/tmp/gatehouse-mx` | Bounded scratch for the original message; not a durable queue. |
+| `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
+| `MX_MAX_MESSAGE_BYTES` | `31457280` | Largest message the edge stages. |
+| `MX_MAX_RECIPIENTS` / `MX_MAX_CONNECTIONS` | `100` / `256` | Recipients per transaction and concurrent connections. |
+| `MX_READ_TIMEOUT_SECONDS` / `MX_WRITE_TIMEOUT_SECONDS` / `MX_DATA_TIMEOUT_SECONDS` | `60` / `60` / `300` | Command, write and DATA read timeouts. |
+| `MX_DNS_RESOLVER` / `MX_DNS_TIMEOUT_SECONDS` | system / `10` | Optional resolver `host:port` for SPF/DKIM/DMARC. |
+| `MX_HEALTH_ADDR` | empty | Optional listener for `/healthz` and `/readyz`. |
+
+Per-domain settings — enforcement mode (moderate/hard), catch-all — live in the
+**Admin UI**, not in either environment. The edge is policy-free: at `RCPT` it
+asks the core, and the core decides from the domain's receiving configuration.
 
 Full details, the wire contract, authentication policy, Spam handling and retry
 semantics are in [docs/MX.md](docs/MX.md).
+
+### Remote edge
+
+A remote edge is the same binary pointed at a public HTTPS endpoint. You do
+**not** need cert files if a reverse proxy terminates TLS: the signature covers
+the method and path only, not the host or scheme. Point `GATEHOUSE_INGEST_URL`
+at the proxy (for example `https://inbound.example.com`) and forward to the
+core's `:8082` **without rewriting the path**. Use `MX_TLS_CERT`/`MX_TLS_KEY`
+only when the edge speaks directly to the core with no proxy. See
+[docs/MX.md](docs/MX.md).
 
 ## Dedicated inbound listener
 

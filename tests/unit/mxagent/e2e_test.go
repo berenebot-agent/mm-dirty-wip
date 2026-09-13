@@ -65,7 +65,7 @@ func startEdge(t *testing.T, coreURL string) (addr string, stop func()) {
 		IngestURL: coreURL, KeyID: "edge", Secret: "secret", EdgeName: "test", Hostname: "mx.example.test",
 		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxRecipients: 10, MaxConnections: 16,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, DataTimeout: 10 * time.Second,
-		DNSTimeout: 2 * time.Second, StagingDir: t.TempDir(), VerificationBudget: 2 * time.Second,
+		DNSTimeout: 2 * time.Second, StagingDir: t.TempDir(),
 	}
 	if err := mxagent.EnsureStaging(cfg.StagingDir); err != nil {
 		t.Fatal(err)
