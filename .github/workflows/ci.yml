@@ -33,3 +33,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/${{ github.repository }}:latest
+      # Separate edge image for the sidecar/remote MX deployment (MX_ENABLE=remote).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mx
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository }}-mx:latest

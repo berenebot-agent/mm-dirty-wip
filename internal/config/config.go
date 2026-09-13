@@ -15,6 +15,36 @@ import (
 // provider ingest routes plus /healthz.
 const InboundAddr = ":8082"
 
+// MXMode is the user-facing direct-SMTP (MX) switch.
+type MXMode string
+
+const (
+	// MXOff disables MX: no ingress endpoints, no edge.
+	MXOff MXMode = "false"
+	// MXLocal ("true") enables MX and embeds the edge in this container as a
+	// separate-uid child process. It is the default-on form of the switch.
+	MXLocal MXMode = "true"
+	// MXRemote enables MX for an edge that runs as a separate container/host and
+	// authenticates with operator-supplied MX_EDGE_KEYS.
+	MXRemote MXMode = "remote"
+)
+
+// parseMXMode maps the MX_ENABLE value to a mode. It accepts false/off for off,
+// true/local/on for the embedded edge, and remote for a separate edge; it
+// rejects anything unrecognised so a typo does not silently disable MX.
+func parseMXMode(raw string) (MXMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "false", "off", "0", "no":
+		return MXOff, nil
+	case "true", "local", "on", "1", "yes":
+		return MXLocal, nil
+	case "remote":
+		return MXRemote, nil
+	default:
+		return MXOff, fmt.Errorf("MX_ENABLE must be false, true or remote, got %q", raw)
+	}
+}
+
 type Config struct {
 	ListenAddr          string
 	BaseURL             string
@@ -45,22 +75,26 @@ type Config struct {
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
 	ApprovalExpiryHours int
-	// MXReceiveEnabled turns on the optional direct-SMTP (MX) ingress endpoints
-	// on the inbound listener. App-only deployments leave it off.
+	// MXMode selects the optional direct-SMTP (MX) deployment: off, local
+	// (edge embedded in this container as a separate-uid child) or remote (edge
+	// runs as a separate container/host and shares MX_EDGE_KEYS). It is the
+	// single user-facing MX switch; MXReceiveEnabled/MXEmbedded are derived.
+	MXMode MXMode
+	// MXReceiveEnabled turns on the direct-SMTP ingress endpoints on the inbound
+	// listener. Derived: true for local and remote.
 	MXReceiveEnabled bool
 	// MXEdgeKeys maps an operator edge key ID to its HMAC secret. MX requests
 	// are authenticated by key ID, not by a self-reported edge name. Overlapping
-	// keys are accepted so a credential can be rotated without downtime.
+	// keys are accepted so a credential can be rotated without downtime. In
+	// embedded mode the key may be generated; remote mode requires it.
 	MXEdgeKeys map[string]string
 	// MXSignatureSkew bounds how old a signed MX request may be.
 	MXSignatureSkew time.Duration
 	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
 	// must cover the supported sender retry window and expected outage recovery.
 	MXReceiptRetention time.Duration
-	// MXEmbedded is set by the container entrypoint when the app should spawn
-	// the MX edge as a child in the same container. When true with
-	// MXReceiveEnabled, cmd/server starts the edge under MXUID/MXGID. It never
-	// causes an in-process start in the sidecar/remote deployments.
+	// MXEmbedded is true only in embedded mode: cmd/server spawns the edge as a
+	// child under MXUID/MXGID and drops privileges. Remote mode leaves it false.
 	MXEmbedded bool
 	// MXUID/MXGID are the uid/gid the embedded edge process runs as, separate
 	// from the app's runtime user, so the edge cannot read /data or the app's
@@ -74,6 +108,10 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	mxMode, err := parseMXMode(env("MX_ENABLE", "false"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		ListenAddr:           env("LISTEN_ADDR", ":8081"),
 		BaseURL:              strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
@@ -96,11 +134,12 @@ func Load() (Config, error) {
 		MaxMIMEParts:         envInt("MAX_MIME_PARTS", 256),
 		BodyReadTimeout:      time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
 		ApprovalExpiryHours:  envInt("APPROVAL_EXPIRY_HOURS", 48),
-		MXReceiveEnabled:     envBool("MX_RECEIVE_ENABLED", false),
+		MXMode:               mxMode,
+		MXReceiveEnabled:     mxMode != MXOff,
+		MXEmbedded:           mxMode == MXLocal,
 		MXEdgeKeys:           parseEdgeKeys(env("MX_EDGE_KEYS", "")),
 		MXSignatureSkew:      time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
 		MXReceiptRetention:   time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
-		MXEmbedded:           envBool("MX_EMBEDDED", false),
 		MXUID:                envInt("MX_UID", 65533),
 		MXGID:                envInt("MX_GID", 65533),
 		InboundTLSCertFile:   strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
@@ -127,10 +166,10 @@ func Load() (Config, error) {
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
 	}
-	// Embedded mode auto-generates an edge credential, so keys are only
-	// required for the sidecar/remote deployments that share an operator secret.
-	if cfg.MXReceiveEnabled && !cfg.MXEmbedded && len(cfg.MXEdgeKeys) == 0 {
-		return Config{}, fmt.Errorf("MX_RECEIVE_ENABLED requires at least one MX_EDGE_KEYS entry (or set MX_EMBEDDED=true to auto-generate)")
+	// embedded mode auto-generates an edge credential; remote mode shares an
+	// operator secret and must be given one.
+	if cfg.MXMode == MXRemote && len(cfg.MXEdgeKeys) == 0 {
+		return Config{}, fmt.Errorf("MX_ENABLE=remote requires at least one MX_EDGE_KEYS entry")
 	}
 	if cfg.MXEmbedded && (cfg.MXUID <= 0 || cfg.MXGID <= 0) {
 		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")

@@ -39,17 +39,24 @@ temporary failures return `451`/`452` and rely on the sending MTA to retry.
 
 ## 1. Configure the core
 
-The default deployment embeds the edge in the same container, so there is
-nothing to configure beyond switching MX on:
+One setting selects the MX deployment:
 
 ```env
-MX_RECEIVE_ENABLED=true
+MX_ENABLE=true   # false (default) | true | remote
 #MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 
-No secret is required: the embedded edge credential is generated automatically
-and shared with the core in-process. To use a fixed or rotating credential,
-set `MX_EDGE_KEYS` yourself:
+- `true` embeds the edge in this container (below).
+- `remote` enables the core endpoints for an edge running as a separate
+  container/host, and requires a shared credential:
+
+  ```env
+  MX_EDGE_KEYS=edge-1:<secret>   # or MX_EDGE_SECRET with the sidecar compose
+  ```
+
+In `true` (embedded) mode no secret is required: the edge credential is generated
+automatically and shared with the core in-process. To use a fixed or rotating
+credential there, set `MX_EDGE_KEYS` yourself:
 
 ```env
 #MX_EDGE_KEYS=edge-1:<old>,edge-2:<new>
@@ -76,11 +83,14 @@ INBOUND_TLS_KEY_FILE=/certs/inbound.key
 
 ## 2. Run the edge
 
-There are three modes. **Embedded** is the default and needs no second service.
+The mode chooses how the edge runs. **true** (embedded) is the default and needs no second
+service.
 
-### Embedded (single container, default)
+### true (single container, default)
 
 ```bash
+# .env
+MX_ENABLE=true
 docker compose up -d --build
 ```
 
@@ -91,35 +101,31 @@ app runtime uid (65532). The edge has no `/data` access and no
 DAC + separate-uid isolation, not namespaces. Because it must spawn the child
 before dropping, the container **must start as root**: a strict compose `user:`
 or `cap_drop: [ALL]` disables the uid separation and startup refuses with a
-clear error. In that case use the sidecar.
+clear error. In that case use `remote`.
 
 The embedded edge is told to stop by closing an inherited pipe (the dropped
 parent cannot signal a child owned by a different uid).
 
-### Sidecar (`docker-compose.mx-sidecar.yml`)
+### remote — separate edge container/image (`docker-compose.mx-sidecar.yml`)
 
-Two containers from the same image; the edge gets its own filesystem and network
-namespace. This is the strongest isolation and is recommended when you can run
-two containers:
+The edge runs from its own minimal image (`Dockerfile.mx`, tag `gatehouse-mx`)
+in its own filesystem and network namespace. This is the strongest isolation and
+is recommended when you can run two containers:
 
 ```bash
+# .env
+MX_EDGE_SECRET=<long random secret>
 docker compose -f docker-compose.mx-sidecar.yml up -d
 ```
 
-Set a shared secret in `.env`; compose derives the core's key list and the
-edge's key id from it:
+The sidecar file sets `MX_ENABLE=remote` on the core and runs the `gatehouse-mx`
+image for the edge. The edge image runs as a non-root user and holds no `/data`,
+so it needs no writable filesystem or privilege. It listens on an unprivileged
+internal port; publish host `25:2525`.
 
-```env
-MX_EDGE_SECRET=<long random secret>
-```
+### remote — another host
 
-The sidecar edge does **not** boot as root: staging is in memory and it holds no
-`/data`, so it needs no writable filesystem or privilege. It listens on an
-unprivileged internal port; publish host `25:2525`.
-
-### Remote
-
-The same `gatehouse-mx` binary on another host, pointed at the core's public
+The same `gatehouse-mx` image on another host, pointed at the core's public
 HTTPS inbound address. No cert files are needed if a reverse proxy terminates
 TLS: the signature covers the method and path only, not the host or scheme.
 Forward to the core's `:8082` **without rewriting the path**.
@@ -133,8 +139,8 @@ port.
 1. Point the domain's **MX** record at the edge hostname (`MX_HOSTNAME`).
 2. Publish an **SPF** record for the domain; the edge evaluates it.
 3. Add **DKIM** keys at the sending side and a **DMARC** record for the domain.
-4. In the Admin UI, set the domain's receiving provider to **Gatehouse MX
-   (direct SMTP)** and choose an enforcement mode.
+4. In the Admin UI, set the domain's receiving provider to **MX** and choose an
+   enforcement mode.
 
 PTR is operationally useful for outbound deliverability but does **not**
 authorize inbound recipients.
