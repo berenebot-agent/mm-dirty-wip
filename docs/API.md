@@ -88,8 +88,13 @@ Example:
 `PATCH /v1/inboxes/{id}` accepts `aliases` as a replace-set: each entry is a
 full `local@domain` address on any domain the account owns. An alias delivers
 inbound mail to this inbox (resolution precedence: exact inbox, alias, then
-domain catch-all). Aliases are inbound only — replies send from the inbox's
-primary `address`. Sending `[]` clears the set.
+domain catch-all) and may be chosen as the From address when sending. Sending
+`[]` clears the set (and clears `default_sender` if it referenced a removed
+alias).
+
+`default_sender` (optional) is the full address compose/reply preselects as
+From — the primary `address` or one of `aliases`; `""` clears it to the primary.
+An invalid value is rejected. The response includes `default_sender` when set.
 
 ## 4. Messages
 
@@ -299,11 +304,18 @@ Idempotency-Key: <caller-generated-key>
 ```json
 {
   "inbox_id": "in_01K...",
+  "sender": "sales@example.com",
   "to": ["recipient@example.org"],
   "subject": "Hello",
   "text": "Message body"
 }
 ```
+
+`sender` (optional) selects the From identity: the inbox's primary address or
+one of its aliases. When it is an alias on another domain, the sending provider
+is resolved from that alias domain's configuration. An address that is neither
+the primary nor an alias is rejected with `403`. Omit `sender` to send from the
+inbox primary (or its `default_sender`, when set for UI compose).
 
 ### Reply
 
@@ -314,11 +326,19 @@ Idempotency-Key: <caller-generated-key>
 
 ```json
 {
+  "sender": "sales@example.com",
   "text": "Reply body"
 }
 ```
 
 The application creates appropriate `In-Reply-To` and `References` headers.
+`sender` is optional and works as above.
+
+### Drafts
+
+`POST /v1/drafts` and `PATCH /v1/drafts/{id}` accept `from_address` (the chosen
+sender). An Assistant may set it; an approved send uses the stored sender, and
+it is part of the frozen approval fingerprint.
 
 ## 10. Replayable event history
 

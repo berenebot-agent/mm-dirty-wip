@@ -669,6 +669,9 @@ var initAliasEditor = (function () {
       } else if (empty) {
         empty.remove();
       }
+      if (opts.onChange) {
+        opts.onChange();
+      }
     }
 
     function addAlias(value) {
@@ -764,6 +767,48 @@ var initAliasEditor = (function () {
   };
 })();
 
+// buildDefaultSenderSelect populates a default-sender <select> from the
+// current alias list, keeping the desired value selected when it still exists
+// (falling back to the primary/empty option).
+function buildDefaultSenderSelect(select, primary, aliases, desired) {
+  if (!select) {
+    return;
+  }
+  var options = [primary].concat(aliases || []);
+  select.innerHTML = '';
+  var primaryOpt = document.createElement('option');
+  primaryOpt.value = '';
+  primaryOpt.textContent = 'Primary address' + (primary ? ' (' + primary + ')' : '');
+  select.appendChild(primaryOpt);
+  options.forEach(function (addr) {
+    if (!addr) {
+      return;
+    }
+    var opt = document.createElement('option');
+    opt.value = addr;
+    opt.textContent = addr;
+    select.appendChild(opt);
+  });
+  var want = (desired || '').toLowerCase();
+  var matched = false;
+  Array.prototype.forEach.call(select.options, function (o) {
+    if (o.value && o.value.toLowerCase() === want) {
+      matched = true;
+    }
+  });
+  select.value = matched ? desired : '';
+}
+
+// currentAliasValues reads the hidden `alias` inputs from an alias editor list.
+function currentAliasValues(list) {
+  if (!list) {
+    return [];
+  }
+  return Array.prototype.map.call(list.querySelectorAll('input[name=alias]'), function (i) {
+    return i.value;
+  });
+}
+
 (function () {
   var dlg = document.getElementById('inbox-dialog');
   if (!dlg) {
@@ -779,11 +824,20 @@ var initAliasEditor = (function () {
     section: document.getElementById('inbox-add-sender-section'),
     addBtn: document.getElementById('inbox-add-sender-add')
   });
+  var addAliasList = document.getElementById('inbox-add-alias-list');
+  var addPrimary = (document.querySelector('#inbox-dialog [name=local]') && document.querySelector('#inbox-dialog [name=local]').value) || '';
+  var addDomain = document.getElementById('inbox-add-alias-domain');
+  var addDefault = document.getElementById('inbox-add-default-sender');
+  function refreshAddSender() {
+    var primary = (addPrimary && addDomain ? addPrimary + '@' : '');
+    buildDefaultSenderSelect(addDefault, primary, currentAliasValues(addAliasList), addDefault ? addDefault.value : '');
+  }
   var aliasEditor = initAliasEditor({
-    list: document.getElementById('inbox-add-alias-list'),
+    list: addAliasList,
     input: document.getElementById('inbox-add-alias-input'),
-    domain: document.getElementById('inbox-add-alias-domain'),
-    addBtn: document.getElementById('inbox-add-alias-add')
+    domain: addDomain,
+    addBtn: document.getElementById('inbox-add-alias-add'),
+    onChange: refreshAddSender
   });
   var add = document.getElementById('add-inbox');
   if (add) {
@@ -791,6 +845,7 @@ var initAliasEditor = (function () {
       form.reset();
       editor.reset();
       aliasEditor.reset();
+      refreshAddSender();
       if (dlg._resetTabs) {
         dlg._resetTabs();
       }
@@ -887,11 +942,20 @@ var initAliasEditor = (function () {
     section: document.getElementById('inbox-sender-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
+  var editAliasList = document.getElementById('inbox-alias-list');
+  var editPrimary = '';
+  var editDefault = document.getElementById('inbox-default-sender');
+  var editDesired = '';
+  function refreshEditSender() {
+    var desired = editDesired || (editDefault ? editDefault.value : '');
+    buildDefaultSenderSelect(editDefault, editPrimary, currentAliasValues(editAliasList), desired);
+  }
   var aliasEditor = initAliasEditor({
-    list: document.getElementById('inbox-alias-list'),
+    list: editAliasList,
     input: document.getElementById('inbox-alias-input'),
     domain: document.getElementById('inbox-alias-domain'),
-    addBtn: document.getElementById('inbox-alias-add')
+    addBtn: document.getElementById('inbox-alias-add'),
+    onChange: refreshEditSender
   });
 
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
@@ -905,7 +969,11 @@ var initAliasEditor = (function () {
       editor.setRestricted(btn.dataset.restricted === '1');
       editor.setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
       editor.clearInput();
+      editPrimary = btn.dataset.address || '';
+      editDesired = btn.dataset.defaultSender || '';
       aliasEditor.setAliases(btn.dataset.aliases || '');
+      buildDefaultSenderSelect(editDefault, editPrimary, currentAliasValues(editAliasList), editDesired);
+      editDesired = '';
       if (usage) {
         usage.textContent = btn.dataset.usage || '—';
       }

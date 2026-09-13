@@ -103,10 +103,12 @@ Create, disable, rename, and manage inbox identities quickly.
 
 Support optional catch-all routing while preserving the original envelope recipient.
 
-Give an inbox aliases: alternate addresses that deliver to it. An alias may be
-on any domain the account owns, so an inbox can receive mail at several
-addresses across domains. Aliases are inbound only; replies send from the
-inbox's primary address.
+Give an inbox aliases: alternate addresses that deliver to it and can be chosen
+as the From address when sending. An alias may be on any domain the account
+owns, so an inbox can send and receive at several addresses across domains; a
+send-as-alias uses the alias domain's own sending configuration. An inbox has an
+optional default sender that preselects the From address; when unset, sends use
+the inbox's primary address.
 
 ### Messages and raw MIME
 

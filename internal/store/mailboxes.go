@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
@@ -282,7 +283,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.default_sender,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -305,7 +306,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		var i model.Inbox
 		var domain, allowed, created string
 		var enabled, restricted int
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &created); err != nil {
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &i.DefaultSender, &created); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
@@ -350,7 +351,7 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	var i model.Inbox
 	var domain, allowed, created string
 	var enabled, restricted int
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.approver_email,i.default_sender,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &i.ApproverEmail, &i.DefaultSender, &created)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -566,6 +567,90 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_aliases(id,account_id,domain_id,inbox_id,local_part,created_at) VALUES(?,?,?,?,?,?)`, idgen.New("al"), accountID, in.DomainID, inboxID, local, nowText()); err != nil {
 			return err
 		}
+	}
+	// A default sender that is no longer the primary or a surviving alias is
+	// cleared, so replacing the alias set can never leave a stale send-from.
+	var currentDefault string
+	if err = tx.QueryRowContext(ctx, `SELECT default_sender FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&currentDefault); err != nil {
+		return err
+	}
+	if currentDefault != "" {
+		if _, _, rerr := resolveSenderQuery(ctx, tx, accountID, inboxID, currentDefault); rerr != nil {
+			if !errors.Is(rerr, ErrForbidden) && !errors.Is(rerr, ErrNotFound) {
+				return rerr
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET default_sender='' WHERE id=? AND account_id=?`, inboxID, accountID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// senderQueryer is the row-read surface shared by the store's read pool and an
+// open transaction, so sender resolution works both standalone and inside a
+// transaction.
+type senderQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// resolveSenderQuery maps a requested sender address to its canonical address
+// and the id of the domain whose sending configuration must be used. An empty
+// request, or one matching the inbox primary address, resolves to the primary
+// and the inbox's own domain. Any other address must match one of the inbox's
+// aliases, whose own domain (which may differ) is returned. A request that is
+// neither is ErrForbidden.
+func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (string, string, error) {
+	var primary, domainID string
+	if err := q.QueryRowContext(ctx, `SELECT i.local_part||'@'||d.name,i.domain_id FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID).Scan(&primary, &domainID); err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", ErrNotFound
+		}
+		return "", "", err
+	}
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" || requested == strings.ToLower(primary) {
+		return primary, domainID, nil
+	}
+	var alias, aliasDomainID string
+	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID)
+	if err == sql.ErrNoRows {
+		return "", "", ErrForbidden
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return alias, aliasDomainID, nil
+}
+
+// ResolveInboxSender maps a requested sender to its canonical address and
+// sending domain (see resolveSenderQuery).
+func (s *Store) ResolveInboxSender(ctx context.Context, accountID, inboxID, requested string) (string, string, error) {
+	return resolveSenderQuery(ctx, s.read, accountID, inboxID, requested)
+}
+
+// SetInboxDefaultSender sets the address compose/reply preselects as From. It
+// must be the inbox primary or one of its aliases; an empty value clears it
+// back to the primary.
+func (s *Store) SetInboxDefaultSender(ctx context.Context, accountID, inboxID, address string) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, _, err = resolveSenderQuery(ctx, tx, accountID, inboxID, address); err != nil {
+		return err
+	}
+	value := ""
+	if strings.TrimSpace(address) != "" {
+		value = strings.ToLower(strings.TrimSpace(address))
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE inboxes SET default_sender=? WHERE id=? AND account_id=?`, value, inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
 	}
 	return tx.Commit()
 }

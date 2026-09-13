@@ -82,7 +82,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	id := idgen.New("msg")
 	// The message is enqueued as pending; the worker marks it sent after the
 	// provider accepts it. sent_at is left NULL until delivery succeeds.
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,internal,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, boolInt(r.Internal), now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,internal,sending_domain_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, boolInt(r.Internal), nullString(r.SendingDomainID), now)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
@@ -162,7 +162,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	defer tx.Rollback()
 	var inboxID, threadID, domainID string
 	var internal int
-	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,i.domain_id,m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID, &internal); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID, &internal); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
@@ -214,7 +214,7 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	defer tx.Rollback()
 	var attempts int
 	var domainID string
-	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainID); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainID); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
@@ -301,11 +301,13 @@ func (s *Store) MessageClaimOwner(ctx context.Context, accountID, id string) (st
 
 // RequeuePendingForDomain resets every pending outbound message for a domain so
 // it retries immediately after the domain's sending configuration is saved.
-// Attempts, retry backoff, the no-provider hold and any claim lease are all
-// cleared, restoring the full retry budget. Sent and failed messages are
-// untouched; failed messages still require an explicit retry.
+// This covers both messages whose inbox is on the domain and send-as-alias
+// messages that chose the domain's config. Attempts, retry backoff, the
+// no-provider hold and any claim lease are all cleared, restoring the full
+// retry budget. Sent and failed messages are untouched; failed messages still
+// require an explicit retry.
 func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID string) (int64, error) {
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND direction='outbound' AND status='pending' AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)`, accountID, domainID, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND direction='outbound' AND status='pending' AND (sending_domain_id=? OR (sending_domain_id IS NULL AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)))`, accountID, domainID, domainID, accountID)
 	if err != nil {
 		return 0, err
 	}

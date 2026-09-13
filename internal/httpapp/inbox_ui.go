@@ -48,13 +48,13 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 {{if .SendRequests}}<section class="card"><div class="card-head"><h2>Draft send requests</h2></div><div class="mailheader"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .SendRequests}}<div class="mailrow"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .Draft.To ", "}}</span><span class="mailsubject">{{if eq .Request.Status "pending"}}{{if eq .Request.NotificationStatus "failed"}}<span class="pill danger">Notification failed</span> {{else if eq .Request.NotificationStatus "queued"}}<span class="pill amber">Notification queued</span> {{else}}<span class="pill amber">Awaiting approval</span> {{end}}{{end}}{{if .Draft.Subject}}{{.Draft.Subject}}{{else}}(no subject){{end}}{{if .Draft.Text}} <span class="mailsnippet">— {{snippet .Draft.Text 80}}</span>{{end}}{{if .Request.Feedback}} <span class="muted small">— {{.Request.Feedback}}</span>{{end}}</span><span class="maildate">{{mailDate .Request.RequestedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq .Request.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}
 <section class="card">{{if .Messages}}<div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>{{if eq .Folder "sent"}}To{{else}}From{{end}}</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq $.Folder "sent"}}{{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{range .Labels}} <span class="labelpill">{{.}}</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq $.Folder "spam"}}<form method="post" action="/ui/messages/{{.ID}}/spam"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="spam" value="0"><button class="secondary btn-sm">Not spam</button></form>{{else}}<form method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form>{{end}}</span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.BasePath}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this folder yet.</p>{{end}}</section>`
 
-const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}"><label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
+const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}">{{if gt (len .ComposeFromOptions) 1}}<label>From</label><select name="sender">{{$from := .ComposeFrom}}{{range .ComposeFromOptions}}<option{{if eq . $from}} selected{{end}}>{{.}}</option>{{end}}</select>{{else if .ComposeFromOptions}}<label>From</label><input value="{{index .ComposeFromOptions 0}}" disabled>{{end}}<label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
 
 const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}/drafts">← Back to drafts</a></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 <section class="card"><h1>Review draft</h1>
 {{if .ReviewDraft.SendRequest.ApproverEmail}}{{if eq .ReviewDraft.SendRequest.NotificationStatus "failed"}}<p><span class="pill danger">Notification failed</span> The approval email to {{.ReviewDraft.SendRequest.ApproverEmail}} could not be delivered.</p>{{else if eq .ReviewDraft.SendRequest.NotificationStatus "queued"}}<p><span class="pill amber">Notification queued</span> The approval email to {{.ReviewDraft.SendRequest.ApproverEmail}} has not been handed to the outbound path yet.</p>{{else}}<p><span class="pill amber">Awaiting approval</span> Requested from {{.ReviewDraft.SendRequest.ApproverEmail}}{{if .ReviewDraft.SendRequest.TokenExpiresAt}} · expires {{mailDate .ReviewDraft.SendRequest.TokenExpiresAt}}{{end}}</p>{{end}}{{else}}<p><span class="pill amber">Awaiting approval</span> Requested by {{.ReviewDraft.SendRequest.RequestedBy}} · {{mailDate .ReviewDraft.SendRequest.RequestedAt}}</p>{{end}}
-<dl class="draftmeta"><dt>From</dt><dd>{{.Inbox.Address}}</dd><dt>To</dt><dd>{{join .ReviewDraft.To ", "}}</dd>{{if .ReviewDraft.CC}}<dt>Cc</dt><dd>{{join .ReviewDraft.CC ", "}}</dd>{{end}}{{if .ReviewDraft.BCC}}<dt>Bcc</dt><dd>{{join .ReviewDraft.BCC ", "}}</dd>{{end}}<dt>Subject</dt><dd>{{if .ReviewDraft.Subject}}{{.ReviewDraft.Subject}}{{else}}(no subject){{end}}</dd><dt>Attachments</dt><dd>{{if .ComposeNote}}{{.ComposeNote}}{{else}}None{{end}}</dd></dl>
+<dl class="draftmeta"><dt>From</dt><dd>{{if .ReviewDraft.FromAddress}}{{.ReviewDraft.FromAddress}}{{else}}{{.Inbox.Address}}{{end}}</dd><dt>To</dt><dd>{{join .ReviewDraft.To ", "}}</dd>{{if .ReviewDraft.CC}}<dt>Cc</dt><dd>{{join .ReviewDraft.CC ", "}}</dd>{{end}}{{if .ReviewDraft.BCC}}<dt>Bcc</dt><dd>{{join .ReviewDraft.BCC ", "}}</dd>{{end}}<dt>Subject</dt><dd>{{if .ReviewDraft.Subject}}{{.ReviewDraft.Subject}}{{else}}(no subject){{end}}</dd><dt>Attachments</dt><dd>{{if .ComposeNote}}{{.ComposeNote}}{{else}}None{{end}}</dd></dl>
 <label>Message</label>
 <pre class="draftbody">{{.ReviewDraft.Text}}</pre>
 <div class="dialog-actions"><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/reject"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="feedback" placeholder="Feedback to agent (optional)"><button class="secondary danger">Reject</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/cancel-send-request"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary">Cancel approval &amp; edit</button></form><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/{{.ReviewDraft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Approve &amp; send</button></form></div>
@@ -79,7 +79,7 @@ type composeFlash struct {
 }
 
 func composeFlashSize(f composeFlash) int {
-	n := len(f.Title) + len(f.Action) + len(f.Cancel) + len(f.Err) + len(f.Input.Subject) + len(f.Input.Text) + len(f.Input.HTML)
+	n := len(f.Title) + len(f.Action) + len(f.Cancel) + len(f.Err) + len(f.Input.Subject) + len(f.Input.Text) + len(f.Input.HTML) + len(f.Input.FromAddress)
 	for _, group := range [][]string{f.Input.To, f.Input.CC, f.Input.BCC} {
 		for _, addr := range group {
 			n += len(addr)
@@ -110,7 +110,7 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 		note = "Attachments kept: " + strings.Join(names, ", ") + ". They will be sent with this message."
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	s.render(w, composeBody, pageData{
+	data := pageData{
 		Title:          f.Title,
 		Principal:      p,
 		CSRF:           csrf(r),
@@ -126,7 +126,32 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 		ComposeText:    f.Input.Text,
 		ComposeNote:    note,
 		ComposeFlash:   tok,
-	})
+	}
+	if f.Input.InboxID != "" {
+		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, f.Input.InboxID); err == nil {
+			data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, f.Input.FromAddress)
+		}
+	}
+	s.render(w, composeBody, data)
+}
+
+// composeFromOptions returns the selectable From addresses for an inbox
+// (primary first, then aliases) and the one to preselect: the requested
+// address when present, otherwise the inbox default, otherwise the primary.
+func composeFromOptions(box model.Inbox, requested string) ([]string, string) {
+	options := append([]string{box.Address}, box.Aliases...)
+	selected := strings.TrimSpace(requested)
+	if selected == "" {
+		selected = box.DefaultSender
+	}
+	if selected != "" {
+		for _, opt := range options {
+			if strings.EqualFold(opt, selected) {
+				return options, opt
+			}
+		}
+	}
+	return options, box.Address
 }
 
 func (s *Server) uiInbox(w http.ResponseWriter, r *http.Request) {
@@ -256,21 +281,24 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 		}
 		note += "Rejected: " + d.SendRequest.Feedback
 	}
+	fromOptions, from := composeFromOptions(box, d.FromAddress)
 	s.render(w, composeBody, pageData{
-		Title:          "Edit Draft",
-		Principal:      p,
-		CSRF:           csrf(r),
-		Account:        acc,
-		ComposeTitle:   "Edit Draft",
-		ComposeAction:  actionWithCSRF("/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save", csrf(r)),
-		ComposeCancel:  "/ui/inboxes/" + box.ID + "/drafts",
-		ComposeTo:      strings.Join(d.To, ", "),
-		ComposeCC:      strings.Join(d.CC, ", "),
-		ComposeBCC:     strings.Join(d.BCC, ", "),
-		ComposeSubject: d.Subject,
-		ComposeText:    d.Text,
-		ComposeNote:    note,
-		ComposeDraftID: d.ID,
+		Title:              "Edit Draft",
+		Principal:          p,
+		CSRF:               csrf(r),
+		Account:            acc,
+		ComposeTitle:       "Edit Draft",
+		ComposeAction:      actionWithCSRF("/ui/inboxes/"+box.ID+"/drafts/"+d.ID+"/save", csrf(r)),
+		ComposeCancel:      "/ui/inboxes/" + box.ID + "/drafts",
+		ComposeTo:          strings.Join(d.To, ", "),
+		ComposeCC:          strings.Join(d.CC, ", "),
+		ComposeBCC:         strings.Join(d.BCC, ", "),
+		ComposeSubject:     d.Subject,
+		ComposeText:        d.Text,
+		ComposeNote:        note,
+		ComposeDraftID:     d.ID,
+		ComposeFrom:        from,
+		ComposeFromOptions: fromOptions,
 	})
 }
 
@@ -321,7 +349,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Save draft: create or update.
-	d := model.Draft{InboxID: box.ID, To: in.To, CC: in.CC, BCC: in.BCC, Subject: in.Subject, Text: in.Text, HTML: in.HTML}
+	d := model.Draft{InboxID: box.ID, FromAddress: in.FromAddress, To: in.To, CC: in.CC, BCC: in.BCC, Subject: in.Subject, Text: in.Text, HTML: in.HTML}
 	if draftID != "" {
 		d.ID = draftID
 		d, err = s.Service.Store.UpdateDraft(r.Context(), p, d)
@@ -674,14 +702,17 @@ func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	fromOptions, from := composeFromOptions(box, "")
 	s.render(w, composeBody, pageData{
-		Title:         "Compose",
-		Principal:     p,
-		CSRF:          csrf(r),
-		Account:       acc,
-		ComposeTitle:  "New message",
-		ComposeAction: actionWithCSRF("/ui/inboxes/"+box.ID+"/send", csrf(r)),
-		ComposeCancel: "/ui/inboxes/" + box.ID,
+		Title:              "Compose",
+		Principal:          p,
+		CSRF:               csrf(r),
+		Account:            acc,
+		ComposeTitle:       "New message",
+		ComposeAction:      actionWithCSRF("/ui/inboxes/"+box.ID+"/send", csrf(r)),
+		ComposeCancel:      "/ui/inboxes/" + box.ID,
+		ComposeFrom:        from,
+		ComposeFromOptions: fromOptions,
 	})
 }
 
@@ -705,7 +736,7 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 	in.InboxID = box.ID
 	// Save Draft button on the compose form.
 	if r.Form.Get("action") == "draft" {
-		d := model.Draft{InboxID: box.ID, To: in.To, CC: in.CC, BCC: in.BCC, Subject: in.Subject, Text: in.Text, HTML: in.HTML}
+		d := model.Draft{InboxID: box.ID, FromAddress: in.FromAddress, To: in.To, CC: in.CC, BCC: in.BCC, Subject: in.Subject, Text: in.Text, HTML: in.HTML}
 		if id := r.Form.Get("draft_id"); id != "" {
 			d.ID = id
 			d, err = s.Service.Store.UpdateDraft(r.Context(), p, d)
@@ -770,6 +801,9 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	data := pageData{Principal: p, CSRF: csrf(r), Account: acc, ComposeCancel: "/ui/messages/" + m.ID}
+	if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, m.InboxID); err == nil {
+		data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, "")
+	}
 	switch kind {
 	case "reply":
 		to := strings.Join(m.To, ", ")
@@ -871,6 +905,7 @@ func (s *Server) parseMessageForm(w http.ResponseWriter, r *http.Request) (app.S
 		}
 	}
 	return app.SendInput{
+		FromAddress: strings.TrimSpace(r.Form.Get("sender")),
 		To:          formAddresses(r, "to"),
 		CC:          formAddresses(r, "cc"),
 		BCC:         formAddresses(r, "bcc"),

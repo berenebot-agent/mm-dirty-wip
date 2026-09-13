@@ -88,6 +88,11 @@ func migrations(dataDir string) []migration {
 			columnAdded("messages", "spam_reason"),
 			tableExists("mx_receipts"),
 		)},
+		{version: "024", sql: migration024, detect: allOf(
+			columnAdded("inboxes", "default_sender"),
+			columnAdded("drafts", "from_address"),
+			columnAdded("messages", "sending_domain_id"),
+		)},
 	}
 }
 

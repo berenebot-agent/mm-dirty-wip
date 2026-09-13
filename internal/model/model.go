@@ -51,12 +51,15 @@ type Inbox struct {
 	// sends by email. When set, the approver address is always accepted as an
 	// inbound sender for this inbox regardless of AllowedSenders.
 	ApproverEmail string `json:"approver_email,omitempty"`
-	// Aliases are alternate inbound addresses (full addresses, possibly on a
-	// different domain of the same account) that deliver to this inbox. They
-	// are address-to-inbox mappings, not mailboxes: replies still send from
-	// Address.
-	Aliases   []string  `json:"aliases,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	// Aliases are alternate addresses (full addresses, possibly on a different
+	// domain of the same account) that deliver to this inbox and may also be
+	// chosen as the From address when sending. They are address-to-inbox
+	// mappings, not mailboxes.
+	Aliases []string `json:"aliases,omitempty"`
+	// DefaultSender is the full address compose/reply preselects as From. It is
+	// the primary Address or one of Aliases; empty means the primary.
+	DefaultSender string    `json:"default_sender,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // HasApprover reports whether the inbox has a configured external approver.
@@ -357,15 +360,19 @@ const EventMessageLabelsChanged = "message.labels_changed"
 const EventMessageSpamChanged = "message.spam_state_changed"
 
 type Draft struct {
-	ID               string   `json:"id"`
-	InboxID          string   `json:"inbox_id"`
-	ReplyToMessageID string   `json:"reply_to_message_id,omitempty"`
-	To               []string `json:"to"`
-	CC               []string `json:"cc,omitempty"`
-	BCC              []string `json:"bcc,omitempty"`
-	Subject          string   `json:"subject"`
-	Text             string   `json:"text"`
-	HTML             string   `json:"html,omitempty"`
+	ID               string `json:"id"`
+	InboxID          string `json:"inbox_id"`
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// FromAddress is the chosen sender (the inbox primary or one of its
+	// aliases). Empty means the inbox primary. It is frozen into the approval
+	// fingerprint and used by the approved send.
+	FromAddress string   `json:"from_address,omitempty"`
+	To          []string `json:"to"`
+	CC          []string `json:"cc,omitempty"`
+	BCC         []string `json:"bcc,omitempty"`
+	Subject     string   `json:"subject"`
+	Text        string   `json:"text"`
+	HTML        string   `json:"html,omitempty"`
 	// Status is one of DraftStatusDraft, DraftStatusPendingApproval or
 	// DraftStatusRejected.
 	Status string `json:"status,omitempty"`
