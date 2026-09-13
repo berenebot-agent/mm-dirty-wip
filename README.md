@@ -14,6 +14,14 @@ Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser
 
 Persistent state is stored in `./data`.
 
+This is the minimal deployment. For a hardened stack (read-only root
+filesystem, dropped capabilities, a dedicated MX staging tmpfs), use
+`docker-compose.advanced.yml`:
+
+```bash
+docker compose -f docker-compose.advanced.yml up -d
+```
+
 ## Mailgun inbound
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
@@ -80,20 +88,22 @@ APP_ENCRYPTION_KEY=<long random secret>
 BASE_URL=https://mail.example.com
 MX_RECEIVE_ENABLED=true
 MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
-MX_HOSTNAME=mail.example.com
 ```
 
 ```bash
 docker compose --profile mx up -d
+# hardened stack: docker compose -f docker-compose.advanced.yml --profile mx up -d
 ```
 
-The compose derives both sides of the credential from `MX_EDGE_SECRET`
-(`MX_EDGE_KEYS=edge-1:<secret>` on the core, `MX_EDGE_KEY_ID=edge-1` on the
-edge), so you set one secret. To use custom key ids or overlap keys for
-rotation, set `MX_EDGE_KEYS` (and `MX_EDGE_KEY_ID`) yourself.
+`MX_HOSTNAME` is optional: set it to the edge's mail hostname if you want the
+SMTP greeting to use one instead of the built-in fallback. The compose derives
+both sides of the credential from `MX_EDGE_SECRET` (`MX_EDGE_KEYS=edge-1:<secret>`
+on the core, `MX_EDGE_KEY_ID=edge-1` on the edge), so you set one secret. To use
+custom key ids or overlap keys for rotation, set `MX_EDGE_KEYS` (and
+`MX_EDGE_KEY_ID`) yourself.
 
 Finally, in the Admin UI, open the domain and set **Receiving → Gatehouse MX
-(direct SMTP)**. Point the domain's MX record at `MX_HOSTNAME` and publish SPF.
+(direct SMTP)**. Point the domain's MX record at the edge host and publish SPF.
 The domain is only an MX receiver once you set this in the UI; a domain left on
 a webhook provider is unaffected.
 
