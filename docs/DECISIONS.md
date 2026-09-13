@@ -598,6 +598,30 @@ the UI From select plus default-sender cascade. No new dependency, no new
 runtime service, no new transport adapter. Hermes Relay send-as remains
 deferred (the Relay send protocol has no sender field yet).
 
+## D033 — Outbox worker panic containment
+
+**Decision:** The background outbox worker contains panics per unit of work
+rather than letting them exit the process. Each maintenance/delivery pass
+(`tick`) is wrapped in a per-step recover, and each individual message and
+workflow delivery is wrapped again so a panic in one item is recorded as a
+failed attempt (with backoff) and the loop continues. The panic **value** is
+never logged, only its type and the goroutine stack — matching the HTTP
+recoverer's secret-safety rule; stack frames carry no request or credential
+values. Recording a recovered failure runs under a second, absorbing recover so
+a fault while persisting the outcome cannot itself terminate the process.
+
+**Reason:** Under the single-process, `restart: unless-stopped` deployment, a
+deterministically panicking message previously exited the process, was
+reclaimed on restart, and panicked again — a crash loop that could take mail
+down for every inbox on a shared instance. Containing the fault at the message
+granularity converts it into one failed message plus a healthy queue. A single
+recover around the whole worker loop would be worse: it would silently kill the
+worker goroutine with the process still running, stalling all mail.
+
+**Complexity:** Local. Adds `tick`/`recoverUnit`/`safeFail` in
+`internal/app/worker.go` and `failMessagePanic`/`failWorkflowPanic` helpers; no
+schema change, no new dependency, no new runtime service.
+
 ## Future extension register
 
 
