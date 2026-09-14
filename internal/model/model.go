@@ -392,6 +392,9 @@ type Draft struct {
 	// SendRequest is the active or most recent workflow request, populated on
 	// retrieval; it is not stored on the draft row.
 	SendRequest *DraftSendRequest `json:"send_request,omitempty"`
+	// Attachments is the draft's attachment metadata, populated on retrieval;
+	// it is not stored on the draft row.
+	Attachments []DraftAttachment `json:"attachments,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 }

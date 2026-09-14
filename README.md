@@ -240,13 +240,13 @@ SMTP configuration:
 {"host":"smtp.example.com","port":587,"username":"user","password":"secret","security":"starttls"}
 ```
 
-Send and reply requests may include base64-encoded attachments:
+Send, reply and draft write requests may include base64-encoded attachments:
 
 ```json
 {"filename":"quote.pdf","content_type":"application/pdf","content":"<base64>"}
 ```
 
-Use the object above in an `attachments` array. The application translates attachments to each provider's native format and stores sent attachment metadata with the raw MIME message.
+Use the object above in an `attachments` array. The application translates attachments to each provider's native format and stores sent attachment metadata with the raw MIME message. Draft writes also accept an `action` of `draft`, `request-send` or `send`, so a draft can be created, attached and submitted for approval in one request.
 
 ## API
 

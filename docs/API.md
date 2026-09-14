@@ -251,7 +251,7 @@ Attachment content responses use download disposition and `nosniff` headers.
 ## 8. Drafts
 
 ```http
-GET    /v1/drafts
+GET    /v1/drafts?inbox={id}&before={id}&limit=100
 POST   /v1/drafts
 GET    /v1/drafts/{id}
 PATCH  /v1/drafts/{id}
@@ -259,11 +259,41 @@ DELETE /v1/drafts/{id}
 
 GET    /v1/drafts/{id}/attachments
 POST   /v1/drafts/{id}/attachments
+GET    /v1/drafts/{id}/attachments/{attId}
 DELETE /v1/drafts/{id}/attachments/{attId}
 ```
 
 `assistant` and `owner` keys can create and edit drafts and upload attachments
 (multipart field `attachments`). Sending a draft requires `owner`.
+
+`POST /v1/drafts`, `PATCH /v1/drafts/{id}`, `POST /v1/drafts/{id}/send` and
+`POST /v1/drafts/{id}/request-send` accept an optional JSON `attachments` array
+in the same shape as send/reply, so a draft can be created and submitted — or
+sent — in one request:
+
+```json
+{
+  "inbox_id": "in_01K...",
+  "to": ["recipient@example.org"],
+  "subject": "Quote",
+  "text": "See attached",
+  "attachments": [
+    {"filename": "quote.pdf", "content_type": "application/pdf", "content": "<base64>"}
+  ],
+  "action": "request-send"
+}
+```
+
+- `action` is `draft` (default), `request-send` (Assistant; requires an owner
+  to approve) or `send` (Owner). `POST /v1/drafts/{id}/send` always sends.
+- Inline attachments are appended to any already uploaded for the draft.
+- `PATCH /v1/drafts/{id}` is a partial update: only the fields present in the
+  body are changed; omitted fields are left untouched. Send `[]`/`""` to clear
+  a list or string field.
+- Draft reads include an `attachments` array, and
+  `GET /v1/drafts/{id}/attachments/{attId}` downloads one attachment's bytes.
+- `sender` is accepted on draft writes as an alias for `from_address`.
+- `POST /v1/drafts/{id}/send` returns `provider_message_id` like `/v1/send`.
 
 ### Draft approval workflow
 

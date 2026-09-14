@@ -378,22 +378,9 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	for _, a := range atts {
-		rawPath := s.draftAttachmentPath()
-		if err = os.MkdirAll(filepath.Dir(rawPath), 0o700); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		if err = os.WriteFile(rawPath, a.Content, 0o600); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		rel, _ := filepath.Rel(s.Service.Config.DataDir, rawPath)
-		if _, err = s.Service.Store.AddDraftAttachment(r.Context(), p, d.ID, model.DraftAttachment{Filename: a.Filename, ContentType: a.ContentType, Size: int64(len(a.Content)), RawPath: filepath.ToSlash(rel)}); err != nil {
-			_ = os.Remove(rawPath)
-			http.Error(w, err.Error(), 500)
-			return
-		}
+	if _, err = s.persistDraftAttachments(r.Context(), p, d.ID, atts); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
 	}
 	if action == "request-send" {
 		if _, err = s.Service.RequestSend(r.Context(), p, d.ID, false); err != nil {
@@ -765,22 +752,9 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, aerr.Error(), 400)
 			return
 		}
-		for _, a := range atts {
-			rawPath := s.draftAttachmentPath()
-			if err = os.MkdirAll(filepath.Dir(rawPath), 0o700); err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			if err = os.WriteFile(rawPath, a.Content, 0o600); err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			rel, _ := filepath.Rel(s.Service.Config.DataDir, rawPath)
-			if _, err = s.Service.Store.AddDraftAttachment(r.Context(), p, d.ID, model.DraftAttachment{Filename: a.Filename, ContentType: a.ContentType, Size: int64(len(a.Content)), RawPath: filepath.ToSlash(rel)}); err != nil {
-				_ = os.Remove(rawPath)
-				http.Error(w, err.Error(), 500)
-				return
-			}
+		if _, err = s.persistDraftAttachments(r.Context(), p, d.ID, atts); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
 		}
 		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
 		return
