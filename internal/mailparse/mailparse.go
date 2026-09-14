@@ -77,12 +77,11 @@ func ParseFile(path string, limits ...Limits) (Parsed, error) {
 }
 func parseMessage(msg *mail.Message, limits Limits) (Parsed, error) {
 	var p Parsed
-	dec := new(mime.WordDecoder)
-	p.Subject, _ = dec.DecodeHeader(msg.Header.Get("Subject"))
+	p.Subject = decodeHeader(msg.Header.Get("Subject"))
 	p.RFCMessageID = strings.TrimSpace(msg.Header.Get("Message-Id"))
 	p.InReplyTo = strings.TrimSpace(msg.Header.Get("In-Reply-To"))
 	p.References = strings.Fields(msg.Header.Get("References"))
-	if a, err := mail.ParseAddress(msg.Header.Get("From")); err == nil {
+	if a, err := headerAddressParser.Parse(msg.Header.Get("From")); err == nil {
 		p.From = Address{Name: a.Name, Address: strings.ToLower(a.Address)}
 	}
 	p.To = parseAddressList(msg.Header, "To")
@@ -102,7 +101,7 @@ func parseMessage(msg *mail.Message, limits Limits) (Parsed, error) {
 	return p, nil
 }
 func parseAddressList(h mail.Header, key string) []string {
-	a, err := h.AddressList(key)
+	a, err := headerAddressParser.ParseList(h.Get(key))
 	if err != nil {
 		return []string{}
 	}
@@ -111,6 +110,40 @@ func parseAddressList(h mail.Header, key string) []string {
 		out = append(out, strings.ToLower(v.Address))
 	}
 	return out
+}
+
+// headerDecoder decodes RFC 2047 encoded-words in headers. It shares
+// convertCharset with the body decoder so a charset accepted in a body part is
+// also accepted in a header. Without this, an unhandled charset (notably the
+// Windows-1252 labels Outlook emits) makes DecodeHeader fail and the whole
+// header is lost; for a control reply that meant the approval token never
+// reached the control handler and the reply was delivered as ordinary mail.
+var headerDecoder = mime.WordDecoder{
+	CharsetReader: func(charset string, input io.Reader) (io.Reader, error) {
+		b, err := io.ReadAll(io.LimitReader(input, 1<<20))
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(convertCharset(b, charset)), nil
+	},
+}
+
+// headerAddressParser parses address headers (From, To, Cc) with the shared
+// decoder so encoded display names in a non-default charset decode consistently
+// with the subject. The address itself is ASCII and never affected.
+var headerAddressParser = mail.AddressParser{WordDecoder: &headerDecoder}
+
+// decodeHeader decodes an RFC 2047 header value. It falls back to the raw
+// value when the decoder cannot make sense of it, so an encoded-word with an
+// unknown charset is never silently reduced to an empty string. The control
+// markers are ASCII and Q-encoding leaves them literal, so the raw fallback
+// still preserves a token for control detection.
+func decodeHeader(raw string) string {
+	decoded, err := headerDecoder.DecodeHeader(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
 }
 
 // Limits bound malicious or pathological MIME so parsing stays bounded in
