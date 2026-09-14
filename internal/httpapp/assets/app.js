@@ -806,7 +806,7 @@ var initAliasEditor = (function () {
         var at = address.lastIndexOf('@');
         aliasDialog.open(aliasEditors[opts.id], li, name, at > 0 ? address.slice(0, at) : address, at > 0 ? address.slice(at + 1) : '');
       });
-      var remove = iconButton('', 'Remove', crossSVG);
+      var remove = iconButton('danger', 'Remove', crossSVG);
       remove.addEventListener('click', function () {
         li.remove();
         refreshEmpty();
@@ -919,6 +919,114 @@ var initAliasEditor = (function () {
     };
   };
 })();
+
+// externalAliasBase builds the dedicated page path for one external alias.
+function externalAliasBase(inboxID, aliasID) {
+  return '/ui/inboxes/' + encodeURIComponent(inboxID) + '/external-aliases/' + encodeURIComponent(aliasID);
+}
+
+// renderExternalAliases fills an inbox dialog's external-alias list from the
+// secret-free JSON on the edit button. Each row shows the sender name and
+// address, a domain-style connector button (amber until configured) that opens
+// the alias's connector popup, and an Activity link.
+function renderExternalAliases(list, inboxID, raw) {
+  if (!list) {
+    return;
+  }
+  var data = [];
+  try {
+    data = JSON.parse(raw || '[]') || [];
+  } catch (e) {
+    data = [];
+  }
+  list.innerHTML = '';
+  if (!data.length) {
+    var empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No external sending aliases.';
+    list.appendChild(empty);
+    return;
+  }
+  data.forEach(function (a) {
+    var li = document.createElement('li');
+    li.className = 'alias-row external';
+
+    var text = document.createElement('div');
+    text.className = 'alias-text';
+    var nameEl = document.createElement('span');
+    nameEl.className = 'alias-row-name';
+    nameEl.textContent = a.display_name || '(no name)';
+    if (!a.display_name) {
+      nameEl.classList.add('muted');
+    }
+    var addrEl = document.createElement('span');
+    addrEl.className = 'alias-row-addr';
+    addrEl.textContent = a.address + ' · External · sending only';
+    text.appendChild(nameEl);
+    text.appendChild(addrEl);
+
+    // Domain-style connector button: amber "Add" until configured, then a
+    // secondary button labelled with the provider.
+    var configure = document.createElement('button');
+    configure.type = 'button';
+    configure.className = (a.configured ? 'secondary' : 'amber') + ' btn-sm cell-edit external-alias-configure';
+    configure.dataset.alias = a.id;
+    configure.textContent = a.configured ? (a.provider || 'Configured') : 'Add';
+    configure.title = a.configured ? 'Edit sending connector' : 'Configure sending connector';
+    configure.setAttribute('aria-label', configure.title);
+
+    var activity = document.createElement('a');
+    activity.className = 'btn secondary icon-btn';
+    activity.href = externalAliasBase(inboxID, a.id);
+    activity.title = 'Activity';
+    activity.setAttribute('aria-label', 'Activity');
+    activity.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="2.5" width="9" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>';
+
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary icon-btn danger external-alias-remove';
+    remove.dataset.alias = a.id;
+    remove.dataset.address = a.address;
+    remove.title = 'Delete';
+    remove.setAttribute('aria-label', 'Delete');
+    remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>';
+
+    li.appendChild(text);
+    li.appendChild(configure);
+    li.appendChild(activity);
+    li.appendChild(remove);
+    list.appendChild(li);
+  });
+}
+
+// deleteExternalAlias POSTs the alias's delete endpoint from a detached form.
+// The row lives inside the inbox edit form (which may not nest a form), so a
+// one-off form is submitted instead.
+function deleteExternalAlias(inboxID, aliasID, address) {
+  if (!window.confirm('Delete external alias ' + (address || '') + ' and its connector? This cannot be undone.')) {
+    return;
+  }
+  var csrf = document.querySelector('#inbox-edit-form [name=_csrf]');
+  var form = document.createElement('form');
+  form.method = 'post';
+  form.action = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/external-aliases/' + encodeURIComponent(aliasID) + '/delete';
+  var tok = document.createElement('input');
+  tok.type = 'hidden';
+  tok.name = '_csrf';
+  tok.value = csrf ? csrf.value : '';
+  form.appendChild(tok);
+  document.body.appendChild(form);
+  form.submit();
+}
+
+// openExternalAliasDialog shows the connector popup for one external alias. The
+// dialogs are rendered server-side on the dashboard, keyed by alias id.
+function openExternalAliasDialog(aliasID) {
+  var dlg = document.getElementById('external-alias-sending-dialog-' + aliasID);
+  if (dlg && !dlg.open) {
+    dlg.showModal();
+  }
+}
 
 // senderLabel renders an option as "Name (email)". Without a name it falls
 // back to the bare address.
@@ -1139,13 +1247,30 @@ function aliasNameByAddress(list) {
     addBtn: document.getElementById('inbox-sender-add')
   });
   var editAliasList = document.getElementById('inbox-alias-list');
+  var editExternalList = document.getElementById('inbox-external-alias-list');
+  var editInboxID = '';
   var editPrimary = '';
   var editPrimaryName = '';
   var editDefault = document.getElementById('inbox-default-sender');
   var editDesired = '';
+  // editExternal holds the secret-free external aliases for the open inbox, so
+  // the default-sender select can include them and preserve an external default.
+  var editExternal = [];
+  function editSenderOptions() {
+    var names = aliasNameByAddress(editAliasList);
+    var addrs = currentAliasValues(editAliasList);
+    editExternal.forEach(function (a) {
+      addrs.push(a.address);
+      if (a.display_name) {
+        names[a.address] = a.display_name;
+      }
+    });
+    return { names: names, addresses: addrs };
+  }
   function refreshEditSender() {
+    var opts = editSenderOptions();
     var desired = editDesired || (editDefault ? editDefault.value : '');
-    buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, aliasNameByAddress(editAliasList), currentAliasValues(editAliasList), desired);
+    buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, opts.names, opts.addresses, desired);
   }
   var aliasEditor = initAliasEditor({
     list: editAliasList,
@@ -1157,6 +1282,7 @@ function aliasNameByAddress(list) {
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = encodeURIComponent(btn.dataset.id || '');
+      editInboxID = btn.dataset.id || '';
       form.action = '/ui/inboxes/' + id + '/edit';
       deleteForm.action = '/ui/inboxes/' + id + '/delete';
       display.value = btn.dataset.name || '';
@@ -1170,8 +1296,19 @@ function aliasNameByAddress(list) {
       editPrimaryName = btn.dataset.name || '';
       editDesired = btn.dataset.defaultSender || '';
       aliasEditor.setAliases(btn.dataset.aliases || '', btn.dataset.aliasNames || '');
-      buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, aliasNameByAddress(editAliasList), currentAliasValues(editAliasList), editDesired);
+      try {
+        editExternal = JSON.parse(btn.dataset.externalAliases || '[]') || [];
+      } catch (e) {
+        editExternal = [];
+      }
+      renderExternalAliases(editExternalList, btn.dataset.id || '', btn.dataset.externalAliases || '[]');
+      var opts = editSenderOptions();
+      buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, opts.names, opts.addresses, editDesired);
       editDesired = '';
+      var extForm = document.getElementById('external-alias-form');
+      if (extForm) {
+        extForm.action = '/ui/inboxes/' + id + '/external-aliases';
+      }
       if (usage) {
         usage.textContent = btn.dataset.usage || '—';
       }
@@ -1181,6 +1318,53 @@ function aliasNameByAddress(list) {
       dlg.showModal();
     });
   });
+
+  var extDlg = document.getElementById('external-alias-dialog');
+  var extAdd = document.getElementById('inbox-external-alias-add');
+  if (extDlg && extAdd) {
+    extAdd.addEventListener('click', function () {
+      var err = document.getElementById('external-alias-error');
+      if (err) {
+        err.hidden = true;
+        err.textContent = '';
+      }
+      var nameEl = document.getElementById('external-alias-name');
+      var addrEl = document.getElementById('external-alias-address');
+      if (nameEl) {
+        nameEl.value = '';
+      }
+      if (addrEl) {
+        addrEl.value = '';
+      }
+      extDlg.showModal();
+    });
+    var extCancel = document.getElementById('external-alias-cancel');
+    if (extCancel) {
+      extCancel.addEventListener('click', function () {
+        extDlg.close();
+      });
+    }
+  }
+
+  // The connector button on each external row opens that alias's connector
+  // popup. It is rendered on the dashboard behind this dialog, so close the
+  // edit dialog first to avoid stacking two modals.
+  if (editExternalList) {
+    editExternalList.addEventListener('click', function (e) {
+      var configure = e.target.closest('.external-alias-configure');
+      if (configure) {
+        e.preventDefault();
+        dlg.close();
+        openExternalAliasDialog(configure.dataset.alias);
+        return;
+      }
+      var remove = e.target.closest('.external-alias-remove');
+      if (remove) {
+        e.preventDefault();
+        deleteExternalAlias(editInboxID, remove.dataset.alias, remove.dataset.address);
+      }
+    });
+  }
 
   if (display) {
     display.addEventListener('input', function () {
@@ -1194,6 +1378,29 @@ function aliasNameByAddress(list) {
     cancel.addEventListener('click', function () {
       dlg.close();
     });
+  }
+
+  // Reopen the inbox edit dialog on its Aliases tab when the dashboard was
+  // loaded with an inbox to open (e.g. returning from a connector save). The
+  // tab listeners are attached by a later IIFE, so defer past script execution.
+  var openCard = document.querySelector('[data-open-inbox]');
+  var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
+  if (openInbox) {
+    setTimeout(function () {
+      var target = null;
+      document.querySelectorAll('.edit-inbox').forEach(function (btn) {
+        if (btn.dataset.id === openInbox) {
+          target = btn;
+        }
+      });
+      if (target) {
+        target.click();
+        var tab = dlg.querySelector('[data-inbox-tab=aliases]');
+        if (tab) {
+          tab.click();
+        }
+      }
+    }, 0);
   }
 })();
 
