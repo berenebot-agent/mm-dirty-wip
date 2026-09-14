@@ -177,7 +177,7 @@ func TestDashboardInboxIssueDot(t *testing.T) {
 	if !strings.Contains(body, `class="issue-dot"`) {
 		t.Fatalf("dashboard missing issue-dot for inbox in unconfigured domain")
 	}
-	if !strings.Contains(body, "No Sender Configured for Domain") {
+	if !strings.Contains(body, "No Sender Configured for Inbox") {
 		t.Fatalf("dashboard missing sender issue tooltip")
 	}
 	if !strings.Contains(body, "No Receiver Configured for Domain") {

@@ -838,9 +838,16 @@ never claims one.
 
 **Deferrals:** an external alias may not be used for inbound or for a per-alias
 DKIM/SPF identity Gatehouse cannot prove; address immutability avoids migration
-of queued attribution. A UI for managing external aliases (Managed/External
-editor choice, connector buttons, per-alias activity) is planned separately and
-not part of this migration.
+of queued attribution.
+
+**UI:** the inbox Aliases tab presents managed and external aliases as two
+separate lists; external rows are display-only ("External · sending only",
+connector status) and link to a dedicated server-rendered page per alias holding
+its editable sender name, connector editor and full outbound activity. External
+aliases are added only to a saved inbox (the Add-inbox dialog points to this
+step). The compose/reply From select and the default-sender selector include
+external aliases, and sending readiness follows the selected/default sender's
+connector, so a missing external connector shows a sender-specific pause banner.
 
 ## Future extension register
 

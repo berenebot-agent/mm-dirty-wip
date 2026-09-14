@@ -43,7 +43,7 @@ func draftDisplaySize(d model.Draft, attachments []model.DraftAttachment) int64 
 const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr">{{.Inbox.Address}}</span></h1>{{if .UnreadCount}}<span class="pill unread-pill">{{.UnreadCount}} unread</span>{{end}}</div>
 <div class="inboxbar"><a class="btn" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="btn secondary{{if eq .Folder "inbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}">Inbox</a><a class="btn secondary{{if eq .Folder "spam"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} ({{.SpamCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "drafts"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} ({{.DraftCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "outbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} ({{.OutboxCount}}){{end}}</a><a class="btn secondary{{if eq .Folder "sent"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}"><button name="action" value="read" class="secondary">Mark read</button><button name="action" value="unread" class="secondary">Mark unread</button><button name="action" value="delete" class="secondary danger" data-confirm="Delete messages permanently?">Delete</button></form></div>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-{{if not .OutboundReady}}<div class="banner warn">Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.</div>{{end}}
+{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
 {{if .SendRequests}}<section class="card"><div class="card-head"><h2>Draft send requests</h2></div><div class="mailheader"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .SendRequests}}<div class="mailrow"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .Draft.To ", "}}</span><span class="mailsubject">{{if eq .Request.Status "pending"}}{{if eq .Request.NotificationStatus "failed"}}<span class="pill danger">Notification failed</span> {{else if eq .Request.NotificationStatus "queued"}}<span class="pill amber">Notification queued</span> {{else}}<span class="pill amber">Awaiting approval</span> {{end}}{{end}}{{if .Draft.Subject}}{{.Draft.Subject}}{{else}}(no subject){{end}}{{if .Draft.Text}} <span class="mailsnippet">— {{snippet .Draft.Text 80}}</span>{{end}}{{if .Request.Feedback}} <span class="muted small">— {{.Request.Feedback}}</span>{{end}}</span><span class="maildate">{{mailDate .Request.RequestedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq .Request.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}
 <section class="card">{{if .Messages}}<div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>{{if eq .Folder "sent"}}To{{else}}From{{end}}</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq $.Folder "sent"}}{{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{range .Labels}} <span class="labelpill">{{.}}</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq $.Folder "spam"}}<form method="post" action="/ui/messages/{{.ID}}/spam"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="spam" value="0"><button class="secondary btn-sm">Not spam</button></form>{{else}}<form method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><button class="secondary btn-sm">{{if .Read}}Mark unread{{else}}Mark read{{end}}</button></form>{{end}}</span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.BasePath}}?before={{.Before}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this folder yet.</p>{{end}}</section>`
@@ -137,10 +137,26 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 	s.render(w, composeBody, data)
 }
 
+// externalSenderFor returns the external sending alias the inbox's
+// default_sender names, or false when the default is the primary or a managed
+// alias (both resolve through a domain connector).
+func externalSenderFor(box model.Inbox) (model.ExternalAlias, bool) {
+	if strings.TrimSpace(box.DefaultSender) == "" {
+		return model.ExternalAlias{}, false
+	}
+	for _, a := range box.ExternalAliases {
+		if strings.EqualFold(a.Address, box.DefaultSender) {
+			return a, true
+		}
+	}
+	return model.ExternalAlias{}, false
+}
+
 // composeFromOptions returns the selectable From addresses for an inbox
-// (primary first, then aliases) and the one to preselect: the requested
-// address when present, otherwise the inbox default, otherwise the primary. A
-// label shows "Name <address>" when the inbox or alias has a display name.
+// (primary first, then managed aliases, then external sending aliases) and the
+// one to preselect: the requested address when present, otherwise the inbox
+// default, otherwise the primary. A label shows "Name <address>" when the
+// inbox or alias has a display name.
 func composeFromOptions(box model.Inbox, requested string) ([]fromOption, string) {
 	label := func(addr, name string) string {
 		if name != "" {
@@ -151,6 +167,9 @@ func composeFromOptions(box model.Inbox, requested string) ([]fromOption, string
 	options := []fromOption{{Address: box.Address, Label: label(box.Address, box.DisplayName)}}
 	for _, addr := range box.Aliases {
 		options = append(options, fromOption{Address: addr, Label: label(addr, box.AliasNames[addr])})
+	}
+	for _, a := range box.ExternalAliases {
+		options = append(options, fromOption{Address: a.Address, Label: label(a.Address, a.DisplayName)})
 	}
 	selected := strings.TrimSpace(requested)
 	if selected == "" {
@@ -583,7 +602,24 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	_, outErr := s.Service.Store.GetDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
+	// Sending readiness follows the selected/default sender's connector: an
+	// external sending alias is ready only when its own connector is set,
+	// otherwise the inbox domain's sending config applies.
+	outboundReady := true
+	pausedExternal := false
+	pausedAddress := ""
+	pausedURL := ""
+	if a, ok := externalSenderFor(box); ok {
+		outboundReady = a.Configured
+		if !a.Configured {
+			pausedExternal = true
+			pausedAddress = a.Address
+			pausedURL = externalAliasConfigureURL(a.ID)
+		}
+	} else {
+		_, outErr := s.Service.Store.GetDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
+		outboundReady = outErr == nil
+	}
 	_, inErr := s.Service.Store.GetDomainReceivingConfig(r.Context(), p.AccountID, box.DomainID)
 	var sendRequests []SendRequestRow
 	if folder == "inbox" {
@@ -617,8 +653,11 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 		SpamCount:                  spamCount,
 		DraftCount:                 draftCount,
 		OutboxCount:                outboxCount,
-		OutboundReady:              outErr == nil,
+		OutboundReady:              outboundReady,
 		InboundReady:               inErr == nil,
+		SendingPausedExternal:      pausedExternal,
+		SendingPausedAddress:       pausedAddress,
+		SendingPausedURL:           pausedURL,
 		DomainSendingSettingsURL:   "/?domain=" + url.PathEscape(box.DomainID) + "&kind=sending",
 		DomainReceivingSettingsURL: "/?domain=" + url.PathEscape(box.DomainID) + "&kind=receiving",
 		Notice:                     r.URL.Query().Get("notice"),

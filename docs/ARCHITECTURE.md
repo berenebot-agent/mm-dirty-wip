@@ -410,6 +410,15 @@ Prefer server-rendered Go templates plus HTMX/vanilla JavaScript, or another com
 
 Production serves UI assets from the Go binary using `embed`.
 
+External sending aliases are managed from the inbox Aliases tab, which lists
+managed and external aliases separately. A per-alias page
+(`/ui/inboxes/{id}/external-aliases/{aliasID}`) holds the sender name, the
+connector editor (reusing the domain provider-editor markup and secret
+retention) and the alias's outbound activity, mirroring the domain delivery log.
+State-changing UI routes are session + CSRF and Admin-only, and are refused in
+hosted mode; the equivalent bearer endpoints live under
+`/v1/admin/inboxes/{id}/external-aliases`.
+
 ## 11. Dependency policy
 
 A runtime dependency should contribute a clear capability such as:
