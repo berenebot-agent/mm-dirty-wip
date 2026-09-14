@@ -19,7 +19,8 @@ import (
 // controlSubjectRe matches the strict approval control subject. It is
 // case-insensitive and tolerates surrounding text such as a Re:/Fwd: prefix.
 // The token is opaque and URL-safe.
-var controlSubjectRe = regexp.MustCompile(`(?i)\[GH-(APPROVE|REJECT):([A-Za-z0-9_-]{16,})\]`)
+var controlSubjectRe = regexp.MustCompile(`(?i)\[GH-(APPROVE|REJECT):([A-Za-z0-9_ -]{16,})\]`)
+var controlTokenRe = regexp.MustCompile(`^[A-Za-z0-9_-]{16,}$`)
 
 // maxFeedbackRunes bounds stored feedback so a control email cannot grow the
 // request, event or UI without limit.
@@ -45,7 +46,15 @@ func parseControlSubject(subject string) (controlDirective, bool) {
 	if len(m) != 1 {
 		return controlDirective{}, false
 	}
-	return controlDirective{action: strings.ToLower(m[0][1]), token: m[0][2]}, true
+	// RFC 2047 Q-encoding uses '_' for a space. Some clients construct a
+	// single encoded-word around the whole subject, so URL-safe '_' characters
+	// in the opaque token can arrive here as spaces. Restore that representation
+	// before looking up the one-time request.
+	token := strings.ReplaceAll(m[0][2], " ", "_")
+	if !controlTokenRe.MatchString(token) {
+		return controlDirective{}, false
+	}
+	return controlDirective{action: strings.ToLower(m[0][1]), token: token}, true
 }
 
 // controlRequestRe matches the neutral reference line embedded in an approval
