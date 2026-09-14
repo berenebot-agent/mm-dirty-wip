@@ -217,6 +217,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /v1/drafts/{id}/send-request", api(s.apiDraftSendRequest))
 	m.HandleFunc("POST /v1/drafts/{id}/attachments", api(s.apiDraftAttachments))
 	m.HandleFunc("GET /v1/drafts/{id}/attachments", api(s.apiDraftAttachments))
+	m.HandleFunc("GET /v1/drafts/{id}/attachments/{attId}", api(s.apiDraftAttachmentContent))
 	m.HandleFunc("DELETE /v1/drafts/{id}/attachments/{attId}", api(s.apiDraftAttachment))
 	m.HandleFunc("GET /v1/send-requests", api(s.apiSendRequests))
 

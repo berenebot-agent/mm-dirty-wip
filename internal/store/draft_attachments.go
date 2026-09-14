@@ -107,6 +107,23 @@ func (s *Store) SetDraftAttachmentHashes(ctx context.Context, accountID, draftID
 	return tx.Commit()
 }
 
+// GetDraftAttachment returns one draft attachment after checking the caller can
+// assist the owning inbox.
+func (s *Store) GetDraftAttachment(ctx context.Context, p model.Principal, draftID, id string) (model.DraftAttachment, error) {
+	d, err := s.GetDraft(ctx, p, draftID)
+	if err != nil {
+		return model.DraftAttachment{}, err
+	}
+	if !p.CanAssist(d.InboxID) {
+		return model.DraftAttachment{}, ErrForbidden
+	}
+	a, err := scanDraftAttachment(s.read.QueryRowContext(ctx, `SELECT id,draft_id,filename,content_type,size_bytes,content_hash,raw_path,created_at FROM draft_attachments WHERE id=? AND draft_id=?`, id, draftID))
+	if err == sql.ErrNoRows {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
 // draftAttachmentPathsTx returns the raw paths and total byte size of a draft's
 // attachments inside the caller's transaction.
 func draftAttachmentPathsTx(ctx context.Context, tx *sql.Tx, draftID string) ([]string, int64, error) {

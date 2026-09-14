@@ -727,6 +727,50 @@ sub-repositories already present in the module graph; notices updated in
 **Complexity:** Qualitative; migrations 026 (inbox `require_authenticated`) and
 027 (Hermes `outbound_role`). No new runtime service.
 
+## D035 — One-shot draft writes and consistent draft API
+
+**Decision:** Draft writes accept the same base64 JSON `attachments` array as
+send/reply, plus an `action` of `draft` (default), `request-send` or `send`.
+This lets an agent create a draft, attach files and submit it for approval (or
+send it, as an owner) in a single request, instead of the previous mandatory
+create → multipart upload → request-send sequence. The same optional body is
+accepted by `POST /v1/drafts/{id}/send` and `/request-send`, so an owner or
+assistant can edit and act in one call.
+
+Supporting consistency fixes on the same surface:
+
+- `PATCH /v1/drafts/{id}` is now a true partial update: only fields present in
+  the body are changed. Previously an omitted field was written empty, silently
+  wiping a draft.
+- Draft read responses include an `attachments` array, and
+  `GET /v1/drafts/{id}/attachments/{attId}` downloads one attachment's bytes.
+- `sender` is accepted as an alias for `from_address` on draft writes.
+- `POST /v1/drafts/{id}/send` returns `provider_message_id`, matching `/v1/send`.
+- `GET /v1/drafts` supports `limit` and `before` keyset paging.
+- `PATCH /v1/messages/{id}` carries explicit JSON tags.
+- `POST /v1/inboxes` accepts `localpart` as well as `local_part`.
+
+Attachments added inline are appended to any already uploaded, and inline bytes
+are covered by the existing per-attachment and total size checks and by the
+frozen approval fingerprint (SHA-256 per attachment), so an approved send still
+applies to the exact reviewed bytes.
+
+**Reason:** The draft workflow was the only write path that required a
+pre-existing draft and a separate multipart upload, while send/reply already
+accepted inline attachments. This was a real integration hazard for agents and
+the direct cause of repeated failed client sends. The PATCH semantics change is
+the only backward-incompatible behaviour change; it prevents silent data loss
+and there are minimal live clients to protect.
+
+**Complexity:** No new migrations, services or dependencies. A shared
+`persistDraftAttachments` helper replaces the file-write loop duplicated across
+the API and UI paths, with cleanup on partial failure.
+
+**Deliberately unchanged:** `{"external": true}` on `request-send` is retained
+for compatibility; it remains optional because a configured inbox approver makes
+the request external automatically. `/v1/drafts/{id}/attachments` multipart
+upload is kept for incremental uploads.
+
 ## Future extension register
 
 

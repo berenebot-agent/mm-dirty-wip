@@ -67,7 +67,20 @@ func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (mod
 		return model.Draft{}, ErrForbidden
 	}
 	d.SendRequest, _ = s.latestSendRequestForDraft(ctx, p.AccountID, id)
+	d.Attachments, _ = s.ListDraftAttachmentsInternal(ctx, p.AccountID, id)
 	return d, nil
+}
+
+// attachDraftAttachments populates Attachments on each draft. Callers must
+// already have filtered the drafts by permission.
+func (s *Store) attachDraftAttachments(ctx context.Context, accountID string, drafts []model.Draft) {
+	for i := range drafts {
+		atts, err := s.ListDraftAttachmentsInternal(ctx, accountID, drafts[i].ID)
+		if err != nil {
+			continue
+		}
+		drafts[i].Attachments = atts
+	}
 }
 
 // GetDraftInternal loads a draft without a principal. It is used by the
@@ -80,11 +93,24 @@ func (s *Store) GetDraftInternal(ctx context.Context, accountID, id string) (mod
 	return d, err
 }
 func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID string) ([]model.Draft, error) {
+	return s.ListDraftsPaged(ctx, p, inboxID, "", 0)
+}
+
+// ListDraftsPaged lists drafts newest-first with an optional keyset cursor
+// (before: a draft id) and limit, mirroring the message and search endpoints.
+func (s *Store) ListDraftsPaged(ctx context.Context, p model.Principal, inboxID, before string, limit int) ([]model.Draft, error) {
 	if inboxID != "" && !p.CanAssist(inboxID) {
 		return nil, ErrForbidden
 	}
 	q := `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE account_id=?`
 	args := []any{p.AccountID}
+	if before != "" {
+		var beforeUpdated string
+		if err := s.read.QueryRowContext(ctx, `SELECT updated_at FROM drafts WHERE id=? AND account_id=?`, before, p.AccountID).Scan(&beforeUpdated); err == nil {
+			q += ` AND (updated_at < ? OR (updated_at = ? AND id < ?))`
+			args = append(args, beforeUpdated, beforeUpdated, before)
+		}
+	}
 	if inboxID != "" {
 		q += ` AND inbox_id=?`
 		args = append(args, inboxID)
@@ -103,7 +129,15 @@ func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID strin
 			args = append(args, id)
 		}
 	}
-	q += ` ORDER BY updated_at DESC`
+	q += ` ORDER BY updated_at DESC, id DESC`
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	q += ` LIMIT ?`
+	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -121,6 +155,7 @@ func (s *Store) ListDrafts(ctx context.Context, p model.Principal, inboxID strin
 		return nil, err
 	}
 	s.attachLatestSendRequests(ctx, p.AccountID, out)
+	s.attachDraftAttachments(ctx, p.AccountID, out)
 	return out, nil
 }
 
