@@ -279,6 +279,54 @@ func TestExternalApprovalApproveByEmail(t *testing.T) {
 	}
 }
 
+func TestExternalApprovalApproveByWindows1252Subject(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.ApprovalExpiryHours = 48
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	if err := svc.Store.SetInboxApprover(context.Background(), u.AccountID, box.ID, approverAddress); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d, err := svc.Store.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "proposal", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(ctx, asst, d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	token := approvalToken(t, svc, u.AccountID, box.ID)
+
+	// Reproduce an Outlook/Exchange reply: the control subject is RFC 2047
+	// encoded as Windows-1252 (0x97 is an em dash). Before the header decoder
+	// learned Windows-1252, this decoded to an empty subject and the control
+	// reply was stored as ordinary inbound mail.
+	encodedSubject := "=?Windows-1252?Q?[GH-APPROVE:" + token + "]_proposal_=97_review?="
+	body := "[GH-FEEDBACK-BEGIN]\r\n\r\n\r\n[GH-FEEDBACK-END]\r\n"
+	req := mgControlRequest(t, testMailgunKey, "ctl-win", box.Address, "Ben <"+approverAddress+">", encodedSubject, body)
+	msg, dup, err := svc.IngestInbound(ctx, "mailgun", req)
+	if !errors.Is(err, transport.ErrInboundIgnored) {
+		t.Fatalf("control ingest err=%v msg=%+v dup=%v", err, msg, dup)
+	}
+	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, d.ID)
+	if err != nil || sr.Status != model.SendRequestApproved || sr.DecisionMethod != model.DecisionMethodEmail {
+		t.Fatalf("request after Windows-1252 email approve %+v err=%v", sr, err)
+	}
+	// The control email, token and all, must never become mailbox content.
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	inbound, err := svc.Store.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Direction: "inbound", Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbound) != 0 {
+		t.Fatalf("Windows-1252 control mail became inbox content: %+v", inbound)
+	}
+	controls, err := svc.Store.ListControlMessages(ctx, u.AccountID, box.ID, 10)
+	if err != nil || len(controls) != 1 || controls[0].Outcome != "approved" {
+		t.Fatalf("control records %+v err=%v", controls, err)
+	}
+}
+
 func TestExternalApprovalRejectByEmailCarriesFeedback(t *testing.T) {
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48

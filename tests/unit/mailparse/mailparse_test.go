@@ -254,3 +254,66 @@ func TestParseExtractIndexConsistency(t *testing.T) {
 		t.Fatalf("bulk names %#v", names)
 	}
 }
+
+// TestParseWindows1252Headers guards the header decoder against a regression
+// where an unhandled charset (notably the Windows-1252 labels Outlook emits)
+// made DecodeHeader fail and reduced the subject to an empty string. This is
+// the exact shape that caused an approval-token subject to be lost and the
+// control reply to be delivered as ordinary mail.
+func TestParseWindows1252Headers(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: =?Windows-1252?Q?Ben_Dell=E1r?= <ben@example.com>",
+		"To: =?Windows-1252?Q?Jos=E9?= <jose@example.net>",
+		"Subject: =?Windows-1252?Q?[GH-APPROVE:wVIg8xlkTlqgcv35bo218w]_BSS-REC-0042_=97_BIC?=",
+		" =?Windows-1252?Q?KLEY(Nicola)_=97_Paid_invoice_for_your_records?=",
+		"Message-ID: <win@test>",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"body",
+	}, "\r\n")
+	path := t.TempDir() + "/win.eml"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := mailparse.ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[GH-APPROVE:wVIg8xlkTlqgcv35bo218w] BSS-REC-0042 \u2014 BICKLEY(Nicola) \u2014 Paid invoice for your records"
+	if p.Subject != want {
+		t.Fatalf("subject = %q, want %q", p.Subject, want)
+	}
+	if p.From.Name != "Ben Dellár" || p.From.Address != "ben@example.com" {
+		t.Fatalf("from = %#v", p.From)
+	}
+	if len(p.To) != 1 || p.To[0] != "jose@example.net" {
+		t.Fatalf("to = %#v", p.To)
+	}
+}
+
+// TestParseUnknownCharsetFallsBackToRawHeader guards the fail-safe: a header
+// encoded with a charset the decoder cannot convert must keep the raw value so
+// an ASCII control token inside it is still detectable, rather than becoming
+// empty and silently disabling approval handling.
+func TestParseUnknownCharsetFallsBackToRawHeader(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: Ben <ben@example.com>",
+		"To: box@example.net",
+		"Subject: =?ks_c_5601-1987?Q?[GH-APPROVE:abcdefghijklmnop]_hello?=",
+		"Message-ID: <unknown@test>",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"body",
+	}, "\r\n")
+	path := t.TempDir() + "/unknown.eml"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := mailparse.ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Subject, "[GH-APPROVE:abcdefghijklmnop]") {
+		t.Fatalf("raw subject token lost: %q", p.Subject)
+	}
+}
