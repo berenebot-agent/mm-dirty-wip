@@ -190,6 +190,20 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 				"delete": map[string]any{"summary": "Clear a domain's receiving provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 			},
 			"/v1/admin/domains/{id}/sending/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for a domain (Admin)", "description": "Returns the per-attempt delivery log for a domain, newest first, with message_id linking to the message. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
+			"/v1/admin/inboxes/{id}/external-aliases": map[string]any{
+				"get":  map[string]any{"summary": "List an inbox's external sending aliases (Admin, self-hosted)", "description": "Send-only identities on domains Gatehouse does not manage. Never participate in inbound routing. Returns ids, addresses, display names, connector provider and configured status; never credentials.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"post": map[string]any{"summary": "Create an external sending alias (Admin, self-hosted)", "description": "Body: address (full local@domain, immutable after creation) and optional display_name. The address must not be the inbox primary or a managed inbox/alias in the account, and must be unique among the account's external aliases.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}": map[string]any{
+				"patch":  map[string]any{"summary": "Update an external alias display name (Admin, self-hosted)", "description": "Accepts display_name only; the address is immutable.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Delete an external alias (Admin, self-hosted)", "description": "Removes the alias and its connector, clears any default_sender that referenced it, and makes its queued messages fail permanently rather than fall back to a domain connector.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending": map[string]any{
+				"get":    map[string]any{"summary": "Get an external alias's sending connector (Admin, self-hosted)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"put":    map[string]any{"summary": "Set an external alias's sending connector (Admin, self-hosted)", "description": "Accepts provider and config; same schema, secret retention and CAS revision semantics as a domain sending config. Requeues only that alias's pending sends.", "security": []map[string]any{{"bearerAuth": []string{}}}},
+				"delete": map[string]any{"summary": "Clear an external alias's sending connector (Admin, self-hosted)", "security": []map[string]any{{"bearerAuth": []string{}}}},
+			},
+			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for an external alias (Admin, self-hosted)", "description": "Returns that alias's per-attempt delivery log, newest first. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
 			"/v1/admin/keys": map[string]any{
 				"get":  map[string]any{"summary": "List API keys (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
 				"post": map[string]any{"summary": "Create an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},

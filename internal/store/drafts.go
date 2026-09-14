@@ -21,17 +21,18 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)); err != nil {
 		return model.Draft{}, err
 	}
-	from, _, err := resolveSenderQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
+	from, target, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
 	if err != nil {
 		return model.Draft{}, err
 	}
 	id := idgen.New("drf")
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, from.Address, from.Name, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, model.DraftStatusDraft, now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO drafts(id,account_id,inbox_id,reply_to_message_id,from_address,from_name,from_external_alias_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, p.AccountID, d.InboxID, d.ReplyToMessageID, from.Address, from.Name, target.ExternalAliasID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, model.DraftStatusDraft, now, now); err != nil {
 		return model.Draft{}, err
 	}
 	d.FromAddress = from.Address
 	d.FromName = from.Name
+	d.FromExternalAliasID = target.ExternalAliasID
 	if err := tx.Commit(); err != nil {
 		return model.Draft{}, err
 	}
@@ -44,7 +45,7 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 func scanDraft(row interface{ Scan(...any) error }) (model.Draft, error) {
 	var d model.Draft
 	var to, cc, bcc, created, updated string
-	err := row.Scan(&d.ID, &d.InboxID, &d.ReplyToMessageID, &d.FromAddress, &d.FromName, &to, &cc, &bcc, &d.Subject, &d.Text, &d.HTML, &d.Status, &created, &updated)
+	err := row.Scan(&d.ID, &d.InboxID, &d.ReplyToMessageID, &d.FromAddress, &d.FromName, &d.FromExternalAliasID, &to, &cc, &bcc, &d.Subject, &d.Text, &d.HTML, &d.Status, &created, &updated)
 	if err != nil {
 		return d, err
 	}
@@ -56,7 +57,7 @@ func scanDraft(row interface{ Scan(...any) error }) (model.Draft, error) {
 	return d, nil
 }
 func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (model.Draft, error) {
-	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID))
+	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,from_external_alias_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID))
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
@@ -86,7 +87,7 @@ func (s *Store) attachDraftAttachments(ctx context.Context, accountID string, dr
 // GetDraftInternal loads a draft without a principal. It is used by the
 // external email approval path, which has already proved the decision.
 func (s *Store) GetDraftInternal(ctx context.Context, accountID, id string) (model.Draft, error) {
-	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, accountID))
+	d, err := scanDraft(s.read.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,from_external_alias_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, accountID))
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
@@ -102,7 +103,7 @@ func (s *Store) ListDraftsPaged(ctx context.Context, p model.Principal, inboxID,
 	if inboxID != "" && !p.CanAssist(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE account_id=?`
+	q := `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,from_external_alias_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE account_id=?`
 	args := []any{p.AccountID}
 	if before != "" {
 		var beforeUpdated string
@@ -217,7 +218,7 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if old.Status == model.DraftStatusPendingApproval {
 		return model.Draft{}, ErrConflict
 	}
-	from, _, err := resolveSenderQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
+	from, target, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
 	if err != nil {
 		return model.Draft{}, err
 	}
@@ -226,11 +227,12 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 		return model.Draft{}, err
 	}
 	now := nowText()
-	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,from_address=?,from_name=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,status=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, from.Address, from.Name, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, status, now, d.ID, p.AccountID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,from_address=?,from_name=?,from_external_alias_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,status=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, from.Address, from.Name, target.ExternalAliasID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, status, now, d.ID, p.AccountID); err != nil {
 		return model.Draft{}, err
 	}
 	d.FromAddress = from.Address
 	d.FromName = from.Name
+	d.FromExternalAliasID = target.ExternalAliasID
 	if err := tx.Commit(); err != nil {
 		return model.Draft{}, err
 	}

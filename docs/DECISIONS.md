@@ -771,6 +771,77 @@ for compatibility; it remains optional because a configured inbox approver makes
 the request external automatically. `/v1/drafts/{id}/attachments` multipart
 upload is kept for incremental uploads.
 
+## D036 — External sending aliases (migration 028)
+
+**Decision:** An inbox may carry one or more **external sending aliases**: full
+email addresses on domains Gatehouse does not manage, used only as outbound
+identities. Each external alias owns its own sending connector (any existing
+outbound provider, encrypted with `APP_ENCRYPTION_KEY`) and an optional sender
+display name. External aliases are strictly send-only: they never participate in
+inbound recipient resolution (`ResolveRecipient` is unchanged), add no receiving
+connector, no mailbox sync, and no external-domain ownership claim. They are
+self-hosted Admin-only, in both management and read paths.
+
+Key invariants:
+
+- **Stable ids.** `external_aliases.id` is the immutable identity. A sender is
+  resolved to either a managed domain or an external alias id; `messages`
+  records `sending_external_alias_id` and `drafts` records
+  `from_external_alias_id` so a queued message or a reviewed draft stays pinned
+  to the alias it was created with. Deleting an alias clears any `default_sender`
+  that referenced it, and subsequent delivery attempts for its queued messages
+  fail permanently with a clear missing-alias error — they never fall back to a
+  domain connector or a recreated alias with the same address.
+- **No replace-set for external aliases.** Unlike managed aliases (which keep
+  D030's replacement semantics), external aliases are created, edited and deleted
+  only through their admin endpoints, one at a time. An ordinary inbox save can
+  never drop an external alias or its connector. This is why `SetExternalAliases`
+  does not exist.
+- **Connector lifecycle.** A send whose selected/default sender is an external
+  alias with no connector is held pending (not failed) with a sender-specific
+  reason; saving that alias's connector requeues only pending messages targeting
+  that alias. Removing the connector clears its credentials and requeues the same
+  set, which then hold again.
+- **Sender identity is frozen at draft time.** `ResolveSendingTargetByID`
+  resolves a frozen external-alias id and returns `ErrExternalAliasDeleted` when
+  it is gone; an empty/unchanged sender keeps the frozen id through owner sends,
+  approval and retries. The approval-request notification itself stays on the
+  inbox primary managed address and its domain connector.
+- **Hermes Relay** sends with the inbox's configured `default_sender`, falling
+  back to the primary, for both direct sends and Assistant-mode drafts. When the
+  default is an external alias, so is the relay send.
+- **Delivery attribution.** `outbound_delivery_log.external_alias_id` records
+  the alias for each attempt; per-alias outbound history reuses the domain
+  delivery renderer's query (`ListExternalAliasDeliveryAttempts`).
+- **API/UI.** Inbox responses gain an `external_aliases` metadata collection
+  (ids, addresses, names, connector status; never secrets). Admin endpoints live
+  under `/v1/admin/inboxes/{id}/external-aliases` (create/metadata/delete,
+  `/sending` GET/PUT/DELETE, `/sending/deliveries`). An alias address is
+  immutable after creation; display name and connector remain editable.
+
+**Reason:** The motivating case is an address you control but cannot attach a
+domain connector to (for example a Gmail address, or a provider that offers no
+webhook). Domain connectors remain the primary model and are untouched; this adds
+a narrow outbound-only identity for exactly that gap. Reusing the existing
+provider schema, encryption, CAS/revision, requeue-on-save and delivery-log code
+means no new runtime service, transport adapter or dependency. Keeping external
+aliases out of inbound routing avoids any "why didn't my mail arrive" ambiguity:
+a managed domain is authoritative for its own namespace, and an external alias
+never claims one.
+
+**Complexity:** Qualitative. Migration 028 adds `external_aliases`,
+`messages.sending_external_alias_id`, `drafts.from_external_alias_id` and
+`outbound_delivery_log.external_alias_id`. New store module
+(`internal/store/external_aliases.go`), service admin surface
+(`internal/app/external_aliases.go`) and admin API
+(`internal/httpapp/external_alias_api.go`). No new dependency or runtime service.
+
+**Deferrals:** an external alias may not be used for inbound or for a per-alias
+DKIM/SPF identity Gatehouse cannot prove; address immutability avoids migration
+of queued attribution. A UI for managing external aliases (Managed/External
+editor choice, connector buttons, per-alias activity) is planned separately and
+not part of this migration.
+
 ## Future extension register
 
 

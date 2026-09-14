@@ -53,6 +53,7 @@ type OutboundRecord struct {
 	// enqueue this message. It is the alias's own domain for a send-as-alias,
 	// and may differ from the inbox's domain. Empty falls back to the inbox
 	// domain at delivery time.
+	SendingExternalAliasID       string
 	SendingDomainID              string
 	To, CC, BCC                  []string
 	Subject, Text, HTML, RawPath string

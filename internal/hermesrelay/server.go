@@ -452,13 +452,18 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 			_ = wr.JSON(outboundResult(requestID, false, "email thread not found", ""))
 			return
 		}
+		inbox, err := s.Store.GetInboxInternal(ctx, h.AccountID, h.InboxID)
+		if err != nil {
+			_ = wr.JSON(outboundResult(requestID, false, "email inbox not found", ""))
+			return
+		}
 		// A connection may be held to the Assistant boundary: instead of
 		// sending with Owner authority, it creates a draft and requests
 		// approval, so a human authorizes the send exactly as with an Assistant
 		// API key. Existing connections default to owner.
 		if strings.EqualFold(h.OutboundRole, "assistant") {
 			p := model.Principal{AccountID: h.AccountID, MailboxRoles: map[string]string{h.InboxID: "assistant"}}
-			draft, derr := s.Store.CreateDraft(ctx, p, model.Draft{InboxID: h.InboxID, ReplyToMessageID: target.ID, To: []string{target.From.Address}, Subject: app.ReplySubject(target.Subject), Text: content})
+			draft, derr := s.Store.CreateDraft(ctx, p, model.Draft{InboxID: h.InboxID, FromAddress: inbox.DefaultSender, ReplyToMessageID: target.ID, To: []string{target.From.Address}, Subject: app.ReplySubject(target.Subject), Text: content})
 			if derr != nil {
 				_ = wr.JSON(outboundResult(requestID, false, derr.Error(), ""))
 				return
@@ -473,7 +478,7 @@ func (s *Server) handleOutbound(ctx context.Context, wr *socketWriter, h store.H
 			return
 		}
 		p := model.Principal{AccountID: h.AccountID, MailboxRoles: map[string]string{h.InboxID: "owner"}}
-		res, err := s.Service.Send(ctx, p, app.SendInput{InboxID: h.InboxID, ReplyToMessageID: target.ID, Text: content}, requestID)
+		res, err := s.Service.Send(ctx, p, app.SendInput{InboxID: h.InboxID, FromAddress: inbox.DefaultSender, ReplyToMessageID: target.ID, Text: content}, requestID)
 		if err != nil {
 			s.Log.Warn("relay outbound failed", "gateway_id", h.GatewayID, "request_id", requestID, "error", err)
 			_ = wr.JSON(outboundResult(requestID, false, err.Error(), ""))

@@ -12,6 +12,7 @@ import (
 // nullable attribution snapshot (SET NULL when the domain is deleted) and the
 // provider stays as the attempt-time provider snapshot.
 type DeliveryAttempt struct {
+	ExternalAliasID   string    `json:"external_alias_id,omitempty"`
 	ID                int64     `json:"id"`
 	AccountID         string    `json:"-"`
 	DomainID          string    `json:"domain_id,omitempty"`
@@ -74,8 +75,8 @@ func messageExistsTx(ctx context.Context, tx *sql.Tx, accountID, id string) (boo
 // insertDeliveryAttemptTx appends one attempt row and prunes the log within an
 // existing transaction, so the attempt is durable with the message state change.
 func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, domainID, provider, messageID, status, providerMessageID, errorText string) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?)`,
-		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, status, providerMessageID, errorText, nowText()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,COALESCE((SELECT sending_external_alias_id FROM messages WHERE id=? AND account_id=?),''),(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?)`,
+		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, messageID, accountID, status, providerMessageID, errorText, nowText()); err != nil {
 		return err
 	}
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)
@@ -136,16 +137,28 @@ func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domai
 	if n != 1 {
 		return nil, ErrNotFound
 	}
+	return s.listDeliveryAttempts(ctx, accountID, "domain_id", domainID, limit, beforeID)
+}
+
+func (s *Store) ListExternalAliasDeliveryAttempts(ctx context.Context, accountID, inboxID, aliasID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
+	if _, err := s.GetExternalAlias(ctx, accountID, inboxID, aliasID); err != nil {
+		return nil, err
+	}
+	return s.listDeliveryAttempts(ctx, accountID, "external_alias_id", aliasID, limit, beforeID)
+}
+
+// column is selected only by the two internal callers above.
+func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, targetID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
-	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.external_alias_id,l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
 		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
-		WHERE l.account_id=? AND l.domain_id=?`
-	args := []any{accountID, domainID}
+		WHERE l.account_id=? AND l.` + column + `=?`
+	args := []any{accountID, targetID}
 	if beforeID > 0 {
 		q += ` AND l.id < ?`
 		args = append(args, beforeID)
@@ -161,7 +174,7 @@ func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domai
 	for rows.Next() {
 		var a DeliveryAttempt
 		var created, to string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.Provider, &a.MessageID, &a.WorkflowID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to, &a.Subject); err != nil {
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.ExternalAliasID, &a.Provider, &a.MessageID, &a.WorkflowID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to, &a.Subject); err != nil {
 			return nil, err
 		}
 		a.To = decodeStrings(to)

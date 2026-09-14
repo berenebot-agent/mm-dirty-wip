@@ -43,6 +43,9 @@ type Inbox struct {
 	DisplayName    string   `json:"display_name"`
 	Enabled        bool     `json:"enabled"`
 	AllowedSenders []string `json:"allowed_senders,omitempty"`
+	// ExternalAliases is the inbox's send-only external aliases, populated on
+	// retrieval. It is exposed to Admin readers only and never carries secrets.
+	ExternalAliases []ExternalAlias `json:"external_aliases,omitempty"`
 	// SenderRestricted enables the allow-list. When false, any sender is
 	// accepted and AllowedSenders is ignored; when true, only AllowedSenders
 	// (and the approver) are accepted. The allow-list matches the RFC5322.From
@@ -71,6 +74,22 @@ type Inbox struct {
 	// the primary Address or one of Aliases; empty means the primary.
 	DefaultSender string    `json:"default_sender,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+// ExternalAlias is a send-only identity: it never participates in inbound
+// routing. This view carries provider metadata and connector status only; the
+// encrypted credentials never leave the store. External aliases are an
+// Admin-only, self-hosted capability.
+type ExternalAlias struct {
+	ID          string    `json:"id"`
+	InboxID     string    `json:"inbox_id"`
+	Address     string    `json:"address"`
+	DisplayName string    `json:"display_name,omitempty"`
+	Provider    string    `json:"provider"`
+	Configured  bool      `json:"configured"`
+	Revision    int64     `json:"revision"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // HasApprover reports whether the inbox has a configured external approver.
@@ -377,15 +396,19 @@ type Draft struct {
 	// FromAddress is the chosen sender (the inbox primary or one of its
 	// aliases). Empty means the inbox primary. It is frozen into the approval
 	// fingerprint and used by the approved send. FromName is the display name
-	// resolved for that sender at draft time.
-	FromAddress string   `json:"from_address,omitempty"`
-	FromName    string   `json:"from_name,omitempty"`
-	To          []string `json:"to"`
-	CC          []string `json:"cc,omitempty"`
-	BCC         []string `json:"bcc,omitempty"`
-	Subject     string   `json:"subject"`
-	Text        string   `json:"text"`
-	HTML        string   `json:"html,omitempty"`
+	// resolved for that sender at draft time. FromExternalAliasID names an
+	// external sending alias by immutable id when the sender is one, so
+	// deleting and recreating an alias with the same address cannot silently
+	// rebind the draft.
+	FromAddress         string   `json:"from_address,omitempty"`
+	FromName            string   `json:"from_name,omitempty"`
+	FromExternalAliasID string   `json:"from_external_alias_id,omitempty"`
+	To                  []string `json:"to"`
+	CC                  []string `json:"cc,omitempty"`
+	BCC                 []string `json:"bcc,omitempty"`
+	Subject             string   `json:"subject"`
+	Text                string   `json:"text"`
+	HTML                string   `json:"html,omitempty"`
 	// Status is one of DraftStatusDraft, DraftStatusPendingApproval or
 	// DraftStatusRejected.
 	Status string `json:"status,omitempty"`

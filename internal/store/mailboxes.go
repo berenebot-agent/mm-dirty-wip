@@ -326,7 +326,12 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		if aerr != nil {
 			return nil, aerr
 		}
+		external, eerr := s.ListExternalAliases(ctx, p.AccountID)
+		if eerr != nil {
+			return nil, eerr
+		}
 		for i := range out {
+			out[i].ExternalAliases = external[out[i].ID]
 			out[i].Aliases = aliasAddresses(aliases[out[i].ID])
 			out[i].AliasNames = aliasNames(aliases[out[i].ID])
 		}
@@ -403,6 +408,12 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	if err = rows.Err(); err != nil {
 		return i, err
 	}
+	rows.Close()
+	external, err := s.ListExternalAliasesForInbox(ctx, accountID, id)
+	if err != nil {
+		return i, err
+	}
+	i.ExternalAliases = external
 	return i, nil
 }
 func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display string, enabled *bool) error {
@@ -597,6 +608,10 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_aliases WHERE account_id=? AND inbox_id=?`, accountID, inboxID); err != nil {
 		return err
 	}
+	var externalCount int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_aliases WHERE inbox_id=?`, inboxID).Scan(&externalCount); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, in := range aliases {
 		local := normalizeLocal(in.LocalPart)
@@ -630,7 +645,13 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 		if collision != 0 {
 			return fmt.Errorf("alias %s@%s is already in use", local, domainName)
 		}
-		if len(seen) > maxInboxAliases {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_aliases WHERE inbox_id=? AND address=?`, inboxID, local+"@"+domainName).Scan(&collision); err != nil {
+			return err
+		}
+		if collision != 0 {
+			return fmt.Errorf("address already exists as an external alias")
+		}
+		if len(seen)+externalCount > maxInboxAliases {
 			return fmt.Errorf("too many aliases")
 		}
 		displayName, err := NormalizeAliasDisplayName(in.DisplayName)
@@ -672,36 +693,43 @@ type senderQueryer interface {
 // configuration must be used. An empty request, or one matching the inbox
 // primary address, resolves to the primary and the inbox's own domain, using
 // the inbox display name. Any other address must match one of the inbox's
-// aliases, whose own domain (which may differ) and display name (falling back
-// to the inbox display name) are returned. A request that is neither is
-// ErrForbidden.
+// managed aliases (its own domain and display name) or external aliases (who
+// carry their own sending connector). A request that is neither is ErrForbidden.
 func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, string, error) {
+	from, target, err := resolveSendingTargetQuery(ctx, q, accountID, inboxID, requested)
+	return from, target.DomainID, err
+}
+
+// resolveSendingTargetQuery is resolveSenderQuery generalized to return the
+// full sending target: a managed domain id, or the immutable id of an external
+// sending alias. Exactly one of the two is set.
+func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, SendingTarget, error) {
 	var primaryName, primary, domainID string
 	if err := q.QueryRowContext(ctx, `SELECT i.display_name,i.local_part||'@'||d.name,i.domain_id FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID).Scan(&primaryName, &primary, &domainID); err != nil {
 		if err == sql.ErrNoRows {
-			return model.Address{}, "", ErrNotFound
+			return model.Address{}, SendingTarget{}, ErrNotFound
 		}
-		return model.Address{}, "", err
+		return model.Address{}, SendingTarget{}, err
 	}
 	requested = strings.ToLower(strings.TrimSpace(requested))
 	if requested == "" || requested == strings.ToLower(primary) {
-		return model.Address{Name: primaryName, Address: primary}, domainID, nil
+		return model.Address{Name: primaryName, Address: primary}, SendingTarget{DomainID: domainID}, nil
 	}
-	var alias, aliasDomainID, aliasName string
+	var alias, aliasDomainID, aliasName, externalID string
 	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id,COALESCE(NULLIF(a.display_name,''),i.display_name) FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id JOIN inboxes i ON i.id=a.inbox_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID, &aliasName)
 	if err == sql.ErrNoRows {
-		return model.Address{}, "", ErrForbidden
+		err = q.QueryRowContext(ctx, `SELECT e.address,COALESCE(NULLIF(e.display_name,''),i.display_name),e.id FROM external_aliases e JOIN inboxes i ON i.id=e.inbox_id AND i.account_id=e.account_id WHERE e.account_id=? AND e.inbox_id=? AND e.address=?`, accountID, inboxID, requested).Scan(&alias, &aliasName, &externalID)
+		if err == sql.ErrNoRows {
+			return model.Address{}, SendingTarget{}, ErrForbidden
+		}
 	}
 	if err != nil {
-		return model.Address{}, "", err
+		return model.Address{}, SendingTarget{}, err
 	}
-	return model.Address{Name: aliasName, Address: alias}, aliasDomainID, nil
-}
-
-// ResolveInboxSender maps a requested sender to its canonical From identity
-// (display name and address) and sending domain (see resolveSenderQuery).
-func (s *Store) ResolveInboxSender(ctx context.Context, accountID, inboxID, requested string) (model.Address, string, error) {
-	return resolveSenderQuery(ctx, s.read, accountID, inboxID, requested)
+	if externalID != "" {
+		return model.Address{Name: aliasName, Address: alias}, SendingTarget{ExternalAliasID: externalID}, nil
+	}
+	return model.Address{Name: aliasName, Address: alias}, SendingTarget{DomainID: aliasDomainID}, nil
 }
 
 // SetInboxDefaultSender sets the address compose/reply preselects as From. It

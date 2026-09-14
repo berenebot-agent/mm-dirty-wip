@@ -841,7 +841,10 @@ func aliasNamesForForms(forms []aliasForm) map[string]string {
 const maxInboxAliasesForm = 100
 
 // inboxConfig holds the per-inbox settings shared by the create and edit
-// flows so both validate and persist them identically.
+// flows so both validate and persist them identically. External sending aliases
+// are intentionally absent: they are stable-id objects managed only through the
+// admin endpoints, so an inbox save can never replace (and thus drop the
+// connector of) an existing external alias.
 type inboxConfig struct {
 	allowedSenders       []string
 	approverEmail        string

@@ -273,6 +273,91 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 	}
 }
 
+// TestRelayOutboundUsesDefaultSender proves a relay send uses the inbox's
+// configured default sender, including an external sending alias, rather than
+// always the primary address.
+func TestRelayOutboundUsesDefaultSender(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
+	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+
+	// The inbox default sender is an external alias.
+	alias, err := st.CreateExternalAlias(ctx, u.AccountID, box.ID, "agent@gmail.com", "Agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetInboxDefaultSender(ctx, u.AccountID, box.ID, alias.Address); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-sender", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, _, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "sender-1", RFCMessageID: "<s1@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Relay sender", Text: "hi", RawPath: "messages/s.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := hermesrelay.New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	client := dialRawWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/relay", makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	// Drain the buffered inbound event so the socket is ready for the reply.
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": inbound["bufferId"]}); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.writeJSON(map[string]any{"type": "outbound", "requestId": "req-1", "action": map[string]any{"op": "send", "chat_id": thread.ThreadID, "content": "reply"}}); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err = client.readJSON(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result["type"] != "outbound_result" {
+		t.Fatalf("outbound result %#v", result)
+	}
+	res, _ := result["result"].(map[string]any)
+	if res == nil || res["success"] != true {
+		t.Fatalf("outbound failed: %#v", result)
+	}
+	msgID, _ := res["message_id"].(string)
+	sent, err := st.GetMessageByID(ctx, u.AccountID, msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.From.Address != "agent@gmail.com" || sent.From.Name != "Agent" {
+		t.Fatalf("relay did not use the default external alias: %+v", sent.From)
+	}
+}
+
 // A message.received event whose message was later deleted must be skipped
 // rather than tearing the socket down, which would reconnect-loop forever on
 // the same stale event.
