@@ -29,7 +29,7 @@ func adjustStorageTx(ctx context.Context, tx *sql.Tx, accountID string, delta in
 func draftBodyBytes(d model.Draft) int64 { return int64(len(d.Text) + len(d.HTML)) }
 
 func getDraftTx(ctx context.Context, tx *sql.Tx, accountID, id string) (model.Draft, error) {
-	d, err := scanDraft(tx.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, accountID))
+	d, err := scanDraft(tx.QueryRowContext(ctx, `SELECT id,inbox_id,reply_to_message_id,from_address,from_name,from_external_alias_id,to_json,cc_json,bcc_json,subject,text_body,html_body,status,created_at,updated_at FROM drafts WHERE id=? AND account_id=?`, id, accountID))
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}

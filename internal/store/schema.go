@@ -848,3 +848,30 @@ const migration026 = `ALTER TABLE inboxes ADD COLUMN require_authenticated INTEG
 // Default 'owner' preserves existing connections' behaviour.
 const migration027 = `ALTER TABLE hermes_connections ADD COLUMN outbound_role TEXT NOT NULL DEFAULT 'owner';
 `
+
+// External aliases have stable IDs and own their optional sending credentials.
+// Message/log IDs are immutable attribution snapshots, deliberately not foreign
+// keys: deleting an alias must not turn a queued external send into a domain send.
+const migration028 = `
+CREATE UNIQUE INDEX idx_inboxes_id_account ON inboxes(id,account_id);
+CREATE TABLE external_aliases (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  inbox_id TEXT NOT NULL,
+  address TEXT NOT NULL COLLATE NOCASE,
+  display_name TEXT NOT NULL DEFAULT '',
+  provider TEXT NOT NULL DEFAULT '',
+  encrypted_config TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(inbox_id,address),
+  FOREIGN KEY(inbox_id,account_id) REFERENCES inboxes(id,account_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_external_aliases_account ON external_aliases(account_id,inbox_id);
+ALTER TABLE messages ADD COLUMN sending_external_alias_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_messages_external_alias ON messages(sending_external_alias_id);
+ALTER TABLE drafts ADD COLUMN from_external_alias_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbound_delivery_log ADD COLUMN external_alias_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_outbound_log_external_alias ON outbound_delivery_log(account_id,external_alias_id,id DESC);
+`

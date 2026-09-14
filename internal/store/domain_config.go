@@ -14,6 +14,7 @@ import (
 // encrypted bytes belong to that domain alone (migrated shared credentials are
 // stored as independent copies).
 type DomainConfig struct {
+	ExternalAliasID string    `json:"external_alias_id,omitempty"`
 	ID              string    `json:"id"`
 	AccountID       string    `json:"account_id"`
 	DomainID        string    `json:"domain_id"`
