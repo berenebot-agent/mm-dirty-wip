@@ -627,7 +627,9 @@ schema change, no new dependency, no new runtime service.
 **Decision:** Each inbox alias may carry an optional sender display name.
 Sending from an alias uses `Name <alias@domain>` when a name is set, and falls
 back to the inbox's `display_name` when it is not; the primary address always
-uses the inbox display name. A draft records the resolved name
+uses the inbox display name. The inbox UI requires a name when adding or editing
+an alias (the API still accepts an empty name and falls back, for compatibility
+with older clients and imports). A draft records the resolved name
 (`drafts.from_name`), it is part of the draft's frozen approval fingerprint, and
 the approval-request body shows the intended `Name <address>`. Names are
 operator-controlled: alias management is already Owner/Admin-only (the inbox
@@ -648,8 +650,12 @@ name that will be shown.
 
 **Complexity:** Qualitative. Adds migration 025
 (`inbox_aliases.display_name`, `drafts.from_name`), name plumbing through alias
-set/draft storage and the send path, the `alias_names` API field, and a name
-input on the alias editor. No new dependency or runtime service.
+set/draft storage and the send path, the `alias_names` API field, and an
+alias editor where each row shows the sender name with its address beneath and
+an add/edit popup collects both. The Aliases tab lists aliases first (with the
+add button above them), then a Primary / Default Address section whose dropdown
+lists the main address and each alias as `Name (email)` — the primary name being
+the inbox display name. No new dependency or runtime service.
 
 ## D034 — External review remediation (security, correctness, UX)
 
