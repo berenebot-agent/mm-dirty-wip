@@ -1,16 +1,25 @@
+# Minimal single-container deployment.
+#
+# Direct SMTP (MX) ingress is ON by default: the embedded edge listens
+# internally on :2525, published here on host port 25. If you receive mail only
+# through a webhook provider (Mailgun, Cloudflare Email Routing, Resend), set
+# MX_ENABLE=false in .env to run webhook-only; port 25 then has no listener.
 services:
   gatehouse:
     image: gatehouse-mail:latest
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Compose default. Override with MX_ENABLE=false (or remote) in .env.
+      MX_ENABLE: "${MX_ENABLE:-true}"
     volumes:
       - ./data:/data
     ports:
       # :8081 = API + web UI + webhook delivery connector.
       - "0.0.0.0:8081:8081"
-      # :8082 = inbound webhook connector for delivery only. 
-      # If using Web+API on LAN only can increase security by only exposing this to public internet.
+      # :8082 = dedicated inbound listener (webhook connectors, plus the MX
+      # resolve/ingest routes when MX is enabled).
       - "0.0.0.0:8082:8082"
-      # :25 = direct smtp if using this as mx receiver
+      # :25 = direct SMTP when using this as an MX receiver (MX_ENABLE=true|remote).
       - "0.0.0.0:25:2525"

@@ -3,11 +3,13 @@
 Gatehouse receives mail two ways:
 
 - **Webhook providers** (Mailgun, Cloudflare Email Routing, Resend) — the
-  default, app-only deployment. No port 25, no extra process.
-- **Direct SMTP (MX)** — an optional policy-free edge binary, `gatehouse-mx`,
-  built into the same image, that terminates SMTP on port 25 and calls the core
-  over signed HTTPS. Use it when you own the domain and want mail delivered
-  straight to Gatehouse without a third-party receiver.
+  minimal, app-only mode. No port 25 and no extra process; select it with
+  `MX_ENABLE=false`.
+- **Direct SMTP (MX)** — the default in the shipped `docker-compose.yml`: a
+  policy-free edge binary, `gatehouse-mx`, built into the same image, that
+  terminates SMTP on port 25 and calls the core over signed HTTPS. Use it when
+  you own the domain and want mail delivered straight to Gatehouse without a
+  third-party receiver.
 
 The edge holds **no** `/data` mount, no database access and no
 `APP_ENCRYPTION_KEY`. Routing, policy, quota and durable storage stay in the
@@ -39,10 +41,11 @@ temporary failures return `451`/`452` and rely on the sending MTA to retry.
 
 ## 1. Configure the core
 
-One setting selects the MX deployment:
+One setting selects the MX deployment. `docker-compose.yml` sets it to `true` by
+default; the server binary defaults to `false` when the variable is unset.
 
 ```env
-MX_ENABLE=true   # false (default) | true | remote
+MX_ENABLE=true   # true (compose default) | false (webhook-only) | remote
 #MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 
@@ -83,14 +86,13 @@ INBOUND_TLS_KEY_FILE=/certs/inbound.key
 
 ## 2. Run the edge
 
-The mode chooses how the edge runs. `true` (embedded) is the default and needs
-no second service.
+The mode chooses how the edge runs. `true` (embedded) is the `docker-compose.yml`
+default and needs no second service.
 
-### true (single container, default)
+### true (single container, Compose default)
 
 ```bash
-# .env
-MX_ENABLE=true
+# .env — MX_ENABLE=true is already the docker-compose.yml default
 docker compose up -d --build
 ```
 
