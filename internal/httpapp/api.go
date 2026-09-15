@@ -694,7 +694,8 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
-	m, err := s.Service.Store.GetMessage(r.Context(), principal(r), r.PathValue("id"))
+	p := principal(r)
+	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -708,10 +709,21 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), principal(r), app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return
+	}
+	// Async by default: return the pending message immediately. With ?wait=true
+	// the request blocks until the worker delivers or fails (or times out).
+	if r.URL.Query().Get("wait") == "true" {
+		dm, werr := s.Service.WaitForDelivery(r.Context(), p.AccountID, res.Message.ID, 30*time.Second)
+		if werr != nil {
+			writeError(w, 504, werr.Error())
+			return
+		}
+		res.Message = dm
+		res.ProviderMessageID = dm.ProviderMessageID
 	}
 	writeJSON(w, 201, res)
 }

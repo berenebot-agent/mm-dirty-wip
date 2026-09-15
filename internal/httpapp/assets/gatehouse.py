@@ -777,9 +777,11 @@ def cmd_reply(client, args):
         body["sender"] = args.sender
     if args.attach:
         body["attachments"] = load_attachment_json(args.attach)
+    params = {"wait": "true"} if args.wait else None
     response = client.request(
         "POST",
         "/v1/messages/" + args.id + "/reply",
+        params=params,
         body=body,
         headers=idem_headers(args),
     )
@@ -1210,7 +1212,7 @@ def build_parser():
 
     p = command(
         "reply",
-        "POST /v1/messages/{id}/reply - reply from the message's inbox (Owner).",
+        "POST /v1/messages/{id}/reply - reply from the message's inbox (Owner); enqueues and returns unless --wait.",
         cmd_reply,
     )
     p.add_argument("id", metavar="ID", help="message id to reply to")
@@ -1226,6 +1228,11 @@ def build_parser():
         "--sender",
         metavar="ADDR",
         help="From identity: the inbox primary or one of its aliases",
+    )
+    p.add_argument(
+        "--wait",
+        action="store_true",
+        help="block until delivery instead of returning as soon as it is queued",
     )
     add_idem(p)
 

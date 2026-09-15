@@ -89,7 +89,7 @@ var routes = []Route{
 
 	// Send and reply.
 	{Method: "POST", Path: "/v1/send", Summary: "Send email as an Owner", Description: "Enqueues into the outbox and returns immediately. Add ?wait=true to block until delivery. Accepts JSON attachments with filename, content_type and base64-encoded content fields. Optional sender chooses a From identity (the inbox primary or one of its aliases); the sending provider is resolved from that address's domain.", Role: "owner", Group: "Send"},
-	{Method: "POST", Path: "/v1/messages/{id}/reply", Summary: "Reply to a message (Owner); optional sender chooses the From identity", Description: "Sends a reply in the message's thread. Accepts text, optional html, base64 attachments and sender.", Role: "owner", Group: "Send", Success: 201},
+	{Method: "POST", Path: "/v1/messages/{id}/reply", Summary: "Reply to a message (Owner); optional sender chooses the From identity", Description: "Sends a reply in the message's thread. Accepts text, optional html, base64 attachments and sender. Add ?wait=true to block until delivery.", Role: "owner", Group: "Send", Success: 201},
 
 	// Drafts.
 	{Method: "GET", Path: "/v1/drafts", Summary: "List drafts (filter by inbox; supports before and limit)", Role: "assistant", Group: "Drafts"},
