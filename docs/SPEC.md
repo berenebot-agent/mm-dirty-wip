@@ -238,6 +238,7 @@ Expose:
 /v1/bootstrap
 /openapi.json
 /examples/python
+/examples/bash
 /examples/curl
 ```
 

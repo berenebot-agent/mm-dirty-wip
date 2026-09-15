@@ -1164,6 +1164,31 @@ post-commit read error caused the caller to delete MIME that committed rows
 already referenced. A commit error is only treated as failure if the row is
 genuinely absent.
 
+## D052 — One source of truth for API discovery
+
+`internal/apispec` is a stdlib-only leaf package holding the canonical `Route`
+table for the authenticated `/v1` surface. Every discovery artifact renders from
+that one table:
+
+- `/agent` — the served Markdown guide;
+- `/openapi.json` — an OpenAPI 3.0.3 document covering the complete operation
+  list;
+- `docs/API-REFERENCE.md` — the generated reference, checked in and verified by
+  a staleness test;
+- `/examples/python`, `/examples/bash` and `/examples/curl` — the embedded
+  Python client, Bash client and curl cookbook.
+
+The authenticated `/v1` registrations are a single registration table in
+`internal/httpapp/server.go`, so the documented surface and the live mux cannot
+drift apart in isolation. `tests/unit/httpapp/route_coverage_test.go` fails when
+a registered `/v1` route is missing from the table, or when a table entry has no
+registration.
+
+`/openapi.json` is valid OpenAPI 3.0.3 because every operation carries a
+non-empty `responses` object (the primary success response plus `401` and
+`default`). Per-operation request and response JSON Schemas remain deferred:
+they need handler-level annotations and are a separate project.
+
 ## Future extension register
 
 

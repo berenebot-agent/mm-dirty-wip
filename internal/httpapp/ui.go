@@ -244,17 +244,21 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !has {
-		http.Redirect(w, r, "/setup", 303)
+		if wantsHTML(r) {
+			http.Redirect(w, r, "/setup", 303)
+			return
+		}
+		s.discovery(w, r)
 		return
 	}
 	c, err := r.Cookie("ghm_session")
 	if err != nil {
-		http.Redirect(w, r, "/login", 303)
+		s.serveDiscoveryOrLogin(w, r)
 		return
 	}
 	p, cval, err := s.Service.Store.SessionPrincipal(r.Context(), c.Value)
 	if err != nil {
-		http.Redirect(w, r, "/login", 303)
+		s.serveDiscoveryOrLogin(w, r)
 		return
 	}
 	ctx := context.WithValue(r.Context(), principalKey, p)
@@ -262,7 +266,24 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	s.dashboard(w, r.WithContext(ctx))
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set Up Gatehouse Mail"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{if .BootstrapRequired}}<label>Bootstrap token</label><input type="password" name="bootstrap_token" required placeholder="One-time setup token">{{end}}{{end}}<label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form></div>`
+// serveDiscoveryOrLogin keeps browsers on the login flow while letting a
+// session-less API client bootstrap from the base URL: a request that does not
+// ask for HTML receives the discovery document instead of a redirect.
+func (s *Server) serveDiscoveryOrLogin(w http.ResponseWriter, r *http.Request) {
+	if wantsHTML(r) {
+		http.Redirect(w, r, "/login", 303)
+		return
+	}
+	s.discovery(w, r)
+}
+
+// wantsHTML reports whether the client prefers an HTML page, so the root URL
+// can serve the human UI to browsers and the discovery document to agents.
+func wantsHTML(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set Up Gatehouse Mail"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{if .BootstrapRequired}}<label>Bootstrap token</label><input type="password" name="bootstrap_token" required placeholder="One-time setup token">{{end}}{{end}}<label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form><p style="font-size:13px;color:#666;margin-top:14px">Agents: <a href="/agent">/agent</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/gatehouse">/.well-known/gatehouse</a></p></div>`
 
 type authFlash struct {
 	Title, Error, Email string

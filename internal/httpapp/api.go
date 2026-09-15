@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"gatehouse-mail/internal/apispec"
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/htmlsanitize"
 	"gatehouse-mail/internal/idgen"
@@ -24,200 +25,44 @@ import (
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{"name": "Gatehouse Mail", "api_version": "v1", "api_base": "/v1", "agent_guide": "/agent", "openapi": "/openapi.json", "bootstrap": "/v1/bootstrap", "capabilities": []string{"inboxes", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"}})
+	writeJSON(w, 200, map[string]any{
+		"name":        "Gatehouse Mail",
+		"api_version": "v1",
+		"api_base":    "/v1",
+		"agent_guide": "/agent",
+		"openapi":     "/openapi.json",
+		"reference":   "/agent",
+		"examples": map[string]string{
+			"python": "/examples/python",
+			"bash":   "/examples/bash",
+			"curl":   "/examples/curl",
+		},
+		"bootstrap":    "/v1/bootstrap",
+		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay", "external-aliases"},
+	})
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-	guide := "# Gatehouse Mail\n\n" +
-		"Authenticate with `Authorization: Bearer <key>`.\n\n" +
-		"Start with `GET /v1/bootstrap` to discover accessible inboxes and mailbox roles.\n\n" +
-		"## Inboxes\n" +
-		"- `GET /v1/inboxes` — list inboxes you can access\n" +
-		"- `GET /v1/inboxes/{id}` — inbox detail\n" +
-		"- `POST /v1/inboxes` (Admin) — create an inbox\n" +
-		"- `PATCH /v1/inboxes/{id}` (Owner) — set display name, allowed senders, approver, aliases, `alias_names` and `default_sender`\n\n" +
-		"## Messages\n" +
-		"- `GET /v1/messages?inbox={id}&label=...&from=...&to=...&unread=true&has_attachment=true&before={id}` — list messages (Spam excluded; `spam=true` lists only Spam, `include_spam=true` includes it)\n" +
-		"- `GET /v1/messages/{id}` — message detail\n" +
-		"- `PATCH /v1/messages/{id}` — set `read`/`archived`/`labels`/`spam`\n" +
-		"- `DELETE /v1/messages/{id}` (Assistant/Owner)\n" +
-		"- `GET /v1/messages/{id}/attachments` — attachment metadata\n" +
-		"- `GET /v1/attachments/{id}` — download attachment bytes\n\n" +
-		"## Threads\n" +
-		"- `GET /v1/threads?inbox={id}`\n" +
-		"- `GET /v1/threads/{id}` and `GET /v1/threads/{id}/messages`\n\n" +
-		"## Search\n" +
-		"- `GET /v1/search?q=...&inbox={id}&label=...&from=...&to=...&has_attachment=true` — FTS5 search\n\n" +
-		"## Labels\n" +
-		"- Free-text tags shared across the account; a message may have many. Matching ignores case and surrounding whitespace.\n" +
-		"- `GET /v1/labels` — distinct labels currently in use\n" +
-		"- `PATCH /v1/messages/{id}` with `{\"labels\":[\"Invoices\",\"Unpaid\"]}` — replace the label set (`[]` clears; omit the field to leave it unchanged)\n" +
-		"- `GET /v1/messages?label=Invoices&label=Unpaid` — messages carrying all listed labels\n\n" +
-		"## Events (realtime)\n" +
-		"- `GET /v1/events?after=evt_...` — incremental history\n" +
-		"- `GET /v1/events/wait?after=evt_...&timeout=60` — long poll\n" +
-		"- `GET /v1/events/stream?after=evt_...` — SSE\n\n" +
-		"## Drafts\n" +
-		"- `GET/POST /v1/drafts`, `GET/PATCH/DELETE /v1/drafts/{id}` (Assistant/Owner)\n" +
-		"- Draft writes (`POST /v1/drafts`, `PATCH /v1/drafts/{id}`, `POST /v1/drafts/{id}/send`, `POST /v1/drafts/{id}/request-send`) accept base64 JSON `attachments` (same shape as send/reply) and an `action` of `draft` (default), `request-send` or `send`, so a draft can be created, attached and submitted for approval in one request. `PATCH` is partial: only supplied fields change. `sender` is accepted as an alias for `from_address`.\n" +
-		"- `GET/POST /v1/drafts/{id}/attachments`, `GET/DELETE /v1/drafts/{id}/attachments/{attId}` (Assistant/Owner; multipart upload field `attachments`)\n" +
-		"- `POST /v1/drafts/{id}/send` (Owner) — send a draft immediately (optional field override + attachments, then deletes the draft)\n\n" +
-		"## Draft approval (human-in-the-loop)\n" +
-		"An Assistant can draft and request send; an Owner authorizes. Approvals always apply to the exact frozen draft.\n" +
-		"- `POST /v1/drafts/{id}/request-send` (Assistant) — submit for authorization; the draft becomes `pending_approval` and is frozen. If the inbox has an `approver_email` configured, the approval-request email is sent automatically; `{\"external\": true}` is optional and only errors when no approver is configured.\n" +
-		"- `POST /v1/drafts/{id}/cancel-send-request` (Assistant) — withdraw the request and return the draft to `draft`.\n" +
-		"- `POST /v1/drafts/{id}/approve` (Owner) — approve and enqueue the frozen draft through the normal outbound flow. Optional `{\"feedback\":\"...\"}`.\n" +
-		"- `POST /v1/drafts/{id}/reject` (Owner) — reject with optional `{\"feedback\":\"...\"}`; the draft becomes `rejected`, stays editable, and can be resubmitted.\n" +
-		"- `GET /v1/drafts/{id}/send-request` — the latest request (works after the draft has been sent); `GET /v1/send-requests?inbox={id}&active=true` lists requests.\n" +
-		"- Draft reads include `status` (`draft`, `pending_approval`, `rejected`) and the latest `send_request`, including `approver_email`, `token_expires_at` and `decision_method` (`ui`, `api` or `email`).\n" +
-		"- External approval: an inbox may configure an `approver_email` (set via `PATCH /v1/inboxes/{id}`). The approver gets an email with Approve/Reject `mailto:` actions and replies to the inbox; Gatehouse consumes the reply, validates the token and sender, and records the decision. A UI decision wins safely over an outstanding email request.\n" +
-		"- External requests expire after `APPROVAL_EXPIRY_HOURS` (default 48, `0` disables); an expired request returns the draft to `draft` and the token is permanently dead.\n" +
-		"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`, `draft.approval_expired`.\n" +
-		"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
-		"## Send and reply (Owner)\n" +
-		"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery. Add `\"sender\":\"sales@example.com\"` to send as one of the inbox's aliases (provider resolved from that alias's domain).\n" +
-		"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
-		"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
-		"- Use an `Idempotency-Key` header to make sends retry-safe.\n\n" +
-		"## Outbox (Owner)\n" +
-		"- `GET /v1/outbox?inbox={id}` — list pending and failed outbound messages\n" +
-		"- `POST /v1/outbox/{id}/retry` — re-queue a failed message\n" +
-		"- `DELETE /v1/outbox/{id}` — cancel a pending send or discard a failed one\n\n" +
-		"## Admin (Admin role)\n" +
-		"- `GET/POST /v1/admin/domains`, `PATCH/DELETE /v1/admin/domains/{id}`\n" +
-		"- `GET/POST /v1/admin/keys`, `DELETE /v1/admin/keys/{id}`\n" +
-		"- `GET/PUT/DELETE /v1/admin/domains/{id}/sending` — sending provider config\n" +
-		"- `GET/PUT/DELETE /v1/admin/domains/{id}/receiving` — receiving provider config\n" +
-		"- `GET /v1/admin/domains/{id}/sending/deliveries` — delivery activity for a domain\n" +
-		"- `GET /v1/admin/hermes`, `DELETE /v1/admin/hermes/{id}`\n\n" +
-		"Roles are assigned per mailbox: Read, Assistant, Owner. Admin is account-wide.\n"
-	fmt.Fprint(w, guide)
+	fmt.Fprint(w, apispec.RenderAgentGuide(apispec.Routes()))
 }
+
+// pythonExample serves the embedded Python client. It is not content-hashed,
+// so it must not use the immutable asset cache policy.
 func (s *Server) pythonExample(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "import requests\nBASE=%q\nKEY='ghm_...'\nh={'Authorization':f'Bearer {KEY}'}\nprint(requests.get(BASE+'/v1/messages',headers=h).json())\n", s.Service.Config.BaseURL)
+	serveBlob(w, "text/x-python; charset=utf-8", "no-cache", pythonClient)
 }
+
+// bashExample serves the embedded Bash client.
+func (s *Server) bashExample(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "text/x-shellscript; charset=utf-8", "no-cache", bashClient)
+}
+
+// curlExample serves the embedded curl scenario cookbook.
 func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "curl -H 'Authorization: Bearer ghm_...' %s/v1/bootstrap\n", s.Service.Config.BaseURL)
+	serveBlob(w, "text/plain; charset=utf-8", "no-cache", curlCookbook)
 }
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]any{
-		"openapi": "3.0.3",
-		"info":    map[string]any{"title": "Gatehouse Mail", "version": "v1"},
-		"servers": []map[string]string{{"url": s.Service.Config.BaseURL}},
-		"paths": map[string]any{
-			"/v1/bootstrap": map[string]any{"get": map[string]any{"summary": "Discover key capabilities and accessible inboxes", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/inboxes": map[string]any{
-				"get":  map[string]any{"summary": "List inboxes", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/inboxes/{id}": map[string]any{
-				"get":    map[string]any{"summary": "Get an inbox", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender)", "description": "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. aliases route inbound mail to this inbox and may be chosen as the From address when sending; alias_names maps an alias address to its optional sender display name (falling back to the inbox display_name). default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete an inbox (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/identities": map[string]any{
-				"get":  map[string]any{"summary": "List identities (openagent.email compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create an identity (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/messages": map[string]any{"get": map[string]any{"summary": "List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/messages/wait": map[string]any{
-				"get":  map[string]any{"summary": "Long-poll for a new message", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Long-poll for a new message (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/messages/{id}": map[string]any{
-				"get":    map[string]any{"summary": "Get a message", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update read/archived/labels state", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete a message (Assistant/Owner)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/messages/{id}/seen":        map[string]any{"post": map[string]any{"summary": "Mark a message seen (compat)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/messages/{id}/attachments": map[string]any{"get": map[string]any{"summary": "List message attachments", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/messages/{id}/reply":       map[string]any{"post": map[string]any{"summary": "Reply to a message (Owner); optional sender chooses the From identity", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/attachments/{id}":          map[string]any{"get": map[string]any{"summary": "Download an attachment", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/threads":                   map[string]any{"get": map[string]any{"summary": "List threads", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/threads/{id}":              map[string]any{"get": map[string]any{"summary": "Get a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/threads/{id}/messages":     map[string]any{"get": map[string]any{"summary": "List messages in a thread", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/search":                    map[string]any{"get": map[string]any{"summary": "Search messages (FTS5)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/labels":                    map[string]any{"get": map[string]any{"summary": "List distinct labels in use", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/events":                    map[string]any{"get": map[string]any{"summary": "Incremental event history", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/events/wait":               map[string]any{"get": map[string]any{"summary": "Long-poll for events", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/events/stream":             map[string]any{"get": map[string]any{"summary": "SSE event stream", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/send":                      map[string]any{"post": map[string]any{"summary": "Send email as an Owner", "description": "Enqueues into the outbox and returns immediately. Add ?wait=true to block until delivery. Accepts JSON attachments with filename, content_type, and base64-encoded content fields. Optional sender chooses a From identity (the inbox primary or one of its aliases); the sending provider is resolved from that address's domain.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts": map[string]any{
-				"get":  map[string]any{"summary": "List drafts (filter by inbox; supports before and limit)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create a draft", "description": "Accepts draft fields plus an optional base64 JSON attachments array and an action of draft (default), request-send (Assistant) or send (Owner), so a draft can be created, attached and submitted in one request. sender is accepted as an alias for from_address.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/drafts/{id}": map[string]any{
-				"get":    map[string]any{"summary": "Get a draft (includes attachments)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"patch":  map[string]any{"summary": "Update a draft (partial)", "description": "Only fields present in the body are changed; omitted fields are left untouched. Also accepts attachments and an action of draft, request-send or send.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete a draft", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/drafts/{id}/send":                map[string]any{"post": map[string]any{"summary": "Send a draft (Owner)", "description": "Copies the draft's fields and attachments into a new outbound message, then deletes the draft. An optional body overrides fields and appends attachments before sending. Returns provider_message_id like /v1/send.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/request-send":        map[string]any{"post": map[string]any{"summary": "Request authorization to send a draft (Assistant)", "description": "Freezes the draft as pending_approval until the request is approved, rejected, cancelled or expired. An optional body overrides fields and appends attachments before freezing. A configured inbox approver makes the request external automatically (the approval email is sent to them); {\"external\": true} is optional and only errors when no approver is configured.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/cancel-send-request": map[string]any{"post": map[string]any{"summary": "Cancel a pending send request (Assistant)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/approve":             map[string]any{"post": map[string]any{"summary": "Approve and send a pending draft (Owner)", "description": "Approves the exact frozen draft and enqueues it through the outbound flow. Accepts an optional feedback field.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/reject":              map[string]any{"post": map[string]any{"summary": "Reject a pending send request (Owner)", "description": "Marks the draft rejected and stores optional feedback for the agent.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/send-request":        map[string]any{"get": map[string]any{"summary": "Get the latest send request for a draft", "description": "Returns the workflow record even after the draft has been consumed by an approved send.", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/drafts/{id}/attachments": map[string]any{
-				"get":  map[string]any{"summary": "List draft attachments", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Upload draft attachments (multipart field 'attachments')", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/drafts/{id}/attachments/{attId}": map[string]any{
-				"get":    map[string]any{"summary": "Download a draft attachment", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete a draft attachment", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/send-requests":     map[string]any{"get": map[string]any{"summary": "List draft send requests (filter by inbox and active)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox":            map[string]any{"get": map[string]any{"summary": "List pending and failed outbound messages", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox/{id}/retry": map[string]any{"post": map[string]any{"summary": "Re-queue a failed outbound message", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/outbox/{id}":       map[string]any{"delete": map[string]any{"summary": "Cancel a pending send or discard a failed one", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/domains": map[string]any{
-				"get":  map[string]any{"summary": "List domains (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/domains/{id}": map[string]any{
-				"patch":  map[string]any{"summary": "Update a domain (Admin)", "description": "Accepts catch_all_inbox_id only.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete a domain (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/domains/{id}/sending": map[string]any{
-				"get":    map[string]any{"summary": "Get a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"put":    map[string]any{"summary": "Set a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Clear a domain's sending provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/domains/{id}/receiving": map[string]any{
-				"get":    map[string]any{"summary": "Get a domain's receiving provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"put":    map[string]any{"summary": "Set a domain's receiving provider config (Admin)", "description": "Accepts provider, config, and regenerate_secret. Generated secrets are returned once in the response.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Clear a domain's receiving provider config (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/domains/{id}/sending/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for a domain (Admin)", "description": "Returns the per-attempt delivery log for a domain, newest first, with message_id linking to the message. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/inboxes/{id}/external-aliases": map[string]any{
-				"get":  map[string]any{"summary": "List an inbox's external sending aliases (Admin, self-hosted)", "description": "Send-only identities on domains Gatehouse does not manage. Never participate in inbound routing. Returns ids, addresses, display names, connector provider and configured status; never credentials.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create an external sending alias (Admin, self-hosted)", "description": "Body: address (full local@domain, immutable after creation) and optional display_name. The address must not be the inbox primary or a managed inbox/alias in the account, and must be unique among the account's external aliases.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}": map[string]any{
-				"patch":  map[string]any{"summary": "Update an external alias display name (Admin, self-hosted)", "description": "Accepts display_name only; the address is immutable.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Delete an external alias (Admin, self-hosted)", "description": "Removes the alias and its connector, clears any default_sender that referenced it, and makes its queued messages fail permanently rather than fall back to a domain connector.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending": map[string]any{
-				"get":    map[string]any{"summary": "Get an external alias's sending connector (Admin, self-hosted)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"put":    map[string]any{"summary": "Set an external alias's sending connector (Admin, self-hosted)", "description": "Accepts provider and config; same schema, secret retention and CAS revision semantics as a domain sending config. Requeues only that alias's pending sends.", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"delete": map[string]any{"summary": "Clear an external alias's sending connector (Admin, self-hosted)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries": map[string]any{"get": map[string]any{"summary": "List delivery attempts for an external alias (Admin, self-hosted)", "description": "Returns that alias's per-attempt delivery log, newest first. Supports limit and before (keyset on attempt id).", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/keys": map[string]any{
-				"get":  map[string]any{"summary": "List API keys (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-				"post": map[string]any{"summary": "Create an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}},
-			},
-			"/v1/admin/keys/{id}":   map[string]any{"delete": map[string]any{"summary": "Revoke an API key (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes":      map[string]any{"get": map[string]any{"summary": "List Hermes connections (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-			"/v1/admin/hermes/{id}": map[string]any{"delete": map[string]any{"summary": "Delete a Hermes connection (Admin)", "security": []map[string]any{{"bearerAuth": []string{}}}}},
-		},
-		"components": map[string]any{
-			"securitySchemes": map[string]any{
-				"bearerAuth": map[string]any{"type": "http", "scheme": "bearer"},
-			},
-		},
-	})
+	writeJSON(w, 200, apispec.RenderOpenAPI(s.Service.Config.BaseURL, apispec.Routes()))
 }
 
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
