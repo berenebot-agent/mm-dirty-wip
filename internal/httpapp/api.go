@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,12 +69,24 @@ func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 // pythonExample serves the embedded Python client. It is not content-hashed,
 // so it must not use the immutable asset cache policy.
 func (s *Server) pythonExample(w http.ResponseWriter, r *http.Request) {
-	serveBlob(w, "text/x-python; charset=utf-8", "no-cache", pythonClient)
+	serveBlob(w, "text/x-python; charset=utf-8", "no-cache", clientWithBase(pythonClient, s.requestBaseURL(r)))
 }
 
 // bashExample serves the embedded Bash client.
 func (s *Server) bashExample(w http.ResponseWriter, r *http.Request) {
-	serveBlob(w, "text/x-shellscript; charset=utf-8", "no-cache", bashClient)
+	serveBlob(w, "text/x-shellscript; charset=utf-8", "no-cache", clientWithBase(bashClient, s.requestBaseURL(r)))
+}
+
+// clientWithBase rewrites the embedded client's default base URL to the origin
+// the caller reached, so a client downloaded from an instance talks to that
+// instance by default instead of localhost. The source keeps its localhost
+// default for running the file directly on the host.
+func clientWithBase(src []byte, base string) []byte {
+	if base == "" {
+		return src
+	}
+	out := bytes.ReplaceAll(src, []byte(`DEFAULT_BASE_URL = "http://localhost:8081"`), []byte(`DEFAULT_BASE_URL = "`+base+`"`))
+	return bytes.ReplaceAll(out, []byte(`DEFAULT_BASE_URL="http://localhost:8081"`), []byte(`DEFAULT_BASE_URL="`+base+`"`))
 }
 
 // curlExample serves the embedded curl scenario cookbook.
@@ -419,7 +432,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -593,7 +606,7 @@ func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -630,7 +643,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -742,7 +755,7 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		res.Message = m
 		res.ProviderMessageID = m.ProviderMessageID
 	}
-	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
+	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -783,7 +796,7 @@ func (s *Server) apiDrafts(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	switch r.Method {
 	case http.MethodGet:
-		limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+		limit, ok := limitQuery(w, r)
 		if !ok {
 			return
 		}
@@ -886,7 +899,7 @@ func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p mode
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
+		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
 	case "request-send":
 		d, err := s.Service.RequestSend(r.Context(), p, draftID, external)
 		if err != nil {
@@ -1060,7 +1073,7 @@ func (s *Server) apiDraftSendRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiSendRequests(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	activeOnly := r.URL.Query().Get("active") == "true"
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -1149,7 +1162,7 @@ func (s *Server) apiDraftAttachment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -1187,7 +1200,7 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	after := store.ParseCursor(r.URL.Query().Get("after"))
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -1198,10 +1211,8 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, v)
 }
-func (s *Server) waitEvents(r *http.Request, timeout time.Duration) ([]model.Event, error) {
+func (s *Server) waitEvents(r *http.Request, after int64, inbox string, timeout time.Duration) ([]model.Event, error) {
 	p := principal(r)
-	after := store.ParseCursor(r.URL.Query().Get("after"))
-	inbox := r.URL.Query().Get("inbox")
 	items, err := s.Service.Store.ListEvents(r.Context(), p, after, inbox, 100)
 	if err != nil || len(items) > 0 {
 		return items, err
@@ -1235,7 +1246,28 @@ func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
 	if sec > 60 {
 		sec = 60
 	}
-	v, err := s.waitEvents(r, time.Duration(sec)*time.Second)
+	p := principal(r)
+	// With no cursor, wait for events after the current head so the call blocks
+	// for new events instead of replaying history. An explicit cursor keeps the
+	// documented drain semantics (return anything already after it).
+	rawAfter := strings.TrimSpace(r.URL.Query().Get("after"))
+	var after int64
+	if rawAfter == "" {
+		head, err := s.Service.Store.LatestEventID(r.Context(), p.AccountID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		after = head
+	} else {
+		parsed, ok := store.ParseCursorStrict(rawAfter)
+		if !ok {
+			writeError(w, 400, "invalid after: must be an evt_ cursor")
+			return
+		}
+		after = parsed
+	}
+	v, err := s.waitEvents(r, after, r.URL.Query().Get("inbox"), time.Duration(sec)*time.Second)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -1305,7 +1337,7 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	q := r.URL.Query()
-	after := store.ParseCursor(q.Get("after"))
+	rawAfter := strings.TrimSpace(q.Get("after"))
 	inboxID := q.Get("inbox")
 	timeoutSec, ok := intQuery(w, r, "timeout", 60)
 	if !ok {
@@ -1333,7 +1365,7 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in)
 		if in.After != "" {
-			after = store.ParseCursor(in.After)
+			rawAfter = strings.TrimSpace(in.After)
 		}
 		if in.Inbox != "" {
 			inboxID = in.Inbox
@@ -1359,6 +1391,31 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			timeoutSec = in.TimeoutSec
 			compat = true
 		}
+	}
+	// Resolve the cursor. An explicit cursor drains from there. With none, the
+	// native path waits for genuinely new mail (seed from the current head)
+	// rather than replaying history, while the openagent.email compatibility
+	// path scans what is already stored so it can return an
+	// already-received matching message. A malformed cursor is rejected rather
+	// than silently treated as zero.
+	var after int64
+	switch {
+	case rawAfter != "":
+		parsed, ok := store.ParseCursorStrict(rawAfter)
+		if !ok {
+			writeError(w, 400, "invalid after: must be an evt_ cursor")
+			return
+		}
+		after = parsed
+	case compat:
+		after = 0
+	default:
+		head, err := s.Service.Store.LatestEventID(r.Context(), p.AccountID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		after = head
 	}
 	if timeoutSec < 1 {
 		timeoutSec = 1

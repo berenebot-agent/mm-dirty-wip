@@ -236,6 +236,30 @@ func TestOpenAPISchemasAndReferencesResolve(t *testing.T) {
 	}
 }
 
+// TestOpenAPISendBodyMatchesLenientRuntime keeps the spec honest about the
+// server's behaviour: no required fields it does not enforce, and recipients
+// that accept either a bare string or a list.
+func TestOpenAPISendBodyMatchesLenientRuntime(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", apispec.Routes())
+	components := doc["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	send, ok := schemas["SendBody"].(map[string]any)
+	if !ok {
+		t.Fatal("SendBody schema missing")
+	}
+	if _, ok := send["required"]; ok {
+		t.Fatalf("SendBody declares required fields the server does not enforce: %#v", send["required"])
+	}
+	props := send["properties"].(map[string]any)
+	to, ok := props["to"].(map[string]any)
+	if !ok {
+		t.Fatal("SendBody.to missing")
+	}
+	if _, ok := to["oneOf"]; !ok {
+		t.Fatalf("SendBody.to must accept a bare string or a list: %#v", to)
+	}
+}
+
 // TestOpenAPIRequestBodyAndQueryParameters asserts a JSON write carries a
 // requestBody, the multipart upload uses its content type, and query
 // parameters are emitted as in:query.

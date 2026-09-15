@@ -41,6 +41,7 @@ var (
 var routeIOByKey = map[string]routeIO{
 	// Discovery.
 	"GET /v1/bootstrap": {Response: "Bootstrap"},
+	"GET /v1/limits":    {Response: "Limits"},
 
 	// Inboxes.
 	"GET /v1/inboxes":         {Response: "InboxList"},

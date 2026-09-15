@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
 )
@@ -155,7 +154,7 @@ func (s *Server) apiDomainSendingDeliveries(w http.ResponseWriter, r *http.Reque
 	if v := r.URL.Query().Get("before"); v != "" {
 		before, _ = strconv.ParseInt(v, 10, 64)
 	}
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}
@@ -187,7 +186,7 @@ func (s *Server) apiDomainReceivingDeliveries(w http.ResponseWriter, r *http.Req
 			before = t
 		}
 	}
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}

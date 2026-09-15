@@ -20,6 +20,7 @@ import (
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/hermesrelay"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -182,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 	// Discovery.
 	m.HandleFunc("GET /.well-known/gatehouse", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
+	m.HandleFunc("GET /docs", s.docsRedirect)
 	m.HandleFunc("GET /openapi.json", s.openapi)
 	m.HandleFunc("GET /examples/python", s.pythonExample)
 	m.HandleFunc("GET /examples/bash", s.bashExample)
@@ -195,7 +197,7 @@ func (s *Server) Handler() http.Handler {
 		m.HandleFunc(rt.pattern, api(rt.bind(s)))
 	}
 
-	return s.securityHeaders(s.recoverer(m))
+	return s.httpsRedirect(s.securityHeaders(s.recoverer(m)))
 }
 
 // apiRoute is one authenticated API registration: a ServeMux pattern and the
@@ -215,6 +217,7 @@ func (rt apiRoute) bind(s *Server) http.HandlerFunc {
 // documentation table and a test fails when the two disagree.
 var v1Routes = []apiRoute{
 	{"GET /v1/bootstrap", (*Server).apiBootstrap},
+	{"GET /v1/limits", (*Server).apiLimits},
 	{"GET /v1/inboxes", (*Server).apiInboxes},
 	{"POST /v1/inboxes", (*Server).apiInboxes},
 	{"GET /v1/inboxes/{id}", (*Server).apiInbox},
@@ -320,7 +323,9 @@ func (s *Server) InboundHandler() http.Handler {
 }
 
 func (s *Server) registerInbound(m *http.ServeMux) {
-	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) })
+	health := func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) }
+	m.HandleFunc("GET /healthz", health)
+	m.HandleFunc("GET /health", health)
 	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
 	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
@@ -549,6 +554,26 @@ func intQuery(w http.ResponseWriter, r *http.Request, name string, def int) (int
 	return v, true
 }
 
+// limitQuery parses the limit query parameter. It defaults to the standard page
+// size and rejects anything that is not an integer of at least 1, so a negative
+// or zero limit cannot be silently rewritten to the default.
+func limitQuery(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return limits.PageSizeDefault, true
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		writeError(w, 400, "invalid limit: must be an integer")
+		return 0, false
+	}
+	if v < 1 {
+		writeError(w, 400, "invalid limit: must be at least 1")
+		return 0, false
+	}
+	return v, true
+}
+
 // boolQuery parses an optional boolean query parameter. A value that is present
 // but not a boolean is rejected with 400; an absent value yields nil.
 func boolQuery(w http.ResponseWriter, r *http.Request, name string) (*bool, bool) {
@@ -564,18 +589,31 @@ func boolQuery(w http.ResponseWriter, r *http.Request, name string) (*bool, bool
 	return &b, true
 }
 
+// forwardedProto returns the first X-Forwarded-Proto value, lowercased.
+func forwardedProto(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+}
+
+// trustForwarded reports whether proxy headers may be believed for this request:
+// either trusted globally or sent by a configured trusted proxy.
+func (s *Server) trustForwarded(r *http.Request) bool {
+	return s.Service.Config.TrustProxyHeaders || s.Service.Config.IsTrustedProxy(r.RemoteAddr)
+}
+
 // requestBaseURL derives the public origin a discovery document was fetched
 // from, so /openapi.json advertises the host the caller actually reached
 // instead of trusting BASE_URL config. It honours X-Forwarded-Proto when proxy
-// headers are trusted and falls back to the configured BaseURL when the request
-// carries no Host.
+// headers are trusted, forces https when FORCE_HTTPS is set, and falls back to
+// the configured BaseURL when the request carries no Host.
 func (s *Server) requestBaseURL(r *http.Request) string {
 	scheme := "http"
-	if r.TLS != nil {
+	switch {
+	case s.Service.Config.ForceHTTPS:
 		scheme = "https"
-	}
-	if s.Service.Config.TrustProxyHeaders {
-		if p := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); p != "" {
+	case r.TLS != nil:
+		scheme = "https"
+	case s.trustForwarded(r):
+		if p := forwardedProto(r); p != "" {
 			scheme = p
 		}
 	}
@@ -583,6 +621,46 @@ func (s *Server) requestBaseURL(r *http.Request) string {
 		return s.Service.Config.BaseURL
 	}
 	return scheme + "://" + r.Host
+}
+
+// httpsRedirect sends plaintext requests to HTTPS when the deployment expects
+// TLS (FORCE_HTTPS). It leaves the inbound webhook connector and health checks
+// untouched so providers and orchestrators are never redirected.
+func (s *Server) httpsRedirect(next http.Handler) http.Handler {
+	if !s.Service.Config.ForceHTTPS {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil || forwardedProto(r) == "https" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch r.URL.Path {
+		case "/health", "/healthz":
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		host := r.Host
+		if host == "" {
+			host = strings.TrimPrefix(strings.TrimPrefix(s.Service.Config.BaseURL, "https://"), "http://")
+		}
+		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+	})
+}
+
+// docsRedirect points the conventional /docs path at the served agent guide.
+func (s *Server) docsRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/agent", http.StatusFound)
+}
+
+// apiLimits returns the same limits block advertised by discovery, so a client
+// that only knows the /v1 surface can still discover the caps.
+func (s *Server) apiLimits(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, s.discoveryLimits())
 }
 
 func clientIP(r *http.Request, trust bool) string {

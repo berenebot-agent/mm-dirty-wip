@@ -150,8 +150,11 @@ func TestOutboundWireIDThreadsExternalReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent.RFCMessageID != "<mailgun-wire@mg.example.com>" {
-		t.Fatalf("outbound rfc id = %q, want provider wire id", sent.RFCMessageID)
+	if sent.RFCMessageID != res.Message.RFCMessageID {
+		t.Fatalf("outbound rfc id = %q, want the stable minted id %q", sent.RFCMessageID, res.Message.RFCMessageID)
+	}
+	if sent.ProviderMessageID != "<mailgun-wire@mg.example.com>" {
+		t.Fatalf("provider id = %q, want the provider wire id", sent.ProviderMessageID)
 	}
 
 	reply := "From: Sender <sender@outside.test>\r\nTo: " + box.Address + "\r\nSubject: Re: Hello\r\nMessage-ID: <external-2@outside.test>\r\nIn-Reply-To: <mailgun-wire@mg.example.com>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nThanks"

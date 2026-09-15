@@ -58,10 +58,12 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 	}
 }
 
-// TestMarkSentPromotesProviderMessageID proves a provider-assigned wire
-// Message-ID (Brevo, Mailgun) replaces the locally synthesized id so recipient
-// replies thread back to this message.
-func TestMarkSentPromotesProviderMessageID(t *testing.T) {
+// TestMarkSentKeepsMintedMessageID proves the locally synthesized Message-ID is
+// stable across a successful send: the provider's wire id is recorded in
+// provider_message_id, and rfc_message_id is not rewritten, so a message id
+// means the same thing whether the send succeeded or failed. Reply threading
+// still works because findThreadTx matches provider_message_id too.
+func TestMarkSentKeepsMintedMessageID(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -74,8 +76,11 @@ func TestMarkSentPromotesProviderMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent.RFCMessageID != "<wire@relay.sendinblue.com>" || sent.ProviderMessageID != "<wire@relay.sendinblue.com>" {
-		t.Fatalf("rfc/provider id = %q/%q", sent.RFCMessageID, sent.ProviderMessageID)
+	if sent.RFCMessageID != "<synth@example.com>" {
+		t.Fatalf("rfc id = %q, want the minted id unchanged", sent.RFCMessageID)
+	}
+	if sent.ProviderMessageID != "<wire@relay.sendinblue.com>" {
+		t.Fatalf("provider id = %q, want the provider wire id", sent.ProviderMessageID)
 	}
 }
 

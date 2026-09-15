@@ -235,7 +235,7 @@ curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/outbox/$OUT"
 # ---------------------------------------------------------------------------
 
 curl -sS -H "Authorization: Bearer $KEY" \
-  "$BASE/v1/events?after=evt_01K...&inbox=$INBOX&limit=100" | jq .
+  "$BASE/v1/events?after=evt_123&inbox=$INBOX&limit=100" | jq .
 
 # ===========================================================================
 # 13. SSE stream — NON-RETURNING
@@ -247,12 +247,12 @@ curl -sS -H "Authorization: Bearer $KEY" \
 # ===========================================================================
 
 curl -N -H "Authorization: Bearer $KEY" -H "Accept: text/event-stream" \
-  "$BASE/v1/events/stream?after=evt_01K...&inbox=$INBOX"
+  "$BASE/v1/events/stream?after=evt_123&inbox=$INBOX"
 
 # Each event is emitted as:
-#   id: evt_01K...
+#   id: evt_123
 #   event: message.received
-#   data: {"cursor":"evt_01K...","type":"message.received", ...}
+#   data: {"cursor":"evt_123","type":"message.received", ...}
 
 # ===========================================================================
 # 14. Long poll — BLOCKS up to --timeout seconds
@@ -263,7 +263,7 @@ curl -N -H "Authorization: Bearer $KEY" -H "Accept: text/event-stream" \
 # ===========================================================================
 
 curl -sS -H "Authorization: Bearer $KEY" \
-  "$BASE/v1/messages/wait?inbox=$INBOX&after=evt_01K...&timeout=60" | jq .
+  "$BASE/v1/messages/wait?inbox=$INBOX&after=evt_123&timeout=60" | jq .
 
 # 204 No Content means no new message arrived before the timeout.
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \

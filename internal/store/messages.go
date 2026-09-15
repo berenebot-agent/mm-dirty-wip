@@ -178,23 +178,6 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	return m, ev, false, nil
 }
 
-// looksLikeRFC5322MessageID reports whether v is a syntactically plausible
-// RFC 5322 Message-ID: an angle-bracketed "left@right" with no whitespace.
-// Provider delivery ids that are bare UUIDs (Resend) or sentinels ("smtp") do
-// not qualify, so they are never promoted to rfc_message_id.
-func looksLikeRFC5322MessageID(v string) bool {
-	v = strings.TrimSpace(v)
-	if len(v) < 3 || v[0] != '<' || v[len(v)-1] != '>' {
-		return false
-	}
-	inner := v[1 : len(v)-1]
-	if strings.ContainsAny(inner, " \t\r\n<>") {
-		return false
-	}
-	at := strings.IndexByte(inner, '@')
-	return at > 0 && at < len(inner)-1
-}
-
 func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply string, refs []string) (string, error) {
 	ids := make([]string, 0, len(refs)+1)
 	if strings.TrimSpace(inReply) != "" {
