@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/mailparse"
@@ -113,6 +114,53 @@ func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
 	}
 	if gotName != "report.txt" || gotContent != "hello attachment" {
 		t.Fatalf("mailgun attachment name=%q content=%q", gotName, gotContent)
+	}
+}
+
+// TestOutboundWireIDThreadsExternalReply reproduces the reported bug: a
+// provider assigns its own wire Message-ID, so the external reply references
+// that id rather than the locally synthesized one. The reply must still join
+// the original conversation.
+func TestOutboundWireIDThreadsExternalReply(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"<mailgun-wire@mg.example.com>"}`)
+	}))
+	defer api.Close()
+	seedSending(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"api_key": "key-test", "domain": "mg.example.com", "api_base": api.URL})
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+
+	start := "From: Sender <sender@outside.test>\r\nTo: " + box.Address + "\r\nSubject: Hello\r\nMessage-ID: <inbound@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nPlease reply"
+	mStart, _, err := svc.IngestInbound(ctx, "mailgun", mgRequest(t, testMailgunKey, "wire-start", box.Address, start))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, ReplyToMessageID: mStart.ID, Text: "Done"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	sent, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.RFCMessageID != "<mailgun-wire@mg.example.com>" {
+		t.Fatalf("outbound rfc id = %q, want provider wire id", sent.RFCMessageID)
+	}
+
+	reply := "From: Sender <sender@outside.test>\r\nTo: " + box.Address + "\r\nSubject: Re: Hello\r\nMessage-ID: <external-2@outside.test>\r\nIn-Reply-To: <mailgun-wire@mg.example.com>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nThanks"
+	mReply, _, err := svc.IngestInbound(ctx, "mailgun", mgRequest(t, testMailgunKey, "wire-reply", box.Address, reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mReply.ThreadID != mStart.ThreadID {
+		t.Fatalf("external reply thread %q, want %q", mReply.ThreadID, mStart.ThreadID)
 	}
 }
 

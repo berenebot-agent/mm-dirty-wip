@@ -178,7 +178,19 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, nil, err
 	}
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, id, accountID); err != nil {
+	update := `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at=''`
+	args := []any{provider, providerMessageID, now}
+	// A provider that assigns its own Message-ID (Brevo, Mailgun) returns the
+	// real wire id, which is what recipients reply to. Promote it so that
+	// In-Reply-To/References matching finds this message. Provider ids that are
+	// not RFC Message-IDs (Resend's UUID, SMTP's sentinel) are left alone.
+	if looksLikeRFC5322MessageID(providerMessageID) {
+		update += `,rfc_message_id=?`
+		args = append(args, strings.TrimSpace(providerMessageID))
+	}
+	update += ` WHERE id=? AND account_id=?`
+	args = append(args, id, accountID)
+	if _, err = tx.ExecContext(ctx, update, args...); err != nil {
 		return model.Message{}, nil, err
 	}
 	// A message cancelled (deleted) between the initial read and this write is
