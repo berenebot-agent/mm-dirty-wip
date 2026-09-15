@@ -40,6 +40,7 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 			"securitySchemes": map[string]any{
 				"bearerAuth": map[string]any{"type": "http", "scheme": "bearer"},
 			},
+			"schemas": Schemas(),
 		},
 	}
 }
@@ -47,16 +48,18 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 // openAPIOperation builds one Operation Object. Every operation carries a
 // non-empty responses map (the primary success response plus 401 and default),
 // and every {placeholder} in the path is declared as a required path parameter,
-// as OpenAPI 3.0.3 requires.
+// as OpenAPI 3.0.3 requires. When the route names a request or response schema,
+// the operation carries the matching requestBody and success content; any
+// documented query parameters are emitted after the path parameters.
 func openAPIOperation(r Route) map[string]any {
 	status := r.Status()
 	op := map[string]any{
 		"summary": r.Summary,
 		"tags":    []string{r.Group},
 		"responses": map[string]any{
-			strconv.Itoa(status): map[string]any{"description": successDescription(status)},
-			"401":                map[string]any{"description": "Unauthorized"},
-			"default":            map[string]any{"description": "Unexpected error"},
+			strconv.Itoa(status): successResponse(r, status),
+			"401":                errorResponse("Unauthorized"),
+			"default":            errorResponse("Unexpected error"),
 		},
 	}
 	if r.Description != "" {
@@ -67,10 +70,73 @@ func openAPIOperation(r Route) map[string]any {
 	if r.Role != "" {
 		op["x-required-role"] = r.Role
 	}
-	if params := pathParameters(r.Path); len(params) > 0 {
+	params := pathParameters(r.Path)
+	params = append(params, queryParameters(r.Query)...)
+	if len(params) > 0 {
 		op["parameters"] = params
 	}
+	if r.Request != "" {
+		contentType := r.RequestContentType
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		op["requestBody"] = map[string]any{
+			"required": true,
+			"content":  map[string]any{contentType: map[string]any{"schema": Ref(r.Request)}},
+		}
+	}
 	return op
+}
+
+// successResponse builds the primary success response, attaching the JSON body
+// schema when the route names one.
+func successResponse(r Route, status int) map[string]any {
+	resp := map[string]any{"description": successDescription(status)}
+	if r.Response != "" {
+		resp["content"] = map[string]any{
+			"application/json": map[string]any{"schema": Ref(r.Response)},
+		}
+	}
+	return resp
+}
+
+// errorResponse builds an error response referencing the shared Error schema.
+func errorResponse(desc string) map[string]any {
+	return map[string]any{
+		"description": desc,
+		"content": map[string]any{
+			"application/json": map[string]any{"schema": Ref("Error")},
+		},
+	}
+}
+
+// queryParameters renders the route's documented query parameters. Array
+// parameters are encoded as repeated string parameters (form/explode), matching
+// how the handlers read r.URL.Query()[name].
+func queryParameters(params []Param) []map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(params))
+	for _, p := range params {
+		schema := map[string]any{"type": p.Type}
+		if p.Type == "array" {
+			schema["items"] = map[string]any{"type": "string"}
+			schema["style"] = "form"
+			schema["explode"] = true
+		}
+		param := map[string]any{
+			"name":     p.Name,
+			"in":       "query",
+			"required": p.Required,
+			"schema":   schema,
+		}
+		if p.Description != "" {
+			param["description"] = p.Description
+		}
+		out = append(out, param)
+	}
+	return out
 }
 
 // pathParameters returns one required string path parameter for each

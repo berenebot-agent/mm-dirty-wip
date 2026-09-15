@@ -8,6 +8,31 @@ import (
 	"gatehouse-mail/internal/apispec"
 )
 
+// collectRefs walks an arbitrary OpenAPI value and returns every
+// #/components/schemas/<name> reference it contains.
+func collectRefs(v any, out map[string]bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if k == "$ref" {
+				if s, ok := val.(string); ok {
+					out[strings.TrimPrefix(s, "#/components/schemas/")] = true
+				}
+				continue
+			}
+			collectRefs(val, out)
+		}
+	case []any:
+		for _, val := range t {
+			collectRefs(val, out)
+		}
+	case []map[string]any:
+		for _, val := range t {
+			collectRefs(val, out)
+		}
+	}
+}
+
 // openAPIFixture covers a 200 GET, a 201 POST and a 204 DELETE so the success
 // status handling can be exercised without depending on the real table.
 func openAPIFixture() []apispec.Route {
@@ -160,5 +185,102 @@ func TestRenderOpenAPINo200On204Route(t *testing.T) {
 	}
 	if _, ok := responses["200"]; ok {
 		t.Fatalf("204 route must not carry a 200 response: %#v", responses)
+	}
+}
+
+// TestContractKeysMatchRoutes guards the wire-contract table against a typo in
+// a "METHOD /path" key that would silently drop a request or response schema.
+func TestContractKeysMatchRoutes(t *testing.T) {
+	known := map[string]bool{}
+	for _, r := range apispec.Routes() {
+		known[r.Method+" "+r.Path] = true
+	}
+	for _, key := range apispec.ContractKeys() {
+		if !known[key] {
+			t.Errorf("route contract key %q does not name a route", key)
+		}
+	}
+}
+
+// TestOpenAPISchemasAndReferencesResolve renders the real document and checks
+// every $ref resolves to a declared component schema, and that every route's
+// named request/response schema exists.
+func TestOpenAPISchemasAndReferencesResolve(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", apispec.Routes())
+	components, ok := doc["components"].(map[string]any)
+	if !ok {
+		t.Fatalf("components = %#v", doc["components"])
+	}
+	schemas, ok := components["schemas"].(map[string]any)
+	if !ok || len(schemas) == 0 {
+		t.Fatalf("components.schemas = %#v", components["schemas"])
+	}
+	refs := map[string]bool{}
+	collectRefs(doc, refs)
+	for name := range refs {
+		if _, ok := schemas[name]; !ok {
+			t.Errorf("reference to undeclared schema %q", name)
+		}
+	}
+	for _, r := range apispec.Routes() {
+		if r.Request != "" {
+			if _, ok := schemas[r.Request]; !ok {
+				t.Errorf("%s %s: request schema %q not declared", r.Method, r.Path, r.Request)
+			}
+		}
+		if r.Response != "" {
+			if _, ok := schemas[r.Response]; !ok {
+				t.Errorf("%s %s: response schema %q not declared", r.Method, r.Path, r.Response)
+			}
+		}
+	}
+}
+
+// TestOpenAPIRequestBodyAndQueryParameters asserts a JSON write carries a
+// requestBody, the multipart upload uses its content type, and query
+// parameters are emitted as in:query.
+func TestOpenAPIRequestBodyAndQueryParameters(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", apispec.Routes())
+	paths := doc["paths"].(map[string]any)
+
+	send := paths["/v1/send"].(map[string]any)["post"].(map[string]any)
+	body, ok := send["requestBody"].(map[string]any)
+	if !ok {
+		t.Fatalf("POST /v1/send has no requestBody")
+	}
+	content := body["content"].(map[string]any)
+	schema := content["application/json"].(map[string]any)["schema"].(map[string]any)
+	if schema["$ref"] != "#/components/schemas/SendBody" {
+		t.Fatalf("POST /v1/send request schema = %#v", schema)
+	}
+	hasWait := false
+	for _, raw := range send["parameters"].([]map[string]any) {
+		if raw["name"] == "wait" && raw["in"] == "query" {
+			hasWait = true
+		}
+	}
+	if !hasWait {
+		t.Fatalf("POST /v1/send missing wait query parameter: %#v", send["parameters"])
+	}
+
+	upload := paths["/v1/drafts/{id}/attachments"].(map[string]any)["post"].(map[string]any)
+	upBody := upload["requestBody"].(map[string]any)
+	if _, ok := upBody["content"].(map[string]any)["multipart/form-data"]; !ok {
+		t.Fatalf("draft upload must use multipart/form-data: %#v", upBody["content"])
+	}
+
+	list := paths["/v1/messages"].(map[string]any)["get"].(map[string]any)
+	params, ok := list["parameters"].([]map[string]any)
+	if !ok || len(params) == 0 {
+		t.Fatalf("GET /v1/messages missing parameters: %#v", list["parameters"])
+	}
+	names := map[string]bool{}
+	for _, raw := range params {
+		names[raw["name"].(string)] = true
+	}
+	for _, want := range []string{"inbox", "limit", "label", "before"} {
+		if !names[want] {
+			t.Errorf("GET /v1/messages missing query parameter %q", want)
+		}
 	}
 }
