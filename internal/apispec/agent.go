@@ -64,6 +64,8 @@ func distinctGroups(routes []Route) []string {
 // File-staged uploads and chained execution wrappers are the shapes scanners
 // flag for human approval, so the guide tells agents not to emit them.
 const agentGuideCalling = "## How to call Gatehouse\n" +
+	"- `BASE` is the origin that served this guide (scheme + host, no trailing slash, e.g. `https://mail.example.com`); `KEY` is your API key. Set both up front:\n" +
+	" `export BASE=\"https://your-instance\" KEY=\"ghm_...\"`\n" +
 	"- Prefer the served clients: `GET /examples/bash` (`gatehouse.sh`, curl + jq) and `GET /examples/python` (`gatehouse.py`, standard library only). Each is one command per operation, sends the JSON body inline, and prints the response to stdout.\n" +
 	"- If you call the API with curl directly, use one command with the JSON body inline:\n" +
 	"  `curl -sS -X POST -H \"Authorization: Bearer $KEY\" -H \"Content-Type: application/json\" -d '{\"inbox_id\":\"inb_...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}' \"$BASE/v1/send?wait=true\" | jq .`\n" +

@@ -1,1 +1,0 @@
-../internal/httpapp/assets/gatehouse.sh

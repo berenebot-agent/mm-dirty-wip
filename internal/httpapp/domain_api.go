@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/app"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/store"
 	"gatehouse-mail/internal/transport"
 )
@@ -154,7 +155,11 @@ func (s *Server) apiDomainSendingDeliveries(w http.ResponseWriter, r *http.Reque
 	if v := r.URL.Query().Get("before"); v != "" {
 		before, _ = strconv.ParseInt(v, 10, 64)
 	}
-	attempts, err := s.Service.Store.ListDomainDeliveryAttempts(r.Context(), p.AccountID, r.PathValue("id"), intParam(r, "limit", 100), before)
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	attempts, err := s.Service.Store.ListDomainDeliveryAttempts(r.Context(), p.AccountID, r.PathValue("id"), limit, before)
 	if err != nil {
 		mapDomainConfigError(w, err)
 		return
@@ -182,7 +187,11 @@ func (s *Server) apiDomainReceivingDeliveries(w http.ResponseWriter, r *http.Req
 			before = t
 		}
 	}
-	entries, err := s.Service.Store.ListDomainReceivingLog(r.Context(), p.AccountID, r.PathValue("id"), intParam(r, "limit", 100), before)
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	entries, err := s.Service.Store.ListDomainReceivingLog(r.Context(), p.AccountID, r.PathValue("id"), limit, before)
 	if err != nil {
 		mapDomainConfigError(w, err)
 		return

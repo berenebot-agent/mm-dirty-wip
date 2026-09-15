@@ -532,23 +532,57 @@ func adminOnly(w http.ResponseWriter, p model.Principal) bool {
 	}
 	return true
 }
-func intParam(r *http.Request, name string, def int) int {
-	v, err := strconv.Atoi(r.URL.Query().Get(name))
-	if err != nil {
-		return def
+
+// intQuery parses an integer query parameter. A value that is present but not
+// an integer is rejected with 400 rather than silently defaulted; an absent
+// value yields def with ok=true.
+func intQuery(w http.ResponseWriter, r *http.Request, name string, def int) (int, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def, true
 	}
-	return v
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		writeError(w, 400, "invalid "+name+": must be an integer")
+		return 0, false
+	}
+	return v, true
 }
-func boolQuery(r *http.Request, name string) *bool {
-	v := r.URL.Query().Get(name)
-	if v == "" {
-		return nil
+
+// boolQuery parses an optional boolean query parameter. A value that is present
+// but not a boolean is rejected with 400; an absent value yields nil.
+func boolQuery(w http.ResponseWriter, r *http.Request, name string) (*bool, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, true
 	}
-	b, err := strconv.ParseBool(v)
+	b, err := strconv.ParseBool(raw)
 	if err != nil {
-		return nil
+		writeError(w, 400, "invalid "+name+": must be a boolean")
+		return nil, false
 	}
-	return &b
+	return &b, true
+}
+
+// requestBaseURL derives the public origin a discovery document was fetched
+// from, so /openapi.json advertises the host the caller actually reached
+// instead of trusting BASE_URL config. It honours X-Forwarded-Proto when proxy
+// headers are trusted and falls back to the configured BaseURL when the request
+// carries no Host.
+func (s *Server) requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if s.Service.Config.TrustProxyHeaders {
+		if p := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); p != "" {
+			scheme = p
+		}
+	}
+	if r.Host == "" {
+		return s.Service.Config.BaseURL
+	}
+	return scheme + "://" + r.Host
 }
 
 func clientIP(r *http.Request, trust bool) string {

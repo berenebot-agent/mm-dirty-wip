@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 )
 
@@ -575,8 +576,8 @@ func (s *Store) ListSendRequests(ctx context.Context, p model.Principal, inboxID
 		q += ` AND status=?`
 		args = append(args, model.SendRequestPending)
 	}
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	q += ` ORDER BY requested_at DESC LIMIT ?`
 	args = append(args, limit)
@@ -894,8 +895,8 @@ func (s *Store) RecordControlMessage(ctx context.Context, r ControlMessageRecord
 // ListControlMessages returns an inbox's consumed control messages, newest
 // first, for the per-domain activity log.
 func (s *Store) ListControlMessages(ctx context.Context, accountID, inboxID string, limit int) ([]ControlMessage, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	rows, err := s.read.QueryContext(ctx, controlMessageSelect+` WHERE account_id=? AND inbox_id=? ORDER BY created_at DESC LIMIT ?`, accountID, inboxID, limit)
 	if err != nil {
@@ -908,8 +909,8 @@ func (s *Store) ListControlMessages(ctx context.Context, accountID, inboxID stri
 // ListAccountControlMessages returns an account's consumed control messages,
 // newest first, for the admin dashboard's Recent messages list.
 func (s *Store) ListAccountControlMessages(ctx context.Context, accountID string, limit int) ([]ControlMessage, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	rows, err := s.read.QueryContext(ctx, controlMessageSelect+` WHERE account_id=? ORDER BY created_at DESC LIMIT ?`, accountID, limit)
 	if err != nil {

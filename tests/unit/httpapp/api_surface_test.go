@@ -1,6 +1,7 @@
 package httpapp_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -172,5 +173,65 @@ func TestRootServesDiscoveryToAgents(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "/openapi.json") {
 		t.Errorf("/login page does not point agents at the discovery surfaces")
+	}
+}
+
+// TestOpenAPIDiscoversRequestOrigin asserts the served document advertises the
+// host the caller actually reached instead of a configured BASE_URL.
+func TestOpenAPIDiscoversRequestOrigin(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	req.Host = "mail.example.org"
+	h.ServeHTTP(rr, req)
+	var doc struct {
+		Servers []struct {
+			URL string `json:"url"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Servers) != 1 || doc.Servers[0].URL != "http://mail.example.org" {
+		t.Fatalf("servers = %#v, want the request origin", doc.Servers)
+	}
+}
+
+// TestDiscoveryAdvertisesLimits asserts the discovery surfaces publish the
+// pagination, size and rate bounds an agent needs to page safely.
+func TestDiscoveryAdvertisesLimits(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/gatehouse", nil))
+	var doc struct {
+		Limits map[string]any `json:"limits"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Limits == nil {
+		t.Fatalf("discovery has no limits block: %s", rr.Body.String())
+	}
+	for _, key := range []string{"page_size_default", "page_size_max_list", "page_size_max_events", "message_bytes_max", "send_per_minute"} {
+		if _, ok := doc.Limits[key]; !ok {
+			t.Errorf("limits missing %q: %#v", key, doc.Limits)
+		}
+	}
+}
+
+// TestInvalidLimitRejected asserts a non-integer limit is a 400 rather than a
+// silently ignored default.
+func TestInvalidLimitRejected(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	_, token, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "test", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/messages?limit=abc", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("limit=abc = %d body=%s, want 400", rr.Code, rr.Body.String())
 	}
 }

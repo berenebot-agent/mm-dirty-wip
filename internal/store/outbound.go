@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 )
 
@@ -396,8 +397,8 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 			args = append(args, id)
 		}
 	}
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	q += ` ORDER BY m.created_at DESC LIMIT ?`
 	args = append(args, limit)

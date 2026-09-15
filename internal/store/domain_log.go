@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"gatehouse-mail/internal/limits"
 )
 
 // DomainLogEntry is one row in a domain's two-way activity log. It merges the
@@ -66,8 +68,8 @@ func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, l
 	if n != 1 {
 		return nil, ErrNotFound
 	}
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	// Fetch one extra row per source so a merge can still fill the page when
 	// one source is exhausted first.

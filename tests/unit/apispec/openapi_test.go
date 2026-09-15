@@ -131,6 +131,24 @@ func TestRenderOpenAPIPathParameters(t *testing.T) {
 	}
 }
 
+// TestRenderOpenAPIRoleExtension asserts the machine-readable role map: a
+// role-scoped operation carries x-required-role, and an open operation does not.
+func TestRenderOpenAPIRoleExtension(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", []apispec.Route{
+		{Method: "POST", Path: "/v1/inboxes", Summary: "Create", Role: "admin", Group: "Inboxes", Success: 201},
+		{Method: "GET", Path: "/v1/bootstrap", Summary: "Discover", Group: "Discovery"},
+	})
+	paths := doc["paths"].(map[string]any)
+	op := paths["/v1/inboxes"].(map[string]any)["post"].(map[string]any)
+	if op["x-required-role"] != "admin" {
+		t.Fatalf("x-required-role = %#v, want admin", op["x-required-role"])
+	}
+	boot := paths["/v1/bootstrap"].(map[string]any)["get"].(map[string]any)
+	if _, ok := boot["x-required-role"]; ok {
+		t.Fatalf("open operation must not carry x-required-role: %#v", boot)
+	}
+}
+
 func TestRenderOpenAPINo200On204Route(t *testing.T) {
 	doc := apispec.RenderOpenAPI("https://mail.example.test", openAPIFixture())
 	paths := doc["paths"].(map[string]any)

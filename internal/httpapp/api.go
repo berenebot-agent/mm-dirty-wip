@@ -18,6 +18,7 @@ import (
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/htmlsanitize"
 	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/mailparse"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
@@ -39,7 +40,25 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		},
 		"bootstrap":    "/v1/bootstrap",
 		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay", "external-aliases"},
+		"limits":       s.discoveryLimits(),
 	})
+}
+
+// discoveryLimits advertises the pagination, size and rate bounds a client
+// needs to page safely and to set retry expectations. Pagination values come
+// from the same constants the store clamps with, so the advertised numbers
+// cannot drift from behaviour; the rest are runtime config.
+func (s *Server) discoveryLimits() map[string]any {
+	return map[string]any{
+		"page_size_default":    limits.PageSizeDefault,
+		"page_size_max_list":   limits.PageSizeMaxList,
+		"page_size_max_events": limits.PageSizeMaxEvents,
+		"message_bytes_max":    s.Service.Config.MaxMessageBytes,
+		"attachment_bytes_max": s.Service.Config.MaxMessageBytes,
+		"send_per_minute":      s.Service.Config.SendLimitPerMinute,
+		"login_per_minute":     s.Service.Config.LoginLimitPerMinute,
+		"storage_quota_bytes":  s.Service.Config.DefaultQuotaBytes,
+	}
 }
 func (s *Server) agentGuide(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
@@ -62,7 +81,7 @@ func (s *Server) curlExample(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "text/plain; charset=utf-8", "no-cache", curlCookbook)
 }
 func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, apispec.RenderOpenAPI(s.Service.Config.BaseURL, apispec.Routes()))
+	writeJSON(w, 200, apispec.RenderOpenAPI(s.requestBaseURL(r), apispec.Routes()))
 }
 
 func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +91,7 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}})
+	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
 }
 
 func (s *Server) apiInboxes(w http.ResponseWriter, r *http.Request) {
@@ -392,10 +411,30 @@ func firstString(v []string) string {
 
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: boolQuery(r, "unread"), HasAttachment: boolQuery(r, "has_attachment"), Labels: r.URL.Query()["label"], Limit: intParam(r, "limit", 100)}
-	if b := boolQuery(r, "spam"); b != nil && *b {
+	unread, ok := boolQuery(w, r, "unread")
+	if !ok {
+		return
+	}
+	hasAttachment, ok := boolQuery(w, r, "has_attachment")
+	if !ok {
+		return
+	}
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	spam, ok := boolQuery(w, r, "spam")
+	if !ok {
+		return
+	}
+	includeSpam, ok := boolQuery(w, r, "include_spam")
+	if !ok {
+		return
+	}
+	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
+	if spam != nil && *spam {
 		f.SpamOnly = true
-	} else if b := boolQuery(r, "include_spam"); b != nil && *b {
+	} else if includeSpam != nil && *includeSpam {
 		f.IncludeSpam = true
 	}
 	compatAddress := strings.TrimSpace(r.URL.Query().Get("address"))
@@ -554,7 +593,11 @@ func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Service.Store.ListThreads(r.Context(), principal(r), r.URL.Query().Get("inbox"), intParam(r, "limit", 100))
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	items, err := s.Service.Store.ListThreads(r.Context(), principal(r), r.URL.Query().Get("inbox"), limit)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -583,14 +626,22 @@ func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, msgs)
 }
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
+	hasAttachment, ok := boolQuery(w, r, "has_attachment")
+	if !ok {
+		return
+	}
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
 	items, err := s.Service.Store.SearchMessagesFiltered(r.Context(), principal(r), r.URL.Query().Get("q"), store.MessageFilter{
 		InboxID:       r.URL.Query().Get("inbox"),
 		From:          r.URL.Query().Get("from"),
 		To:            r.URL.Query().Get("to"),
 		Before:        r.URL.Query().Get("before"),
 		Labels:        r.URL.Query()["label"],
-		HasAttachment: boolQuery(r, "has_attachment"),
-		Limit:         intParam(r, "limit", 100),
+		HasAttachment: hasAttachment,
+		Limit:         limit,
 	})
 	if err != nil {
 		mapStoreError(w, err)
@@ -732,7 +783,11 @@ func (s *Server) apiDrafts(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	switch r.Method {
 	case http.MethodGet:
-		v, err := s.Service.Store.ListDraftsPaged(r.Context(), p, r.URL.Query().Get("inbox"), r.URL.Query().Get("before"), intParam(r, "limit", 100))
+		limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+		if !ok {
+			return
+		}
+		v, err := s.Service.Store.ListDraftsPaged(r.Context(), p, r.URL.Query().Get("inbox"), r.URL.Query().Get("before"), limit)
 		if err != nil {
 			mapStoreError(w, err)
 			return
@@ -1005,7 +1060,11 @@ func (s *Server) apiDraftSendRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiSendRequests(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	activeOnly := r.URL.Query().Get("active") == "true"
-	v, err := s.Service.Store.ListSendRequests(r.Context(), p, r.URL.Query().Get("inbox"), activeOnly, intParam(r, "limit", 100))
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	v, err := s.Service.Store.ListSendRequests(r.Context(), p, r.URL.Query().Get("inbox"), activeOnly, limit)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -1090,7 +1149,11 @@ func (s *Server) apiDraftAttachment(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	v, err := s.Service.Store.ListOutbox(r.Context(), p, r.URL.Query().Get("inbox"), intParam(r, "limit", 100))
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	v, err := s.Service.Store.ListOutbox(r.Context(), p, r.URL.Query().Get("inbox"), limit)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -1124,7 +1187,11 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	after := store.ParseCursor(r.URL.Query().Get("after"))
-	v, err := s.Service.Store.ListEvents(r.Context(), principal(r), after, r.URL.Query().Get("inbox"), intParam(r, "limit", 100))
+	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	if !ok {
+		return
+	}
+	v, err := s.Service.Store.ListEvents(r.Context(), principal(r), after, r.URL.Query().Get("inbox"), limit)
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -1158,7 +1225,10 @@ func (s *Server) waitEvents(r *http.Request, timeout time.Duration) ([]model.Eve
 	}
 }
 func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
-	sec := intParam(r, "timeout", 60)
+	sec, ok := intQuery(w, r, "timeout", 60)
+	if !ok {
+		return
+	}
 	if sec < 1 {
 		sec = 1
 	}
@@ -1237,12 +1307,17 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	after := store.ParseCursor(q.Get("after"))
 	inboxID := q.Get("inbox")
-	timeoutSec := intParam(r, "timeout", 60)
+	timeoutSec, ok := intQuery(w, r, "timeout", 60)
+	if !ok {
+		return
+	}
 	fromContains := ""
 	subjectContains := ""
 	compat := false
 	includeSpam := false
-	if b := boolQuery(r, "include_spam"); b != nil {
+	if b, ok := boolQuery(w, r, "include_spam"); !ok {
+		return
+	} else if b != nil {
 		includeSpam = *b
 	}
 	if r.Method == http.MethodPost {
