@@ -286,7 +286,7 @@ common flags:
   send:          --to ADDR --cc ADDR --bcc ADDR --subject TEXT --text TEXT
                  --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
-  reply:         --text TEXT --html HTML --attach FILE --sender ADDR
+  reply:         --text TEXT --html HTML --attach FILE --sender ADDR --wait
                  --idempotency-key KEY --no-idem
   label:         --labels a,b --clear-labels
   drafts/draft:  --create --to --cc --bcc --subject --text --html --from
@@ -771,10 +771,12 @@ cmd_reply() {
 	need_pos "$COMMAND"
 	reject_extra
 	build_attachments
-	local body idem
+	local body idem path
 	body="$(build_reply_body)"
 	idem="$(idem_for_request)"
-	api POST "/v1/messages/$POSITION/reply" "$body" "$idem" "$TABLE_DEFAULT"
+	path="/v1/messages/$POSITION/reply"
+	if [ "$WAIT" -eq 1 ]; then path="$path?wait=true"; fi
+	api POST "$path" "$body" "$idem" "$TABLE_DEFAULT"
 }
 
 cmd_mark_read() {

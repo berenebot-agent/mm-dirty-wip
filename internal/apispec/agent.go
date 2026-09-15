@@ -91,7 +91,7 @@ const agentGuideNarrative = "## Label notes\n" +
 	"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +
 	"## Send and reply (Owner)\n" +
 	"- `POST /v1/send` with `{\"inbox_id\":\"...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}` — enqueues into the outbox and returns immediately (`queued:true`). Add `?wait=true` to block until delivery. Add `\"sender\":\"sales@example.com\"` to send as one of the inbox's aliases (provider resolved from that alias's domain).\n" +
-	"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}`\n" +
+	"- `POST /v1/messages/{id}/reply` with `{\"text\":\"...\"}` — add `?wait=true` to block until delivery\n" +
 	"- Send and reply accept optional attachments as base64 JSON: `[{\"filename\":\"file.pdf\",\"content_type\":\"application/pdf\",\"content\":\"<base64>\"}]`\n" +
 	"- Send the JSON body inline in a single command, or use `GET /examples/bash` / `GET /examples/python`; never stage it in a temporary file or pass `curl --data-binary @file`.\n" +
 	"- Use an `Idempotency-Key` header to make sends retry-safe.\n\n" +

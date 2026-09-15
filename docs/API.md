@@ -417,6 +417,9 @@ Idempotency-Key: <caller-generated-key>
 The application creates appropriate `In-Reply-To` and `References` headers.
 `sender` is optional and works as above.
 
+Add `?wait=true` to block until the worker delivers or fails (up to 30
+seconds), returning the terminal message; a timeout returns `504`.
+
 ### Drafts
 
 `POST /v1/drafts` and `PATCH /v1/drafts/{id}` accept `from_address` (the chosen
