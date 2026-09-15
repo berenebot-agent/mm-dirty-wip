@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mail ./cmd/server
 # The optional MX edge is built into the same image so the embedded mode
-# (MX_ENABLE=local) can spawn it. The sidecar/remote deployments use the
+# (MX_ENABLE=true) can spawn it. The sidecar/remote deployments use the
 # separate, minimal gatehouse-mx image instead (Dockerfile.mx), and select it
 # with MX_ENABLE=remote.
 RUN --mount=type=cache,target=/go/pkg/mod \

@@ -14,6 +14,11 @@ Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser
 
 Persistent state is stored in `./data`.
 
+The default Compose starts the embedded MX edge and publishes direct SMTP on
+host port 25. If you receive mail only through a webhook provider (Mailgun,
+Cloudflare Email Routing, Resend), set `MX_ENABLE=false` in `.env`; port 25 then
+has no listener.
+
 This is the minimal deployment. For a hardened stack (read-only root
 filesystem, a /tmp tmpfs, dropped capabilities), use
 `docker-compose.advanced.yml`:
@@ -69,15 +74,18 @@ https://your-host.example/internal/ingest/resend
 
 Resend also works as a sending provider (see below).
 
-## Direct SMTP (MX) inbound — optional
+## Direct SMTP (MX) inbound
 
 Instead of a webhook provider you can receive mail straight on port 25 with the
-optional MX edge. One setting, `MX_ENABLE`, selects the mode:
+optional MX edge. One setting, `MX_ENABLE`, selects the mode. The server binary
+defaults to `false` when the variable is unset; the shipped `docker-compose.yml`
+sets it to `true`.
 
-- **`false`** (default) — no MX; receive via a webhook provider only.
-- **`true`** — receive on port 25 with the edge embedded in the app container as
-  a separate, unprivileged uid. This is the default `docker-compose.yml`; the
-  edge credential is generated automatically.
+- **`true`** (default `docker-compose.yml`) — receive on port 25 with the edge
+  embedded in the app container as a separate, unprivileged uid. The edge
+  credential is generated automatically.
+- **`false`** (server default) — no MX; receive via a webhook provider only. Set
+  this in `.env` for a webhook-only deployment.
 - **`remote`** — receive on port 25 with the edge in its own container/image
   (`gatehouse-mx`, via `docker-compose.mx-sidecar.yml`) or on another host. Needs
   a shared `MX_EDGE_SECRET`.
@@ -85,11 +93,10 @@ optional MX edge. One setting, `MX_ENABLE`, selects the mode:
 The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages
 messages in memory only.
 
-### true (one container, default)
+### true (one container, Compose default)
 
 ```bash
-# .env
-MX_ENABLE=true
+# .env — MX_ENABLE=true is already the docker-compose.yml default
 #MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
 ```
 

@@ -10,6 +10,10 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Compose default; override with MX_ENABLE=false (webhook-only) or
+      # MX_ENABLE=remote (separate gatehouse-mx container) in .env.
+      MX_ENABLE: "${MX_ENABLE:-true}"
     volumes:
       - ./data:/data
     ports:
