@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 	"gatehouse-mail/internal/store"
 )
@@ -157,7 +156,7 @@ func (s *Server) apiExternalAliasDeliveries(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	limit, ok := intQuery(w, r, "limit", limits.PageSizeDefault)
+	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
 	}

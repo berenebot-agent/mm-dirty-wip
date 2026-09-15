@@ -7,6 +7,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
 | GET | /v1/bootstrap | Discover key capabilities and accessible inboxes |  |
+| GET | /v1/limits | Get server pagination, size and rate limits | read |
 
 ## Inboxes
 

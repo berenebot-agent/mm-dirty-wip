@@ -431,26 +431,26 @@ it is part of the frozen approval fingerprint.
 ### Incremental read
 
 ```http
-GET /v1/events?after=evt_01K...
+GET /v1/events?after=evt_123
 ```
 
 ### Long poll
 
 ```http
-GET /v1/events/wait?after=evt_01K...&timeout=60
+GET /v1/events/wait?after=evt_123&timeout=60
 ```
 
 ### SSE
 
 ```http
-GET /v1/events/stream?after=evt_01K...
+GET /v1/events/stream?after=evt_123
 Accept: text/event-stream
 ```
 
 Example event:
 
 ```text
-id: evt_01K...
+id: evt_123
 event: message.received
 data: {"message_id":"msg_01K...","inbox_id":"in_01K...","thread_id":"thr_01K..."}
 ```

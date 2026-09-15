@@ -65,6 +65,7 @@ func (r Route) Status() int {
 var routes = []Route{
 	// Discovery.
 	{Method: "GET", Path: "/v1/bootstrap", Summary: "Discover key capabilities and accessible inboxes", Role: "", Group: "Discovery"},
+	{Method: "GET", Path: "/v1/limits", Summary: "Get server pagination, size and rate limits", Role: "read", Group: "Discovery"},
 
 	// Inboxes.
 	{Method: "GET", Path: "/v1/inboxes", Summary: "List inboxes", Role: "read", Group: "Inboxes"},

@@ -12,6 +12,8 @@ docker compose up -d
 
 Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser. The first visit creates the initial Admin account.
 
+Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-Proto` is believed, and set `FORCE_HTTPS=true` to redirect any plaintext request to HTTPS and advertise HTTPS in discovery documents. `/health`, `/healthz` and the `/internal/*` webhook endpoints are never redirected.
+
 Persistent state is stored in `./data`.
 
 The default Compose starts the embedded MX edge and publishes direct SMTP on

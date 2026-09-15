@@ -46,13 +46,17 @@ func parseMXMode(raw string) (MXMode, error) {
 }
 
 type Config struct {
-	ListenAddr             string
-	BaseURL                string
-	DataDir                string
-	Mode                   string
-	AllowRegistration      bool
-	TrustProxyHeaders      bool
-	TrustedProxies         []netip.Prefix
+	ListenAddr        string
+	BaseURL           string
+	DataDir           string
+	Mode              string
+	AllowRegistration bool
+	TrustProxyHeaders bool
+	TrustedProxies    []netip.Prefix
+	// ForceHTTPS redirects plaintext requests to https and reports https in
+	// discovery documents. It is for deployments that terminate TLS at a
+	// reverse proxy and never want the app to answer over cleartext.
+	ForceHTTPS             bool
 	AppEncryptionKey       string
 	AdminBootstrapToken    string
 	MaxMessageBytes        int64
@@ -120,6 +124,7 @@ func Load() (Config, error) {
 		Mode:                   strings.ToLower(env("MODE", "selfhosted")),
 		AllowRegistration:      envBool("ALLOW_REGISTRATION", false),
 		TrustProxyHeaders:      envBool("TRUST_PROXY_HEADERS", false),
+		ForceHTTPS:             envBool("FORCE_HTTPS", false),
 		AppEncryptionKey:       strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
 		AdminBootstrapToken:    strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
 		MaxMessageBytes:        envInt64("MAX_MESSAGE_BYTES", 30<<20),

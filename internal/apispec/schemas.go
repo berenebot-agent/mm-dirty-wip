@@ -61,6 +61,18 @@ func stringList(desc string) map[string]any {
 	return m
 }
 
+// stringOrArray accepts either a single string or an array of strings, matching
+// the server's lenient recipient parsing.
+func stringOrArray(desc string) map[string]any {
+	return map[string]any{
+		"description": desc,
+		"oneOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+	}
+}
+
 // stringMap is an object with string values.
 func stringMap(desc string) map[string]any {
 	m := map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}}
@@ -276,14 +288,14 @@ var schemas = map[string]any{
 		"inbox_id":    str("Inbox id; or use from."),
 		"from":        str("Compatibility inbox address selection."),
 		"sender":      str("From identity: the inbox primary or one of its aliases."),
-		"to":          stringList("To recipients."),
-		"cc":          stringList("Cc recipients."),
-		"bcc":         stringList("Bcc recipients."),
+		"to":          stringOrArray("To recipients; a single address or a list."),
+		"cc":          stringOrArray("Cc recipients; a single address or a list."),
+		"bcc":         stringOrArray("Bcc recipients; a single address or a list."),
 		"subject":     str("Subject line."),
 		"text":        str("Plain-text body."),
 		"html":        str("HTML body."),
 		"attachments": map[string]any{"type": "array", "items": Ref("SendAttachment")},
-	}, "to", "subject", "text"),
+	}),
 
 	"ReplyBody": obj(map[string]any{
 		"sender":      str("From identity: the inbox primary or one of its aliases."),

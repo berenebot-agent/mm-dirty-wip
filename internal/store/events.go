@@ -16,7 +16,32 @@ func ParseCursor(v string) int64 {
 	n, _ := strconv.ParseInt(v, 10, 64)
 	return n
 }
+
+// ParseCursorStrict parses a durable event cursor of the form "evt_<n>". It
+// reports ok=false for anything malformed so a caller can reject a bad cursor
+// instead of silently treating it as the start of history.
+func ParseCursorStrict(v string) (int64, bool) {
+	v = strings.TrimSpace(v)
+	if !strings.HasPrefix(v, "evt_") {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimPrefix(v, "evt_"), 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 func EventCursor(id int64) string { return fmt.Sprintf("evt_%d", id) }
+
+// LatestEventID returns the newest durable event id for the account, or 0 when
+// it has no events yet. A long-poll can seed its cursor with this so it waits
+// for genuinely new events instead of replaying history.
+func (s *Store) LatestEventID(ctx context.Context, accountID string) (int64, error) {
+	var id int64
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM events WHERE account_id=?`, accountID).Scan(&id)
+	return id, err
+}
 
 func scanEvent(row interface{ Scan(...any) error }) (model.Event, error) {
 	var e model.Event

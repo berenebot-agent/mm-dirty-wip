@@ -179,16 +179,13 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, nil, err
 	}
 	now := nowText()
+	// rfc_message_id is the stable Message-ID Gatehouse minted at enqueue time;
+	// it is never rewritten, so a message id means the same thing whether the
+	// send succeeded or failed. A provider that assigns its own wire id is
+	// recorded in provider_message_id, and reply matching already looks in both
+	// columns (see findThreadTx), so threading still works.
 	update := `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at=''`
 	args := []any{provider, providerMessageID, now}
-	// A provider that assigns its own Message-ID (Brevo, Mailgun) returns the
-	// real wire id, which is what recipients reply to. Promote it so that
-	// In-Reply-To/References matching finds this message. Provider ids that are
-	// not RFC Message-IDs (Resend's UUID, SMTP's sentinel) are left alone.
-	if looksLikeRFC5322MessageID(providerMessageID) {
-		update += `,rfc_message_id=?`
-		args = append(args, strings.TrimSpace(providerMessageID))
-	}
 	update += ` WHERE id=? AND account_id=?`
 	args = append(args, id, accountID)
 	if _, err = tx.ExecContext(ctx, update, args...); err != nil {

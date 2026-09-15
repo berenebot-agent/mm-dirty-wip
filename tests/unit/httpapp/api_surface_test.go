@@ -227,11 +227,13 @@ func TestInvalidLimitRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/v1/messages?limit=abc", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("limit=abc = %d body=%s, want 400", rr.Code, rr.Body.String())
+	for _, q := range []string{"limit=abc", "limit=0", "limit=-5"} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/messages?"+q, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("%s = %d body=%s, want 400", q, rr.Code, rr.Body.String())
+		}
 	}
 }
