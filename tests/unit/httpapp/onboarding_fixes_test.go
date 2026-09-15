@@ -154,6 +154,16 @@ func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
 		t.Fatalf("redirect Location = %q", loc)
 	}
 
+	// An untrusted X-Forwarded-Proto must not bypass the redirect.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
+	req.Host = "mail.example.org"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusPermanentRedirect {
+		t.Fatalf("untrusted X-Forwarded-Proto bypassed redirect: %d", rr.Code)
+	}
+
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
 	if rr.Code != http.StatusOK {

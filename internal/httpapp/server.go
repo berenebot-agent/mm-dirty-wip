@@ -631,7 +631,7 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS != nil || forwardedProto(r) == "https" {
+		if r.TLS != nil || (s.trustForwarded(r) && forwardedProto(r) == "https") {
 			next.ServeHTTP(w, r)
 			return
 		}
