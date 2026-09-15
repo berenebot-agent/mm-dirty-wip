@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 )
 
@@ -132,10 +133,10 @@ func (s *Store) ListDraftsPaged(ctx context.Context, p model.Principal, inboxID,
 	}
 	q += ` ORDER BY updated_at DESC, id DESC`
 	if limit <= 0 {
-		limit = 100
+		limit = limits.PageSizeDefault
 	}
-	if limit > 500 {
-		limit = 500
+	if limit > limits.PageSizeMaxEvents {
+		limit = limits.PageSizeMaxEvents
 	}
 	q += ` LIMIT ?`
 	args = append(args, limit)

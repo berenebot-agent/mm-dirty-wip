@@ -11,7 +11,7 @@ Quick start
 ::
 
     # 1. Point the client at an instance and an API key.
-    export GATEHOUSE_BASE_URL="http://localhost:8081"
+    export GATEHOUSE_BASE_URL="https://your-instance"
     export GATEHOUSE_API_KEY="ghm_..."
 
     # 2. Discover who you are and which inboxes you can reach.
@@ -58,7 +58,7 @@ Resolution order (first non-empty wins):
 3. ``~/.gatehouse/client.json`` (create it mode 0600)::
 
        {
-         "base_url": "http://localhost:8081",
+         "base_url": "https://your-instance",
          "api_key": "ghm_...",
          "inbox": "inb_123"
        }
@@ -139,6 +139,7 @@ realtime:
 credentials:
   --base/--key, then GATEHOUSE_BASE_URL/GATEHOUSE_API_KEY, then
   ~/.gatehouse/client.json (chmod 600). Never ~/.hermes/.env.
+  With none set, the base defaults to http://localhost:8081 with a warning.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
 """
@@ -219,8 +220,13 @@ def resolve_client(args):
         or os.environ.get("GATEHOUSE_BASE_URL")
         or config.get("base_url")
         or config.get("base")
-        or DEFAULT_BASE_URL
     )
+    if not base:
+        base = DEFAULT_BASE_URL
+        print(
+            "gatehouse.py: GATEHOUSE_BASE_URL not set; defaulting to %s" % base,
+            file=sys.stderr,
+        )
     key = (
         args.key
         or os.environ.get("GATEHOUSE_API_KEY")
@@ -262,7 +268,7 @@ def extract_error(exc):
 
 class Client(object):
     def __init__(self, base, key, inbox):
-        self.base = (base or DEFAULT_BASE_URL).rstrip("/")
+        self.base = base.rstrip("/")
         self.key = key or ""
         self.inbox = inbox or ""
 

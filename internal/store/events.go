@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 )
 
@@ -53,8 +54,8 @@ func (s *Store) ListEvents(ctx context.Context, p model.Principal, after int64, 
 			args = append(args, id)
 		}
 	}
-	if limit <= 0 || limit > 500 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxEvents {
+		limit = limits.PageSizeDefault
 	}
 	q += ` ORDER BY id ASC LIMIT ?`
 	args = append(args, limit)

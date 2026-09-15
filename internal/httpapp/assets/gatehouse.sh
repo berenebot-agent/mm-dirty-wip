@@ -11,9 +11,9 @@
 # Quick start
 # -----------
 #
-#     # 1. Point the client at an instance and an API key.
-#     export GATEHOUSE_BASE_URL="http://localhost:8081"
-#     export GATEHOUSE_API_KEY="ghm_..."
+# # 1. Point the client at an instance and an API key.
+# export GATEHOUSE_BASE_URL="https://your-instance"
+# export GATEHOUSE_API_KEY="ghm_..."
 #
 #     # 2. Discover who you are and which inboxes you can reach.
 #     ./gatehouse.sh bootstrap
@@ -53,8 +53,8 @@
 # Scenario: bootstrap -> list -> send -> reply -> events
 # -----------------------------------------------------
 #
-#     BASE_URL=http://localhost:8081
-#     KEY=ghm_...
+# BASE_URL=https://your-instance
+# KEY=ghm_...
 #
 #     # Who am I and which inboxes can I reach?
 #     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" bootstrap --table
@@ -86,7 +86,7 @@
 #   3. ~/.gatehouse/client.json (create it mode 0600):
 #
 #          {
-#            "base_url": "http://localhost:8081",
+# "base_url": "https://your-instance",
 #            "api_key": "ghm_...",
 #            "inbox": "inb_123"
 #          }
@@ -242,8 +242,9 @@ usage:
   gatehouse.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
 
 global options:
-  --base URL     API base URL (default: $GATEHOUSE_BASE_URL, then
-                 ~/.gatehouse/client.json, then http://localhost:8081)
+--base URL API base URL (default: $GATEHOUSE_BASE_URL, then
+                 ~/.gatehouse/client.json, then http://localhost:8081
+                 with a warning)
   --key KEY      API key (default: $GATEHOUSE_API_KEY, then client.json)
   --inbox ID     default inbox id for commands that use one
   --table        print a simple columnar view instead of JSON
@@ -1415,7 +1416,10 @@ main() {
 
 	require_tools
 	load_config
-	BASE="${BASE:-$DEFAULT_BASE_URL}"
+	if [ -z "$BASE" ]; then
+		BASE="$DEFAULT_BASE_URL"
+		printf 'gatehouse.sh: GATEHOUSE_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
+	fi
 	BASE="${BASE%/}"
 	if [ -z "$KEY" ]; then
 		die "no API key: pass --key, set GATEHOUSE_API_KEY, or write $CONFIG_PATH"

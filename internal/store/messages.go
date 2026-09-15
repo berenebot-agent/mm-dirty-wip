@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gatehouse-mail/internal/idgen"
+	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
 )
 
@@ -441,8 +442,8 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 		}
 	}
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
 	args = append(args, limit)
@@ -802,8 +803,8 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 		}
 	}
 	q += ` GROUP BY t.id HAVING count(m.id) > 0 ORDER BY MAX(m.created_at) DESC LIMIT ?`
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
@@ -933,8 +934,8 @@ func (s *Store) ListBlockedMessages(ctx context.Context, p model.Principal, limi
 			args = append(args, id)
 		}
 	}
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	q += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
 	args = append(args, limit)
@@ -1018,8 +1019,8 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		}
 	}
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	sqlq += ` ORDER BY m.created_at DESC LIMIT ?`
 	args = append(args, limit)

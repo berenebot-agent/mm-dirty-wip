@@ -30,7 +30,7 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 		"info": map[string]any{
 			"title":       "Gatehouse Mail",
 			"version":     "v1",
-			"description": "Agent-first REST API for Gatehouse Mail. See /agent for the working guide and GET /v1/bootstrap for key capabilities and accessible inboxes.",
+			"description": "Agent-first REST API for Gatehouse Mail. See /agent for the working guide and GET /v1/bootstrap for key capabilities and accessible inboxes. Every operation carries x-required-role: one of read, assistant, owner or admin (absent means any authenticated principal).",
 		},
 		"servers":  []map[string]string{{"url": baseURL}},
 		"security": []map[string]any{{"bearerAuth": []string{}}},
@@ -61,6 +61,11 @@ func openAPIOperation(r Route) map[string]any {
 	}
 	if r.Description != "" {
 		op["description"] = r.Description
+	}
+	// x-required-role makes the mailbox/admin role machine-readable so a client
+	// can pre-filter operations against the roles returned by /v1/bootstrap.
+	if r.Role != "" {
+		op["x-required-role"] = r.Role
 	}
 	if params := pathParameters(r.Path); len(params) > 0 {
 		op["parameters"] = params

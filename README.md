@@ -257,13 +257,13 @@ Use the object above in an `attachments` array. The application translates attac
 
 ## API
 
-Give an agent the base URL and an API key. Discovery starts at:
+Give an agent the origin (`BASE`, e.g. `https://mail.example.com`) and an API key. Discovery starts at:
 
 ```text
-/.well-known/gatehouse
-/agent
-/v1/bootstrap
-/openapi.json
+$BASE/.well-known/gatehouse
+$BASE/agent
+$BASE/v1/bootstrap
+$BASE/openapi.json
 ```
 
 Mailbox permissions are assigned per inbox:

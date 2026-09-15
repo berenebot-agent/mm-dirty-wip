@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"gatehouse-mail/internal/limits"
 )
 
 // DeliveryAttempt is one immutable provider send (success or failure) for an
@@ -149,8 +151,8 @@ func (s *Store) ListExternalAliasDeliveryAttempts(ctx context.Context, accountID
 
 // column is selected only by the two internal callers above.
 func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, targetID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 100
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
 	}
 	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.external_alias_id,l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,'')
