@@ -115,6 +115,26 @@ func TestPermissionsThreadIsolationDedupSearchEvents(t *testing.T) {
 	}
 }
 
+// TestInboundReplyThreadsViaProviderMessageIDFallback proves a reply that
+// references a provider's wire Message-ID joins the outbound thread even for a
+// row persisted before the id was promoted to rfc_message_id.
+func TestInboundReplyThreadsViaProviderMessageIDFallback(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, b := testStore(t)
+	box := b[0]
+	m, _, err := s.CommitOutbound(ctx, store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<synth@example.com>", ProviderMessageID: "<legacy-wire@relay.sendinblue.com>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _, _, err := s.CommitInbound(ctx, inbound(box, "reply-legacy", "<reply@outside.test>", "", []string{"<legacy-wire@relay.sendinblue.com>"}, "Re: s", "x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ThreadID != m.ThreadID {
+		t.Fatalf("reply thread %q, want %q", reply.ThreadID, m.ThreadID)
+	}
+}
+
 func TestSQLiteConcurrentWritesSerialized(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)

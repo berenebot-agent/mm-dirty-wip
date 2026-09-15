@@ -58,6 +58,47 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 	}
 }
 
+// TestMarkSentPromotesProviderMessageID proves a provider-assigned wire
+// Message-ID (Brevo, Mailgun) replaces the locally synthesized id so recipient
+// replies thread back to this message.
+func TestMarkSentPromotesProviderMessageID(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	rec := store.OutboundRecord{Inbox: box, Provider: "brevo", RFCMessageID: "<synth@example.com>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	m, _, err := s.CommitOutbound(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, _, err := s.MarkSent(ctx, u.AccountID, m.ID, "<wire@relay.sendinblue.com>", "brevo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.RFCMessageID != "<wire@relay.sendinblue.com>" || sent.ProviderMessageID != "<wire@relay.sendinblue.com>" {
+		t.Fatalf("rfc/provider id = %q/%q", sent.RFCMessageID, sent.ProviderMessageID)
+	}
+}
+
+// TestMarkSentLeavesNonMessageIDProviderID proves ids that are not RFC
+// Message-IDs (SMTP's sentinel, Resend's UUID) do not overwrite the local id.
+func TestMarkSentLeavesNonMessageIDProviderID(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	rec := store.OutboundRecord{Inbox: box, Provider: "smtp", RFCMessageID: "<synth@example.com>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	m, _, err := s.CommitOutbound(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent, _, err := s.MarkSent(ctx, u.AccountID, m.ID, "smtp", "smtp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.RFCMessageID != "<synth@example.com>" {
+		t.Fatalf("rfc id changed to %q", sent.RFCMessageID)
+	}
+}
+
 func TestOutboxMarkFailedAndRetry(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
