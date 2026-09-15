@@ -33,6 +33,10 @@ type Server struct {
 	upgrader            ws.Upgrader
 }
 
+// relayQuietReconnectWindow suppresses Info-level spam from the idle-timeout
+// reconnect loop: a gateway that connected recently logs at Debug instead.
+const relayQuietReconnectWindow = 10 * time.Minute
+
 func New(svc *app.Service) *Server {
 	return &Server{
 		Service:             svc,
@@ -199,7 +203,11 @@ func (s *Server) ServeWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	s.Store.MarkHermesConnected(r.Context(), h.ID)
-	s.Log.Info("relay connected", "gateway_id", h.GatewayID, "inbox_id", h.InboxID)
+	if h.LastConnectedAt != nil && time.Since(*h.LastConnectedAt) < relayQuietReconnectWindow {
+		s.Log.Debug("relay reconnected", "gateway_id", h.GatewayID, "inbox_id", h.InboxID)
+	} else {
+		s.Log.Info("relay connected", "gateway_id", h.GatewayID, "inbox_id", h.InboxID)
+	}
 	_ = s.run(r.Context(), c, h)
 }
 
