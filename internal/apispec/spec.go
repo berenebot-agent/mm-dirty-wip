@@ -12,6 +12,16 @@ import (
 	"strings"
 )
 
+// Param documents one query parameter on an operation. Type is an OpenAPI
+// primitive name ("string", "integer", "boolean"); "array" becomes an array of
+// strings.
+type Param struct {
+	Name        string
+	Type        string
+	Required    bool
+	Description string
+}
+
 // Route is one method+path operation in the authenticated /v1 API.
 type Route struct {
 	Method  string // GET, POST, PUT, PATCH, DELETE
@@ -26,6 +36,16 @@ type Route struct {
 	// Success is the status code of the operation's primary success response.
 	// Zero is treated as 200.
 	Success int
+	// Request is the component schema name of the JSON request body, or "" when
+	// the operation has no body. RequestContentType defaults to
+	// application/json and is only set for the multipart upload.
+	Request            string
+	RequestContentType string
+	// Response is the component schema name of the primary success body, or ""
+	// when the success response carries no JSON (204, SSE, binary download).
+	Response string
+	// Query documents the operation's query parameters.
+	Query []Param
 }
 
 // Status returns the effective primary success status code for the route.
@@ -152,8 +172,9 @@ var routes = []Route{
 	{Method: "DELETE", Path: "/v1/admin/hermes/{id}", Summary: "Delete a Hermes connection (Admin)", Role: "admin", Group: "Admin: Hermes", Success: 204},
 }
 
-// Routes returns the API table in documentation order.
-func Routes() []Route { return routes }
+// Routes returns the API table in documentation order with the wire contract
+// (request body, success body, query parameters) applied from route_io.go.
+func Routes() []Route { return decorate(routes) }
 
 // Groups returns the distinct group headings in first-seen order.
 func Groups() []string {
