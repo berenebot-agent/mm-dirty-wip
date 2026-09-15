@@ -1,0 +1,259 @@
+# Gatehouse Mail — curl cookbook
+#
+# Copy-pasteable REST scenarios using only curl and jq. Every request carries
+# `Authorization: Bearer <key>`.
+#
+#   export BASE="http://localhost:8081"
+#   export KEY="ghm_..."
+#   export INBOX="inb_..."      # set after the bootstrap step below
+#   export HELP='-H "Authorization: Bearer $KEY"'   # optional shell shorthand
+#
+# Responses are JSON; piping through `jq .` pretty-prints them. Add `-i` to any
+# request to see the status line and headers.
+#
+# The Bash client in clients/gatehouse.sh wraps every call below and is the
+# easiest way to run these scenarios end to end. This cookbook exists so the
+# same calls can be made by hand or from another language.
+
+# ---------------------------------------------------------------------------
+# 0. Discovery (no auth required)
+# ---------------------------------------------------------------------------
+
+curl -sS "$BASE/.well-known/gatehouse" | jq .
+curl -sS "$BASE/agent"                      # Markdown usage guide
+curl -sS "$BASE/openapi.json" | jq .        # OpenAPI document
+
+# ---------------------------------------------------------------------------
+# 1. Bootstrap — who am I, which inboxes can I reach
+# ---------------------------------------------------------------------------
+
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/bootstrap" | jq .
+
+INBOX=$(curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/bootstrap" \
+  | jq -r '.inboxes[0].id')
+
+# Equivalent direct inbox listing:
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/inboxes" | jq .
+
+# ---------------------------------------------------------------------------
+# 2. List messages with filters
+# ---------------------------------------------------------------------------
+
+# Newest unread messages in an inbox, at most 20.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages?inbox=$INBOX&unread=true&limit=20" | jq .
+
+# Messages carrying BOTH labels (repeated label params are ANDed), with an
+# attachment, sent by a given address, older than a keyset cursor.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages?inbox=$INBOX&label=Invoices&label=Unpaid&has_attachment=true&from=jane@example.org&before=msg_01K..." \
+  | jq .
+
+# ---------------------------------------------------------------------------
+# 3. Get one message
+# ---------------------------------------------------------------------------
+
+MSG="msg_01K..."
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG" | jq .
+
+# Attachment metadata, then the bytes of one attachment.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages/$MSG/attachments" | jq .
+ATT="att_01K..."
+curl -sS -H "Authorization: Bearer $KEY" \
+  -o quote.pdf "$BASE/v1/attachments/$ATT"
+
+# ---------------------------------------------------------------------------
+# 4. Full-text search (SQLite FTS5)
+# ---------------------------------------------------------------------------
+
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/search?q=invoice&inbox=$INBOX&limit=20" | jq .
+
+# Search also accepts the usual filters: label, from, to, has_attachment.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/search?q=quote&inbox=$INBOX&has_attachment=true" | jq .
+
+# ---------------------------------------------------------------------------
+# 5. Send (with an attachment, base64-encoded JSON)
+# ---------------------------------------------------------------------------
+
+# Build the request body with jq so the base64 payload is escaped correctly.
+BODY=$(jq -n \
+  --arg inbox "$INBOX" \
+  --arg b64 "$(base64 -w0 report.pdf)" \
+  '{
+     inbox_id: $inbox,
+     to: ["alice@example.org"],
+     subject: "Report",
+     text: "See the attached report.",
+     attachments: [
+       {filename: "report.pdf", content_type: "application/pdf", content: $b64}
+     ]
+   }')
+
+# Idempotency-Key makes the send retry-safe: re-sending the same key returns the
+# already-created message instead of sending twice.
+IDEM=$(uuidgen 2>/dev/null || printf 'gh-%s-%s' "$(date +%s)" "$$")
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEM" \
+  -d "$BODY" "$BASE/v1/send" | jq .
+
+# Block until delivery instead of returning as soon as it is queued:
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEM-wait" \
+  -d "$BODY" "$BASE/v1/send?wait=true" | jq .
+
+# ---------------------------------------------------------------------------
+# 6. Reply to a message (In-Reply-To/References are set server-side)
+# ---------------------------------------------------------------------------
+
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: reply-$IDEM" \
+  -d '{"text":"Thanks for the note!"}' \
+  "$BASE/v1/messages/$MSG/reply" | jq .
+
+# ---------------------------------------------------------------------------
+# 7. Patch message state and labels
+# ---------------------------------------------------------------------------
+
+# Mark read / unread.
+curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"read":true}' "$BASE/v1/messages/$MSG" | jq .
+
+# Replace the label set (`[]` clears every label).
+curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"labels":["Invoices","Unpaid"]}' "$BASE/v1/messages/$MSG" | jq .
+
+# Quarantine / release from Spam.
+curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"spam":true}' "$BASE/v1/messages/$MSG" | jq .
+
+# Delete a message (Assistant/Owner).
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG"
+
+# ---------------------------------------------------------------------------
+# 8. Drafts
+# ---------------------------------------------------------------------------
+
+# List drafts in an inbox.
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/drafts?inbox=$INBOX" | jq .
+
+# Create a draft (action defaults to "draft").
+DRAFT_BODY=$(jq -n --arg inbox "$INBOX" \
+  '{inbox_id:$inbox, to:["alice@example.org"], subject:"Quote", text:"Draft body"}')
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "$DRAFT_BODY" "$BASE/v1/drafts" | jq .
+
+DRAFT=$(curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "$DRAFT_BODY" "$BASE/v1/drafts" | jq -r '.id')
+
+# Get / partial-update / delete a draft.
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/drafts/$DRAFT" | jq .
+curl -sS -X PATCH -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"subject":"Quote (revised)"}' "$BASE/v1/drafts/$DRAFT" | jq .
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/drafts/$DRAFT"
+
+# Create + inline-attach + submit for approval in a single request:
+#   {"action":"request-send"} (Assistant) or {"action":"send"} (Owner).
+
+# ---------------------------------------------------------------------------
+# 9. Multipart draft attachment upload (field name is exactly "attachments")
+# ---------------------------------------------------------------------------
+
+curl -sS -X POST -H "Authorization: Bearer $KEY" \
+  -F "attachments=@report.pdf;type=application/pdf" \
+  "$BASE/v1/drafts/$DRAFT/attachments" | jq .
+
+# List, download, delete one draft attachment (second upload shown for the id).
+ATT2=$(curl -sS -X POST -H "Authorization: Bearer $KEY" \
+  -F "attachments=@report.pdf;type=application/pdf" \
+  "$BASE/v1/drafts/$DRAFT/attachments" | jq -r '.[0].id')
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/drafts/$DRAFT/attachments" | jq .
+curl -sS -H "Authorization: Bearer $KEY" \
+  -o downloaded.pdf "$BASE/v1/drafts/$DRAFT/attachments/$ATT2"
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/drafts/$DRAFT/attachments/$ATT2"
+
+# ---------------------------------------------------------------------------
+# 10. Draft approval workflow (Assistant requests, Owner authorizes)
+# ---------------------------------------------------------------------------
+
+# Assistant: submit the frozen draft for authorization.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"external":true}' \
+  "$BASE/v1/drafts/$DRAFT/request-send" | jq .
+
+# Inspect requests (active only, for one inbox).
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/send-requests?inbox=$INBOX&active=true" | jq .
+
+# The latest request for a draft (works even after the draft was sent).
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/drafts/$DRAFT/send-request" | jq .
+
+# Owner: approve and enqueue (approval and delivery are separate states).
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: approve-$IDEM" \
+  -d '{"feedback":"Looks good"}' \
+  "$BASE/v1/drafts/$DRAFT/approve" | jq .
+
+# Owner: reject with feedback (draft stays editable).
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"feedback":"Please revise the numbers"}' \
+  "$BASE/v1/drafts/$DRAFT/reject" | jq .
+
+# Assistant: withdraw a pending request.
+curl -sS -X POST -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/drafts/$DRAFT/cancel-send-request" | jq .
+
+# Direct send of a draft (Owner) instead of the approval flow.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{}' "$BASE/v1/drafts/$DRAFT/send" | jq .
+
+# ---------------------------------------------------------------------------
+# 11. Outbox — pending/failed sends, retry, cancel
+# ---------------------------------------------------------------------------
+
+curl -sS -H "Authorization: Bearer $KEY" "$BASE/v1/outbox?inbox=$INBOX" | jq .
+OUT="omsg_01K..."
+curl -sS -X POST -H "Authorization: Bearer $KEY" "$BASE/v1/outbox/$OUT/retry"
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/outbox/$OUT"
+
+# ---------------------------------------------------------------------------
+# 12. Events — one page of durable history
+# ---------------------------------------------------------------------------
+
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/events?after=evt_01K...&inbox=$INBOX&limit=100" | jq .
+
+# ===========================================================================
+# 13. SSE stream — NON-RETURNING
+# ---------------------------------------------------------------------------
+# Opens the event stream and keeps the connection open until interrupted
+# (Ctrl-C). `curl -N` disables output buffering so events appear immediately.
+# Backlog after `after` is delivered first, then live events. This does NOT
+# return on its own; run it on a dedicated worker, not inside a request.
+# ===========================================================================
+
+curl -N -H "Authorization: Bearer $KEY" -H "Accept: text/event-stream" \
+  "$BASE/v1/events/stream?after=evt_01K...&inbox=$INBOX"
+
+# Each event is emitted as:
+#   id: evt_01K...
+#   event: message.received
+#   data: {"cursor":"evt_01K...","type":"message.received", ...}
+
+# ===========================================================================
+# 14. Long poll — BLOCKS up to --timeout seconds
+# ---------------------------------------------------------------------------
+# Calls the JSON long-poll endpoint and blocks until a new message arrives or
+# the timeout (server cap 600s) elapses. On timeout the server returns 204 with
+# no body. Prefer `events` for a single non-blocking poll.
+# ===========================================================================
+
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages/wait?inbox=$INBOX&after=evt_01K...&timeout=60" | jq .
+
+# 204 No Content means no new message arrived before the timeout.
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages/wait?inbox=$INBOX&timeout=60"

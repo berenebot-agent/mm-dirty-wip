@@ -42,6 +42,15 @@ var faviconSVG []byte
 //go:embed assets/apple-touch-icon.png
 var appleTouchIconPNG []byte
 
+//go:embed assets/gatehouse.py
+var pythonClient []byte
+
+//go:embed assets/gatehouse.sh
+var bashClient []byte
+
+//go:embed assets/curl-cookbook.txt
+var curlCookbook []byte
+
 type Server struct {
 	Service         *app.Service
 	Relay           *hermesrelay.Server
@@ -175,91 +184,126 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /openapi.json", s.openapi)
 	m.HandleFunc("GET /examples/python", s.pythonExample)
+	m.HandleFunc("GET /examples/bash", s.bashExample)
 	m.HandleFunc("GET /examples/curl", s.curlExample)
 
-	// Authenticated agent API.
+	// Authenticated agent API. The single registration table is also the
+	// authoritative surface checked against internal/apispec by the route
+	// coverage test; never register a /v1 route outside it.
 	api := func(h http.HandlerFunc) http.HandlerFunc { return s.withBearer(h) }
-	m.HandleFunc("GET /v1/bootstrap", api(s.apiBootstrap))
-	m.HandleFunc("GET /v1/inboxes", api(s.apiInboxes))
-	m.HandleFunc("POST /v1/inboxes", api(s.apiInboxes))
-	m.HandleFunc("GET /v1/inboxes/{id}", api(s.apiInbox))
-	m.HandleFunc("PATCH /v1/inboxes/{id}", api(s.apiInbox))
-	m.HandleFunc("DELETE /v1/inboxes/{id}", api(s.apiInbox))
-	m.HandleFunc("GET /v1/admin/inboxes/{id}/external-aliases", api(s.apiExternalAliases))
-	m.HandleFunc("POST /v1/admin/inboxes/{id}/external-aliases", api(s.apiExternalAliases))
-	m.HandleFunc("PATCH /v1/admin/inboxes/{id}/external-aliases/{aliasID}", api(s.apiExternalAlias))
-	m.HandleFunc("DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}", api(s.apiExternalAlias))
-	m.HandleFunc("GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", api(s.apiExternalAliasSending))
-	m.HandleFunc("PUT /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", api(s.apiExternalAliasSending))
-	m.HandleFunc("DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", api(s.apiExternalAliasSending))
-	m.HandleFunc("GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries", api(s.apiExternalAliasDeliveries))
-	// openagent.email terminology compatibility.
-	m.HandleFunc("GET /v1/identities", api(s.apiIdentities))
-	m.HandleFunc("POST /v1/identities", api(s.apiIdentities))
-	m.HandleFunc("DELETE /v1/identities/{address}", api(s.apiIdentityDelete))
-
-	m.HandleFunc("GET /v1/messages", api(s.apiMessages))
-	m.HandleFunc("GET /v1/messages/wait", api(s.apiMessagesWait))
-	m.HandleFunc("POST /v1/messages/wait", api(s.apiMessagesWait))
-	m.HandleFunc("GET /v1/messages/{id}", api(s.apiMessage))
-	m.HandleFunc("PATCH /v1/messages/{id}", api(s.apiMessage))
-	m.HandleFunc("DELETE /v1/messages/{id}", api(s.apiMessage))
-	m.HandleFunc("POST /v1/messages/{id}/seen", api(s.apiSeen))
-	m.HandleFunc("GET /v1/messages/{id}/attachments", api(s.apiMessageAttachments))
-	m.HandleFunc("POST /v1/messages/{id}/reply", api(s.apiReply))
-	m.HandleFunc("GET /v1/attachments/{id}", api(s.apiAttachment))
-	m.HandleFunc("GET /v1/threads", api(s.apiThreads))
-	m.HandleFunc("GET /v1/threads/{id}", api(s.apiThread))
-	m.HandleFunc("GET /v1/threads/{id}/messages", api(s.apiThreadMessages))
-	m.HandleFunc("GET /v1/search", api(s.apiSearch))
-	m.HandleFunc("GET /v1/labels", api(s.apiLabels))
-	m.HandleFunc("GET /v1/events", api(s.apiEvents))
-	m.HandleFunc("GET /v1/events/wait", api(s.apiEventsWait))
-	m.HandleFunc("GET /v1/events/stream", api(s.apiEventsStream))
-	m.HandleFunc("POST /v1/send", api(s.apiSend))
-
-	m.HandleFunc("GET /v1/drafts", api(s.apiDrafts))
-	m.HandleFunc("POST /v1/drafts", api(s.apiDrafts))
-	m.HandleFunc("GET /v1/drafts/{id}", api(s.apiDraft))
-	m.HandleFunc("PATCH /v1/drafts/{id}", api(s.apiDraft))
-	m.HandleFunc("DELETE /v1/drafts/{id}", api(s.apiDraft))
-	m.HandleFunc("POST /v1/drafts/{id}/send", api(s.apiDraftSend))
-	m.HandleFunc("POST /v1/drafts/{id}/request-send", api(s.apiDraftRequestSend))
-	m.HandleFunc("POST /v1/drafts/{id}/cancel-send-request", api(s.apiDraftCancelSendRequest))
-	m.HandleFunc("POST /v1/drafts/{id}/approve", api(s.apiDraftApprove))
-	m.HandleFunc("POST /v1/drafts/{id}/reject", api(s.apiDraftReject))
-	m.HandleFunc("GET /v1/drafts/{id}/send-request", api(s.apiDraftSendRequest))
-	m.HandleFunc("POST /v1/drafts/{id}/attachments", api(s.apiDraftAttachments))
-	m.HandleFunc("GET /v1/drafts/{id}/attachments", api(s.apiDraftAttachments))
-	m.HandleFunc("GET /v1/drafts/{id}/attachments/{attId}", api(s.apiDraftAttachmentContent))
-	m.HandleFunc("DELETE /v1/drafts/{id}/attachments/{attId}", api(s.apiDraftAttachment))
-	m.HandleFunc("GET /v1/send-requests", api(s.apiSendRequests))
-
-	m.HandleFunc("GET /v1/outbox", api(s.apiOutbox))
-	m.HandleFunc("POST /v1/outbox/{id}/retry", api(s.apiOutboxRetry))
-	m.HandleFunc("DELETE /v1/outbox/{id}", api(s.apiOutboxDelete))
-
-	m.HandleFunc("GET /v1/admin/domains", api(s.apiDomains))
-	m.HandleFunc("POST /v1/admin/domains", api(s.apiDomains))
-	m.HandleFunc("PATCH /v1/admin/domains/{id}", api(s.apiDomain))
-	m.HandleFunc("DELETE /v1/admin/domains/{id}", api(s.apiDomain))
-	m.HandleFunc("GET /v1/admin/keys", api(s.apiKeys))
-	m.HandleFunc("POST /v1/admin/keys", api(s.apiKeys))
-	m.HandleFunc("DELETE /v1/admin/keys/{id}", api(s.apiKey))
-	m.HandleFunc("GET /v1/admin/domains/{id}/sending", api(s.apiDomainSending))
-	m.HandleFunc("PUT /v1/admin/domains/{id}/sending", api(s.apiDomainSending))
-	m.HandleFunc("DELETE /v1/admin/domains/{id}/sending", api(s.apiDomainSending))
-	m.HandleFunc("GET /v1/admin/domains/{id}/receiving", api(s.apiDomainReceiving))
-	m.HandleFunc("PUT /v1/admin/domains/{id}/receiving", api(s.apiDomainReceiving))
-	m.HandleFunc("DELETE /v1/admin/domains/{id}/receiving", api(s.apiDomainReceiving))
-	m.HandleFunc("GET /v1/admin/domains/{id}/sending/deliveries", api(s.apiDomainSendingDeliveries))
-	m.HandleFunc("GET /v1/admin/domains/{id}/receiving/deliveries", api(s.apiDomainReceivingDeliveries))
-	m.HandleFunc("POST /v1/admin/hermes/enroll", api(s.apiHermesEnroll))
-	m.HandleFunc("GET /v1/admin/hermes", api(s.apiHermesList))
-	m.HandleFunc("PUT /v1/admin/hermes/{id}", api(s.apiHermesConnection))
-	m.HandleFunc("DELETE /v1/admin/hermes/{id}", api(s.apiHermesDelete))
+	for _, rt := range v1Routes {
+		m.HandleFunc(rt.pattern, api(rt.bind(s)))
+	}
 
 	return s.securityHeaders(s.recoverer(m))
+}
+
+// apiRoute is one authenticated API registration: a ServeMux pattern and the
+// method value that serves it.
+type apiRoute struct {
+	pattern string
+	handler func(*Server, http.ResponseWriter, *http.Request)
+}
+
+// bind turns a method expression into the handler for one server instance.
+func (rt apiRoute) bind(s *Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { rt.handler(s, w, r) }
+}
+
+// v1Routes is the single registration list for the authenticated API. It is
+// the code-side half of the auto-discovery contract: internal/apispec holds the
+// documentation table and a test fails when the two disagree.
+var v1Routes = []apiRoute{
+	{"GET /v1/bootstrap", (*Server).apiBootstrap},
+	{"GET /v1/inboxes", (*Server).apiInboxes},
+	{"POST /v1/inboxes", (*Server).apiInboxes},
+	{"GET /v1/inboxes/{id}", (*Server).apiInbox},
+	{"PATCH /v1/inboxes/{id}", (*Server).apiInbox},
+	{"DELETE /v1/inboxes/{id}", (*Server).apiInbox},
+	{"GET /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
+	{"POST /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
+	{"PATCH /v1/admin/inboxes/{id}/external-aliases/{aliasID}", (*Server).apiExternalAlias},
+	{"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}", (*Server).apiExternalAlias},
+	{"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
+	{"PUT /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
+	{"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
+	{"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries", (*Server).apiExternalAliasDeliveries},
+	// openagent.email terminology compatibility.
+	{"GET /v1/identities", (*Server).apiIdentities},
+	{"POST /v1/identities", (*Server).apiIdentities},
+	{"DELETE /v1/identities/{address}", (*Server).apiIdentityDelete},
+
+	{"GET /v1/messages", (*Server).apiMessages},
+	{"GET /v1/messages/wait", (*Server).apiMessagesWait},
+	{"POST /v1/messages/wait", (*Server).apiMessagesWait},
+	{"GET /v1/messages/{id}", (*Server).apiMessage},
+	{"PATCH /v1/messages/{id}", (*Server).apiMessage},
+	{"DELETE /v1/messages/{id}", (*Server).apiMessage},
+	{"POST /v1/messages/{id}/seen", (*Server).apiSeen},
+	{"GET /v1/messages/{id}/attachments", (*Server).apiMessageAttachments},
+	{"POST /v1/messages/{id}/reply", (*Server).apiReply},
+	{"GET /v1/attachments/{id}", (*Server).apiAttachment},
+	{"GET /v1/threads", (*Server).apiThreads},
+	{"GET /v1/threads/{id}", (*Server).apiThread},
+	{"GET /v1/threads/{id}/messages", (*Server).apiThreadMessages},
+	{"GET /v1/search", (*Server).apiSearch},
+	{"GET /v1/labels", (*Server).apiLabels},
+	{"GET /v1/events", (*Server).apiEvents},
+	{"GET /v1/events/wait", (*Server).apiEventsWait},
+	{"GET /v1/events/stream", (*Server).apiEventsStream},
+	{"POST /v1/send", (*Server).apiSend},
+
+	{"GET /v1/drafts", (*Server).apiDrafts},
+	{"POST /v1/drafts", (*Server).apiDrafts},
+	{"GET /v1/drafts/{id}", (*Server).apiDraft},
+	{"PATCH /v1/drafts/{id}", (*Server).apiDraft},
+	{"DELETE /v1/drafts/{id}", (*Server).apiDraft},
+	{"POST /v1/drafts/{id}/send", (*Server).apiDraftSend},
+	{"POST /v1/drafts/{id}/request-send", (*Server).apiDraftRequestSend},
+	{"POST /v1/drafts/{id}/cancel-send-request", (*Server).apiDraftCancelSendRequest},
+	{"POST /v1/drafts/{id}/approve", (*Server).apiDraftApprove},
+	{"POST /v1/drafts/{id}/reject", (*Server).apiDraftReject},
+	{"GET /v1/drafts/{id}/send-request", (*Server).apiDraftSendRequest},
+	{"POST /v1/drafts/{id}/attachments", (*Server).apiDraftAttachments},
+	{"GET /v1/drafts/{id}/attachments", (*Server).apiDraftAttachments},
+	{"GET /v1/drafts/{id}/attachments/{attId}", (*Server).apiDraftAttachmentContent},
+	{"DELETE /v1/drafts/{id}/attachments/{attId}", (*Server).apiDraftAttachment},
+	{"GET /v1/send-requests", (*Server).apiSendRequests},
+
+	{"GET /v1/outbox", (*Server).apiOutbox},
+	{"POST /v1/outbox/{id}/retry", (*Server).apiOutboxRetry},
+	{"DELETE /v1/outbox/{id}", (*Server).apiOutboxDelete},
+
+	{"GET /v1/admin/domains", (*Server).apiDomains},
+	{"POST /v1/admin/domains", (*Server).apiDomains},
+	{"PATCH /v1/admin/domains/{id}", (*Server).apiDomain},
+	{"DELETE /v1/admin/domains/{id}", (*Server).apiDomain},
+	{"GET /v1/admin/keys", (*Server).apiKeys},
+	{"POST /v1/admin/keys", (*Server).apiKeys},
+	{"DELETE /v1/admin/keys/{id}", (*Server).apiKey},
+	{"GET /v1/admin/domains/{id}/sending", (*Server).apiDomainSending},
+	{"PUT /v1/admin/domains/{id}/sending", (*Server).apiDomainSending},
+	{"DELETE /v1/admin/domains/{id}/sending", (*Server).apiDomainSending},
+	{"GET /v1/admin/domains/{id}/receiving", (*Server).apiDomainReceiving},
+	{"PUT /v1/admin/domains/{id}/receiving", (*Server).apiDomainReceiving},
+	{"DELETE /v1/admin/domains/{id}/receiving", (*Server).apiDomainReceiving},
+	{"GET /v1/admin/domains/{id}/sending/deliveries", (*Server).apiDomainSendingDeliveries},
+	{"GET /v1/admin/domains/{id}/receiving/deliveries", (*Server).apiDomainReceivingDeliveries},
+	{"POST /v1/admin/hermes/enroll", (*Server).apiHermesEnroll},
+	{"GET /v1/admin/hermes", (*Server).apiHermesList},
+	{"PUT /v1/admin/hermes/{id}", (*Server).apiHermesConnection},
+	{"DELETE /v1/admin/hermes/{id}", (*Server).apiHermesDelete},
+}
+
+// RegisteredAPIRoutes returns the authenticated /v1 registrations as
+// "METHOD /path" strings, for the route coverage test. It is the live half of
+// the auto-discovery contract documented in internal/apispec.
+func (s *Server) RegisteredAPIRoutes() []string {
+	out := make([]string, 0, len(v1Routes))
+	for _, rt := range v1Routes {
+		out = append(out, rt.pattern)
+	}
+	return out
 }
 
 // InboundHandler serves only the health check and the authenticated provider

@@ -2,6 +2,14 @@
 
 This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
 
+> **Route listings are generated.** The endpoint list is no longer maintained by
+> hand here. `internal/apispec` is the single source of truth; the served guide is
+> [`/agent`](/agent), the generated reference is
+> [`docs/API-REFERENCE.md`](API-REFERENCE.md), and
+> [`/openapi.json`](/openapi.json) is authoritative for the complete operation
+> list. This document keeps the rationale, provider schemas, and compatibility
+> notes that a route table cannot carry.
+
 ## 1. Authentication
 
 ```http
@@ -588,7 +596,23 @@ Enrollment:
 POST /relay/enroll
 ```
 
-The hosted UI issues single-use enrollment tokens and displays the corresponding Hermes CLI command.
+The hosted UI issues single-use enrollment tokens and displays the corresponding Hermes CLI command. The same management operations are available programmatically to an Admin principal:
+
+```http
+GET    /v1/admin/hermes
+POST   /v1/admin/hermes/enroll
+PUT    /v1/admin/hermes/{id}
+DELETE /v1/admin/hermes/{id}
+```
+
+`POST /v1/admin/hermes/enroll` takes `{"inbox_id","name"}`, issues a new
+single-use enrollment token, returns `201` with the `gateway_id`, `secret`,
+`delivery_key`, `connector_url` and a ready-to-paste `env` block, and is the API
+equivalent of the `/relay/enroll` UI. `GET` lists the account's relay
+connections. `PUT /v1/admin/hermes/{id}` takes `{"role"}` and sets the
+connection's outbound role: `owner` lets the relay send directly, while
+`assistant` makes it draft and request approval instead. `DELETE
+/v1/admin/hermes/{id}` removes the connection and returns `204`.
 
 Relay protocol implementation should follow the Hermes connector contract while isolating its versioning from the canonical API.
 
@@ -598,6 +622,7 @@ Where semantics align naturally, support familiar compatibility operations such 
 
 ```text
 /v1/identities
+DELETE /v1/identities/{address}
 /v1/messages
 /v1/messages/{id}
 /v1/messages/wait
