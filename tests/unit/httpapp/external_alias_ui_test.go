@@ -14,8 +14,8 @@ import (
 
 // TestUIExternalAliasLifecycle exercises the external-alias UI: creation
 // redirects to the dashboard with the alias's connector popup, the dialogs
-// render, the connector saves with secret retention, the activity page shows
-// the alias, the name edits, and delete removes it.
+// render, the connector saves with secret retention, the log page is
+// read-only, the name edits from the dashboard, and delete removes it.
 func TestUIExternalAliasLifecycle(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
@@ -28,7 +28,7 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("create %d %s", rr.Code, rr.Body.String())
 	}
-	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/?") || !strings.Contains(loc, "alias=") {
+	if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "/?") || !strings.Contains(loc, "alias=") || !strings.Contains(loc, "inbox="+box.ID) {
 		t.Fatalf("create redirect %q", loc)
 	}
 	groups, err := svc.Store.ListExternalAliases(ctx, u.AccountID)
@@ -43,7 +43,7 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 	dlgID := "external-alias-sending-dialog-" + alias.ID
 
 	// The dashboard renders the connector popup for the alias with the provider
-	// picker; the alias activity page shows identity and activity.
+	// picker; the alias log page is read-only, mirroring the domain log.
 	rr = domainGet(t, h, cookie, "/?alias="+alias.ID)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
@@ -61,9 +61,15 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("activity page cache-control = %q", got)
 	}
-	for _, want := range []string{"agent@gmail.com", "sending only", "Activity", "Delete"} {
-		if !strings.Contains(rr.Body.String(), want) {
+	body = rr.Body.String()
+	for _, want := range []string{"agent@gmail.com", "sending only", "Activity", "Back to inbox settings", "/?inbox=" + box.ID} {
+		if !strings.Contains(body, want) {
 			t.Fatalf("activity page missing %q", want)
+		}
+	}
+	for _, absent := range []string{"Configure connector", "Save name", "Delete alias", "external_alias_name"} {
+		if strings.Contains(body, absent) {
+			t.Fatalf("activity page should be read-only, found %q", absent)
 		}
 	}
 
@@ -112,20 +118,26 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 		t.Fatalf("connector not cleared: %+v", cleared)
 	}
 
-	// Rename the alias.
+	// Rename the alias from the dashboard; it returns to inbox settings.
 	rr = domainPost(t, h, cookie, aliasBase+"/edit", url.Values{"_csrf": {csrf}, "external_alias_name": {"Agent Two"}})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("rename %d %s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "inbox="+box.ID) {
+		t.Fatalf("rename redirect %q, want inbox=%s", loc, box.ID)
 	}
 	renamed, _ := svc.Store.GetExternalAlias(ctx, u.AccountID, box.ID, alias.ID)
 	if renamed.DisplayName != "Agent Two" {
 		t.Fatalf("rename failed: %+v", renamed)
 	}
 
-	// Delete removes it.
+	// Delete removes it and returns to inbox settings.
 	rr = domainPost(t, h, cookie, aliasBase+"/delete", url.Values{"_csrf": {csrf}})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("delete %d %s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "inbox="+box.ID) {
+		t.Fatalf("delete redirect %q, want inbox=%s", loc, box.ID)
 	}
 	if _, err := svc.Store.GetExternalAlias(ctx, u.AccountID, box.ID, alias.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("alias survived delete: %v", err)
@@ -199,8 +211,8 @@ func TestUIExternalAliasDefaultSenderPreserved(t *testing.T) {
 }
 
 // TestUIExternalAliasConnectorValidationRetainsInput proves a connector
-// validation error reopens the alias page with the error and the submitted
-// non-secret values, while never echoing a secret.
+// validation error reopens the alias popup on the dashboard with the error
+// and the submitted non-secret values, while never echoing a secret.
 func TestUIExternalAliasConnectorValidationRetainsInput(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
@@ -219,8 +231,8 @@ func TestUIExternalAliasConnectorValidationRetainsInput(t *testing.T) {
 		t.Fatalf("validation redirect %d %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.Contains(loc, "provider=smtp") || !strings.Contains(loc, "_flash=") {
-		t.Fatalf("validation redirect lacks provider/flash: %q", loc)
+	if !strings.Contains(loc, "provider=smtp") || !strings.Contains(loc, "_flash=") || !strings.Contains(loc, "inbox="+box.ID) {
+		t.Fatalf("validation redirect lacks provider/flash/inbox: %q", loc)
 	}
 	rr = domainGet(t, h, cookie, loc)
 	body := rr.Body.String()

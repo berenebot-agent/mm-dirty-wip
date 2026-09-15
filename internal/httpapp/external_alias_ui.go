@@ -58,11 +58,6 @@ func (s *Server) externalAliasContext(w http.ResponseWriter, r *http.Request, ac
 	return box, a, true
 }
 
-// externalAliasBase is the canonical UI path for one alias's activity page.
-func externalAliasBase(inboxID, aliasID string) string {
-	return "/ui/inboxes/" + url.PathEscape(inboxID) + "/external-aliases/" + url.PathEscape(aliasID)
-}
-
 // externalAliasConfigureURL opens the alias's connector popup on the dashboard.
 func externalAliasConfigureURL(aliasID string) string {
 	return "/?" + url.Values{"alias": {aliasID}}.Encode()
@@ -86,13 +81,15 @@ func (s *Server) uiCreateExternalAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Return to the dashboard with the new alias's connector dialog open, since
-	// the alias exists but cannot send until a connector is configured.
-	q := url.Values{"alias": {a.ID}, "notice": {"External alias created — configure its sending connector"}}
+	// the alias exists but cannot send until a connector is configured. The
+	// inbox param reopens inbox settings behind it, so cancelling the popup
+	// resumes there instead of dropping to the bare dashboard.
+	q := url.Values{"alias": {a.ID}, "inbox": {a.InboxID}, "notice": {"External alias created — configure its sending connector"}}
 	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 }
 
-// uiUpdateExternalAlias edits an external alias's display name on its activity
-// page. The address is intentionally not editable.
+// uiUpdateExternalAlias edits an external alias's display name from the
+// dashboard. The address is intentionally not editable.
 func (s *Server) uiUpdateExternalAlias(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.externalAliasAdmin(w, r)
 	if !ok {
@@ -106,7 +103,7 @@ func (s *Server) uiUpdateExternalAlias(w http.ResponseWriter, r *http.Request) {
 		s.externalAliasError(w, err)
 		return
 	}
-	http.Redirect(w, r, externalAliasBase(box.ID, a.ID)+"?notice="+url.QueryEscape("Alias updated"), http.StatusSeeOther)
+	s.externalAliasBackToInbox(w, r, box.ID, "Alias updated")
 }
 
 func (s *Server) uiDeleteExternalAlias(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +119,7 @@ func (s *Server) uiDeleteExternalAlias(w http.ResponseWriter, r *http.Request) {
 		s.externalAliasError(w, err)
 		return
 	}
-	http.Redirect(w, r, "/?notice="+url.QueryEscape("External alias deleted"), http.StatusSeeOther)
+	s.externalAliasBackToInbox(w, r, box.ID, "External alias deleted")
 }
 
 // uiExternalAliasSending saves the alias's connector using the same schema,
@@ -183,8 +180,8 @@ func (s *Server) externalAliasBackToInbox(w http.ResponseWriter, r *http.Request
 	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 }
 
-// uiExternalAlias renders one alias's outbound activity and its name/delete
-// controls. The connector is edited from the dashboard popup, linked here.
+// uiExternalAlias renders one alias's read-only outbound activity log. Name,
+// connector and delete controls live on the dashboard.
 func (s *Server) uiExternalAlias(w http.ResponseWriter, r *http.Request) {
 	p, ok := s.externalAliasAdmin(w, r)
 	if !ok {
@@ -222,7 +219,6 @@ func (s *Server) uiExternalAlias(w http.ResponseWriter, r *http.Request) {
 		ExternalDeliveryAttempts: attempts,
 		ExternalLogHasMore:       hasMore,
 		ExternalLogBefore:        nextBefore,
-		ExternalNotice:           r.URL.Query().Get("notice"),
 	})
 }
 
@@ -359,7 +355,9 @@ func (s *Server) externalAliasEditorError(w http.ResponseWriter, r *http.Request
 		values = nil
 	}
 	f := externalAliasNoticeFlash{AccountID: p.AccountID, UserID: p.UserID, InboxID: box.ID, AliasID: a.ID, AliasRev: a.Revision, Provider: provider, Error: msg, Values: values}
-	q := url.Values{"alias": {a.ID}, "provider": {provider}}
+	// The inbox param reopens inbox settings behind the popup, so cancelling
+	// it resumes there instead of dropping to the bare dashboard.
+	q := url.Values{"alias": {a.ID}, "inbox": {box.ID}, "provider": {provider}}
 	if tok := s.flashes.put(f, size); tok != "" {
 		q.Set("_flash", tok)
 	}
@@ -404,21 +402,13 @@ func (s *Server) externalAliasError(w http.ResponseWriter, err error) {
 // dialog JS runs), containing only the provider editor, never the identity.
 const externalAliasConnectorDialogs = `{{range .ExternalAliasDialogs}}<dialog id="external-alias-sending-dialog-{{.AliasID}}" class="domain-dialog"{{if .Open}} data-open="1"{{end}}><h2>Sending · {{.Address}}</h2><form id="external-alias-sending-form-{{.AliasID}}" method="post" action="/ui/inboxes/{{.InboxID}}/external-aliases/{{.AliasID}}/sending" class="cfg-form" autocomplete="off"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label>Provider</label><select name="provider" class="provider-select"><option value="">Select a provider…</option>{{range .Editors}}<option value="{{.Provider}}"{{if .Selected}} selected{{end}}>{{.ProviderLabel}}</option>{{end}}</select><p class="muted provider-hint"{{if .Selected}} hidden{{end}}>Choose a provider to configure sending from this alias.</p>{{range .Editors}}{{$e := .}}<div class="provider-fields provider-box" data-provider="{{.Provider}}"{{if not .Selected}} hidden{{end}}>{{if .Error}}<div class="error">{{.Error}}</div>{{end}}{{if .KeepSecrets}}<p class="muted">Saving {{.ProviderLabel}} updates this alias's connector. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted">Saving {{.ProviderLabel}} replaces this alias's connector. Required secrets must be entered.</p>{{end}}{{range .Fields}}{{if not .Generated}}{{if .Options}}<label>{{.Label}}{{if .Required}} *{{end}}</label><select name="cfg_{{$e.Provider}}_{{.Name}}"{{if not $e.Selected}} disabled{{end}}>{{$f := .}}{{range .Options}}<option value="{{.Value}}"{{if eq .Value (index $e.Values $f.Name)}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<label>{{.Label}}{{if .Required}} *{{end}}{{if and .Secret $e.KeepSecrets}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input type="{{.Type}}" name="cfg_{{$e.Provider}}_{{.Name}}" placeholder="{{.Placeholder}}"{{if not $e.Selected}} disabled{{end}}{{if and .Required (or (not .Secret) (not $e.KeepSecrets))}} required{{end}}{{if .Secret}} autocomplete="off"{{else}} value="{{index $e.Values .Name}}"{{end}}>{{end}}{{end}}{{end}}</div>{{end}}</form><div class="dialog-actions">{{if .Configured}}<div class="dialog-danger"><form method="post" action="/ui/inboxes/{{.InboxID}}/external-aliases/{{.AliasID}}/sending/clear" data-confirm="Remove this alias's sending connector? Mail from this alias will queue until a provider is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove sending</button></form></div>{{end}}<button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="external-alias-sending-form-{{.AliasID}}" data-save-provider{{if not .Selected}} disabled{{end}}>Save</button></div></dialog>{{end}}`
 
-// externalAliasBody is the activity page for one external sending alias. The
-// connector is edited from the dashboard popup, so this page does not repeat it.
-const externalAliasBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}">← {{.Inbox.Address}}</a></div>
-{{if .ExternalNotice}}<div class="ok notice" role="status" aria-live="polite">{{.ExternalNotice}}</div>{{end}}
-<section class="card"><div class="msghead"><div><h1>{{.ExternalAlias.Address}}</h1><p class="muted">External sending alias · sending only. Mail addressed here remains with its email provider.</p></div><div class="actions"><a class="btn secondary btn-sm" href="/?alias={{.ExternalAlias.ID}}">Configure connector</a></div></div>
-<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/external-aliases/{{.ExternalAlias.ID}}/edit" class="row"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="external_alias_name" value="{{.ExternalAlias.DisplayName}}" placeholder="Sender name" maxlength="128"><button class="secondary btn-narrow" type="submit">Save name</button></form>
+// externalAliasBody is the read-only activity log for one external sending
+// alias, mirroring the domain log page. Name, connector and delete controls
+// live on the dashboard (inbox edit dialog Aliases tab and connector popup).
+const externalAliasBody = `<div class="toolbar"><a href="/?inbox={{.Inbox.ID}}">← Back to inbox settings</a></div>
+<section class="card"><div class="msghead"><div><h1>{{.ExternalAlias.Address}}</h1><p class="muted">External sending alias · sending only. Mail addressed here remains with its email provider.</p></div></div>
 </section>
 <section class="card"><h2>Activity</h2>
 <p class="muted">Every outbound send attempt from this alias, newest first. Attempts are retained for about 30 days.</p>
 {{if .ExternalDeliveryAttempts}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Status</th><th>From</th><th>To</th><th>Subject</th><th>Detail</th><th></th></tr></thead><tbody>{{range .ExternalDeliveryAttempts}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if eq .Status "sent"}}<span class="pill">Sent</span>{{else}}<span class="pill danger">Failed</span>{{end}}</td><td>{{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted log-detail">attempt {{.Attempt}}{{if .Provider}} · {{.Provider}}{{end}}{{if .ProviderMessageID}} · {{.ProviderMessageID}}{{end}}{{if .ErrorText}} · {{.ErrorText}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .ExternalLogHasMore}}<p><a href="/ui/inboxes/{{.Inbox.ID}}/external-aliases/{{.ExternalAlias.ID}}?before={{.ExternalLogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No sends yet.</p>{{end}}
-</section>
-<section class="card"><h2>Delete</h2>
-<p class="muted">Deleting this alias removes its connector and any default that referenced it. Queued mail from this alias then fails rather than falling back to a domain connector.</p>
-<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/external-aliases/{{.ExternalAlias.ID}}/delete" data-confirm="Delete this external alias and its connector? This cannot be undone.">
-<input type="hidden" name="_csrf" value="{{.CSRF}}">
-<button class="secondary danger">Delete alias</button>
-</form>
 </section>`

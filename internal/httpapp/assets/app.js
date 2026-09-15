@@ -927,8 +927,9 @@ function externalAliasBase(inboxID, aliasID) {
 
 // renderExternalAliases fills an inbox dialog's external-alias list from the
 // secret-free JSON on the edit button. Each row shows the sender name and
-// address, a domain-style connector button (amber until configured) that opens
-// the alias's connector popup, and an Activity link.
+// address, an edit button for the sender name, a domain-style connector button
+// (amber until configured) that opens the alias's connector popup, and an
+// Activity link.
 function renderExternalAliases(list, inboxID, raw) {
   if (!list) {
     return;
@@ -967,6 +968,16 @@ function renderExternalAliases(list, inboxID, raw) {
 
     // Domain-style connector button: amber "Add" until configured, then a
     // secondary button labelled with the provider.
+    var edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'secondary icon-btn external-alias-edit';
+    edit.dataset.alias = a.id;
+    edit.dataset.name = a.display_name || '';
+    edit.dataset.address = a.address;
+    edit.title = 'Edit sender name';
+    edit.setAttribute('aria-label', 'Edit sender name');
+    edit.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg>';
+
     var configure = document.createElement('button');
     configure.type = 'button';
     configure.className = (a.configured ? 'secondary' : 'amber') + ' btn-sm cell-edit external-alias-configure';
@@ -992,6 +1003,7 @@ function renderExternalAliases(list, inboxID, raw) {
     remove.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>';
 
     li.appendChild(text);
+    li.appendChild(edit);
     li.appendChild(configure);
     li.appendChild(activity);
     li.appendChild(remove);
@@ -1246,6 +1258,31 @@ function aliasNameByAddress(list) {
     section: document.getElementById('inbox-sender-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
+  // suspendedFromInbox tracks whether an external-alias secondary (Add, Edit
+  // or Connector popup) was launched from inbox settings. Cancelling it
+  // resumes the inbox edit dialog on the Aliases tab instead of dropping to
+  // the bare dashboard. Submitting clears the flag: the page navigates and the
+  // server redirect (/?inbox=) takes over the return path.
+  var suspendedFromInbox = false;
+  function suspendInbox() {
+    suspendedFromInbox = true;
+    if (dlg.open) {
+      dlg.close();
+    }
+  }
+  function resumeInbox() {
+    if (!suspendedFromInbox) {
+      return;
+    }
+    suspendedFromInbox = false;
+    if (!dlg.open) {
+      dlg.showModal();
+    }
+    var tab = dlg.querySelector('[data-inbox-tab=aliases]');
+    if (tab) {
+      tab.click();
+    }
+  }
   var editAliasList = document.getElementById('inbox-alias-list');
   var editExternalList = document.getElementById('inbox-external-alias-list');
   var editInboxID = '';
@@ -1321,21 +1358,70 @@ function aliasNameByAddress(list) {
 
   var extDlg = document.getElementById('external-alias-dialog');
   var extAdd = document.getElementById('inbox-external-alias-add');
+  var extTitle = document.getElementById('external-alias-dialog-title');
+  var extSave = document.getElementById('external-alias-save');
+  function resetExternalAliasDialog() {
+    var err = document.getElementById('external-alias-error');
+    if (err) {
+      err.hidden = true;
+      err.textContent = '';
+    }
+    var nameEl = document.getElementById('external-alias-name');
+    var addrEl = document.getElementById('external-alias-address');
+    if (nameEl) {
+      nameEl.value = '';
+    }
+    if (addrEl) {
+      addrEl.value = '';
+      addrEl.disabled = false;
+    }
+    if (extTitle) {
+      extTitle.textContent = 'Add external sending alias';
+    }
+    if (extSave) {
+      extSave.textContent = 'Add external alias';
+    }
+    var extForm = document.getElementById('external-alias-form');
+    if (extForm && editInboxID) {
+      extForm.action = '/ui/inboxes/' + encodeURIComponent(editInboxID) + '/external-aliases';
+    }
+  }
+  // openExternalAliasEditor reuses the add dialog for renaming: the address is
+  // immutable, so it is shown disabled and only the sender name is submitted.
+  function openExternalAliasEditor(aliasID, name, address) {
+    if (!extDlg) {
+      return;
+    }
+    resetExternalAliasDialog();
+    var nameEl = document.getElementById('external-alias-name');
+    var addrEl = document.getElementById('external-alias-address');
+    if (nameEl) {
+      nameEl.value = name || '';
+    }
+    if (addrEl) {
+      addrEl.value = address || '';
+      addrEl.disabled = true;
+    }
+    if (extTitle) {
+      extTitle.textContent = 'Edit external alias';
+    }
+    if (extSave) {
+      extSave.textContent = 'Save';
+    }
+    var extForm = document.getElementById('external-alias-form');
+    if (extForm) {
+      extForm.action = '/ui/inboxes/' + encodeURIComponent(editInboxID) + '/external-aliases/' + encodeURIComponent(aliasID) + '/edit';
+    }
+    suspendInbox();
+    extDlg.showModal();
+    if (nameEl) {
+      nameEl.focus();
+    }
+  }
   if (extDlg && extAdd) {
     extAdd.addEventListener('click', function () {
-      var err = document.getElementById('external-alias-error');
-      if (err) {
-        err.hidden = true;
-        err.textContent = '';
-      }
-      var nameEl = document.getElementById('external-alias-name');
-      var addrEl = document.getElementById('external-alias-address');
-      if (nameEl) {
-        nameEl.value = '';
-      }
-      if (addrEl) {
-        addrEl.value = '';
-      }
+      resetExternalAliasDialog();
+      suspendInbox();
       extDlg.showModal();
     });
     var extCancel = document.getElementById('external-alias-cancel');
@@ -1346,15 +1432,38 @@ function aliasNameByAddress(list) {
     }
   }
 
-  // The connector button on each external row opens that alias's connector
-  // popup. It is rendered on the dashboard behind this dialog, so close the
-  // edit dialog first to avoid stacking two modals.
+  // Closing a secondary (Cancel, Esc, backdrop) resumes the suspended inbox
+  // dialog; submitting clears the flag because the page navigates and the
+  // server redirect takes over the return path.
+  if (extDlg) {
+    extDlg.addEventListener('close', resumeInbox);
+    var extFormEl = document.getElementById('external-alias-form');
+    if (extFormEl) {
+      extFormEl.addEventListener('submit', function () {
+        suspendedFromInbox = false;
+      });
+    }
+  }
+  document.querySelectorAll('dialog[id^="external-alias-sending-dialog-"]').forEach(function (connDlg) {
+    connDlg.addEventListener('close', resumeInbox);
+    connDlg.querySelectorAll('form').forEach(function (f) {
+      f.addEventListener('submit', function () {
+        suspendedFromInbox = false;
+      });
+    });
+  });
   if (editExternalList) {
     editExternalList.addEventListener('click', function (e) {
+      var edit = e.target.closest('.external-alias-edit');
+      if (edit) {
+        e.preventDefault();
+        openExternalAliasEditor(edit.dataset.alias, edit.dataset.name, edit.dataset.address);
+        return;
+      }
       var configure = e.target.closest('.external-alias-configure');
       if (configure) {
         e.preventDefault();
-        dlg.close();
+        suspendInbox();
         openExternalAliasDialog(configure.dataset.alias);
         return;
       }
@@ -1381,8 +1490,10 @@ function aliasNameByAddress(list) {
   }
 
   // Reopen the inbox edit dialog on its Aliases tab when the dashboard was
-  // loaded with an inbox to open (e.g. returning from a connector save). The
-  // tab listeners are attached by a later IIFE, so defer past script execution.
+  // loaded with an inbox to open (e.g. returning from a connector save). If a
+  // connector popup is also pending (validation error or fresh create), the
+  // inbox suspends first so cancelling the popup resumes it. The tab listeners
+  // are attached by a later IIFE, so defer past script execution.
   var openCard = document.querySelector('[data-open-inbox]');
   var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
   if (openInbox) {
@@ -1398,6 +1509,11 @@ function aliasNameByAddress(list) {
         var tab = dlg.querySelector('[data-inbox-tab=aliases]');
         if (tab) {
           tab.click();
+        }
+        var pending = document.querySelector('.domain-dialog[data-open="1"]');
+        if (pending && !pending.open && typeof pending.showModal === 'function') {
+          suspendInbox();
+          pending.showModal();
         }
       }
     }, 0);
@@ -1423,6 +1539,11 @@ function aliasNameByAddress(list) {
       panels.forEach(function (p) {
         p.hidden = p.getAttribute('data-inbox-panel') !== name;
       });
+      // The Aliases tab needs room for the alias rows and action buttons;
+      // other tabs stay narrow for a tidier form layout.
+      if (dlg.id === 'inbox-dialog' || dlg.id === 'inbox-edit-dialog') {
+        dlg.classList.toggle('inbox-dialog--wide', name === 'aliases');
+      }
     }
 
     tabs.forEach(function (t) {
@@ -1579,7 +1700,20 @@ function aliasNameByAddress(list) {
       }
     });
   });
+  // Pending dialogs auto-open, unless inbox settings are also reopening: the
+  // inbox-edit flow then suspends first and shows the pending dialog itself,
+  // so cancelling it resumes settings instead of dropping to the dashboard.
+  // The inbox script block runs before this one and defers via setTimeout, so
+  // check for a pending inbox reopen synchronously here.
+  var inboxReopening = false;
+  var openCardEl = document.querySelector('[data-open-inbox]');
+  if (openCardEl && openCardEl.getAttribute('data-open-inbox')) {
+    inboxReopening = true;
+  }
   document.querySelectorAll('.domain-dialog[data-open="1"]').forEach(function (dlg) {
+    if (inboxReopening) {
+      return;
+    }
     if (!dlg.open) {
       dlg.showModal();
     }
