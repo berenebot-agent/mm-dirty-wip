@@ -80,7 +80,10 @@ func TestSendMapsPayloadAndParsesMessageID(t *testing.T) {
 	if body.Subject != "Hello" || body.TextContent != "plain body" || body.HTMLContent != "<p>rich body</p>" {
 		t.Fatalf("content %#v", body)
 	}
-	if body.Headers["Message-ID"] != "<m1@example.com>" || body.Headers["In-Reply-To"] != "<m0@example.com>" {
+	if _, ok := body.Headers["Message-ID"]; ok {
+		t.Fatalf("Message-ID must not be sent to Brevo: %#v", body.Headers)
+	}
+	if body.Headers["In-Reply-To"] != "<m0@example.com>" {
 		t.Fatalf("headers %#v", body.Headers)
 	}
 	if len(body.Attachment) != 1 || body.Attachment[0].Name != "quote.pdf" {

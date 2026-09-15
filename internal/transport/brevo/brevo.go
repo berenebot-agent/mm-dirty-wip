@@ -99,11 +99,15 @@ func Send(ctx context.Context, c Config, m transport.OutboundMessage) (SendResul
 		p.Sender.Name = m.FromName
 		p.ReplyTo.Name = m.FromName
 	}
-	if m.MessageID != "" || m.InReplyTo != "" || len(m.References) > 0 {
+	// Brevo's API does not support standard email headers: it assigns its own
+	// Message-ID and returns it in the response. Supplying Message-ID made
+	// Brevo echo our synthesized id back as the response messageId while
+	// putting a different id on the wire, so the stored provider_message_id
+	// never matched what recipients replied to. Omit Message-ID and let Brevo
+	// own it. In-Reply-To/References are standard headers too and are
+	// best-effort only.
+	if m.InReplyTo != "" || len(m.References) > 0 {
 		p.Headers = map[string]string{}
-		if m.MessageID != "" {
-			p.Headers["Message-ID"] = m.MessageID
-		}
 		if m.InReplyTo != "" {
 			p.Headers["In-Reply-To"] = m.InReplyTo
 		}
