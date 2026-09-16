@@ -210,6 +210,9 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, domainID); err != nil {
 		return nil, err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inbound_delivery_log WHERE account_id=? AND domain_id=?`, accountID, domainID); err != nil {
+		return nil, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND message_id IN (SELECT m.id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?)`, accountID, accountID, domainID); err != nil {
 		return nil, err
 	}
@@ -858,6 +861,9 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 	}
 	wfRows.Close()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inbound_delivery_log WHERE account_id=? AND inbox_id=?`, accountID, id); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM outbound_idempotency WHERE account_id=? AND message_id IN (SELECT id FROM messages WHERE account_id=? AND inbox_id=?)`, accountID, accountID, id); err != nil {
