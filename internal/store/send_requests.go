@@ -586,7 +586,7 @@ func (s *Store) ListSendRequests(ctx context.Context, p model.Principal, inboxID
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.DraftSendRequest
+	out := []model.DraftSendRequest{}
 	for rows.Next() {
 		r, err := scanSendRequest(rows)
 		if err != nil {
@@ -866,7 +866,7 @@ func ApprovalSubjectLabel(outcome, subject string) string {
 const controlMessageSelect = `SELECT id,inbox_id,provider,from_name,from_address,envelope_recipient,request_id,action,outcome,reason,subject,created_at FROM inbound_control_messages`
 
 func scanControlMessages(rows *sql.Rows) ([]ControlMessage, error) {
-	var out []ControlMessage
+	out := []ControlMessage{}
 	for rows.Next() {
 		var m ControlMessage
 		var created string

@@ -172,7 +172,7 @@ func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, tar
 		return nil, err
 	}
 	defer rows.Close()
-	var out []DeliveryAttempt
+	out := []DeliveryAttempt{}
 	for rows.Next() {
 		var a DeliveryAttempt
 		var created, to string

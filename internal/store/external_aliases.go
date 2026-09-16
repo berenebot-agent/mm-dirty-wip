@@ -66,7 +66,7 @@ func (s *Store) ListExternalAliasesForInbox(ctx context.Context, accountID, inbo
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.ExternalAlias
+	out := []model.ExternalAlias{}
 	for rows.Next() {
 		a, scanErr := scanExternalAliasMetadata(rows)
 		if scanErr != nil {

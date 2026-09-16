@@ -435,7 +435,7 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Message
+	out := []model.Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {
@@ -720,7 +720,7 @@ func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageI
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Attachment
+	out := []model.Attachment{}
 	for rows.Next() {
 		var a model.Attachment
 		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
@@ -738,7 +738,7 @@ func (s *Store) ListAttachmentsInternal(ctx context.Context, accountID, messageI
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Attachment
+	out := []model.Attachment{}
 	for rows.Next() {
 		var a model.Attachment
 		if err = rows.Scan(&a.ID, &a.MessageID, &a.Filename, &a.ContentType, &a.Size, &a.PartIndex, &a.ContentID); err != nil {
@@ -795,7 +795,7 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Thread
+	out := []model.Thread{}
 	for rows.Next() {
 		var t model.Thread
 		var last string
@@ -927,7 +927,7 @@ func (s *Store) ListBlockedMessages(ctx context.Context, p model.Principal, limi
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.BlockedMessage
+	out := []model.BlockedMessage{}
 	for rows.Next() {
 		m, err := scanBlockedMessage(rows)
 		if err != nil {
@@ -1012,7 +1012,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Message
+	out := []model.Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {

@@ -423,11 +423,13 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := strings.TrimSpace(r.Header.Get("Authorization"))
 		if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="gatehouse-api"`)
 			writeError(w, 401, "bearer API key required")
 			return
 		}
 		p, err := s.Service.Store.APIKeyPrincipal(r.Context(), strings.TrimSpace(h[7:]))
 		if err != nil {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="gatehouse-api"`)
 			writeError(w, 401, "invalid API key")
 			return
 		}
@@ -504,7 +506,32 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	code := "request_failed"
+	switch {
+	case status == 400:
+		code = "invalid_request"
+	case status == 401:
+		code = "unauthorized"
+	case status == 403 && msg == "admin required":
+		code = "admin_required"
+	case status == 403 && msg == "sender not allowed":
+		code = "sender_not_allowed"
+	case status == 403:
+		code = "forbidden"
+	case status == 404:
+		code = "not_found"
+	case status == 409:
+		code = "conflict"
+	case status == 429:
+		code = "rate_limited"
+	case status == 504:
+		code = "timeout"
+	case status == 507:
+		code = "storage_quota_exceeded"
+	case status >= 500:
+		code = "internal_error"
+	}
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
 }
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return decodeJSONLimit(w, r, v, 2<<20)
@@ -520,6 +547,8 @@ func decodeJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64)
 }
 func mapStoreError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, store.ErrSenderNotAllowed):
+		writeError(w, 403, "sender not allowed")
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, 404, "not found")
 	case errors.Is(err, store.ErrForbidden):

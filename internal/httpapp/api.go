@@ -109,7 +109,33 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
+	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
+}
+
+type mailboxPermissions struct {
+	Role       string `json:"role"`
+	CanRead    bool   `json:"can_read"`
+	CanDraft   bool   `json:"can_draft"`
+	CanSend    bool   `json:"can_send"`
+	CanApprove bool   `json:"can_approve"`
+}
+
+func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox) map[string]mailboxPermissions {
+	out := make(map[string]mailboxPermissions, len(boxes))
+	for _, box := range boxes {
+		role := p.Role(box.ID)
+		if p.Admin {
+			role = "admin"
+		}
+		out[box.ID] = mailboxPermissions{
+			Role:       role,
+			CanRead:    p.CanRead(box.ID),
+			CanDraft:   p.CanAssist(box.ID),
+			CanSend:    p.CanOwn(box.ID),
+			CanApprove: p.CanOwn(box.ID),
+		}
+	}
+	return out
 }
 
 func (s *Server) apiInboxes(w http.ResponseWriter, r *http.Request) {

@@ -110,6 +110,14 @@ func TestDiscoverySurfacesServeRealContent(t *testing.T) {
 	}
 
 	guide := get("/agent")
+	quickstart := strings.Index(guide, "## Quick start")
+	discoverySection := strings.Index(guide, "## Discovery")
+	if quickstart < 0 || discoverySection < 0 || quickstart > discoverySection {
+		t.Error("/agent quickstart should precede the generated route reference")
+	}
+	if !strings.Contains(guide, "GET /openapi.json") {
+		t.Error("/agent does not link to /openapi.json")
+	}
 	for _, group := range apispec.Groups() {
 		if !strings.Contains(guide, "## "+group) {
 			t.Errorf("/agent missing group %q", group)
@@ -241,6 +249,88 @@ func TestDiscoveryAdvertisesAuth(t *testing.T) {
 		if doc.Auth["scheme"] != "bearer" || doc.Auth["header"] != "Authorization" || doc.Auth["key_prefix"] != "ghm_" {
 			t.Errorf("%s auth block = %#v, want bearer/Authorization/ghm_", path, doc.Auth)
 		}
+	}
+}
+
+func TestBootstrapAdvertisesEffectivePermissions(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		admin bool
+		role  string
+		want  map[string]bool
+	}{
+		{name: "read", role: "read", want: map[string]bool{"can_read": true}},
+		{name: "assistant", role: "assistant", want: map[string]bool{"can_read": true, "can_draft": true}},
+		{name: "owner", role: "owner", want: map[string]bool{"can_read": true, "can_draft": true, "can_send": true, "can_approve": true}},
+		{name: "admin", admin: true, want: map[string]bool{"can_read": true, "can_draft": true, "can_send": true, "can_approve": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			roles := map[string]string(nil)
+			if !tc.admin {
+				roles = map[string]string{box.ID: tc.role}
+			}
+			_, token, err := svc.Store.CreateAPIKey(ctx, u.AccountID, tc.name, tc.admin, roles)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("bootstrap = %d body=%s", rr.Code, rr.Body.String())
+			}
+			var body struct {
+				Permissions map[string]map[string]any `json:"permissions"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := body.Permissions[box.ID]
+			if !ok {
+				t.Fatalf("permissions missing inbox %q: %#v", box.ID, body.Permissions)
+			}
+			for field, want := range tc.want {
+				if got[field] != want {
+					t.Errorf("%s = %#v, want %t", field, got[field], want)
+				}
+			}
+		})
+	}
+}
+
+func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	for _, tc := range []struct {
+		name string
+		auth string
+	}{
+		{name: "missing", auth: ""},
+		{name: "invalid", auth: "Bearer ghm_invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
+			if tc.auth != "" {
+				req.Header.Set("Authorization", tc.auth)
+			}
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rr.Code)
+			}
+			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer realm="gatehouse-api"` {
+				t.Fatalf("WWW-Authenticate = %q", got)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["code"] != "unauthorized" {
+				t.Fatalf("error code = %q, want unauthorized", body["code"])
+			}
+		})
 	}
 }
 

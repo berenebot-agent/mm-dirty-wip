@@ -101,7 +101,8 @@ var attachmentSchema = obj(map[string]any{
 var schemas = map[string]any{
 	"Error": obj(map[string]any{
 		"error": str("Human-readable error message."),
-	}, "error"),
+		"code":  str("Stable machine-readable error code."),
+	}, "error", "code"),
 
 	"Address": obj(map[string]any{
 		"name":    str("Display name."),
@@ -204,11 +205,19 @@ var schemas = map[string]any{
 		"alias_names":           stringMap("Alias address to display name."),
 		"default_sender":        str("Preselected From address; empty clears to the primary."),
 	}),
+	"MailboxPermissions": obj(map[string]any{
+		"role":        str("Effective role for this inbox: read, assistant, owner or admin."),
+		"can_read":    boolean("Whether the credential can read messages and threads."),
+		"can_draft":   boolean("Whether the credential can create and edit drafts."),
+		"can_send":    boolean("Whether the credential can send and reply."),
+		"can_approve": boolean("Whether the credential can approve a pending draft send."),
+	}, "role", "can_read", "can_draft", "can_send", "can_approve"),
 
 	"Bootstrap": obj(map[string]any{
 		"account_id":    str("Account id."),
 		"admin":         boolean("Whether the credential is account admin."),
 		"mailbox_roles": stringMap("Inbox id to role: read, assistant or owner."),
+		"permissions":   map[string]any{"type": "object", "additionalProperties": Ref("MailboxPermissions")},
 		"inboxes":       arrayOf("Inbox", "Accessible inboxes."),
 		"events":        obj(map[string]any{"list": str(""), "wait": str(""), "stream": str("")}),
 		"limits":        Ref("Limits"),
@@ -285,16 +294,16 @@ var schemas = map[string]any{
 	"SendAttachment": attachmentSchema,
 
 	"SendBody": obj(map[string]any{
-		"inbox_id":    str("Inbox id; or use from."),
-		"from":        str("Compatibility inbox address selection."),
+		"inbox_id":    str("Inbox id; required unless from identifies one accessible inbox or a non-admin key owns exactly one inbox."),
+		"from":        str("Compatibility inbox address selector; optional when inbox_id is supplied."),
 		"sender":      str("From identity: the inbox primary or one of its aliases."),
-		"to":          stringOrArray("To recipients; a single address or a list."),
-		"cc":          stringOrArray("Cc recipients; a single address or a list."),
-		"bcc":         stringOrArray("Bcc recipients; a single address or a list."),
-		"subject":     str("Subject line; required."),
-		"text":        str("Plain-text body."),
-		"html":        str("HTML body."),
-		"attachments": map[string]any{"type": "array", "items": Ref("SendAttachment")},
+		"to":          stringOrArray("Required: at least one recipient; a single address or a list."),
+		"cc":          stringOrArray("Optional Cc recipients; a single address or a list."),
+		"bcc":         stringOrArray("Optional Bcc recipients; a single address or a list."),
+		"subject":     str("Required and must be non-empty."),
+		"text":        str("Plain-text body; text or html must be non-empty."),
+		"html":        str("HTML body; text or html must be non-empty."),
+		"attachments": map[string]any{"type": "array", "description": "Optional base64-encoded attachments.", "items": Ref("SendAttachment")},
 	}, "to", "subject"),
 
 	"ReplyBody": obj(map[string]any{

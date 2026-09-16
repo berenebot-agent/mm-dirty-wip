@@ -89,7 +89,7 @@ func (s *Store) ListEvents(ctx context.Context, p model.Principal, after int64, 
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Event
+	out := []model.Event{}
 	for rows.Next() {
 		e, err := scanEvent(rows)
 		if err != nil {

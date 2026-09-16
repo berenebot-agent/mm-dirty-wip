@@ -404,7 +404,7 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Message
+	out := []model.Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {

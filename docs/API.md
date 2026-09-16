@@ -16,6 +16,12 @@ This document defines the initial canonical interface. Exact field additions may
 Authorization: Bearer <api-key>
 ```
 
+API error responses include a stable `code` alongside the human-readable
+`error` message. Clients should branch on `code` and use the HTTP status as the
+broad category. Authorization failures use codes such as `unauthorized`,
+`forbidden`, `admin_required` and `sender_not_allowed`; missing resources use
+`not_found`.
+
 Mailbox access is assigned per inbox using one of three roles:
 
 | Role | Access |
@@ -70,7 +76,28 @@ Concise Markdown usage guide for LLM clients.
 
 ### `GET /v1/bootstrap`
 
-Returns key-specific capabilities and accessible inboxes.
+Returns key-specific capabilities, effective per-inbox permissions and accessible
+inboxes. `mailbox_roles` remains for compatibility; use `permissions` when a
+client needs to decide which operation it can perform without mapping role
+names itself.
+
+```json
+{
+  "mailbox_roles": {"inb_01K...": "owner"},
+  "permissions": {
+    "inb_01K...": {
+      "role": "owner",
+      "can_read": true,
+      "can_draft": true,
+      "can_send": true,
+      "can_approve": true
+    }
+  }
+}
+```
+
+The quick-start send example is at the top of `/agent`. The machine-readable
+operation and schema contract is at `/openapi.json`.
 
 ## 3. Inboxes
 
@@ -391,6 +418,21 @@ Idempotency-Key: <caller-generated-key>
   "subject": "Hello",
   "text": "Message body"
 }
+```
+
+`inbox_id` is required unless the compatibility `from` field identifies one
+accessible inbox or a non-admin key owns exactly one inbox. `to` must contain at
+least one recipient, `subject` must be non-empty, and at least one of `text` or
+`html` must be non-empty. `sender`,
+`from`, `cc`, `bcc` and `attachments` are optional. `sender` selects the From
+identity; `from` selects an inbox and is not a From identity.
+
+Common failures use the JSON error envelope with a stable `code`:
+
+```json
+{"error":"sender not allowed","code":"sender_not_allowed"}
+{"error":"forbidden","code":"forbidden"}
+{"error":"not found","code":"not_found"}
 ```
 
 `sender` (optional) selects the From identity: the inbox's primary address or
