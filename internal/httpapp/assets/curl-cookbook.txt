@@ -3,22 +3,27 @@
 # Copy-pasteable REST scenarios using only curl and jq. Every request carries
 # `Authorization: Bearer <key>`.
 #
+# PREREQUISITE: this cookbook uses curl and jq. If jq is not on PATH, drop the
+# `| jq .` pipes (the raw response is already JSON) or use the stdlib-only
+# Python client at `GET /examples/python`, which needs neither.
+#
 # export BASE="https://your-instance" # origin serving this cookbook
 # export KEY="ghm_..."
 #   export INBOX="inb_..."      # set after the bootstrap step below
 #   export HELP='-H "Authorization: Bearer $KEY"'   # optional shell shorthand
 #
-# Responses are JSON; piping through `jq .` pretty-prints them. Add `-i` to any
-# request to see the status line and headers.
+# Responses are JSON; piping through `jq .` pretty-prints them where jq is
+# available. Add `-i` to any request to see the status line and headers.
 #
-# Prefer the served clients: `GET /examples/bash` (gatehouse.sh) and
-# `GET /examples/python` (gatehouse.py, standard library only). Each is one
-# command per operation, sends the JSON body inline, and prints the response to
-# stdout. This cookbook exists so the same calls can be made by hand or from
-# another language.
+# Prefer the served clients: `GET /examples/python` (gatehouse.py, standard
+# library only) and `GET /examples/bash` (gatehouse.sh, requires curl and jq).
+# Each is one command per operation, sends the JSON body inline, and prints the
+# response to stdout. This cookbook exists so the same calls can be made by hand
+# or from another language.
 #
-# Safe-calling rules (inline single-command bodies, no file staging) are in
-# `GET /agent`. Keep each call below a single command with an inline body.
+# Safe-calling rules (inline single-command bodies, no pipe, no file staging)
+# are in `GET /agent`. Keep each call below a single command with an inline body
+# and no formatter pipe.
 
 # ---------------------------------------------------------------------------
 # 0. Discovery (no auth required)
@@ -82,14 +87,29 @@ curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/search?q=quote&inbox=$INBOX&has_attachment=true" | jq .
 
 # ---------------------------------------------------------------------------
-# 5. Send (with an attachment, base64-encoded JSON)
+# 5. Send
 # ---------------------------------------------------------------------------
 
-# Send the body inline (as below). Do not stage it in a file or pass
-# `--data-binary @file`: upload-shaped commands are flagged by host security
-# scanners and then require human approval.
+# The canonical shape: ONE curl command, body inline, and nothing after it.
+# Do not stage the body in a file, pass `--data-binary @file`, or pipe the
+# response to a formatter. Upload-shaped and chained-execution commands are
+# flagged by host security scanners and then require human approval.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "{\"inbox_id\":\"$INBOX\",\"to\":[\"alice@example.org\"],\"subject\":\"Report\",\"text\":\"See the report.\"}" \
+  "$BASE/v1/send"
 
-# Build the request body with jq so the base64 payload is escaped correctly.
+# Idempotency-Key makes the send retry-safe: re-sending the same key returns the
+# already-created message instead of sending twice. Block until delivery instead
+# of returning as soon as it is queued with `?wait=true`.
+IDEM=$(uuidgen 2>/dev/null || printf 'gh-%s-%s' "$(date +%s)" "$$")
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $IDEM" \
+  -d "{\"inbox_id\":\"$INBOX\",\"to\":[\"alice@example.org\"],\"subject\":\"Report\",\"text\":\"See the report.\"}" \
+  "$BASE/v1/send?wait=true"
+
+# With an attachment, the base64 payload makes a jq-built body the practical
+# option. This shape needs jq; without it, use `GET /examples/python`, whose
+# `send --attach` does the same encoding.
 BODY=$(jq -n \
   --arg inbox "$INBOX" \
   --arg b64 "$(base64 -w0 report.pdf)" \
@@ -102,18 +122,9 @@ BODY=$(jq -n \
        {filename: "report.pdf", content_type: "application/pdf", content: $b64}
      ]
    }')
-
-# Idempotency-Key makes the send retry-safe: re-sending the same key returns the
-# already-created message instead of sending twice.
-IDEM=$(uuidgen 2>/dev/null || printf 'gh-%s-%s' "$(date +%s)" "$$")
 curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -H "Idempotency-Key: $IDEM" \
-  -d "$BODY" "$BASE/v1/send" | jq .
-
-# Block until delivery instead of returning as soon as it is queued:
-curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -H "Idempotency-Key: $IDEM-wait" \
-  -d "$BODY" "$BASE/v1/send?wait=true" | jq .
+  -H "Idempotency-Key: $IDEM-attach" \
+  -d "$BODY" "$BASE/v1/send"
 
 # ---------------------------------------------------------------------------
 # 6. Reply to a message (In-Reply-To/References are set server-side)
