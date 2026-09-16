@@ -29,6 +29,8 @@ type DeliveryAttempt struct {
 	To                []string  `json:"to,omitempty"`
 	Subject           string    `json:"subject,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
+	InboxID           string    `json:"-"`
+	Client            string    `json:"client,omitempty"`
 }
 
 // maxDeliveryLogPerAccount is the retention cap for the delivery log: the
@@ -53,8 +55,8 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, a DeliveryAttempt) er
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		a.AccountID, nullString(domainID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText()); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.AccountID, nullString(domainID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText(), a.InboxID, a.FromAddress, jsonString(a.To), a.Subject, a.Client); err != nil {
 		return err
 	}
 	if err = s.pruneDeliveryLogTx(ctx, tx, a.AccountID); err != nil {
@@ -77,8 +79,8 @@ func messageExistsTx(ctx context.Context, tx *sql.Tx, accountID, id string) (boo
 // insertDeliveryAttemptTx appends one attempt row and prunes the log within an
 // existing transaction, so the attempt is durable with the message state change.
 func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, domainID, provider, messageID, status, providerMessageID, errorText string) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,?,COALESCE((SELECT sending_external_alias_id FROM messages WHERE id=? AND account_id=?),''),(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?)`,
-		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, messageID, accountID, status, providerMessageID, errorText, nowText()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label) VALUES(?,?,?,?,COALESCE((SELECT sending_external_alias_id FROM messages WHERE id=? AND account_id=?),''),(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?, ?,COALESCE((SELECT inbox_id FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT from_address FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT to_json FROM messages WHERE id=? AND account_id=?),'[]'),COALESCE((SELECT subject FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT client_label FROM messages WHERE id=? AND account_id=?),''))`,
+		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, messageID, accountID, status, providerMessageID, errorText, nowText(), messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID); err != nil {
 		return err
 	}
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)
@@ -155,7 +157,7 @@ func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, tar
 		limit = limits.PageSizeDefault
 	}
 	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.external_alias_id,l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
-			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,'')
+			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
 		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id

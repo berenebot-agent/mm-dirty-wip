@@ -142,6 +142,12 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider_delivery_id,provider_message_id,message_id,from_address,to_json,subject,size_bytes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.Inbox.AccountID, r.Inbox.DomainID, r.Inbox.ID, r.Provider, nullString(r.ProviderDeliveryID), r.ProviderMessageID, id, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, "received", now); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if err = pruneInboundDeliveryLogTx(ctx, tx, r.Inbox.AccountID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
 	ev, err := insertEventTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, "message.received", id, receivedPayload(id, r.Inbox.ID, threadID, r.Spam, r.SpamReason, r.AuthResults))
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
@@ -176,6 +182,18 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		return model.Message{}, model.Event{}, false, err
 	}
 	return m, ev, false, nil
+}
+
+const maxInboundDeliveryLogPerAccount = 5000
+const inboundDeliveryLogMaxAge = 30 * 24 * time.Hour
+
+func pruneInboundDeliveryLogTx(ctx context.Context, tx *sql.Tx, accountID string) error {
+	cutoff := time.Now().UTC().Add(-inboundDeliveryLogMaxAge)
+	_, err := tx.ExecContext(ctx, `DELETE FROM inbound_delivery_log
+		WHERE account_id=?
+		  AND (id NOT IN (SELECT id FROM inbound_delivery_log WHERE account_id=? ORDER BY id DESC LIMIT ?)
+		       OR created_at < ?)`, accountID, accountID, maxInboundDeliveryLogPerAccount, timeText(cutoff))
+	return err
 }
 
 func findThreadTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, inReply string, refs []string) (string, error) {

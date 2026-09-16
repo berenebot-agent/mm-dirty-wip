@@ -128,7 +128,7 @@ func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
 	if len(attempts) != 1 || attempts[0].MessageID != "" {
 		t.Fatalf("after message delete %+v", attempts)
 	}
-	if attempts[0].FromAddress != "" || len(attempts[0].To) != 0 {
-		t.Fatalf("addresses should be cleared after message delete %+v", attempts[0])
+	if attempts[0].FromAddress != "owner@example.com" || len(attempts[0].To) != 1 || attempts[0].To[0] != "x@y.test" || attempts[0].Subject != "s" {
+		t.Fatalf("message snapshot should survive deletion %+v", attempts[0])
 	}
 }

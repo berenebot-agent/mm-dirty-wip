@@ -875,3 +875,42 @@ ALTER TABLE drafts ADD COLUMN from_external_alias_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE outbound_delivery_log ADD COLUMN external_alias_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_outbound_log_external_alias ON outbound_delivery_log(account_id,external_alias_id,id DESC);
 `
+
+// migration029 makes transport activity independent from mailbox message
+// lifetime. Inbound deliveries get an immutable snapshot, while outbound
+// attempts retain the message fields needed by the activity log after the
+// message is deleted.
+const migration029 = `
+CREATE TABLE inbound_delivery_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  message_id TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'received',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_inbound_log_domain ON inbound_delivery_log(account_id,domain_id,created_at DESC,id DESC);
+CREATE INDEX idx_inbound_log_inbox ON inbound_delivery_log(account_id,inbox_id,created_at DESC,id DESC);
+CREATE INDEX idx_inbound_log_message ON inbound_delivery_log(message_id);
+CREATE UNIQUE INDEX idx_inbound_log_delivery ON inbound_delivery_log(account_id,provider,inbox_id,provider_delivery_id) WHERE provider_delivery_id IS NOT NULL AND provider_delivery_id<>'';
+ALTER TABLE outbound_delivery_log ADD COLUMN inbox_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbound_delivery_log ADD COLUMN from_address TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbound_delivery_log ADD COLUMN to_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE outbound_delivery_log ADD COLUMN subject TEXT NOT NULL DEFAULT '';
+ALTER TABLE outbound_delivery_log ADD COLUMN client_label TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_outbound_log_inbox ON outbound_delivery_log(account_id,inbox_id,id DESC);
+INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider_delivery_id,provider_message_id,message_id,from_address,to_json,subject,size_bytes,status,created_at)
+  SELECT m.account_id,i.domain_id,m.inbox_id,m.provider,m.provider_delivery_id,m.provider_message_id,m.id,m.from_address,m.to_json,m.subject,m.size_bytes,'received',m.created_at
+  FROM messages m JOIN inboxes i ON i.id=m.inbox_id AND i.account_id=m.account_id
+  WHERE m.direction='inbound' AND m.internal=0;
+UPDATE outbound_delivery_log SET inbox_id=COALESCE((SELECT m.inbox_id FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'');
+UPDATE outbound_delivery_log SET from_address=COALESCE((SELECT m.from_address FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),''),to_json=COALESCE((SELECT m.to_json FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'[]'),subject=COALESCE((SELECT m.subject FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),''),client_label=COALESCE((SELECT m.client_label FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'') WHERE from_address='' AND to_json='[]' AND subject='' AND client_label='';
+`

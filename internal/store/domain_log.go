@@ -110,15 +110,15 @@ func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, l
 // appendDomainReceiving adds delivered inbound messages and blocked inbound
 // records whose inbox belongs to the domain.
 func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	deliveredQ := `SELECT m.id,m.inbox_id,m.provider,m.provider_message_id,m.from_address,m.to_json,m.subject,m.size_bytes,m.created_at
-		FROM messages m JOIN inboxes i ON i.id=m.inbox_id AND i.account_id=m.account_id
-		WHERE m.account_id=? AND i.domain_id=? AND m.direction='inbound'`
+	deliveredQ := `SELECT CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN l.message_id ELSE '' END,l.inbox_id,l.provider,l.provider_message_id,l.from_address,l.to_json,l.subject,l.size_bytes,l.created_at
+		FROM inbound_delivery_log l
+		WHERE l.account_id=? AND l.domain_id=?`
 	deliveredArgs := []any{accountID, domainID}
 	if beforeText != "" {
-		deliveredQ += ` AND m.created_at < ?`
+		deliveredQ += ` AND l.created_at < ?`
 		deliveredArgs = append(deliveredArgs, beforeText)
 	}
-	deliveredQ += ` ORDER BY m.created_at DESC LIMIT ?`
+	deliveredQ += ` ORDER BY l.created_at DESC, l.id DESC LIMIT ?`
 	deliveredArgs = append(deliveredArgs, limit)
 	rows, err := s.read.QueryContext(ctx, deliveredQ, deliveredArgs...)
 	if err != nil {
@@ -211,7 +211,7 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 // appendDomainOutbound adds the domain's outbound delivery attempts.
 func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
 	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
-			COALESCE(m.from_address,w.from_address,''),COALESCE(m.to_json,w.to_json,'[]'),COALESCE(m.subject,w.subject,''),COALESCE(m.inbox_id,w.inbox_id,''),COALESCE(m.client_label,'')
+			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,''),COALESCE(l.inbox_id,m.inbox_id,w.inbox_id,''),COALESCE(l.client_label,m.client_label,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
 		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
