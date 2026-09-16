@@ -103,14 +103,35 @@ func TestV1LimitsEndpoint(t *testing.T) {
 	}
 }
 
+// TestSendRequiresSubject asserts an empty subject is a descriptive 400 at send
+// time rather than a later provider failure.
+func TestSendRequiresSubject(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	token := adminToken(t, svc, u.AccountID)
+	body := `{"inbox_id":"` + box.ID + `","to":["friend@example.net"],"text":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/send", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("empty-subject send = %d body=%s, want 400", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "subject is required") {
+		t.Fatalf("error body does not explain the subject requirement: %s", rr.Body.String())
+	}
+}
+
 func TestHealthAliasAndDocsRedirect(t *testing.T) {
 	_, h, _, _, _ := httpFixture(t)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("GET /health = %d", rr.Code)
+	for _, path := range []string{"/health", "/healthz", "/v1/health"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rr.Code)
+		}
 	}
-	rr = httptest.NewRecorder()
+	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/docs", nil))
 	if rr.Code != http.StatusFound || rr.Header().Get("Location") != "/agent" {
 		t.Fatalf("GET /docs = %d Location=%q, want 302 /agent", rr.Code, rr.Header().Get("Location"))

@@ -185,6 +185,9 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
 	m.HandleFunc("GET /openapi.json", s.openapi)
+	// Versioned health path so /v1/health and /health agree. Unauthenticated
+	// and deliberately outside v1Routes, so it is not part of the bearer API.
+	m.HandleFunc("GET /v1/health", s.health)
 	m.HandleFunc("GET /examples/python", s.pythonExample)
 	m.HandleFunc("GET /examples/bash", s.bashExample)
 	m.HandleFunc("GET /examples/curl", s.curlExample)
@@ -323,9 +326,8 @@ func (s *Server) InboundHandler() http.Handler {
 }
 
 func (s *Server) registerInbound(m *http.ServeMux) {
-	health := func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"status": "ok"}) }
-	m.HandleFunc("GET /healthz", health)
-	m.HandleFunc("GET /health", health)
+	m.HandleFunc("GET /healthz", s.health)
+	m.HandleFunc("GET /health", s.health)
 	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
 	m.HandleFunc("POST /internal/ingest/mailgun/raw-mime", s.mailgunIngest)
 	m.HandleFunc("POST /internal/ingest/{provider}", s.ingestInbound)
@@ -650,6 +652,11 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
 	})
+}
+
+// health is the liveness response shared by /healthz, /health and /v1/health.
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"status": "ok"})
 }
 
 // docsRedirect points the conventional /docs path at the served agent guide.

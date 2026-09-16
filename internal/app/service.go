@@ -1116,6 +1116,13 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 	if strings.TrimSpace(in.Text) == "" && strings.TrimSpace(in.HTML) == "" {
 		return SendResult{}, fmt.Errorf("message body is required")
 	}
+	// Providers reject a message with no subject (Brevo returns a permanent
+	// 400), so reject it here rather than letting the send fail asynchronously in
+	// the outbox. Replies and forwards derive a "Re:"/"Fwd:" subject above and are
+	// unaffected.
+	if subject == "" {
+		return SendResult{}, fmt.Errorf("subject is required (email providers reject a message with an empty subject)")
+	}
 	// A missing provider is not fatal: the message is queued and the outbox
 	// worker holds it until a provider is configured for the sending domain.
 	sending, cfgErr := s.Store.SendingConfigForTarget(ctx, accountID, inbox.ID, sendingTarget)
