@@ -458,6 +458,7 @@ var initSenderEditor = (function () {
     var restrict = opts.restrict;
     var requireAuth = opts.requireAuth;
     var section = opts.section;
+    var mxSection = opts.mxSection;
 
     function approverValue() {
       return (approverEmail && approverEmail.value || '').trim().toLowerCase();
@@ -596,6 +597,19 @@ var initSenderEditor = (function () {
       }
     }
 
+    // setMX reveals the authenticated-sender control only for domains that
+    // receive mail by direct SMTP (MX); the flag has no effect on webhook
+    // providers. Disabling it also unchecks the box so a hidden control cannot
+    // submit a stale value.
+    function setMX(value) {
+      if (mxSection) {
+        mxSection.hidden = !value;
+      }
+      if (!value && requireAuth) {
+        requireAuth.checked = false;
+      }
+    }
+
     function clearInput() {
       if (input) {
         input.value = '';
@@ -617,6 +631,7 @@ var initSenderEditor = (function () {
       clearInput();
       setRestricted(false);
       setRequireAuth(false);
+      setMX(false);
       refreshSenderNote();
       refreshSenderEmpty();
     }
@@ -651,6 +666,7 @@ var initSenderEditor = (function () {
       setApprover: setApprover,
       setRestricted: setRestricted,
       setRequireAuth: setRequireAuth,
+      setMX: setMX,
       clearInput: clearInput,
       reset: reset
     };
@@ -1125,8 +1141,17 @@ function aliasNameByAddress(list) {
     restrict: document.getElementById('inbox-add-sender-restricted'),
     requireAuth: document.getElementById('inbox-add-require-auth'),
     section: document.getElementById('inbox-add-sender-section'),
+    mxSection: document.getElementById('inbox-add-require-auth-section'),
     addBtn: document.getElementById('inbox-add-sender-add')
   });
+  var addDomainEl = document.querySelector('#inbox-dialog [name=domain]');
+  function refreshAddRequireAuth() {
+    var opt = addDomainEl && addDomainEl.options[addDomainEl.selectedIndex];
+    editor.setMX(!!(opt && opt.getAttribute('data-mx') === '1'));
+  }
+  if (addDomainEl) {
+    addDomainEl.addEventListener('change', refreshAddRequireAuth);
+  }
   var addAliasList = document.getElementById('inbox-add-alias-list');
   var addDefault = document.getElementById('inbox-add-default-sender');
   function addPrimary() {
@@ -1159,6 +1184,7 @@ function aliasNameByAddress(list) {
     add.addEventListener('click', function () {
       form.reset();
       editor.reset();
+      refreshAddRequireAuth();
       aliasEditor.reset();
       refreshAddSender();
       if (dlg._resetTabs) {
@@ -1256,6 +1282,7 @@ function aliasNameByAddress(list) {
     restrict: document.getElementById('inbox-sender-restricted'),
     requireAuth: document.getElementById('inbox-require-auth'),
     section: document.getElementById('inbox-sender-section'),
+    mxSection: document.getElementById('inbox-edit-require-auth-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
   // suspendedFromInbox tracks whether an external-alias secondary (Add, Edit
@@ -1327,6 +1354,7 @@ function aliasNameByAddress(list) {
       editor.setApprover(btn.dataset.approverEmail || '');
       editor.setRestricted(btn.dataset.restricted === '1');
       editor.setRequireAuth(btn.dataset.requireAuth === '1');
+      editor.setMX(btn.dataset.mx === '1');
       editor.setSenders(btn.dataset.allowed || '', btn.dataset.approverEmail || '');
       editor.clearInput();
       editPrimary = btn.dataset.address || '';
