@@ -638,7 +638,7 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 			return
 		}
 		switch r.URL.Path {
-		case "/health", "/healthz":
+		case "/health", "/healthz", "/v1/health":
 			next.ServeHTTP(w, r)
 			return
 		}

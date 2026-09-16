@@ -185,10 +185,12 @@ func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
 		t.Fatalf("untrusted X-Forwarded-Proto bypassed redirect: %d", rr.Code)
 	}
 
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/health", nil))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("health must not redirect, got %d", rr.Code)
+	for _, path := range []string{"/health", "/v1/health"} {
+		rr = httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s must not redirect, got %d", path, rr.Code)
+		}
 	}
 
 	rr = httptest.NewRecorder()

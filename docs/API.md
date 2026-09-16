@@ -56,6 +56,7 @@ Returns a compact discovery document:
   "name": "Gatehouse Mail",
   "api_version": "v1",
   "api_base": "/v1",
+  "auth": {"scheme": "bearer", "header": "Authorization", "key_prefix": "ghm_"},
   "agent_guide": "/agent",
   "openapi": "/openapi.json",
   "bootstrap": "/v1/bootstrap",

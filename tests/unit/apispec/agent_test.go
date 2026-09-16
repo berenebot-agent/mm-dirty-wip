@@ -56,3 +56,36 @@ func TestRenderAgentGuideRetainsNarrative(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderAgentGuideRecommendsStdlibClient guards the jq-less onboarding
+// path: the Python client must be recommended as stdlib-only, the Bash client
+// must state its jq prerequisite, and the canonical inline curl example must
+// not end in a jq pipe.
+func TestRenderAgentGuideRecommendsStdlibClient(t *testing.T) {
+	guide := apispec.RenderAgentGuide(guideFixture())
+	for _, want := range []string{
+		"`GET /examples/python`",
+		"standard library only",
+		"requires both `curl` and `jq`",
+	} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("guide missing jq-less guidance %q", want)
+		}
+	}
+	// The canonical single-command example must contain no pipe: a pipe is the
+	// chained-execution shape a host scanner flags. The prose may still *name*
+	// the forbidden `| jq .` shape while telling agents not to use it.
+	found := false
+	for _, line := range strings.Split(guide, "\n") {
+		if !strings.Contains(line, "$BASE/v1/send?wait=true") {
+			continue
+		}
+		found = true
+		if strings.Contains(line, "|") {
+			t.Errorf("canonical inline example pipes its output: %q", line)
+		}
+	}
+	if !found {
+		t.Fatal("guide has no inline curl send example")
+	}
+}

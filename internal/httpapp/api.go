@@ -31,6 +31,11 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		"name":        "Gatehouse Mail",
 		"api_version": "v1",
 		"api_base":    "/v1",
+		"auth": map[string]string{
+			"scheme":     "bearer",
+			"header":     "Authorization",
+			"key_prefix": "ghm_",
+		},
 		"agent_guide": "/agent",
 		"openapi":     "/openapi.json",
 		"reference":   "/agent",

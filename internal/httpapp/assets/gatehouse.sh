@@ -2,7 +2,7 @@
 #
 # gatehouse.sh -- Gatehouse Mail agent client (Bash; curl + jq only).
 #
-# This is the canonical example client served at `GET /examples/curl` and is
+# This is the canonical example client served at `GET /examples/bash` and is
 # the Bash sibling of the Python example at `GET /examples/python`. It wraps the
 # whole agent-facing REST surface of Gatehouse Mail and is meant to be read as
 # much as run: every command maps one-to-one onto an HTTP route, and a comment

@@ -219,6 +219,31 @@ func TestDiscoveryAdvertisesLimits(t *testing.T) {
 	}
 }
 
+// TestDiscoveryAdvertisesAuth asserts the discovery document reveals the auth
+// scheme, header and key prefix so an agent can authenticate from the
+// well-known document without reading the full /agent guide first.
+func TestDiscoveryAdvertisesAuth(t *testing.T) {
+	_, h, _, _, _ := httpFixture(t)
+	for _, path := range []string{"/.well-known/gatehouse", "/"} {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Accept", "application/json")
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", path, rr.Code)
+		}
+		var doc struct {
+			Auth map[string]string `json:"auth"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", path, err)
+		}
+		if doc.Auth["scheme"] != "bearer" || doc.Auth["header"] != "Authorization" || doc.Auth["key_prefix"] != "ghm_" {
+			t.Errorf("%s auth block = %#v, want bearer/Authorization/ghm_", path, doc.Auth)
+		}
+	}
+}
+
 // TestInvalidLimitRejected asserts a non-integer limit is a 400 rather than a
 // silently ignored default.
 func TestInvalidLimitRejected(t *testing.T) {

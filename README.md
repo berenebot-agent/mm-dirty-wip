@@ -259,7 +259,7 @@ Use the object above in an `attachments` array. The application translates attac
 
 ## API
 
-Give an agent the origin (`BASE`, e.g. `https://mail.example.com`) and an API key. Discovery starts at:
+Give an agent the origin (`BASE`, e.g. `https://mail.example.com`) and an API key. Keys are sent as `Authorization: Bearer ghm_...` and the prefix is advertised in the discovery document. Discovery starts at:
 
 ```text
 $BASE/.well-known/gatehouse
