@@ -291,11 +291,11 @@ var schemas = map[string]any{
 		"to":          stringOrArray("To recipients; a single address or a list."),
 		"cc":          stringOrArray("Cc recipients; a single address or a list."),
 		"bcc":         stringOrArray("Bcc recipients; a single address or a list."),
-		"subject":     str("Subject line."),
+		"subject":     str("Subject line; required."),
 		"text":        str("Plain-text body."),
 		"html":        str("HTML body."),
 		"attachments": map[string]any{"type": "array", "items": Ref("SendAttachment")},
-	}),
+	}, "to", "subject"),
 
 	"ReplyBody": obj(map[string]any{
 		"sender":      str("From identity: the inbox primary or one of its aliases."),
