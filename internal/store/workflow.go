@@ -333,7 +333,7 @@ func (s *Store) TerminalUnredactedWorkflows(ctx context.Context) ([]Workflow, er
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Workflow
+	out := []Workflow{}
 	for rows.Next() {
 		w, err := scanWorkflow(rows)
 		if err != nil {

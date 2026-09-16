@@ -52,7 +52,7 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Domain
+	out := []model.Domain{}
 	for rows.Next() {
 		var d model.Domain
 		var c string
@@ -301,7 +301,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Inbox
+	out := []model.Inbox{}
 	for rows.Next() {
 		var i model.Inbox
 		var domain, allowed, created string
@@ -720,7 +720,7 @@ func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, 
 	if err == sql.ErrNoRows {
 		err = q.QueryRowContext(ctx, `SELECT e.address,COALESCE(NULLIF(e.display_name,''),i.display_name),e.id FROM external_aliases e JOIN inboxes i ON i.id=e.inbox_id AND i.account_id=e.account_id WHERE e.account_id=? AND e.inbox_id=? AND e.address=?`, accountID, inboxID, requested).Scan(&alias, &aliasName, &externalID)
 		if err == sql.ErrNoRows {
-			return model.Address{}, SendingTarget{}, ErrForbidden
+			return model.Address{}, SendingTarget{}, fmt.Errorf("%w: %w", ErrForbidden, ErrSenderNotAllowed)
 		}
 	}
 	if err != nil {

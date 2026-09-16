@@ -145,7 +145,7 @@ func (s *Store) ListDraftsPaged(ctx context.Context, p model.Principal, inboxID,
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.Draft
+	out := []model.Draft{}
 	for rows.Next() {
 		d, err := scanDraft(rows)
 		if err != nil {

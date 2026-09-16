@@ -145,7 +145,7 @@ func (s *Store) ListHermesConnections(ctx context.Context, accountID string) ([]
 		return nil, err
 	}
 	defer rows.Close()
-	var out []HermesConnection
+	out := []HermesConnection{}
 	for rows.Next() {
 		h, err := scanHermes(rows)
 		if err != nil {

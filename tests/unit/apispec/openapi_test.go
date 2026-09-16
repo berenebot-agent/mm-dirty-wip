@@ -268,6 +268,28 @@ func TestOpenAPISendBodyMatchesRuntime(t *testing.T) {
 	if _, ok := to["oneOf"]; !ok {
 		t.Fatalf("SendBody.to must accept a bare string or a list: %#v", to)
 	}
+	if desc, _ := props["text"].(map[string]any)["description"].(string); !strings.Contains(desc, "html") {
+		t.Fatalf("SendBody.text does not explain the body requirement: %q", desc)
+	}
+	if desc, _ := props["subject"].(map[string]any)["description"].(string); !strings.Contains(desc, "non-empty") {
+		t.Fatalf("SendBody.subject does not explain the non-empty requirement: %q", desc)
+	}
+}
+
+func TestOpenAPIBootstrapIncludesEffectivePermissions(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", apispec.Routes())
+	components := doc["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	bootstrap := schemas["Bootstrap"].(map[string]any)
+	props := bootstrap["properties"].(map[string]any)
+	permissions := props["permissions"].(map[string]any)
+	if permissions["type"] != "object" {
+		t.Fatalf("Bootstrap.permissions type = %#v", permissions["type"])
+	}
+	additional, ok := permissions["additionalProperties"].(map[string]any)
+	if !ok || additional["$ref"] != "#/components/schemas/MailboxPermissions" {
+		t.Fatalf("Bootstrap.permissions schema = %#v", permissions)
+	}
 }
 
 // TestOpenAPIRequestBodyAndQueryParameters asserts a JSON write carries a

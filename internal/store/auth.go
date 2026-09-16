@@ -338,7 +338,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIK
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.APIKey
+	out := []model.APIKey{}
 	index := map[string]int{}
 	for rows.Next() {
 		var k model.APIKey

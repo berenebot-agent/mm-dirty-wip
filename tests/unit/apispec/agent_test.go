@@ -44,6 +44,12 @@ func TestRenderAgentGuideHeadingsAndRoutes(t *testing.T) {
 func TestRenderAgentGuideRetainsNarrative(t *testing.T) {
 	guide := apispec.RenderAgentGuide(guideFixture())
 	for _, keyword := range []string{
+		"GET /openapi.json",
+		"Quick start",
+		"can_send",
+		"sender_not_allowed",
+		`{"error":"sender not allowed","code":"sender_not_allowed"}`,
+		"Appendix: command security notes",
 		"pending_approval",
 		"Idempotency-Key",
 		"APPROVAL_EXPIRY_HOURS",
@@ -54,6 +60,18 @@ func TestRenderAgentGuideRetainsNarrative(t *testing.T) {
 		if !strings.Contains(guide, keyword) {
 			t.Fatalf("guide dropped narrative keyword %q", keyword)
 		}
+	}
+}
+
+func TestRenderAgentGuidePutsQuickstartBeforeSecurityNotes(t *testing.T) {
+	guide := apispec.RenderAgentGuide(guideFixture())
+	quickstart := strings.Index(guide, "## Quick start")
+	security := strings.Index(guide, "## Appendix: command security notes")
+	if quickstart < 0 || security < 0 || quickstart > security {
+		t.Fatalf("quickstart/security order is wrong: quickstart=%d security=%d", quickstart, security)
+	}
+	if strings.Index(guide, "## Quick start") > strings.Index(guide, "## Bootstrap") {
+		t.Fatal("quickstart should precede the generated route reference")
 	}
 }
 

@@ -137,7 +137,7 @@ func boolInt(v bool) int {
 }
 func jsonString(v any) string { b, _ := json.Marshal(v); return string(b) }
 func decodeStrings(v string) []string {
-	var out []string
+	out := []string{}
 	_ = json.Unmarshal([]byte(v), &out)
 	if out == nil {
 		out = []string{}
@@ -152,6 +152,7 @@ func decodeMap(v string) map[string]any {
 
 var ErrNotFound = errors.New("not found")
 var ErrForbidden = errors.New("forbidden")
+var ErrSenderNotAllowed = errors.New("sender not allowed")
 var ErrConflict = errors.New("conflict")
 var ErrQuota = errors.New("storage quota exceeded")
 var ErrNoProvider = errors.New("no provider configured")

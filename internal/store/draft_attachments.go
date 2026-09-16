@@ -73,7 +73,7 @@ func (s *Store) ListDraftAttachmentsInternal(ctx context.Context, accountID, dra
 		return nil, err
 	}
 	defer rows.Close()
-	var out []model.DraftAttachment
+	out := []model.DraftAttachment{}
 	for rows.Next() {
 		a, err := scanDraftAttachment(rows)
 		if err != nil {
