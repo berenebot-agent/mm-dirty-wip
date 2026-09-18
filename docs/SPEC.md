@@ -1,11 +1,11 @@
-# Gatehouse Mail — V1 Product Specification
+# MailMoose — V1 Product Specification
 
 **Status:** Implementation-ready V1  
 **Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, free hosted or self-hosted.
 
 ## 1. Pitch
 
-Gatehouse Mail is an API-native email inbox platform for autonomous agents.
+MailMoose is an API-native email inbox platform for autonomous agents.
 
 It gives agents persistent email identities, searchable mail history, attachments, scoped access, realtime delivery, and outbound sending through user-provided credentials.
 
@@ -233,7 +233,7 @@ Provide a lightweight interface for:
 Expose:
 
 ```text
-/.well-known/gatehouse
+/.well-known/mailmoose
 /agent
 /v1/bootstrap
 /openapi.json
@@ -273,8 +273,8 @@ Target deployment:
 
 ```yaml
 services:
-  gatehouse-mail:
-    image: ghcr.io/<org>/gatehouse-mail:latest
+  mailmoose:
+    image: ghcr.io/<org>/mailmoose:latest
     restart: unless-stopped
     volumes:
       - ./data:/data
@@ -283,7 +283,7 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional Gatehouse MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
+The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional MailMoose MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
 Self-hosted setup creates the initial Admin from one-shot `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` (either may come from a `*_FILE` secret) on the first start against an empty database. The values are transactional and ignored once any user exists, and there is no unauthenticated setup form. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -294,7 +294,7 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 ### Inbound
 
 V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as
-inbound transports, plus the optional Gatehouse MX direct-SMTP edge (see
+inbound transports, plus the optional MailMoose MX direct-SMTP edge (see
 [MX.md](MX.md)). Provider webhook mail never carries trusted authentication
 evidence; only the authenticated MX edge supplies SPF/DKIM/DMARC evidence, and
 its per-domain policy can classify a message as Spam. Spam is a computed view
@@ -307,7 +307,7 @@ Internet SMTP
     ↓
 Mailgun, Cloudflare Email Routing, or Resend
     ↓ HTTPS webhook
-Gatehouse Mail
+MailMoose
 ```
 
 One catch-all transport route can serve many logical inbox identities. Each
@@ -366,7 +366,7 @@ The canonical API uses straightforward REST resources for:
 
 Where openagent.email endpoint semantics map naturally to the data model, preserve compatible paths/fields so integrations can migrate with minimal changes.
 
-Gatehouse Mail extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
+MailMoose extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
 
 ## 9. Data and backup
 

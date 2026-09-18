@@ -5,14 +5,14 @@
 #
 #   docker compose -f docker-compose.advanced.yml up -d
 services:
-  gatehouse:
-    image: gatehouse-mail:latest
+  mailmoose:
+    image: mailmoose:latest
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       # Compose default; override with MX_ENABLE=false (webhook-only) or
-      # MX_ENABLE=remote (separate gatehouse-mx container) in .env.
+      # MX_ENABLE=remote (separate mailmoose-mx container) in .env.
       MX_ENABLE: "${MX_ENABLE:-true}"
     volumes:
       - ./data:/data
@@ -37,7 +37,7 @@ services:
     # to open, `cap_drop: [ALL]` removes the setuid/setgid/chown capabilities
     # the drop requires, and the embedded edge cannot be spawned under a
     # separate uid. With `user:`/`cap_drop:` set, use MX_ENABLE=remote (the
-    # separate gatehouse-mx container) instead of the default MX_ENABLE=true.
+    # separate mailmoose-mx container) instead of the default MX_ENABLE=true.
     #
     #   cap_drop: [ALL]
-    #   user: "${GATEHOUSE_RUN_UID:-65532}:${GATEHOUSE_RUN_GID:-65532}"
+    #   user: "${MAILMOOSE_RUN_UID:-65532}:${MAILMOOSE_RUN_GID:-65532}"

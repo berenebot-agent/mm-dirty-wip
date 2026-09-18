@@ -21,7 +21,7 @@ import (
 // the pre-existing envelope; PBKDF2 with a fixed salt and a high iteration
 // count is still a large, backward-compatible improvement over a single
 // unsalted SHA-256.
-var kdfSalt = []byte("gatehouse-mail/app-encryption-key/v2")
+var kdfSalt = []byte("github.com/dellarb/mailmoose/app-encryption-key/v2")
 
 const kdfIterations = 210_000
 

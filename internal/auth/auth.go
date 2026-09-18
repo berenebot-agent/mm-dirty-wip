@@ -99,7 +99,7 @@ var (
 // confirm whether an account exists.
 func DummyPasswordCheck(password string) {
 	dummyHashOnce.Do(func() {
-		dummyHash, _ = HashPassword("gatehouse-dummy-password")
+		dummyHash, _ = HashPassword("mailmoose-dummy-password")
 	})
 	_ = CheckPassword(dummyHash, password)
 }

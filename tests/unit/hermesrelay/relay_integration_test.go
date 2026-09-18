@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/cryptox"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/hermesrelay"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/cryptox"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/hermesrelay"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 type rawWS struct {

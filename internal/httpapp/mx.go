@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // mxReplayCache bounds request-ID reuse for the signature-skew window. A
@@ -83,7 +83,7 @@ func (s *Server) registerMX(m *http.ServeMux) {
 }
 
 // mxEnvelope is the authenticated request header carrying the signature.
-const mxSignatureHeader = "X-Gatehouse-MX-Signature"
+const mxSignatureHeader = "X-MailMoose-MX-Signature"
 
 func (s *Server) mxKey(keyID string) ([]byte, bool) {
 	secret, ok := s.Service.Config.MXEdgeKeys[keyID]

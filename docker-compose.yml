@@ -5,8 +5,8 @@
 # through a webhook provider (Mailgun, Cloudflare Email Routing, Resend), set
 # MX_ENABLE=false in .env to run webhook-only; port 25 then has no listener.
 services:
-  gatehouse:
-    image: gatehouse-mail:latest
+  mailmoose:
+    image: mailmoose:latest
     build: .
     restart: unless-stopped
     env_file: .env
@@ -17,7 +17,7 @@ services:
       #   INITIAL_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
       # and add `secrets: [admin_password]` below. Ignored once a user exists.
       #INITIAL_ADMIN_EMAIL: admin@example.com
-      #INITIAL_ADMIN_PASSWORD: "${GATEHOUSE_ADMIN_PASSWORD}"
+      #INITIAL_ADMIN_PASSWORD: "${MAILMOOSE_ADMIN_PASSWORD}"
     volumes:
       - ./data:/data
     ports:

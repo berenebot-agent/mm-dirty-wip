@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/launcher"
+	"github.com/dellarb/mailmoose/internal/launcher"
 )
 
 func TestResolveEdgeCredentialPicksDeterministic(t *testing.T) {
@@ -54,7 +54,7 @@ func TestEdgeEnvScrubsAppSecrets(t *testing.T) {
 	for _, want := range []string{
 		"MX_EDGE_KEY_ID=edge-1",
 		"MX_EDGE_SECRET=sekret",
-		"GATEHOUSE_INGEST_URL=http://127.0.0.1:8082",
+		"MAILMOOSE_INGEST_URL=http://127.0.0.1:8082",
 		"MX_LISTEN_ADDR=:2525",
 		"MX_HOSTNAME=mail.example.com",
 		"MX_SHUTDOWN_FD=3",
@@ -77,11 +77,11 @@ func TestEdgeEnvDefaultHostname(t *testing.T) {
 	env := launcher.EdgeEnv("", "edge-1", "s", 3)
 	found := false
 	for _, e := range env {
-		if e == "MX_HOSTNAME=gatehouse-mx" {
+		if e == "MX_HOSTNAME=mailmoose-mx" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("expected gatehouse-mx fallback hostname")
+		t.Fatal("expected mailmoose-mx fallback hostname")
 	}
 }

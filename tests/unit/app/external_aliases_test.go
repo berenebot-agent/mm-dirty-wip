@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestExternalAliasSendUsesAliasConnector proves an external alias send resolves

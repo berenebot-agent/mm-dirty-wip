@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestApprovalControlShowsReceivedWithControlClient locks in that a consumed

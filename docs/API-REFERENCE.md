@@ -1,4 +1,4 @@
-# Gatehouse Mail API Reference
+# MailMoose API Reference
 
 Generated from `internal/apispec`; do not edit by hand.
 

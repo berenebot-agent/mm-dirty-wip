@@ -12,8 +12,8 @@ import (
 	"net/url"
 	"strings"
 
-	"gatehouse-mail/internal/transport"
-	"gatehouse-mail/internal/transport/netutil"
+	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 type Config struct {

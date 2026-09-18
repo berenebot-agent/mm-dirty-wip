@@ -39,7 +39,7 @@ collect_evictions() {
     done
 }
 
-collect_evictions 'gatehouse-go/*.log' "$KEEP_GO"
+collect_evictions 'mailmoose-go/*.log' "$KEEP_GO"
 collect_evictions 'runs/*' "$KEEP_RUNS"
 
 if [ "${#evict[@]}" -eq 0 ]; then

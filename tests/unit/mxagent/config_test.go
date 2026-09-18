@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
 // testEdgeSecret is a fixed 32-byte (256-bit) hex secret: operator
@@ -15,7 +15,7 @@ import (
 const testEdgeSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestLoadStagingDefaultsAndValidation(t *testing.T) {
-	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
+	t.Setenv("MAILMOOSE_INGEST_URL", "http://core:8082")
 	t.Setenv("MX_EDGE_KEY_ID", "edge")
 	t.Setenv("MX_EDGE_SECRET", testEdgeSecret)
 	t.Setenv("MX_MAX_MESSAGE_BYTES", "")
@@ -36,7 +36,7 @@ func TestLoadStagingDefaultsAndValidation(t *testing.T) {
 }
 
 func TestLoadRejectsWeakEdgeSecret(t *testing.T) {
-	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
+	t.Setenv("MAILMOOSE_INGEST_URL", "http://core:8082")
 	t.Setenv("MX_EDGE_KEY_ID", "edge")
 	for _, weak := range []string{"", "secret", "0123456789abcdef"} {
 		t.Setenv("MX_EDGE_SECRET", weak)
@@ -47,7 +47,7 @@ func TestLoadRejectsWeakEdgeSecret(t *testing.T) {
 }
 
 func TestLoadRequireTLSValidation(t *testing.T) {
-	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
+	t.Setenv("MAILMOOSE_INGEST_URL", "http://core:8082")
 	t.Setenv("MX_EDGE_KEY_ID", "edge")
 	t.Setenv("MX_EDGE_SECRET", testEdgeSecret)
 	t.Setenv("MX_REQUIRE_TLS", "true")

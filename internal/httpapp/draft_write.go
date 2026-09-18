@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // draftWriteInput is the JSON body shared by the draft write endpoints

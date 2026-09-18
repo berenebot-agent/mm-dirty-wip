@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/run.sh — unified test runner for gatehouse-mail.
+# tests/run.sh — unified test runner for mailmoose.
 #
 # Runs the selected test tiers, writes ALL detail to
 # tests/logs/runs/<UTC-ts>-<tiers>/, and prints only a one-line-per-tier
@@ -96,17 +96,17 @@ for t in "${SELECTED[@]}"; do
         unit)
             # -v so per-test timing is available in the output for L2;
             # -race for CI parity.
-            GATEHOUSE_TEST_DIR="$RUN_DIR/unit" \
-                ./gatehouse-go.sh test -race -count=1 -v ./... >/dev/null 2>&1 || rc=$?
+            MAILMOOSE_TEST_DIR="$RUN_DIR/unit" \
+                ./mailmoose-go.sh test -race -count=1 -v ./... >/dev/null 2>&1 || rc=$?
             ;;
         vet)
-            GATEHOUSE_TEST_DIR="$RUN_DIR/vet" \
-                ./gatehouse-go.sh vet ./... >/dev/null 2>&1 || rc=$?
+            MAILMOOSE_TEST_DIR="$RUN_DIR/vet" \
+                ./mailmoose-go.sh vet ./... >/dev/null 2>&1 || rc=$?
             ;;
         fmt)
             # CI gate: gofmt -l prints unformatted files; empty output = pass.
-            GATEHOUSE_TEST_DIR="$RUN_DIR/fmt" \
-                ./gatehouse-go.sh gofmt -l cmd internal tests >/dev/null 2>&1 || rc=$?
+            MAILMOOSE_TEST_DIR="$RUN_DIR/fmt" \
+                ./mailmoose-go.sh gofmt -l cmd internal tests >/dev/null 2>&1 || rc=$?
             if [ "$rc" -eq 0 ] && [ -s "$RUN_DIR/fmt/out.log" ]; then
                 rc=1
             fi
@@ -141,7 +141,7 @@ done
 overall_str=$([ "$overall_rc" -eq 0 ] && echo "PASS" || echo "FAIL")
 
 {
-    echo "[gatehouse-mail tests] ${TS} — ${TIER_LABEL}"
+    echo "[mailmoose tests] ${TS} — ${TIER_LABEL}"
     for t in "${SELECTED[@]}"; do
         rc=${TIER_RC[$t]}
         elapsed=${TIER_ELAPSED[$t]}
@@ -179,7 +179,7 @@ overall_str=$([ "$overall_rc" -eq 0 ] && echo "PASS" || echo "FAIL")
 
 # --- L3 full log ----------------------------------------------------------
 {
-    echo "===== gatehouse-mail tests: ${TS} ${TIER_LABEL} ====="
+    echo "===== mailmoose tests: ${TS} ${TIER_LABEL} ====="
     echo "overall: $overall_str  total: ${total_elapsed}s"
     echo
     for t in "${SELECTED[@]}"; do

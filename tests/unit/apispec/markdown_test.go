@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 // TestMarkdownReferenceUpToDate guards against a stale checked-in

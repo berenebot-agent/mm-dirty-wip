@@ -1,4 +1,4 @@
-// Package apispec is the single source of truth for the Gatehouse Mail HTTP API
+// Package apispec is the single source of truth for the MailMoose HTTP API
 // surface. The agent guide, the OpenAPI document, the generated reference and
 // the example clients are all rendered from this table, so no artifact drifts
 // alone.
@@ -157,7 +157,7 @@ var routes = []Route{
 	{Method: "DELETE", Path: "/v1/admin/keys/{id}", Summary: "Revoke an API key (Admin)", Role: "admin", Group: "Admin: keys", Success: 204},
 
 	// Admin: external aliases.
-	{Method: "GET", Path: "/v1/admin/inboxes/{id}/external-aliases", Summary: "List an inbox's external sending aliases (Admin, self-hosted)", Description: "Send-only identities on domains Gatehouse does not manage. Never participate in inbound routing. Returns ids, addresses, display names, connector provider and configured status; never credentials.", Role: "admin", Group: "Admin: external aliases"},
+	{Method: "GET", Path: "/v1/admin/inboxes/{id}/external-aliases", Summary: "List an inbox's external sending aliases (Admin, self-hosted)", Description: "Send-only identities on domains MailMoose does not manage. Never participate in inbound routing. Returns ids, addresses, display names, connector provider and configured status; never credentials.", Role: "admin", Group: "Admin: external aliases"},
 	{Method: "POST", Path: "/v1/admin/inboxes/{id}/external-aliases", Summary: "Create an external sending alias (Admin, self-hosted)", Description: "Body: address (full local@domain, immutable after creation) and optional display_name. The address must not be the inbox primary or a managed inbox/alias in the account, and must be unique among the account's external aliases.", Role: "admin", Group: "Admin: external aliases", Success: 201},
 	{Method: "PATCH", Path: "/v1/admin/inboxes/{id}/external-aliases/{aliasID}", Summary: "Update an external alias display name (Admin, self-hosted)", Description: "Accepts display_name only; the address is immutable.", Role: "admin", Group: "Admin: external aliases"},
 	{Method: "DELETE", Path: "/v1/admin/inboxes/{id}/external-aliases/{aliasID}", Summary: "Delete an external alias (Admin, self-hosted)", Description: "Removes the alias and its connector, clears any default_sender that referenced it, and makes its queued messages fail permanently rather than fall back to a domain connector.", Role: "admin", Group: "Admin: external aliases", Success: 204},

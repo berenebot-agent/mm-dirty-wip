@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // newV012 creates a temporary data directory whose inbox.db is the full

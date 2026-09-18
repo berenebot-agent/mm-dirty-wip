@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 const sendRequestSelect = `SELECT id,draft_id,inbox_id,status,delivery_status,content_hash,requested_at,requested_by,requested_by_api_key_id,requested_by_user_id,approver_email,token_hash,token_expires_at,approval_message_id,approval_workflow_id,notification_status,decided_at,decision_actor,decision_actor_id,decision_method,feedback,message_id,created_at,updated_at FROM draft_send_requests`

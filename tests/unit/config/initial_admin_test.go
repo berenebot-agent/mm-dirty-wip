@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/config"
+	"github.com/dellarb/mailmoose/internal/config"
 )
 
 func clearInitialAdminEnv(t *testing.T) {
@@ -33,8 +33,8 @@ func TestInitialAdminFromEnv(t *testing.T) {
 	if cfg.InitialAdminPassword != "correct-horse-battery-staple" {
 		t.Fatalf("InitialAdminPassword = %q", cfg.InitialAdminPassword)
 	}
-	if cfg.InitialAccountName != "Gatehouse" {
-		t.Fatalf("InitialAccountName = %q, want Gatehouse", cfg.InitialAccountName)
+	if cfg.InitialAccountName != "MailMoose" {
+		t.Fatalf("InitialAccountName = %q, want MailMoose", cfg.InitialAccountName)
 	}
 }
 
@@ -63,8 +63,8 @@ func TestInitialAdminUnset(t *testing.T) {
 	if cfg.InitialAdminEmail != "" || cfg.InitialAdminPassword != "" {
 		t.Fatal("unset initial admin must stay empty")
 	}
-	if cfg.InitialAccountName != "Gatehouse" {
-		t.Fatalf("InitialAccountName = %q, want Gatehouse", cfg.InitialAccountName)
+	if cfg.InitialAccountName != "MailMoose" {
+		t.Fatalf("InitialAccountName = %q, want MailMoose", cfg.InitialAccountName)
 	}
 }
 

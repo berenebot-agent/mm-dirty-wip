@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func TestForwardCarriesBodyAndAttachments(t *testing.T) {

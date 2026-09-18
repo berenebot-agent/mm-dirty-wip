@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // Workflow is a durable outbound job for system/workflow mail — currently the

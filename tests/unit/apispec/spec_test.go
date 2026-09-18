@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 // TestRoutesCount pins the size of the canonical table to the live /v1

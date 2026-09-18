@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // workflowTokenRe matches any approval control token marker (request reference
@@ -187,7 +187,7 @@ func writeApprovalBodies(w *strings.Builder, textBody, htmlBody string) {
 // writeApprovalBodiesHTML renders both body alternatives escaped into the HTML
 // approval body. The HTML alternative is included as escaped source in a <pre>
 // block and deliberately not rendered, so agent-authored markup cannot present
-// a different, deceptive document inside Gatehouse's own approval email.
+// a different, deceptive document inside MailMoose's own approval email.
 func writeApprovalBodiesHTML(w *strings.Builder, textBody, htmlBody string) {
 	pre := func(s string) string {
 		return "<pre style=\"white-space:pre-wrap;font-family:inherit;border:1px solid #ddd;padding:8px\">" + html.EscapeString(s) + "</pre>"

@@ -3,7 +3,7 @@ package model_test
 import (
 	"testing"
 
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func TestNormalizeAllowedSender(t *testing.T) {

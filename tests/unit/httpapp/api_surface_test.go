@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 // TestOpenAPISurfaceIsValidAndComplete asserts the served document is valid
@@ -127,10 +127,10 @@ func TestDiscoverySurfacesServeRealContent(t *testing.T) {
 		t.Errorf("/agent unexpectedly short (%d bytes)", len(guide))
 	}
 
-	discovery := get("/.well-known/gatehouse")
+	discovery := get("/.well-known/mailmoose")
 	for _, want := range []string{"/agent", "/openapi.json", "/examples/python", "/examples/bash", "/examples/curl", "/v1/bootstrap"} {
 		if !strings.Contains(discovery, want) {
-			t.Errorf("/.well-known/gatehouse does not advertise %q", want)
+			t.Errorf("/.well-known/mailmoose does not advertise %q", want)
 		}
 	}
 
@@ -210,7 +210,7 @@ func TestOpenAPIDiscoversRequestOrigin(t *testing.T) {
 func TestDiscoveryAdvertisesLimits(t *testing.T) {
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/gatehouse", nil))
+	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/mailmoose", nil))
 	var doc struct {
 		Limits map[string]any `json:"limits"`
 	}
@@ -232,7 +232,7 @@ func TestDiscoveryAdvertisesLimits(t *testing.T) {
 // well-known document without reading the full /agent guide first.
 func TestDiscoveryAdvertisesAuth(t *testing.T) {
 	_, h, _, _, _ := httpFixture(t)
-	for _, path := range []string{"/.well-known/gatehouse", "/"} {
+	for _, path := range []string{"/.well-known/mailmoose", "/"} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Accept", "application/json")
@@ -246,8 +246,8 @@ func TestDiscoveryAdvertisesAuth(t *testing.T) {
 		if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 			t.Fatalf("%s is not valid JSON: %v", path, err)
 		}
-		if doc.Auth["scheme"] != "bearer" || doc.Auth["header"] != "Authorization" || doc.Auth["key_prefix"] != "ghm_" {
-			t.Errorf("%s auth block = %#v, want bearer/Authorization/ghm_", path, doc.Auth)
+		if doc.Auth["scheme"] != "bearer" || doc.Auth["header"] != "Authorization" || doc.Auth["key_prefix"] != "mmm_" {
+			t.Errorf("%s auth block = %#v, want bearer/Authorization/mmm_", path, doc.Auth)
 		}
 	}
 }
@@ -308,7 +308,7 @@ func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
 		auth string
 	}{
 		{name: "missing", auth: ""},
-		{name: "invalid", auth: "Bearer ghm_invalid"},
+		{name: "invalid", auth: "Bearer mmm_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -320,7 +320,7 @@ func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
 			if rr.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rr.Code)
 			}
-			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer realm="gatehouse-api"` {
+			if got := rr.Header().Get("WWW-Authenticate"); got != `Bearer realm="mailmoose-api"` {
 				t.Fatalf("WWW-Authenticate = %q", got)
 			}
 			var body map[string]string

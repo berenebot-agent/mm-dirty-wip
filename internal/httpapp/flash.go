@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"gatehouse-mail/internal/auth"
+	"github.com/dellarb/mailmoose/internal/auth"
 )
 
 // flashStore holds short-lived, one-shot state between a POST that redirects

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestDraftStorageAccounting(t *testing.T) {

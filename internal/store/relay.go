@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/idgen"
 )
 
 type HermesConnection struct {

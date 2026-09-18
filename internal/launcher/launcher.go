@@ -18,13 +18,13 @@ import (
 
 // DefaultAppBinary and DefaultMXBinary are the image install paths.
 const (
-	DefaultAppBinary = "/usr/local/bin/gatehouse-mail"
-	DefaultMXBinary  = "/usr/local/bin/gatehouse-mx"
+	DefaultAppBinary = "/usr/local/bin/mailmoose"
+	DefaultMXBinary  = "/usr/local/bin/mailmoose-mx"
 )
 
 // Spec is everything needed to spawn the embedded edge.
 type Spec struct {
-	// Binary is the gatehouse-mx executable.
+	// Binary is the mailmoose-mx executable.
 	Binary string
 	// UID/GID the edge runs as, separate from the app runtime user.
 	UID int
@@ -63,19 +63,19 @@ func ResolveEdgeCredential(edgeKeys map[string]string) (keyID, secret string, er
 
 // EdgeEnv builds the child's environment. It is an allowlist: the edge never
 // receives APP_ENCRYPTION_KEY, DATA_DIR or MX_EDGE_KEYS, and staging is
-// in-memory so no filesystem path is needed. GATEHOUSE_INGEST_URL points at the
+// in-memory so no filesystem path is needed. MAILMOOSE_INGEST_URL points at the
 // core's loopback inbound connector.
 func EdgeEnv(hostname, keyID, secret string, shutdownFD int) []string {
 	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
 		"MX_EDGE_KEY_ID=" + keyID,
 		"MX_EDGE_SECRET=" + secret,
-		"GATEHOUSE_INGEST_URL=http://127.0.0.1:8082",
+		"MAILMOOSE_INGEST_URL=http://127.0.0.1:8082",
 		"MX_LISTEN_ADDR=:2525",
 		fmt.Sprintf("MX_SHUTDOWN_FD=%d", shutdownFD),
 	}
 	if strings.TrimSpace(hostname) == "" {
-		hostname = "gatehouse-mx"
+		hostname = "mailmoose-mx"
 	}
 	env = append(env, "MX_HOSTNAME="+hostname)
 	// Forward the operator-tunable MX edge settings, but never the core's
@@ -99,12 +99,12 @@ func EdgeEnv(hostname, keyID, secret string, shutdownFD int) []string {
 
 // ResolveBinary returns the edge binary path, honouring an override for tests.
 func ResolveBinary() string {
-	if v := strings.TrimSpace(os.Getenv("GATEHOUSE_MX_BIN")); v != "" {
+	if v := strings.TrimSpace(os.Getenv("MAILMOOSE_MX_BIN")); v != "" {
 		return v
 	}
 	if exe, err := os.Executable(); err == nil {
-		// Prefer a sibling gatehouse-mx next to the running app binary.
-		sibling := filepath.Join(filepath.Dir(exe), "gatehouse-mx")
+		// Prefer a sibling mailmoose-mx next to the running app binary.
+		sibling := filepath.Join(filepath.Dir(exe), "mailmoose-mx")
 		if _, err := os.Stat(sibling); err == nil {
 			return sibling
 		}

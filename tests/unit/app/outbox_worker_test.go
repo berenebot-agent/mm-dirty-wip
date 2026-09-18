@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func TestOutboxWorkerDeliversPending(t *testing.T) {

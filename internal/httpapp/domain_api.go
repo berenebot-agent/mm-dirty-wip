@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // domainConfigResponse is the redacted view of a domain's sending or receiving

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/httpapp"
 )
 
 func inboundRawMessage() string {

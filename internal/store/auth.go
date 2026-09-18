@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
@@ -331,7 +331,7 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 	if err != nil {
 		return model.APIKey{}, "", err
 	}
-	plain = "ghm_" + plain
+	plain = "mmm_" + plain
 	id := idgen.New("key")
 	prefix := plain
 	if len(prefix) > 14 {
@@ -451,7 +451,7 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 	if err != nil {
 		return "", err
 	}
-	plain = "ghm_" + plain
+	plain = "mmm_" + plain
 	prefix := plain
 	if len(prefix) > 14 {
 		prefix = prefix[:14]

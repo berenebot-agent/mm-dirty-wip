@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func rawDB(t *testing.T, path string) *sql.DB {

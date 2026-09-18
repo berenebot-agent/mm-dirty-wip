@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/mxwire"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // mxService builds a service with MX receiving enabled and the domain's receive

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // InboundAddr is the fixed address of the dedicated inbound webhook listener.
@@ -74,7 +74,7 @@ type Config struct {
 	InitialAdminEmail    string
 	InitialAdminPassword string
 	// InitialAccountName is the display name for the account created alongside
-	// the initial administrator. Defaults to "Gatehouse".
+	// the initial administrator. Defaults to "MailMoose".
 	InitialAccountName     string
 	MaxMessageBytes        int64
 	DefaultQuotaBytes      int64
@@ -299,9 +299,9 @@ func loadInitialAdmin() (initialAdminConfig, error) {
 			return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_PASSWORD %w", err)
 		}
 	}
-	name := strings.TrimSpace(env("INITIAL_ACCOUNT_NAME", "Gatehouse"))
+	name := strings.TrimSpace(env("INITIAL_ACCOUNT_NAME", "MailMoose"))
 	if name == "" {
-		name = "Gatehouse"
+		name = "MailMoose"
 	}
 	return initialAdminConfig{email: email, password: password, accountName: name}, nil
 }

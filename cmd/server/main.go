@@ -14,15 +14,15 @@ import (
 	"syscall"
 	"time"
 
-	"gatehouse-mail/internal/admincli"
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/launcher"
-	"gatehouse-mail/internal/logging"
-	"gatehouse-mail/internal/privdrop"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/admincli"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/launcher"
+	"github.com/dellarb/mailmoose/internal/logging"
+	"github.com/dellarb/mailmoose/internal/privdrop"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func main() {
@@ -123,7 +123,7 @@ func main() {
 		}
 		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.BodyReadTimeout, IdleTimeout: 90 * time.Second}
 		go func() {
-			log.Info("Gatehouse Mail listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
+			log.Info("MailMoose listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error("HTTP server failed", "listener", name, "error", err)
 				os.Exit(1)
@@ -183,7 +183,7 @@ func ensureInitialAdmin(svc *app.Service, log *slog.Logger) {
 		return
 	}
 	if svc.Config.InitialAdminEmail == "" {
-		log.Info("Gatehouse has not been configured; set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD and restart")
+		log.Info("MailMoose has not been configured; set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD and restart")
 		return
 	}
 	if svc.Config.Mode != "selfhosted" {
@@ -241,7 +241,7 @@ func installEmbeddedCredential(log *slog.Logger) {
 func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
 	if os.Getuid() != 0 {
 		return nil, fmt.Errorf("MX_ENABLE=true requires the container to start as root so the edge can run under a separate uid; " +
-			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or set MX_ENABLE=remote and run the gatehouse-mx container (docker-compose.mx-sidecar.yml) for hard isolation")
+			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or set MX_ENABLE=remote and run the mailmoose-mx container (docker-compose.mx-sidecar.yml) for hard isolation")
 	}
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
@@ -285,5 +285,5 @@ func edgeHostname() string {
 	if v := os.Getenv("MX_HOSTNAME"); v != "" {
 		return v
 	}
-	return "gatehouse-mx"
+	return "mailmoose-mx"
 }

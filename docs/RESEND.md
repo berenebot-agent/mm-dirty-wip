@@ -1,17 +1,17 @@
 # Resend inbound and outbound
 
-This guide connects Resend to Gatehouse Mail for both directions:
+This guide connects Resend to MailMoose for both directions:
 
 - **Inbound (receive):** Resend accepts mail for a verified domain and notifies
-  Gatehouse over a signed webhook; Gatehouse then fetches the raw MIME from the
+  MailMoose over a signed webhook; MailMoose then fetches the raw MIME from the
   Resend API.
-- **Outbound (send):** Gatehouse sends through the Resend send API.
+- **Outbound (send):** MailMoose sends through the Resend send API.
 
 Flow for receiving:
 
 ```text
 Internet email -> Resend MX -> Resend -> signed HTTPS webhook (metadata only)
-    -> /internal/ingest/resend -> Gatehouse fetches raw MIME from Resend API
+    -> /internal/ingest/resend -> MailMoose fetches raw MIME from Resend API
     -> logical inbox
 ```
 
@@ -28,12 +28,12 @@ parsed by the shared ingest core.
   cannot read received mail.
 - The **webhook URL** to register in Resend:
   `https://<your-host>/internal/ingest/resend`, where `<your-host>` is the
-  instance's `BASE_URL`. Gatehouse shows this exact URL in the receiving dialog
+  instance's `BASE_URL`. MailMoose shows this exact URL in the receiving dialog
   before you save.
 - The Resend **webhook signing secret** (`whsec_...`), created when you add the
-  webhook. Resend generates this secret; you paste it into Gatehouse.
+  webhook. Resend generates this secret; you paste it into MailMoose.
 
-## 1. Add the receiving configuration in Gatehouse Mail
+## 1. Add the receiving configuration in MailMoose
 
 On the dashboard, click **Receiving** for the domain you receive on:
 
@@ -42,7 +42,7 @@ On the dashboard, click **Receiving** for the domain you receive on:
 2. In Resend, open **Webhooks** → **Add Webhook**, paste that URL, tick
    **email.received** (leave the other events unchecked), and save. Open the
    webhook and copy its **signing secret** (`whsec_...`).
-3. Back in Gatehouse, enter the **Resend API key** (full access) and the
+3. Back in MailMoose, enter the **Resend API key** (full access) and the
    **Webhook signing secret**. Optionally set **API base URL** (default
    `https://api.resend.com`).
 4. Save. The remaining setup steps are shown in the dialog before you save.
@@ -51,8 +51,8 @@ Repeat for each domain you receive on. Each domain stores its own receiving
 configuration. If several domains share one Resend webhook, enter the same
 signing secret on each domain.
 
-The operator supplies both the API key and the webhook signing secret. Gatehouse
-does not generate Resend secrets (contrast Cloudflare, where Gatehouse generates
+The operator supplies both the API key and the webhook signing secret. MailMoose
+does not generate Resend secrets (contrast Cloudflare, where MailMoose generates
 the Worker shared secret).
 
 You can also use the REST API:
@@ -64,7 +64,7 @@ curl -X PUT "$BASE_URL/v1/admin/domains/$DOMAIN_ID/receiving" \
   -d '{"provider":"resend","config":{"api_key":"re_...","webhook_secret":"whsec_..."}}'
 ```
 
-## 2. Add the sending provider in Gatehouse Mail
+## 2. Add the sending provider in MailMoose
 
 1. On the dashboard, click **Sending** for that domain, choose **Resend**, and
    enter the **API key**, then save. (Or `PUT /v1/admin/domains/{id}/sending` with

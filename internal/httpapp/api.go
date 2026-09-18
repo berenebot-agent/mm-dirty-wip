@@ -15,26 +15,26 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/apispec"
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/htmlsanitize"
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/htmlsanitize"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"name":        "Gatehouse Mail",
+		"name":        "MailMoose",
 		"api_version": "v1",
 		"api_base":    "/v1",
 		"auth": map[string]string{
 			"scheme":     "bearer",
 			"header":     "Authorization",
-			"key_prefix": "ghm_",
+			"key_prefix": "mmm_",
 		},
 		"agent_guide": "/agent",
 		"openapi":     "/openapi.json",

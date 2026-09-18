@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 const resendFixtureKey = "resend-webhook-fixture-key"
@@ -238,7 +238,7 @@ func TestResendNonReceivedEventRequiresSignature(t *testing.T) {
 }
 
 // TestResendFansOutToAllRecipients proves a single Resend delivery addressed to
-// several Gatehouse inboxes is delivered to each, exactly once.
+// several MailMoose inboxes is delivered to each, exactly once.
 func TestResendFansOutToAllRecipients(t *testing.T) {
 	svc, server, principal, box := resendIngestFixture(t)
 	ctx := context.Background()

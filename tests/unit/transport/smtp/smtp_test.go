@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/transport/smtp"
+	"github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
 func fakeSMTP(t *testing.T) (host string, port int, got <-chan string, closeFn func()) {

@@ -1,4 +1,4 @@
-// Command mx is the optional policy-free SMTP edge for Gatehouse Mail. It is
+// Command mx is the optional policy-free SMTP edge for MailMoose. It is
 // built from the same module and image as the application and runs as a
 // separate process, either as a standalone sidecar/remote edge or as a child of
 // the embedded single-container mode. See internal/mxagent and decision D031.
@@ -12,8 +12,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"gatehouse-mail/internal/logging"
-	"gatehouse-mail/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/logging"
+	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
 func main() {

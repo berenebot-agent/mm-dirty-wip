@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // ExternalAliasAdmin reports whether the principal may read or manage external

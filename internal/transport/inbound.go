@@ -13,7 +13,7 @@ import (
 	"errors"
 	"net/http"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 var (
@@ -38,7 +38,7 @@ type InboundMessage struct {
 	// authenticated binding and, for single-recipient providers, as the only
 	// delivery target.
 	Recipient string
-	// Recipients lists every Gatehouse-controlled recipient the provider
+	// Recipients lists every MailMoose-controlled recipient the provider
 	// addressed. It is used by providers (Resend) whose events carry all
 	// recipients and must fan a single delivery out to each distinct inbox.
 	// When empty, Recipient is the sole target.

@@ -1,4 +1,4 @@
-# Gatehouse Mail — V1 Acceptance Tests
+# MailMoose — V1 Acceptance Tests
 
 ## A. Account and authorization
 

@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestCommitReturnsCommittedMessage locks the invariant that the message

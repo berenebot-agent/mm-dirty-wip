@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // Config is the edge's operator configuration. Secrets are read from the
 // environment and never logged.
 type Config struct {
 	// IngestURL is the base URL of the core's inbound connector, e.g.
-	// http://gatehouse:8082.
+	// http://mailmoose:8082.
 	IngestURL string
 	// KeyID and Secret authenticate signed requests to the core.
 	KeyID  string
@@ -69,7 +69,7 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		IngestURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("GATEHOUSE_INGEST_URL")), "/"),
+		IngestURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MAILMOOSE_INGEST_URL")), "/"),
 		KeyID:           strings.TrimSpace(os.Getenv("MX_EDGE_KEY_ID")),
 		Secret:          strings.TrimSpace(os.Getenv("MX_EDGE_SECRET")),
 		EdgeName:        env("MX_EDGE_NAME", "mx-1"),
@@ -93,7 +93,7 @@ func Load() (Config, error) {
 		DNSTimeout:      time.Duration(envInt("MX_DNS_TIMEOUT_SECONDS", 10)) * time.Second,
 	}
 	if cfg.IngestURL == "" {
-		return Config{}, fmt.Errorf("GATEHOUSE_INGEST_URL is required")
+		return Config{}, fmt.Errorf("MAILMOOSE_INGEST_URL is required")
 	}
 	if cfg.KeyID == "" || cfg.Secret == "" {
 		return Config{}, fmt.Errorf("MX_EDGE_KEY_ID and MX_EDGE_SECRET are required")

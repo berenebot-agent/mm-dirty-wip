@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {
@@ -91,7 +91,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 	var csrfCookie *http.Cookie
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "ghm_csrf" {
+		if c.Name == "mmm_csrf" {
 			csrfCookie = c
 		}
 	}
@@ -118,7 +118,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 	var session *http.Cookie
 	for _, c := range rr.Result().Cookies() {
-		if c.Name == "ghm_session" {
+		if c.Name == "mmm_session" {
 			session = c
 		}
 	}
@@ -162,7 +162,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 			t.Fatalf("login get %d", rr.Code)
 		}
 		for _, c := range rr.Result().Cookies() {
-			if c.Name == "ghm_csrf" {
+			if c.Name == "mmm_csrf" {
 				return c
 			}
 		}
@@ -189,7 +189,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		t.Fatalf("plain http login with csrf=%d body=%s", rr.Code, rr.Body.String())
 	}
 	for _, sc := range rr.Result().Cookies() {
-		if sc.Name == "ghm_session" && sc.Secure {
+		if sc.Name == "mmm_session" && sc.Secure {
 			t.Fatal("session cookie must not be Secure over direct plain HTTP")
 		}
 	}

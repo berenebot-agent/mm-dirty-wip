@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestSendForbiddenForReadAndAssistant(t *testing.T) {
@@ -221,7 +221,7 @@ func TestUnconfiguredInstanceCannotBeClaimed(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("setup get = %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "Gatehouse has not been configured") {
+	if !strings.Contains(rr.Body.String(), "MailMoose has not been configured") {
 		t.Fatalf("unconfigured page missing message: %s", rr.Body.String())
 	}
 	if strings.Contains(rr.Body.String(), "<form method=\"post\"") {
@@ -231,7 +231,7 @@ func TestUnconfiguredInstanceCannotBeClaimed(t *testing.T) {
 	form := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=csrf"
 	req := httptest.NewRequest("POST", "/setup", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(&http.Cookie{Name: "ghm_csrf", Value: "csrf"})
+	req.AddCookie(&http.Cookie{Name: "mmm_csrf", Value: "csrf"})
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed && rr.Code != http.StatusNotFound {
@@ -334,7 +334,7 @@ func TestClientIPSpoofingResistsAppendingProxy(t *testing.T) {
 	login := func(h http.Handler, remoteAddr, xff string) int {
 		req := httptest.NewRequest("POST", "/login", strings.NewReader("email=a@b&password=x&_csrf=csrf"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.AddCookie(&http.Cookie{Name: "ghm_csrf", Value: "csrf"})
+		req.AddCookie(&http.Cookie{Name: "mmm_csrf", Value: "csrf"})
 		req.RemoteAddr = remoteAddr
 		if xff != "" {
 			req.Header.Set("X-Forwarded-For", xff)

@@ -8,8 +8,8 @@ import (
 	"net/mail"
 	"strings"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 var ErrExternalAliasDeleted = errors.New("external sending alias was removed; select a sender and send again")

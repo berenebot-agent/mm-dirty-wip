@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestConfigSaveResolvesDomainBeforeProvider pins the ordering of the save

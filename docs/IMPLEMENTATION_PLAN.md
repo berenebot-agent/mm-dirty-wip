@@ -1,4 +1,4 @@
-# Gatehouse Mail — V1 Implementation Plan
+# MailMoose — V1 Implementation Plan
 
 Each phase should leave the application runnable and tested.
 
@@ -203,7 +203,7 @@ The Hermes host uses its outbound Relay connection for both directions.
 
 ### Deliverables
 
-- `/.well-known/gatehouse`
+- `/.well-known/mailmoose`
 - `/agent`
 - `/v1/bootstrap`
 - `/openapi.json`

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/ws"
+	"github.com/dellarb/mailmoose/internal/ws"
 )
 
 // TestWriteJSONFramesAcrossIdle writes two JSON frames separated by an idle

@@ -3,8 +3,8 @@ package httpapp_test
 import (
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
-	"gatehouse-mail/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/httpapp"
 )
 
 // TestAPISpecCoversEveryRegisteredRoute is the drift guard for agent

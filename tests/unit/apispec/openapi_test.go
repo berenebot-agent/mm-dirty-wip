@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 // collectRefs walks an arbitrary OpenAPI value and returns every
@@ -72,7 +72,7 @@ func TestRenderOpenAPITopLevel(t *testing.T) {
 		t.Fatalf("bearerAuth = %#v", schemes["bearerAuth"])
 	}
 	info, ok := doc["info"].(map[string]any)
-	if !ok || info["title"] != "Gatehouse Mail" || info["version"] != "v1" {
+	if !ok || info["title"] != "MailMoose" || info["version"] != "v1" {
 		t.Fatalf("info = %#v", doc["info"])
 	}
 	tags, ok := doc["tags"].([]map[string]any)

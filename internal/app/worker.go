@@ -9,7 +9,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/idgen"
 )
 
 // workflowRetention is how long a terminal workflow job (and its retained raw

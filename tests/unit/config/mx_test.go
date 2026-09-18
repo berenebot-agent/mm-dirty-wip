@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/config"
+	"github.com/dellarb/mailmoose/internal/config"
 )
 
 // testEdgeSecret is a fixed 32-byte (256-bit) hex secret for MX fixtures.
