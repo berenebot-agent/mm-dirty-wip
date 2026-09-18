@@ -39,9 +39,22 @@ func HashToken(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// MinPasswordLength is the shortest password the application accepts.
+const MinPasswordLength = 10
+
+// ValidatePassword applies the password-strength rules shared by account
+// creation, password changes and operator-driven resets. Keeping them here
+// means a reset cannot bypass the rules enforced when a password is first set.
+func ValidatePassword(password string) error {
+	if len(password) < MinPasswordLength {
+		return fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+	}
+	return nil
+}
+
 func HashPassword(password string) (string, error) {
-	if len(password) < 10 {
-		return "", fmt.Errorf("password must be at least 10 characters")
+	if err := ValidatePassword(password); err != nil {
+		return "", err
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {

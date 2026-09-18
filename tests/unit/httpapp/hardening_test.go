@@ -201,44 +201,44 @@ func TestSearchFiltersFromToBefore(t *testing.T) {
 	}
 }
 
-func TestBootstrapTokenRequired(t *testing.T) {
+func TestUnconfiguredInstanceCannotBeClaimed(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60, AdminBootstrapToken: "sekret-token"}
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := httpapp.New(svc, nil).Handler()
-	// Without the token, setup is rejected.
+	// A fresh instance serves the static unconfigured page with the operator
+	// instructions and no claim form.
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("setup get = %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Gatehouse has not been configured") {
+		t.Fatalf("unconfigured page missing message: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "<form method=\"post\"") {
+		t.Fatal("unconfigured page must not expose a claim form")
+	}
+	// There is no unauthenticated POST that can create the first admin.
 	form := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=csrf"
 	req := httptest.NewRequest("POST", "/setup", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: "ghm_csrf", Value: "csrf"})
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("setup without token = %d", rr.Code)
-	}
-	if has, _ := st.HasUsers(context.Background()); has {
-		t.Fatal("admin created without bootstrap token")
-	}
-	// With the token, setup succeeds.
-	form = "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=csrf&bootstrap_token=sekret-token"
-	req = httptest.NewRequest("POST", "/setup", strings.NewReader(form))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(&http.Cookie{Name: "ghm_csrf", Value: "csrf"})
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("setup with token = %d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusMethodNotAllowed && rr.Code != http.StatusNotFound {
+		t.Fatalf("POST /setup = %d, want the claim route to be gone", rr.Code)
 	}
-	if has, _ := st.HasUsers(context.Background()); !has {
-		t.Fatal("admin not created with bootstrap token")
+	if has, _ := st.HasUsers(context.Background()); has {
+		t.Fatal("admin created through a removed setup route")
 	}
 }
 
@@ -280,7 +280,7 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 	}
 	// Untrusted peer: spoofed X-Forwarded-Proto must NOT set Secure cookies.
 	h := newHandler(t, "")
-	req := httptest.NewRequest("GET", "/setup", nil)
+	req := httptest.NewRequest("GET", "/login", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.RemoteAddr = "203.0.113.5:1234"
 	rr := httptest.NewRecorder()
@@ -292,7 +292,7 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 	}
 	// Trusted peer: X-Forwarded-Proto https sets Secure cookies.
 	h = newHandler(t, "203.0.113.0/24")
-	req = httptest.NewRequest("GET", "/setup", nil)
+	req = httptest.NewRequest("GET", "/login", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	req.RemoteAddr = "203.0.113.5:1234"
 	rr = httptest.NewRecorder()

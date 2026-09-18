@@ -118,7 +118,6 @@ func (s *Server) Handler() http.Handler {
 	// Human UI.
 	m.HandleFunc("GET /", s.home)
 	m.HandleFunc("GET /setup", s.setupGet)
-	m.HandleFunc("POST /setup", s.withPreAuthCSRF(s.setupPost))
 	m.HandleFunc("GET /register", s.registerGet)
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)

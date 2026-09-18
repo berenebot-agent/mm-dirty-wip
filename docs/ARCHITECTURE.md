@@ -362,7 +362,7 @@ Protect cookie-authenticated state-changing requests with CSRF tokens.
 
 Store a hash of the session token in SQLite.
 
-Self-hosted mode bootstraps the first Admin account and defaults account registration to closed. Hosted deployments can enable public registration by configuration.
+Self-hosted mode creates the first Admin account from one-shot `INITIAL_ADMIN_*` configuration at startup and defaults account registration to closed. Once any user exists the bootstrap settings are ignored. Hosted deployments can enable public registration by configuration.
 
 ### Agent API keys
 

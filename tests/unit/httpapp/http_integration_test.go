@@ -79,10 +79,15 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, _ := app.New(cfg, st, events.NewHub())
 	h := httpapp.New(svc, nil).Handler()
+	// The first administrator now comes from INITIAL_ADMIN_* at startup, so
+	// seed the account directly for this HTTP-level test.
+	if _, err = st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes); err != nil {
+		t.Fatal(err)
+	}
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))
 	if rr.Code != 200 {
-		t.Fatalf("setup get %d", rr.Code)
+		t.Fatalf("login get %d", rr.Code)
 	}
 	var csrfCookie *http.Cookie
 	for _, c := range rr.Result().Cookies() {
@@ -93,23 +98,23 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	if csrfCookie == nil {
 		t.Fatal("missing preauth csrf cookie")
 	}
-	form := url.Values{"account": {"A"}, "email": {"admin@example.com"}, "password": {"correct horse battery staple"}}
-	req := httptest.NewRequest("POST", "/setup", strings.NewReader(form.Encode()))
+	form := url.Values{"email": {"admin@example.com"}, "password": {"correct horse battery staple"}}
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(csrfCookie)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 403 {
-		t.Fatalf("setup without csrf = %d", rr.Code)
+		t.Fatalf("login without csrf = %d", rr.Code)
 	}
 	form.Set("_csrf", csrfCookie.Value)
-	req = httptest.NewRequest("POST", "/setup", strings.NewReader(form.Encode()))
+	req = httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(csrfCookie)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 303 {
-		t.Fatalf("setup with csrf=%d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("login with csrf=%d body=%s", rr.Code, rr.Body.String())
 	}
 	var session *http.Cookie
 	for _, c := range rr.Result().Cookies() {
@@ -139,6 +144,9 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { st.Close() })
+		if _, err = st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20); err != nil {
+			t.Fatal(err)
+		}
 		cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", AllowPrivateOutbound: true, TrustProxyHeaders: trustProxy, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 		svc, err := app.New(cfg, st, events.NewHub())
 		if err != nil {
@@ -151,7 +159,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		if rr.Code != 200 {
-			t.Fatalf("setup get %d", rr.Code)
+			t.Fatalf("login get %d", rr.Code)
 		}
 		for _, c := range rr.Result().Cookies() {
 			if c.Name == "ghm_csrf" {
@@ -161,24 +169,24 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		t.Fatal("missing preauth csrf cookie")
 		return nil
 	}
-	newSetup := func(value string, cookie *http.Cookie) *http.Request {
-		form := url.Values{"account": {"A"}, "email": {"admin@example.com"}, "password": {"correct horse battery staple"}, "_csrf": {value}}
-		req := httptest.NewRequest("POST", "/setup", strings.NewReader(form.Encode()))
+	newLogin := func(value string, cookie *http.Cookie) *http.Request {
+		form := url.Values{"email": {"admin@example.com"}, "password": {"correct horse battery staple"}, "_csrf": {value}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.AddCookie(cookie)
 		return req
 	}
 	// Direct plain HTTP with an https BaseURL: cookies must not be Secure,
-	// otherwise browsers drop them and setup fails with "invalid CSRF token".
+	// otherwise browsers drop them and login fails with "invalid CSRF token".
 	h := newHandler(t, "https://mail.example.test", false)
-	c := csrfCookie(t, h, httptest.NewRequest("GET", "/setup", nil))
+	c := csrfCookie(t, h, httptest.NewRequest("GET", "/login", nil))
 	if c.Secure {
 		t.Fatal("csrf cookie must not be Secure over direct plain HTTP")
 	}
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, newSetup(c.Value, c))
+	h.ServeHTTP(rr, newLogin(c.Value, c))
 	if rr.Code != 303 {
-		t.Fatalf("plain http setup with csrf=%d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("plain http login with csrf=%d body=%s", rr.Code, rr.Body.String())
 	}
 	for _, sc := range rr.Result().Cookies() {
 		if sc.Name == "ghm_session" && sc.Secure {
@@ -187,7 +195,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 	}
 	// Trusted proxy reporting https: cookies keep the Secure flag.
 	h = newHandler(t, "https://mail.example.test", true)
-	req := httptest.NewRequest("GET", "/setup", nil)
+	req := httptest.NewRequest("GET", "/login", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	c = csrfCookie(t, h, req)
 	if !c.Secure {
@@ -195,7 +203,7 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 	}
 	// An untrusted X-Forwarded-Proto header must not enable Secure.
 	h = newHandler(t, "https://mail.example.test", false)
-	req = httptest.NewRequest("GET", "/setup", nil)
+	req = httptest.NewRequest("GET", "/login", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
 	c = csrfCookie(t, h, req)
 	if c.Secure {
