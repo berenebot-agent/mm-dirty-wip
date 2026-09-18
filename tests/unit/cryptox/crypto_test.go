@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/cryptox"
+	"github.com/dellarb/mailmoose/internal/cryptox"
 )
 
 // TestDeriveKeysPassphraseUsesPBKDF2AndKeepsLegacyReadable verifies a

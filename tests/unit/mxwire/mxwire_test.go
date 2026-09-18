@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 func TestSignVerifyRoundTrip(t *testing.T) {

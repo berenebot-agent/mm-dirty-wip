@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gatehouse-mail/internal/privdrop"
+	"github.com/dellarb/mailmoose/internal/privdrop"
 )
 
 func TestDropToRuntimeUserNoopWhenNonRoot(t *testing.T) {
@@ -35,8 +35,8 @@ func TestDropToRuntimeUserNoopWhenNonRoot(t *testing.T) {
 }
 
 func TestResolvedIdentityHonoursEnv(t *testing.T) {
-	t.Setenv("GATEHOUSE_RUN_UID", "4242")
-	t.Setenv("GATEHOUSE_RUN_GID", "4343")
+	t.Setenv("MAILMOOSE_RUN_UID", "4242")
+	t.Setenv("MAILMOOSE_RUN_GID", "4343")
 	uid, gid, err := privdrop.ResolvedIdentity()
 	if err != nil {
 		t.Fatalf("ResolvedIdentity: %v", err)
@@ -47,8 +47,8 @@ func TestResolvedIdentityHonoursEnv(t *testing.T) {
 }
 
 func TestResolvedIdentityFallsBackToDefaults(t *testing.T) {
-	t.Setenv("GATEHOUSE_RUN_UID", "")
-	t.Setenv("GATEHOUSE_RUN_GID", "")
+	t.Setenv("MAILMOOSE_RUN_UID", "")
+	t.Setenv("MAILMOOSE_RUN_GID", "")
 	uid, gid, err := privdrop.ResolvedIdentity()
 	if err != nil {
 		t.Fatalf("ResolvedIdentity: %v", err)
@@ -59,13 +59,13 @@ func TestResolvedIdentityFallsBackToDefaults(t *testing.T) {
 }
 
 func TestResolvedIdentityRejectsNonPositive(t *testing.T) {
-	t.Setenv("GATEHOUSE_RUN_UID", "0")
+	t.Setenv("MAILMOOSE_RUN_UID", "0")
 	if _, _, err := privdrop.ResolvedIdentity(); err == nil {
-		t.Fatal("expected an error for GATEHOUSE_RUN_UID=0")
+		t.Fatal("expected an error for MAILMOOSE_RUN_UID=0")
 	}
-	t.Setenv("GATEHOUSE_RUN_UID", "not-a-number")
+	t.Setenv("MAILMOOSE_RUN_UID", "not-a-number")
 	if _, _, err := privdrop.ResolvedIdentity(); err == nil {
-		t.Fatal("expected an error for non-numeric GATEHOUSE_RUN_UID")
+		t.Fatal("expected an error for non-numeric MAILMOOSE_RUN_UID")
 	}
 }
 
@@ -88,8 +88,8 @@ func TestDropToRejectsZeroViaDropToRuntimeUser(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("running as root: DropTo would actually drop privileges")
 	}
-	t.Setenv("GATEHOUSE_RUN_UID", "0")
+	t.Setenv("MAILMOOSE_RUN_UID", "0")
 	if _, _, _, err := privdrop.DropToRuntimeUser(t.TempDir()); err == nil {
-		t.Fatal("expected an error for GATEHOUSE_RUN_UID=0")
+		t.Fatal("expected an error for MAILMOOSE_RUN_UID=0")
 	}
 }

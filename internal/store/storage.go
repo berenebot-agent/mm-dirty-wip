@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // adjustStorageTx applies a storage delta to an account inside a transaction.

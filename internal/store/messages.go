@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 type AttachmentInput struct {

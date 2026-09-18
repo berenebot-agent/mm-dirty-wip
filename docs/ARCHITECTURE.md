@@ -1,4 +1,4 @@
-# Gatehouse Mail — V1 Architecture
+# MailMoose — V1 Architecture
 
 ## 1. Runtime topology
 
@@ -6,14 +6,14 @@
                          INTERNET EMAIL
                                │
                      ┌─────────┴─────────┐
-                  Mailgun/CF/Resend   optional gatehouse-mx
+                  Mailgun/CF/Resend   optional mailmoose-mx
                    SMTP / MX edge       direct SMTP :25 edge
                      │                      │ signed HMAC
                   HTTPS webhook              │
                      └───────────┬────────────┘
                                ▼
                   ┌────────────────────────┐
-                  │   Gatehouse Mail       │
+                  │   MailMoose       │
                   │                        │
                   │ Go HTTP server         │
                   │ auth                   │
@@ -31,7 +31,7 @@
                            /data
 ```
 
-The optional `gatehouse-mx` edge is built into the same image but runs as a
+The optional `mailmoose-mx` edge is built into the same image but runs as a
 separate, non-root process with no `/data` mount and no encryption key; it is
 the only exception to the one-process topology (decision `D031`). See
 [MX.md](MX.md).
@@ -187,7 +187,7 @@ inbox domain). A per-inbox `default_sender` preselects it, and each alias may
 carry its own sender display name (falling back to the inbox name).
 
 An inbox may also carry **external sending aliases** (`external_aliases`):
-addresses on domains Gatehouse does not manage, used only as outbound From
+addresses on domains MailMoose does not manage, used only as outbound From
 identities. They never participate in inbound resolution — the inbound
 precedence above is unchanged. Each external alias owns its own sending
 connector, selected by immutable id: a send records
@@ -343,7 +343,7 @@ Generic SMTP validates resolved destinations as public-routable addresses before
 
 ### Optional MX receiving edge
 
-An operator may enable direct-SMTP ingress. The `gatehouse-mx` edge (same
+An operator may enable direct-SMTP ingress. The `mailmoose-mx` edge (same
 module and image, separate non-root process) terminates SMTP, strictly frames
 and stages the original bytes, computes SPF/DKIM/DMARC evidence, and calls two
 HMAC-authenticated core endpoints. It holds no policy snapshot, database access

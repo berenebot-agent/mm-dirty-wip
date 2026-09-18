@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/idgen"
 )
 
 // DomainConfig is the single optional sending or receiving provider

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestDomainConfigSaveAfterRemovalConflicts covers a concurrent removal: the

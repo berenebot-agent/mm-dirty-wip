@@ -10,13 +10,13 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/mxagent"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // mxCore spins up a real core HTTP handler with MX enabled and returns the

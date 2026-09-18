@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/model"
-	_ "gatehouse-mail/internal/sqlite3driver"
+	"github.com/dellarb/mailmoose/internal/model"
+	_ "github.com/dellarb/mailmoose/internal/sqlite3driver"
 )
 
 type Store struct {

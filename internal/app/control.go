@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // controlSubjectRe matches the strict approval control subject. It is

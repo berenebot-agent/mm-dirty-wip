@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // AddDraftAttachment records a draft attachment file and charges its bytes to

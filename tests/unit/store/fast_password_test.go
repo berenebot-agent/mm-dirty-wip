@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"gatehouse-mail/internal/auth"
+	"github.com/dellarb/mailmoose/internal/auth"
 )
 
 func TestMain(m *testing.M) {

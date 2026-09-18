@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# gatehouse.sh -- Gatehouse Mail agent client (Bash; curl + jq only).
+# mailmoose.sh -- MailMoose agent client (Bash; curl + jq only).
 #
 # This is the canonical example client served at `GET /examples/bash` and is
 # the Bash sibling of the Python example at `GET /examples/python`. It wraps the
-# whole agent-facing REST surface of Gatehouse Mail and is meant to be read as
+# whole agent-facing REST surface of MailMoose and is meant to be read as
 # much as run: every command maps one-to-one onto an HTTP route, and a comment
 # above each handler names the route it calls.
 #
@@ -12,82 +12,82 @@
 # -----------
 #
 # # 1. Point the client at an instance and an API key.
-# export GATEHOUSE_BASE_URL="https://your-instance"
-# export GATEHOUSE_API_KEY="ghm_..."
+# export MAILMOOSE_BASE_URL="https://your-instance"
+# export MAILMOOSE_API_KEY="mmm_..."
 #
 #     # 2. Discover who you are and which inboxes you can reach.
-#     ./gatehouse.sh bootstrap
-#     ./gatehouse.sh inboxes --table
+#     ./mailmoose.sh bootstrap
+#     ./mailmoose.sh inboxes --table
 #
 #     # 3. Read mail.
-#     ./gatehouse.sh list --inbox inb_123 --unread --limit 20 --table
-#     ./gatehouse.sh get msg_123
-#     ./gatehouse.sh search invoice --inbox inb_123
-#     ./gatehouse.sh threads --inbox inb_123
-#     ./gatehouse.sh thread thr_123
-#     ./gatehouse.sh labels
+#     ./mailmoose.sh list --inbox inb_123 --unread --limit 20 --table
+#     ./mailmoose.sh get msg_123
+#     ./mailmoose.sh search invoice --inbox inb_123
+#     ./mailmoose.sh threads --inbox inb_123
+#     ./mailmoose.sh thread thr_123
+#     ./mailmoose.sh labels
 #
 #     # 4. Send and reply.
-#     ./gatehouse.sh send --to alice@example.com --subject "Hi" --text "Hello"
-#     ./gatehouse.sh send --to a@x,b@y --subject "Report" --text "See attached" \
+#     ./mailmoose.sh send --to alice@example.com --subject "Hi" --text "Hello"
+#     ./mailmoose.sh send --to a@x,b@y --subject "Report" --text "See attached" \
 #         --attach report.pdf --wait
-#     ./gatehouse.sh reply msg_123 --text "Thanks!"
+#     ./mailmoose.sh reply msg_123 --text "Thanks!"
 #
 #     # 5. Triage.
-#     ./gatehouse.sh mark-read msg_123
-#     ./gatehouse.sh label msg_123 --labels "Invoices,Unpaid"
-#     ./gatehouse.sh delete msg_123
+#     ./mailmoose.sh mark-read msg_123
+#     ./mailmoose.sh label msg_123 --labels "Invoices,Unpaid"
+#     ./mailmoose.sh delete msg_123
 #
 #     # 6. Drafts and human-in-the-loop approval.
-#     ./gatehouse.sh drafts --inbox inb_123
-#     ./gatehouse.sh drafts --inbox inb_123 --to alice@example.com \
+#     ./mailmoose.sh drafts --inbox inb_123
+#     ./mailmoose.sh drafts --inbox inb_123 --to alice@example.com \
 #         --subject "Quote" --text "..." --action request-send
-#     ./gatehouse.sh send-requests --active
-#     ./gatehouse.sh approve drf_123 --feedback "Looks good"
+#     ./mailmoose.sh send-requests --active
+#     ./mailmoose.sh approve drf_123 --feedback "Looks good"
 #
 #     # 7. Realtime and long-poll.
-#     ./gatehouse.sh events --after evt_100
-#     ./gatehouse.sh watch --after evt_100      # streams until Ctrl-C
-#     ./gatehouse.sh wait --inbox inb_123 --timeout 120
+#     ./mailmoose.sh events --after evt_100
+#     ./mailmoose.sh watch --after evt_100      # streams until Ctrl-C
+#     ./mailmoose.sh wait --inbox inb_123 --timeout 120
 #
 # Scenario: bootstrap -> list -> send -> reply -> events
 # -----------------------------------------------------
 #
 # BASE_URL=https://your-instance
-# KEY=ghm_...
+# KEY=mmm_...
 #
 #     # Who am I and which inboxes can I reach?
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" bootstrap --table
-#     INBOX=$(./gatehouse.sh --base "$BASE_URL" --key "$KEY" inboxes \
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" bootstrap --table
+#     INBOX=$(./mailmoose.sh --base "$BASE_URL" --key "$KEY" inboxes \
 #         | jq -r '.[0].id')
 #
 #     # Read the newest unread message in that inbox.
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" list \
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" list \
 #         --inbox "$INBOX" --unread --limit 5 --table
-#     MSG=$(./gatehouse.sh --base "$BASE_URL" --key "$KEY" list \
+#     MSG=$(./mailmoose.sh --base "$BASE_URL" --key "$KEY" list \
 #         --inbox "$INBOX" --limit 1 | jq -r '.[0].id')
 #
 #     # Send, then reply to the message we just read.
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" send \
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" send \
 #         --to alice@example.org --subject "Hello" --text "Hi there"
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" reply "$MSG" \
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" reply "$MSG" \
 #         --text "Thanks for the note"
 #
 #     # Follow durable events from the cursor returned by bootstrap/list.
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" events --inbox "$INBOX"
-#     ./gatehouse.sh --base "$BASE_URL" --key "$KEY" watch --inbox "$INBOX"
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" events --inbox "$INBOX"
+#     ./mailmoose.sh --base "$BASE_URL" --key "$KEY" watch --inbox "$INBOX"
 #
 # Credentials
 # -----------
 # Resolution order (first non-empty wins):
 #
 #   1. --base / --key command-line flags
-#   2. GATEHOUSE_BASE_URL / GATEHOUSE_API_KEY environment variables
-#   3. ~/.gatehouse/client.json (create it mode 0600):
+#   2. MAILMOOSE_BASE_URL / MAILMOOSE_API_KEY environment variables
+#   3. ~/.mailmoose/client.json (create it mode 0600):
 #
 #          {
 # "base_url": "https://your-instance",
-#            "api_key": "ghm_...",
+#            "api_key": "mmm_...",
 #            "inbox": "inb_123"
 #          }
 #
@@ -111,18 +111,18 @@
 # run them on a dedicated worker rather than in the middle of a request/response
 # cycle.
 #
-# Run `gatehouse.sh <command> --help` for per-command usage.
+# Run `mailmoose.sh <command> --help` for per-command usage.
 
 set -euo pipefail
 
 VERSION="1.0"
 DEFAULT_BASE_URL="http://localhost:8081"
-CONFIG_PATH="${GATEHOUSE_CONFIG:-${HOME:-}/.gatehouse/client.json}"
+CONFIG_PATH="${MAILMOOSE_CONFIG:-${HOME:-}/.mailmoose/client.json}"
 
 # Global state (set by the option parser).
-BASE="${GATEHOUSE_BASE_URL:-}"
-KEY="${GATEHOUSE_API_KEY:-}"
-INBOX="${GATEHOUSE_INBOX:-}"
+BASE="${MAILMOOSE_BASE_URL:-}"
+KEY="${MAILMOOSE_API_KEY:-}"
+INBOX="${MAILMOOSE_INBOX:-}"
 TABLE=0
 COMMAND=""
 
@@ -236,16 +236,16 @@ if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
 
 usage() {
 	cat <<'EOF'
-gatehouse.sh -- Gatehouse Mail agent client (Bash; curl + jq only).
+mailmoose.sh -- MailMoose agent client (Bash; curl + jq only).
 
 usage:
-  gatehouse.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
+  mailmoose.sh [--base URL] [--key KEY] [--inbox ID] [--table] <command> [args]
 
 global options:
---base URL API base URL (default: $GATEHOUSE_BASE_URL, then
-                 ~/.gatehouse/client.json, then http://localhost:8081
+--base URL API base URL (default: $MAILMOOSE_BASE_URL, then
+                 ~/.mailmoose/client.json, then http://localhost:8081
                  with a warning)
-  --key KEY      API key (default: $GATEHOUSE_API_KEY, then client.json)
+  --key KEY      API key (default: $MAILMOOSE_API_KEY, then client.json)
   --inbox ID     default inbox id for commands that use one
   --table        print a simple columnar view instead of JSON
   --version      print the client version
@@ -303,8 +303,8 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then GATEHOUSE_BASE_URL/GATEHOUSE_API_KEY, then
-  ~/.gatehouse/client.json (chmod 600). Never ~/.hermes/.env.
+  --base/--key, then MAILMOOSE_BASE_URL/MAILMOOSE_API_KEY, then
+  ~/.mailmoose/client.json (chmod 600). Never ~/.hermes/.env.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
 EOF
@@ -315,7 +315,7 @@ EOF
 # ---------------------------------------------------------------------------
 
 err() {
-	printf 'gatehouse: %s\n' "$*" >&2
+	printf 'mailmoose: %s\n' "$*" >&2
 }
 
 die() {
@@ -331,7 +331,7 @@ die_usage() {
 }
 
 warn() {
-	printf 'gatehouse: warning: %s\n' "$*" >&2
+	printf 'mailmoose: warning: %s\n' "$*" >&2
 }
 
 require_tools() {
@@ -502,7 +502,7 @@ build_attachments() {
 api_fetch() {
 	local method="$1" path="$2" body="${3:-}" idem="${4:-}" maxtime="${5:-60}"
 	require_tools
-	local -a cargs=(-sS --max-time "$maxtime" -X "$method" -A "gatehouse.sh/$VERSION"
+	local -a cargs=(-sS --max-time "$maxtime" -X "$method" -A "mailmoose.sh/$VERSION"
 		-H "Authorization: Bearer $KEY" -H "Accept: application/json")
 	if [ -n "$body" ]; then
 		cargs+=(-H "Content-Type: application/json" --data-binary "$body")
@@ -576,7 +576,7 @@ upload_attachments() {
 		fargs+=(-F "attachments=@${f};type=${ct}")
 	done
 	local tmp status
-	local -a cargs=(-sS --max-time 120 -X POST -A "gatehouse.sh/$VERSION"
+	local -a cargs=(-sS --max-time 120 -X POST -A "mailmoose.sh/$VERSION"
 		-H "Authorization: Bearer $KEY")
 	cargs+=("${fargs[@]}")
 	tmp="$(mktemp "$WORKDIR/resp.XXXXXX")"
@@ -1002,7 +1002,7 @@ $value"
 			\{*) raw="$line" ;;
 			esac
 		fi
-	done < <(set +e; curl -N -sS -D "$hdr" -A "gatehouse.sh/$VERSION" \
+	done < <(set +e; curl -N -sS -D "$hdr" -A "mailmoose.sh/$VERSION" \
 		-H "Authorization: Bearer $KEY" -H "Accept: text/event-stream" "$BASE$path"
 		printf '%s' "$?" >"$status_file")
 	if [ -n "$data" ]; then
@@ -1321,7 +1321,7 @@ parse_flags() {
 			shift
 			;;
 		--version)
-			printf 'gatehouse.sh %s\n' "$VERSION"
+			printf 'mailmoose.sh %s\n' "$VERSION"
 			exit 0
 			;;
 		--help | -h)
@@ -1379,7 +1379,7 @@ main() {
 			shift
 			;;
 		--version)
-			printf 'gatehouse.sh %s\n' "$VERSION"
+			printf 'mailmoose.sh %s\n' "$VERSION"
 			exit 0
 			;;
 		--help | -h)
@@ -1418,14 +1418,14 @@ main() {
 	load_config
 	if [ -z "$BASE" ]; then
 		BASE="$DEFAULT_BASE_URL"
-		printf 'gatehouse.sh: GATEHOUSE_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
+		printf 'mailmoose.sh: MAILMOOSE_BASE_URL not set; defaulting to %s\n' "$BASE" >&2
 	fi
 	BASE="${BASE%/}"
 	if [ -z "$KEY" ]; then
-		die "no API key: pass --key, set GATEHOUSE_API_KEY, or write $CONFIG_PATH"
+		die "no API key: pass --key, set MAILMOOSE_API_KEY, or write $CONFIG_PATH"
 	fi
 
-	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/gatehouse.XXXXXX")"
+	WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mailmoose.XXXXXX")"
 	trap 'rm -rf "$WORKDIR"' EXIT
 
 	case "$COMMAND" in

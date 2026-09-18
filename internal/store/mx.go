@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/idgen"
 )
 
 // MXReceipt is the durable per-recipient delivery receipt for the optional MX

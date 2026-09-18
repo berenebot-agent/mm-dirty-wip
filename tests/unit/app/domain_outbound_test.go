@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func providerServer(t *testing.T, id string, calls *atomic.Int32) *httptest.Server {

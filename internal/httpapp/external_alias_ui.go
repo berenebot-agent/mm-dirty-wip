@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // externalAliasDialogView drives one external alias's connector popup. It mirrors

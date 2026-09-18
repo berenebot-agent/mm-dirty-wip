@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 // guideFixture exercises group headings, the role suffix and a plain route
@@ -19,7 +19,7 @@ func guideFixture() []apispec.Route {
 
 func TestRenderAgentGuideHeadingsAndRoutes(t *testing.T) {
 	guide := apispec.RenderAgentGuide(guideFixture())
-	if !strings.HasPrefix(guide, "# Gatehouse Mail\n\n") {
+	if !strings.HasPrefix(guide, "# MailMoose\n\n") {
 		t.Fatalf("guide does not start with the header: %q", guide)
 	}
 	if !strings.Contains(guide, "Authenticate with `Authorization: Bearer <key>`.") {

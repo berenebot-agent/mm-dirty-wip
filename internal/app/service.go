@@ -20,22 +20,22 @@ import (
 	"sync"
 	"time"
 
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/cryptox"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
-	_ "gatehouse-mail/internal/transport/brevo"
-	_ "gatehouse-mail/internal/transport/cloudflare"
-	_ "gatehouse-mail/internal/transport/mailgun"
-	_ "gatehouse-mail/internal/transport/mx"
-	"gatehouse-mail/internal/transport/netutil"
-	_ "gatehouse-mail/internal/transport/resend"
-	_ "gatehouse-mail/internal/transport/smtp"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/cryptox"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
+	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
+	_ "github.com/dellarb/mailmoose/internal/transport/cloudflare"
+	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
+	_ "github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	_ "github.com/dellarb/mailmoose/internal/transport/resend"
+	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
 type Service struct {
@@ -64,7 +64,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
 // keyed on the receiving domain rather than the full recipient, so random local
-// parts on a Gatehouse-controlled domain cannot each produce an audit row; the
+// parts on a MailMoose-controlled domain cannot each produce an audit row; the
 // offending recipient is still recorded in the detail for operational
 // visibility.
 func (s *Service) auditUnrouted(provider, recipient string) {
@@ -147,7 +147,7 @@ func (s *Service) IngestInbound(ctx context.Context, provider string, r *http.Re
 // transactionally, then publishes the realtime event. A future SMTP ingress can
 // call the same core with its own authorization context.
 //
-// A provider event may address several Gatehouse recipients (Resend carries the
+// A provider event may address several MailMoose recipients (Resend carries the
 // full To list). Each distinct inbox is delivered to once, under its own
 // sender-allow-list and quota rules; a delivery to one inbox never suppresses
 // or duplicates another.

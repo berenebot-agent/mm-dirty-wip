@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gatehouse-mail/internal/transport/netutil"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 func TestHTTPClientRejectsPrivateHosted(t *testing.T) {

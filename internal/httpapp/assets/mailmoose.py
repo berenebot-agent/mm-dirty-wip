@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Gatehouse Mail agent client (Python 3 standard library only).
+"""MailMoose agent client (Python 3 standard library only).
 
 This is the canonical example client served at ``GET /examples/python``. It
-wraps the whole agent-facing REST surface of Gatehouse Mail and is meant to be
+wraps the whole agent-facing REST surface of MailMoose and is meant to be
 read as much as run: every command maps one-to-one onto an HTTP route, and the
 ``--help`` text for each command lists every option.
 
@@ -11,55 +11,55 @@ Quick start
 ::
 
     # 1. Point the client at an instance and an API key.
-    export GATEHOUSE_BASE_URL="https://your-instance"
-    export GATEHOUSE_API_KEY="ghm_..."
+    export MAILMOOSE_BASE_URL="https://your-instance"
+    export MAILMOOSE_API_KEY="mmm_..."
 
     # 2. Discover who you are and which inboxes you can reach.
-    python3 gatehouse.py bootstrap
-    python3 gatehouse.py inboxes --table
+    python3 mailmoose.py bootstrap
+    python3 mailmoose.py inboxes --table
 
     # 3. Read mail.
-    python3 gatehouse.py list --inbox inb_123 --unread --limit 20 --table
-    python3 gatehouse.py get msg_123
-    python3 gatehouse.py search "invoice" --inbox inb_123
-    python3 gatehouse.py threads --inbox inb_123
-    python3 gatehouse.py thread thr_123
-    python3 gatehouse.py labels
+    python3 mailmoose.py list --inbox inb_123 --unread --limit 20 --table
+    python3 mailmoose.py get msg_123
+    python3 mailmoose.py search "invoice" --inbox inb_123
+    python3 mailmoose.py threads --inbox inb_123
+    python3 mailmoose.py thread thr_123
+    python3 mailmoose.py labels
 
     # 4. Send and reply.
-    python3 gatehouse.py send --to alice@example.com --subject "Hi" --text "Hello"
-    python3 gatehouse.py send --to a@x,b@y --subject "Report" --text "See attached" \
+    python3 mailmoose.py send --to alice@example.com --subject "Hi" --text "Hello"
+    python3 mailmoose.py send --to a@x,b@y --subject "Report" --text "See attached" \
         --attach report.pdf --wait
-    python3 gatehouse.py reply msg_123 --text "Thanks!"
+    python3 mailmoose.py reply msg_123 --text "Thanks!"
 
     # 5. Triage.
-    python3 gatehouse.py mark-read msg_123
-    python3 gatehouse.py label msg_123 --labels "Invoices,Unpaid"
-    python3 gatehouse.py delete msg_123
+    python3 mailmoose.py mark-read msg_123
+    python3 mailmoose.py label msg_123 --labels "Invoices,Unpaid"
+    python3 mailmoose.py delete msg_123
 
     # 6. Drafts and human-in-the-loop approval.
-    python3 gatehouse.py drafts --inbox inb_123
-    python3 gatehouse.py drafts --inbox inb_123 --to alice@example.com \
+    python3 mailmoose.py drafts --inbox inb_123
+    python3 mailmoose.py drafts --inbox inb_123 --to alice@example.com \
         --subject "Quote" --text "..." --action request-send
-    python3 gatehouse.py send-requests --active
-    python3 gatehouse.py approve drf_123 --feedback "Looks good"
+    python3 mailmoose.py send-requests --active
+    python3 mailmoose.py approve drf_123 --feedback "Looks good"
 
     # 7. Realtime and long-poll.
-    python3 gatehouse.py events --after evt_100
-    python3 gatehouse.py watch --after evt_100      # streams until Ctrl-C
-    python3 gatehouse.py wait --inbox inb_123 --timeout 120
+    python3 mailmoose.py events --after evt_100
+    python3 mailmoose.py watch --after evt_100      # streams until Ctrl-C
+    python3 mailmoose.py wait --inbox inb_123 --timeout 120
 
 Credentials
 -----------
 Resolution order (first non-empty wins):
 
 1. ``--base`` / ``--key`` command-line flags
-2. ``GATEHOUSE_BASE_URL`` / ``GATEHOUSE_API_KEY`` environment variables
-3. ``~/.gatehouse/client.json`` (create it mode 0600)::
+2. ``MAILMOOSE_BASE_URL`` / ``MAILMOOSE_API_KEY`` environment variables
+3. ``~/.mailmoose/client.json`` (create it mode 0600)::
 
        {
          "base_url": "https://your-instance",
-         "api_key": "ghm_...",
+         "api_key": "mmm_...",
          "inbox": "inb_123"
        }
 
@@ -95,7 +95,7 @@ import urllib.request
 import uuid
 
 DEFAULT_BASE_URL = "http://localhost:8081"
-CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".gatehouse", "client.json")
+CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mailmoose", "client.json")
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -137,8 +137,8 @@ realtime:
   wait blocks until a message arrives or --timeout (max 600s), then returns.
 
 credentials:
-  --base/--key, then GATEHOUSE_BASE_URL/GATEHOUSE_API_KEY, then
-  ~/.gatehouse/client.json (chmod 600). Never ~/.hermes/.env.
+  --base/--key, then MAILMOOSE_BASE_URL/MAILMOOSE_API_KEY, then
+  ~/.mailmoose/client.json (chmod 600). Never ~/.hermes/.env.
   With none set, the base defaults to http://localhost:8081 with a warning.
 
 exit codes: 0 ok, 1 error, 2 usage. JSON to stdout, diagnostics to stderr.
@@ -174,7 +174,7 @@ class Response(object):
 
 
 def err(message):
-    sys.stderr.write("gatehouse: %s\n" % message)
+    sys.stderr.write("mailmoose: %s\n" % message)
 
 
 def resolve_inbox(value):
@@ -217,26 +217,26 @@ def resolve_client(args):
     config = load_config_file()
     base = (
         args.base
-        or os.environ.get("GATEHOUSE_BASE_URL")
+        or os.environ.get("MAILMOOSE_BASE_URL")
         or config.get("base_url")
         or config.get("base")
     )
     if not base:
         base = DEFAULT_BASE_URL
         print(
-            "gatehouse.py: GATEHOUSE_BASE_URL not set; defaulting to %s" % base,
+            "mailmoose.py: MAILMOOSE_BASE_URL not set; defaulting to %s" % base,
             file=sys.stderr,
         )
     key = (
         args.key
-        or os.environ.get("GATEHOUSE_API_KEY")
+        or os.environ.get("MAILMOOSE_API_KEY")
         or config.get("api_key")
         or config.get("key")
         or ""
     )
     inbox = (
         resolve_inbox(getattr(args, "inbox", None))
-        or resolve_inbox(os.environ.get("GATEHOUSE_INBOX"))
+        or resolve_inbox(os.environ.get("MAILMOOSE_INBOX"))
         or resolve_inbox(config.get("inbox"))
     )
     return Client(base, key, inbox)
@@ -649,7 +649,7 @@ def load_attachment_files(paths):
 
 
 def encode_multipart(files, field="attachments"):
-    boundary = "----gatehouse" + uuid.uuid4().hex
+    boundary = "----mailmoose" + uuid.uuid4().hex
     parts = []
     for filename, content_type, content in files:
         safe_name = filename.replace('"', "%22")
@@ -1058,9 +1058,9 @@ def cmd_wait(client, args):
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="gatehouse",
+        prog="mailmoose",
         description=(
-            "Gatehouse Mail agent client. JSON to stdout, diagnostics to stderr."
+            "MailMoose agent client. JSON to stdout, diagnostics to stderr."
         ),
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1070,15 +1070,15 @@ def build_parser():
         metavar="URL",
         default=None,
         help=(
-            "API base URL (default: $GATEHOUSE_BASE_URL, then "
-            "~/.gatehouse/client.json, then %s)" % DEFAULT_BASE_URL
+            "API base URL (default: $MAILMOOSE_BASE_URL, then "
+            "~/.mailmoose/client.json, then %s)" % DEFAULT_BASE_URL
         ),
     )
     parser.add_argument(
         "--key",
         metavar="KEY",
         default=None,
-        help="API key (default: $GATEHOUSE_API_KEY, then ~/.gatehouse/client.json)",
+        help="API key (default: $MAILMOOSE_API_KEY, then ~/.mailmoose/client.json)",
     )
     parser.add_argument(
         "--inbox",
@@ -1094,7 +1094,7 @@ def build_parser():
     parser.add_argument(
         "--version",
         action="version",
-        version="gatehouse.py 1.0",
+        version="mailmoose.py 1.0",
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     subparsers.required = True
@@ -1490,8 +1490,8 @@ def main(argv=None):
         return EXIT_ERROR
     if not client.key:
         err(
-            "no API key: pass --key, set GATEHOUSE_API_KEY, or write "
-            "~/.gatehouse/client.json"
+            "no API key: pass --key, set MAILMOOSE_API_KEY, or write "
+            "~/.mailmoose/client.json"
         )
         return EXIT_ERROR
     try:

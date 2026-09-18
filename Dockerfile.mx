@@ -6,7 +6,7 @@
 # remote core over HTTPS) and DNS (/etc/resolv.conf) for SPF/DKIM/DMARC.
 #
 # The embedded single-container mode (MX_ENABLE=true) does NOT use this image:
-# it runs the edge binary that ships inside the main gatehouse-mail image.
+# it runs the edge binary that ships inside the main mailmoose image.
 
 FROM golang:1.27-bookworm AS build
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -17,20 +17,20 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/gatehouse-mx ./cmd/mx
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./cmd/mx
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 
 # The edge holds no /data, no app key and needs no privilege; it stages messages
 # in memory. Run it as the same non-root uid the main image uses.
-ARG GATEHOUSE_UID=65532
-ARG GATEHOUSE_GID=65532
-RUN groupadd -g ${GATEHOUSE_GID} gatehouse 2>/dev/null || true \
- && useradd -u ${GATEHOUSE_UID} -g ${GATEHOUSE_GID} -M -s /usr/sbin/nologin gatehouse
+ARG MAILMOOSE_UID=65532
+ARG MAILMOOSE_GID=65532
+RUN groupadd -g ${MAILMOOSE_GID} mailmoose 2>/dev/null || true \
+ && useradd -u ${MAILMOOSE_UID} -g ${MAILMOOSE_GID} -M -s /usr/sbin/nologin mailmoose
 
-COPY --from=build /out/gatehouse-mx /usr/local/bin/gatehouse-mx
-COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/gatehouse-mail/
-USER ${GATEHOUSE_UID}:${GATEHOUSE_GID}
+COPY --from=build /out/mailmoose-mx /usr/local/bin/mailmoose-mx
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
+USER ${MAILMOOSE_UID}:${MAILMOOSE_GID}
 EXPOSE 2525
-ENTRYPOINT ["/usr/local/bin/gatehouse-mx"]
+ENTRYPOINT ["/usr/local/bin/mailmoose-mx"]

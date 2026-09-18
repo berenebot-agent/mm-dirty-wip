@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/mxagent"
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 func TestDomainsAlign(t *testing.T) {

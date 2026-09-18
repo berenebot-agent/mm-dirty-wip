@@ -1,4 +1,4 @@
-# Gatehouse Mail — V1 Decision Register
+# MailMoose — V1 Decision Register
 
 This file records architectural decisions the implementation should treat as settled unless a concrete requirement justifies revision. It is the single decision register for the project: the former root `DECISIONS.md` implementation notes were merged here as D038–D051.
 
@@ -101,7 +101,7 @@ A domain with no credential is valid: mail is still accepted and queued as `pend
 
 **Reason:** Familiar integration and easier migration.
 
-**Boundary:** Native Gatehouse Mail models remain authoritative for richer features.
+**Boundary:** Native MailMoose models remain authoritative for richer features.
 
 ## D012 — Lightweight web UI
 
@@ -304,9 +304,9 @@ invalidates an approval. Draft bytes stay charged until send consumes them.
 ## D026 — External email approval for draft sends
 
 **Decision:** Phase 2 lets an external person authorize a draft send entirely
-by email, with no Gatehouse account. An inbox may configure one optional
+by email, with no MailMoose account. An inbox may configure one optional
 `approver_email` (Owner/Admin via `PATCH /v1/inboxes/{id}`). A configured
-approver makes `request-send` external automatically: Gatehouse freezes the
+approver makes `request-send` external automatically: MailMoose freezes the
 draft, records a request carrying the approver, a hashed one-time token and an
 expiry, and queues an approval email from the agent inbox through the existing
 outbound path in the same transaction. The optional `{"external": true}` flag
@@ -318,7 +318,7 @@ to the inbox; nothing happens until the approver sends that reply.
 **Trigger:** External approval is a property of the inbox, not the request. An
 agent that simply calls `request-send` gets approval by email whenever the
 inbox has an approver configured; it never has to know the transport. An inbox
-with an approver cannot create a Gatehouse-only request (the owner can still
+with an approver cannot create a MailMoose-only request (the owner can still
 approve or reject in the UI).
 
 An inbound message whose decoded subject contains exactly one strict
@@ -365,7 +365,7 @@ primitive; a valid reject stores optional feedback and returns the draft to
 request keeps the approver it was created with.
 
 **Requirement:** The product rule is that an agent expresses intent but cannot
-self-authorize, and that a nominated human approves without needing a Gatehouse
+self-authorize, and that a nominated human approves without needing a MailMoose
 account. Email is the lowest-friction transport, but a bare subject token is
 weak: it can be guessed, replayed, forwarded or forged. The design therefore
 pairs the secret token with a nominated sender address, enforces single use at
@@ -703,7 +703,7 @@ across the approval boundary, MX edge, outbound queue, crypto and UI:
   email and the UI review page now show Bcc (which the generated MIME never
   carries) and both the text and HTML body alternatives. The HTML alternative
   is included as escaped source in the email and never rendered inside
-  Gatehouse's own approval mail; only the sandboxed UI view renders it.
+  MailMoose's own approval mail; only the sandboxed UI view renders it.
 - **Approval/rejection processing is retry-safe.** A transient store failure
   while recording a decision is returned, so the webhook provider re-delivers
   and the MX edge answers a temporary SMTP failure; only terminal outcomes
@@ -811,7 +811,7 @@ upload is kept for incremental uploads.
 ## D037 — External sending aliases (migration 028)
 
 **Decision:** An inbox may carry one or more **external sending aliases**: full
-email addresses on domains Gatehouse does not manage, used only as outbound
+email addresses on domains MailMoose does not manage, used only as outbound
 identities. Each external alias owns its own sending connector (any existing
 outbound provider, encrypted with `APP_ENCRYPTION_KEY`) and an optional sender
 display name. External aliases are strictly send-only: they never participate in
@@ -874,7 +874,7 @@ never claims one.
 (`internal/httpapp/external_alias_api.go`). No new dependency or runtime service.
 
 **Deferrals:** an external alias may not be used for inbound or for a per-alias
-DKIM/SPF identity Gatehouse cannot prove; address immutability avoids migration
+DKIM/SPF identity MailMoose cannot prove; address immutability avoids migration
 of queued attribution.
 
 **UI:** the inbox Aliases tab presents managed and external aliases as two
@@ -888,23 +888,23 @@ connector, so a missing external connector shows a sender-specific pause banner.
 
 ## D038 — Embedded MX: single-container mode with a separate-uid child
 
-**Decision:** `MX_ENABLE=true` makes `cmd/server` spawn `gatehouse-mx` as a child
+**Decision:** `MX_ENABLE=true` makes `cmd/server` spawn `mailmoose-mx` as a child
 process in the same container, under a different uid/gid (`MX_UID`/`MX_GID`,
 default 65533) with a scrubbed environment, then drop its own privileges to the
 app runtime user (default 65532). The edge has no `/data` access, no
 `APP_ENCRYPTION_KEY`, no `DATA_DIR` and no `MX_EDGE_KEYS`, and stages messages in
 memory. The single switch `MX_ENABLE` has three values: `false` (no MX), `true`
 (embedded, above), and `remote` (edge runs as its own container/image,
-`gatehouse-mx`, or on another host, sharing `MX_EDGE_KEYS`). The shipped
+`mailmoose-mx`, or on another host, sharing `MX_EDGE_KEYS`). The shipped
 `docker-compose.yml` selects `true` by default; see D039.
 
 - **Why:** operators want `docker compose up -d` to receive mail directly with
   no second service, while still keeping the edge out of the app's data and
   secrets. A separate process under a separate uid gives that with DAC, without
   a new binary or a supervisor package.
-- **No separate supervisor, no `GATEHOUSE_ROLE`:** the existing app process is
+- **No separate supervisor, no `MAILMOOSE_ROLE`:** the existing app process is
   already PID 1, so it spawns the child before its privilege drop and keeps
-  running to coordinate shutdown. There is no `cmd/gatehouse`.
+  running to coordinate shutdown. There is no `cmd/mailmoose`.
 - **Shutdown is a pipe, not a signal:** after the parent drops uid it cannot
   signal a child owned by a different uid, so the parent passes an inherited
   write pipe and closing it (EOF) tells the edge to stop (`MX_SHUTDOWN_FD`).
@@ -913,7 +913,7 @@ memory. The single switch `MX_ENABLE` has three values: `false` (no MX), `true`
   two remedies (remove the hardening, or use `MX_ENABLE=remote` with the
   separate edge image). Silent same-uid degradation would defeat the isolation.
 - **Isolation is weaker than `remote`:** DAC + separate uid, no mount or
-  network namespaces. `docker-compose.mx-sidecar.yml` (the `gatehouse-mx` image)
+  network namespaces. `docker-compose.mx-sidecar.yml` (the `mailmoose-mx` image)
   remains the recommended mode when two containers are acceptable; the embedded
   mode trades namespace isolation for a one-container deployment.
 - **In-memory staging, capped:** the edge holds the original bytes in RAM for
@@ -943,7 +943,7 @@ is then published but has no listener. Compose supplies the `true` default via
 binary itself defaults to `false` when `MX_ENABLE` is unset. A separate,
 self-contained `docker-compose.advanced.yml` mirrors the same MX default and adds
 the hardened stack (`read_only`, `/tmp` tmpfs, `no-new-privileges`, the optional
-`cap_drop`/`user` block, `GATEHOUSE_RUN_UID`/`GID`).
+`cap_drop`/`user` block, `MAILMOOSE_RUN_UID`/`GID`).
 `docker-compose.mx-sidecar.yml` is the two-container sidecar deployment and
 forces `MX_ENABLE=remote`.
 
@@ -976,12 +976,12 @@ change-discipline rule for a settled decision (this entry).
 
 ## D040 — Separate edge image for remote/sidecar MX (Dockerfile.mx)
 
-The sidecar/remote edge runs from its own image, `gatehouse-mx` (`Dockerfile.mx`),
+The sidecar/remote edge runs from its own image, `mailmoose-mx` (`Dockerfile.mx`),
 not the app image with an entrypoint override. The app image still builds the
 edge binary for `MX_ENABLE=true`; the separate image is edge-only.
 
 - **Why:** "which container is this?" should be obvious. A standalone MX host or
-  sidecar previously ran the full app image (including `gatehouse-mail` and
+  sidecar previously ran the full app image (including `mailmoose` and
   `libsqlite3`) with a different entrypoint. The edge links no SQLite and opens
   no files, so the edge image builds `CGO_ENABLED=0` static, ships only
   ca-certificates/tzdata, and runs as a non-root user with no `/data` volume.
@@ -1026,7 +1026,7 @@ status/attempts/claim columns, instead of a `messages` row flagged `internal`.
 The container image has no `USER` and installs no `gosu`. It boots as root so
 `internal/privdrop` can recursively `Lchown` a fresh, root-owned `./data` bind
 mount to the runtime UID/GID, then `Setgroups`/`Setgid`/`Setuid` before the
-database is opened. `GATEHOUSE_RUN_UID`/`GATEHOUSE_RUN_GID` (default
+database is opened. `MAILMOOSE_RUN_UID`/`MAILMOOSE_RUN_GID` (default
 65532:65532) select the runtime user; the drop is a no-op when the process is
 already non-root, so the opt-in hardened compose (`user:`, `cap_drop: [ALL]`)
 needs no setuid capability. This mirrors the sibling router service: no host `chown` step,
@@ -1233,9 +1233,9 @@ database. Once any user exists the bootstrap settings have no effect. If no
 credentials are supplied the service starts and serves a static
 "not configured" page; there is no HTTP path that can claim the instance.
 Password recovery is operator-driven through
-`gatehouse admin reset-password <email>`, which reuses the normal password
+`mailmoose admin reset-password <email>`, which reuses the normal password
 rules, revokes all browser sessions, leaves API keys intact, and writes an
-audit event; `gatehouse admin revoke-api-keys <email>` is a separate command.
+audit event; `mailmoose admin revoke-api-keys <email>` is a separate command.
 
 **Reason:** A bootstrap token that must be read from logs and re-entered on a
 web form is easy to mishandle, and an unauthenticated setup form is a standing
@@ -1244,6 +1244,17 @@ and match how the rest of the configuration is supplied, while the guaranteed
 server-side reset covers lost access without depending on outbound email. API
 keys are treated as independent machine integrations, so they are not torn down
 by a human password reset.
+
+## D056 — Rename Gatehouse Mail to MailMoose
+
+**Decision:** Rename the product, Go module (`github.com/dellarb/mailmoose`),
+binaries (`mailmoose`, `mailmoose-mx`), env prefix (`MAILMOOSE_*`), HTTP
+headers (`X-Mailmoose-*`), discovery path (`/.well-known/mailmoose`), API key
+prefix (`mmm_`), cookies (`mmm_csrf`, `mmm_session`), and embedded brand
+assets to MailMoose. No compatibility shims for the old names.
+
+**Reason:** The product launches under the MailMoose name with its own logo
+pack. A breaking rename before first deployment avoids carrying two brands.
 
 ## Future extension register
 

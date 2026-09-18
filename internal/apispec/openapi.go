@@ -28,9 +28,9 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 	return map[string]any{
 		"openapi": "3.0.3",
 		"info": map[string]any{
-			"title":       "Gatehouse Mail",
+			"title":       "MailMoose",
 			"version":     "v1",
-			"description": "Agent-first REST API for Gatehouse Mail. See /agent for the working guide and GET /v1/bootstrap for key capabilities and accessible inboxes. Every operation carries x-required-role: one of read, assistant, owner or admin (absent means any authenticated principal).",
+			"description": "Agent-first REST API for MailMoose. See /agent for the working guide and GET /v1/bootstrap for key capabilities and accessible inboxes. Every operation carries x-required-role: one of read, assistant, owner or admin (absent means any authenticated principal).",
 		},
 		"servers":  []map[string]string{{"url": baseURL}},
 		"security": []map[string]any{{"bearerAuth": []string{}}},

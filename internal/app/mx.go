@@ -6,11 +6,11 @@ import (
 	"errors"
 	"strings"
 
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/mxwire"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // mxwire.Provider is the registered receiving provider name for the MX edge.

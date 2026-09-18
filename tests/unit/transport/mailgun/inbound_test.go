@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/transport"
-	"gatehouse-mail/internal/transport/mailgun"
+	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/mailgun"
 )
 
 type fakeResolver struct {

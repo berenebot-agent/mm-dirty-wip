@@ -7,7 +7,7 @@ import "strings"
 // one-line summaries cannot.
 func RenderAgentGuide(routes []Route) string {
 	var b strings.Builder
-	b.WriteString("# Gatehouse Mail\n\n")
+	b.WriteString("# MailMoose\n\n")
 	b.WriteString("Authenticate with `Authorization: Bearer <key>`.\n\n")
 	b.WriteString("The complete machine-readable contract is at `GET /openapi.json`.\n\n")
 	b.WriteString("Start with `GET /v1/bootstrap` to discover accessible inboxes and effective permissions.\n\n")
@@ -63,7 +63,7 @@ func distinctGroups(routes []Route) []string {
 const agentGuideQuickstart = "## Quick start\n" +
 	"1. Call `GET /v1/bootstrap` and choose an inbox whose `permissions[inbox_id].can_send` is `true`. The matching `inboxes` entry includes the primary address, managed aliases and `default_sender`.\n" +
 	"2. Send with `POST /v1/send?wait=true`:\n\n" +
-	"```http\nPOST /v1/send?wait=true\nAuthorization: Bearer <key>\nContent-Type: application/json\n\n{\"inbox_id\":\"inb_...\",\"to\":[\"recipient@example.com\"],\"subject\":\"Test message\",\"text\":\"Hello from Gatehouse\"}\n```\n\n" +
+	"```http\nPOST /v1/send?wait=true\nAuthorization: Bearer <key>\nContent-Type: application/json\n\n{\"inbox_id\":\"inb_...\",\"to\":[\"recipient@example.com\"],\"subject\":\"Test message\",\"text\":\"Hello from MailMoose\"}\n```\n\n" +
 	"3. With `wait=true`, a successful response waits for the provider attempt and includes the message status. Without it, the message is returned as soon as it is queued.\n" +
 	"- Send fields: `inbox_id` is required unless `from` identifies an accessible inbox or this non-admin key owns exactly one inbox; `to` and a non-empty `subject` are required; a non-empty `text` or `html` body is required. `sender`, `from`, `cc`, `bcc` and `attachments` are optional.\n" +
 	"- `sender` must be the inbox primary address or one of its returned aliases. It is not the same as `from`, which is the compatibility inbox selector.\n" +
@@ -76,8 +76,8 @@ const agentGuideQuickstart = "## Quick start\n" +
 // first thing an agent must read.
 const agentGuideSecurityAppendix = "## Appendix: command security notes\n" +
 	"- `BASE` is the origin that served this guide (scheme + host, no trailing slash, e.g. `https://mail.example.com`); `KEY` is your API key. Set both up front:\n" +
-	" `export BASE=\"https://your-instance\" KEY=\"ghm_...\"`\n" +
-	"- `GET /examples/python` (`gatehouse.py`) uses only the Python 3 standard library, so it runs on hosts with no `curl` or `jq`. `GET /examples/bash` (`gatehouse.sh`) requires both `curl` and `jq` on `PATH`; use the Python client when `jq` is unavailable.\n" +
+	" `export BASE=\"https://your-instance\" KEY=\"mmm_...\"`\n" +
+	"- `GET /examples/python` (`mailmoose.py`) uses only the Python 3 standard library, so it runs on hosts with no `curl` or `jq`. `GET /examples/bash` (`mailmoose.sh`) requires both `curl` and `jq` on `PATH`; use the Python client when `jq` is unavailable.\n" +
 	"- If you call the API with curl directly, use one command with the JSON body inline and nothing after it:\n" +
 	"  `curl -sS -X POST -H \"Authorization: Bearer $KEY\" -H \"Content-Type: application/json\" -d '{\"inbox_id\":\"inb_...\",\"to\":[\"a@b.c\"],\"subject\":\"...\",\"text\":\"...\"}' \"$BASE/v1/send?wait=true\"`\n" +
 	"- Do not stage the request body in a temporary file and do not pass `curl --data-binary @file`. Do not write the response to a file with `-o` and re-read it. Do not pipe the response to a formatter (`| jq .`, `python -m json.tool`) or run it through an interpreter (`python3 -c '...'`); a pipe or interpreter turns the call into a chained-execution shape even when the JSON body is inline. Do not bundle `export`, the request and a formatter into one shell invocation; keep each step a separate command.\n" +
@@ -98,7 +98,7 @@ const agentGuideNarrative = "## Label notes\n" +
 	"- `POST /v1/drafts/{id}/reject` (Owner) — reject with optional `{\"feedback\":\"...\"}`; the draft becomes `rejected`, stays editable, and can be resubmitted.\n" +
 	"- `GET /v1/drafts/{id}/send-request` — the latest request (works after the draft has been sent); `GET /v1/send-requests?inbox={id}&active=true` lists requests.\n" +
 	"- Draft reads include `status` (`draft`, `pending_approval`, `rejected`) and the latest `send_request`, including `approver_email`, `token_expires_at` and `decision_method` (`ui`, `api` or `email`).\n" +
-	"- External approval: an inbox may configure an `approver_email` (set via `PATCH /v1/inboxes/{id}`). The approver gets an email with Approve/Reject `mailto:` actions and replies to the inbox; Gatehouse consumes the reply, validates the token and sender, and records the decision. A UI decision wins safely over an outstanding email request.\n" +
+	"- External approval: an inbox may configure an `approver_email` (set via `PATCH /v1/inboxes/{id}`). The approver gets an email with Approve/Reject `mailto:` actions and replies to the inbox; MailMoose consumes the reply, validates the token and sender, and records the decision. A UI decision wins safely over an outstanding email request.\n" +
 	"- External requests expire after `APPROVAL_EXPIRY_HOURS` (default 48, `0` disables); an expired request returns the draft to `draft` and the token is permanently dead.\n" +
 	"- Events: `draft.send_requested`, `draft.send_request_cancelled`, `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`, `draft.approval_expired`.\n" +
 	"- Approval is asynchronous: it enqueues a pending message; watch `draft.sent` or `draft.send_failed` for the delivery outcome. Approval and delivery are separate states.\n\n" +

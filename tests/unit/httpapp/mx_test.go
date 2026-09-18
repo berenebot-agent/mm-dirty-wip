@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/mxwire"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // testMXSecret is a fixed 32-byte (256-bit) hex secret shared by the core
@@ -77,7 +77,7 @@ func mxRequest(path, meta string, body []byte, keyID string) *http.Request {
 	buf.Write(body)
 	req := httptest.NewRequest("POST", path, bytes.NewReader(buf.Bytes()))
 	req.Header.Set("Content-Type", mxwire.IngestContentType)
-	req.Header.Set("X-Gatehouse-MX-Signature", sig)
+	req.Header.Set("X-MailMoose-MX-Signature", sig)
 	return req
 }
 
@@ -147,7 +147,7 @@ func TestMXIngestRejectsBadSignatureBeforeStaging(t *testing.T) {
 		`,"request_id":"preauth","edge":"mx-1","recipients":["` + box.Address + `"],"envelope_from":"s@outside.test","content_digest":"` + digest +
 		`","size":` + itoa(int64(len(raw))) + `,"auth_results":{}}`
 	req := mxRequest(mxwire.PathIngest, meta, raw, "edge")
-	req.Header.Set("X-Gatehouse-MX-Signature", "deadbeef")
+	req.Header.Set("X-MailMoose-MX-Signature", "deadbeef")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 401 {
@@ -168,7 +168,7 @@ func TestMXBadSignatureRejected(t *testing.T) {
 	meta := `{"version":"mx-v1","key_id":"edge","timestamp":` + itoa(time.Now().Unix()) + `,"request_id":"r3"}`
 	body := []byte(`{"recipients":["` + box.Address + `"]}`)
 	req := mxRequest(mxwire.PathResolve, meta, body, "edge")
-	req.Header.Set("X-Gatehouse-MX-Signature", "deadbeef")
+	req.Header.Set("X-MailMoose-MX-Signature", "deadbeef")
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 401 {

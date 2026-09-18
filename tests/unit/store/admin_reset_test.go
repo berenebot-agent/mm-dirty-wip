@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestGetUserByEmail(t *testing.T) {

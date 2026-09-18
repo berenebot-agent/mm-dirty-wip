@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/admincli"
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/admincli"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestMain(m *testing.M) {

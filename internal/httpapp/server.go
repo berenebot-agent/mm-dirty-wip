@@ -18,13 +18,13 @@ import (
 	"sync"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/hermesrelay"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/hermesrelay"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 //go:embed assets/app.js
@@ -45,10 +45,10 @@ var faviconSVG []byte
 //go:embed assets/apple-touch-icon.png
 var appleTouchIconPNG []byte
 
-//go:embed assets/gatehouse.py
+//go:embed assets/mailmoose.py
 var pythonClient []byte
 
-//go:embed assets/gatehouse.sh
+//go:embed assets/mailmoose.sh
 var bashClient []byte
 
 //go:embed assets/curl-cookbook.txt
@@ -182,7 +182,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
 
 	// Discovery.
-	m.HandleFunc("GET /.well-known/gatehouse", s.discovery)
+	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
 	m.HandleFunc("GET /openapi.json", s.openapi)
@@ -353,7 +353,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
-		w.Header().Set("Link", `</.well-known/gatehouse>; rel="help"; title="Agents: GET /.well-known/gatehouse for API reference"`)
+		w.Header().Set("Link", `</.well-known/mailmoose>; rel="help"; title="Agents: GET /.well-known/mailmoose for API reference"`)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -390,18 +390,18 @@ func principal(r *http.Request) model.Principal {
 func csrf(r *http.Request) string { v, _ := r.Context().Value(csrfKey).(string); return v }
 
 func (s *Server) setPreAuthCSRF(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie("ghm_csrf"); err == nil && len(c.Value) >= 20 {
+	if c, err := r.Cookie("mmm_csrf"); err == nil && len(c.Value) >= 20 {
 		return c.Value
 	}
 	tok, err := auth.RandomToken(24)
 	if err != nil {
 		return ""
 	}
-	http.SetCookie(w, &http.Cookie{Name: "ghm_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+	http.SetCookie(w, &http.Cookie{Name: "mmm_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
 	return tok
 }
 func preAuthCSRF(r *http.Request) string {
-	c, err := r.Cookie("ghm_csrf")
+	c, err := r.Cookie("mmm_csrf")
 	if err != nil {
 		return ""
 	}
@@ -424,13 +424,13 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := strings.TrimSpace(r.Header.Get("Authorization"))
 		if len(h) < 8 || !strings.EqualFold(h[:7], "Bearer ") {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="gatehouse-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
 			writeError(w, 401, "bearer API key required")
 			return
 		}
 		p, err := s.Service.Store.APIKeyPrincipal(r.Context(), strings.TrimSpace(h[7:]))
 		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="gatehouse-api"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="mailmoose-api"`)
 			writeError(w, 401, "invalid API key")
 			return
 		}
@@ -440,7 +440,7 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("ghm_session")
+		c, err := r.Cookie("mmm_session")
 		if err != nil {
 			redirectLogin(w, r)
 			return
@@ -472,10 +472,10 @@ func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{Name: "ghm_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
 }
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: "ghm_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
 }
 
 // cookieSecure marks cookies Secure only when the deployment is HTTPS

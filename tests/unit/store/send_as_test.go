@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestResolveSendingTarget covers primary, same-domain alias, cross-domain alias

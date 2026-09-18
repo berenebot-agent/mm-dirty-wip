@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // domainEditorView drives the save form for a chosen provider. Non-secret
@@ -636,8 +636,8 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "mx":
 		return []string{
-			"Point this domain's MX record at your Gatehouse MX edge hostname.",
-			"Run the optional gatehouse-mx sidecar (or a remote edge) and register its key id and secret with the core.",
+			"Point this domain's MX record at your MailMoose MX edge hostname.",
+			"Run the optional mailmoose-mx sidecar (or a remote edge) and register its key id and secret with the core.",
 			"Publish an SPF record for the domain; DKIM and DMARC are computed at the edge.",
 			"Choose an enforcement mode below (moderate is the default), then save.",
 		}

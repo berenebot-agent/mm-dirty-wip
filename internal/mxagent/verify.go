@@ -11,7 +11,7 @@ import (
 	"github.com/emersion/go-msgauth/dmarc"
 	"golang.org/x/net/publicsuffix"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // Verifier computes SPF/DKIM/DMARC evidence for one message. It never trusts
@@ -45,7 +45,7 @@ func NewVerifier(cfg Config) *Verifier {
 func (v *Verifier) Verify(ctx context.Context, raw io.ReadSeeker, peerIP net.IP, helo, mailFrom, fromDomain string) mxwire.AuthResults {
 	var out mxwire.AuthResults
 	out.Source = "edge"
-	out.Evaluator = "gatehouse-mx/1"
+	out.Evaluator = "mailmoose-mx/1"
 	lookupTXT := v.txtLookup
 
 	if v.cfg.VerifySPF {

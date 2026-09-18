@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {

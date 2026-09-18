@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/htmlsanitize"
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/mailparse"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/htmlsanitize"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 const inboxPageSize = 50

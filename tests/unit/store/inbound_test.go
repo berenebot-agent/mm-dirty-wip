@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func TestResolveInboundBindingAndIsolation(t *testing.T) {

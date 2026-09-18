@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"strings"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {

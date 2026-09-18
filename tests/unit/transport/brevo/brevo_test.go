@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/transport"
-	"gatehouse-mail/internal/transport/brevo"
-	"gatehouse-mail/internal/transport/netutil"
+	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/brevo"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 // brevoPayload mirrors the unexported JSON payload that brevo.Send posts.

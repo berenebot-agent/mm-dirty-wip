@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // CoreClient talks to the core's authenticated MX endpoints. Every request
@@ -44,7 +44,7 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-const mxSignatureHeader = "X-Gatehouse-MX-Signature"
+const mxSignatureHeader = "X-MailMoose-MX-Signature"
 
 // post signs and sends one framed request: a 4-byte metadata length, the
 // metadata JSON and then the raw body stream. metaBytes and bodyDigest are the

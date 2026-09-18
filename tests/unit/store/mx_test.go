@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 func inboundMX(t *testing.T, st *store.Store, box model.Inbox, provider, rcpt, delivery, fingerprint string, spam bool) model.Message {

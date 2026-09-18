@@ -17,7 +17,7 @@ import (
 	"os"
 	"strings"
 
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // Transport adapts the Worker webhook to the generic inbound boundary.
@@ -36,10 +36,10 @@ func (Transport) ConfigFields() []transport.ConfigField {
 
 // Header names of the Worker webhook contract.
 const (
-	HeaderRecipient  = "X-Gatehouse-Recipient"
-	HeaderEnvelopeTo = "X-Gatehouse-Envelope-From"
-	HeaderDeliveryID = "X-Gatehouse-Delivery-ID"
-	HeaderReceivedAt = "X-Gatehouse-Received-At"
+	HeaderRecipient  = "X-MailMoose-Recipient"
+	HeaderEnvelopeTo = "X-MailMoose-Envelope-From"
+	HeaderDeliveryID = "X-MailMoose-Delivery-ID"
+	HeaderReceivedAt = "X-MailMoose-Received-At"
 
 	maxHeaderValue = 512
 )

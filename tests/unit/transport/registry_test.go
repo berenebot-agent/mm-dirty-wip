@@ -3,11 +3,11 @@ package transport_test
 import (
 	"testing"
 
-	"gatehouse-mail/internal/transport"
-	_ "gatehouse-mail/internal/transport/brevo"
-	_ "gatehouse-mail/internal/transport/mailgun"
-	_ "gatehouse-mail/internal/transport/resend"
-	_ "gatehouse-mail/internal/transport/smtp"
+	"github.com/dellarb/mailmoose/internal/transport"
+	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
+	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
+	_ "github.com/dellarb/mailmoose/internal/transport/resend"
+	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
 func TestOutboundRegistry(t *testing.T) {

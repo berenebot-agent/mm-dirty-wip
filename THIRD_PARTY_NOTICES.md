@@ -1,6 +1,6 @@
 # Third-party notices
 
-Gatehouse Mail is licensed under the GNU Affero General Public License v3.0
+MailMoose is licensed under the GNU Affero General Public License v3.0
 (see [LICENSE](LICENSE)). It bundles or links the following third-party
 components; their notices are reproduced as required.
 
@@ -361,5 +361,5 @@ License at http://www.apache.org/licenses/LICENSE-2.0
 
 ## SQLite (libsqlite3)
 
-Gatehouse links the system SQLite library (`libsqlite3-0`). SQLite is in the
+MailMoose links the system SQLite library (`libsqlite3-0`). SQLite is in the
 public domain. See https://www.sqlite.org/copyright.html.

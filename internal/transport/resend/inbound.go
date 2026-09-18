@@ -22,8 +22,8 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/transport"
-	"gatehouse-mail/internal/transport/netutil"
+	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 // Transport adapts Resend inbound webhooks to the generic inbound boundary.

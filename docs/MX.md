@@ -1,14 +1,14 @@
 # Optional MX (direct SMTP) ingress
 
-Gatehouse receives mail two ways:
+MailMoose receives mail two ways:
 
 - **Webhook providers** (Mailgun, Cloudflare Email Routing, Resend) — the
   minimal, app-only mode. No port 25 and no extra process; select it with
   `MX_ENABLE=false`.
 - **Direct SMTP (MX)** — the default in the shipped `docker-compose.yml`: a
-  policy-free edge binary, `gatehouse-mx`, built into the same image, that
+  policy-free edge binary, `mailmoose-mx`, built into the same image, that
   terminates SMTP on port 25 and calls the core over signed HTTPS. Use it when
-  you own the domain and want mail delivered straight to Gatehouse without a
+  you own the domain and want mail delivered straight to MailMoose without a
   third-party receiver.
 
 The edge holds **no** `/data` mount, no database access and no
@@ -21,11 +21,11 @@ core. See decision `D031` in [DECISIONS.md](DECISIONS.md).
 Internet TCP :25
        |
        v
-gatehouse-mx (non-root, in-memory staging, SMTP + SPF/DKIM/DMARC)
+mailmoose-mx (non-root, in-memory staging, SMTP + SPF/DKIM/DMARC)
        | RCPT: POST /internal/mx/resolve
        | DATA: POST /internal/mx/ingest   (one request per message)
        v
-gatehouse-mail inbound connector :8082
+mailmoose inbound connector :8082
        | HMAC-verified edge identity + recipient binding
        | core fans out per accepted recipient: per-domain auth policy + mailbox rules
        v
@@ -46,7 +46,7 @@ default; the server binary defaults to `false` when the variable is unset.
 
 ```env
 MX_ENABLE=true   # true (compose default) | false (webhook-only) | remote
-#MX_HOSTNAME=mail.example.com   # optional; defaults to gatehouse-mx
+#MX_HOSTNAME=mail.example.com   # optional; defaults to mailmoose-mx
 ```
 
 - `true` embeds the edge in this container (below).
@@ -102,7 +102,7 @@ default and needs no second service.
 docker compose up -d --build
 ```
 
-The app spawns `gatehouse-mx` as a child under a separate uid (`MX_UID`/`MX_GID`,
+The app spawns `mailmoose-mx` as a child under a separate uid (`MX_UID`/`MX_GID`,
 default 65533) with a scrubbed environment, then drops its own privileges to the
 app runtime uid (65532). The edge has no `/data` access and no
 `APP_ENCRYPTION_KEY`, and writes nothing to disk (staging is in memory). This is
@@ -116,7 +116,7 @@ parent cannot signal a child owned by a different uid).
 
 ### remote — separate edge container/image (`docker-compose.mx-sidecar.yml`)
 
-The edge runs from its own minimal image (`Dockerfile.mx`, tag `gatehouse-mx`)
+The edge runs from its own minimal image (`Dockerfile.mx`, tag `mailmoose-mx`)
 in its own filesystem and network namespace. This is the strongest isolation and
 is recommended when you can run two containers:
 
@@ -126,14 +126,14 @@ MX_EDGE_SECRET=<long random secret>
 docker compose -f docker-compose.mx-sidecar.yml up -d
 ```
 
-The sidecar file sets `MX_ENABLE=remote` on the core and runs the `gatehouse-mx`
+The sidecar file sets `MX_ENABLE=remote` on the core and runs the `mailmoose-mx`
 image for the edge. The edge image runs as a non-root user and holds no `/data`,
 so it needs no writable filesystem or privilege. It listens on an unprivileged
 internal port; publish host `25:2525`.
 
 ### remote — another host
 
-The same `gatehouse-mx` image on another host, pointed at the core's public
+The same `mailmoose-mx` image on another host, pointed at the core's public
 HTTPS inbound address. No cert files are needed if a reverse proxy terminates
 TLS: the signature covers the method and path only, not the host or scheme.
 Forward to the core's `:8082` **without rewriting the path**.

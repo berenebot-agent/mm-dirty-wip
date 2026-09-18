@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/config"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/httpapp"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // forceHTTPSHandler builds a handler whose config forces HTTPS, for testing the

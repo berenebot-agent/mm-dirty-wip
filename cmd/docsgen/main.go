@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"gatehouse-mail/internal/apispec"
+	"github.com/dellarb/mailmoose/internal/apispec"
 )
 
 func main() {

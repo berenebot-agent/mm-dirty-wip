@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/mailparse"
+	"github.com/dellarb/mailmoose/internal/mailparse"
 )
 
 // Mirror internal/mailparse unexported limits (internal/mailparse/parse.go).

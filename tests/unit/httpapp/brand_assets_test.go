@@ -43,7 +43,7 @@ func TestHeaderUsesLogoHomeLink(t *testing.T) {
 	if !strings.Contains(body, `rel="icon"`) {
 		t.Fatalf("head missing favicon link")
 	}
-	if strings.Contains(body, "<b>Gatehouse Email</b>") || strings.Contains(body, "<b>Gatehouse Mail</b>") {
+	if strings.Contains(body, "<b>MailMoose</b>") || strings.Contains(body, "<b>MailMoose</b>") {
 		t.Fatalf("header still renders a text brand label")
 	}
 }

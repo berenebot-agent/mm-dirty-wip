@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"gatehouse-mail/internal/limits"
+	"github.com/dellarb/mailmoose/internal/limits"
 )
 
 // DeliveryAttempt is one immutable provider send (success or failure) for an

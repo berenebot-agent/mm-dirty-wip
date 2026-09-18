@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 func TestUIDomainCreateNameOnlyRedirectsToDomainPage(t *testing.T) {

@@ -21,7 +21,7 @@ import (
 
 	"github.com/emersion/go-smtp"
 
-	"gatehouse-mail/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // Server is the policy-free SMTP edge. It enforces connection/recipient/size

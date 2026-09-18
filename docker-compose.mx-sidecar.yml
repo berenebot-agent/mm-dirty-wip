@@ -1,5 +1,5 @@
 # Sidecar MX deployment: the edge in its own container from its own image
-# (gatehouse-mx), no /data mount and no app key. This is the strongest isolation
+# (mailmoose-mx), no /data mount and no app key. This is the strongest isolation
 # (separate filesystem and network namespaces) and is what the MX_ENABLE=remote
 # mode expects.
 #
@@ -8,8 +8,8 @@
 # Set MX_EDGE_SECRET in .env; the core accepts the edge's key and the edge signs
 # with it.
 services:
-  gatehouse:
-    image: gatehouse-mail:latest
+  mailmoose:
+    image: mailmoose:latest
     build: .
     restart: unless-stopped
     env_file: .env
@@ -24,21 +24,21 @@ services:
       - "0.0.0.0:8081:8081"
       - "0.0.0.0:8082:8082"
 
-  gatehouse-mx:
-    image: gatehouse-mx:latest
+  mailmoose-mx:
+    image: mailmoose-mx:latest
     build:
       context: .
       dockerfile: Dockerfile.mx
     restart: unless-stopped
     environment:
-      GATEHOUSE_INGEST_URL: ${MX_INGEST_URL:-http://gatehouse:8082}
+      MAILMOOSE_INGEST_URL: ${MX_INGEST_URL:-http://mailmoose:8082}
       MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
       MX_EDGE_SECRET: ${MX_EDGE_SECRET:?set MX_EDGE_SECRET in .env}
-      MX_HOSTNAME: ${MX_HOSTNAME:-gatehouse-mx}
+      MX_HOSTNAME: ${MX_HOSTNAME:-mailmoose-mx}
     ports:
       - "0.0.0.0:25:2525"
     depends_on:
-      - gatehouse
+      - mailmoose
     # The edge image already runs as a non-root user and stages in memory, so no
     # user:/read_only: overrides are required.
     security_opt:

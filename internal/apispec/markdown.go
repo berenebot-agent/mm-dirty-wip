@@ -6,7 +6,7 @@ import "strings"
 // with one table per group.
 func RenderMarkdown(routes []Route) string {
 	var b strings.Builder
-	b.WriteString("# Gatehouse Mail API Reference\n\n")
+	b.WriteString("# MailMoose API Reference\n\n")
 	b.WriteString("Generated from `internal/apispec`; do not edit by hand.\n\n")
 	for _, group := range distinctGroups(routes) {
 		b.WriteString("## ")

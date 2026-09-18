@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"gatehouse-mail/internal/idgen"
-	"gatehouse-mail/internal/limits"
-	"gatehouse-mail/internal/model"
+	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // HoldPending records why a pending message is not being delivered and defers
@@ -179,7 +179,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, nil, err
 	}
 	now := nowText()
-	// rfc_message_id is the stable Message-ID Gatehouse minted at enqueue time;
+	// rfc_message_id is the stable Message-ID MailMoose minted at enqueue time;
 	// it is never rewritten, so a message id means the same thing whether the
 	// send succeeded or failed. A provider that assigns its own wire id is
 	// recorded in provider_message_id, and reply matching already looks in both

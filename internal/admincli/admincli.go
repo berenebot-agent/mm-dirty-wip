@@ -1,5 +1,5 @@
 // Package admincli implements the operator-facing `admin` subcommands of the
-// Gatehouse binary. They open the store directly, so recovery does not depend
+// MailMoose binary. They open the store directly, so recovery does not depend
 // on the HTTP server or a working application configuration (in particular,
 // APP_ENCRYPTION_KEY is not required).
 package admincli
@@ -13,8 +13,8 @@ import (
 	"os"
 	"strings"
 
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/store"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // dataDirEnv matches the server's DATA_DIR so the command and a running
@@ -23,7 +23,7 @@ const dataDirEnv = "DATA_DIR"
 
 const defaultDataDir = "/data"
 
-// Run executes one `gatehouse admin` command and returns a process exit code.
+// Run executes one `mailmoose admin` command and returns a process exit code.
 // stdin/stdout/stderr are injected so tests can drive it without a terminal.
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -46,7 +46,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, `usage: gatehouse admin <command> [options]
+	fmt.Fprintln(w, `usage: mailmoose admin <command> [options]
 
 Commands:
   reset-password <email> [--password-file PATH]
@@ -95,7 +95,7 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		}
 	}
 	if len(positional) != 1 {
-		fmt.Fprintln(stderr, "usage: gatehouse admin reset-password <email> [--password-file PATH]")
+		fmt.Fprintln(stderr, "usage: mailmoose admin reset-password <email> [--password-file PATH]")
 		return 2
 	}
 	if passwordFileSet && strings.TrimSpace(passwordFile) == "" {
@@ -147,7 +147,7 @@ func runRevokeAPIKeys(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stderr, "usage: gatehouse admin revoke-api-keys <email>")
+		fmt.Fprintln(stderr, "usage: mailmoose admin revoke-api-keys <email>")
 		return 2
 	}
 	email := strings.TrimSpace(fs.Arg(0))

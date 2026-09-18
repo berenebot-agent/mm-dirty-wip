@@ -16,12 +16,12 @@ import (
 	"sync"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/auth"
-	"gatehouse-mail/internal/events"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/ws"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/events"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/ws"
 )
 
 type Server struct {
@@ -244,7 +244,7 @@ func descriptor() map[string]any {
 	return map[string]any{
 		"type": "descriptor",
 		"descriptor": map[string]any{
-			"contract_version": 1, "platform": "email", "label": "Gatehouse Mail", "emoji": "✉️",
+			"contract_version": 1, "platform": "email", "label": "MailMoose", "emoji": "✉️",
 			"platform_hint": "Email", "max_message_length": 100000, "supports_draft_streaming": false,
 			"supports_edit": false, "supports_threads": true, "markdown_dialect": "plain", "len_unit": "chars",
 			"supported_ops": []string{"send", "typing"},

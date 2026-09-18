@@ -3,7 +3,7 @@ package config_test
 import (
 	"testing"
 
-	"gatehouse-mail/internal/config"
+	"github.com/dellarb/mailmoose/internal/config"
 )
 
 const testKey = "01234567890123456789012345678901"

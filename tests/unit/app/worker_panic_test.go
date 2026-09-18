@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // panicTransport is a deliberately faulty outbound provider. Its Send panics,

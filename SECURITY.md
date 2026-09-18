@@ -1,6 +1,6 @@
 # Security Policy
 
-Gatehouse Mail handles untrusted email, credentials and tenant data, so we take
+MailMoose handles untrusted email, credentials and tenant data, so we take
 security reports seriously. Thank you for helping keep the project and its
 operators safe.
 
@@ -9,7 +9,7 @@ operators safe.
 Please report suspected vulnerabilities **privately** through GitHub's Private
 Vulnerability Reporting:
 
-<https://github.com/dellarb/gatehouse-mail/security/advisories/new>
+<https://github.com/dellarb/mailmoose/security/advisories/new>
 
 **Do not open a public issue or pull request for a suspected vulnerability.**
 A public report exposes every self-hosted and hosted deployment before a fix is
@@ -52,7 +52,7 @@ will help triage it.
 
 ## Supported versions
 
-Gatehouse Mail is at V1. Only the latest release and the current `master`
+MailMoose is at V1. Only the latest release and the current `master`
 branch are supported; there is no backport line for older versions.
 
 ## What to expect
@@ -69,7 +69,7 @@ details.
 
 ## Operators
 
-If you run Gatehouse Mail, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
+If you run MailMoose, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
 snapshot of `/data` backed up separately, as described in the README's backup
 section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.
@@ -80,6 +80,6 @@ empty database. They are never written to logs, error responses, diagnostic
 bundles, admin pages, or API responses, and they are ignored once any user
 exists, so they can be removed after first start. Prefer the `*_FILE` forms
 with Docker secrets over a plain environment variable. Operator password resets
-(`gatehouse admin reset-password`) revoke all browser sessions and record an
+(`mailmoose admin reset-password`) revoke all browser sessions and record an
 audit event without recording the password; API keys are revoked only on an
-explicit `gatehouse admin revoke-api-keys`.
+explicit `mailmoose admin revoke-api-keys`.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"gatehouse-mail/internal/auth"
+	"github.com/dellarb/mailmoose/internal/auth"
 )
 
 // testDefaultIterations mirrors internal/auth's unexported defaultPasswordIterations.

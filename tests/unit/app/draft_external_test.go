@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/model"
-	"gatehouse-mail/internal/store"
-	"gatehouse-mail/internal/transport"
+	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 const approverAddress = "ben@approver.test"
@@ -621,7 +621,7 @@ func seedExternalRequest(t *testing.T, svc *app.Service, u model.User, box model
 // replyBody quotes the approval email's reference line as a webmail client
 // would when the approver replies.
 func replyBody(firstLine, token string) string {
-	return firstLine + "\r\n\r\nOn Mon, Sep 7 2026, Gatehouse wrote:\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> --- Draft to send ---\r\n"
+	return firstLine + "\r\n\r\nOn Mon, Sep 7 2026, MailMoose wrote:\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> --- Draft to send ---\r\n"
 }
 
 func TestExternalApprovalApproveByReplyFirstLine(t *testing.T) {
@@ -676,7 +676,7 @@ func TestExternalApprovalReplyQuoteCannotApprove(t *testing.T) {
 	asst := assistantPrincipal(u.AccountID, box.ID)
 	draftID, token := seedExternalRequest(t, svc, u, box)
 
-	body := "Reject\r\n\r\nOn Mon, Sep 7 2026, Gatehouse wrote:\r\n> Approve & Send\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> [GH-APPROVE:" + token + "]\r\n"
+	body := "Reject\r\n\r\nOn Mon, Sep 7 2026, MailMoose wrote:\r\n> Approve & Send\r\n> Reference: [GH-REQUEST:" + token + "]\r\n> [GH-APPROVE:" + token + "]\r\n"
 	req := mgControlRequest(t, testMailgunKey, "ctl-reply-quote", box.Address, "Ben <"+approverAddress+">", "Re: Approval required: proposal", body)
 	if _, _, err := svc.IngestInbound(ctx, "mailgun", req); !errors.Is(err, transport.ErrInboundIgnored) {
 		t.Fatalf("control ingest err=%v", err)

@@ -1,4 +1,4 @@
-# Gatehouse Mail — curl cookbook
+# MailMoose — curl cookbook
 #
 # Copy-pasteable REST scenarios using only curl and jq. Every request carries
 # `Authorization: Bearer <key>`.
@@ -8,15 +8,15 @@
 # Python client at `GET /examples/python`, which needs neither.
 #
 # export BASE="https://your-instance" # origin serving this cookbook
-# export KEY="ghm_..."
+# export KEY="mmm_..."
 #   export INBOX="inb_..."      # set after the bootstrap step below
 #   export HELP='-H "Authorization: Bearer $KEY"'   # optional shell shorthand
 #
 # Responses are JSON; piping through `jq .` pretty-prints them where jq is
 # available. Add `-i` to any request to see the status line and headers.
 #
-# Prefer the served clients: `GET /examples/python` (gatehouse.py, standard
-# library only) and `GET /examples/bash` (gatehouse.sh, requires curl and jq).
+# Prefer the served clients: `GET /examples/python` (mailmoose.py, standard
+# library only) and `GET /examples/bash` (mailmoose.sh, requires curl and jq).
 # Each is one command per operation, sends the JSON body inline, and prints the
 # response to stdout. This cookbook exists so the same calls can be made by hand
 # or from another language.
@@ -29,11 +29,11 @@
 # 0. Discovery (no auth required)
 # ---------------------------------------------------------------------------
 
-curl -sS "$BASE/.well-known/gatehouse" | jq .
+curl -sS "$BASE/.well-known/mailmoose" | jq .
 curl -sS "$BASE/agent"                      # Markdown usage guide
 curl -sS "$BASE/openapi.json" | jq .        # OpenAPI document
-curl -sS "$BASE/examples/bash"              # served Bash client (gatehouse.sh)
-curl -sS "$BASE/examples/python"            # served Python client (gatehouse.py)
+curl -sS "$BASE/examples/bash"              # served Bash client (mailmoose.sh)
+curl -sS "$BASE/examples/python"            # served Python client (mailmoose.py)
 
 # ---------------------------------------------------------------------------
 # 1. Bootstrap — who am I, which inboxes can I reach

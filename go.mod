@@ -1,4 +1,4 @@
-module gatehouse-mail
+module github.com/dellarb/mailmoose
 
 go 1.27
 
