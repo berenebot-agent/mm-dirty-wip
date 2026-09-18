@@ -52,7 +52,7 @@ will help triage it.
 
 ## Supported versions
 
-MailMoose is at V1. Only the latest release and the current `master`
+MailMoose is at V1. Only the latest release and the current `main`
 branch are supported; there is no backport line for older versions.
 
 ## What to expect

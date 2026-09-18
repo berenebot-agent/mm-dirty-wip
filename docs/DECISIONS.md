@@ -1245,7 +1245,7 @@ server-side reset covers lost access without depending on outbound email. API
 keys are treated as independent machine integrations, so they are not torn down
 by a human password reset.
 
-## D056 — Rename Gatehouse Mail to MailMoose
+## D056 — Product rename to MailMoose
 
 **Decision:** Rename the product, Go module (`github.com/dellarb/mailmoose`),
 binaries (`mailmoose`, `mailmoose-mx`), env prefix (`MAILMOOSE_*`), HTTP
