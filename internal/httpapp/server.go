@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 
 	"gatehouse-mail/internal/app"
 	"gatehouse-mail/internal/auth"
+	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/hermesrelay"
 	"gatehouse-mail/internal/limits"
 	"gatehouse-mail/internal/model"
@@ -620,9 +622,18 @@ func boolQuery(w http.ResponseWriter, r *http.Request, name string) (*bool, bool
 	return &b, true
 }
 
-// forwardedProto returns the first X-Forwarded-Proto value, lowercased.
+// forwardedProto returns the last X-Forwarded-Proto value, lowercased. An
+// appending proxy preserves attacker-supplied leading entries, so only the
+// value closest to us (the one our trusted proxy wrote) is meaningful. Callers
+// must check trustForwarded first.
 func forwardedProto(r *http.Request) string {
-	return strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+	parts := strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if p := strings.ToLower(strings.TrimSpace(parts[i])); p != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 // trustForwarded reports whether proxy headers may be believed for this request:
@@ -655,8 +666,12 @@ func (s *Server) requestBaseURL(r *http.Request) string {
 }
 
 // httpsRedirect sends plaintext requests to HTTPS when the deployment expects
-// TLS (FORCE_HTTPS). It leaves the inbound webhook connector and health checks
-// untouched so providers and orchestrators are never redirected.
+// TLS (FORCE_HTTPS). The target host is always the canonical BASE_URL host:
+// r.Host is attacker-controlled, so using it would let a forged Host header
+// turn the 308 into a phishing redirect or poison caches. The inbound webhook
+// connector and health checks are untouched so providers and orchestrators are
+// never redirected. Discovery documents (/openapi.json, /examples/*) still
+// advertise the request origin; only the redirect is canonical.
 func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 	if !s.Service.Config.ForceHTTPS {
 		return next
@@ -675,9 +690,12 @@ func (s *Server) httpsRedirect(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		host := r.Host
+		host := s.Service.Config.BaseHost()
 		if host == "" {
-			host = strings.TrimPrefix(strings.TrimPrefix(s.Service.Config.BaseURL, "https://"), "http://")
+			// Unreachable via config.Load (BASE_URL is validated), but never
+			// redirect to an attacker-controlled Host: fail the request.
+			writeError(w, 500, "redirect misconfigured")
+			return
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
 	})
@@ -699,17 +717,96 @@ func (s *Server) apiLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.discoveryLimits())
 }
 
-func clientIP(r *http.Request, trust bool) string {
-	if trust {
-		if x := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); x != "" {
-			return x
+// clientIP returns the rate-limit identity for a request. When the peer is a
+// trusted proxy, the X-Forwarded-For chain is walked from the right (closest
+// to us): trusted entries are stripped and the first untrusted address is
+// returned. A proxy that appends rather than scrubs attacker-supplied XFF
+// would otherwise let a caller pick its own limit key by prepending a fake
+// leftmost entry. With a single trusted hop the last entry is the
+// proxy-observed client. Invalid entries are skipped; when nothing usable
+// remains, the peer address is returned. When the peer is not trusted, XFF is
+// ignored entirely.
+//
+// Under the legacy TRUST_PROXY_HEADERS trust-all mode there is no trusted set
+// to strip against, so the last entry is used. That mode requires the proxy to
+// overwrite (not append to) XFF; prefer TRUSTED_PROXIES.
+func clientIP(r *http.Request, cfg config.Config) string {
+	peer := remoteIP(r.RemoteAddr)
+	if !cfg.IsTrustedProxy(r.RemoteAddr) {
+		return peer
+	}
+	addrs := parseXFF(r.Header.Get("X-Forwarded-For"))
+	if len(addrs) == 0 {
+		return peer
+	}
+	if len(cfg.TrustedProxies) == 0 {
+		// Legacy trust-all: no set to strip against. Take the entry closest
+		// to us, which the (overwrite-required) proxy wrote.
+		return addrs[len(addrs)-1].String()
+	}
+	for i := len(addrs) - 1; i >= 0; i-- {
+		if !prefixContains(cfg.TrustedProxies, addrs[i]) {
+			return addrs[i].String()
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	// Every entry is a trusted proxy address: the last one is the
+	// proxy-observed client.
+	return addrs[len(addrs)-1].String()
+}
+
+// remoteIP extracts the host part of a host:port remote address, tolerating
+// bare IPs, missing ports and IPv6 zones.
+func remoteIP(remoteAddr string) string {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
+		return remoteAddr
 	}
-	return r.RemoteAddr
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		if h := strings.TrimSpace(host); h != "" {
+			return h
+		}
+		return trimmed
+	}
+	// Bare IP without a port (common in tests).
+	if addr, err := netip.ParseAddr(trimmed); err == nil {
+		return addr.String()
+	}
+	return trimmed
+}
+
+// parseXFF splits an X-Forwarded-For header into valid addresses, closest last.
+// Entries may carry ports ("1.2.3.4:5678") or IPv6 zones; unparseable entries
+// are skipped so a garbage token cannot become a limit key.
+func parseXFF(header string) []netip.Addr {
+	var out []netip.Addr
+	for _, part := range strings.Split(header, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(part); err == nil {
+			part = strings.TrimSpace(host)
+		}
+		// Strip brackets and a trailing zone for parsing; keep the zone off
+		// the returned key so fe80::1%eth0 and fe80::1 match.
+		part = strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(part), "]"), "[")
+		if i := strings.LastIndex(part, "%"); i >= 0 {
+			part = part[:i]
+		}
+		if addr, err := netip.ParseAddr(part); err == nil {
+			out = append(out, addr.WithZone(""))
+		}
+	}
+	return out
+}
+
+func prefixContains(prefixes []netip.Prefix, addr netip.Addr) bool {
+	for _, p := range prefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // maxTrackedIPs bounds the number of distinct rate-limit keys held at once so

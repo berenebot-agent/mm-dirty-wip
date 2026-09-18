@@ -12,7 +12,7 @@ docker compose up -d
 
 Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser. The first visit creates the initial Admin account.
 
-Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-Proto` is believed, and set `FORCE_HTTPS=true` to redirect any plaintext request to HTTPS and advertise HTTPS in discovery documents. `/health`, `/healthz` and the `/internal/*` webhook endpoints are never redirected.
+Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-*` headers are believed (the proxy should overwrite `X-Forwarded-For`, not append to a client-supplied value), and set `FORCE_HTTPS=true` to redirect any plaintext request to `https://<BASE_URL host>` and advertise HTTPS in discovery documents. `/health`, `/healthz` and the `/internal/*` webhook endpoints are never redirected.
 
 Persistent state is stored in `./data`.
 
@@ -146,7 +146,7 @@ Core service (`gatehouse-mail`):
 | `MX_UID` / `MX_GID` | `65533` | Uid/gid the embedded edge runs as (must differ from the app's). |
 | `MX_SIGNATURE_SKEW_SECONDS` | `600` | How old a signed edge request may be (replay window bound). |
 | `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
-| `MX_EDGE_KEYS` | auto-generated (embedded) | Override the edge credential (`key_id:secret`, comma-separated for rotation). Required for `remote`. |
+| `MX_EDGE_KEYS` | auto-generated (embedded) | Override the edge credential (`key_id:secret`, comma-separated for rotation). Required for `remote`. Every secret must carry 32 bytes / 256 bits of entropy; startup refuses weaker values. |
 | `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
 
 Edge service (`gatehouse-mx`):

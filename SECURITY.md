@@ -71,5 +71,5 @@ details.
 
 If you run Gatehouse Mail, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
 snapshot of `/data` backed up separately, as described in the README's backup
-section. See `AGENTS.md` and `docs/DECISIONS.md` for the security model and the
+section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.

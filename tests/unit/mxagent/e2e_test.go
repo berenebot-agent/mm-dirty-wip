@@ -33,7 +33,7 @@ func mxCore(t *testing.T) (*app.Service, *httptest.Server, model.Inbox) {
 		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true,
 		AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20,
 		SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60,
-		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": "secret"}, MXSignatureSkew: 10 * time.Minute,
+		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": testEdgeSecret}, MXSignatureSkew: 10 * time.Minute,
 	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
@@ -62,7 +62,7 @@ func mxCore(t *testing.T) (*app.Service, *httptest.Server, model.Inbox) {
 func startEdgeWithConns(t *testing.T, coreURL string, maxConns int) (addr string, stop func()) {
 	t.Helper()
 	cfg := mxagent.Config{
-		IngestURL: coreURL, KeyID: "edge", Secret: "secret", EdgeName: "test", Hostname: "mx.example.test",
+		IngestURL: coreURL, KeyID: "edge", Secret: testEdgeSecret, EdgeName: "test", Hostname: "mx.example.test",
 		ListenAddr: "127.0.0.1:0", MaxMessageBytes: 5 << 20, MaxStagingBytes: 64 << 20, MaxRecipients: 10, MaxConnections: maxConns,
 		ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, DataTimeout: 10 * time.Second,
 		DNSTimeout: 2 * time.Second,

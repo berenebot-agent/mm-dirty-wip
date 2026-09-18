@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -106,6 +107,42 @@ const (
 	// MaxDKIMSignatures bounds how many signatures the edge evaluates.
 	MaxDKIMSignatures = 10
 )
+
+// MinEdgeSecretBytes is the minimum decoded entropy for an operator-supplied
+// MX edge HMAC secret: 32 bytes / 256 bits. The secret authenticates every
+// edge->core request, and the core trusts the edge's SPF/DKIM/DMARC evidence
+// on a valid signature, so a guessable secret lets anyone inject mail and burn
+// quota. Length is an enforceable proxy for unguessability: generate with
+// `openssl rand -hex 32`. This cannot prove randomness; it rejects the
+// obviously weak.
+const MinEdgeSecretBytes = 32
+
+// CheckEdgeSecret reports whether an operator-supplied edge HMAC secret meets
+// the minimum entropy bar. It accepts hex, base64 (std/raw, padded or not) or
+// raw secrets that decode to at least MinEdgeSecretBytes. Auto-generated
+// embedded credentials already carry 32 random bytes, so this gates only
+// operator values. The secret itself is never included in the error.
+func CheckEdgeSecret(secret string) error {
+	s := strings.TrimSpace(secret)
+	if s == "" {
+		return fmt.Errorf("mxwire: edge secret must not be empty (generate: openssl rand -hex 32)")
+	}
+	if b, err := hex.DecodeString(s); err == nil && len(b) >= MinEdgeSecretBytes {
+		return nil
+	}
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) >= MinEdgeSecretBytes {
+			return nil
+		}
+	}
+	if len([]byte(s)) >= MinEdgeSecretBytes {
+		return nil
+	}
+	return fmt.Errorf("mxwire: edge secret too weak: need at least %d bytes of entropy as hex, base64 or raw text (generate: openssl rand -hex 32)", MinEdgeSecretBytes)
+}
 
 // Disposition is the durable outcome the core returns for an ingest.
 type Disposition string

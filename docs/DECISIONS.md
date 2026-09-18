@@ -1189,6 +1189,39 @@ non-empty `responses` object (the primary success response plus `401` and
 `default`). Per-operation request and response JSON Schemas remain deferred:
 they need handler-level annotations and are a separate project.
 
+## D053 — Proxy-chain trust and canonical HTTPS redirect
+
+**Decision:** `X-Forwarded-For` is walked from the right (closest to us):
+trusted `TRUSTED_PROXIES` entries are stripped and the first untrusted address
+is the client identity used for rate limiting; a single trusted hop yields the
+last entry. Under legacy `TRUST_PROXY_HEADERS` trust-all the last entry is
+used, which requires the proxy to overwrite (not append to) `X-Forwarded-For`.
+`X-Forwarded-Proto` follows the same rightmost rule. `FORCE_HTTPS` redirects
+target only the canonical `BASE_URL` host (validated as a bare origin at
+startup; `FORCE_HTTPS=true` requires an `https://` base), never the request
+`Host`. Discovery documents (`/openapi.json`, `/examples/*`) still advertise
+the request origin; only the 308 is canonical.
+
+**Reason:** An appending proxy preserves attacker-supplied leading XFF/XFP
+entries, so leftmost parsing lets a caller pick its own rate-limit key and
+spoof `https` to bypass the redirect and `Secure` cookies. Request `Host`
+headers are attacker-controlled, so echoing them in a 308 enables phishing
+redirects and cache poisoning.
+
+## D054 — Operator MX edge secrets require 256 bits
+
+**Decision:** Every operator-supplied MX edge HMAC secret (`MX_EDGE_KEYS`
+entries, `MX_EDGE_SECRET`) must carry 32 bytes / 256 bits of entropy as hex,
+base64 or 32+ raw bytes, enforced fail-closed at startup by both
+`config.Load` and `mxagent.Load` via `mxwire.CheckEdgeSecret`. Embedded mode
+already generates 32 random bytes; only operator values are gated. Rotation
+uses overlapping `MX_EDGE_KEYS` entries.
+
+**Reason:** The secret authenticates every edge->core request and the core
+trusts the edge's SPF/DKIM/DMARC evidence on a valid signature, so a guessable
+secret lets anyone inject mail, forge auth evidence and burn quota. Length is
+an enforceable proxy for unguessability; it cannot prove randomness.
+
 ## Future extension register
 
 

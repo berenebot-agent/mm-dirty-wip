@@ -164,6 +164,10 @@ func TestExamplesDefaultToRequestOrigin(t *testing.T) {
 func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
 	h := forceHTTPSHandler(t)
 
+	// The redirect target is the canonical BASE_URL host
+	// (https://mail.example.test), never the request Host: r.Host is
+	// attacker-controlled, so echoing it would turn the 308 into a phishing
+	// redirect or poison caches.
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
 	req.Host = "mail.example.org"
@@ -171,8 +175,20 @@ func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
 	if rr.Code != http.StatusPermanentRedirect {
 		t.Fatalf("plaintext /v1/bootstrap = %d, want 308", rr.Code)
 	}
-	if loc := rr.Header().Get("Location"); loc != "https://mail.example.org/v1/bootstrap" {
+	if loc := rr.Header().Get("Location"); loc != "https://mail.example.test/v1/bootstrap" {
 		t.Fatalf("redirect Location = %q", loc)
+	}
+
+	// A forged Host header must not change the redirect target.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/bootstrap", nil)
+	req.Host = "evil.example"
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusPermanentRedirect {
+		t.Fatalf("plaintext /v1/bootstrap = %d, want 308", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "https://mail.example.test/v1/bootstrap" {
+		t.Fatalf("forged-Host redirect Location = %q", loc)
 	}
 
 	// An untrusted X-Forwarded-Proto must not bypass the redirect.

@@ -31,7 +31,7 @@ func mxService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbo
 		AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901",
 		MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour,
 		LoginLimitPerMinute: 10, SendLimitPerMinute: 60,
-		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": "secret"}, MXSignatureSkew: 10 * time.Minute,
+		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, MXSignatureSkew: 10 * time.Minute,
 	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {

@@ -100,6 +100,34 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+func TestCheckEdgeSecret(t *testing.T) {
+	strong := []string{
+		// 32 random bytes as hex (openssl rand -hex 32).
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		// 32 random bytes as base64.
+		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		// 32 raw bytes.
+		"01234567890123456789012345678901",
+	}
+	for _, s := range strong {
+		if err := mxwire.CheckEdgeSecret(s); err != nil {
+			t.Fatalf("strong secret rejected: %v", err)
+		}
+	}
+	weak := []string{
+		"",
+		"secret",
+		"correct horse battery staple",
+		"0123456789abcdef",
+		"AAAAAAAAAAAAAAAAAAAAAA==",
+	}
+	for _, s := range weak {
+		if err := mxwire.CheckEdgeSecret(s); err == nil {
+			t.Fatalf("weak secret %q accepted", s)
+		}
+	}
+}
+
 func TestDeliveryFingerprintStable(t *testing.T) {
 	a := mxwire.DeliveryFingerprint("a@x", "b@y", "digest")
 	b := mxwire.DeliveryFingerprint("A@X", "B@Y", "digest")

@@ -57,6 +57,12 @@ MX_ENABLE=true   # true (compose default) | false (webhook-only) | remote
   MX_EDGE_KEYS=edge-1:<secret>   # or MX_EDGE_SECRET with the sidecar compose
   ```
 
+  Every operator-supplied secret must carry 32 bytes / 256 bits of entropy
+  (hex, base64 or 32+ raw bytes); generate with `openssl rand -hex 32`. The
+  core and the edge both refuse to start with a weaker value, because the
+  secret authenticates every edge request and the core trusts the edge's
+  SPF/DKIM/DMARC evidence on a valid signature.
+
 In `true` (embedded) mode no secret is required: the edge credential is generated
 automatically and shared with the core in-process. To use a fixed or rotating
 credential there, set `MX_EDGE_KEYS` yourself:
