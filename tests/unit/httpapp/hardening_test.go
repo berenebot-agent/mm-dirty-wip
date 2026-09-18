@@ -307,3 +307,69 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 		t.Fatal("trusted peer should set Secure cookies")
 	}
 }
+
+// TestClientIPSpoofingResistsAppendingProxy proves the rate-limit identity
+// cannot be chosen by prepending a fake leftmost X-Forwarded-For entry: an
+// appending proxy preserves the attacker's entry as
+// "fake, real", and the limiter must see the proxy-observed address.
+func TestClientIPSpoofingResistsAppendingProxy(t *testing.T) {
+	newLoginHandler := func(t *testing.T, trusted string) http.Handler {
+		t.Helper()
+		dir := t.TempDir()
+		st, err := store.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 1, SendLimitPerMinute: 60}
+		if trusted != "" {
+			cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix(trusted)}
+		}
+		svc, err := app.New(cfg, st, events.NewHub())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httpapp.New(svc, nil).Handler()
+	}
+	login := func(h http.Handler, remoteAddr, xff string) int {
+		req := httptest.NewRequest("POST", "/login", strings.NewReader("email=a@b&password=x&_csrf=csrf"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(&http.Cookie{Name: "ghm_csrf", Value: "csrf"})
+		req.RemoteAddr = remoteAddr
+		if xff != "" {
+			req.Header.Set("X-Forwarded-For", xff)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	proxy := "203.0.113.5:1234"
+	// Trusted proxy, attacker prepends a rotating fake per attempt: every
+	// attempt must still count against the same proxy-observed key, so the
+	// second attempt is rate limited.
+	h := newLoginHandler(t, "203.0.113.0/24")
+	if code := login(h, proxy, "198.51.100.9, 192.0.2.44"); code != 303 && code != 200 {
+		t.Fatalf("first login attempt = %d", code)
+	}
+	if code := login(h, proxy, "198.51.100.10, 192.0.2.44"); code != 429 {
+		t.Fatalf("spoofed second login = %d, want 429 (same limit key)", code)
+	}
+	// Multi-hop: strip both trusted proxies, keep the originating client. A
+	// prepended fake must not change the key (leftmost parsing would see
+	// 198.51.100.99 and miss the limit).
+	h = newLoginHandler(t, "10.0.0.0/8")
+	if code := login(h, "10.0.0.9:1", "192.0.2.7, 10.0.0.1, 10.0.0.2"); code != 303 && code != 200 {
+		t.Fatalf("multi-hop first = %d", code)
+	}
+	if code := login(h, "10.0.0.9:1", "198.51.100.99, 192.0.2.7, 10.0.0.1, 10.0.0.2"); code != 429 {
+		t.Fatalf("multi-hop spoofed second = %d, want 429", code)
+	}
+	// Untrusted peer: XFF is ignored, the peer itself is the key.
+	h = newLoginHandler(t, "")
+	if code := login(h, "198.51.100.5:1234", "192.0.2.44"); code != 303 && code != 200 {
+		t.Fatalf("untrusted first = %d", code)
+	}
+	if code := login(h, "198.51.100.5:1234", "192.0.2.99"); code != 429 {
+		t.Fatalf("untrusted second with different XFF = %d, want 429 (peer key)", code)
+	}
+}

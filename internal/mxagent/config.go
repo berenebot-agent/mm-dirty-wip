@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gatehouse-mail/internal/mxwire"
 )
 
 // Config is the edge's operator configuration. Secrets are read from the
@@ -95,6 +97,12 @@ func Load() (Config, error) {
 	}
 	if cfg.KeyID == "" || cfg.Secret == "" {
 		return Config{}, fmt.Errorf("MX_EDGE_KEY_ID and MX_EDGE_SECRET are required")
+	}
+	// The secret authenticates every edge->core request and the core trusts
+	// edge auth evidence on a valid signature, so a guessable secret is a
+	// startup error, not a warning. Generate with `openssl rand -hex 32`.
+	if err := mxwire.CheckEdgeSecret(cfg.Secret); err != nil {
+		return Config{}, fmt.Errorf("MX_EDGE_SECRET too weak: need 32 bytes of entropy (generate: openssl rand -hex 32)")
 	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MX_MAX_MESSAGE_BYTES is too small")

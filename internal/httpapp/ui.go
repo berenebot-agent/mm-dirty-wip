@@ -365,7 +365,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 	}
 	// Bound signup abuse: a public hosted deployment cannot let a single source
 	// create accounts without limit.
-	ip := clientIP(r, s.Service.Config.IsTrustedProxy(r.RemoteAddr))
+	ip := clientIP(r, s.Service.Config)
 	if s.registerLimiter != nil && !s.registerLimiter.Allow(ip) {
 		http.Error(w, "too many registration attempts", 429)
 		return
@@ -388,7 +388,7 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 	s.renderAuth(w, r, "Log In")
 }
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r, s.Service.Config.IsTrustedProxy(r.RemoteAddr))
+	ip := clientIP(r, s.Service.Config)
 	if !s.loginLimiter.Allow(ip) {
 		http.Error(w, "too many login attempts", 429)
 		return
@@ -474,7 +474,7 @@ func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	ip := clientIP(r, s.Service.Config.IsTrustedProxy(r.RemoteAddr))
+	ip := clientIP(r, s.Service.Config)
 	if !s.passwordLimiter.Allow(ip) {
 		s.settingsRedirect(w, r, "", "too many attempts, try again later")
 		return
@@ -497,7 +497,7 @@ func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	ip := clientIP(r, s.Service.Config.IsTrustedProxy(r.RemoteAddr))
+	ip := clientIP(r, s.Service.Config)
 	if !s.passwordLimiter.Allow(ip) {
 		s.settingsRedirect(w, r, "", "too many attempts, try again later")
 		return

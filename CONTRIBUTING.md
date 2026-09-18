@@ -1,8 +1,6 @@
 # Contributing to Gatehouse Mail
 
-Thanks for your interest. This is a V1 project with a deliberately small scope,
-so please read `AGENTS.md` first — it is the authoritative guide to the
-architecture, approved dependencies, and change discipline.
+Thanks for your interest. This is a V1 project with a deliberately small scope.
 
 Please also read `SECURITY.md` before reporting a security issue, and never open
 a public issue for a suspected vulnerability.
@@ -51,7 +49,7 @@ Write Go with tabs, never spaces, and never collapse a block onto one line.
 
 ## Dependencies
 
-Only the dependencies listed as approved in `AGENTS.md` may be used. Adding a
+Only the dependencies listed as approved in `docs/DECISIONS.md` may be used. Adding a
 new dependency, service, or infrastructure component requires an explicit,
 named request from a maintainer, plus an entry in `THIRD_PARTY_NOTICES.md` and a
 decision recorded in `docs/DECISIONS.md`.

@@ -21,6 +21,10 @@ import (
 	"gatehouse-mail/internal/store"
 )
 
+// testMXSecret is a fixed 32-byte (256-bit) hex secret shared by the core
+// fixture and the request signer below.
+const testMXSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 // mxFixture builds an HTTP handler with MX enabled and the domain receiving
 // provider set to mx.
 func mxFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Domain, model.Inbox) {
@@ -35,7 +39,7 @@ func mxFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Doma
 		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true,
 		AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20,
 		SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60,
-		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": "secret"}, MXSignatureSkew: 10 * time.Minute,
+		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": testMXSecret}, MXSignatureSkew: 10 * time.Minute,
 	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
@@ -67,7 +71,7 @@ func mxRequest(path, meta string, body []byte, keyID string) *http.Request {
 		RequestID string `json:"request_id"`
 	}
 	_ = json.Unmarshal([]byte(meta), &m)
-	sig := mxwire.Sign([]byte("secret"), mxwire.ProtocolVersion, keyID, m.Timestamp, m.RequestID, "POST", path, mxwire.MetaDigest([]byte(meta)), mxwire.BodyDigest(body))
+	sig := mxwire.Sign([]byte(testMXSecret), mxwire.ProtocolVersion, keyID, m.Timestamp, m.RequestID, "POST", path, mxwire.MetaDigest([]byte(meta)), mxwire.BodyDigest(body))
 	var buf bytes.Buffer
 	_ = mxwire.WritePrelude(&buf, []byte(meta))
 	buf.Write(body)

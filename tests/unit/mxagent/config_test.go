@@ -10,10 +10,14 @@ import (
 	"gatehouse-mail/internal/mxagent"
 )
 
+// testEdgeSecret is a fixed 32-byte (256-bit) hex secret: operator
+// MX_EDGE_SECRET values must meet the mxwire entropy bar.
+const testEdgeSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func TestLoadStagingDefaultsAndValidation(t *testing.T) {
 	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
 	t.Setenv("MX_EDGE_KEY_ID", "edge")
-	t.Setenv("MX_EDGE_SECRET", "secret")
+	t.Setenv("MX_EDGE_SECRET", testEdgeSecret)
 	t.Setenv("MX_MAX_MESSAGE_BYTES", "")
 	t.Setenv("MX_STAGING_BYTES", "")
 	cfg, err := mxagent.Load()
@@ -31,10 +35,21 @@ func TestLoadStagingDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsWeakEdgeSecret(t *testing.T) {
+	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
+	t.Setenv("MX_EDGE_KEY_ID", "edge")
+	for _, weak := range []string{"", "secret", "0123456789abcdef"} {
+		t.Setenv("MX_EDGE_SECRET", weak)
+		if _, err := mxagent.Load(); err == nil {
+			t.Fatalf("weak MX_EDGE_SECRET %q accepted", weak)
+		}
+	}
+}
+
 func TestLoadRequireTLSValidation(t *testing.T) {
 	t.Setenv("GATEHOUSE_INGEST_URL", "http://core:8082")
 	t.Setenv("MX_EDGE_KEY_ID", "edge")
-	t.Setenv("MX_EDGE_SECRET", "secret")
+	t.Setenv("MX_EDGE_SECRET", testEdgeSecret)
 	t.Setenv("MX_REQUIRE_TLS", "true")
 	t.Setenv("MX_TLS_CERT", "")
 	t.Setenv("MX_TLS_KEY", "")

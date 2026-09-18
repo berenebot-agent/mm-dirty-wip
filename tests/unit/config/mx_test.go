@@ -1,10 +1,15 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 
 	"gatehouse-mail/internal/config"
 )
+
+// testEdgeSecret is a fixed 32-byte (256-bit) hex secret for MX fixtures.
+// Operator MX_EDGE_KEYS entries must meet the mxwire entropy bar.
+const testEdgeSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestMXDefaultsDisabled(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
@@ -49,7 +54,7 @@ func TestMXRemoteRequiresKeys(t *testing.T) {
 func TestMXRemoteDoesNotEmbed(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "remote")
-	t.Setenv("MX_EDGE_KEYS", "edge-1:secret")
+	t.Setenv("MX_EDGE_KEYS", "edge-1:"+testEdgeSecret)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -79,15 +84,63 @@ func TestMXEmbeddedRejectsZeroUID(t *testing.T) {
 func TestMXEdgeKeysParsed(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "remote")
-	t.Setenv("MX_EDGE_KEYS", "edge1:secret1, edge2:secret2, malformed")
+	t.Setenv("MX_EDGE_KEYS", "edge1:"+testEdgeSecret+", edge2:"+testEdgeSecret+", malformed")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.MXEdgeKeys["edge1"] != "secret1" || cfg.MXEdgeKeys["edge2"] != "secret2" {
+	if cfg.MXEdgeKeys["edge1"] != testEdgeSecret || cfg.MXEdgeKeys["edge2"] != testEdgeSecret {
 		t.Fatalf("edge keys %+v", cfg.MXEdgeKeys)
 	}
 	if _, ok := cfg.MXEdgeKeys["malformed"]; ok {
 		t.Fatal("malformed entry should be ignored")
+	}
+}
+
+func TestMXEdgeKeysRejectWeakSecret(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("MX_ENABLE", "remote")
+	for _, weak := range []string{"secret", "short", strings.Repeat("a", 31)} {
+		t.Setenv("MX_EDGE_KEYS", "edge-1:"+weak)
+		if _, err := config.Load(); err == nil {
+			t.Fatalf("weak MX_EDGE_KEYS secret %q accepted", weak)
+		}
+	}
+}
+
+func TestBaseURLValidation(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("MX_ENABLE", "")
+	for _, bad := range []string{
+		"not-a-url",
+		"://missing-scheme",
+		"ftp://example.test",
+		"https://user@example.test",
+		"https://example.test/path",
+		"https://example.test?x=1",
+		"https://example.test#frag",
+	} {
+		t.Setenv("BASE_URL", bad)
+		if _, err := config.Load(); err == nil {
+			t.Fatalf("BASE_URL %q accepted", bad)
+		}
+	}
+	t.Setenv("BASE_URL", "https://mail.example.test:8443")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseHost() != "mail.example.test:8443" {
+		t.Fatalf("BaseHost = %q", cfg.BaseHost())
+	}
+}
+
+func TestForceHTTPSRequiresHTTPSBaseURL(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("MX_ENABLE", "")
+	t.Setenv("BASE_URL", "http://mail.example.test")
+	t.Setenv("FORCE_HTTPS", "true")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("FORCE_HTTPS with http BASE_URL accepted")
 	}
 }

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"gatehouse-mail/internal/mxwire"
 )
 
 // InboundAddr is the fixed address of the dedicated inbound webhook listener.
@@ -46,8 +49,12 @@ func parseMXMode(raw string) (MXMode, error) {
 }
 
 type Config struct {
-	ListenAddr        string
-	BaseURL           string
+	ListenAddr string
+	BaseURL    string
+	// baseHost is the canonical host (with explicit port) parsed from BaseURL.
+	// It is the only host the HTTPS redirect may target; request Host headers
+	// are attacker-controlled and never used for redirects.
+	baseHost          string
 	DataDir           string
 	Mode              string
 	AllowRegistration bool
@@ -117,9 +124,19 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	mxEdgeKeys, err := parseEdgeKeys(env("MX_EDGE_KEYS", ""))
+	if err != nil {
+		return Config{}, err
+	}
+	baseURL := strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/")
+	baseHost, err := parseBaseHost(baseURL)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		ListenAddr:             env("LISTEN_ADDR", ":8081"),
-		BaseURL:                strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/"),
+		BaseURL:                baseURL,
+		baseHost:               baseHost,
 		DataDir:                env("DATA_DIR", "/data"),
 		Mode:                   strings.ToLower(env("MODE", "selfhosted")),
 		AllowRegistration:      envBool("ALLOW_REGISTRATION", false),
@@ -144,7 +161,7 @@ func Load() (Config, error) {
 		MXMode:                 mxMode,
 		MXReceiveEnabled:       mxMode != MXOff,
 		MXEmbedded:             mxMode == MXLocal,
-		MXEdgeKeys:             parseEdgeKeys(env("MX_EDGE_KEYS", "")),
+		MXEdgeKeys:             mxEdgeKeys,
 		MXSignatureSkew:        time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
 		MXReceiptRetention:     time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
 		MXUID:                  envInt("MX_UID", 65533),
@@ -190,6 +207,9 @@ func Load() (Config, error) {
 	if (cfg.InboundTLSCertFile == "") != (cfg.InboundTLSKeyFile == "") {
 		return Config{}, fmt.Errorf("INBOUND_TLS_CERT_FILE and INBOUND_TLS_KEY_FILE must be set together")
 	}
+	if cfg.ForceHTTPS && !strings.HasPrefix(strings.ToLower(cfg.BaseURL), "https://") {
+		return Config{}, fmt.Errorf("FORCE_HTTPS=true requires BASE_URL=https://... so the redirect target is canonical")
+	}
 	proxies, err := parseTrustedProxies(env("TRUSTED_PROXIES", ""))
 	if err != nil {
 		return Config{}, err
@@ -200,9 +220,12 @@ func Load() (Config, error) {
 
 // parseEdgeKeys parses MX_EDGE_KEYS, a comma-separated list of
 // "key_id:secret" pairs. Both halves are required; a malformed entry is
-// ignored so one bad pair cannot silently disable the rest. The secret is never
-// logged.
-func parseEdgeKeys(raw string) map[string]string {
+// ignored so one bad pair cannot silently disable the rest. Every
+// operator-supplied secret must meet the mxwire entropy bar (32 bytes / 256
+// bits); a weak secret is a startup error, never silently accepted, because it
+// authenticates the edge and the core trusts edge auth evidence on a valid
+// signature. The secret is never logged or included in the error.
+func parseEdgeKeys(raw string) (map[string]string, error) {
 	out := map[string]string{}
 	for _, part := range strings.Split(raw, ",") {
 		part = strings.TrimSpace(part)
@@ -215,12 +238,47 @@ func parseEdgeKeys(raw string) map[string]string {
 		if !ok || id == "" || secret == "" {
 			continue
 		}
+		if err := mxwire.CheckEdgeSecret(secret); err != nil {
+			return nil, fmt.Errorf("MX_EDGE_KEYS entry %q too weak: need 32 bytes of entropy (generate: openssl rand -hex 32)", id)
+		}
 		out[id] = secret
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, nil
 	}
-	return out
+	return out, nil
+}
+
+// parseBaseHost extracts the canonical redirect host from BASE_URL, rejecting
+// values that cannot serve as one (missing scheme/host, userinfo, path, query
+// or fragment). Request Host headers are attacker-controlled, so the HTTPS
+// redirect targets only this host.
+func parseBaseHost(baseURL string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("BASE_URL must be an absolute http(s) URL with a host, got %q", baseURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("BASE_URL must use http or https, got %q", baseURL)
+	}
+	if u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("BASE_URL must be a bare origin (scheme://host[:port]), got %q", baseURL)
+	}
+	return u.Host, nil
+}
+
+// BaseHost returns the canonical host (with explicit port) parsed from
+// BASE_URL. It is the only host the HTTPS redirect may target.
+func (c Config) BaseHost() string {
+	if c.baseHost != "" {
+		return c.baseHost
+	}
+	// Struct-literal configs in tests bypass Load: derive best-effort so the
+	// redirect still has a canonical host instead of trusting r.Host.
+	if h, err := parseBaseHost(c.BaseURL); err == nil {
+		return h
+	}
+	return ""
 }
 
 // parseTrustedProxies parses a comma-separated list of IP addresses or CIDR
