@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/mxwire"
 )
 
@@ -63,9 +65,17 @@ type Config struct {
 	// ForceHTTPS redirects plaintext requests to https and reports https in
 	// discovery documents. It is for deployments that terminate TLS at a
 	// reverse proxy and never want the app to answer over cleartext.
-	ForceHTTPS             bool
-	AppEncryptionKey       string
-	AdminBootstrapToken    string
+	ForceHTTPS       bool
+	AppEncryptionKey string
+	// InitialAdminEmail/InitialAdminPassword are one-shot bootstrap credentials
+	// for a fresh self-hosted installation. They are consumed only when the
+	// database has no users and are ignored forever afterwards. Empty means
+	// unset. Never log the password.
+	InitialAdminEmail    string
+	InitialAdminPassword string
+	// InitialAccountName is the display name for the account created alongside
+	// the initial administrator. Defaults to "Gatehouse".
+	InitialAccountName     string
 	MaxMessageBytes        int64
 	DefaultQuotaBytes      int64
 	SessionTTL             time.Duration
@@ -128,6 +138,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	initialAdmin, err := loadInitialAdmin()
+	if err != nil {
+		return Config{}, err
+	}
 	baseURL := strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/")
 	baseHost, err := parseBaseHost(baseURL)
 	if err != nil {
@@ -143,7 +157,9 @@ func Load() (Config, error) {
 		TrustProxyHeaders:      envBool("TRUST_PROXY_HEADERS", false),
 		ForceHTTPS:             envBool("FORCE_HTTPS", false),
 		AppEncryptionKey:       strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
-		AdminBootstrapToken:    strings.TrimSpace(os.Getenv("ADMIN_BOOTSTRAP_TOKEN")),
+		InitialAdminEmail:      initialAdmin.email,
+		InitialAdminPassword:   initialAdmin.password,
+		InitialAccountName:     initialAdmin.accountName,
 		MaxMessageBytes:        envInt64("MAX_MESSAGE_BYTES", 30<<20),
 		DefaultQuotaBytes:      envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
 		SessionTTL:             time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
@@ -247,6 +263,74 @@ func parseEdgeKeys(raw string) (map[string]string, error) {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// initialAdminConfig carries the one-shot bootstrap credentials for a fresh
+// self-hosted installation.
+type initialAdminConfig struct {
+	email       string
+	password    string
+	accountName string
+}
+
+// loadInitialAdmin resolves INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD
+// (either may come from a *_FILE variant) and validates them. Supplying only
+// one half is a startup error: a half-configured bootstrap must never start
+// and later be mistaken for "no credentials". The password is never included
+// in an error.
+func loadInitialAdmin() (initialAdminConfig, error) {
+	email, emailSet, err := envSecret("INITIAL_ADMIN_EMAIL")
+	if err != nil {
+		return initialAdminConfig{}, err
+	}
+	password, passwordSet, err := envSecret("INITIAL_ADMIN_PASSWORD")
+	if err != nil {
+		return initialAdminConfig{}, err
+	}
+	if emailSet != passwordSet {
+		return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD must be supplied together")
+	}
+	if emailSet {
+		addr, perr := mail.ParseAddress(email)
+		if perr != nil || addr.Address != email {
+			return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_EMAIL must be a plain email address")
+		}
+		if err := auth.ValidatePassword(password); err != nil {
+			return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_PASSWORD %w", err)
+		}
+	}
+	name := strings.TrimSpace(env("INITIAL_ACCOUNT_NAME", "Gatehouse"))
+	if name == "" {
+		name = "Gatehouse"
+	}
+	return initialAdminConfig{email: email, password: password, accountName: name}, nil
+}
+
+// envSecret resolves a secret from either NAME or NAME_FILE. The two forms are
+// mutually exclusive: setting both is a startup error so the effective value
+// is never ambiguous. A file is read as text with surrounding whitespace
+// trimmed (so a trailing newline is not part of the secret).
+func envSecret(name string) (string, bool, error) {
+	direct := strings.TrimSpace(os.Getenv(name))
+	path := strings.TrimSpace(os.Getenv(name + "_FILE"))
+	if direct != "" && path != "" {
+		return "", false, fmt.Errorf("%s and %s_FILE must not both be set", name, name)
+	}
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", false, fmt.Errorf("cannot read %s_FILE: %w", name, err)
+		}
+		v := strings.TrimSpace(string(b))
+		if v == "" {
+			return "", false, fmt.Errorf("%s_FILE is empty", name)
+		}
+		return v, true, nil
+	}
+	if direct != "" {
+		return direct, true, nil
+	}
+	return "", false, nil
 }
 
 // parseBaseHost extracts the canonical redirect host from BASE_URL, rejecting

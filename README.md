@@ -6,11 +6,40 @@ Open email infrastructure for AI agents: lightweight inbox identities, searchabl
 
 ```bash
 cp .env.example .env
-# Set APP_ENCRYPTION_KEY and BASE_URL in .env
+# Set APP_ENCRYPTION_KEY, BASE_URL, INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD
 docker compose up -d
 ```
 
-Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser. The first visit creates the initial Admin account.
+Put the service behind your HTTPS reverse proxy and open `BASE_URL` in a browser.
+
+### Initial administrator
+
+On the first start against an empty database, Gatehouse creates the account
+named by `INITIAL_ADMIN_EMAIL` with the password in `INITIAL_ADMIN_PASSWORD`
+and logs `Initial administrator created: <email>`. Both values may instead be
+read from files with `INITIAL_ADMIN_EMAIL_FILE` / `INITIAL_ADMIN_PASSWORD_FILE`
+(intended for Docker secrets); set only one form per setting, and set both the
+email and the password together. `INITIAL_ACCOUNT_NAME` optionally sets the
+account display name (default `Gatehouse`).
+
+These values are **bootstrap-only**: as soon as any user exists they are
+ignored, so they can be left in place or removed from Compose. They never
+update an existing account, change an email, or create another administrator.
+If they are not supplied, Gatehouse still starts and serves a page explaining
+that it is not configured; there is no unauthenticated setup form.
+
+### Password recovery
+
+If the administrator loses access, reset the password from the server:
+
+```bash
+docker compose exec gatehouse gatehouse admin reset-password admin@example.com
+```
+
+The command prompts for the new password without echoing it (or reads it from
+`--password-file` for automation), applies the normal password rules, and
+revokes every existing browser session. API keys are left untouched; revoke
+them separately with `gatehouse admin revoke-api-keys admin@example.com`.
 
 Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-*` headers are believed (the proxy should overwrite `X-Forwarded-For`, not append to a client-supplied value), and set `FORCE_HTTPS=true` to redirect any plaintext request to `https://<BASE_URL host>` and advertise HTTPS in discovery documents. `/health`, `/healthz` and the `/internal/*` webhook endpoints are never redirected.
 

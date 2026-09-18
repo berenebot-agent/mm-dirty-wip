@@ -73,3 +73,13 @@ If you run Gatehouse Mail, keep `APP_ENCRYPTION_KEY` and a filesystem-consistent
 snapshot of `/data` backed up separately, as described in the README's backup
 section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.
+
+Bootstrap credentials (`INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, and
+their `*_FILE` variants) are read only to create the first administrator on an
+empty database. They are never written to logs, error responses, diagnostic
+bundles, admin pages, or API responses, and they are ignored once any user
+exists, so they can be removed after first start. Prefer the `*_FILE` forms
+with Docker secrets over a plain environment variable. Operator password resets
+(`gatehouse admin reset-password`) revoke all browser sessions and record an
+audit event without recording the password; API keys are revoked only on an
+explicit `gatehouse admin revoke-api-keys`.

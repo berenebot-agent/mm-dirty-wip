@@ -141,7 +141,15 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 	if opts.ReadOnly {
 		return nil, errors.New("sqlite: read-only transactions not supported")
 	}
-	if _, err := c.exec(ctx, "BEGIN", nil); err != nil {
+	// A serializable request takes the write lock at BEGIN time
+	// (BEGIN IMMEDIATE) instead of on first write. This closes the
+	// read-then-write race where two processes both observe a pre-condition
+	// (for example "no users exist") and then both insert.
+	begin := "BEGIN"
+	if opts.Isolation == driver.IsolationLevel(sql.LevelSerializable) {
+		begin = "BEGIN IMMEDIATE"
+	}
+	if _, err := c.exec(ctx, begin, nil); err != nil {
 		return nil, err
 	}
 	return &tx{c: c}, nil

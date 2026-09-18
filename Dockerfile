@@ -32,6 +32,9 @@ RUN mkdir -p /data && chown ${GATEHOUSE_UID}:${GATEHOUSE_GID} /data
 
 COPY --from=build /out/gatehouse-mail /usr/local/bin/gatehouse-mail
 COPY --from=build /out/gatehouse-mx /usr/local/bin/gatehouse-mx
+# Short alias so the documented `gatehouse admin reset-password ...` command
+# works against the container without changing the entrypoint.
+RUN ln -s /usr/local/bin/gatehouse-mail /usr/local/bin/gatehouse
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/gatehouse-mail/
 VOLUME ["/data"]
 EXPOSE 8081 8082

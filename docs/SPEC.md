@@ -285,7 +285,7 @@ services:
 
 The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional Gatehouse MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
-Self-hosted setup uses a first-run Admin bootstrap. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
+Self-hosted setup creates the initial Admin from one-shot `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` (either may come from a `*_FILE` secret) on the first start against an empty database. The values are transactional and ignored once any user exists, and there is no unauthenticated setup form. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
 The application serves HTTP behind the operator's reverse proxy, which provides public TLS termination.
 

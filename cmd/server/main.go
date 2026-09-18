@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"gatehouse-mail/internal/admincli"
 	"gatehouse-mail/internal/app"
-	"gatehouse-mail/internal/auth"
 	"gatehouse-mail/internal/config"
 	"gatehouse-mail/internal/events"
 	"gatehouse-mail/internal/httpapp"
@@ -25,6 +26,12 @@ import (
 )
 
 func main() {
+	// Operator commands run in the same binary but before any server setup, so
+	// they do not require a full application configuration (or an encryption
+	// key) and never spawn the embedded MX edge.
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		os.Exit(admincli.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	log := logging.New(os.Stdout, slog.LevelInfo, logging.PrefixCore)
 
 	// In the embedded single-container mode, generate (or select) the edge
@@ -91,7 +98,7 @@ func main() {
 		os.Exit(1)
 	}
 	svc.Log = log
-	ensureBootstrapToken(svc, log)
+	ensureInitialAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
 	defer worker.Stop()
@@ -158,31 +165,41 @@ func main() {
 	}
 }
 
-// ensureBootstrapToken generates and logs a one-time setup token when this is a
-// fresh installation (no users yet) and the operator did not set
-// ADMIN_BOOTSTRAP_TOKEN. Without it, a fresh instance exposed on 8081 before
-// setup could be claimed by the first internet visitor. The token is only
-// required by the /setup form, and is not persisted, so it does not survive a
-// restart; an operator who has not completed setup will get a new one.
-func ensureBootstrapToken(svc *app.Service, log *slog.Logger) {
-	if svc.Config.AdminBootstrapToken != "" {
-		return
-	}
+// ensureInitialAdmin creates the first administrator from the one-shot
+// INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD configuration when the database
+// has no users. It never modifies an existing installation: once any user
+// exists the bootstrap settings are ignored, so they can be left in place (or
+// removed) without effect. The password is never logged.
+func ensureInitialAdmin(svc *app.Service, log *slog.Logger) {
 	hasUsers, err := svc.Store.HasUsers(context.Background())
 	if err != nil {
-		log.Warn("cannot determine whether setup is complete; leaving setup open", "error", err)
-		return
+		log.Error("cannot determine whether setup is complete", "error", err)
+		os.Exit(1)
 	}
 	if hasUsers {
+		if svc.Config.InitialAdminEmail != "" {
+			log.Info("Initial administrator configuration ignored because setup is already complete")
+		}
 		return
 	}
-	tok, err := auth.RandomToken(24)
+	if svc.Config.InitialAdminEmail == "" {
+		log.Info("Gatehouse has not been configured; set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD and restart")
+		return
+	}
+	if svc.Config.Mode != "selfhosted" {
+		log.Warn("INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD are ignored in hosted mode")
+		return
+	}
+	u, err := svc.Store.CreateInitialAdmin(context.Background(), svc.Config.InitialAccountName, svc.Config.InitialAdminEmail, svc.Config.InitialAdminPassword, svc.Config.DefaultQuotaBytes)
 	if err != nil {
-		log.Error("cannot generate admin bootstrap token; setup remains open", "error", err)
-		return
+		if errors.Is(err, store.ErrConflict) {
+			log.Info("Initial administrator configuration ignored because setup is already complete")
+			return
+		}
+		log.Error("cannot create initial administrator", "error", err)
+		os.Exit(1)
 	}
-	svc.Config.AdminBootstrapToken = tok
-	log.Warn("no admin exists yet: a one-time setup token was generated; open /setup and enter it to claim this instance", "bootstrap_token", tok)
+	log.Info("Initial administrator created: " + u.Email)
 }
 
 // edgeExit returns the edge's exit channel, or a nil channel (blocks forever)

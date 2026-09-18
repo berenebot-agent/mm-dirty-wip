@@ -1222,6 +1222,29 @@ trusts the edge's SPF/DKIM/DMARC evidence on a valid signature, so a guessable
 secret lets anyone inject mail, forge auth evidence and burn quota. Length is
 an enforceable proxy for unguessability; it cannot prove randomness.
 
+## D055 — One-shot initial admin and operator password reset
+
+**Decision:** Remove `ADMIN_BOOTSTRAP_TOKEN` and the unauthenticated `/setup`
+claim flow. A fresh self-hosted database is initialised from one-shot
+`INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (either may be supplied via a
+`*_FILE` secret) at startup, creating the first administrator inside a single
+`BEGIN IMMEDIATE` transaction so two processes cannot both initialise the
+database. Once any user exists the bootstrap settings have no effect. If no
+credentials are supplied the service starts and serves a static
+"not configured" page; there is no HTTP path that can claim the instance.
+Password recovery is operator-driven through
+`gatehouse admin reset-password <email>`, which reuses the normal password
+rules, revokes all browser sessions, leaves API keys intact, and writes an
+audit event; `gatehouse admin revoke-api-keys <email>` is a separate command.
+
+**Reason:** A bootstrap token that must be read from logs and re-entered on a
+web form is easy to mishandle, and an unauthenticated setup form is a standing
+claim risk on a fresh instance. Deployment-time credentials fit Docker secrets
+and match how the rest of the configuration is supplied, while the guaranteed
+server-side reset covers lost access without depending on outbound email. API
+keys are treated as independent machine integrations, so they are not torn down
+by a human password reset.
+
 ## Future extension register
 
 

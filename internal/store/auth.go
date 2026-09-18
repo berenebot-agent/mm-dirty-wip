@@ -42,7 +42,11 @@ func (s *Store) createAccountAndAdmin(ctx context.Context, name, email, password
 	if err != nil {
 		return model.User{}, err
 	}
-	tx, err := s.write.BeginTx(ctx, nil)
+	// BEGIN IMMEDIATE so the empty-users check and the inserts are atomic
+	// across processes: a second process blocks until this transaction
+	// commits, then observes the user and returns ErrConflict instead of
+	// creating a second administrator.
+	tx, err := s.write.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return model.User{}, err
 	}
@@ -97,6 +101,24 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 	var created string
 	var admin int
 	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,created_at FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &created)
+	if err == sql.ErrNoRows {
+		return model.User{}, ErrNotFound
+	}
+	if err != nil {
+		return model.User{}, err
+	}
+	u.IsAdmin = admin != 0
+	u.CreatedAt = parseTime(created)
+	return u, nil
+}
+
+// GetUserByEmail looks a user up by login address, used by the operator
+// password-reset command.
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, error) {
+	var u model.User
+	var created string
+	var admin int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &created)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -201,6 +223,53 @@ func (s *Store) UpdateUserPassword(ctx context.Context, userID, currentPassword,
 		return err
 	}
 	return tx.Commit()
+}
+
+// AdminResetPassword replaces a user's password without verifying the old one,
+// for operator-driven recovery from the command line. It revokes every
+// interactive session for the user and records a security audit event, but
+// deliberately leaves API keys untouched because they may represent
+// independent machine integrations. It returns ErrNotFound when no such user
+// exists.
+func (s *Store) AdminResetPassword(ctx context.Context, userID, newPassword string) error {
+	newHash, err := auth.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	tx, err := s.write.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var accountID, email string
+	if err = tx.QueryRowContext(ctx, `SELECT account_id,email FROM users WHERE id=?`, userID).Scan(&accountID, &email); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, newHash, userID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_log(account_id,kind,detail,created_at) VALUES(?,?,?,?)`, accountID, "admin.password_reset", email, nowText()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RevokeAPIKeysForAccount revokes every active API key on an account. It backs
+// the operator `admin revoke-api-keys` recovery command, kept separate from a
+// password reset so machine integrations are only torn down on request.
+func (s *Store) RevokeAPIKeysForAccount(ctx context.Context, accountID string) (int64, error) {
+	res, err := s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, nowText(), accountID)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
 }
 
 func (s *Store) CreateSession(ctx context.Context, userID string, ttl time.Duration) (token, csrf string, err error) {

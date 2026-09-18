@@ -2,7 +2,6 @@ package httpapp
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -125,8 +124,6 @@ type pageData struct {
 	ReviewDraft  *model.Draft
 
 	Email string
-
-	BootstrapRequired bool
 }
 
 // externalAliasDataView is the secret-free shape embedded in the inbox edit
@@ -284,7 +281,13 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if eq .Title "Set Up Gatehouse Mail"}}<label>Account name</label><input name="account" required placeholder="My Inbox">{{if .BootstrapRequired}}<label>Bootstrap token</label><input type="password" name="bootstrap_token" required placeholder="One-time setup token">{{end}}{{end}}<label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form><div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/gatehouse">/.well-known/gatehouse</a></p></div></div>`
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form><div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/gatehouse">/.well-known/gatehouse</a></p></div></div>`
+
+// unconfiguredBody is shown when the database has no users and no initial
+// administrator credentials were supplied. It is deliberately static: there is
+// no unauthenticated form that can claim the instance. The operator must set
+// INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD and restart.
+const unconfiguredBody = `<div class="card" style="max-width:560px;margin:60px auto"><h1>Gatehouse has not been configured</h1><p>Set <code>INITIAL_ADMIN_EMAIL</code> and <code>INITIAL_ADMIN_PASSWORD</code> and restart Gatehouse.</p><p class="muted">Once the initial administrator exists these values are ignored and may be removed from your deployment.</p></div>`
 
 type authFlash struct {
 	Title, Error, Email string
@@ -293,7 +296,7 @@ type authFlash struct {
 // renderAuth shows an auth page, restoring any error and email left by a
 // redirect from a failed POST (Post/Redirect/Get).
 func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string) {
-	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r), BootstrapRequired: s.Service.Config.AdminBootstrapToken != ""}
+	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r)}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
@@ -310,46 +313,21 @@ func (s *Server) flashAuth(w http.ResponseWriter, r *http.Request, dest, title, 
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
+// setupGet shows the unconfigured page on a fresh install. There is no POST
+// counterpart: an unconfigured instance cannot be claimed over HTTP. The
+// operator creates the first administrator by setting INITIAL_ADMIN_EMAIL and
+// INITIAL_ADMIN_PASSWORD before startup.
 func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
-	has, _ := s.Service.Store.HasUsers(r.Context())
+	has, err := s.Service.Store.HasUsers(r.Context())
+	if err != nil {
+		http.Error(w, "database error", 500)
+		return
+	}
 	if has {
 		http.Redirect(w, r, "/login", 303)
 		return
 	}
-	s.renderAuth(w, r, "Set Up Gatehouse Mail")
-}
-func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
-	has, _ := s.Service.Store.HasUsers(r.Context())
-	if has {
-		http.Error(w, "setup complete", 403)
-		return
-	}
-	// If a one-time bootstrap token is configured, the first Admin must present
-	// it so an arbitrary first internet visitor cannot claim the instance.
-	if tok := s.Service.Config.AdminBootstrapToken; tok != "" {
-		got := strings.TrimSpace(r.Form.Get("bootstrap_token"))
-		if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) != 1 {
-			s.flashAuth(w, r, "/setup", "Set Up Gatehouse Mail", "invalid bootstrap token", r.Form.Get("email"))
-			return
-		}
-	}
-	_ = r.ParseForm()
-	u, err := s.Service.Store.CreateInitialAdmin(r.Context(), r.Form.Get("account"), r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
-	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			http.Error(w, "setup complete", 403)
-			return
-		}
-		s.flashAuth(w, r, "/setup", "Set Up Gatehouse Mail", err.Error(), r.Form.Get("email"))
-		return
-	}
-	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
-	if err != nil {
-		http.Error(w, "session error", 500)
-		return
-	}
-	s.setSessionCookie(w, r, tok)
-	http.Redirect(w, r, "/", 303)
+	s.render(w, unconfiguredBody, pageData{Title: "Gatehouse has not been configured"})
 }
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
 	if !s.Service.Config.AllowRegistration {

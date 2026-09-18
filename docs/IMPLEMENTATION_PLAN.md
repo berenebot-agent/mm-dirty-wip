@@ -36,7 +36,7 @@ docker compose up
 
 - account/user schema
 - password/session auth for human UI with SameSite cookies and CSRF protection
-- first-run Admin bootstrap and configurable registration mode
+- one-shot initial Admin configuration (`INITIAL_ADMIN_*`) and configurable registration mode
 - API key issuance and hashing
 - mailbox-level roles: Read, Assistant, Owner
 - per-inbox role assignments for each API key

@@ -23,7 +23,7 @@
 
 1. Verify state-changing cookie-authenticated requests require a valid CSRF token.
 2. Verify session cookies are HttpOnly, Secure when externally HTTPS, and SameSite.
-3. Verify self-hosted first-run setup creates the initial Admin and public registration remains closed by default.
+3. Verify a fresh self-hosted instance creates the initial Admin from `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD`, ignores those values once a user exists, and leaves public registration closed by default.
 4. Verify an HTML attachment downloads rather than executing inline in the authenticated application origin.
 
 ## A3. Draft approval workflow
