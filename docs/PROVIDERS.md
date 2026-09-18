@@ -1,0 +1,178 @@
+# MailMoose — Receiving and Sending Providers
+
+Receiving and sending are configured **per domain**. Each domain owns at most
+one optional receiving configuration and one optional sending configuration;
+there is no account-level connector pool and no assignment step, so mail can
+only enter or leave through the provider configured on its domain.
+
+Both directions are configured in the Admin UI (domain page → **Receiving** /
+**Sending**) or through the Admin API. Provider secrets are stored encrypted
+using `APP_ENCRYPTION_KEY`.
+
+---
+
+## Inbound: Mailgun
+
+1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
+2. In the Admin UI, open the domain's page (**Dashboard → Settings → the domain**) and configure a **Receiving** provider of type **Mailgun**, entering the account's webhook signing key. The secret is stored encrypted on that domain; it is not read from the environment.
+3. Create a Mailgun catch-all route for the domain that forwards incoming mail to:
+
+```text
+https://your-host.example/internal/ingest/mailgun/raw-mime
+```
+
+MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
+
+## Inbound: Cloudflare Email Routing
+
+Inbound can be received via Cloudflare Email Routing through a Worker that
+streams the raw MIME to the generic webhook. Full dashboard navigation is in
+[docs/CLOUDFLARE_INBOUND.md](CLOUDFLARE_INBOUND.md).
+
+High-level steps:
+
+1. On the dashboard, click **Receiving** for the domain and configure a **Receiving** provider of type **Cloudflare Worker**. MailMoose generates the shared secret, stores it encrypted on that domain, and shows the complete Worker code and Cloudflare steps in a one-time dialog. The generated secret is shown once; use **Regenerate secret** in the same dialog if you lose it (this replaces it, and the old Worker stops working until you paste the new code).
+2. In Cloudflare, create a Worker and paste the generated code (it already contains your ingest URL and secret), then deploy it.
+3. In Cloudflare, enable **Email Routing** for your domain and follow the MX verification.
+4. Under Email Routing -> **Routing rules**, add a **Send to a Worker** rule for each receiving address, choosing your Worker as the action.
+
+Cloudflare hands each message to the Worker, which streams the raw MIME to:
+
+```text
+https://your-host.example/internal/ingest/cloudflare
+```
+
+The server resolves the recipient to its logical inbox with the same behavior as Mailgun.
+
+## Inbound: Resend
+
+Inbound can also be received via Resend. Resend posts a signed metadata webhook; MailMoose verifies it and then fetches the raw MIME from the Resend API. Full setup is in [docs/RESEND.md](RESEND.md).
+
+The webhook URL to register in Resend is:
+
+```text
+https://your-host.example/internal/ingest/resend
+```
+
+1. In Resend, verify the domain (including the inbound MX record) and create a **full access** API key. A send-only key cannot read received mail.
+2. On the dashboard, click **Receiving** for that domain and choose **Resend**. The form shows the exact webhook URL before you save. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), then enter it with the API key and save.
+3. Each domain stores its own receiving configuration; if several domains share one Resend webhook, enter the same signing secret on each domain.
+
+Resend also works as a sending provider (see below).
+
+## Inbound: Direct SMTP (MX)
+
+Instead of a webhook provider you can receive mail straight on port 25 with the
+optional MX edge. One setting, `MX_ENABLE`, selects the mode. The server binary
+defaults to `false` when the variable is unset; the shipped `docker-compose.yml`
+sets it to `true`.
+
+- **`true`** (default `docker-compose.yml`) — receive on port 25 with the edge
+  embedded in the app container as a separate, unprivileged uid. The edge
+  credential is generated automatically.
+- **`false`** (server default) — no MX; receive via a webhook provider only. Set
+  this in `.env` for a webhook-only deployment.
+- **`remote`** — receive on port 25 with the edge in its own container/image
+  (`mailmoose-mx`, via `docker-compose.mx-sidecar.yml`) or on another host. Needs
+  a shared `MX_EDGE_SECRET`.
+
+The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages
+messages in memory only.
+
+Deployment modes, tuning, and the wire contract are covered in
+[docs/SELFHOSTING.md](SELFHOSTING.md) and [docs/MX.md](MX.md).
+
+---
+
+## Outbound
+
+Sending is configured per domain. Open a domain's page, choose a **Sending**
+provider, and fill in the fields it asks for (for example Brevo only needs an
+API key). Each domain owns its own configuration. A domain with no sending
+provider queues mail until one is configured, and removing a provider pauses
+sending for that domain only.
+
+The same operations are available through the Admin API, scoped to a domain:
+
+```http
+GET    /v1/admin/domains/{id}/sending
+PUT    /v1/admin/domains/{id}/sending
+DELETE /v1/admin/domains/{id}/sending
+```
+
+`PUT` accepts `{"provider":"...","config":{...}}`, and
+`GET /v1/admin/domains/{id}/sending/deliveries` lists the domain's send
+attempts newest first. The legacy `POST /v1/admin/outbound` endpoint, the
+account-level connector model, and the `/ui/outbound*` admin pages have been
+removed.
+
+### Provider configurations
+
+Mailgun:
+
+```json
+{"api_key":"key-...","domain":"mg.example.com"}
+```
+
+Brevo:
+
+```json
+{"api_key":"xkeysib-..."}
+```
+
+Brevo requires the inbox sender address to be a verified sender in Brevo.
+
+Resend:
+
+```json
+{"api_key":"re_..."}
+```
+
+The `from` domain must be a verified sending domain in Resend.
+
+Generic SMTP:
+
+```json
+{"host":"smtp.example.com","port":587,"username":"user","password":"secret","security":"starttls"}
+```
+
+### Attachments
+
+Send, reply and draft write requests may include base64-encoded attachments:
+
+```json
+{"filename":"quote.pdf","content_type":"application/pdf","content":"<base64>"}
+```
+
+Use the object above in an `attachments` array. The application translates
+attachments to each provider's native format and stores sent attachment
+metadata with the raw MIME message. Draft writes also accept an `action` of
+`draft`, `request-send` or `send`, so a draft can be created, attached and
+submitted for approval in one request.
+
+---
+
+## Dedicated inbound listener
+
+The server always listens on two ports:
+
+- `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
+- `:8082` is a dedicated listener that serves **only** the inbound webhook and MX
+  routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`,
+  and, when `MX_ENABLE=true|remote`, `/internal/mx/resolve` and
+  `/internal/mx/ingest`) plus `/healthz`.
+
+To keep the API and UI off the public internet, expose only `:8082` to your
+reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
+the firewall. Point provider webhook URLs at the dedicated host/port:
+
+```text
+https://inbound.example.com/internal/ingest/mailgun/raw-mime
+https://inbound.example.com/internal/ingest/cloudflare
+https://inbound.example.com/internal/ingest/resend
+```
+
+The ingest routes remain available on the main listener for backward
+compatibility. The dedicated listener is plain HTTP like the main listener:
+terminate TLS at the reverse proxy and do not expose the port directly to the
+internet.
