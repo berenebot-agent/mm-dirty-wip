@@ -1,4 +1,4 @@
-.PHONY: build test run fmt vet dist docs
+.PHONY: build test run fmt vet dist docs changelog
 build:
 	./mailmoose-go.sh build ./cmd/server
 test:
@@ -14,6 +14,10 @@ vet:
 # by the host user.
 docs:
 	./mailmoose-go.sh run ./cmd/docsgen > docs/API-REFERENCE.md
+# changelog syncs the embedded copy served at /changelog with the repository
+# root CHANGELOG.md. A test fails when the two drift.
+changelog:
+	cp CHANGELOG.md internal/httpapp/assets/CHANGELOG.md
 # dist builds a review/export archive from tracked files only. Using git archive
 # (rather than zip) guarantees gitignored paths such as .env and data/ can never
 # be bundled, even though they exist in the working tree.

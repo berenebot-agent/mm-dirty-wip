@@ -128,7 +128,7 @@ func TestDiscoverySurfacesServeRealContent(t *testing.T) {
 	}
 
 	discovery := get("/.well-known/mailmoose")
-	for _, want := range []string{"/agent", "/openapi.json", "/examples/python", "/examples/bash", "/examples/curl", "/v1/bootstrap"} {
+	for _, want := range []string{"/agent", "/openapi.json", "/examples/python", "/examples/bash", "/examples/curl", "/v1/bootstrap", "/changelog"} {
 		if !strings.Contains(discovery, want) {
 			t.Errorf("/.well-known/mailmoose does not advertise %q", want)
 		}
