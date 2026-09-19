@@ -39,6 +39,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 		"agent_guide": "/agent",
 		"openapi":     "/openapi.json",
 		"reference":   "/agent",
+		"changelog":   "/changelog",
 		"examples": map[string]string{
 			"python": "/examples/python",
 			"bash":   "/examples/bash",

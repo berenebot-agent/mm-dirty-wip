@@ -54,6 +54,9 @@ var bashClient []byte
 //go:embed assets/curl-cookbook.txt
 var curlCookbook []byte
 
+//go:embed assets/CHANGELOG.md
+var changelogMD []byte
+
 type Server struct {
 	Service         *app.Service
 	Relay           *hermesrelay.Server
@@ -185,6 +188,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
+	m.HandleFunc("GET /changelog", s.changelog)
 	m.HandleFunc("GET /openapi.json", s.openapi)
 	// Versioned health path so /v1/health and /health agree. Unauthenticated
 	// and deliberately outside v1Routes, so it is not part of the bearer API.
@@ -708,6 +712,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 // docsRedirect points the conventional /docs path at the served agent guide.
 func (s *Server) docsRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/agent", http.StatusFound)
+}
+
+// changelog serves the project changelog embedded from the assets copy kept in
+// sync with the repository-root CHANGELOG.md by `make changelog`.
+func (s *Server) changelog(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "text/markdown; charset=utf-8", "no-cache", changelogMD)
 }
 
 // apiLimits returns the same limits block advertised by discovery, so a client
