@@ -75,6 +75,7 @@ listeners run in the same process and share the same store.
       /cloudflare
       /resend
       /smtp
+      /mx
 
   /integrations
       /hermesrelay

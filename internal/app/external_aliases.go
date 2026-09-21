@@ -6,6 +6,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // ExternalAliasAdmin reports whether the principal may read or manage external
@@ -58,6 +59,9 @@ func (s *Service) SaveExternalAliasSendingConfig(ctx context.Context, p model.Pr
 	provider = normalizeProvider(provider)
 	if provider == "" {
 		return store.ExternalAlias{}, store.ErrInvalidAlias
+	}
+	if t, ok := transport.LookupOutbound(provider); ok && !transport.OutboundAllowed(t, s.Config.Mode == "hosted") {
+		return store.ExternalAlias{}, invalidConfig("provider is not available in hosted mode")
 	}
 	fields, err := outboundConfigFields(provider)
 	if err != nil {

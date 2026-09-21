@@ -1256,6 +1256,27 @@ assets to MailMoose. No compatibility shims for the old names.
 **Reason:** The product launches under the MailMoose name with its own logo
 pack. A breaking rename before first deployment avoids carrying two brands.
 
+## D057 — Self-hosted Direct MX outbound delivery
+
+**Decision:** Add a `mx` outbound provider for self-hosted deployments. It
+resolves the recipient domain's MX records and delivers raw MIME directly to
+port 25, using the configured HELO hostname and opportunistic STARTTLS without
+SMTP credentials. Each queued message is limited to one unique envelope
+recipient, so the existing atomic outbox state remains correct. Direct MX is
+hidden and rejected in hosted mode, and all resolved destinations continue to
+pass the public-routable outbound guard.
+
+**Reason:** Operators who own their sending IP and DNS should be able to send
+without paying for an SMTP relay. Keeping the feature self-hosted-only avoids
+turning the hosted service into an unmanaged reputation and abuse surface. The
+single-recipient constraint avoids claiming success for recipients that were
+not accepted when one SMTP transaction partially succeeds.
+
+**Operational requirements:** Operators are responsible for port 25 egress,
+forward and reverse DNS for the HELO identity, SPF, DKIM if desired, DMARC
+alignment, and IP reputation. A future extension may add durable per-recipient
+delivery state and signing support.
+
 ## Future extension register
 
 

@@ -8,6 +8,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Self-hosted Direct MX outbound delivery with DNS MX resolution, opportunistic
+  STARTTLS, public-destination enforcement, and single-recipient delivery.
+
 - Agent discovery surface: `/.well-known/mailmoose`, `/agent`, `/docs`,
   `/openapi.json` (request, response and query schemas plus a machine-readable
   `x-required-role`), `/v1/limits`, `/v1/health`, `/changelog`, and served
