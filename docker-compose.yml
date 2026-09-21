@@ -6,8 +6,17 @@
 # internally on :2525, published here on host port 25. Comment the :25 mapping
 # out (or set MX_ENABLE=false in .env) if you receive mail only through a
 # webhook provider (Mailgun, Cloudflare Email Routing, Resend).
+#
+# Project name pinned explicitly. Without this, Compose derives it from the
+# directory basename — and since the gatehouse layout puts the checkout in
+# repo/, both this project and the sibling router service resolve to the project name
+# "repo". That makes each project see the other's containers as orphans, and
+# `--remove-orphans` in one would tear down the other's live stack.
+name: mailmoose
+
 services:
   mailmoose:
+    container_name: mailmoose
     image: mailmoose:latest
     build: .
     restart: unless-stopped
