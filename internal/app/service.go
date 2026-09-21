@@ -475,6 +475,9 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 		return store.DomainSendingConfig{}, err
 	}
 	provider = normalizeProvider(provider)
+	if t, ok := transport.LookupOutbound(provider); ok && !transport.OutboundAllowed(t, s.Config.Mode == "hosted") {
+		return store.DomainSendingConfig{}, invalidConfig("provider is not available in hosted mode")
+	}
 	fields, err := outboundConfigFields(provider)
 	if err != nil {
 		return store.DomainSendingConfig{}, err
@@ -1136,6 +1139,16 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 			queuedReason = "no sending connector configured for this external alias"
 		}
 	}
+	if cfgErr == nil {
+		if outboundProvider, ok := transport.LookupOutbound(sending.Provider); ok {
+			if !transport.OutboundAllowed(outboundProvider, s.Config.Mode == "hosted") {
+				return SendResult{}, invalidConfig("provider is not available in hosted mode")
+			}
+			if limit := transport.MaxEnvelopeRecipients(outboundProvider); limit > 0 && len(uniqueEnvelopeRecipients(to, cc, bcc)) > limit {
+				return SendResult{}, fmt.Errorf("selected provider supports at most %d envelope recipient", limit)
+			}
+		}
+	}
 	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(fromAddress, "@", 2)[1])
 	now := time.Now().UTC()
 	html := in.HTML
@@ -1322,6 +1335,12 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if !ok {
 		return s.fail(outcomeCtx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
 	}
+	if !transport.OutboundAllowed(provider, s.Config.Mode == "hosted") {
+		return s.fail(outcomeCtx, m, fmt.Errorf("provider is not available in hosted mode"), sending.Provider)
+	}
+	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(m.To, m.CC, m.BCC)) > limit {
+		return s.fail(outcomeCtx, m, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
+	}
 	outbound := transport.OutboundMessage{
 		FromName:       m.From.Name,
 		FromAddress:    m.From.Address,
@@ -1472,6 +1491,12 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
 		return s.failWorkflow(outcomeCtx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+	}
+	if !transport.OutboundAllowed(provider, s.Config.Mode == "hosted") {
+		return s.failWorkflow(outcomeCtx, w, fmt.Errorf("provider is not available in hosted mode"), sending.Provider)
+	}
+	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(w.To, w.CC, w.BCC)) > limit {
+		return s.failWorkflow(outcomeCtx, w, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
 	}
 	outbound := transport.OutboundMessage{
 		FromName:    w.From.Name,
@@ -1668,6 +1693,21 @@ func cleanAddresses(in []string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+func uniqueEnvelopeRecipients(groups ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.ToLower(strings.TrimSpace(value))
+			if value != "" && !seen[value] {
+				seen[value] = true
+				out = append(out, value)
+			}
+		}
+	}
+	return out
 }
 func appendUnique(in []string, v string) []string {
 	for _, x := range in {

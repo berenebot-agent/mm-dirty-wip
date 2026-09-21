@@ -29,7 +29,7 @@ you an ops project, not a feature.
 MailMoose gives every agent its own address — `research@yourdomain.com`,
 `task-8291@yourdomain.com`, as many as you want — with full-text search,
 durable event streams, scoped API keys, and sending through Mailgun, Brevo,
-Resend, or any SMTP relay you already pay for. Free hosted, or self-host the
+Resend, Direct MX, or any SMTP relay you already pay for. Free hosted, or self-host the
 whole thing in a single container.
 
 ## Why MailMoose vs Alternatives
@@ -109,7 +109,7 @@ flowchart LR
         CORE["mailbox core\ninboxes · threads · drafts"]
         DB[("SQLite WAL + FTS5")]
         EV["replayable event log"]
-        OUT["outbound adapters\nMailgun · Brevo · Resend · SMTP"]
+        OUT["outbound adapters\nMailgun · Brevo · Resend · SMTP · Direct MX"]
     end
 
     subgraph Consumers["Realtime + agents"]

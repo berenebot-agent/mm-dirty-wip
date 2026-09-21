@@ -56,6 +56,38 @@ type ConfigSchemaProvider interface {
 	ConfigFields() []ConfigField
 }
 
+// SelfHostedOnlyProvider marks transports that must not be exposed by the
+// hosted service. These transports generally require operator-owned network
+// identity or reputation.
+type SelfHostedOnlyProvider interface {
+	SelfHostedOnly() bool
+}
+
+// EnvelopeRecipientLimitProvider lets a transport reject messages whose
+// envelope cannot be delivered atomically by one provider transaction.
+type EnvelopeRecipientLimitProvider interface {
+	MaxEnvelopeRecipients() int
+}
+
+func OutboundAllowed(t OutboundTransport, hosted bool) bool {
+	if t == nil {
+		return false
+	}
+	if hosted {
+		if restricted, ok := t.(SelfHostedOnlyProvider); ok && restricted.SelfHostedOnly() {
+			return false
+		}
+	}
+	return true
+}
+
+func MaxEnvelopeRecipients(t OutboundTransport) int {
+	if limited, ok := t.(EnvelopeRecipientLimitProvider); ok {
+		return limited.MaxEnvelopeRecipients()
+	}
+	return 0
+}
+
 func DecodeOutboundConfig(in map[string]any, out any) error {
 	b, err := json.Marshal(in)
 	if err != nil {

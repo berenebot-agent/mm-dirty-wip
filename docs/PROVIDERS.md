@@ -136,6 +136,22 @@ Generic SMTP:
 {"host":"smtp.example.com","port":587,"username":"user","password":"secret","security":"starttls"}
 ```
 
+Direct MX (self-hosted only):
+
+```json
+{"helo":"mail.example.com"}
+```
+
+Direct MX resolves the recipient domain's MX records and connects directly to
+port 25 without credentials. It accepts one unique envelope recipient per
+message; send separate messages when delivering to multiple domains or
+recipients. The configured HELO hostname should have matching forward and PTR
+DNS where possible. Operators must provide port 25 egress, publish SPF for the
+sending IP, and arrange DKIM signing separately if aligned DKIM is required.
+STARTTLS is used opportunistically when the receiving server advertises it.
+Hosted deployments do not expose Direct MX because the operator controls the
+network identity and reputation required for direct Internet delivery.
+
 ### Attachments
 
 Send, reply and draft write requests may include base64-encoded attachments:

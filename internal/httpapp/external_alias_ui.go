@@ -232,6 +232,9 @@ func (s *Server) externalAliasSendingEditors(ctx context.Context, accountID, inb
 		return out
 	}
 	for _, t := range transport.ListOutbound() {
+		if !transport.OutboundAllowed(t, s.Service.Config.Mode == "hosted") {
+			continue
+		}
 		e, ok := newDomainEditor("sending", t.Name(), s.Service.Config.BaseURL)
 		if !ok {
 			continue

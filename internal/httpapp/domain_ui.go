@@ -44,6 +44,9 @@ type domainEditorView struct {
 // domainSendingEditor builds the prefilled sending editor for one provider,
 // returning false for an unknown provider.
 func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, provider string) (*domainEditorView, bool) {
+	if t, ok := transport.LookupOutbound(provider); !ok || !transport.OutboundAllowed(t, s.Service.Config.Mode == "hosted") {
+		return nil, false
+	}
 	e, ok := newDomainEditor("sending", provider, s.Service.Config.BaseURL)
 	if !ok {
 		return nil, false
@@ -67,6 +70,9 @@ func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID,
 func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
 	out := []*domainEditorView{}
 	for _, t := range transport.ListOutbound() {
+		if !transport.OutboundAllowed(t, s.Service.Config.Mode == "hosted") {
+			continue
+		}
 		if e, ok := s.domainSendingEditor(ctx, accountID, domainID, t.Name()); ok {
 			out = append(out, e)
 		}

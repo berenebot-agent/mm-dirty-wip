@@ -6,12 +6,13 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport"
 	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
 	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
+	_ "github.com/dellarb/mailmoose/internal/transport/mx"
 	_ "github.com/dellarb/mailmoose/internal/transport/resend"
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
 func TestOutboundRegistry(t *testing.T) {
-	for _, name := range []string{"mailgun", "smtp", "brevo", "resend"} {
+	for _, name := range []string{"mailgun", "smtp", "brevo", "resend", "mx"} {
 		provider, ok := transport.LookupOutbound(name)
 		if !ok {
 			t.Fatalf("provider %q not registered", name)
@@ -23,7 +24,7 @@ func TestOutboundRegistry(t *testing.T) {
 	if _, ok := transport.LookupOutbound("nope"); ok {
 		t.Fatal("unknown provider resolved")
 	}
-	if len(transport.ListOutbound()) != 4 {
+	if len(transport.ListOutbound()) != 5 {
 		t.Fatalf("list length %d", len(transport.ListOutbound()))
 	}
 }
