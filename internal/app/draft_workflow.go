@@ -65,7 +65,11 @@ func draftContentHash(d model.Draft, atts []model.DraftAttachment) string {
 func (s *Service) ensureAttachmentHashes(ctx context.Context, accountID, draftID string, atts []model.DraftAttachment) ([]model.DraftAttachment, error) {
 	pending := map[string]string{}
 	for i := range atts {
-		data, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(atts[i].RawPath)))
+		attPath, perr := s.dataPath(atts[i].RawPath)
+		if perr != nil {
+			return nil, perr
+		}
+		data, err := os.ReadFile(attPath)
 		if err != nil {
 			return nil, err
 		}

@@ -44,9 +44,6 @@ func main() {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
-	if cfg.TrustProxyHeaders && len(cfg.TrustedProxies) == 0 {
-		log.Warn("TRUST_PROXY_HEADERS=true trusts X-Forwarded-* headers from any peer; prefer TRUSTED_PROXIES with your reverse proxy's address")
-	}
 	if cfg.MXEmbedded {
 		log.Info("embedded MX edge enabled (SMTP ingress); set MX_ENABLE=false to run webhook-only")
 	}

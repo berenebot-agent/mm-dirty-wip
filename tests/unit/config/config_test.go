@@ -110,15 +110,21 @@ func TestTrustedProxiesInvalid(t *testing.T) {
 	}
 }
 
-func TestTrustProxyHeadersFallback(t *testing.T) {
+func TestTrustProxyHeadersRefused(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("TRUSTED_PROXIES", "")
 	t.Setenv("TRUST_PROXY_HEADERS", "true")
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := config.Load(); err == nil {
+		t.Fatal("TRUST_PROXY_HEADERS=true must be refused: it trusts every caller")
 	}
-	if !cfg.IsTrustedProxy("1.2.3.4:80") {
-		t.Fatal("legacy TRUST_PROXY_HEADERS should trust all peers")
+}
+
+func TestTrustedProxiesCatchAllRefused(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	for _, v := range []string{"0.0.0.0/0", "::/0"} {
+		t.Setenv("TRUSTED_PROXIES", v)
+		if _, err := config.Load(); err == nil {
+			t.Fatalf("TRUSTED_PROXIES=%s must be refused: it trusts every caller", v)
+		}
 	}
 }
