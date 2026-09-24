@@ -25,6 +25,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The dashboard inbox and client edit buttons now use a gear (settings) icon,
+  an admin-only gear shortcut in the inbox view opens that inbox's settings
+  directly, and action icons in the dashboard tables and activity links are
+  slightly larger.
 - Renamed Gatehouse Mail to MailMoose. This is breaking: the module path,
   binary and image names, and the discovery path
   (`/.well-known/gatehouse` → `/.well-known/mailmoose`) all changed.
