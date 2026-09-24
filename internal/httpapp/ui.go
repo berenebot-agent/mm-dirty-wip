@@ -177,56 +177,26 @@ func inboxAddrMap(boxes []model.Inbox) map[string]string {
 	return m
 }
 
-// mergeBlockedMessages folds metadata-only blocked-message records into the
-// admin Recent messages list as synthetic Messages, newest first.
-func mergeBlockedMessages(msgs []model.Message, blocked []model.BlockedMessage, limit int) []model.Message {
-	for _, b := range blocked {
-		msgs = append(msgs, model.Message{
-			ID:         b.ID,
-			InboxID:    b.InboxID,
-			Direction:  "inbound",
-			From:       b.From,
-			To:         b.To,
-			Subject:    b.Subject,
-			SizeBytes:  b.SizeBytes,
-			ReceivedAt: b.ReceivedAt,
-			CreatedAt:  b.CreatedAt,
-			Blocked:    true,
-		})
-	}
-	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].CreatedAt.After(msgs[j].CreatedAt) })
-	if limit > 0 && len(msgs) > limit {
-		msgs = msgs[:limit]
-	}
-	return msgs
-}
-
-// mergeControlMessages folds consumed approval control messages into the admin
-// Recent messages list as synthetic Messages. Control mail is never stored as a
-// message, so the row has no detail view and is read-only, like blocked mail.
-func mergeControlMessages(msgs []model.Message, controls []store.ControlMessage, limit int) []model.Message {
-	for _, c := range controls {
-		var to []string
-		if c.EnvelopeRecipient != "" {
-			to = []string{c.EnvelopeRecipient}
+func dashboardActivityRows(entries []store.DomainLogEntry) []model.Message {
+	msgs := make([]model.Message, 0, len(entries))
+	for _, entry := range entries {
+		direction := "inbound"
+		if entry.Kind == "sent" || entry.Kind == "failed" {
+			direction = "outbound"
 		}
-		created := c.CreatedAt
 		msgs = append(msgs, model.Message{
-			ID:         c.ID,
-			InboxID:    c.InboxID,
-			Direction:  "inbound",
-			From:       model.Address{Name: c.FromName, Address: c.FromAddress},
-			To:         to,
-			Subject:    store.ApprovalSubjectLabel(c.Outcome, c.Subject),
-			Client:     "Control",
-			ReceivedAt: &created,
-			CreatedAt:  created,
-			Approval:   true,
+			ID:        entry.MessageID,
+			InboxID:   entry.InboxID,
+			Direction: direction,
+			From:      model.Address{Address: entry.FromAddress},
+			To:        entry.To,
+			Subject:   entry.Subject,
+			Client:    entry.Client,
+			SizeBytes: entry.SizeBytes,
+			CreatedAt: entry.At,
+			Blocked:   entry.Kind == "blocked",
+			Approval:  entry.Kind == "approval",
 		})
-	}
-	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].CreatedAt.After(msgs[j].CreatedAt) })
-	if limit > 0 && len(msgs) > limit {
-		msgs = msgs[:limit]
 	}
 	return msgs
 }
@@ -514,7 +484,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 <div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th></th><th class="hcenter">Unread</th><th class="hcenter">Pending send</th><th>Address</th><th>Size</th><th></th></tr></thead><tbody>{{range .Inboxes}}<tr class="row-link" data-href="/ui/inboxes/{{.ID}}"><td><a href="/ui/inboxes/{{.ID}}">{{if .DisplayName}}{{.DisplayName}}{{else}}<span class="muted">—</span>{{end}}</a></td><td class="inbox-flags" style="white-space:nowrap">{{$sp := index $.InboxSendingReady .ID}}{{$rp := index $.DomainReceivingReady .DomainID}}{{if or (not $sp) (not $rp)}}<span class="issue-dot" style="color:#b3261e;vertical-align:middle"{{if and (not $sp) (not $rp)}} title="No Sender Configured for Inbox&#10;No Receiver Configured for Domain" aria-label="No Sender Configured for Inbox, No Receiver Configured for Domain"{{else if not $sp}} title="No Sender Configured for Inbox" aria-label="No Sender Configured for Inbox"{{else}} title="No Receiver Configured for Domain" aria-label="No Receiver Configured for Domain"{{end}}><svg viewBox="0 0 16 16" width="14.4" height="14.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="m5.9 5.9 4.2 4.2M10.1 5.9l-4.2 4.2"/></svg></span>{{end}}{{if .SenderRestricted}} <span title="Sender allow-list active (matches the From address, which can be spoofed)" aria-label="Restricted to allowed senders" style="color:#5f6368;vertical-align:middle"><svg viewBox="0 0 16 16" width="14.4" height="14.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7"/></svg></span>{{end}}{{if .Aliases}} <span title="Aliases:&#10;{{range $i, $a := .Aliases}}{{if $i}}&#10;{{end}}{{$a}}{{end}}" aria-label="Has aliases" style="color:#5f6368;vertical-align:middle"><svg viewBox="0 0 16 16" width="14.4" height="14.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.2" cy="5" r="2.3"/><path d="M10.8 13.4v-1a2.6 2.6 0 0 0-2.6-2.6H4.2a2.6 2.6 0 0 0-2.6 2.6v1"/><path d="M14.2 13.4v-1a2.6 2.6 0 0 0-1.9-2.5"/><path d="M10 2.6a2.3 2.3 0 0 1 0 4.6"/></svg></span>{{end}}</td><td style="white-space:nowrap;text-align:center">{{if index $.Unread .ID}}<span class="pill unread-pill">{{index $.Unread .ID}}</span>{{else}}<span class="muted">—</span>{{end}}</td><td style="white-space:nowrap;text-align:center">{{if index $.DraftCounts .ID}}<a class="pill pending-pill" href="/ui/inboxes/{{.ID}}/drafts" title="Drafts awaiting approval to send">{{index $.DraftCounts .ID}}</a>{{else}}<span class="muted">—</span>{{end}}</td><td style="white-space:nowrap">{{.Address}}</td><td style="white-space:nowrap">{{filesize (index $.MailboxSizes .ID)}}</td><td class="actions" style="white-space:nowrap"><button type="button" class="secondary icon-btn edit-inbox" data-id="{{.ID}}" data-name="{{.DisplayName}}" data-address="{{.Address}}" data-allowed="{{join .AllowedSenders ","}}" data-restricted="{{if .SenderRestricted}}1{{end}}" data-require-auth="{{if .RequireAuthenticated}}1{{end}}" data-mx="{{if index $.DomainIsMX .DomainID}}1{{end}}" data-approver-email="{{.ApproverEmail}}" data-aliases="{{join .Aliases ","}}" data-alias-names="{{aliasNames .Aliases .AliasNames}}" data-external-aliases="{{externalAliases .ExternalAliases}}" data-default-sender="{{.DefaultSender}}" data-usage="{{filesize (index $.MailboxSizes .ID)}}" title="Edit inbox" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/inboxes/{{.ID}}/delete" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" title="Edit" aria-label="Edit"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.4 2l2.6 2.6L5.6 13l-3.1.5.5-3.1z"/></svg></button><form method="post" action="/ui/{{if eq .Kind "hermes"}}hermes{{else}}keys{{end}}/{{.ID}}/delete" data-confirm="Delete this {{.Type}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<div class="table-wrap"><table class="domains-table"><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}{{$d := .}}<tr><td><b>{{.Name}}</b></td><td>{{if .CatchAllInboxID}}<button type="button" class="cell-link domain-catchall-link open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall" title="{{index $.InboxAddr .CatchAllInboxID}}">{{index $.InboxAddr .CatchAllInboxID}}</button>{{else}}<button type="button" class="secondary btn-sm cell-edit domain-catchall-add open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall">Add</button>{{end}}</td><td><button type="button" class="{{if .SendingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="sending">{{if .SendingProvider}}{{index $.DomainSendingLabel .ID}}{{else}}Add{{end}}</button></td><td><button type="button" class="{{if .ReceivingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="receiving">{{if .ReceivingProvider}}{{index $.DomainReceivingLabel .ID}}{{else}}Add{{end}}</button></td><td><span class="domain-actions"><a class="btn secondary icon-btn" href="/ui/domains/{{.ID}}/sending/deliveries" title="Activity log" aria-label="Activity log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="2.5" width="9" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg></a><form method="post" action="/ui/domains/{{.ID}}/delete" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></span></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">Add your first domain.</p>{{end}}</section></div>
-<section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
+<section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval (not .ID)}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
 </div>
 
 <dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg" data-set-scope="all"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead>{{range .Domains}}{{$d := .}}{{if index $.DomainInboxes $d.ID}}<tbody data-domain="{{$d.ID}}"><tr class="domain-row"><td><b>{{$d.Name}}</b></td><td><div class="seg" data-set-scope="{{$d.ID}}"><button type="button" data-set-role="" data-domain="{{$d.ID}}">None</button><button type="button" data-set-role="read" data-domain="{{$d.ID}}">Read</button><button type="button" data-set-role="assistant" data-domain="{{$d.ID}}">Assistant</button><button type="button" data-set-role="owner" data-domain="{{$d.ID}}">Owner</button></div></td></tr>{{range index $.DomainInboxes $d.ID}}<tr><td class="domain-inbox">{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody>{{end}}{{end}}</table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments.</td></tr><tr><td>Assistant</td><td>Read plus delete messages and create/edit drafts. Cannot send.</td></tr><tr><td>Owner</td><td>Full mailbox access: read, delete, send.</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .SenderRestricted}}1{{end}}">{{.Address}}</option>{{end}}</select><label>Outbound authority</label><select name="role"><option value="owner">Owner — relay sends directly</option><option value="assistant">Assistant — relay drafts and requests approval</option></select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Add Client</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
@@ -545,11 +515,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		msgs, _ = s.Service.Store.SearchMessages(ctx, p, q, "", 100)
 	} else {
-		msgs, _ = s.Service.Store.ListMessages(ctx, p, store.MessageFilter{Limit: 100})
-		blocked, _ := s.Service.Store.ListBlockedMessages(ctx, p, 100)
-		msgs = mergeBlockedMessages(msgs, blocked, 100)
-		controls, _ := s.Service.Store.ListAccountControlMessages(ctx, p.AccountID, 100)
-		msgs = mergeControlMessages(msgs, controls, 100)
+		activity, _ := s.Service.Store.ListAccountLog(ctx, p.AccountID, 100)
+		msgs = dashboardActivityRows(activity)
 	}
 	sendingReady := make(map[string]bool, len(domains))
 	receivingReady := make(map[string]bool, len(domains))
