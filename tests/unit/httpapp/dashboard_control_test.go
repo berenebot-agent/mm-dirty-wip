@@ -6,9 +6,43 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
+
+func TestDashboardActivitySurvivesMessageDelete(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	msg, _, _, err := svc.Store.CommitInbound(ctx, store.InboundRecord{
+		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "dashboard-retained-1",
+		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address},
+		EnvelopeTo: []string{box.Address}, Subject: "Retained activity", Text: "hello",
+		RawPath: "messages/dashboard-retained.eml", SizeBytes: 5, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	if _, _, _, err = svc.Store.DeleteMessage(ctx, p, msg.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Retained activity") || !strings.Contains(rr.Body.String(), "sender@outside.test") {
+		t.Fatalf("dashboard omitted activity for deleted message: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "/ui/messages/"+msg.ID) {
+		t.Fatalf("dashboard retained a detail link for deleted message %s", msg.ID)
+	}
+}
 
 // TestApprovalControlShowsReceivedWithControlClient locks in that a consumed
 // approval control message is rendered as a normal Received row in both the

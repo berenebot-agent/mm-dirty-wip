@@ -60,13 +60,22 @@ func (s *Store) ListDomainLog(ctx context.Context, accountID, domainID string, l
 	return s.listDomainLog(ctx, accountID, domainID, limit, before, true)
 }
 
+// ListAccountLog returns the account's newest durable activity across all
+// domains. Message rows are optional links; the activity snapshots survive
+// message deletion.
+func (s *Store) ListAccountLog(ctx context.Context, accountID string, limit int) ([]DomainLogEntry, error) {
+	return s.listDomainLog(ctx, accountID, "", limit, time.Time{}, true)
+}
+
 func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, limit int, before time.Time, includeOutbound bool) ([]DomainLogEntry, error) {
 	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&n); err != nil {
-		return nil, err
-	}
-	if n != 1 {
-		return nil, ErrNotFound
+	if domainID != "" {
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n != 1 {
+			return nil, ErrNotFound
+		}
 	}
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
@@ -112,8 +121,12 @@ func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, l
 func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
 	deliveredQ := `SELECT CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN l.message_id ELSE '' END,l.inbox_id,l.provider,l.provider_message_id,l.from_address,l.to_json,l.subject,l.size_bytes,l.created_at
 		FROM inbound_delivery_log l
-		WHERE l.account_id=? AND l.domain_id=?`
-	deliveredArgs := []any{accountID, domainID}
+		WHERE l.account_id=?`
+	deliveredArgs := []any{accountID}
+	if domainID != "" {
+		deliveredQ += ` AND l.domain_id=?`
+		deliveredArgs = append(deliveredArgs, domainID)
+	}
 	if beforeText != "" {
 		deliveredQ += ` AND l.created_at < ?`
 		deliveredArgs = append(deliveredArgs, beforeText)
@@ -133,7 +146,9 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 		}
 		e.Kind = "received"
 		e.Status = "received"
-		e.MessageID = e.ID
+		if e.ID != "" {
+			e.MessageID = e.ID
+		}
 		e.To = decodeStrings(to)
 		e.At = parseTime(created)
 		out = append(out, e)
@@ -146,8 +161,12 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 
 	blockedQ := `SELECT b.id,b.inbox_id,b.provider,b.from_address,b.to_json,b.subject,b.size_bytes,b.reason,b.created_at
 		FROM blocked_messages b JOIN inboxes i ON i.id=b.inbox_id AND i.account_id=b.account_id
-		WHERE b.account_id=? AND i.domain_id=?`
-	blockedArgs := []any{accountID, domainID}
+		WHERE b.account_id=?`
+	blockedArgs := []any{accountID}
+	if domainID != "" {
+		blockedQ += ` AND i.domain_id=?`
+		blockedArgs = append(blockedArgs, domainID)
+	}
 	if beforeText != "" {
 		blockedQ += ` AND b.created_at < ?`
 		blockedArgs = append(blockedArgs, beforeText)
@@ -179,8 +198,12 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
 	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.subject,c.created_at
 		FROM inbound_control_messages c JOIN inboxes i ON i.id=c.inbox_id AND i.account_id=c.account_id
-		WHERE c.account_id=? AND i.domain_id=?`
-	args := []any{accountID, domainID}
+		WHERE c.account_id=?`
+	args := []any{accountID}
+	if domainID != "" {
+		q += ` AND i.domain_id=?`
+		args = append(args, domainID)
+	}
 	if beforeText != "" {
 		q += ` AND c.created_at < ?`
 		args = append(args, beforeText)
@@ -210,13 +233,17 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 
 // appendDomainOutbound adds the domain's outbound delivery attempts.
 func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT l.id,l.provider,COALESCE(l.message_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+	q := `SELECT l.id,l.provider,CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN COALESCE(l.message_id,'') ELSE '' END,l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,''),COALESCE(l.inbox_id,m.inbox_id,w.inbox_id,''),COALESCE(l.client_label,m.client_label,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id
 		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
-		WHERE l.account_id=? AND l.domain_id=?`
-	args := []any{accountID, domainID}
+		WHERE l.account_id=?`
+	args := []any{accountID}
+	if domainID != "" {
+		q += ` AND l.domain_id=?`
+		args = append(args, domainID)
+	}
 	if beforeText != "" {
 		q += ` AND l.created_at < ?`
 		args = append(args, beforeText)
