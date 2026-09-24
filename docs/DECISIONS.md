@@ -1186,8 +1186,10 @@ registration.
 
 `/openapi.json` is valid OpenAPI 3.0.3 because every operation carries a
 non-empty `responses` object (the primary success response plus `401` and
-`default`). Per-operation request and response JSON Schemas remain deferred:
-they need handler-level annotations and are a separate project.
+`default`). Per-operation request, response and query schemas were subsequently
+added (`internal/apispec/schemas.go` and `route_io.go`; wired in `openapi.go`,
+covered by `tests/unit/apispec/openapi_test.go`), superseding the original
+deferral. Every operation now references named `components.schemas`.
 
 ## D053 — Proxy-chain trust and canonical HTTPS redirect
 
