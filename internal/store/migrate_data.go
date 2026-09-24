@@ -6,7 +6,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"os"
-	"path/filepath"
+
+	"github.com/dellarb/mailmoose/internal/safepath"
 )
 
 // reconcileIdempotency backfills the mailbox scope on existing idempotency rows
@@ -126,7 +127,11 @@ func backfillAttachmentHashes(dataDir string) func(context.Context, *sql.Tx) err
 			return err
 		}
 		for _, a := range pending {
-			data, err := os.ReadFile(filepath.Join(dataDir, filepath.FromSlash(a.path)))
+			path, perr := safepath.Join(dataDir, a.path)
+			if perr != nil {
+				continue
+			}
+			data, err := os.ReadFile(path)
 			if err != nil {
 				continue
 			}

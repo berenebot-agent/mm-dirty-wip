@@ -43,6 +43,26 @@ func (s *Store) LatestEventID(ctx context.Context, accountID string) (int64, err
 	return id, err
 }
 
+// assistantScopedEventKeys are event payload fields written by the draft
+// approval workflow. They name a nominated approver and record decision
+// metadata, so only a principal who can assist the inbox may see them. A
+// read-only principal receives the event with these fields removed, mirroring
+// the CanAssist check ListSendRequests applies to the same data.
+var assistantScopedEventKeys = []string{"approver_email", "decision_actor", "decision_method", "feedback"}
+
+// redactEventPayload removes assistant-scoped fields from an event payload when
+// the principal may only read the owning inbox. Admins see every field; when the
+// event has no inbox the principal cannot be shown to have assist rights, so
+// the fields are withheld.
+func redactEventPayload(p model.Principal, e *model.Event) {
+	if p.Admin || p.CanAssist(e.InboxID) {
+		return
+	}
+	for _, k := range assistantScopedEventKeys {
+		delete(e.Payload, k)
+	}
+}
+
 func scanEvent(row interface{ Scan(...any) error }) (model.Event, error) {
 	var e model.Event
 	var inbox sql.NullString
@@ -95,6 +115,7 @@ func (s *Store) ListEvents(ctx context.Context, p model.Principal, after int64, 
 		if err != nil {
 			return nil, err
 		}
+		redactEventPayload(p, &e)
 		out = append(out, e)
 	}
 	return out, rows.Err()

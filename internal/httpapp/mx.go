@@ -21,6 +21,12 @@ import (
 // request ID is bound to the authenticated request fingerprint; conflicting
 // reuse is rejected, while an identical retry is allowed to reach the idempotent
 // service path and return its recorded outcome.
+//
+// The cache is in-process, so it covers a single core instance only. MailMoose
+// runs as one process/container (SQLite, no shared cache), so no multi-instance
+// deployment exists to share it with; a future horizontally scaled deployment
+// would need this state in shared storage or the idempotent durable receipts
+// would have to carry the whole replay guarantee.
 type mxReplayCache struct {
 	mu  sync.Mutex
 	m   map[string]replayEntry

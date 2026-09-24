@@ -25,6 +25,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The dashboard inbox and client edit buttons now use a gear (settings) icon,
+  an admin-only gear shortcut in the inbox view opens that inbox's settings
+  directly, and action icons in the dashboard tables and activity links are
+  slightly larger.
 - Renamed Gatehouse Mail to MailMoose. This is breaking: the module path,
   binary and image names, and the discovery path
   (`/.well-known/gatehouse` → `/.well-known/mailmoose`) all changed.
@@ -45,6 +49,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Security
 
+- The events feed (`/v1/events`, `/wait`, `/stream`) withholds assistant-scoped
+  approval fields from principals that can only read the inbox.
+- MX approval control mail is deduplicated by a durable receipt, so a
+  byte-identical signed replay cannot re-run an approval decision.
+- MX approvals require the edge's trusted SPF/DKIM/DMARC evidence for the
+  sender's domain.
+- `TRUST_PROXY_HEADERS=true` and catch-all `/0` `TRUSTED_PROXIES` entries are
+  refused at startup, since they let any caller choose its own rate-limit
+  identity.
+- Stored raw-MIME and attachment paths are containment-checked before any open,
+  read or remove.
+- Event streams and long-polls are bounded per credential.
+- Unrecognised storage-engine and filesystem errors answer a generic `500`
+  instead of leaking internal detail, and `Strict-Transport-Security` is sent
+  when `FORCE_HTTPS=true`.
 - `FORCE_HTTPS` redirects plaintext requests to HTTPS and reports HTTPS in
   discovery documents; only trusted proxies may assert `X-Forwarded-Proto`.
 - MX edge credentials are 256-bit.

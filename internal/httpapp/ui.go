@@ -8,8 +8,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -734,7 +732,7 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, path := range paths {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	http.Redirect(w, r, "/?notice=Domain+deleted", 303)
 }
@@ -1017,7 +1015,7 @@ func (s *Server) uiDeleteInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, path := range paths {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	http.Redirect(w, r, "/?notice=Inbox+deleted", 303)
 }

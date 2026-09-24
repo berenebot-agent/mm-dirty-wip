@@ -6,7 +6,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -430,7 +429,7 @@ func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, path := range paths {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Draft+deleted", 303)
 }
@@ -548,7 +547,7 @@ func (s *Server) uiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path != "" {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 	s.Service.Hub.Publish(ev)
@@ -695,7 +694,7 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if path != "" {
-				_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+				s.removeDataFile(path)
 			}
 			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 			s.Service.Hub.Publish(ev)
@@ -1079,7 +1078,7 @@ func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path != "" {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 	s.Service.Hub.Publish(ev)
@@ -1151,7 +1150,11 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	path := filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(m.RawPath))
+	path, perr := s.dataPath(m.RawPath)
+	if perr != nil {
+		s.Log.Error("attachment path rejected", "error", perr)
+		return
+	}
 	if err := mailparse.ExtractAttachment(path, a.PartIndex, w); err != nil {
 		s.Log.Error("attachment extraction", "error", err)
 	}

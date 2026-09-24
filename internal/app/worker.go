@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime/debug"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/safepath"
 )
 
 // workflowRetention is how long a terminal workflow job (and its retained raw
@@ -175,7 +175,9 @@ func (w *OutboxWorker) sweepWorkflows() {
 		return
 	}
 	for _, p := range paths {
-		_ = os.Remove(filepath.Join(w.svc.Config.DataDir, filepath.FromSlash(p)))
+		if path, perr := safepath.Join(w.svc.Config.DataDir, p); perr == nil {
+			_ = os.Remove(path)
+		}
 	}
 }
 

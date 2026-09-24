@@ -1279,6 +1279,58 @@ forward and reverse DNS for the HELO identity, SPF, DKIM if desired, DMARC
 alignment, and IP reputation. A future extension may add durable per-recipient
 delivery state and signing support.
 
+## D058 — Strix security review remediation
+
+**Decision:** Apply the confirmed and hardening fixes from the Strix review
+(`the removed review report`, run `<review-run>`):
+
+- **Events feed role parity (vuln-0004).** `ListEvents` withholds the
+  assistant-scoped payload fields `approver_email`, `decision_actor`,
+  `decision_method` and `feedback` from a principal that cannot assist the
+  event's inbox, matching the `CanAssist` gate `ListSendRequests` already
+  applies. Admin principals see every field.
+- **Durable control receipts (vuln-0001).** Consumed control mail on the MX
+  path records an MX receipt with disposition `control`, so a byte-identical
+  signed replay is deduplicated by the existing receipt lookup even though no
+  message row exists.
+- **Authenticated evidence for MX approvals (vuln-0002).** The MX edge's
+  trusted SPF/DKIM/DMARC evidence is required before a control message may act
+  on the sender's identity, regardless of the inbox's `require_authenticated`
+  setting. Webhook providers carry no edge evidence and are unaffected.
+- **Trusted-proxy startup guard (vuln-0005).** `config.Load` refuses
+  `TRUST_PROXY_HEADERS=true` and any `/0` `TRUSTED_PROXIES` entry, both of which
+  make the peer check meaningless. This supersedes the legacy trust-all fallback
+  described in D053; `TRUSTED_PROXIES` is now the only way to trust forwarded
+  headers.
+- **Path containment (hardening).** `internal/safepath.Join` resolves a stored
+  relative path beneath `DataDir` and rejects absolute paths, `..`, NUL and
+  backslash, and is used at every raw-MIME/attachment open, read and remove.
+- **Per-credential long-lived bounds (hardening).** SSE streams and long-polls
+  are capped per credential so one key cannot park unbounded connections. The
+  MX replay cache remains in-process and is documented as single-instance,
+  consistent with the one-process/one-container architecture.
+- **Error hygiene and HSTS (hardening).** Unrecognised storage-engine and
+  filesystem errors answer a generic 500 instead of echoing schema, query or
+  path text; `Strict-Transport-Security` is sent when `FORCE_HTTPS=true`.
+
+**Accepted risk — Mailgun unattested envelope sender (vuln-0003).** The Mailgun
+webhook HMAC covers only `timestamp+token`, so the `sender` form field is not
+provider-attested. The approval path continues to treat it as the envelope
+sender to preserve email-based approvals for Mailgun deployments. Exploitation
+requires *both* valid Mailgun signing material (the signing key, or one captured
+triple replayable within the 24-hour window) and the 128-bit single-use
+approval token, so the practical bar is high. A future change should either
+fail closed on unattested envelopes (breaking Mailgun email approvals) or
+authenticate the reply locally (for example DKIM verification of the staged
+MIME) before revisiting this.
+
+**Reason:** The review found no privilege escalation to `owner`/`admin`, no
+cross-inbox rights bleed and no MX HMAC bypass. The confirmed issues are a
+role-parity gap on the events surface, a missing control-mail receipt, and an
+approval-identity gap on the MX path; the remainder are hardening. The Mailgun
+gap is a deliberate product trade-off recorded here rather than silently
+resolved.
+
 ## Future extension register
 
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +26,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/hermesrelay"
 	"github.com/dellarb/mailmoose/internal/limits"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/safepath"
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
@@ -70,6 +73,8 @@ type Server struct {
 	assetVersion    string
 	inboundSem      chan struct{}
 	mxReplay        *mxReplayCache
+	streamLimiter   *concurrentLimiter
+	waitLimiter     *concurrentLimiter
 }
 
 type ctxKey int
@@ -98,7 +103,9 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		registerLimiter: newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
 		flashes:         newFlashStore(64, 64<<20),
 		assetVersion:    fmt.Sprintf("%x", sum[:6]),
-		inboundSem:      make(chan struct{}, conc)}
+		inboundSem:      make(chan struct{}, conc),
+		streamLimiter:   newConcurrentLimiter(maxConcurrentLongLived),
+		waitLimiter:     newConcurrentLimiter(maxConcurrentLongLived)}
 }
 
 // assetURL returns a content-hashed asset path so a rebuilt binary always
@@ -358,6 +365,12 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
 		w.Header().Set("Link", `</.well-known/mailmoose>; rel="help"; title="Agents: GET /.well-known/mailmoose for API reference"`)
+		// HSTS is only meaningful on a deployment that requires HTTPS; the
+		// redirect middleware runs over plaintext, so this is reached only on
+		// a TLS request (or a trusted proxy-reported HTTPS request).
+		if s.Service.Config.ForceHTTPS {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -372,6 +385,25 @@ func serveBlob(w http.ResponseWriter, contentType, cacheControl string, body []b
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", cacheControl)
 	_, _ = w.Write(body)
+}
+
+// dataPath resolves a stored relative path beneath DataDir through the shared
+// containment guard, so a raw path that escaped the data root (today only
+// possible by a future code path storing a client-supplied value) cannot turn a
+// read or remove into arbitrary file access.
+func (s *Server) dataPath(rel string) (string, error) {
+	return safepath.Join(s.Service.Config.DataDir, rel)
+}
+
+// removeDataFile removes a stored relative path beneath DataDir after the
+// containment guard; an empty or escaping path is ignored rather than removed.
+func (s *Server) removeDataFile(rel string) {
+	if strings.TrimSpace(rel) == "" {
+		return
+	}
+	if path, err := s.dataPath(rel); err == nil {
+		_ = os.Remove(path)
+	}
 }
 
 func (s *Server) showLogo(w http.ResponseWriter, r *http.Request) {
@@ -554,7 +586,7 @@ func mapStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrSenderNotAllowed):
 		writeError(w, 403, "sender not allowed")
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, sql.ErrNoRows):
 		writeError(w, 404, "not found")
 	case errors.Is(err, store.ErrForbidden):
 		writeError(w, 403, "forbidden")
@@ -562,9 +594,42 @@ func mapStoreError(w http.ResponseWriter, err error) {
 		writeError(w, 409, "conflict")
 	case errors.Is(err, store.ErrQuota):
 		writeError(w, 507, "storage quota exceeded")
+	case errors.Is(err, app.ErrInvalidConfig), errors.Is(err, store.ErrInvalidAlias):
+		writeError(w, 400, err.Error())
+	case errors.Is(err, app.ErrReplyFromSpam), errors.Is(err, store.ErrExternalAliasDeleted):
+		writeError(w, 409, err.Error())
+	case isInternalStoreError(err):
+		// A storage-engine or filesystem fault must not leak its raw text
+		// (schema, query state, on-disk paths) to the client. Record it and
+		// answer generically.
+		slog.Error("internal store error", "error", err)
+		writeError(w, 500, "internal error")
 	default:
+		// Errors produced deliberately by validation keep their message; they
+		// carry no engine detail.
 		writeError(w, 400, err.Error())
 	}
+}
+
+// isInternalStoreError reports whether an error originates in the storage
+// engine or filesystem rather than in validated client input. The local cgo
+// SQLite driver reports engine faults with a "sqlite" prefix, and a path error
+// exposes an on-disk location, so both are answered generically rather than
+// echoed back.
+func isInternalStoreError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return true
+	}
+	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
+		if strings.HasPrefix(err.Error(), prefix) {
+			return true
+		}
+	}
+	return false
 }
 func adminOnly(w http.ResponseWriter, p model.Principal) bool {
 	if !p.Admin {
@@ -879,6 +944,58 @@ func (l *limiter) sweepLocked(now time.Time) {
 			delete(l.m, k)
 		}
 	}
+}
+
+// maxConcurrentLongLived bounds the number of simultaneous SSE streams and
+// long-polls a single credential may hold, so one key cannot exhaust server
+// connections while a request is parked.
+const maxConcurrentLongLived = 16
+
+// concurrentLimiter bounds the number of in-flight long-lived requests a single
+// credential may hold at once. Unlike limiter it counts live work and releases
+// when the request ends, so it tracks concurrency rather than a rate.
+type concurrentLimiter struct {
+	mu   sync.Mutex
+	max  int
+	live map[string]int
+}
+
+func newConcurrentLimiter(max int) *concurrentLimiter {
+	if max <= 0 {
+		max = 1
+	}
+	return &concurrentLimiter{max: max, live: map[string]int{}}
+}
+
+// acquire reserves a slot for key, reporting false when the cap is reached.
+func (l *concurrentLimiter) acquire(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.live[key] >= l.max {
+		return false
+	}
+	l.live[key]++
+	return true
+}
+
+// release returns a slot previously taken by acquire.
+func (l *concurrentLimiter) release(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n := l.live[key]; n <= 1 {
+		delete(l.live, key)
+		return
+	}
+	l.live[key]--
+}
+
+// credentialKey identifies the credential behind a request for per-key
+// concurrency accounting: a UI session, an API key, or a user principal.
+func credentialKey(p model.Principal) string {
+	if scopes := p.Scopes(); len(scopes) > 0 {
+		return strings.Join(scopes, "|")
+	}
+	return "anonymous"
 }
 
 func baseWSURL(base string) string {

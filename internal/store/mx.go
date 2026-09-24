@@ -73,6 +73,23 @@ func (s *Store) SweepMXReceipts(ctx context.Context, now time.Time) (int, error)
 	return int(n), nil
 }
 
+// RecordMXReceipt writes a durable receipt outside a message transaction, for
+// consumed control mail that is never persisted as a message. It lets the MX
+// ingest path deduplicate a byte-identical signed replay of an approval even
+// though no message row exists. A repeat fingerprint is ignored, so the first
+// recorded disposition wins.
+func (s *Store) RecordMXReceipt(ctx context.Context, r MXReceipt) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := recordMXReceiptTx(ctx, tx, r); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // DefaultMXReceiptTTL is the 7-day retention horizon recorded in D031. It
 // covers the supported sender retry window, the HTTP replay window and expected
 // outage recovery.
@@ -91,6 +108,7 @@ func receiptExpiry(ttl time.Duration) time.Time {
 // duplicated here so the provider-neutral store does not import the MX wire
 // package.
 const (
-	DispositionStored = "stored"
-	DispositionSpam   = "spam"
+	DispositionStored  = "stored"
+	DispositionSpam    = "spam"
+	DispositionControl = "control"
 )

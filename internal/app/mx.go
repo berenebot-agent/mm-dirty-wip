@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -303,7 +304,22 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 		case errors.Is(err, transport.ErrInboundIgnored):
 			// Consumed control mail (an approval decision) is a durable,
 			// terminal outcome: acknowledge it so the edge returns 250 and the
-			// sender does not retry.
+			// sender does not retry. Record a receipt so a byte-identical
+			// signed replay is deduplicated even though no message row exists.
+			receipt := store.MXReceipt{
+				AccountID:           binding.AccountID,
+				Provider:            mxProvider,
+				EnvelopeRecipient:   recipient,
+				DeliveryFingerprint: fingerprint,
+				Disposition:         store.DispositionControl,
+				Reason:              "control",
+			}
+			if s.Config.MXReceiptRetention > 0 {
+				receipt.ExpiresAt = time.Now().UTC().Add(s.Config.MXReceiptRetention)
+			}
+			if rerr := s.Store.RecordMXReceipt(ctx, receipt); rerr != nil {
+				return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeTempFail}
+			}
 			return mxwire.RecipientIngestResult{Recipient: recipient, Disposition: mxwire.DispositionControl, MachineCode: mxwire.CodeOK}
 		case errors.Is(err, store.ErrQuota):
 			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeQuota}

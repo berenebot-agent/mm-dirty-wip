@@ -5,13 +5,13 @@ import (
 	"html"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/safepath"
 	"github.com/dellarb/mailmoose/internal/transport"
 )
 
@@ -211,7 +211,11 @@ func (s *Service) buildApprovalMessage(inbox model.Inbox, to []string, d model.D
 	attachments := make([]transport.OutboundAttachment, 0, len(atts))
 	parts := make([]mailparse.Attachment, 0, len(atts))
 	for i, a := range atts {
-		data, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(a.RawPath)))
+		aPath, perr := safepath.Join(s.Config.DataDir, a.RawPath)
+		if perr != nil {
+			return nil, nil, perr
+		}
+		data, err := os.ReadFile(aPath)
 		if err != nil {
 			return nil, nil, err
 		}

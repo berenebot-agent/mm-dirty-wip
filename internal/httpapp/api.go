@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -327,7 +326,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, path := range paths {
-			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+			s.removeDataFile(path)
 		}
 		w.WriteHeader(204)
 	}
@@ -416,7 +415,7 @@ func (s *Server) apiIdentityDelete(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, path := range paths {
-				_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+				s.removeDataFile(path)
 			}
 			writeJSON(w, 200, map[string]bool{"deleted": true})
 			return
@@ -575,7 +574,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if path != "" {
-			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+			s.removeDataFile(path)
 		}
 		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 		s.Service.Hub.Publish(ev)
@@ -627,7 +626,11 @@ func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	path := filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(m.RawPath))
+	path, perr := s.dataPath(m.RawPath)
+	if perr != nil {
+		writeError(w, 500, "internal error")
+		return
+	}
 	disp := mime.FormatMediaType("attachment", map[string]string{"filename": a.Filename})
 	w.Header().Set("Content-Disposition", disp)
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -909,7 +912,7 @@ func (s *Server) apiDraft(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, path := range paths {
-			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+			s.removeDataFile(path)
 		}
 		w.WriteHeader(204)
 	}
@@ -1166,7 +1169,11 @@ func (s *Server) apiDraftAttachmentContent(w http.ResponseWriter, r *http.Reques
 		mapStoreError(w, err)
 		return
 	}
-	path := filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(a.RawPath))
+	path, perr := s.dataPath(a.RawPath)
+	if perr != nil {
+		writeError(w, 404, "not found")
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		writeError(w, 404, "not found")
@@ -1187,7 +1194,7 @@ func (s *Server) apiDraftAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if raw != "" {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(raw)))
+		s.removeDataFile(raw)
 	}
 	w.WriteHeader(204)
 }
@@ -1223,7 +1230,7 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path != "" {
-		_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+		s.removeDataFile(path)
 	}
 	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 	s.Service.Hub.Publish(ev)
@@ -1279,6 +1286,12 @@ func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
 		sec = 60
 	}
 	p := principal(r)
+	waitKey := credentialKey(p)
+	if !s.waitLimiter.acquire(waitKey) {
+		writeError(w, 429, "too many concurrent waits")
+		return
+	}
+	defer s.waitLimiter.release(waitKey)
 	// With no cursor, wait for events after the current head so the call blocks
 	// for new events instead of replaying history. An explicit cursor keeps the
 	// documented drain semantics (return anything already after it).
@@ -1314,6 +1327,12 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	p := principal(r)
 	// Revoking, rotating, or rescoping the credential cancels this stream.
+	streamKey := credentialKey(p)
+	if !s.streamLimiter.acquire(streamKey) {
+		writeError(w, 429, "too many concurrent streams")
+		return
+	}
+	defer s.streamLimiter.release(streamKey)
 	scopeCtx, unregister := s.Service.Hub.RegisterScope(p.Scopes()...)
 	defer unregister()
 	ctx, cancelCtx := context.WithCancel(r.Context())
@@ -1368,6 +1387,12 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	waitKey := credentialKey(p)
+	if !s.waitLimiter.acquire(waitKey) {
+		writeError(w, 429, "too many concurrent waits")
+		return
+	}
+	defer s.waitLimiter.release(waitKey)
 	q := r.URL.Query()
 	rawAfter := strings.TrimSpace(q.Get("after"))
 	inboxID := q.Get("inbox")
@@ -1567,7 +1592,7 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, path := range paths {
-			_ = os.Remove(filepath.Join(s.Service.Config.DataDir, filepath.FromSlash(path)))
+			s.removeDataFile(path)
 		}
 		w.WriteHeader(204)
 	}

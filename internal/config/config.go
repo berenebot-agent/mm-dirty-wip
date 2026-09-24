@@ -230,6 +230,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// A trust set that matches every caller (legacy trust-all, or a /0 range)
+	// makes the peer check meaningless and lets any client choose its own
+	// rate-limit identity and scheme via forwarded headers. It is always a
+	// misconfiguration, so refuse it at startup rather than run insecurely.
+	if cfg.TrustProxyHeaders {
+		return Config{}, fmt.Errorf("TRUST_PROXY_HEADERS=true trusts proxy headers from every caller; set TRUSTED_PROXIES to the proxy ranges instead")
+	}
+	for _, p := range proxies {
+		if p.Bits() == 0 {
+			return Config{}, fmt.Errorf("TRUSTED_PROXIES entry %q trusts every caller; list the proxy ranges instead", p.String())
+		}
+	}
 	cfg.TrustedProxies = proxies
 	return cfg, nil
 }
@@ -389,7 +401,9 @@ func parseTrustedProxies(raw string) ([]netip.Prefix, error) {
 
 // IsTrustedProxy reports whether the given remote address (host:port) is a
 // configured trusted proxy. When TRUSTED_PROXIES is empty it falls back to the
-// legacy TRUST_PROXY_HEADERS bool (trust everything) for backward compatibility.
+// TRUST_PROXY_HEADERS bool; config.Load refuses TRUST_PROXY_HEADERS=true, so
+// that path is reachable only from an in-process config that sets the field
+// directly.
 func (c Config) IsTrustedProxy(remoteAddr string) bool {
 	if len(c.TrustedProxies) == 0 {
 		return c.TrustProxyHeaders

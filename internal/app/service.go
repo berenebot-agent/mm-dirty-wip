@@ -27,6 +27,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/safepath"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
 	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
@@ -96,6 +97,14 @@ func (s *Service) MaxMultipartParts() int { return s.Config.MaxMultipartParts }
 func (s *Service) workflowPath() string {
 	id := idgen.New("raw")
 	return filepath.Join(s.Config.DataDir, "workflow", id[4:6], id[6:8], id+".eml")
+}
+
+// dataPath resolves a stored relative path beneath DataDir through the shared
+// containment guard, so a raw path that escaped the data root (today only
+// possible by a future code path storing a client-supplied value) cannot turn
+// a read or remove into arbitrary file access.
+func (s *Service) dataPath(rel string) (string, error) {
+	return safepath.Join(s.Config.DataDir, rel)
 }
 
 // ResolveInboundBinding implements transport.BindingResolver. It maps an
@@ -282,7 +291,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	// created. Invalid control mail is consumed too; only its outcome is
 	// recorded.
 	if looksLikeControl(parsed.Subject) || looksLikeControlReply(parsed) {
-		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed)
+		return model.Message{}, false, s.handleControlMessage(ctx, provider, msg, inbox, parsed, mx.authenticated())
 	}
 	// The allow-list matches the spoofable RFC5322.From address. When the inbox
 	// additionally requires an authenticated sender, MX mail whose edge evidence
@@ -1265,7 +1274,11 @@ func (s *Service) sendDraftCore(ctx context.Context, accountID string, d model.D
 	}
 	paths := make([]string, 0, len(atts))
 	for _, a := range atts {
-		data, rerr := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(a.RawPath)))
+		aPath, perr := s.dataPath(a.RawPath)
+		if perr != nil {
+			return SendResult{}, perr
+		}
+		data, rerr := os.ReadFile(aPath)
 		if rerr != nil {
 			return SendResult{}, rerr
 		}
@@ -1287,7 +1300,9 @@ func (s *Service) sendDraftCore(ctx context.Context, accountID string, d model.D
 	}
 	// The draft rows were consumed with the enqueue; remove the files now.
 	for _, path := range paths {
-		_ = os.Remove(filepath.Join(s.Config.DataDir, filepath.FromSlash(path)))
+		if p, perr := s.dataPath(path); perr == nil {
+			_ = os.Remove(p)
+		}
 	}
 	return res, nil
 }
@@ -1327,7 +1342,11 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if err != nil {
 		return s.fail(outcomeCtx, m, err, sending.Provider)
 	}
-	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath)))
+	rawPath, err := s.dataPath(m.RawPath)
+	if err != nil {
+		return s.fail(outcomeCtx, m, err, sending.Provider)
+	}
+	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		return s.fail(outcomeCtx, m, err, sending.Provider)
 	}
@@ -1484,7 +1503,11 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if err != nil {
 		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
 	}
-	raw, err := os.ReadFile(filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath)))
+	rawPath, err := s.dataPath(w.RawPath)
+	if err != nil {
+		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+	}
+	raw, err := os.ReadFile(rawPath)
 	if err != nil {
 		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
 	}
@@ -1578,7 +1601,10 @@ func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID s
 // redactWorkflow removes approval control tokens from a terminal workflow
 // job's stored bodies and retained raw MIME. It is idempotent.
 func (s *Service) redactWorkflow(w store.Workflow) error {
-	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath))
+	path, perr := s.dataPath(w.RawPath)
+	if perr != nil {
+		return perr
+	}
 	if raw, err := os.ReadFile(path); err == nil {
 		redacted := redactWorkflowTokens(string(raw))
 		if redacted != string(raw) {
@@ -1595,7 +1621,10 @@ func (s *Service) redactWorkflow(w store.Workflow) error {
 // workflowAttachments reconstructs attachment bytes from a workflow job's
 // retained raw MIME so HTTP adapters send the same content.
 func (s *Service) workflowAttachments(w store.Workflow) ([]transport.OutboundAttachment, error) {
-	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(w.RawPath))
+	path, perr := s.dataPath(w.RawPath)
+	if perr != nil {
+		return nil, perr
+	}
 	var out []transport.OutboundAttachment
 	err := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		var buf bytes.Buffer
@@ -1766,7 +1795,10 @@ func (s *Service) forwardAttachments(ctx context.Context, accountID string, m mo
 	if len(meta) == 0 {
 		return nil, nil
 	}
-	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath))
+	path, perr := s.dataPath(m.RawPath)
+	if perr != nil {
+		return nil, perr
+	}
 	var out []SendAttachment
 	err = mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		var buf bytes.Buffer
@@ -1792,7 +1824,10 @@ func prefersRawMIME(t transport.OutboundTransport) bool {
 // deliveryAttachments reconstructs attachment bytes from the persisted MIME so
 // HTTP adapters send the same content the stored message describes.
 func (s *Service) deliveryAttachments(m model.Message) ([]transport.OutboundAttachment, error) {
-	path := filepath.Join(s.Config.DataDir, filepath.FromSlash(m.RawPath))
+	path, perr := s.dataPath(m.RawPath)
+	if perr != nil {
+		return nil, perr
+	}
 	var out []transport.OutboundAttachment
 	err := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		var buf bytes.Buffer

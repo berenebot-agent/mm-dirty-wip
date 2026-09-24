@@ -267,8 +267,11 @@ func canonicalSender(raw string) string {
 // handleControlMessage consumes an inbound approval control message. It returns
 // transport.ErrInboundIgnored so the webhook is acknowledged without the
 // message being stored. Every outcome is recorded for the domain log; a
-// successful decision publishes the normal draft event.
-func (s *Service) handleControlMessage(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed) error {
+// successful decision publishes the normal draft event. authenticated reports
+// whether the edge's trusted SPF/DKIM/DMARC evidence establishes the From
+// domain; it is only consulted for the MX edge, whose provider does not
+// otherwise attest the envelope.
+func (s *Service) handleControlMessage(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, authenticated bool) error {
 	dir, ok := parseControlSubject(parsed.Subject)
 	if !ok {
 		dir, ok = parseControlReply(parsed)
@@ -303,6 +306,15 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	}
 	if d, derr := s.Store.GetDraftInternal(ctx, inbox.AccountID, r.DraftID); derr == nil {
 		subject = d.Subject
+	}
+	// The MX edge supplies trusted SPF/DKIM/DMARC evidence for the From domain;
+	// require it before an approval acts on the sender's identity. Webhook
+	// providers carry no such evidence, so the provider's authenticated
+	// envelope assertion (not this flag) is their sender authority.
+	if provider == mxProvider && !authenticated {
+		s.Store.Audit(ctx, inbox.AccountID, provider+".control_sender", "approval sender not authenticated")
+		record(r.ID, action, "invalid", "sender not authenticated")
+		return transport.ErrInboundIgnored
 	}
 	// The provider-attested envelope sender is authoritative: the MIME From
 	// header is attacker-controlled, while the envelope is what the receiving
