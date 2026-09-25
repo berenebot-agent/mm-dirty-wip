@@ -10,3 +10,11 @@
 .DS_Store
 tests/logs/
 repo.zip
+
+# Strix live-app throwaway instance: disposable data dir + scratch.
+# Only the SECRET-BEARING files are ignored — accounts.txt holds live throwaway
+# API keys, and data/ is a throwaway database. The harness scripts themselves
+# (mint_scan_keys.sh, update_brief_creds.py) ARE tracked: they contain no
+# secrets and are the reusable part.
+tests/strix/data/
+tests/strix/accounts.txt
