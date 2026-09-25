@@ -1348,6 +1348,53 @@ approval-identity gap on the MX path; the remainder are hardening. The Mailgun
 gap is a deliberate product trade-off recorded here rather than silently
 resolved.
 
+## D059 — Unattested inbound envelope senders: extended acceptance and containment
+
+**Context:** A second review round (Strix run `<review-run>`, live-app
+assessment) found that the accepted risk `D058` rested partly on a claim that was
+false. `D058` asserted the Cloudflare inbound adapter carried a "genuinely
+attested" envelope sender and was therefore unaffected by the envelope-sender
+risk. It does not: `internal/transport/cloudflare/inbound.go` reads the envelope
+sender from the `X-MailMoose-Envelope-From` request header, and the shared
+per-domain bearer authenticates the caller without attesting the value. Cloudflare
+is therefore a second unattested entry to the approval decision. Resend **is**
+attested (its envelope sender comes from the Svix-signed payload).
+
+**Decision:** Accept the Cloudflare exposure under the same reasoning as `D058`
+rather than changing approval behaviour at this time. The maintainer's judgement:
+the practical bar remains possession of the domain's receiving secret *and* the
+128-bit single-use approval token, and the approver identity is server-fixed, so
+the attacker's gain is limited to forcing approval of the specific draft whose
+token they hold.
+
+**Consequences:**
+
+- The accepted risk now covers **two** providers (Mailgun and Cloudflare) and is
+  documented for reporters in `SECURITY.md`.
+- The "failing closed would break Mailgun" rationale is weaker than it appeared.
+  A single provenance flag on `transport.InboundMessage` would close Mailgun and
+  Cloudflare together, which is the preferred eventual fix — the blocker is that
+  fail-closed loses email approvals for every provider that passes an unattested
+  sender, not Mailgun alone.
+- **Attestation is a property of what a signature covers, never of a provider's
+  name.** Any future adapter is attested only if its verified signature or secret
+  covers the sender value the adapter reports. Recorded as a general rule in
+  `SECURITY.md`.
+
+**Also in this change (retest follow-ups, not part of the acceptance):**
+
+- `internal/store`: a NUL or control byte in a search query no longer reaches the
+  FTS5 engine. A NUL is a typed client-input error (`ErrInvalidSearchQuery`) and a
+  control byte is stripped; an emptied expression short-circuits to "no matches".
+  Previously the malformed expression surfaced as an unmapped store error and an
+  HTTP 500 (retest finding B, informational).
+- `internal/httpapp`: `ErrInvalidSearchQuery` maps to a 400 rather than falling
+  through to the generic 500 branch.
+- `internal/config`: a `TRUSTED_PROXIES` entry wider than `/8` is now refused at
+  load, closing the "equivalent-but-not-literal /0" gap recorded as a retest open
+  item; a peer found inside the trust set is logged at WARN so a covering-set
+  misconfiguration is visible at runtime, which startup cannot detect.
+
 ## Future extension register
 
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/mail"
 	"net/netip"
@@ -241,6 +242,13 @@ func Load() (Config, error) {
 		if p.Bits() == 0 {
 			return Config{}, fmt.Errorf("TRUSTED_PROXIES entry %q trusts every caller; list the proxy ranges instead", p.String())
 		}
+		// A prefix this short is not a proxy address in any real topology and
+		// almost certainly covers ordinary clients too. Refusing at load is the
+		// only point where a deliberately-wide covering set can be caught, since
+		// startup cannot know which addresses will actually connect.
+		if p.Bits() < minTrustedProxyBits {
+			return Config{}, fmt.Errorf("TRUSTED_PROXIES entry %q is wider than /%d and would trust ordinary clients; list the specific proxy addresses", p.String(), minTrustedProxyBits)
+		}
 	}
 	cfg.TrustedProxies = proxies
 	return cfg, nil
@@ -399,6 +407,12 @@ func parseTrustedProxies(raw string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// minTrustedProxyBits is the narrowest prefix length accepted for a
+// TRUSTED_PROXIES entry. Anything wider is refused at load (see Load): a
+// /1 or similar is not a proxy address in any real topology, and trusting it
+// would let ordinary clients set their own rate-limit identity and scheme.
+const minTrustedProxyBits = 8
+
 // IsTrustedProxy reports whether the given remote address (host:port) is a
 // configured trusted proxy. When TRUSTED_PROXIES is empty it falls back to the
 // TRUST_PROXY_HEADERS bool; config.Load refuses TRUST_PROXY_HEADERS=true, so
@@ -418,6 +432,13 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 	}
 	for _, p := range c.TrustedProxies {
 		if p.Contains(addr) {
+			// A peer inside the trust set is the load-bearing case for the
+			// forwarded-header decision. Logging it makes a covering-set
+			// misconfiguration visible while running: startup cannot know which
+			// addresses will connect, so this is the only place the condition
+			// can actually be observed.
+			slog.Warn("request peer is inside the trusted-proxy set; forwarded headers will be honoured",
+				"peer", addr.String(), "prefix", p.String())
 			return true
 		}
 	}

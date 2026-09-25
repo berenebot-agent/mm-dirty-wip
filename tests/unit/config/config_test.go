@@ -128,3 +128,37 @@ func TestTrustedProxiesCatchAllRefused(t *testing.T) {
 		}
 	}
 }
+
+// A prefix wider than the floor is refused even though it is not /0: a /1 is
+// not a proxy address in any real topology and still covers ordinary clients.
+// This is the gap the retest recorded as an open item (the original guard
+// checked each entry's prefix length only for == 0).
+func TestTrustedProxiesTooWideRefused(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	for _, v := range []string{"0.0.0.0/1", "10.0.0.0/1", "::/1", "192.0.0.0/2"} {
+		t.Setenv("TRUSTED_PROXIES", v)
+		if _, err := config.Load(); err == nil {
+			t.Fatalf("TRUSTED_PROXIES=%s must be refused: wider than the accepted floor", v)
+		}
+	}
+}
+
+// The floor must not refuse legitimate proxy entries. /8 is the narrowest
+// accepted, and everything narrower (including the live deployment's bare IP)
+// must keep loading.
+func TestTrustedProxiesAtOrNarrowerThanFloorAccepted(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	// 0.0.0.0/8 == a /8 prefix; 255.0.0.0/8 is the narrowest accepted.
+	t.Setenv("TRUSTED_PROXIES", "255.0.0.0/8")
+	if _, err := config.Load(); err != nil {
+		t.Fatalf("/8 must be accepted (it is the floor): %v", err)
+	}
+	t.Setenv("TRUSTED_PROXIES", "203.0.113.10")
+	if _, err := config.Load(); err != nil {
+		t.Fatalf("bare IP must be accepted: %v", err)
+	}
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/9")
+	if _, err := config.Load(); err != nil {
+		t.Fatalf("/9 must be accepted: %v", err)
+	}
+}
