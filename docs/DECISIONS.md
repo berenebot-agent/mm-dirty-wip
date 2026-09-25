@@ -476,6 +476,15 @@ Cloudflare and Resend adapters (`transport.InboundMessage.EnvelopeFrom`).
 Providers that do not supply it fail closed; the generated Cloudflare Worker
 sends it. Full SPF/DKIM/DMARC evidence capture remains a future extension.
 
+Normalization is **not** the same as attestation, and the difference matters for
+the approval decision (`D058`, `D027`): the value is normalized on every adapter
+but only *attested* on Resend, whose envelope sender comes from the Svix-signed
+payload. Mailgun passes an unsigned form field and Cloudflare passes an unsigned
+request header (`X-MailMoose-Envelope-From`), so on both the transport is
+authenticated while the sender **content** is caller-controlled. A consumer that
+needs an attested sender must require a provenance flag, not the provider name
+(round-2 retest, finding A).
+
 ## D030 — Inbox aliases: inbound address routing (migration 021)
 
 **Decision:** An inbox may carry aliases: alternate inbound addresses
@@ -1323,6 +1332,14 @@ approval token, so the practical bar is high. A future change should either
 fail closed on unattested envelopes (breaking Mailgun email approvals) or
 authenticate the reply locally (for example DKIM verification of the staged
 MIME) before revisiting this.
+
+**Correction (round-2 retest):** the acceptance originally rested in part on the
+claim that the Cloudflare adapter carried a genuinely attested envelope sender and
+was therefore unaffected. **That claim was false** — Cloudflare reads the envelope
+sender from an unsigned request header, so it is a second unattested entry point to
+the same decision (finding A, `LOW`). Resend remains genuinely attested. The
+"failing closed breaks Mailgun" argument is correspondingly weaker: a single
+provenance flag on `transport.InboundMessage` closes Mailgun and Cloudflare together.
 
 **Reason:** The review found no privilege escalation to `owner`/`admin`, no
 cross-inbox rights bleed and no MX HMAC bypass. The confirmed issues are a

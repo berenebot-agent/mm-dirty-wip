@@ -83,8 +83,16 @@ verify the approval reply's DKIM signature locally against the staged MIME
 before acting on the sender's identity. Revisit only alongside an explicit
 decision to change approval behaviour.
 
-The Resend and Cloudflare inbound adapters carry a genuinely attested envelope
-sender and are **not** affected.
+The **Resend** inbound adapter carries a genuinely attested envelope sender and is
+**not** affected: its envelope sender is taken from the Svix-signed webhook payload,
+so the signature covers the value the adapter reports.
+
+The **Cloudflare** inbound adapter is **also affected**. It reads the envelope sender
+verbatim from the `X-MailMoose-Envelope-From` request header; the shared bearer
+authenticates the caller, not the value the caller asserts. An earlier revision of
+this document described Cloudflare as "genuinely attested" — that was incorrect for
+the approval-sender purpose. See retest finding A in
+`the removed review report` and decision D058.
 
 ## Supported versions
 
