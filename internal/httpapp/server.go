@@ -596,6 +596,10 @@ func mapStoreError(w http.ResponseWriter, err error) {
 		writeError(w, 507, "storage quota exceeded")
 	case errors.Is(err, app.ErrInvalidConfig), errors.Is(err, store.ErrInvalidAlias):
 		writeError(w, 400, err.Error())
+	case errors.Is(err, store.ErrInvalidSearchQuery):
+		// Bad client input (control bytes in the query), not an engine fault —
+		// answer 400 rather than letting it fall through to the 500 branch.
+		writeError(w, 400, err.Error())
 	case errors.Is(err, app.ErrReplyFromSpam), errors.Is(err, store.ErrExternalAliasDeleted):
 		writeError(w, 409, err.Error())
 	case isInternalStoreError(err):

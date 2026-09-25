@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/limits"
@@ -845,14 +847,33 @@ func spamClause(alias string, spamOnly, includeSpam bool) string {
 	}
 }
 
-func ftsQuery(q string) string {
-	fields := strings.Fields(q)
+// ErrInvalidSearchQuery reports a search query that cannot be expressed to the
+// full-text engine (for example one containing a NUL or other control byte).
+// It is client input, so it maps to a 400-class answer rather than a 500.
+var ErrInvalidSearchQuery = errors.New("invalid search query")
+
+// ftsQuery builds the FTS5 MATCH expression for a user-supplied query.
+//
+// Each whitespace-separated term is quoted, so the caller cannot inject FTS
+// operators. Control bytes are the one input that survives quoting (a NUL byte
+// inside the quoted term makes the driver reject the whole expression), and a
+// rejection there would surface as an unmapped store error — a 500 for what is
+// really bad client input. Control bytes are therefore dropped here, and a raw
+// NUL aborts the search so a hostile query degrades to "no matches" instead of
+// an error. The caller keeps the parameterised binding.
+func ftsQuery(q string) (string, error) {
+	if strings.ContainsRune(q, 0) {
+		return "", ErrInvalidSearchQuery
+	}
+	fields := strings.FieldsFunc(q, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		f = strings.ReplaceAll(f, `"`, `""`)
 		out = append(out, `"`+f+`"`)
 	}
-	return strings.Join(out, " AND ")
+	return strings.Join(out, " AND "), nil
 }
 
 type BlockedRecord struct {
@@ -968,7 +989,17 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		return []model.Message{}, nil
 	}
 	sqlq := messageSelect + ` FROM message_fts JOIN messages m ON m.id=message_fts.message_id WHERE message_fts MATCH ? AND m.account_id=? AND m.internal=0`
-	args := []any{ftsQuery(q), p.AccountID}
+	match, err := ftsQuery(q)
+	if err != nil {
+		return nil, err
+	}
+	if match == "" {
+		// The query reduced to nothing once control bytes were stripped (e.g. it
+		// was wholly control bytes). An empty MATCH expression is a syntax error
+		// to FTS5, so short-circuit to "no matches" rather than querying.
+		return []model.Message{}, nil
+	}
+	args := []any{match, p.AccountID}
 	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
