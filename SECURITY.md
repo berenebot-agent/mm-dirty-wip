@@ -50,6 +50,42 @@ The following are generally not treated as vulnerabilities in this project:
 If you are unsure whether something is in scope, report it privately and we
 will help triage it.
 
+## Known accepted risks
+
+Accepted risks are design decisions that are deliberately retained. They are
+**not** vulnerabilities to report — a finding matching one of these will be
+closed as accepted, so please check here before spending effort on one.
+
+### The Mailgun inbound envelope sender is not provider-attested
+
+**Status:** accepted risk — decision `D058` in `docs/DECISIONS.md`.
+
+The Mailgun webhook HMAC covers only `timestamp + token`
+(`internal/transport/mailgun/inbound.go`), so the `sender` form field is not
+provider-attested. The approval workflow nevertheless uses that value as the
+message's envelope sender, and the approval decision requires the envelope
+sender to equal the nominated approver.
+
+The consequence is that a caller holding valid Mailgun signing material — the
+signing key, or a captured `timestamp`/`token`/`signature` triple replayable
+within its 24-hour window — can set the approver address and obtain an approval.
+Exploitation requires **both** of those signing values **and** the 128-bit
+single-use approval token, so the practical bar is high.
+
+**Why it is retained:** failing closed on an unattested envelope sender breaks
+email-based draft approvals for every Mailgun deployment, which is a supported
+and documented inbound provider. The maintainer judged the residual risk lower
+than losing that capability.
+
+**Eventual fix (out of scope until then):** carry a provenance flag on inbound
+messages so an unattested envelope sender can never be consumed as attested, or
+verify the approval reply's DKIM signature locally against the staged MIME
+before acting on the sender's identity. Revisit only alongside an explicit
+decision to change approval behaviour.
+
+The Resend and Cloudflare inbound adapters carry a genuinely attested envelope
+sender and are **not** affected.
+
 ## Supported versions
 
 MailMoose is at V1. Only the latest release and the current `main`
