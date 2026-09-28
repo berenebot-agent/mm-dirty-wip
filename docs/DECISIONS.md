@@ -1506,6 +1506,70 @@ it is enforced before the first request rather than after it.
 - D059's closing paragraph in this file is superseded on its second clause ("a peer
   found inside the trust set is logged at WARN").
 
+## D062 — Unified clients and webhook delivery
+
+**Context:** The product had two consumer kinds for an inbox: account-scoped API
+keys (pull, with per-mailbox roles) and inbox-bound Hermes relay connections
+(push over an outbound WebSocket). Both the dashboard and the operating model
+already treated them together as "Clients". A third consumer was wanted: a
+generic HTTP webhook that pushes incoming mail to a URL, with either a small
+notification (the receiver fetches the body later with its own API key) or a
+full forward of the raw MIME.
+
+**Decision:** Model every consumer as a row in a single `clients` base table
+with a `type` discriminator (`api_key`, `hermes`, `webhook`), plus type detail
+tables: `client_api_keys` (hashed bearer), `client_inbox_bindings` (per-inbox
+roles, formerly `api_key_mailbox_roles`) and `client_push` (inbox-bound push
+config: gateway id, encrypted secrets, cursor, URL, payload mode, auth mode,
+enabled). `webhook_deliveries` is the durable per-event delivery queue.
+
+- Migration 032 creates the client tables and copies existing API keys and
+  Hermes connections into them, preserving their ids (`key…`, `hrm…`) so
+  `messages.client_id`, `draft_send_requests` and role bindings keep resolving.
+  The legacy `api_keys` / `api_key_mailbox_roles` / `hermes_connections` tables
+  are retained and dual-written for API-key lifecycle, so any not-yet-migrated
+  reader stays correct; all runtime reads go through the client tables.
+- Webhook clients are bound to exactly one inbox, delivery-only: no bearer, no
+  `/v1` access, no outbound send. Hermes keeps its `outbound_role`.
+- Payload modes: `notify` (fixed small JSON: event, cursor, inbox_id,
+  message_id; the receiver fetches the rest with its own API key) and `forward`
+  (byte-for-byte raw MIME streamed as `message/rfc822`, bounded by
+  `MAX_MESSAGE_BYTES`). Both modes deliver `message.received` and
+  `message.spam_state_changed`, skipping currently-Spam mail, matching Hermes.
+- Auth is chosen per client: `signature` (timestamped
+  `X-MailMoose-Signature: t=…,v1=…`, HMAC-SHA256 over `t + "." + body`) or
+  `bearer` (static `Authorization: Bearer`). The secret is generated once,
+  shown once, stored encrypted, and rotatable.
+- Delivery reuses the durable event log and a background worker (the same
+  outbox worker pass): one inbox-ordered head event per client, HTTP 2xx acks
+  and advances the cursor, failures retry with capped exponential backoff, and
+  a delivery that has not succeeded within `WEBHOOK_RETRY_WINDOW_DAYS`
+  (default 7) is marked failed and the cursor advances so a dead endpoint
+  cannot block a mailbox forever. `enabled` pauses delivery without losing the
+  cursor.
+- The destination is validated as HTTPS at save and dialled with the existing
+  `netutil` public-routable guard, so a webhook cannot be pointed at a private
+  or loopback address.
+- `/v1/admin/clients` is the canonical listing; `/v1/admin/clients/webhooks*`
+  manages webhook clients; the existing `/v1/admin/keys` and
+  `/v1/admin/hermes` routes remain as compatibility aliases.
+
+**Reason:** One identity table gives one list, one id space and one revoke
+path for every way mail reaches a consumer, and the webhook is structurally
+the Hermes connection with an HTTP transport instead of a WebSocket, so it
+shares the same cursor, secret custody and cancellation machinery. Keeping
+API-key and Hermes HTTP routes as aliases preserves existing integrations.
+
+**Consequences:**
+
+- A webhook is a delivery accelerator like Relay: SQLite remains the durable
+  source of truth and the cursor is what makes retries and catch-up correct.
+- The legacy client tables still exist on upgraded databases. Dropping them is
+  deferred until every reader is migrated; this is recorded here so it is not
+  mistaken for an oversight.
+- Mode and auth are editable without resetting the cursor; mode changes only
+  the shape of future payloads.
+
 ## Future extension register
 
 

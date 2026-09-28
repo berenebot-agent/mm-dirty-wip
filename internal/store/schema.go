@@ -965,3 +965,65 @@ const migration031 = `
 ALTER TABLE accounts ADD COLUMN mailer_inbox_id TEXT REFERENCES inboxes(id) ON DELETE SET NULL;
 DROP TABLE IF EXISTS system_settings;
 `
+
+const migration032 = `
+CREATE TABLE clients (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK(type IN ('api_key','hermes','webhook')),
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+CREATE INDEX idx_clients_account ON clients(account_id, created_at DESC);
+INSERT INTO clients(id,account_id,type,name,created_at,revoked_at)
+SELECT id,account_id,'api_key',name,created_at,revoked_at FROM api_keys;
+INSERT INTO clients(id,account_id,type,name,created_at)
+SELECT id,account_id,'hermes',name,created_at FROM hermes_connections;
+CREATE TABLE client_api_keys (
+  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL UNIQUE,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  last_used_at TEXT
+);
+INSERT INTO client_api_keys(client_id,key_prefix,key_hash,is_admin,last_used_at)
+SELECT id,key_prefix,key_hash,is_admin,last_used_at FROM api_keys;
+CREATE TABLE client_inbox_bindings (
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('read','assistant','owner')),
+  PRIMARY KEY(client_id,inbox_id)
+);
+INSERT INTO client_inbox_bindings(client_id,inbox_id,role)
+SELECT api_key_id,inbox_id,role FROM api_key_mailbox_roles;
+CREATE TABLE client_push (
+  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  gateway_id TEXT UNIQUE,
+  secret_encrypted TEXT NOT NULL DEFAULT '',
+  delivery_key_encrypted TEXT NOT NULL DEFAULT '',
+  outbound_role TEXT NOT NULL DEFAULT 'owner',
+  last_ack_event_id INTEGER NOT NULL DEFAULT 0,
+  last_connected_at TEXT,
+  url TEXT NOT NULL DEFAULT '',
+  payload_mode TEXT NOT NULL DEFAULT '',
+  auth_mode TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_success_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  signing_secret_encrypted TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO client_push(client_id,inbox_id,gateway_id,secret_encrypted,delivery_key_encrypted,outbound_role,last_ack_event_id,last_connected_at)
+SELECT id,inbox_id,gateway_id,secret_encrypted,delivery_key_encrypted,outbound_role,last_ack_event_id,last_connected_at FROM hermes_connections;
+CREATE TABLE webhook_deliveries (
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(client_id,event_id)
+);
+`

@@ -155,6 +155,15 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/admin/hermes/enroll": {Request: "HermesEnrollBody", Response: "HermesEnrollment"},
 	"PUT /v1/admin/hermes/{id}":    {Request: "HermesUpdateBody", Response: "HermesUpdateResult"},
 	"DELETE /v1/admin/hermes/{id}": {},
+
+	// Admin: clients.
+	"GET /v1/admin/clients":                        {Response: "ClientList"},
+	"GET /v1/admin/clients/webhooks":               {Response: "WebhookClientList"},
+	"POST /v1/admin/clients/webhooks":              {Request: "WebhookCreateBody", Response: "WebhookCreated"},
+	"PUT /v1/admin/clients/webhooks/{id}":          {Request: "WebhookUpdateBody", Response: "Updated"},
+	"DELETE /v1/admin/clients/webhooks/{id}":       {},
+	"POST /v1/admin/clients/webhooks/{id}/rotate":  {Response: "WebhookRotateResult"},
+	"POST /v1/admin/clients/webhooks/{id}/enabled": {Request: "WebhookEnabledBody", Response: "WebhookEnabledResult"},
 }
 
 // ContractKeys returns the "METHOD /path" keys that carry wire-contract

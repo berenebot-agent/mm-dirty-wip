@@ -101,6 +101,7 @@ type Config struct {
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
 	ApprovalExpiryHours int
+	WebhookRetryWindow  time.Duration
 	// MXMode selects the optional direct-SMTP (MX) deployment: off, true (edge
 	// embedded in this container as a separate-uid child) or remote (edge runs
 	// as a separate container/host and shares MX_EDGE_KEYS). It is the single
@@ -178,6 +179,7 @@ func Load() (Config, error) {
 		MaxMIMEParts:           envInt("MAX_MIME_PARTS", 256),
 		BodyReadTimeout:        time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
 		ApprovalExpiryHours:    envInt("APPROVAL_EXPIRY_HOURS", 48),
+		WebhookRetryWindow:     time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
 		MXMode:                 mxMode,
 		MXReceiveEnabled:       mxMode != MXOff,
 		MXEmbedded:             mxMode == MXLocal,

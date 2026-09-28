@@ -162,3 +162,15 @@ Generated from `internal/apispec`; do not edit by hand.
 | PUT | /v1/admin/hermes/{id} | Update a Hermes connection outbound role (Admin) | admin |
 | DELETE | /v1/admin/hermes/{id} | Delete a Hermes connection (Admin) | admin |
 
+## Admin: clients
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/clients | List clients (Admin) | admin |
+| GET | /v1/admin/clients/webhooks | List webhook clients (Admin) | admin |
+| POST | /v1/admin/clients/webhooks | Create a webhook client (Admin) | admin |
+| PUT | /v1/admin/clients/webhooks/{id} | Update a webhook client (Admin) | admin |
+| DELETE | /v1/admin/clients/webhooks/{id} | Delete a webhook client (Admin) | admin |
+| POST | /v1/admin/clients/webhooks/{id}/rotate | Rotate a webhook signing secret (Admin) | admin |
+| POST | /v1/admin/clients/webhooks/{id}/enabled | Enable or pause a webhook client (Admin) | admin |
+

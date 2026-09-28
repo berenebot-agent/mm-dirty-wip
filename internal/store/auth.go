@@ -418,11 +418,15 @@ func (s *Store) AdminResetPassword(ctx context.Context, userID, newPassword stri
 // the operator `admin revoke-api-keys` recovery command, kept separate from a
 // password reset so machine integrations are only torn down on request.
 func (s *Store) RevokeAPIKeysForAccount(ctx context.Context, accountID string) (int64, error) {
-	res, err := s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, nowText(), accountID)
+	now := nowText()
+	res, err := s.write.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE account_id=? AND type='api_key' AND revoked_at IS NULL`, now, accountID)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	if _, err = s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, now, accountID); err != nil {
+		return 0, err
+	}
 	return n, nil
 }
 
@@ -507,7 +511,15 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 	}
 	defer tx.Rollback()
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO api_keys(id,account_id,name,key_prefix,key_hash,is_admin,created_at) VALUES(?,?,?,?,?,?,?)`, id, accountID, strings.TrimSpace(name), prefix, auth.HashToken(plain), boolInt(admin), now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO clients(id,account_id,type,name,created_at) VALUES(?,?,'api_key',?,?)`, id, accountID, strings.TrimSpace(name), now); err != nil {
+		return model.APIKey{}, "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO client_api_keys(client_id,key_prefix,key_hash,is_admin) VALUES(?,?,?,?)`, id, prefix, auth.HashToken(plain), boolInt(admin)); err != nil {
+		return model.APIKey{}, "", err
+	}
+	// Mirror into the legacy table before the role rows, which carry a
+	// foreign key to it, so the dual-write keeps both schemas valid.
+	if err = s.syncLegacyAPIKey(ctx, tx, id); err != nil {
 		return model.APIKey{}, "", err
 	}
 	if !admin {
@@ -519,6 +531,9 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 			var n int
 			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
 				return model.APIKey{}, "", ErrForbidden
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role) VALUES(?,?,?)`, id, inboxID, role); err != nil {
+				return model.APIKey{}, "", err
 			}
 			if _, err = tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, id, inboxID, role); err != nil {
 				return model.APIKey{}, "", err
@@ -536,7 +551,7 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 	var revoked sql.NullString
 	var admin int
 	hash := auth.HashToken(token)
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,is_admin,revoked_at FROM api_keys WHERE key_hash=?`, hash).Scan(&p.APIKeyID, &p.AccountID, &admin, &revoked)
+	err := s.read.QueryRowContext(ctx, `SELECT c.id,c.account_id,k.is_admin,c.revoked_at FROM clients c JOIN client_api_keys k ON k.client_id=c.id WHERE k.key_hash=? AND c.type='api_key'`, hash).Scan(&p.APIKeyID, &p.AccountID, &admin, &revoked)
 	if err == sql.ErrNoRows {
 		return p, ErrNotFound
 	}
@@ -549,7 +564,7 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 	p.Admin = admin != 0
 	p.MailboxRoles = map[string]string{}
 	if !p.Admin {
-		rows, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM api_key_mailbox_roles WHERE api_key_id=?`, p.APIKeyID)
+		rows, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM client_inbox_bindings WHERE client_id=?`, p.APIKeyID)
 		if err != nil {
 			return p, err
 		}
@@ -562,11 +577,11 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 			p.MailboxRoles[id] = role
 		}
 	}
-	_, _ = s.write.ExecContext(ctx, `UPDATE api_keys SET last_used_at=? WHERE id=?`, nowText(), p.APIKeyID)
+	_, _ = s.write.ExecContext(ctx, `UPDATE client_api_keys SET last_used_at=? WHERE client_id=?`, nowText(), p.APIKeyID)
 	return p, nil
 }
 func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIKey, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT k.id,k.name,k.key_prefix,k.is_admin,k.created_at,r.inbox_id,r.role FROM api_keys k LEFT JOIN api_key_mailbox_roles r ON r.api_key_id=k.id WHERE k.account_id=? AND k.revoked_at IS NULL ORDER BY k.created_at DESC, k.id`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT c.id,c.name,k.key_prefix,k.is_admin,c.created_at,r.inbox_id,r.role FROM clients c JOIN client_api_keys k ON k.client_id=c.id LEFT JOIN client_inbox_bindings r ON r.client_id=c.id WHERE c.account_id=? AND c.type='api_key' AND c.revoked_at IS NULL ORDER BY c.created_at DESC, c.id`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -597,7 +612,7 @@ func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIK
 	return out, rows.Err()
 }
 func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND account_id=?`, nowText(), keyID, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE id=? AND account_id=? AND type='api_key'`, nowText(), keyID, accountID)
 	if err != nil {
 		return err
 	}
@@ -605,7 +620,8 @@ func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error
 	if n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	_, err = s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND account_id=?`, nowText(), keyID, accountID)
+	return err
 }
 
 // RotateAPIKey issues a new secret for an existing key while keeping its id,
@@ -620,12 +636,16 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 	if len(prefix) > 14 {
 		prefix = prefix[:14]
 	}
-	res, err := s.write.ExecContext(ctx, `UPDATE api_keys SET key_hash=?, key_prefix=?, last_used_at=NULL WHERE id=? AND account_id=? AND revoked_at IS NULL`, auth.HashToken(plain), prefix, keyID, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE client_api_keys SET key_hash=?, key_prefix=?, last_used_at=NULL WHERE client_id=? AND EXISTS (SELECT 1 FROM clients c WHERE c.id=client_api_keys.client_id AND c.account_id=? AND c.type='api_key' AND c.revoked_at IS NULL)`, auth.HashToken(plain), prefix, keyID, accountID)
 	if err != nil {
 		return "", err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return "", ErrNotFound
+	}
+	_, err = s.write.ExecContext(ctx, `UPDATE api_keys SET key_hash=?,key_prefix=?,last_used_at=NULL WHERE id=? AND account_id=?`, auth.HashToken(plain), prefix, keyID, accountID)
+	if err != nil {
+		return "", err
 	}
 	return plain, nil
 }
@@ -638,12 +658,18 @@ func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string,
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE api_keys SET name=?, is_admin=? WHERE id=? AND account_id=? AND revoked_at IS NULL`, strings.TrimSpace(name), boolInt(admin), keyID, accountID)
+	res, err := tx.ExecContext(ctx, `UPDATE clients SET name=? WHERE id=? AND account_id=? AND type='api_key' AND revoked_at IS NULL`, strings.TrimSpace(name), keyID, accountID)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE client_api_keys SET is_admin=? WHERE client_id=?`, boolInt(admin), keyID)
+	}
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM client_inbox_bindings WHERE client_id=?`, keyID); err != nil {
+		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE api_key_id=?`, keyID); err != nil {
 		return err
@@ -658,10 +684,16 @@ func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string,
 			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
 				return ErrForbidden
 			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
+				return err
+			}
 			if _, err = tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
 				return err
 			}
 		}
+	}
+	if err = s.syncLegacyAPIKey(ctx, tx, keyID); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

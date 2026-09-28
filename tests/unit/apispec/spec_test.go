@@ -11,8 +11,8 @@ import (
 // registration count so a new transport route cannot be added without a
 // matching table entry.
 func TestRoutesCount(t *testing.T) {
-	if got := len(apispec.Routes()); got != 75 {
-		t.Fatalf("len(Routes()) = %d, want 75", got)
+	if got := len(apispec.Routes()); got != 82 {
+		t.Fatalf("len(Routes()) = %d, want 82", got)
 	}
 }
 
@@ -139,6 +139,7 @@ func TestGroups(t *testing.T) {
 		"Admin: keys",
 		"Admin: external aliases",
 		"Admin: Hermes",
+		"Admin: clients",
 	}
 	got := apispec.Groups()
 	if len(got) != len(want) {

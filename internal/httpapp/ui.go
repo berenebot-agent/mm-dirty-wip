@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
@@ -167,6 +168,7 @@ type fromOption struct {
 
 type credentialView struct {
 	ID, Kind, Name, Type, Scope, RolesJSON, InboxID, Role string
+	URL, Mode, AuthMode                                   string
 	Admin                                                 bool
 }
 
@@ -573,12 +575,12 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 {{if .DomainWorkerCode}}<section class="card"><h2>Cloudflare setup code</h2><p class="muted">Paste this into Cloudflare. It contains the generated shared secret and is shown only once.</p><ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Worker</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In Email Routing, add a <b>Send to a Worker</b> rule for each receiving address and choose this Worker.</li></ol><pre class="cf-code" id="cf-code">{{.DomainWorkerCode}}</pre><p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><a class="btn" href="/">Done</a></div></section>{{end}}
 <div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>
 <div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
-<section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" title="Client settings" aria-label="Client settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><form method="post" action="/ui/{{if eq .Kind "hermes"}}hermes{{else}}keys{{end}}/{{.ID}}/delete" data-confirm="Delete this {{.Type}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
+<section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions"><button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" data-url="{{.URL}}" data-mode="{{.Mode}}" data-auth="{{.AuthMode}}" title="Client settings" aria-label="Client settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><form method="post" action="/ui/{{if eq .Kind "hermes"}}hermes{{else if eq .Kind "webhook"}}webhooks{{else}}keys{{end}}/{{.ID}}/delete" data-confirm="Delete this {{.Type}}?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<div class="table-wrap"><table class="domains-table"><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}{{$d := .}}<tr><td><b>{{.Name}}</b></td><td>{{if .CatchAllInboxID}}<button type="button" class="cell-link domain-catchall-link open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall" title="{{index $.InboxAddr .CatchAllInboxID}}">{{index $.InboxAddr .CatchAllInboxID}}</button>{{else}}<button type="button" class="secondary btn-sm cell-edit domain-catchall-add open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall">Add</button>{{end}}</td><td><button type="button" class="{{if .SendingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="sending">{{if .SendingProvider}}{{index $.DomainSendingLabel .ID}}{{else}}Add{{end}}</button></td><td><button type="button" class="{{if .ReceivingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="receiving">{{if .ReceivingProvider}}{{index $.DomainReceivingLabel .ID}}{{else}}Add{{end}}</button></td><td><span class="domain-actions"><a class="btn secondary icon-btn" href="/ui/domains/{{.ID}}/sending/deliveries" title="Activity log" aria-label="Activity log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="2.5" width="9" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg></a><form method="post" action="/ui/domains/{{.ID}}/delete" data-confirm="Delete this domain and ALL of its inboxes and messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></form></span></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">Add your first domain.</p>{{end}}</section></div>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval (not .ID)}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
 </div>
 
-<dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg" data-set-scope="all"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead>{{range .Domains}}{{$d := .}}{{if index $.DomainInboxes $d.ID}}<tbody data-domain="{{$d.ID}}"><tr class="domain-row"><td><b>{{$d.Name}}</b></td><td><div class="seg" data-set-scope="{{$d.ID}}"><button type="button" data-set-role="" data-domain="{{$d.ID}}">None</button><button type="button" data-set-role="read" data-domain="{{$d.ID}}">Read</button><button type="button" data-set-role="assistant" data-domain="{{$d.ID}}">Assistant</button><button type="button" data-set-role="owner" data-domain="{{$d.ID}}">Owner</button></div></td></tr>{{range index $.DomainInboxes $d.ID}}<tr><td class="domain-inbox">{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody>{{end}}{{end}}</table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments.</td></tr><tr><td>Assistant</td><td>Read plus delete messages and create/edit drafts. Cannot send.</td></tr><tr><td>Owner</td><td>Full mailbox access: read, delete, send.</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .SenderRestricted}}1{{end}}">{{.Address}}</option>{{end}}</select><label>Outbound authority</label><select name="role"><option value="owner">Owner — relay sends directly</option><option value="assistant">Assistant — relay drafts and requests approval</option></select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Add Client</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
+<dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option><option value="webhook">Webhook delivery</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg" data-set-scope="all"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead>{{range .Domains}}{{$d := .}}{{if index $.DomainInboxes $d.ID}}<tbody data-domain="{{$d.ID}}"><tr class="domain-row"><td><b>{{$d.Name}}</b></td><td><div class="seg" data-set-scope="{{$d.ID}}"><button type="button" data-set-role="" data-domain="{{$d.ID}}">None</button><button type="button" data-set-role="read" data-domain="{{$d.ID}}">Read</button><button type="button" data-set-role="assistant" data-domain="{{$d.ID}}">Assistant</button><button type="button" data-set-role="owner" data-domain="{{$d.ID}}">Owner</button></div></td></tr>{{range index $.DomainInboxes $d.ID}}<tr><td class="domain-inbox">{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody>{{end}}{{end}}</table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments.</td></tr><tr><td>Assistant</td><td>Read plus delete messages and create/edit drafts. Cannot send.</td></tr><tr><td>Owner</td><td>Full mailbox access: read, delete, send.</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .SenderRestricted}}1{{end}}">{{.Address}}</option>{{end}}</select><label>Outbound authority</label><select name="role"><option value="owner">Owner — relay sends directly</option><option value="assistant">Assistant — relay drafts and requests approval</option></select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><fieldset class="key-fields" data-type="webhook" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><label>Destination URL</label><input name="url" type="url" placeholder="https://example.com/hook" autocomplete="off"><label>Payload</label><select name="mode"><option value="notify">Notify — small JSON with the message id</option><option value="forward">Forward — full raw MIME</option></select><label>Authentication</label><select name="auth"><option value="signature">Signature — signed HMAC-SHA256 header</option><option value="bearer">Bearer — static token</option></select></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Add Client</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
 <dialog id="add-domain-dialog"><form method="post" action="/ui/domains"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Domain</label><input name="name" placeholder="example.com" required aria-describedby="add-domain-hint"><p class="muted small" id="add-domain-hint">Enter the bare domain (<code>example.com</code>). Add the whole domain even if you only use a few addresses. Configure sending and receiving from the domain's row in the Domains list.</p><div class="dialog-actions"><button type="button" class="secondary" id="add-domain-cancel">Cancel</button><button>Add Domain</button></div></form></dialog>
 <dialog id="inbox-dialog"><h2>Add inbox</h2><div class="dialog-tabs" role="tablist" data-inbox-tabs><button type="button" class="dialog-tab active" role="tab" aria-selected="true" data-inbox-tab="basic">Basic</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="allow">Allow list</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="approver">Approver</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="quota">Quota</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="aliases">Aliases</button></div><form method="post" action="/ui/inboxes"><input type="hidden" name="_csrf" value="{{.CSRF}}"><section class="dialog-panel" role="tabpanel" data-inbox-panel="basic"><label>Email address</label><div class="email-field"><input name="local" placeholder="hermes" required><span class="at">@</span><select name="domain" required>{{range .Domains}}<option value="{{.ID}}" data-mx="{{if index $.DomainIsMX .ID}}1{{end}}">{{.Name}}</option>{{end}}</select></div><label>Display Name</label><input name="display" placeholder="Hermes"></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="allow" hidden><label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="sender_restricted" value="1" id="inbox-add-sender-restricted" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Block senders to this inbox except the allow list below</span></label><div id="inbox-add-sender-section" hidden><p class="muted" id="inbox-add-sender-note">Only these From addresses are accepted. The From header can be spoofed, so this is a filter, not proof of identity.</p><ul id="inbox-add-sender-list" class="slist"><li class="empty">Add an address below to allow it to email this inbox.</li></ul><div class="row"><input id="inbox-add-sender-input" type="text" placeholder="someone@example.com"><button type="button" class="secondary btn-narrow" id="inbox-add-sender-add">Add</button></div><p class="muted small" id="inbox-add-sender-hint">Use <code>*@example.com</code> to allow any sender at a domain, or <code>*@*.example.com</code> for its subdomains. The approver is always allowed.</p></div><div id="inbox-add-require-auth-section" hidden><h3 class="section-head">MX delivery</h3><p class="muted small">This domain receives mail by direct SMTP (MX). Require authenticated senders (SPF, DKIM or DMARC pass) in addition to the allow list.</p><label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="require_authenticated" value="1" id="inbox-add-require-auth" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Require an authenticated sender</span></label></div></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="approver" hidden><label>Approver email</label><input name="approver_email" id="inbox-add-approver-email" placeholder="Optional — approves draft sends by email"><p class="muted small" id="inbox-add-approver-note">When set, this address will receive approval requests for emails requested to send by clients with Assistant permission.</p></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="quota" hidden><p class="muted">Storage is limited at the account level.</p><dl class="dialog-usage"><dt>This inbox</dt><dd>No usage yet — new inbox.</dd><dt>Account used</dt><dd>{{filesize .Account.StorageUsedBytes}} of {{filesize .Account.StorageQuotaBytes}}</dd></dl><p class="muted small">Per-inbox usage appears here after the inbox receives mail.</p></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="aliases" hidden><h3 class="section-head">Managed aliases</h3><p class="muted">Alternate addresses that deliver to this inbox and can send as it. An alias may be on any domain in this account. Each alias has a sender name and an email address.</p><button type="button" class="secondary btn-narrow" id="inbox-add-alias-add">Add alias</button><ul id="inbox-add-alias-list" class="slist aliases"><li class="empty">No aliases.</li></ul><h3 class="section-head">External sending aliases</h3><p class="muted">Sending only. Mail addressed here remains with its email provider. Save the inbox first, then add external sending aliases from its Edit dialog.</p><h3 class="section-head">Primary / Default Address</h3><select name="default_sender" id="inbox-add-default-sender"><option value="">Primary address</option></select></section><div class="dialog-actions"><button type="button" class="secondary" id="inbox-cancel">Cancel</button><button>Add Inbox</button></div></form></dialog>
 <dialog id="inbox-edit-dialog"><h2>Edit inbox</h2><div class="dialog-tabs" role="tablist" data-inbox-tabs><button type="button" class="dialog-tab active" role="tab" aria-selected="true" data-inbox-tab="basic">Basic</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="allow">Allow list</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="approver">Approver</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="quota">Quota</button><button type="button" class="dialog-tab" role="tab" aria-selected="false" data-inbox-tab="aliases">Aliases</button></div><form method="post" id="inbox-edit-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><section class="dialog-panel" role="tabpanel" data-inbox-panel="basic"><label>Display name</label><input name="display"><label>Email address</label><input id="inbox-edit-address" value="" disabled></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="allow" hidden><label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="sender_restricted" value="1" id="inbox-sender-restricted" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Block senders to this inbox except the allow list below</span></label><div id="inbox-sender-section" hidden><p class="muted" id="inbox-sender-note">Only these From addresses are accepted. The From header can be spoofed, so this is a filter, not proof of identity.</p><ul id="inbox-sender-list" class="slist"><li class="empty">Add an address below to allow it to email this inbox.</li></ul><div class="row"><input id="inbox-sender-input" type="text" placeholder="someone@example.com"><button type="button" class="secondary btn-narrow" id="inbox-sender-add">Add</button></div><p class="muted small" id="inbox-sender-hint">Use <code>*@example.com</code> to allow any sender at a domain, or <code>*@*.example.com</code> for its subdomains. The approver above is always allowed.</p></div><div id="inbox-edit-require-auth-section" hidden><h3 class="section-head">MX delivery</h3><p class="muted small">This domain receives mail by direct SMTP (MX). Require authenticated senders (SPF, DKIM or DMARC pass) in addition to the allow list.</p><label style="display:flex;align-items:flex-start;gap:8px"><input type="checkbox" name="require_authenticated" value="1" id="inbox-require-auth" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>Require an authenticated sender</span></label></div></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="approver" hidden><label>Approver email</label><input name="approver_email" id="inbox-edit-approver-email" placeholder="Optional — approves draft sends by email"><p class="muted small" id="inbox-approver-note">When set, this address will receive approval requests for emails requested to send by clients with Assistant permission.</p></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="quota" hidden><p class="muted">Storage is limited at the account level.</p><dl class="dialog-usage"><dt>This inbox</dt><dd id="inbox-edit-usage">—</dd><dt>Account used</dt><dd>{{filesize .Account.StorageUsedBytes}} of {{filesize .Account.StorageQuotaBytes}}</dd></dl><p class="muted small">Per-inbox quota limits are not configurable yet.</p></section><section class="dialog-panel" role="tabpanel" data-inbox-panel="aliases" hidden><h3 class="section-head">Managed aliases</h3><p class="muted">Alternate addresses that deliver to this inbox and can send as it. An alias may be on any domain in this account. Each alias has a sender name and an email address.</p><button type="button" class="secondary btn-narrow" id="inbox-alias-add">Add alias</button><ul id="inbox-alias-list" class="slist aliases"><li class="empty">No aliases.</li></ul><h3 class="section-head">External sending aliases</h3><p class="muted">Sending only. Mail addressed here remains with its email provider and is never received by MailMoose. Each alias has its own sending connector, configured separately.</p><div id="inbox-external-alias-section"><button type="button" class="secondary btn-narrow" id="inbox-external-alias-add">Add external alias</button><ul id="inbox-external-alias-list" class="slist aliases external"><li class="empty">No external sending aliases.</li></ul></div><h3 class="section-head">Primary / Default Address</h3><select name="default_sender" id="inbox-default-sender"><option value="">Primary address</option></select></section></form><div class="dialog-actions"><form method="post" id="inbox-edit-delete-form" data-confirm="Delete this inbox and all of its messages? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Delete Inbox</button></form><button type="button" class="secondary" id="inbox-edit-cancel">Cancel</button><button type="submit" form="inbox-edit-form">Save</button></div></dialog>
@@ -604,6 +606,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	boxes, _ := s.Service.Store.ListInboxes(ctx, p)
 	keys, _ := s.Service.Store.ListAPIKeys(ctx, p.AccountID)
 	conns, _ := s.Service.Store.ListHermesConnections(ctx, p.AccountID)
+	webhooks, _ := s.Service.Store.ListWebhookClients(ctx, p.AccountID)
 	var msgs []model.Message
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		msgs, _ = s.Service.Store.SearchMessages(ctx, p, q, "", 100)
@@ -775,7 +778,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns), Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns, webhooks), Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -1098,7 +1101,38 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	notice, label, secret := "", "", ""
-	if r.Form.Get("type") == "hermes" {
+	if r.Form.Get("type") == "webhook" {
+		mode, authMode := r.Form.Get("mode"), r.Form.Get("auth")
+		if mode == "" {
+			mode = "notify"
+		}
+		if authMode == "" {
+			authMode = "signature"
+		}
+		if err := validateWebhookConfig(r.Form.Get("url"), mode, authMode); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		plain, err := auth.RandomToken(32)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		enc, err := s.Service.EncryptSecret([]byte(plain))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		name := strings.TrimSpace(r.Form.Get("name"))
+		if name == "" {
+			name = "Webhook"
+		}
+		if _, err := s.Service.Store.CreateWebhookClient(r.Context(), p.AccountID, r.Form.Get("inbox"), name, strings.TrimSpace(r.Form.Get("url")), mode, authMode, enc); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		notice, label, secret = "Webhook created", "Copy this signing secret now — you will only be able to see it now, it will not be shown again.", plain
+	} else if r.Form.Get("type") == "hermes" {
 		inboxID := r.Form.Get("inbox")
 		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, inboxID); err == nil && !box.SenderRestricted && r.Form.Get("ack") != "1" {
 			http.Error(w, "confirm the no-allow-list risk before creating a Hermes relay connection to this inbox", 400)
@@ -1204,6 +1238,81 @@ func (s *Server) uiDeleteKey(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?notice=Key+deleted", 303)
 }
 
+func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := validateWebhookConfig(r.Form.Get("url"), r.Form.Get("mode"), r.Form.Get("auth")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if name == "" {
+		name = "Webhook"
+	}
+	if err := s.Service.Store.UpdateWebhookClient(r.Context(), p.AccountID, r.PathValue("id"), name, strings.TrimSpace(r.Form.Get("url")), r.Form.Get("mode"), r.Form.Get("auth")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/?notice=Webhook+updated", 303)
+}
+
+func (s *Server) uiRotateWebhook(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	plain, err := auth.RandomToken(32)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	enc, err := s.Service.EncryptSecret([]byte(plain))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.Service.Store.RotateWebhookSecret(r.Context(), p.AccountID, r.PathValue("id"), enc); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if wantsJSON(r) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, map[string]string{"notice": "Webhook secret rotated", "label": "Copy this signing secret now — you will only be able to see it now, it will not be shown again.", "secret": plain})
+		return
+	}
+	s.flashSecret(w, r, "Webhook secret rotated", "Copy this signing secret now — you will only be able to see it now, it will not be shown again.", plain)
+}
+
+func (s *Server) uiToggleWebhook(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.SetWebhookEnabled(r.Context(), p.AccountID, r.PathValue("id"), r.Form.Get("enabled") == "1"); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/?notice=Webhook+updated", 303)
+}
+
+func (s *Server) uiDeleteWebhook(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	if err := s.Service.Store.DeleteWebhookClient(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	http.Redirect(w, r, "/?notice=Webhook+deleted", 303)
+}
+
 func (s *Server) uiUpdateHermes(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -1246,10 +1355,10 @@ func (s *Server) cloudflareWorkerCode(baseURL, secret string) string {
 	return code
 }
 
-// credentialViews combines API keys and Hermes relay connections into the
-// dashboard "Clients" list.
-func credentialViews(keys []model.APIKey, conns []store.HermesConnection) []credentialView {
-	out := make([]credentialView, 0, len(keys)+len(conns))
+// credentialViews combines API keys, Hermes relay connections and webhook
+// delivery clients into the dashboard "Clients" list.
+func credentialViews(keys []model.APIKey, conns []store.HermesConnection, webhooks []store.WebhookClient) []credentialView {
+	out := make([]credentialView, 0, len(keys)+len(conns)+len(webhooks))
 	for _, k := range keys {
 		v := credentialView{ID: k.ID, Kind: "api", Name: k.Name, Type: "API key", Scope: apiKeyScope(k), Admin: k.Admin}
 		if len(k.Roles) > 0 {
@@ -1269,6 +1378,13 @@ func credentialViews(keys []model.APIKey, conns []store.HermesConnection) []cred
 			scope = "Assistant"
 		}
 		out = append(out, credentialView{ID: h.ID, Kind: "hermes", Name: h.Name, Type: "Hermes relay", Scope: scope, InboxID: h.InboxID, Role: role})
+	}
+	for _, wh := range webhooks {
+		state := "Active"
+		if !wh.Enabled {
+			state = "Paused"
+		}
+		out = append(out, credentialView{ID: wh.ID, Kind: "webhook", Name: wh.Name, Type: "Webhook", Scope: state, InboxID: wh.InboxID, Role: wh.Mode, URL: wh.URL, Mode: wh.Mode, AuthMode: wh.AuthMode})
 	}
 	return out
 }
