@@ -12,26 +12,27 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
-// systemMailerKey is the system_settings key holding the inbox id used to send
-// installation mail such as account invitations.
-const systemMailerKey = "system_mailer_inbox_id"
-
-// SystemMailerInboxID returns the configured system-mailer inbox id, or "" when
-// none has been selected.
-func (s *Store) SystemMailerInboxID(ctx context.Context) (string, error) {
-	var v string
-	err := s.read.QueryRowContext(ctx, `SELECT value FROM system_settings WHERE key=?`, systemMailerKey).Scan(&v)
+// AccountMailerInboxID returns the mailbox an account uses to send its
+// invitations, or "" when none has been selected or the mailbox was deleted.
+func (s *Store) AccountMailerInboxID(ctx context.Context, accountID string) (string, error) {
+	var v sql.NullString
+	err := s.read.QueryRowContext(ctx, `SELECT mailer_inbox_id FROM accounts WHERE id=?`, accountID).Scan(&v)
 	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if !v.Valid {
 		return "", nil
 	}
-	return v, err
+	return v.String, nil
 }
 
-// SetSystemMailerInbox stores the system-mailer inbox id. A non-empty id must
-// name an inbox on accountID, so an installation can only send system mail from
-// a mailbox its own system administrator controls. An empty id clears the
-// selection.
-func (s *Store) SetSystemMailerInbox(ctx context.Context, accountID, inboxID string) error {
+// SetAccountMailerInbox stores an account's invitation mailer. A non-empty id
+// must name an inbox owned by that account, so an account can only send its
+// invitations from one of its own mailboxes. An empty id clears the selection.
+func (s *Store) SetAccountMailerInbox(ctx context.Context, accountID, inboxID string) error {
 	if inboxID != "" {
 		var n int
 		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil {
@@ -41,8 +42,56 @@ func (s *Store) SetSystemMailerInbox(ctx context.Context, accountID, inboxID str
 			return ErrForbidden
 		}
 	}
-	_, err := s.write.ExecContext(ctx, `INSERT INTO system_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, systemMailerKey, inboxID)
-	return err
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET mailer_inbox_id=? WHERE id=?`, nullString(inboxID), accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AccountSummary is an account as shown on the system administrator plane: the
+// email of its Admin (empty until an invitation is accepted) and, while an
+// account invitation is outstanding, that invitation's id and expiry.
+type AccountSummary struct {
+	ID              string
+	Name            string
+	AdminEmail      string
+	InviteID        string
+	InviteExpiresAt time.Time
+	CreatedAt       time.Time
+}
+
+// ListAccounts returns every account with its Admin and any outstanding
+// new-account invitation, newest first.
+func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
+	const q = `SELECT a.id,a.name,a.created_at,
+	  COALESCE((SELECT u.email FROM users u WHERE u.account_id=a.id AND u.is_admin=1 ORDER BY u.created_at LIMIT 1),''),
+	  COALESCE((SELECT i.id FROM invites i WHERE i.account_id=a.id AND i.kind='account_admin' AND i.accepted_at IS NULL AND i.revoked_at IS NULL ORDER BY i.created_at DESC LIMIT 1),''),
+	  (SELECT i.expires_at FROM invites i WHERE i.account_id=a.id AND i.kind='account_admin' AND i.accepted_at IS NULL AND i.revoked_at IS NULL ORDER BY i.created_at DESC LIMIT 1)
+	FROM accounts a ORDER BY a.created_at DESC`
+	rows, err := s.read.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AccountSummary{}
+	for rows.Next() {
+		var a AccountSummary
+		var created string
+		var expiry sql.NullString
+		if err = rows.Scan(&a.ID, &a.Name, &created, &a.AdminEmail, &a.InviteID, &expiry); err != nil {
+			return nil, err
+		}
+		a.CreatedAt = parseTime(created)
+		if expiry.Valid {
+			a.InviteExpiresAt = parseTime(expiry.String)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // ListAccountUsers returns the account's human users. Non-admin members carry

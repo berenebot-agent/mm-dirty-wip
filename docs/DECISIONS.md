@@ -1414,13 +1414,15 @@ plane:
 - **System administrator** — one configured login (`ADMIN_EMAIL` /
   `ADMIN_PASSWORD`, `*_FILE` supported), marked by `users.is_system_admin`. The
   configured credentials are authoritative while present: they create the login
-  on first start and rotate its stored email/password (revoking its sessions) on
-  later starts; when both are absent the stored login is preserved. The login is
-  never editable in the UI and `admin reset-password` refuses it, both pointing
-  at the deployment secret. The system administrator has an ordinary account of
-  its own but does **not** automatically gain access to other accounts' mail.
+  on first start, or **adopt an existing user with that email** (forcing it to
+  account Admin and system Admin, and resetting its password), and rotate the
+  stored email/password (revoking its sessions) on later starts; when both are
+  absent the stored login is preserved. The login is never editable in the UI
+  and `admin reset-password` refuses it, both pointing at the deployment
+  secret. The system administrator has an ordinary account of its own but does
+  **not** automatically gain access to other accounts' mail.
 - **Account Admin** — unchanged `users.is_admin`; full control of one account's
-  domains, clients and mailboxes.
+  domains, clients and mailboxes. Each account has one Admin.
 - **Mailbox operator** — a non-admin member of an account whose access is a set
   of per-inbox Owner grants in `user_mailbox_roles`. Operators are Owners of the
   mailboxes assigned to them and nothing else; they get no domain, client or
@@ -1430,10 +1432,16 @@ Provisioning is by **invitation** (`invites`), not stored initial passwords. An
 invite is either a new, separate account with its own Admin or a mailbox
 operator on an existing account. The invitee chooses their password from a
 single-use, expiring (7 day) link; only the token hash is stored. Sending the
-invitation email goes through the **ordinary outbound queue** from a
-system-mailer mailbox the system administrator selects (`system_settings`), and
-the same setup link can be copied and shared out of band instead. The system
-mailer must be a mailbox the system administrator owns.
+invitation email goes through the **ordinary outbound queue** from the
+inviter's account **mailer** (`accounts.mailer_inbox_id`) — a mailbox that
+account owns, so no account ever sends from another's — and the same setup link
+can be copied and shared out of band instead.
+
+**UI:** the system administrator's **Admin** page lists accounts (with their
+Admin or a pending invitation) and offers a `Create invitation` dialog. An
+account Admin manages the account's operators and its mailer on the **Account**
+page, using the same list-plus-dialog pattern. There is no separate account
+"Members" page, so an account Admin keeps a single nav button.
 
 **Consequences:**
 
@@ -1446,15 +1454,17 @@ mailer must be a mailbox the system administrator owns.
 - `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (and `INITIAL_ACCOUNT_NAME`)
   are renamed to `ADMIN_*` in place; the project is not yet deployed, so no
   compatibility shim is carried.
-- `users`, `system_settings`, `user_mailbox_roles`, `invites`, and the
-  `is_system_admin` column are added by migration `030`.
+- `users`, `user_mailbox_roles`, `invites`, and the `is_system_admin` column are
+  added by migration `030`; `accounts.mailer_inbox_id` replaces the discarded
+  installation-wide `system_settings` in migration `031`.
 
 **Reason:** Separate accounts keep each person's domains and settings isolated,
 which the existing account boundary already supports. Keeping the system
 administrator out of other accounts' mail preserves the account boundary rather
 than making system administration a superuser. Reusing existing Owner semantics
 for operators avoids inventing another permission tier, and routing invitations
-through the normal outbound queue avoids a second mail path.
+through the normal outbound queue avoids a second mail path. A per-account
+mailer keeps invitations inside the account's own sending credentials.
 
 ## Future extension register
 

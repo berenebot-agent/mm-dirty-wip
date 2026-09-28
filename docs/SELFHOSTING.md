@@ -15,23 +15,33 @@ password together. `ADMIN_ACCOUNT_NAME` optionally sets the display name of the
 system administrator's own account (default `MailMoose`).
 
 The configured credentials are **authoritative while present**. On first start
-against an empty database they create the system administrator; on every later
-start they rotate its stored login to match, so changing the secret changes the
-login (existing sessions are signed out). When **both** settings are absent the
-stored login is left untouched, so a deployment may drop them once provisioned.
-A half-configured pair, or an `*_FILE` path that cannot be read, is a startup
+they create the system administrator; on every later start they rotate its
+stored login to match, so changing the secret changes the login (existing
+sessions are signed out). If `ADMIN_EMAIL` already belongs to an existing user,
+that user is **adopted in place** — it keeps its account and is forced to
+account Admin and system Admin — so pointing the secret at an existing login
+does not fail startup. When **both** settings are absent the stored login is
+left untouched, so a deployment may drop them once provisioned. A
+half-configured pair, or an `*_FILE` path that cannot be read, is a startup
 error. If no system administrator exists and no credentials are supplied,
 MailMoose still starts and serves a page explaining that it is not configured;
 there is no unauthenticated setup form.
 
-The system administrator can manage the installation (choose the system-mailer
-mailbox, invite people, administer accounts) and use their own account
+The system administrator can manage the installation and use their own account
 normally, but does **not** automatically get access to other accounts' mail.
 Because the deployment secret owns this login, the account settings page does
 not let the system administrator change its email or password; update the
-secret and restart instead. From the **Admin** page they can invite a new
-person as a **separate account Admin**, or invite a **mailbox operator** who is
-Owner of selected mailboxes in an existing account.
+secret and restart instead.
+
+From the **Admin** page the system administrator sees the list of accounts and
+invites a new person as a **separate account Admin** (each account has one
+Admin). The invitation is emailed from the **mailer** selected on the system
+administrator's own Account page, or its one-time link can be copied.
+
+Each **account Admin** manages their account's **mailbox operators** (non-admin
+users who are Owner of selected inboxes) and the account's own **mailer** from
+the **Account** page. An operator signs in with their own login and only sees
+the mailboxes assigned to them.
 
 ## Password recovery
 
