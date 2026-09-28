@@ -107,6 +107,10 @@ func migrations(dataDir string) []migration {
 			tableExists("system_settings"),
 			tableExists("invites"),
 		)},
+		{version: "031", sql: migration031, detect: allOf(
+			columnAdded("accounts", "mailer_inbox_id"),
+			tableMissing("system_settings"),
+		)},
 	}
 }
 

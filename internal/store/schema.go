@@ -956,3 +956,12 @@ CREATE TABLE IF NOT EXISTS invites (
 CREATE INDEX IF NOT EXISTS idx_invites_account ON invites(account_id);
 CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email);
 `
+
+// migration031 moves the invitation mailer from an installation-wide setting to
+// a per-account choice: each account sends its invitations from one of its own
+// mailboxes, so no account ever sends from another's. system_settings held only
+// that installation-wide mailer, so it is retired.
+const migration031 = `
+ALTER TABLE accounts ADD COLUMN mailer_inbox_id TEXT REFERENCES inboxes(id) ON DELETE SET NULL;
+DROP TABLE IF EXISTS system_settings;
+`

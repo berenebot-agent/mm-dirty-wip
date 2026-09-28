@@ -19,8 +19,8 @@ import (
 )
 
 // systemAdminFixture builds a service whose bootstrap user is the installation
-// system administrator (rather than an ordinary account Admin), with a domain
-// and a mailbox of their own.
+// system administrator (as well as account Admin of its own account), with a
+// domain and a mailbox of their own.
 func systemAdminFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Inbox) {
 	t.Helper()
 	dir := t.TempDir()
@@ -58,33 +58,29 @@ func inviteToken(t *testing.T, body string) string {
 	return m[1]
 }
 
-// createInvite posts an invite form as the system administrator and returns the
-// one-time setup token from the flashed link.
-func systemAdminInvite(t *testing.T, h http.Handler, cookie *http.Cookie, csrf, path string, form url.Values) string {
+// createInvite posts an invite form and returns the one-time setup token from
+// the flashed link re-read from flashPage.
+func createInvite(t *testing.T, h http.Handler, cookie *http.Cookie, csrf, postPath, flashPage string, form url.Values) string {
 	t.Helper()
 	form.Set("_csrf", csrf)
-	rr := domainPost(t, h, cookie, path, form)
+	rr := domainPost(t, h, cookie, postPath, form)
 	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("create invite status = %d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("create invite %s status = %d body=%s", postPath, rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
 	flash := ""
 	if i := strings.Index(loc, "_flash="); i >= 0 {
 		flash = loc[i+len("_flash="):]
 	}
-	page := "/admin"
-	if strings.HasPrefix(path, "/ui/members") {
-		page = "/members"
-	}
-	rr = uiGet(t, h, cookie, page+"?_flash="+flash)
+	rr = uiGet(t, h, cookie, flashPage+"?_flash="+flash)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("admin page status = %d", rr.Code)
+		t.Fatalf("flash page %s status = %d", flashPage, rr.Code)
 	}
 	return inviteToken(t, rr.Body.String())
 }
 
 // acceptInvite walks the public setup flow and returns the resulting session.
-func acceptInvite(t *testing.T, h http.Handler, token, password string) (*http.Cookie, *httptest.ResponseRecorder) {
+func acceptInvite(t *testing.T, h http.Handler, token, password string) *http.Cookie {
 	t.Helper()
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/invite/"+token, nil))
@@ -111,11 +107,11 @@ func acceptInvite(t *testing.T, h http.Handler, token, password string) (*http.C
 	}
 	for _, c := range rr.Result().Cookies() {
 		if c.Name == "mmm_session" {
-			return c, rr
+			return c
 		}
 	}
 	t.Fatal("invite POST did not set a session cookie")
-	return nil, nil
+	return nil
 }
 
 func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
@@ -124,8 +120,26 @@ func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusForbidden {
 		t.Fatalf("account admin /admin = %d, want 403", rr.Code)
 	}
-	if rr := uiGet(t, h, cookie, "/members"); rr.Code != http.StatusOK {
-		t.Fatalf("account admin /members = %d, want 200", rr.Code)
+	rr := uiGet(t, h, cookie, "/account")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("account admin /account = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Mailbox operators") {
+		t.Fatal("account page must show the operators section for account Admins")
+	}
+}
+
+func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
+	svc, h, root, mailerBox := systemAdminFixture(t)
+	cookie, csrf := uiSession(t, svc, root.ID)
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	op := acceptInvite(t, h, token, "correct horse battery staple")
+	rr := uiGet(t, h, op, "/account")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("operator /account = %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "Mailbox operators") {
+		t.Fatal("operators must not see the operators section")
 	}
 }
 
@@ -135,10 +149,8 @@ func TestSystemAdminInvitesNewAccount(t *testing.T) {
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusOK {
 		t.Fatalf("system admin /admin = %d", rr.Code)
 	}
-	token := systemAdminInvite(t, h, cookie, csrf, "/ui/admin/invites", url.Values{
-		"kind": {"account_admin"}, "email": {"new@example.com"}, "account_name": {"New Co"},
-	})
-	session, _ := acceptInvite(t, h, token, "correct horse battery staple")
+	token := createInvite(t, h, cookie, csrf, "/ui/admin/invites", "/admin", url.Values{"email": {"new@example.com"}, "account_name": {"New Co"}})
+	session := acceptInvite(t, h, token, "correct horse battery staple")
 	if rr := uiGet(t, h, session, "/"); rr.Code != http.StatusOK {
 		t.Fatalf("new admin dashboard = %d", rr.Code)
 	}
@@ -154,7 +166,7 @@ func TestSystemAdminInvitesNewAccount(t *testing.T) {
 	}
 }
 
-func TestMembersInviteOperatorGrantsSelectedMailboxOnly(t *testing.T) {
+func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.GetDomain(ctx, root.AccountID, mailerBox.DomainID)
@@ -166,10 +178,13 @@ func TestMembersInviteOperatorGrantsSelectedMailboxOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, root.ID)
-	token := systemAdminInvite(t, h, cookie, csrf, "/ui/members/invites", url.Values{
-		"kind": {"operator"}, "email": {"op@example.com"}, "inboxes": {mailerBox.ID},
-	})
-	session, _ := acceptInvite(t, h, token, "correct horse battery staple")
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	// The system admin plane lists accounts only; an operator invite must not
+	// leak into it.
+	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "op@example.com") {
+		t.Fatalf("operator invite leaked onto /admin: status=%d", rr.Code)
+	}
+	session := acceptInvite(t, h, token, "correct horse battery staple")
 	if rr := uiGet(t, h, session, "/"); rr.Code != http.StatusOK {
 		t.Fatalf("operator dashboard = %d", rr.Code)
 	}
@@ -184,24 +199,21 @@ func TestMembersInviteOperatorGrantsSelectedMailboxOnly(t *testing.T) {
 	}
 }
 
-func TestSendInviteQueuesFromSystemMailer(t *testing.T) {
+func TestAccountMailerSendsOperatorInvite(t *testing.T) {
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
-	if err := svc.Store.SetSystemMailerInbox(ctx, root.AccountID, mailerBox.ID); err != nil {
+	if err := svc.Store.SetAccountMailerInbox(ctx, root.AccountID, mailerBox.ID); err != nil {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, root.ID)
-	// Create the invite, then send it. The setup link is rotated by the send.
-	token := systemAdminInvite(t, h, cookie, csrf, "/ui/admin/invites", url.Values{
-		"kind": {"account_admin"}, "email": {"queued@example.com"},
-	})
-	invites, err := svc.Store.ListInvites(ctx, "")
+	createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"queued@example.com"}, "inboxes": {mailerBox.ID}})
+	invites, err := svc.Store.ListInvites(ctx, root.AccountID)
 	if err != nil || len(invites) != 1 {
 		t.Fatalf("ListInvites = %d, %v", len(invites), err)
 	}
-	rr := domainPost(t, h, cookie, "/ui/admin/invites/"+invites[0].ID+"/send", url.Values{"_csrf": {csrf}})
+	rr := domainPost(t, h, cookie, "/ui/account/operators/invites/"+invites[0].ID+"/send", url.Values{"_csrf": {csrf}})
 	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("send invite = %d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("send operator invite = %d body=%s", rr.Code, rr.Body.String())
 	}
 	admin := model.Principal{AccountID: root.AccountID, Admin: true}
 	outbox, err := svc.Store.ListOutbox(ctx, admin, mailerBox.ID, 10)
@@ -211,11 +223,54 @@ func TestSendInviteQueuesFromSystemMailer(t *testing.T) {
 	if outbox[0].To[0] != "queued@example.com" {
 		t.Fatalf("queued invitation recipient = %v", outbox[0].To)
 	}
-	// The previously copied link is invalidated by the send rotation.
+}
+
+func TestReissueRotatesOperatorLink(t *testing.T) {
+	svc, h, root, mailerBox := systemAdminFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, root.ID)
+	oldToken := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	invites, err := svc.Store.ListInvites(ctx, root.AccountID)
+	if err != nil || len(invites) != 1 {
+		t.Fatalf("ListInvites = %d, %v", len(invites), err)
+	}
+	rr := domainPost(t, h, cookie, "/ui/account/operators/invites/"+invites[0].ID+"/reissue", url.Values{"_csrf": {csrf}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("reissue = %d body=%s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	flash := loc[strings.Index(loc, "_flash=")+len("_flash="):]
+	page := uiGet(t, h, cookie, "/account?_flash="+flash)
+	newToken := inviteToken(t, page.Body.String())
+	if newToken == oldToken {
+		t.Fatal("reissue must rotate the setup token")
+	}
 	stale := httptest.NewRecorder()
-	h.ServeHTTP(stale, httptest.NewRequest("GET", "/invite/"+token, nil))
+	h.ServeHTTP(stale, httptest.NewRequest("GET", "/invite/"+oldToken, nil))
 	if strings.Contains(stale.Body.String(), "Set your password") {
-		t.Fatalf("stale link still redeemable: status=%d", stale.Code)
+		t.Fatal("old invite link still redeemable after reissue")
+	}
+}
+
+func TestSystemAdminSendsNewAccountInviteFromOwnMailer(t *testing.T) {
+	svc, h, root, mailerBox := systemAdminFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetAccountMailerInbox(ctx, root.AccountID, mailerBox.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, root.ID)
+	_ = createInvite(t, h, cookie, csrf, "/ui/admin/invites", "/admin", url.Values{"email": {"fresh@example.com"}})
+	invites, err := svc.Store.ListInvites(ctx, "")
+	if err != nil || len(invites) != 1 {
+		t.Fatalf("ListInvites = %d, %v", len(invites), err)
+	}
+	if rr := domainPost(t, h, cookie, "/ui/admin/invites/"+invites[0].ID+"/send", url.Values{"_csrf": {csrf}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("send new-account invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	admin := model.Principal{AccountID: root.AccountID, Admin: true}
+	outbox, err := svc.Store.ListOutbox(ctx, admin, mailerBox.ID, 10)
+	if err != nil || len(outbox) != 1 {
+		t.Fatalf("outbox = %d, %v; want 1 queued invitation", len(outbox), err)
 	}
 }
 

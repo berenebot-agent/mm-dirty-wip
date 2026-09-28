@@ -71,17 +71,85 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 	}
 }
 
-func TestSyncSystemAdminRefusesTakenEmail(t *testing.T) {
+func TestSyncSystemAdminAdoptsExistingUser(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	if _, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20); err != nil {
+	// An ordinary account Admin already exists (for example from a prior
+	// deployment). Pointing ADMIN_EMAIL at that address adopts the user in
+	// place rather than failing or creating a second account.
+	existing, err := s.CreateAccountAndAdmin(ctx, "Existing", "admin@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateAccountAndAdmin(ctx, "Other", "other@example.com", "correct horse battery staple", 50<<20); err != nil {
+	const rotated = "another correct horse battery staple"
+	u, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", rotated, 50<<20)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "other@example.com", "correct horse battery staple", 50<<20); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("sync onto an existing email error = %v, want ErrConflict", err)
+	if !changed || u.ID != existing.ID || u.AccountID != existing.AccountID {
+		t.Fatalf("adoption = %#v changed=%v; want existing user %q in account %q", u, changed, existing.ID, existing.AccountID)
+	}
+	if !u.SystemAdmin || !u.IsAdmin {
+		t.Fatalf("adopted user roles = %#v, want system+account admin", u)
+	}
+	if _, err := s.AuthenticateUser(ctx, "admin@example.com", "correct horse battery staple"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("old password still works after adoption: %v", err)
+	}
+	if _, err := s.AuthenticateUser(ctx, "admin@example.com", rotated); err != nil {
+		t.Fatalf("adopted password rejected: %v", err)
+	}
+}
+
+func TestSyncSystemAdminPromotesAnOperatorAccount(t *testing.T) {
+	ctx := context.Background()
+	s, accountOwner, _, boxes := testStore(t)
+	// An operator (non-admin) whose email is then chosen as ADMIN_EMAIL must be
+	// forced to account Admin as well as system administrator.
+	_, token, err := s.CreateInvite(ctx, store.InviteInput{AccountID: accountOwner.AccountID, Email: "op@example.com", Kind: model.InviteKindOperator, InboxIDs: []string{boxes[0].ID}, TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := s.RedeemInvite(ctx, token, "correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.IsAdmin {
+		t.Fatal("operator fixture unexpectedly already an account Admin")
+	}
+	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "op@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.ID != op.ID || !u.IsAdmin || !u.SystemAdmin {
+		t.Fatalf("promoted operator = %#v, want user %q forced admin", u, op.ID)
+	}
+}
+
+func TestSyncSystemAdminMovesRoleOnEmailChange(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	first, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second user already owns the new configured address.
+	second, err := s.CreateAccountAndAdmin(ctx, "Other", "other@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "other@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || u.ID != second.ID || !u.SystemAdmin {
+		t.Fatalf("move = %#v changed=%v, want user %q elevated", u, changed, second.ID)
+	}
+	old, err := s.GetUser(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.SystemAdmin {
+		t.Fatalf("old system administrator kept the role: %#v", old)
 	}
 }
 
@@ -97,24 +165,27 @@ func TestAdminResetRefusesSystemAdmin(t *testing.T) {
 	}
 }
 
-func TestSystemMailerOwnership(t *testing.T) {
+func TestAccountMailerOwnership(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
-	if err := s.SetSystemMailerInbox(ctx, u.AccountID, boxes[0].ID); err != nil {
+	if err := s.SetAccountMailerInbox(ctx, u.AccountID, boxes[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SystemMailerInboxID(ctx)
+	got, err := s.AccountMailerInboxID(ctx, u.AccountID)
 	if err != nil || got != boxes[0].ID {
-		t.Fatalf("SystemMailerInboxID = %q, %v", got, err)
+		t.Fatalf("AccountMailerInboxID = %q, %v", got, err)
 	}
-	if err := s.SetSystemMailerInbox(ctx, u.AccountID, "inb_missing"); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("foreign system mailer error = %v, want ErrForbidden", err)
+	if err := s.SetAccountMailerInbox(ctx, u.AccountID, "inb_missing"); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("foreign account mailer error = %v, want ErrForbidden", err)
 	}
-	if err := s.SetSystemMailerInbox(ctx, u.AccountID, ""); err != nil {
+	if err := s.SetAccountMailerInbox(ctx, u.AccountID, ""); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s.SystemMailerInboxID(ctx); got != "" {
-		t.Fatalf("cleared system mailer = %q, want empty", got)
+	if got, _ = s.AccountMailerInboxID(ctx, u.AccountID); got != "" {
+		t.Fatalf("cleared account mailer = %q, want empty", got)
+	}
+	if _, err := s.AccountMailerInboxID(ctx, "acct_missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown account mailer error = %v, want ErrNotFound", err)
 	}
 }
 

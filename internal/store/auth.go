@@ -84,14 +84,17 @@ func (s *Store) HasSystemAdmin(ctx context.Context) (bool, error) {
 }
 
 // SyncSystemAdmin reconciles the configured system-administrator credentials
-// with the database. The configured values are authoritative when present: a
-// changed email or password is applied and every existing session for that user
-// is revoked, so a rotated deployment secret takes effect on restart. When no
-// system administrator exists it is created together with its own account.
+// with the database. The configured email identifies the system administrator:
 //
-// A configured email that already belongs to a different user is refused rather
-// than silently taking over that identity. The error never contains the
-// password.
+//   - If a user already has that email, it is adopted in place — it keeps its
+//     account and is forced to account Admin and system Admin. This lets the
+//     operator point ADMIN_EMAIL at an existing login.
+//   - Otherwise, an existing system administrator is renamed to the new email.
+//   - Otherwise, a new account and Admin user are created.
+//
+// The configured password is applied when it differs, and the affected user's
+// sessions are revoked whenever anything changes, so a rotated deployment
+// secret takes effect on restart. The error never contains the password.
 func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, password string, quota int64) (model.User, bool, error) {
 	email = normalizeAddress(email)
 	if email == "" {
@@ -107,14 +110,24 @@ func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, passwor
 	}
 	defer tx.Rollback()
 
-	var uid, aid, currentEmail, currentHash, created string
-	var admin int
-	err = tx.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,created_at FROM users WHERE is_system_admin=1 ORDER BY created_at LIMIT 1`).Scan(&uid, &aid, &currentEmail, &currentHash, &admin, &created)
-	if err == sql.ErrNoRows {
-		if err = ensureEmailUnused(ctx, tx, email, ""); err != nil {
-			return model.User{}, false, err
-		}
-		aid, uid = idgen.New("acct"), idgen.New("usr")
+	// The current system administrator, if any.
+	var sysUID, sysAccount, sysEmail, sysHash, sysCreated string
+	var sysAdmin int
+	sysErr := tx.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,created_at FROM users WHERE is_system_admin=1 ORDER BY created_at LIMIT 1`).Scan(&sysUID, &sysAccount, &sysEmail, &sysHash, &sysAdmin, &sysCreated)
+	if sysErr != nil && sysErr != sql.ErrNoRows {
+		return model.User{}, false, sysErr
+	}
+	// A user already using the configured email, if any.
+	var byEmailUID, byEmailAccount, byEmailHash, byEmailCreated string
+	var byEmailAdmin int
+	emailErr := tx.QueryRowContext(ctx, `SELECT id,account_id,password_hash,is_admin,created_at FROM users WHERE email=?`, email).Scan(&byEmailUID, &byEmailAccount, &byEmailHash, &byEmailAdmin, &byEmailCreated)
+	if emailErr != nil && emailErr != sql.ErrNoRows {
+		return model.User{}, false, emailErr
+	}
+
+	if emailErr == sql.ErrNoRows && sysErr == sql.ErrNoRows {
+		// Fresh installation: create the system administrator's own account.
+		aid, uid := idgen.New("acct"), idgen.New("usr")
 		now := nowText()
 		name := strings.TrimSpace(accountName)
 		if name == "" {
@@ -131,34 +144,63 @@ func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, passwor
 		}
 		return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, SystemAdmin: true, CreatedAt: parseTime(now)}, true, nil
 	}
-	if err != nil {
+
+	// Resolve the target user: the existing owner of the configured email when
+	// there is one, otherwise the current system administrator (renamed).
+	targetUID, targetAccount, targetHash, targetCreated, targetAdmin := byEmailUID, byEmailAccount, byEmailHash, byEmailCreated, byEmailAdmin
+	targetEmail := email
+	if emailErr == sql.ErrNoRows {
+		targetUID, targetAccount, targetHash, targetCreated, targetAdmin = sysUID, sysAccount, sysHash, sysCreated, sysAdmin
+		targetEmail = sysEmail
+	}
+
+	passwordChanged := !auth.CheckPassword(targetHash, password)
+	mustBeAdmin := targetAdmin == 0
+	// The target gains the system-administrator role unless it already held it.
+	grantSystem := sysErr == sql.ErrNoRows || sysUID != targetUID
+	emailChanged := targetEmail != email
+	// A pre-existing system administrator other than the target loses the role.
+	demote := sysErr == nil && sysUID != targetUID
+
+	set := []string{"is_admin=1", "is_system_admin=1"}
+	if emailChanged {
+		set = append(set, "email=?")
+	}
+	if passwordChanged {
+		set = append(set, "password_hash=?")
+	}
+	args := []any{}
+	if emailChanged {
+		args = append(args, email)
+	}
+	if passwordChanged {
+		args = append(args, ph)
+	}
+	args = append(args, targetUID)
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET `+strings.Join(set, ",")+` WHERE id=?`, args...); err != nil {
 		return model.User{}, false, err
 	}
-	changed := false
-	if currentEmail != email {
-		if err = ensureEmailUnused(ctx, tx, email, uid); err != nil {
+	var demoteUID string
+	if demote {
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET is_system_admin=0 WHERE id=?`, sysUID); err != nil {
 			return model.User{}, false, err
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=?`, email, uid); err != nil {
-			return model.User{}, false, err
-		}
-		changed = true
+		demoteUID = sysUID
 	}
-	if !auth.CheckPassword(currentHash, password) {
-		if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, ph, uid); err != nil {
-			return model.User{}, false, err
-		}
-		changed = true
-	}
+	changed := grantSystem || mustBeAdmin || emailChanged || passwordChanged || demote
 	if changed {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid); err != nil {
+		if demoteUID != "" {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id IN (?,?)`, targetUID, demoteUID); err != nil {
+				return model.User{}, false, err
+			}
+		} else if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, targetUID); err != nil {
 			return model.User{}, false, err
 		}
 	}
 	if err = tx.Commit(); err != nil {
 		return model.User{}, false, err
 	}
-	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: admin != 0, SystemAdmin: true, CreatedAt: parseTime(created)}, changed, nil
+	return model.User{ID: targetUID, AccountID: targetAccount, Email: email, IsAdmin: true, SystemAdmin: true, CreatedAt: parseTime(targetCreated)}, changed, nil
 }
 
 // ensureEmailUnused returns ErrConflict when email belongs to a user other than

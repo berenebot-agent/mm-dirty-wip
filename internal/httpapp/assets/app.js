@@ -1942,3 +1942,63 @@ function aliasNameByAddress(list) {
 
   render();
 })();
+
+// Operator invite dialog (account page): one dialog serves both creating an
+// invitation and editing an existing operator's mailbox access.
+(function () {
+  var dlg = document.getElementById('operator-invite-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = dlg.querySelector('form');
+  var email = dlg.querySelector('[name=email]');
+  var submit = document.getElementById('operator-invite-submit');
+  var title = document.getElementById('operator-invite-title');
+  var boxes = dlg.querySelectorAll('input[name=inboxes]');
+  var add = document.getElementById('add-operator');
+  if (add) {
+    add.addEventListener('click', function () {
+      form.setAttribute('action', '/ui/account/operators/invites');
+      email.value = '';
+      email.readOnly = false;
+      boxes.forEach(function (b) { b.checked = false; });
+      if (title) { title.textContent = 'Create invitation'; }
+      if (submit) { submit.textContent = 'Create invitation'; }
+      dlg.showModal();
+    });
+  }
+  document.querySelectorAll('.edit-operator').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      form.setAttribute('action', '/ui/account/operators/' + btn.getAttribute('data-id') + '/roles');
+      email.value = btn.getAttribute('data-email') || '';
+      email.readOnly = true;
+      var owned = (btn.getAttribute('data-inboxes') || '').split(',');
+      boxes.forEach(function (b) { b.checked = owned.indexOf(b.value) >= 0; });
+      if (title) { title.textContent = 'Edit operator'; }
+      if (submit) { submit.textContent = 'Save access'; }
+      dlg.showModal();
+    });
+  });
+  dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+})();
+
+// New-account invite dialog (system admin plane).
+(function () {
+  var dlg = document.getElementById('account-invite-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = dlg.querySelector('form');
+  var add = document.getElementById('add-account');
+  if (add) {
+    add.addEventListener('click', function () {
+      form.reset();
+      dlg.showModal();
+    });
+  }
+  dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+})();
