@@ -1,6 +1,10 @@
+# Bind-mounted data dirs are chowned to uid 65532 with mode 0700, so the
+# build-context sender (running as the invoking user) cannot read them —
+# every one of these must be pruned or `docker build` dies in context transfer.
+**/data
+tests/strix/accounts.txt
 .git
 .github
-/data
 .env
 *.zip
 tests/logs
