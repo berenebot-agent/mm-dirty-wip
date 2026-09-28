@@ -233,6 +233,8 @@ message_tags
 api_keys
 api_key_inboxes
 api_key_mailbox_roles
+user_mailbox_roles
+invites
 events
 domain_sending_configs
 domain_receiving_configs
@@ -240,6 +242,7 @@ outbound_delivery_log
 hermes_connections
 audit_log
 settings
+system_settings
 ```
 
 A domain owns at most one row in `domain_sending_configs` and at most one in
@@ -363,7 +366,7 @@ Protect cookie-authenticated state-changing requests with CSRF tokens.
 
 Store a hash of the session token in SQLite.
 
-Self-hosted mode creates the first Admin account from one-shot `INITIAL_ADMIN_*` configuration at startup and defaults account registration to closed. Once any user exists the bootstrap settings are ignored. Hosted deployments can enable public registration by configuration.
+Self-hosted mode creates the installation's **system administrator** from `ADMIN_EMAIL` / `ADMIN_PASSWORD` configuration at startup and defaults account registration to closed. While present those credentials are authoritative and rotate the stored login on restart; when absent the stored login is preserved. A system administrator has an own account and an Admin plane but no automatic access to other accounts' mail. People are added by invitation (a separate account with its own Admin, or a non-admin mailbox operator with Owner on selected inboxes); the invitee sets their own password from a single-use link. Account-level Admin remains separate, and non-admin members carry per-inbox roles in `user_mailbox_roles`.
 
 ### Agent API keys
 

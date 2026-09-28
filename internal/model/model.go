@@ -17,11 +17,47 @@ type Account struct {
 }
 
 type User struct {
-	ID        string    `json:"id"`
-	AccountID string    `json:"account_id"`
-	Email     string    `json:"email"`
-	IsAdmin   bool      `json:"is_admin"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	Email     string `json:"email"`
+	// IsAdmin is the account-level Admin role: full access to that account's
+	// domains, clients and mailboxes.
+	IsAdmin bool `json:"is_admin"`
+	// SystemAdmin is the installation-level role: provision accounts and
+	// invitations. It does not by itself grant access to other accounts' mail.
+	SystemAdmin bool `json:"system_admin"`
+	// Roles is the user's per-inbox access when they are not an account Admin,
+	// keyed by inbox id. It is populated on listings and is empty for Admins.
+	Roles     map[string]string `json:"mailboxes,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// Invite kinds. An account_admin invite provisions a new, separate account
+// with its own Admin; an operator invite grants Owner access to selected
+// mailboxes of an existing account.
+const (
+	InviteKindAccountAdmin = "account_admin"
+	InviteKindOperator     = "operator"
+)
+
+// Invite is a pending, expiring, single-use account or operator setup link.
+// The plaintext setup token is never stored; only its hash is kept.
+type Invite struct {
+	ID          string     `json:"id"`
+	AccountID   string     `json:"account_id"`
+	AccountName string     `json:"account_name,omitempty"`
+	Email       string     `json:"email"`
+	Kind        string     `json:"kind"`
+	InboxIDs    []string   `json:"inbox_ids,omitempty"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	AcceptedAt  *time.Time `json:"accepted_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// Pending reports whether the invite can still be redeemed.
+func (i Invite) Pending(now time.Time) bool {
+	return i.AcceptedAt == nil && i.RevokedAt == nil && now.Before(i.ExpiresAt)
 }
 
 type Domain struct {
@@ -485,11 +521,15 @@ type APIKey struct {
 }
 
 type Principal struct {
-	AccountID    string
-	UserID       string
-	APIKeyID     string
-	SessionHash  string
-	Admin        bool
+	AccountID   string
+	UserID      string
+	APIKeyID    string
+	SessionHash string
+	// Admin is the account-level Admin role for AccountID.
+	Admin bool
+	// SystemAdmin is the installation-level system-administrator role. It is
+	// only ever set for a web-UI session, never for an API key.
+	SystemAdmin  bool
 	MailboxRoles map[string]string
 	ViaSession   bool
 }

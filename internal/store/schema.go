@@ -914,3 +914,45 @@ INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider
 UPDATE outbound_delivery_log SET inbox_id=COALESCE((SELECT m.inbox_id FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'');
 UPDATE outbound_delivery_log SET from_address=COALESCE((SELECT m.from_address FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),''),to_json=COALESCE((SELECT m.to_json FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'[]'),subject=COALESCE((SELECT m.subject FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),''),client_label=COALESCE((SELECT m.client_label FROM messages m WHERE m.id=outbound_delivery_log.message_id AND m.account_id=outbound_delivery_log.account_id),'') WHERE from_address='' AND to_json='[]' AND subject='' AND client_label='';
 `
+
+// migration030 adds multi-user support. A system administrator is one user on
+// the installation (not of any one account) who provisions accounts and
+// invitations but gets no automatic access to other accounts' mail. An account
+// can additionally have non-admin human members ("mailbox operators") whose
+// access is a set of per-inbox Owner grants in user_mailbox_roles. system_settings
+// holds installation-wide choices such as the mailbox used to send system mail.
+const migration030 = `
+ALTER TABLE users ADD COLUMN is_system_admin INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS user_mailbox_roles (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('read','assistant','owner')),
+  PRIMARY KEY(user_id, inbox_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_mailbox_roles_user ON user_mailbox_roles(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_mailbox_roles_inbox ON user_mailbox_roles(inbox_id);
+CREATE TABLE IF NOT EXISTS system_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);
+-- An invitation is either a new account with an Admin (account_admin, where
+-- account_id is the pre-created pending account) or a mailbox operator on an
+-- existing account (operator, with owner grants in inbox_ids_json). Only the
+-- SHA-256 of the one-time setup token is stored.
+CREATE TABLE IF NOT EXISTS invites (
+  id TEXT PRIMARY KEY,
+  account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+  account_name TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL COLLATE NOCASE,
+  kind TEXT NOT NULL CHECK(kind IN ('account_admin','operator')),
+  inbox_ids_json TEXT NOT NULL DEFAULT '[]',
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT,
+  revoked_at TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invites_account ON invites(account_id);
+CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(email);
+`

@@ -24,11 +24,12 @@ services:
     environment:
       # Compose default. Override with MX_ENABLE=false (or remote) in .env.
       MX_ENABLE: "${MX_ENABLE:-true}"
-      # First-run administrator, bootstrap-only. Prefer a Docker secret:
-      #   INITIAL_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
-      # and add `secrets: [admin_password]` below. Ignored once a user exists.
-      #INITIAL_ADMIN_EMAIL: admin@example.com
-      #INITIAL_ADMIN_PASSWORD: "${MAILMOOSE_ADMIN_PASSWORD}"
+      # System administrator credentials. When set they are authoritative and
+      # rotate the stored login on restart. Prefer a Docker secret:
+      #   ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      # and add `secrets: [admin_password]` below.
+      #ADMIN_EMAIL: admin@example.com
+      #ADMIN_PASSWORD: "${MAILMOOSE_ADMIN_PASSWORD}"
     volumes:
       - ./data:/data
     ports:

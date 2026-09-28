@@ -132,6 +132,13 @@ func runResetPassword(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		return 1
 	}
 	if err := st.AdminResetPassword(ctx, user.ID, password); err != nil {
+		if errors.Is(err, store.ErrSystemAdmin) {
+			// The configured deployment secret would overwrite this on the next
+			// restart, so send the operator to the source of truth.
+			fmt.Fprintln(stderr, "reset-password: the system administrator's login is managed by the deployment configuration")
+			fmt.Fprintln(stderr, "update ADMIN_PASSWORD or ADMIN_PASSWORD_FILE and restart MailMoose")
+			return 1
+		}
 		fmt.Fprintf(stderr, "reset-password: %v\n", err)
 		return 1
 	}

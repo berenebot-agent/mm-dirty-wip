@@ -9,68 +9,68 @@ import (
 	"github.com/dellarb/mailmoose/internal/config"
 )
 
-func clearInitialAdminEnv(t *testing.T) {
+func clearAdminEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("INITIAL_ADMIN_EMAIL", "")
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "")
-	t.Setenv("INITIAL_ADMIN_EMAIL_FILE", "")
-	t.Setenv("INITIAL_ADMIN_PASSWORD_FILE", "")
-	t.Setenv("INITIAL_ACCOUNT_NAME", "")
+	t.Setenv("ADMIN_EMAIL", "")
+	t.Setenv("ADMIN_PASSWORD", "")
+	t.Setenv("ADMIN_EMAIL_FILE", "")
+	t.Setenv("ADMIN_PASSWORD_FILE", "")
+	t.Setenv("ADMIN_ACCOUNT_NAME", "")
 }
 
-func TestInitialAdminFromEnv(t *testing.T) {
+func TestAdminFromEnv(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InitialAdminEmail != "admin@example.com" {
-		t.Fatalf("InitialAdminEmail = %q", cfg.InitialAdminEmail)
+	if cfg.AdminEmail != "admin@example.com" {
+		t.Fatalf("AdminEmail = %q", cfg.AdminEmail)
 	}
-	if cfg.InitialAdminPassword != "correct-horse-battery-staple" {
-		t.Fatalf("InitialAdminPassword = %q", cfg.InitialAdminPassword)
+	if cfg.AdminPassword != "correct-horse-battery-staple" {
+		t.Fatalf("AdminPassword = %q", cfg.AdminPassword)
 	}
-	if cfg.InitialAccountName != "MailMoose" {
-		t.Fatalf("InitialAccountName = %q, want MailMoose", cfg.InitialAccountName)
+	if cfg.AdminAccountName != "MailMoose" {
+		t.Fatalf("AdminAccountName = %q, want MailMoose", cfg.AdminAccountName)
 	}
 }
 
-func TestInitialAdminAccountName(t *testing.T) {
+func TestAdminAccountName(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
-	t.Setenv("INITIAL_ACCOUNT_NAME", "Acme")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
+	t.Setenv("ADMIN_ACCOUNT_NAME", "Acme")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InitialAccountName != "Acme" {
-		t.Fatalf("InitialAccountName = %q, want Acme", cfg.InitialAccountName)
+	if cfg.AdminAccountName != "Acme" {
+		t.Fatalf("AdminAccountName = %q, want Acme", cfg.AdminAccountName)
 	}
 }
 
-func TestInitialAdminUnset(t *testing.T) {
+func TestAdminUnset(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
+	clearAdminEnv(t)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InitialAdminEmail != "" || cfg.InitialAdminPassword != "" {
-		t.Fatal("unset initial admin must stay empty")
+	if cfg.AdminEmail != "" || cfg.AdminPassword != "" {
+		t.Fatal("unset admin must stay empty so the stored login is preserved")
 	}
-	if cfg.InitialAccountName != "MailMoose" {
-		t.Fatalf("InitialAccountName = %q, want MailMoose", cfg.InitialAccountName)
+	if cfg.AdminAccountName != "MailMoose" {
+		t.Fatalf("AdminAccountName = %q, want MailMoose", cfg.AdminAccountName)
 	}
 }
 
-func TestInitialAdminFileSecrets(t *testing.T) {
+func TestAdminFileSecrets(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
+	clearAdminEnv(t)
 	dir := t.TempDir()
 	emailPath := filepath.Join(dir, "email")
 	pwPath := filepath.Join(dir, "password")
@@ -80,40 +80,40 @@ func TestInitialAdminFileSecrets(t *testing.T) {
 	if err := os.WriteFile(pwPath, []byte("correct-horse-battery-staple\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("INITIAL_ADMIN_EMAIL_FILE", emailPath)
-	t.Setenv("INITIAL_ADMIN_PASSWORD_FILE", pwPath)
+	t.Setenv("ADMIN_EMAIL_FILE", emailPath)
+	t.Setenv("ADMIN_PASSWORD_FILE", pwPath)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.InitialAdminEmail != "admin@example.com" {
-		t.Fatalf("InitialAdminEmail = %q, want trimmed file value", cfg.InitialAdminEmail)
+	if cfg.AdminEmail != "admin@example.com" {
+		t.Fatalf("AdminEmail = %q, want trimmed file value", cfg.AdminEmail)
 	}
-	if cfg.InitialAdminPassword != "correct-horse-battery-staple" {
-		t.Fatalf("InitialAdminPassword = %q, want trimmed file value", cfg.InitialAdminPassword)
+	if cfg.AdminPassword != "correct-horse-battery-staple" {
+		t.Fatalf("AdminPassword = %q, want trimmed file value", cfg.AdminPassword)
 	}
 }
 
-func TestInitialAdminBothFormsError(t *testing.T) {
+func TestAdminBothFormsError(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
+	clearAdminEnv(t)
 	dir := t.TempDir()
 	emailPath := filepath.Join(dir, "email")
 	if err := os.WriteFile(emailPath, []byte("admin@example.com"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("INITIAL_ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("INITIAL_ADMIN_EMAIL_FILE", emailPath)
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("ADMIN_EMAIL_FILE", emailPath)
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("expected error when both the value and _FILE form are set")
 	}
 }
 
-func TestInitialAdminPartialError(t *testing.T) {
+func TestAdminPartialError(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_EMAIL", "admin@example.com")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
 	_, err := config.Load()
 	if err == nil {
 		t.Fatal("expected error for email without password")
@@ -121,33 +121,43 @@ func TestInitialAdminPartialError(t *testing.T) {
 	if !strings.Contains(err.Error(), "must be supplied together") {
 		t.Fatalf("error = %v", err)
 	}
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("expected error for password without email")
 	}
 }
 
-func TestInitialAdminInvalidEmail(t *testing.T) {
+func TestAdminInvalidEmail(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_EMAIL", "not-an-address")
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "correct-horse-battery-staple")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL", "not-an-address")
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("expected error for an invalid email")
 	}
 }
 
-func TestInitialAdminWeakPassword(t *testing.T) {
+func TestAdminWeakPassword(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	clearInitialAdminEnv(t)
-	t.Setenv("INITIAL_ADMIN_EMAIL", "admin@example.com")
-	t.Setenv("INITIAL_ADMIN_PASSWORD", "short")
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL", "admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "short")
 	_, err := config.Load()
 	if err == nil {
 		t.Fatal("expected error for a weak password")
 	}
 	if strings.Contains(err.Error(), "short") {
 		t.Fatalf("error must not include the password: %v", err)
+	}
+}
+
+func TestAdminMissingFileFails(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	clearAdminEnv(t)
+	t.Setenv("ADMIN_EMAIL_FILE", filepath.Join(t.TempDir(), "does-not-exist"))
+	t.Setenv("ADMIN_PASSWORD", "correct-horse-battery-staple")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("an explicitly configured but unreadable *_FILE must fail startup, not silently fall back")
 	}
 }
