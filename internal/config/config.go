@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"net"
 	"net/mail"
 	"net/netip"
@@ -436,13 +435,11 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 	}
 	for _, p := range c.TrustedProxies {
 		if p.Contains(addr) {
-			// A peer inside the trust set is the load-bearing case for the
-			// forwarded-header decision. Logging it makes a covering-set
-			// misconfiguration visible while running: startup cannot know which
-			// addresses will connect, so this is the only place the condition
-			// can actually be observed.
-			slog.Warn("request peer is inside the trusted-proxy set; forwarded headers will be honoured",
-				"peer", addr.String(), "prefix", p.String())
+			// A peer inside the trust set is the normal case: the request
+			// arrived through a configured proxy. Load refuses entries wider
+			// than minTrustedProxyBits, so a match is not by itself evidence of
+			// an over-covering set, and logging it on the per-request path only
+			// reported that the proxy is working.
 			return true
 		}
 	}

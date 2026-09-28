@@ -1398,7 +1398,8 @@ token they hold.
 - `internal/config`: a `TRUSTED_PROXIES` entry wider than `/8` is now refused at
   load, closing the "equivalent-but-not-literal /0" gap recorded as a retest open
   item; a peer found inside the trust set is logged at WARN so a covering-set
-  misconfiguration is visible at runtime, which startup cannot detect.
+  misconfiguration is visible at runtime, which startup cannot detect. (The second
+  clause is superseded by D061; the load-time `/8` floor stands.)
 
 ## D060 — System administrator, account Admins, and mailbox operators
 
@@ -1465,6 +1466,45 @@ than making system administration a superuser. Reusing existing Owner semantics
 for operators avoids inventing another permission tier, and routing invitations
 through the normal outbound queue avoids a second mail path. A per-account
 mailer keeps invitations inside the account's own sending credentials.
+
+## D061 — The trusted-proxy per-request WARN is removed (D059 correction)
+
+**Context:** D059 hardened the trusted-proxy path in two ways: `config.Load` refuses
+a `TRUSTED_PROXIES` entry wider than `/8` (`minTrustedProxyBits`), and
+`Config.IsTrustedProxy` logged at WARN on every request whose socket peer fell inside
+the trust set, on the reasoning that a covering-set misconfiguration cannot be
+detected at startup. In practice the second half reports the healthy case. With the
+proxy actually in front, every proxied request wrote
+
+    WARN request peer is inside the trusted-proxy set; forwarded headers will be honoured
+        peer=203.0.113.10 prefix=203.0.113.10/32
+
+and the same line appeared in the test-run logs for every trusted fixture peer, so the
+WARN carried no information beyond "the configured proxy is proxying", and buried real
+warnings.
+
+**Decision:** `IsTrustedProxy` returns `true` for an in-set peer without logging.
+The load-time `/8` floor remains and is the control that keeps the trust set from
+covering ordinary clients; the runtime log line is not part of the control, so
+removing it removes no protection. The matching prefix is still resolved the same
+way, and `clientIP`, `cookieSecure` and the request-scoped trust checks in
+`internal/httpapp` are unchanged.
+
+**Reason:** A warning that fires on correct configuration trains an operator to
+ignore warnings. The signal it was meant to carry is already enforced at load, where
+it is enforced before the first request rather than after it.
+
+**Consequences:**
+
+- No behaviour change: trust decisions, rate-limit identity and the `Secure`-cookie
+  decision are byte-for-byte the same.
+- `log/slog` is no longer imported by `internal/config`; the file's only other
+  logging call was this one.
+- `the removed review report` §O1 still records the WARN as a delivered
+  remediation. That row is left as the historical record of the review round; this
+  decision supersedes the behaviour, not the record.
+- D059's closing paragraph in this file is superseded on its second clause ("a peer
+  found inside the trust set is logged at WARN").
 
 ## Future extension register
 
