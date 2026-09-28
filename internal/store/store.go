@@ -156,6 +156,8 @@ var ErrSenderNotAllowed = errors.New("sender not allowed")
 var ErrConflict = errors.New("conflict")
 var ErrQuota = errors.New("storage quota exceeded")
 var ErrNoProvider = errors.New("no provider configured")
+var ErrSystemAdmin = errors.New("system administrator credentials are managed by the deployment configuration")
+var ErrInviteExpired = errors.New("invitation is no longer valid")
 
 func normalizeAddress(v string) string { return strings.ToLower(strings.TrimSpace(v)) }
 func normalizeDomain(v string) string {

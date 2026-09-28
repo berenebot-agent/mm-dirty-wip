@@ -5,25 +5,37 @@ reverse proxy setup, direct-SMTP (MX) deployment modes, hardening, backup, and
 upgrades. For receiving/sending provider setup see
 [docs/PROVIDERS.md](PROVIDERS.md).
 
-## First-run administrator
+## System administrator
 
-On the first start against an empty database, MailMoose creates the account
-named by `INITIAL_ADMIN_EMAIL` with the password in `INITIAL_ADMIN_PASSWORD`
-and logs `Initial administrator created: <email>`. Both values may instead be
-read from files with `INITIAL_ADMIN_EMAIL_FILE` / `INITIAL_ADMIN_PASSWORD_FILE`
-(intended for Docker secrets); set only one form per setting, and set both the
-email and the password together. `INITIAL_ACCOUNT_NAME` optionally sets the
-account display name (default `MailMoose`).
+The installation has one **system administrator**: the login named by
+`ADMIN_EMAIL` with the password in `ADMIN_PASSWORD`. Both values may instead be
+read from files with `ADMIN_EMAIL_FILE` / `ADMIN_PASSWORD_FILE` (intended for
+Docker secrets); set only one form per setting, and set both the email and the
+password together. `ADMIN_ACCOUNT_NAME` optionally sets the display name of the
+system administrator's own account (default `MailMoose`).
 
-These values are **bootstrap-only**: as soon as any user exists they are
-ignored, so they can be left in place or removed from Compose. They never
-update an existing account, change an email, or create another administrator.
-If they are not supplied, MailMoose still starts and serves a page explaining
-that it is not configured; there is no unauthenticated setup form.
+The configured credentials are **authoritative while present**. On first start
+against an empty database they create the system administrator; on every later
+start they rotate its stored login to match, so changing the secret changes the
+login (existing sessions are signed out). When **both** settings are absent the
+stored login is left untouched, so a deployment may drop them once provisioned.
+A half-configured pair, or an `*_FILE` path that cannot be read, is a startup
+error. If no system administrator exists and no credentials are supplied,
+MailMoose still starts and serves a page explaining that it is not configured;
+there is no unauthenticated setup form.
+
+The system administrator can manage the installation (choose the system-mailer
+mailbox, invite people, administer accounts) and use their own account
+normally, but does **not** automatically get access to other accounts' mail.
+Because the deployment secret owns this login, the account settings page does
+not let the system administrator change its email or password; update the
+secret and restart instead. From the **Admin** page they can invite a new
+person as a **separate account Admin**, or invite a **mailbox operator** who is
+Owner of selected mailboxes in an existing account.
 
 ## Password recovery
 
-If the administrator loses access, reset the password from the server:
+If an ordinary account Admin loses access, reset the password from the server:
 
 ```bash
 docker compose exec mailmoose mailmoose admin reset-password admin@example.com
@@ -33,6 +45,10 @@ The command prompts for the new password without echoing it (or reads it from
 `--password-file` for automation), applies the normal password rules, and
 revokes every existing browser session. API keys are left untouched; revoke
 them separately with `mailmoose admin revoke-api-keys admin@example.com`.
+
+The system administrator's login is owned by `ADMIN_EMAIL` / `ADMIN_PASSWORD`,
+so `reset-password` refuses it and tells you to update the deployment secret
+and restart instead.
 
 ## Reverse proxy and TLS
 

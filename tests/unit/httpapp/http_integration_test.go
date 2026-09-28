@@ -79,8 +79,8 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, _ := app.New(cfg, st, events.NewHub())
 	h := httpapp.New(svc, nil).Handler()
-	// The first administrator now comes from INITIAL_ADMIN_* at startup, so
-	// seed the account directly for this HTTP-level test.
+	// The system administrator now comes from ADMIN_* at startup, so seed an
+	// ordinary account Admin directly for this HTTP-level test.
 	if _, err = st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes); err != nil {
 		t.Fatal(err)
 	}

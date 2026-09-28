@@ -198,10 +198,6 @@ func (s *Server) uiSpam(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -231,10 +227,6 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -264,10 +256,6 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -334,10 +322,6 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -413,10 +397,6 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -436,10 +416,6 @@ func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -454,10 +430,6 @@ func (s *Server) uiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftApprove(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -473,10 +445,6 @@ func (s *Server) uiDraftApprove(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftReject(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -496,10 +464,6 @@ func (s *Server) uiDraftReject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiDraftCancelSendRequest(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -514,10 +478,6 @@ func (s *Server) uiDraftCancelSendRequest(w http.ResponseWriter, r *http.Request
 
 func (s *Server) uiOutboxRetry(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -532,10 +492,6 @@ func (s *Server) uiOutboxRetry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -561,10 +517,6 @@ func (s *Server) draftAttachmentPath() string {
 
 func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder string) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	id := r.PathValue("id")
 	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
 	if err != nil {
@@ -665,10 +617,6 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 
 func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -725,10 +673,6 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -755,10 +699,6 @@ func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "inbox not found", 404)
@@ -810,10 +750,6 @@ func (s *Server) uiForwardForm(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind string) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	if f, ok := s.peekComposeFlash(r); ok {
 		s.renderComposeFlash(w, r, p, r.URL.Query().Get("_flash"), f)
 		return
@@ -859,10 +795,6 @@ func (s *Server) uiForwardSend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
@@ -973,10 +905,6 @@ func (s *Server) formAttachments(r *http.Request) ([]app.SendAttachment, error) 
 
 func (s *Server) uiMessageLabels(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
@@ -1015,10 +943,6 @@ func (s *Server) uiMessageLabels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
@@ -1038,10 +962,6 @@ func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uiMessageSpam(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)

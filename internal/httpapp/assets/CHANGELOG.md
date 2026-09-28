@@ -8,6 +8,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- System administrator, account Admins, and non-admin mailbox operators. The
+  system administrator (configured with `ADMIN_EMAIL` / `ADMIN_PASSWORD`) has an
+  Admin plane to select the system-mailer mailbox, invite a new person as a
+  separate account, or invite a mailbox operator with Owner access to selected
+  inboxes; invitees set their own password from a single-use, expiring link that
+  is sent through the normal outbound queue or copied directly.
 - Self-hosted Direct MX outbound delivery with DNS MX resolution, opportunistic
   STARTTLS, public-destination enforcement, and single-recipient delivery.
 
@@ -25,6 +31,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The first-run administrator configuration `INITIAL_ADMIN_EMAIL` /
+  `INITIAL_ADMIN_PASSWORD` (`_FILE` supported) is renamed to `ADMIN_EMAIL` /
+  `ADMIN_PASSWORD` and is now deployment-authoritative: while set it rotates the
+  system administrator's stored login on every start; when unset the stored
+  login is preserved.
 - The dashboard inbox and client edit buttons now use a gear (settings) icon,
   an admin-only gear shortcut in the inbox view opens that inbox's settings
   directly, and action icons in the dashboard tables and activity links are

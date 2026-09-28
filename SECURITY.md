@@ -124,12 +124,16 @@ snapshot of `/data` backed up separately, as described in the README's backup
 section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.
 
-Bootstrap credentials (`INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, and
-their `*_FILE` variants) are read only to create the first administrator on an
-empty database. They are never written to logs, error responses, diagnostic
-bundles, admin pages, or API responses, and they are ignored once any user
-exists, so they can be removed after first start. Prefer the `*_FILE` forms
-with Docker secrets over a plain environment variable. Operator password resets
-(`mailmoose admin reset-password`) revoke all browser sessions and record an
-audit event without recording the password; API keys are revoked only on an
-explicit `mailmoose admin revoke-api-keys`.
+System-administrator credentials (`ADMIN_EMAIL`, `ADMIN_PASSWORD`, and their
+`*_FILE` variants) are the source of truth for the installation's system
+administrator login. When present they create that user on first start and
+rotate its stored credentials (revoking its sessions) on later starts; when
+absent the stored login is preserved. They are never written to logs, error
+responses, diagnostic bundles, admin pages, or API responses. Prefer the
+`*_FILE` forms with Docker secrets over a plain environment variable. Because
+the configured secret owns this login, the account settings page blocks the
+system administrator from changing its email or password and
+`mailmoose admin reset-password` refuses it, directing the operator to the
+configuration instead. Resets for ordinary users revoke all their browser
+sessions and record an audit event without recording the password; API keys are
+revoked only on an explicit `mailmoose admin revoke-api-keys`.

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -95,7 +94,7 @@ func main() {
 		os.Exit(1)
 	}
 	svc.Log = log
-	ensureInitialAdmin(svc, log)
+	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
 	defer worker.Stop()
@@ -162,41 +161,34 @@ func main() {
 	}
 }
 
-// ensureInitialAdmin creates the first administrator from the one-shot
-// INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD configuration when the database
-// has no users. It never modifies an existing installation: once any user
-// exists the bootstrap settings are ignored, so they can be left in place (or
-// removed) without effect. The password is never logged.
-func ensureInitialAdmin(svc *app.Service, log *slog.Logger) {
-	hasUsers, err := svc.Store.HasUsers(context.Background())
-	if err != nil {
-		log.Error("cannot determine whether setup is complete", "error", err)
-		os.Exit(1)
-	}
-	if hasUsers {
-		if svc.Config.InitialAdminEmail != "" {
-			log.Info("Initial administrator configuration ignored because setup is already complete")
+// ensureSystemAdmin reconciles the configured system administrator
+// (ADMIN_EMAIL / ADMIN_PASSWORD, either of which may come from a *_FILE secret)
+// with the database. The configured credentials are authoritative when present:
+// they create the system administrator on first start and rotate its stored
+// login (revoking its sessions) when either changes. When they are absent the
+// stored system administrator is left untouched, so a deployment may drop them
+// once provisioned. A half-configured pair is a startup error and never reaches
+// this function. The password is never logged.
+func ensureSystemAdmin(svc *app.Service, log *slog.Logger) {
+	if svc.Config.AdminEmail != "" {
+		u, changed, err := svc.Store.SyncSystemAdmin(context.Background(), svc.Config.AdminAccountName, svc.Config.AdminEmail, svc.Config.AdminPassword, svc.Config.DefaultQuotaBytes)
+		if err != nil {
+			log.Error("cannot configure system administrator", "error", err)
+			os.Exit(1)
+		}
+		if changed {
+			log.Info("system administrator configured", "email", u.Email, "updated", true)
 		}
 		return
 	}
-	if svc.Config.InitialAdminEmail == "" {
-		log.Info("MailMoose has not been configured; set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD and restart")
-		return
-	}
-	if svc.Config.Mode != "selfhosted" {
-		log.Warn("INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD are ignored in hosted mode")
-		return
-	}
-	u, err := svc.Store.CreateInitialAdmin(context.Background(), svc.Config.InitialAccountName, svc.Config.InitialAdminEmail, svc.Config.InitialAdminPassword, svc.Config.DefaultQuotaBytes)
+	has, err := svc.Store.HasSystemAdmin(context.Background())
 	if err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			log.Info("Initial administrator configuration ignored because setup is already complete")
-			return
-		}
-		log.Error("cannot create initial administrator", "error", err)
+		log.Error("cannot determine system administrator state", "error", err)
 		os.Exit(1)
 	}
-	log.Info("Initial administrator created: " + u.Email)
+	if !has {
+		log.Info("MailMoose has not been configured; set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
+	}
 }
 
 // edgeExit returns the edge's exit channel, or a nil channel (blocks forever)

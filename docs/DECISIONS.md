@@ -1233,7 +1233,12 @@ trusts the edge's SPF/DKIM/DMARC evidence on a valid signature, so a guessable
 secret lets anyone inject mail, forge auth evidence and burn quota. Length is
 an enforceable proxy for unguessability; it cannot prove randomness.
 
-## D055 — One-shot initial admin and operator password reset
+## D055 — Operator password reset (superseded in part by D060)
+
+> **Superseded in part by D060:** the one-shot `INITIAL_ADMIN_*` bootstrap was
+> replaced by the deployment-authoritative `ADMIN_*` system administrator, and
+> `admin reset-password` now refuses the system administrator (the configured
+> secret owns that login). The remainder of this decision still stands.
 
 **Decision:** Remove `ADMIN_BOOTSTRAP_TOKEN` and the unauthenticated `/setup`
 claim flow. A fresh self-hosted database is initialised from one-shot
@@ -1394,6 +1399,62 @@ token they hold.
   load, closing the "equivalent-but-not-literal /0" gap recorded as a retest open
   item; a peer found inside the trust set is logged at WARN so a covering-set
   misconfiguration is visible at runtime, which startup cannot detect.
+
+## D060 — System administrator, account Admins, and mailbox operators
+
+**Context:** The app already modelled separate accounts and users, but only ever
+created one human user per account and every human login was an account Admin
+(the web UI and `/v1` admin surface required `p.Admin`; non-admin sessions failed
+closed). Provisioning another person meant public registration, which is closed
+by default and creates a fresh account each time.
+
+**Decision:** Add three explicit human roles and an installation-level admin
+plane:
+
+- **System administrator** — one configured login (`ADMIN_EMAIL` /
+  `ADMIN_PASSWORD`, `*_FILE` supported), marked by `users.is_system_admin`. The
+  configured credentials are authoritative while present: they create the login
+  on first start and rotate its stored email/password (revoking its sessions) on
+  later starts; when both are absent the stored login is preserved. The login is
+  never editable in the UI and `admin reset-password` refuses it, both pointing
+  at the deployment secret. The system administrator has an ordinary account of
+  its own but does **not** automatically gain access to other accounts' mail.
+- **Account Admin** — unchanged `users.is_admin`; full control of one account's
+  domains, clients and mailboxes.
+- **Mailbox operator** — a non-admin member of an account whose access is a set
+  of per-inbox Owner grants in `user_mailbox_roles`. Operators are Owners of the
+  mailboxes assigned to them and nothing else; they get no domain, client or
+  account controls.
+
+Provisioning is by **invitation** (`invites`), not stored initial passwords. An
+invite is either a new, separate account with its own Admin or a mailbox
+operator on an existing account. The invitee chooses their password from a
+single-use, expiring (7 day) link; only the token hash is stored. Sending the
+invitation email goes through the **ordinary outbound queue** from a
+system-mailer mailbox the system administrator selects (`system_settings`), and
+the same setup link can be copied and shared out of band instead. The system
+mailer must be a mailbox the system administrator owns.
+
+**Consequences:**
+
+- `SessionPrincipal` now resolves per-inbox roles for non-admin users from
+  `user_mailbox_roles`, so the previously unimplemented
+  `userMailboxRoles` path is live.
+- The account-level UI and `/v1` admin routes still require `Admin`; the
+  mailbox-level UI routes check the per-inbox role, so an operator can read,
+  draft, send/reply, approve and manage only their assigned mailboxes.
+- `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (and `INITIAL_ACCOUNT_NAME`)
+  are renamed to `ADMIN_*` in place; the project is not yet deployed, so no
+  compatibility shim is carried.
+- `users`, `system_settings`, `user_mailbox_roles`, `invites`, and the
+  `is_system_admin` column are added by migration `030`.
+
+**Reason:** Separate accounts keep each person's domains and settings isolated,
+which the existing account boundary already supports. Keeping the system
+administrator out of other accounts' mail preserves the account boundary rather
+than making system administration a superuser. Reusing existing Owner semantics
+for operators avoids inventing another permission tier, and routing invitations
+through the normal outbound queue avoids a second mail path.
 
 ## Future extension register
 

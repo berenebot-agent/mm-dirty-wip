@@ -398,7 +398,7 @@ GET  /v1/send-requests?inbox={id}&active=true
   `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`,
   `draft.notification_sent`, `draft.notification_failed`.
 
-Human users in the web UI are always Owners. Mailbox roles apply to API keys.
+Mailbox roles apply to API keys and to human users alike. An account Admin is an Owner of every mailbox in the account; a non-admin mailbox operator holds Owner on only the inboxes assigned to them.
 Hermes Relay sends as an owner directly and does not use the draft workflow.
 
 ## 9. Send and reply

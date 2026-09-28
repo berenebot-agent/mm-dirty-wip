@@ -23,7 +23,9 @@
 
 1. Verify state-changing cookie-authenticated requests require a valid CSRF token.
 2. Verify session cookies are HttpOnly, Secure when externally HTTPS, and SameSite.
-3. Verify a fresh self-hosted instance creates the initial Admin from `INITIAL_ADMIN_EMAIL`/`INITIAL_ADMIN_PASSWORD`, ignores those values once a user exists, and leaves public registration closed by default.
+3. Verify a fresh self-hosted instance creates the system administrator from `ADMIN_EMAIL`/`ADMIN_PASSWORD`, rotates its stored login when the configured secret changes on restart (revoking its sessions), preserves the stored login when the secret is removed, and leaves public registration closed by default.
+4. Verify the system administrator's login cannot be changed from the account settings page or by `mailmoose admin reset-password`.
+5. Verify a system administrator can invite a new account Admin and a mailbox operator; the invitee sets a password from a single-use, expiring link; an operator is Owner of only the selected mailboxes and cannot reach the dashboard, domains, or clients.
 4. Verify an HTML attachment downloads rather than executing inline in the authenticated application origin.
 
 ## A3. Draft approval workflow

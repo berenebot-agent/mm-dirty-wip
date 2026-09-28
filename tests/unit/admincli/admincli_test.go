@@ -20,9 +20,11 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// seedInstance creates an on-disk instance with one administrator and returns
-// its data directory. The store is closed before returning so the command can
-// open it independently.
+// seedInstance creates an on-disk instance with one account administrator and
+// returns its data directory. The store is closed before returning so the
+// command can open it independently. The user is deliberately an ordinary
+// account Admin, not the system administrator, because the system
+// administrator's login is owned by the deployment configuration.
 func seedInstance(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,7 +33,7 @@ func seedInstance(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		st.Close()
 		t.Fatal(err)
@@ -128,6 +130,30 @@ func TestResetPasswordRefusesNonInteractive(t *testing.T) {
 	}
 }
 
+func TestResetPasswordRefusesSystemAdmin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DATA_DIR", dir)
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.SyncSystemAdmin(context.Background(), "MailMoose", "root@example.com", "correct horse battery staple", 50<<20); err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
+	st.Close()
+
+	pwFile := writePasswordFile(t, "brand-new-password")
+	var stdout, stderr bytes.Buffer
+	code := admincli.Run([]string{"reset-password", "root@example.com", "--password-file", pwFile}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "ADMIN_PASSWORD") {
+		t.Fatalf("stderr must direct the operator to the config: %q", stderr.String())
+	}
+}
+
 func TestRevokeAPIKeys(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
@@ -135,7 +161,7 @@ func TestRevokeAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

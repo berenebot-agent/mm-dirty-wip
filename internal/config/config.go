@@ -68,15 +68,19 @@ type Config struct {
 	// reverse proxy and never want the app to answer over cleartext.
 	ForceHTTPS       bool
 	AppEncryptionKey string
-	// InitialAdminEmail/InitialAdminPassword are one-shot bootstrap credentials
-	// for a fresh self-hosted installation. They are consumed only when the
-	// database has no users and are ignored forever afterwards. Empty means
-	// unset. Never log the password.
-	InitialAdminEmail    string
-	InitialAdminPassword string
-	// InitialAccountName is the display name for the account created alongside
-	// the initial administrator. Defaults to "MailMoose".
-	InitialAccountName     string
+	// AdminEmail/AdminPassword are the configured system-administrator
+	// credentials. When present they are authoritative: on every start the
+	// stored system administrator is reconciled to them, rotating its login
+	// (and revoking its sessions) if either changed. When both are absent the
+	// stored system administrator is left untouched, so a deployment can omit
+	// them once provisioned. Supplying only one is a startup error. Never log
+	// the password.
+	AdminEmail    string
+	AdminPassword string
+	// AdminAccountName is the display name for the system administrator's own
+	// account. Defaults to "MailMoose". It is only used when the system
+	// administrator is first created.
+	AdminAccountName       string
 	MaxMessageBytes        int64
 	DefaultQuotaBytes      int64
 	SessionTTL             time.Duration
@@ -139,7 +143,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	initialAdmin, err := loadInitialAdmin()
+	admin, err := loadAdmin()
 	if err != nil {
 		return Config{}, err
 	}
@@ -158,9 +162,9 @@ func Load() (Config, error) {
 		TrustProxyHeaders:      envBool("TRUST_PROXY_HEADERS", false),
 		ForceHTTPS:             envBool("FORCE_HTTPS", false),
 		AppEncryptionKey:       strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
-		InitialAdminEmail:      initialAdmin.email,
-		InitialAdminPassword:   initialAdmin.password,
-		InitialAccountName:     initialAdmin.accountName,
+		AdminEmail:             admin.email,
+		AdminPassword:          admin.password,
+		AdminAccountName:       admin.accountName,
 		MaxMessageBytes:        envInt64("MAX_MESSAGE_BYTES", 30<<20),
 		DefaultQuotaBytes:      envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
 		SessionTTL:             time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
@@ -285,45 +289,45 @@ func parseEdgeKeys(raw string) (map[string]string, error) {
 	return out, nil
 }
 
-// initialAdminConfig carries the one-shot bootstrap credentials for a fresh
-// self-hosted installation.
-type initialAdminConfig struct {
+// adminConfig carries the configured system-administrator credentials.
+type adminConfig struct {
 	email       string
 	password    string
 	accountName string
 }
 
-// loadInitialAdmin resolves INITIAL_ADMIN_EMAIL / INITIAL_ADMIN_PASSWORD
-// (either may come from a *_FILE variant) and validates them. Supplying only
-// one half is a startup error: a half-configured bootstrap must never start
-// and later be mistaken for "no credentials". The password is never included
-// in an error.
-func loadInitialAdmin() (initialAdminConfig, error) {
-	email, emailSet, err := envSecret("INITIAL_ADMIN_EMAIL")
+// loadAdmin resolves ADMIN_EMAIL / ADMIN_PASSWORD (either may come from a
+// *_FILE variant) and validates them. Supplying only one half is a startup
+// error: a half-configured administrator must never start and later be
+// mistaken for "no credentials", which would silently keep an old login.
+// Supplying neither is valid: the stored system administrator (if any) is left
+// untouched. The password is never included in an error.
+func loadAdmin() (adminConfig, error) {
+	email, emailSet, err := envSecret("ADMIN_EMAIL")
 	if err != nil {
-		return initialAdminConfig{}, err
+		return adminConfig{}, err
 	}
-	password, passwordSet, err := envSecret("INITIAL_ADMIN_PASSWORD")
+	password, passwordSet, err := envSecret("ADMIN_PASSWORD")
 	if err != nil {
-		return initialAdminConfig{}, err
+		return adminConfig{}, err
 	}
 	if emailSet != passwordSet {
-		return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD must be supplied together")
+		return adminConfig{}, fmt.Errorf("ADMIN_EMAIL and ADMIN_PASSWORD must be supplied together")
 	}
 	if emailSet {
 		addr, perr := mail.ParseAddress(email)
 		if perr != nil || addr.Address != email {
-			return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_EMAIL must be a plain email address")
+			return adminConfig{}, fmt.Errorf("ADMIN_EMAIL must be a plain email address")
 		}
 		if err := auth.ValidatePassword(password); err != nil {
-			return initialAdminConfig{}, fmt.Errorf("INITIAL_ADMIN_PASSWORD %w", err)
+			return adminConfig{}, fmt.Errorf("ADMIN_PASSWORD %w", err)
 		}
 	}
-	name := strings.TrimSpace(env("INITIAL_ACCOUNT_NAME", "MailMoose"))
+	name := strings.TrimSpace(env("ADMIN_ACCOUNT_NAME", "MailMoose"))
 	if name == "" {
 		name = "MailMoose"
 	}
-	return initialAdminConfig{email: email, password: password, accountName: name}, nil
+	return adminConfig{email: email, password: password, accountName: name}, nil
 }
 
 // envSecret resolves a secret from either NAME or NAME_FILE. The two forms are

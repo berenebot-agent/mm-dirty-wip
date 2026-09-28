@@ -986,6 +986,18 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	return s.send(ctx, p.AccountID, in, idem)
 }
 
+// SendSystemMail enqueues outbound installation mail (currently account
+// invitations) from a specific inbox. There is no mailbox-role principal to
+// check: the caller is the system-administrator surface and the inbox is an
+// explicit installation setting, so authority has already been established.
+// The message goes through the ordinary outbox queue exactly like user mail.
+func (s *Service) SendSystemMail(ctx context.Context, accountID, inboxID string, in SendInput) (SendResult, error) {
+	in.InboxID = inboxID
+	in.ClientLabel = "System"
+	in.ClientID = ""
+	return s.send(ctx, accountID, in, "")
+}
+
 // send is the principal-free outbound core. The external email approval path
 // calls it after validating the token and approver; mailbox ownership was
 // already established by the send request itself.

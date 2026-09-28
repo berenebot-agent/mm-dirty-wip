@@ -63,8 +63,8 @@ services:
 ```bash
 APP_ENCRYPTION_KEY=$(openssl rand -hex 32)   # back this up — it decrypts provider secrets
 BASE_URL=https://mail.example.com            # where you'll reach this instance
-INITIAL_ADMIN_EMAIL=admin@example.com
-INITIAL_ADMIN_PASSWORD=a-long-random-password
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=a-long-random-password
 ```
 
 **3. Run it:**
@@ -73,7 +73,7 @@ INITIAL_ADMIN_PASSWORD=a-long-random-password
 docker compose up -d
 ```
 
-Open `BASE_URL`, sign in with the admin credentials, and add your domain. Then:
+Open `BASE_URL`, sign in with the system administrator credentials, and add your domain. From the **Admin** page you can invite other people, each as their own separate account. Then:
 
 - Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - Direct-SMTP (MX) on port 25, hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md)

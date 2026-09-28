@@ -18,22 +18,24 @@ func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 	return n > 0, err
 }
 
-// CreateInitialAdmin atomically creates the first account and admin user. It
-// returns ErrConflict if any user already exists, so two concurrent setup
-// requests cannot both succeed. The writer connection is serialized, so the
+// CreateInitialAdmin atomically creates the first account and admin user and
+// marks that user as the installation's system administrator. It returns
+// ErrConflict if any user already exists, so two concurrent setup requests
+// cannot both succeed. The writer connection is serialized, so the
 // check-and-insert inside one transaction is race-free.
 func (s *Store) CreateInitialAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
-	return s.createAccountAndAdmin(ctx, name, email, password, quota, true)
+	return s.createAccountAndAdmin(ctx, name, email, password, quota, true, true)
 }
 
 func (s *Store) CreateAccountAndAdmin(ctx context.Context, name, email, password string, quota int64) (model.User, error) {
-	return s.createAccountAndAdmin(ctx, name, email, password, quota, false)
+	return s.createAccountAndAdmin(ctx, name, email, password, quota, false, false)
 }
 
 // createAccountAndAdmin performs the shared account + admin-user insert. When
 // requireEmpty is set it first asserts that no user exists, which makes it the
-// one-time bootstrap path.
-func (s *Store) createAccountAndAdmin(ctx context.Context, name, email, password string, quota int64, requireEmpty bool) (model.User, error) {
+// one-time bootstrap path. When systemAdmin is set the new user also carries
+// the installation-level system-administrator role.
+func (s *Store) createAccountAndAdmin(ctx context.Context, name, email, password string, quota int64, requireEmpty, systemAdmin bool) (model.User, error) {
 	email = normalizeAddress(email)
 	if email == "" {
 		return model.User{}, fmt.Errorf("email required")
@@ -65,20 +67,120 @@ func (s *Store) createAccountAndAdmin(ctx context.Context, name, email, password
 	if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, strings.TrimSpace(name), quota, now); err != nil {
 		return model.User{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,account_id,email,password_hash,is_admin,created_at) VALUES(?,?,?,?,1,?)`, uid, aid, email, ph, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,account_id,email,password_hash,is_admin,is_system_admin,created_at) VALUES(?,?,?,?,1,?,?)`, uid, aid, email, ph, boolInt(systemAdmin), now); err != nil {
 		return model.User{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return model.User{}, err
 	}
-	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, CreatedAt: parseTime(now)}, nil
+	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, SystemAdmin: systemAdmin, CreatedAt: parseTime(now)}, nil
+}
+
+// HasSystemAdmin reports whether the installation has a system administrator.
+func (s *Store) HasSystemAdmin(ctx context.Context) (bool, error) {
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM users WHERE is_system_admin=1`).Scan(&n)
+	return n > 0, err
+}
+
+// SyncSystemAdmin reconciles the configured system-administrator credentials
+// with the database. The configured values are authoritative when present: a
+// changed email or password is applied and every existing session for that user
+// is revoked, so a rotated deployment secret takes effect on restart. When no
+// system administrator exists it is created together with its own account.
+//
+// A configured email that already belongs to a different user is refused rather
+// than silently taking over that identity. The error never contains the
+// password.
+func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, password string, quota int64) (model.User, bool, error) {
+	email = normalizeAddress(email)
+	if email == "" {
+		return model.User{}, false, fmt.Errorf("email required")
+	}
+	ph, err := auth.HashPassword(password)
+	if err != nil {
+		return model.User{}, false, err
+	}
+	tx, err := s.write.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return model.User{}, false, err
+	}
+	defer tx.Rollback()
+
+	var uid, aid, currentEmail, currentHash, created string
+	var admin int
+	err = tx.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,created_at FROM users WHERE is_system_admin=1 ORDER BY created_at LIMIT 1`).Scan(&uid, &aid, &currentEmail, &currentHash, &admin, &created)
+	if err == sql.ErrNoRows {
+		if err = ensureEmailUnused(ctx, tx, email, ""); err != nil {
+			return model.User{}, false, err
+		}
+		aid, uid = idgen.New("acct"), idgen.New("usr")
+		now := nowText()
+		name := strings.TrimSpace(accountName)
+		if name == "" {
+			name = "MailMoose"
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES(?,?,?,?)`, aid, name, quota, now); err != nil {
+			return model.User{}, false, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO users(id,account_id,email,password_hash,is_admin,is_system_admin,created_at) VALUES(?,?,?,?,1,1,?)`, uid, aid, email, ph, now); err != nil {
+			return model.User{}, false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return model.User{}, false, err
+		}
+		return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: true, SystemAdmin: true, CreatedAt: parseTime(now)}, true, nil
+	}
+	if err != nil {
+		return model.User{}, false, err
+	}
+	changed := false
+	if currentEmail != email {
+		if err = ensureEmailUnused(ctx, tx, email, uid); err != nil {
+			return model.User{}, false, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET email=? WHERE id=?`, email, uid); err != nil {
+			return model.User{}, false, err
+		}
+		changed = true
+	}
+	if !auth.CheckPassword(currentHash, password) {
+		if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, ph, uid); err != nil {
+			return model.User{}, false, err
+		}
+		changed = true
+	}
+	if changed {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, uid); err != nil {
+			return model.User{}, false, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return model.User{}, false, err
+	}
+	return model.User{ID: uid, AccountID: aid, Email: email, IsAdmin: admin != 0, SystemAdmin: true, CreatedAt: parseTime(created)}, changed, nil
+}
+
+// ensureEmailUnused returns ErrConflict when email belongs to a user other than
+// excludeID. It runs inside the same transaction as the write it guards.
+func ensureEmailUnused(ctx context.Context, tx *sql.Tx, email, excludeID string) error {
+	var other string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM users WHERE email=? AND id!=?`, email, excludeID).Scan(&other)
+	switch {
+	case err == nil:
+		return fmt.Errorf("%w: email %s is already in use", ErrConflict, email)
+	case err == sql.ErrNoRows:
+		return nil
+	default:
+		return err
+	}
 }
 
 func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (model.User, error) {
 	var u model.User
 	var ph, created string
-	var admin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &created)
+	var admin, sysadmin int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,is_system_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &sysadmin, &created)
 	if err == sql.ErrNoRows {
 		// Equalize the work done for an unknown account so login timing cannot
 		// be used to enumerate accounts.
@@ -92,6 +194,7 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 		return model.User{}, ErrNotFound
 	}
 	u.IsAdmin = admin != 0
+	u.SystemAdmin = sysadmin != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
 }
@@ -99,8 +202,8 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) {
 	var u model.User
 	var created string
-	var admin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,created_at FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &created)
+	var admin, sysadmin int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -108,6 +211,7 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 		return model.User{}, err
 	}
 	u.IsAdmin = admin != 0
+	u.SystemAdmin = sysadmin != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
 }
@@ -117,8 +221,8 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, error) {
 	var u model.User
 	var created string
-	var admin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &created)
+	var admin, sysadmin int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -126,6 +230,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, e
 		return model.User{}, err
 	}
 	u.IsAdmin = admin != 0
+	u.SystemAdmin = sysadmin != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
 }
@@ -242,11 +347,18 @@ func (s *Store) AdminResetPassword(ctx context.Context, userID, newPassword stri
 	}
 	defer tx.Rollback()
 	var accountID, email string
-	if err = tx.QueryRowContext(ctx, `SELECT account_id,email FROM users WHERE id=?`, userID).Scan(&accountID, &email); err != nil {
+	var sysadmin int
+	if err = tx.QueryRowContext(ctx, `SELECT account_id,email,is_system_admin FROM users WHERE id=?`, userID).Scan(&accountID, &email, &sysadmin); err != nil {
 		if err == sql.ErrNoRows {
 			return ErrNotFound
 		}
 		return err
+	}
+	// The system administrator's credentials are owned by the deployment
+	// configuration. A database reset would be silently overwritten on the next
+	// restart, so refuse it and send the operator to the config instead.
+	if sysadmin != 0 {
+		return ErrSystemAdmin
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, newHash, userID); err != nil {
 		return err
@@ -290,8 +402,8 @@ func (s *Store) DeleteSession(ctx context.Context, token string) {
 func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
 	var p model.Principal
 	var csrf, exp string
-	var admin int
-	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,s.csrf_token,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &csrf, &exp)
+	var admin, sysadmin int
+	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,u.is_system_admin,s.csrf_token,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &sysadmin, &csrf, &exp)
 	if err == sql.ErrNoRows {
 		return p, "", ErrNotFound
 	}
@@ -303,6 +415,7 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 		return p, "", ErrNotFound
 	}
 	p.Admin = admin != 0
+	p.SystemAdmin = sysadmin != 0
 	p.ViaSession = true
 	p.SessionHash = auth.HashToken(token)
 	p.MailboxRoles = map[string]string{}
@@ -316,14 +429,23 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 	return p, csrf, nil
 }
 
-// userMailboxRoles is intentionally unimplemented. Every user row created by
-// this package is an admin (see createAccountAndAdmin), so no non-admin session
-// can currently reach this path. Rather than silently return an empty role set
-// (which would lock a future non-admin user out of every mailbox with no
-// signal), fail closed and loudly. Implement a user_mailbox_roles table
-// mirroring api_key_mailbox_roles before introducing non-admin sessions.
+// userMailboxRoles returns a non-admin user's per-inbox roles. A user with no
+// assignments returns an empty map, which grants access to no mailbox.
 func (s *Store) userMailboxRoles(ctx context.Context, userID string) (map[string]string, error) {
-	return nil, fmt.Errorf("non-admin session users are not supported")
+	rows, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM user_mailbox_roles WHERE user_id=?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var inboxID, role string
+		if err = rows.Scan(&inboxID, &role); err != nil {
+			return nil, err
+		}
+		out[inboxID] = role
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin bool, roles map[string]string) (model.APIKey, string, error) {

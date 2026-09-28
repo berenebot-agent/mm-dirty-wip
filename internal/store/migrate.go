@@ -101,6 +101,12 @@ func migrations(dataDir string) []migration {
 		{version: "027", sql: migration027, detect: stateOf(columnAdded("hermes_connections", "outbound_role"))},
 		{version: "028", sql: migration028, detect: allOf(tableExists("external_aliases"), columnAdded("messages", "sending_external_alias_id"), columnAdded("drafts", "from_external_alias_id"), columnAdded("outbound_delivery_log", "external_alias_id"))},
 		{version: "029", sql: migration029, detect: allOf(tableExists("inbound_delivery_log"), columnAdded("outbound_delivery_log", "inbox_id"), columnAdded("outbound_delivery_log", "client_label"))},
+		{version: "030", sql: migration030, detect: allOf(
+			columnAdded("users", "is_system_admin"),
+			tableExists("user_mailbox_roles"),
+			tableExists("system_settings"),
+			tableExists("invites"),
+		)},
 	}
 }
 

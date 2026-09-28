@@ -161,7 +161,9 @@ Permissions are assigned **per mailbox**, using three simple mailbox roles:
 - manage settings for that mailbox
 
 A single API key may have different roles on different mailboxes. These roles
-apply to API keys; a human user signed in to the web UI is always an Owner.
+also apply to human users: an account Admin has Owner access to every mailbox
+in the account, while a **mailbox operator** is a non-admin user granted Owner
+on a chosen subset of mailboxes.
 
 Example:
 
@@ -184,7 +186,7 @@ An additional **Admin** role applies at the account level.
 - manage Hermes connections
 - manage account-wide settings
 
-Admin provides account administration, while Owner provides full operation of an assigned mailbox.
+Admin provides account administration, while Owner provides full operation of an assigned mailbox. An additional **System Admin** role applies at the installation level: it provisions accounts and invitations and manages installation settings, but does not by itself grant access to other accounts' mail.
 
 ### Replayable event history
 
@@ -285,7 +287,7 @@ services:
 
 The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional MailMoose MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
-Self-hosted setup creates the initial Admin from one-shot `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` (either may come from a `*_FILE` secret) on the first start against an empty database. The values are transactional and ignored once any user exists, and there is no unauthenticated setup form. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
+The installation has one **system administrator**: the login named by `ADMIN_EMAIL` / `ADMIN_PASSWORD` (either may come from a `*_FILE` secret). While supplied, these credentials are authoritative — they create the login on first start and rotate its stored email/password on later starts (revoking its sessions); when absent the stored login is preserved. There is no unauthenticated setup form. The system administrator has an account of their own and an **Admin** plane, but no automatic access to other accounts' mail. From it they select the system-mailer mailbox, invite people, and administer accounts. An invitation is either a new, separate account with its own Admin, or a mailbox operator who is Owner of selected mailboxes in an existing account; the invitee sets their password from a single-use, expiring link. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
 The application serves HTTP behind the operator's reverse proxy, which provides public TLS termination.
 

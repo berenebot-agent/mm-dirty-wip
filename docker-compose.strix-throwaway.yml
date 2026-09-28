@@ -23,9 +23,9 @@ services:
       # boot cleanly regardless of the proxy question, so the scan tests the app
       # rather than the deployment's TLS termination.
       BASE_URL: http://mailmoose-strix:8081
-      # One-shot admin. Applied only because the data dir starts empty.
-      INITIAL_ADMIN_EMAIL: [REDACTED-THROWAWAY-EMAIL]
-      INITIAL_ADMIN_PASSWORD: [REDACTED-THROWAWAY-PASSWORD]
+      # System administrator credentials for the throwaway scan instance.
+      ADMIN_EMAIL: [REDACTED-THROWAWAY-EMAIL]
+      ADMIN_PASSWORD: [REDACTED-THROWAWAY-PASSWORD]
       APP_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     volumes:
       # Bind mount (never a named volume), inside the repo, gitignored.
