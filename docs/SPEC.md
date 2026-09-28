@@ -175,6 +175,27 @@ accounts@example.com  Assistant
 travel@example.com    Read
 ```
 
+### Clients
+
+Every consumer of an inbox is a **client**. A client has one of three types:
+
+- an **API key** — a scoped, account-level pull credential (the roles above);
+- a **Hermes relay** — an inbox-bound push connection over an outbound
+  authenticated WebSocket; or
+- a **webhook** — an inbox-bound push destination that receives each incoming
+  message at an HTTPS URL.
+
+A webhook is delivery-only: it has no API access and cannot send. It chooses
+either a small JSON notification (carrying the event, cursor, inbox id and
+message id, so the receiver fetches the body at leisure with its own API key)
+or a full forward of the raw MIME, byte-for-byte. The receiver authenticates
+each delivery by a timestamped HMAC-SHA256 signature or a static bearer token,
+chosen per client. Deliveries reuse the durable event cursor: HTTP 2xx
+acknowledges, failures retry with backoff for a configurable window (seven days
+by default), after which the delivery is marked failed and the cursor advances.
+A webhook can be paused without losing its place. Destinations must be public
+HTTPS, so a webhook cannot target a private or loopback address.
+
 An additional **Admin** role applies at the account level.
 
 **Admin**

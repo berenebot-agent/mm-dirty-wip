@@ -171,6 +171,15 @@ var routes = []Route{
 	{Method: "POST", Path: "/v1/admin/hermes/enroll", Summary: "Enroll a Hermes Relay connection (Admin)", Description: "Body: inbox_id and name. Mints a gateway id, secret and delivery key, returned once with the connector URL and an env block.", Role: "admin", Group: "Admin: Hermes", Success: 201},
 	{Method: "PUT", Path: "/v1/admin/hermes/{id}", Summary: "Update a Hermes connection outbound role (Admin)", Description: "Body: role. owner lets the relay send directly; assistant makes it draft and request approval instead.", Role: "admin", Group: "Admin: Hermes"},
 	{Method: "DELETE", Path: "/v1/admin/hermes/{id}", Summary: "Delete a Hermes connection (Admin)", Role: "admin", Group: "Admin: Hermes", Success: 204},
+
+	// Admin: clients.
+	{Method: "GET", Path: "/v1/admin/clients", Summary: "List clients (Admin)", Description: "Returns every client of the account grouped by type: API keys, Hermes relays and webhooks. Never includes secrets.", Role: "admin", Group: "Admin: clients"},
+	{Method: "GET", Path: "/v1/admin/clients/webhooks", Summary: "List webhook clients (Admin)", Description: "Returns webhook delivery clients (id, inbox, name, url, mode, auth mode, enabled, cursor and status); never the signing secret.", Role: "admin", Group: "Admin: clients"},
+	{Method: "POST", Path: "/v1/admin/clients/webhooks", Summary: "Create a webhook client (Admin)", Description: "Body: inbox_id, name, url (HTTPS), mode (notify|forward) and auth (signature|bearer). Returns the client and its secret once.", Role: "admin", Group: "Admin: clients", Success: 201},
+	{Method: "PUT", Path: "/v1/admin/clients/webhooks/{id}", Summary: "Update a webhook client (Admin)", Description: "Body: name, url, mode and auth. The secret and delivery cursor are unchanged.", Role: "admin", Group: "Admin: clients"},
+	{Method: "DELETE", Path: "/v1/admin/clients/webhooks/{id}", Summary: "Delete a webhook client (Admin)", Role: "admin", Group: "Admin: clients", Success: 204},
+	{Method: "POST", Path: "/v1/admin/clients/webhooks/{id}/rotate", Summary: "Rotate a webhook signing secret (Admin)", Description: "Issues a new secret and returns it once; the previous secret stops signing immediately.", Role: "admin", Group: "Admin: clients"},
+	{Method: "POST", Path: "/v1/admin/clients/webhooks/{id}/enabled", Summary: "Enable or pause a webhook client (Admin)", Description: "Body: enabled. Pausing preserves the delivery cursor.", Role: "admin", Group: "Admin: clients"},
 }
 
 // Routes returns the API table in documentation order with the wire contract

@@ -50,7 +50,7 @@ type rowQuerier interface {
 func actorIdentity(ctx context.Context, q rowQuerier, p model.Principal) (ActorIdentity, error) {
 	if p.APIKeyID != "" {
 		var name string
-		err := q.QueryRowContext(ctx, `SELECT name FROM api_keys WHERE id=? AND account_id=?`, p.APIKeyID, p.AccountID).Scan(&name)
+		err := q.QueryRowContext(ctx, `SELECT name FROM clients WHERE id=? AND account_id=? AND type='api_key'`, p.APIKeyID, p.AccountID).Scan(&name)
 		if err != nil && err != sql.ErrNoRows {
 			return ActorIdentity{}, err
 		}

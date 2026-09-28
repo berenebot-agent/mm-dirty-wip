@@ -16,6 +16,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/apispec"
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/limits"
@@ -23,6 +24,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
@@ -1638,6 +1640,168 @@ func (s *Server) apiKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
 	w.WriteHeader(204)
+}
+
+func (s *Server) apiClients(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	keys, err := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	hermes, err := s.Service.Store.ListHermesConnections(r.Context(), p.AccountID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	webhooks, err := s.Service.Store.ListWebhookClients(r.Context(), p.AccountID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"api_keys": keys, "hermes": hermes, "webhooks": webhooks})
+}
+
+type webhookCreateRequest struct {
+	InboxID string `json:"inbox_id"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Mode    string `json:"mode"`
+	Auth    string `json:"auth"`
+}
+
+func (s *Server) apiWebhookClients(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	if r.Method == http.MethodGet {
+		v, err := s.Service.Store.ListWebhookClients(r.Context(), p.AccountID)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		for i := range v {
+			v[i].SecretEncrypted = ""
+		}
+		writeJSON(w, 200, v)
+		return
+	}
+	var in webhookCreateRequest
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := validateWebhookConfig(in.URL, in.Mode, in.Auth); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	secret, err := auth.RandomToken(32)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "webhook client creation failed"})
+		return
+	}
+	encrypted, err := s.Service.EncryptSecret([]byte(secret))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "webhook client creation failed"})
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = "Webhook"
+	}
+	c, err := s.Service.Store.CreateWebhookClient(r.Context(), p.AccountID, in.InboxID, name, strings.TrimSpace(in.URL), in.Mode, in.Auth, encrypted)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	c.SecretEncrypted = ""
+	writeJSON(w, http.StatusCreated, map[string]any{"client": c, "secret": secret})
+}
+
+func (s *Server) apiWebhookClient(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	id := r.PathValue("id")
+	if r.Method == http.MethodDelete {
+		if err := s.Service.Store.DeleteWebhookClient(r.Context(), p.AccountID, id); err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var in webhookCreateRequest
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := validateWebhookConfig(in.URL, in.Mode, in.Auth); err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.Service.Store.UpdateWebhookClient(r.Context(), p.AccountID, id, strings.TrimSpace(in.Name), strings.TrimSpace(in.URL), in.Mode, in.Auth); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
+func (s *Server) apiWebhookRotate(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	secret, err := auth.RandomToken(32)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "secret rotation failed"})
+		return
+	}
+	encrypted, err := s.Service.EncryptSecret([]byte(secret))
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": "secret rotation failed"})
+		return
+	}
+	if err = s.Service.Store.RotateWebhookSecret(r.Context(), p.AccountID, r.PathValue("id"), encrypted); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"secret": secret})
+}
+
+func (s *Server) apiWebhookEnable(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		Enabled bool `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := s.Service.Store.SetWebhookEnabled(r.Context(), p.AccountID, r.PathValue("id"), in.Enabled); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
+}
+
+func validateWebhookConfig(raw, mode, authMode string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("webhook URL must be an HTTPS URL without userinfo or fragment")
+	}
+	if mode != "notify" && mode != "forward" {
+		return fmt.Errorf("mode must be notify or forward")
+	}
+	if authMode != "signature" && authMode != "bearer" {
+		return fmt.Errorf("auth must be signature or bearer")
+	}
+	return netutil.ValidateBaseURL(raw)
 }
 
 func (s *Server) apiHermesEnroll(w http.ResponseWriter, r *http.Request) {

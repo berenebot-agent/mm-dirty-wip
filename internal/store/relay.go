@@ -94,11 +94,14 @@ func (s *Store) CreateHermesConnection(ctx context.Context, r EnrollRecord, gate
 
 func (s *Store) upsertHermesConnectionTx(ctx context.Context, tx *sql.Tx, r EnrollRecord, gatewayID, secretEnc, deliveryEnc, now string) (string, error) {
 	var existingID, existingAccount string
-	err := tx.QueryRowContext(ctx, `SELECT id,account_id FROM hermes_connections WHERE gateway_id=?`, gatewayID).Scan(&existingID, &existingAccount)
+	err := tx.QueryRowContext(ctx, `SELECT c.id,c.account_id FROM clients c JOIN client_push p ON p.client_id=c.id WHERE p.gateway_id=? AND c.type='hermes'`, gatewayID).Scan(&existingID, &existingAccount)
 	switch {
 	case err == sql.ErrNoRows:
 		id := idgen.New("hrm")
-		if _, err = tx.ExecContext(ctx, `INSERT INTO hermes_connections(id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,created_at) VALUES(?,?,?,?,?,?,?,?)`, id, r.AccountID, r.InboxID, r.Name, gatewayID, secretEnc, deliveryEnc, now); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO clients(id,account_id,type,name,created_at) VALUES(?,?,'hermes',?,?)`, id, r.AccountID, r.Name, now); err != nil {
+			return "", err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO client_push(client_id,inbox_id,gateway_id,secret_encrypted,delivery_key_encrypted) VALUES(?,?,?,?,?)`, id, r.InboxID, gatewayID, secretEnc, deliveryEnc); err != nil {
 			return "", err
 		}
 		return id, nil
@@ -107,7 +110,10 @@ func (s *Store) upsertHermesConnectionTx(ctx context.Context, tx *sql.Tx, r Enro
 	case existingAccount != r.AccountID:
 		return "", ErrForbidden
 	default:
-		if _, err = tx.ExecContext(ctx, `UPDATE hermes_connections SET account_id=?,inbox_id=?,name=?,secret_encrypted=?,delivery_key_encrypted=?,last_ack_event_id=0,created_at=? WHERE id=?`, r.AccountID, r.InboxID, r.Name, secretEnc, deliveryEnc, now, existingID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE clients SET account_id=?,name=?,created_at=? WHERE id=?`, r.AccountID, r.Name, now, existingID); err != nil {
+			return "", err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE client_push SET inbox_id=?,secret_encrypted=?,delivery_key_encrypted=?,last_ack_event_id=0 WHERE client_id=?`, r.InboxID, secretEnc, deliveryEnc, existingID); err != nil {
 			return "", err
 		}
 		return existingID, nil
@@ -133,14 +139,14 @@ func scanHermes(row interface{ Scan(...any) error }) (HermesConnection, error) {
 	return h, nil
 }
 func (s *Store) GetHermesConnectionByGateway(ctx context.Context, gatewayID string) (HermesConnection, error) {
-	h, err := scanHermes(s.read.QueryRowContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at,outbound_role FROM hermes_connections WHERE gateway_id=?`, gatewayID))
+	h, err := scanHermes(s.read.QueryRowContext(ctx, `SELECT c.id,c.account_id,p.inbox_id,c.name,p.gateway_id,p.secret_encrypted,p.delivery_key_encrypted,p.last_ack_event_id,c.created_at,p.last_connected_at,p.outbound_role FROM clients c JOIN client_push p ON p.client_id=c.id WHERE p.gateway_id=? AND c.type='hermes'`, gatewayID))
 	if err == sql.ErrNoRows {
 		return h, ErrNotFound
 	}
 	return h, err
 }
 func (s *Store) ListHermesConnections(ctx context.Context, accountID string) ([]HermesConnection, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,inbox_id,name,gateway_id,secret_encrypted,delivery_key_encrypted,last_ack_event_id,created_at,last_connected_at,outbound_role FROM hermes_connections WHERE account_id=? ORDER BY created_at DESC`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT c.id,c.account_id,p.inbox_id,c.name,p.gateway_id,p.secret_encrypted,p.delivery_key_encrypted,p.last_ack_event_id,c.created_at,p.last_connected_at,p.outbound_role FROM clients c JOIN client_push p ON p.client_id=c.id WHERE c.account_id=? AND c.type='hermes' ORDER BY c.created_at DESC`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -156,14 +162,14 @@ func (s *Store) ListHermesConnections(ctx context.Context, accountID string) ([]
 	return out, rows.Err()
 }
 func (s *Store) MarkHermesConnected(ctx context.Context, id string) {
-	_, _ = s.write.ExecContext(ctx, `UPDATE hermes_connections SET last_connected_at=? WHERE id=?`, nowText(), id)
+	_, _ = s.write.ExecContext(ctx, `UPDATE client_push SET last_connected_at=? WHERE client_id=?`, nowText(), id)
 }
 func (s *Store) AckHermesEvent(ctx context.Context, id string, eventID int64) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE id=?`, eventID, id)
+	_, err := s.write.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE client_id=?`, eventID, id)
 	return err
 }
 func (s *Store) UpdateHermesConnectionName(ctx context.Context, accountID, id, name string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET name=? WHERE id=? AND account_id=?`, strings.TrimSpace(name), id, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE clients SET name=? WHERE id=? AND account_id=? AND type='hermes'`, strings.TrimSpace(name), id, accountID)
 	if err != nil {
 		return err
 	}
@@ -181,7 +187,7 @@ func (s *Store) SetHermesOutboundRole(ctx context.Context, accountID, id, role s
 	if role != "owner" && role != "assistant" {
 		return ErrForbidden
 	}
-	res, err := s.write.ExecContext(ctx, `UPDATE hermes_connections SET outbound_role=? WHERE id=? AND account_id=?`, role, id, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE client_push SET outbound_role=? WHERE client_id=? AND EXISTS (SELECT 1 FROM clients c WHERE c.id=client_push.client_id AND c.account_id=? AND c.type='hermes')`, role, id, accountID)
 	if err != nil {
 		return err
 	}
@@ -192,7 +198,7 @@ func (s *Store) SetHermesOutboundRole(ctx context.Context, accountID, id, role s
 }
 
 func (s *Store) DeleteHermesConnection(ctx context.Context, accountID, id string) error {
-	res, err := s.write.ExecContext(ctx, `DELETE FROM hermes_connections WHERE id=? AND account_id=?`, id, accountID)
+	res, err := s.write.ExecContext(ctx, `DELETE FROM clients WHERE id=? AND account_id=? AND type='hermes'`, id, accountID)
 	if err != nil {
 		return err
 	}

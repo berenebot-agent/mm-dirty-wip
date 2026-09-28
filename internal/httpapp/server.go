@@ -178,6 +178,10 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/keys/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteKey)))
 	m.HandleFunc("POST /ui/hermes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
 	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
+	m.HandleFunc("POST /ui/webhooks/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateWebhook)))
+	m.HandleFunc("POST /ui/webhooks/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateWebhook)))
+	m.HandleFunc("POST /ui/webhooks/{id}/toggle", s.withSession(s.withCSRF(s.uiToggleWebhook)))
+	m.HandleFunc("POST /ui/webhooks/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteWebhook)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
@@ -328,6 +332,13 @@ var v1Routes = []apiRoute{
 	{"GET /v1/admin/hermes", (*Server).apiHermesList},
 	{"PUT /v1/admin/hermes/{id}", (*Server).apiHermesConnection},
 	{"DELETE /v1/admin/hermes/{id}", (*Server).apiHermesDelete},
+	{"GET /v1/admin/clients", (*Server).apiClients},
+	{"GET /v1/admin/clients/webhooks", (*Server).apiWebhookClients},
+	{"POST /v1/admin/clients/webhooks", (*Server).apiWebhookClients},
+	{"PUT /v1/admin/clients/webhooks/{id}", (*Server).apiWebhookClient},
+	{"DELETE /v1/admin/clients/webhooks/{id}", (*Server).apiWebhookClient},
+	{"POST /v1/admin/clients/webhooks/{id}/rotate", (*Server).apiWebhookRotate},
+	{"POST /v1/admin/clients/webhooks/{id}/enabled", (*Server).apiWebhookEnable},
 }
 
 // RegisteredAPIRoutes returns the authenticated /v1 registrations as

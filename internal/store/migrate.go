@@ -111,6 +111,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("accounts", "mailer_inbox_id"),
 			tableMissing("system_settings"),
 		)},
+		{version: "032", sql: migration032, fkOff: true, detect: allOf(tableExists("clients"), tableExists("client_api_keys"), tableExists("client_push"), tableExists("webhook_deliveries"), tableExists("client_inbox_bindings"))},
 	}
 }
 

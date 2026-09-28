@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/safepath"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // workflowRetention is how long a terminal workflow job (and its retained raw
@@ -93,6 +95,22 @@ func (w *OutboxWorker) run() {
 // deliver runs the per-tick delivery passes. Each step is independently
 // panic-guarded so a fault in one poison message cannot exit the process (and
 // with it every other inbox); the guard logs and the pass moves on.
+func (w *OutboxWorker) deliverWebhooks() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	h := NewWebhookWorker(w.svc)
+	for i := 0; i < 64 && !w.stopping(); i++ {
+		err := h.RunOnce(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			return
+		}
+		if err != nil {
+			w.log.Warn("webhook delivery failed", "error", err)
+			return
+		}
+	}
+}
+
 func (w *OutboxWorker) deliver() {
 	for _, step := range []struct {
 		name string
@@ -100,6 +118,7 @@ func (w *OutboxWorker) deliver() {
 	}{
 		{"deliverDue", w.deliverDue},
 		{"deliverWorkflowDue", w.deliverWorkflowDue},
+		{"deliverWebhooks", w.deliverWebhooks},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
 	}

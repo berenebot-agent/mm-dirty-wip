@@ -24,6 +24,7 @@
   var hermesAckRow = document.getElementById('key-hermes-ack-row');
   var hermesAck = document.getElementById('key-hermes-ack');
   var adminSnapshot = null;
+  var currentKind = 'api';
 
   function sync() {
     document.querySelectorAll('.key-fields').forEach(function (fs) {
@@ -211,6 +212,7 @@
     form.action = '/ui/keys';
     idInput.value = '';
     adminSnapshot = null;
+    currentKind = 'api';
     sel.disabled = false;
     if (submitBtn) {
       submitBtn.textContent = 'Add Client';
@@ -227,8 +229,10 @@
   function openEdit(btn) {
     form.reset();
     adminSnapshot = null;
-    var kind = btn.dataset.kind === 'hermes' ? 'hermes' : 'api';
-    form.action = '/ui/' + (kind === 'hermes' ? 'hermes' : 'keys') + '/' + btn.dataset.id + '/edit';
+    var kind = btn.dataset.kind === 'hermes' ? 'hermes' : (btn.dataset.kind === 'webhook' ? 'webhook' : 'api');
+    currentKind = kind;
+    var segment = kind === 'hermes' ? 'hermes' : (kind === 'webhook' ? 'webhooks' : 'keys');
+    form.action = '/ui/' + segment + '/' + btn.dataset.id + '/edit';
     idInput.value = btn.dataset.id;
     sel.value = kind;
     sel.disabled = true;
@@ -236,7 +240,7 @@
       submitBtn.textContent = 'Save';
     }
     if (rotateBtn) {
-      rotateBtn.hidden = kind !== 'api';
+      rotateBtn.hidden = kind === 'hermes';
     }
     nameInput.value = btn.dataset.name || '';
     if (adminInput) {
@@ -252,6 +256,15 @@
       rolesRadios().forEach(function (el) {
         el.checked = el.value === (roles[el.name.slice(5)] || '');
       });
+    } else if (kind === 'webhook') {
+      var wf = form.querySelector('.key-fields[data-type=webhook]');
+      var wInbox = wf.querySelector('select[name=inbox]');
+      if (wInbox && btn.dataset.inbox) {
+        wInbox.value = btn.dataset.inbox;
+      }
+      wf.querySelector('input[name=url]').value = btn.dataset.url || '';
+      wf.querySelector('select[name=mode]').value = btn.dataset.mode || 'notify';
+      wf.querySelector('select[name=auth]').value = btn.dataset.auth || 'signature';
     } else {
       var inbox = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
       if (inbox && btn.dataset.inbox) {
@@ -264,8 +277,8 @@
     }
     sync();
     syncAdmin();
-    if (kind === 'hermes') {
-      var inbox2 = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
+    if (kind === 'hermes' || kind === 'webhook') {
+      var inbox2 = form.querySelector('.key-fields[data-type=' + kind + '] select[name=inbox]');
       if (inbox2) {
         inbox2.disabled = true;
       }
@@ -345,7 +358,8 @@
       if (!id) {
         return;
       }
-      if (!window.confirm('Rotate this API key? The current key stops working immediately.')) {
+      var webhook = currentKind === 'webhook';
+      if (!window.confirm(webhook ? 'Rotate this webhook signing secret? The current secret stops working immediately.' : 'Rotate this API key? The current key stops working immediately.')) {
         return;
       }
       var csrfInput = form.querySelector('[name=_csrf]');
@@ -354,7 +368,8 @@
         body.append('_csrf', csrfInput.value);
       }
       rotateBtn.disabled = true;
-      fetch('/ui/keys/' + encodeURIComponent(id) + '/rotate', {
+      var rotatePath = webhook ? '/ui/webhooks/' + encodeURIComponent(id) + '/rotate' : '/ui/keys/' + encodeURIComponent(id) + '/rotate';
+      fetch(rotatePath, {
         method: 'POST',
         headers: {
           Accept: 'application/json',
