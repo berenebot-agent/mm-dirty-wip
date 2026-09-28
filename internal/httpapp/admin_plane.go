@@ -390,22 +390,45 @@ func htmlEscape(v string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;").Replace(v)
 }
 
-// operatorBody is the landing page for a non-admin mailbox operator: just the
-// mailboxes they own.
+// operatorBody is the landing page for a non-admin mailbox operator: the
+// mailboxes they own, rendered with the same counts and readiness flags as the
+// account Admin's dashboard table.
 const operatorBody = `<h1>Mailboxes</h1><p class="muted">You have Owner access to the following mailboxes.</p>
-{{if .Inboxes}}<div class="grid">{{range .Inboxes}}<section class="card"><h2><a href="/ui/inboxes/{{.ID}}">{{.Address}}</a></h2><p class="muted">{{if .DisplayName}}{{.DisplayName}}{{else}}Mailbox{{end}}{{with index $.Unread .ID}} · {{.}} unread{{end}}</p></section>{{end}}</div>{{else}}<p class="muted">No mailboxes have been assigned to you yet.</p>{{end}}`
+{{if .Inboxes}}<section class="card">{{template "inboxes-table" .}}</section>{{else}}<p class="muted">No mailboxes have been assigned to you yet.</p>{{end}}`
 
 func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	inboxes, err := s.Service.Store.ListInboxes(r.Context(), p)
+	ctx := r.Context()
+	inboxes, err := s.Service.Store.ListInboxes(ctx, p)
 	if err != nil {
 		http.Error(w, "cannot list mailboxes", 500)
 		return
 	}
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	domains, _ := s.Service.Store.ListDomains(ctx, p.AccountID)
+	_, receivingReady, inboxSendingReady := inboxReadiness(domains, inboxes)
+	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
 	if unread == nil {
 		unread = map[string]int{}
 	}
-	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	s.render(w, operatorBody, pageData{Title: "Mailboxes", Principal: p, CSRF: csrf(r), Account: acc, Inboxes: inboxes, Unread: unread})
+	draftCounts, _ := s.Service.Store.PendingDraftCountsByInbox(ctx, p)
+	if draftCounts == nil {
+		draftCounts = map[string]int{}
+	}
+	mailboxSizes, _ := s.Service.Store.MessageSizesByInbox(ctx, p)
+	if mailboxSizes == nil {
+		mailboxSizes = map[string]int64{}
+	}
+	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
+	s.render(w, operatorBody, pageData{
+		Title:                "Mailboxes",
+		Principal:            p,
+		CSRF:                 csrf(r),
+		Account:              acc,
+		Inboxes:              inboxes,
+		Unread:               unread,
+		DraftCounts:          draftCounts,
+		MailboxSizes:         mailboxSizes,
+		InboxSendingReady:    inboxSendingReady,
+		DomainReceivingReady: receivingReady,
+	})
 }

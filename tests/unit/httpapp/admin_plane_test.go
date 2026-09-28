@@ -177,6 +177,12 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Store.SetInboxAllowedSenders(ctx, root.AccountID, mailerBox.ID, []string{"friend@outside.test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetInboxSenderRestricted(ctx, root.AccountID, mailerBox.ID, true); err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, root.ID)
 	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
 	// The system admin plane lists accounts only; an operator invite must not
@@ -185,8 +191,27 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 		t.Fatalf("operator invite leaked onto /admin: status=%d", rr.Code)
 	}
 	session := acceptInvite(t, h, token, "correct horse battery staple")
-	if rr := uiGet(t, h, session, "/"); rr.Code != http.StatusOK {
+	_ = seedInbound(t, svc, mailerBox, "op-dash-1", "<op-dash@test>", "Hello operator", "body")
+	rr := uiGet(t, h, session, "/")
+	if rr.Code != http.StatusOK {
 		t.Fatalf("operator dashboard = %d", rr.Code)
+	}
+	body := rr.Body.String()
+	// The operator's landing page uses the same inbox table (and counts/status
+	// flags) as the account Admin's dashboard.
+	for _, want := range []string{">Unread</th>", ">Pending send</th>", ">Size</th>", `class="pill unread-pill">1<`, "issue-dot", mailerBox.Address, "Sender allow list:", "friend@outside.test"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("operator dashboard missing %q", want)
+		}
+	}
+	if strings.Contains(body, other.Address) {
+		t.Fatalf("operator dashboard leaked unassigned mailbox %q", other.Address)
+	}
+	// Admin-only controls (Add Inbox, settings gear, delete) must not render.
+	for _, banned := range []string{`id="add-inbox"`, "edit-inbox", "/delete"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("operator dashboard must not contain admin control %q", banned)
+		}
 	}
 	if rr := uiGet(t, h, session, "/ui/inboxes/"+mailerBox.ID); rr.Code != http.StatusOK {
 		t.Fatalf("operator assigned inbox = %d, want 200", rr.Code)
