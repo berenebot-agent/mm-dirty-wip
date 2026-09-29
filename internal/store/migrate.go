@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // applyState describes how much of a migration's schema work is already present
@@ -117,6 +118,22 @@ func migrations(dataDir string) []migration {
 			columnAdded("domains", "inherit_receiving"),
 			columnAdded("domains", "inherit_sending"),
 		)},
+		{version: "034", sql: migration034, fkOff: true, detect: stateOf(tableSQLContains("outbound_delivery_log", "'sending'"))},
+	}
+}
+
+// tableSQLContains reports whether a table's stored CREATE statement contains
+// the given substring. It is how a migration that widens a CHECK constraint
+// detects whether it has already run, since the constraint is not otherwise
+// introspectable.
+func tableSQLContains(table, substr string) detector {
+	return func(ctx context.Context, conn *sql.Conn) (bool, error) {
+		var sqlText string
+		err := conn.QueryRowContext(ctx, `SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type='table' AND name=?),'')`, table).Scan(&sqlText)
+		if err != nil {
+			return false, err
+		}
+		return strings.Contains(sqlText, substr), nil
 	}
 }
 

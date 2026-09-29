@@ -10,6 +10,7 @@ import (
 	"net/smtp"
 	"net/textproto"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -166,14 +167,41 @@ func isNoSuchDomain(err error) bool {
 	return false
 }
 
+// smtpPhaseTimeout bounds a single SMTP command/response exchange (dial, greeting,
+// HELO, STARTTLS, MAIL, RCPT, QUIT). The message body upload is deliberately not
+// bounded by it: a fixed whole-transaction deadline is wrong for a multi-megabyte
+// message, which can take far longer to upload than the command phases. The body
+// is instead bounded only by the caller's context, and the acceptance of DATA is
+// what decides success.
+//
+// It is a var so tests can shrink it without waiting on a real timeout.
+var smtpPhaseTimeout = 45 * time.Second
+
+// SetPhaseTimeoutForTest overrides the per-command SMTP deadline. It exists so a
+// test can prove a slow body upload is not cut off by the command-phase timer
+// without waiting the production timeout.
+func SetPhaseTimeoutForTest(d time.Duration) { smtpPhaseTimeout = d }
+
+// smtpPort is the destination port for direct MX delivery. It is 25 in
+// production and is a var only so tests can point at a loopback fixture.
+var smtpPort = 25
+
+// SetPortForTest overrides the MX delivery port. Tests spin up a fake SMTP
+// server on an ephemeral port; production always uses 25.
+func SetPortForTest(port int) { smtpPort = port }
+
 func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, recipient string, raw []byte) error {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), "25"))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(smtpPort)))
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
+	// A per-command deadline that each phase refreshes. It is cleared before the
+	// body upload so large messages are not killed by a total-transaction timer.
+	setPhaseDeadline := func() { _ = conn.SetDeadline(time.Now().Add(smtpPhaseTimeout)) }
+	clearDeadline := func() { _ = conn.SetDeadline(time.Time{}) }
+	setPhaseDeadline()
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		return err
@@ -183,32 +211,47 @@ func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, re
 		return err
 	}
 	if ok, _ := client.Extension("STARTTLS"); ok {
+		setPhaseDeadline()
 		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
 			return err
 		}
 	}
+	setPhaseDeadline()
 	if err := client.Mail(from); err != nil {
 		return classifySMTPError(err)
 	}
+	setPhaseDeadline()
 	if err := client.Rcpt(recipient); err != nil {
 		return classifySMTPError(err)
 	}
+	setPhaseDeadline()
 	w, err := client.Data()
 	if err != nil {
 		return classifySMTPError(err)
 	}
+	// The body upload runs with no command deadline; it is bounded only by the
+	// caller's context (the worker's delivery deadline).
+	clearDeadline()
 	bw := bufio.NewWriter(w)
 	if _, err = bw.Write(raw); err == nil {
 		err = bw.Flush()
 	}
-	closeErr := w.Close()
 	if err != nil {
+		_ = w.Close()
 		return err
 	}
+	// w.Close() sends the terminating dot and reads the server's verdict on the
+	// message. That verdict is the delivery outcome: once it is a 2xx the remote
+	// has accepted the message, so a failure of the cosmetic QUIT that follows
+	// must not be reported as a delivery failure (it would trigger a duplicate).
+	closeErr := w.Close()
 	if closeErr != nil {
 		return classifySMTPError(closeErr)
 	}
-	return client.Quit()
+	// A failed QUIT is ignored: the message was already accepted above.
+	setPhaseDeadline()
+	_ = client.Quit()
+	return nil
 }
 
 func classifySMTPError(err error) error {

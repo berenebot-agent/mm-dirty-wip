@@ -412,7 +412,49 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	// Mark messages whose latest attempt is currently in flight, so the outbox
+	// can show "Sending…" rather than a generic queued "Pending".
+	if err = s.markOutboxSending(ctx, p.AccountID, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// markOutboxSending sets Sending on each message that has an in-flight
+// ("sending") delivery-log row. It is a single query keyed by message id.
+func (s *Store) markOutboxSending(ctx context.Context, accountID string, msgs []model.Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(msgs))
+	index := make(map[string]int, len(msgs))
+	for i, m := range msgs {
+		ids = append(ids, m.ID)
+		index[m.ID] = i
+	}
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, accountID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT DISTINCT message_id FROM outbound_delivery_log WHERE account_id=? AND status='sending' AND message_id IN (`+placeholders(len(ids))+`)`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			msgs[i].Sending = true
+		}
+	}
+	return rows.Err()
 }
 
 // CountOutbox returns the number of pending or failed outbound messages for

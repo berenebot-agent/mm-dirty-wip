@@ -1666,6 +1666,54 @@ a silently self-hosted boot.
   retained; only the hosted-mode gating around them is gone.
 - Account registration remains configuration-controlled and defaults to closed.
 
+## D065 — In-flight delivery attempts are durably recorded
+
+**Context:** A large outbound message (~19 MB) sent over Direct MX was delivered
+to the recipient, but the message stayed `pending`, its claim lease was left
+set, and the sending log had no row for it: the only writers of
+`outbound_delivery_log` were the terminal `MarkSent`/`MarkFailed`, which run
+after the provider call returns. An interrupted send — a process restart, crash
+or dropped connection during the upload — therefore left no trace at all and
+silently looped as pending even though the remote had accepted the message. A
+second defect compounded it: `smtpTransaction` applied a single 45-second
+deadline to the entire SMTP transaction, including the multi-megabyte `DATA`
+upload, and treated a failed cosmetic `QUIT` as a delivery failure even after
+the remote had accepted the message with a `250`.
+
+**Decision:** A delivery attempt is recorded durably when it starts, before the
+provider call:
+
+- `outbound_delivery_log.status` gains `sending` (in flight) and `interrupted`
+  (an in-flight attempt abandoned before an outcome was written). Migration 034
+  rebuilds the table with the widened CHECK; existing rows are carried over.
+- `Store.RecordDeliveryStarted` / `RecordWorkflowDeliveryStarted` append a
+  `sending` row before `provider.Send` and mark any earlier `sending` row for the
+  same message/job `interrupted`, so a re-claim records the previous attempt's
+  fate instead of leaving a dangling row.
+- The MX outbound transaction uses a per-command deadline that each SMTP command
+  phase refreshes and that is cleared for the body upload; the body is bounded
+  only by the caller's context. The acceptance of `DATA` (`w.Close()` returning a
+  2xx) is the delivery outcome, and a failed `QUIT` afterwards is ignored.
+
+**Reason:** Durable truth before notification is the project's core invariant.
+Recording a send only on its terminal outcome inverts it: an interrupted send is
+invisible, so an operator cannot see that the remote may already have accepted
+the message, and the worker re-claims and re-sends it. A whole-transaction SMTP
+deadline is wrong for a large message, and treating a post-acceptance `QUIT`
+failure as a failure would itself cause duplicate delivery.
+
+**Consequences:**
+
+- The sending log and outbox show an in-flight message as "Sending…" and an
+  abandoned attempt as "Interrupted"; the outbox listing sets `sending` on a
+  message with an in-flight row.
+- A message that is actually delivered but whose outcome is lost is now visible
+  as `sending`/`interrupted` rather than an empty log, so an operator can
+  reconcile it instead of re-sending blind.
+- Retry and success/failure semantics are unchanged for genuine provider errors.
+- The delivery-log retention (newest 5000 rows / 30 days) is unchanged; the
+  extra in-flight row counts toward it.
+
 ## Future extension register
 
 
