@@ -17,6 +17,8 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   outbound queue or copied directly.
 - Per-account mailer: each account sends its invitations from one of its own
   mailboxes, so no account ever sends from another's.
+- The system administrator's Admin page shows each account's storage usage and
+  quota and can edit the quota, with `0` meaning unlimited.
 - Self-hosted Direct MX outbound delivery with DNS MX resolution, opportunistic
   STARTTLS, public-destination enforcement, and single-recipient delivery.
 

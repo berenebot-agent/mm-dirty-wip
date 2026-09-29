@@ -53,21 +53,24 @@ func (s *Store) SetAccountMailerInbox(ctx context.Context, accountID, inboxID st
 }
 
 // AccountSummary is an account as shown on the system administrator plane: the
-// email of its Admin (empty until an invitation is accepted) and, while an
-// account invitation is outstanding, that invitation's id and expiry.
+// email of its Admin (empty until an invitation is accepted), its storage
+// usage and quota, and, while an account invitation is outstanding, that
+// invitation's id and expiry.
 type AccountSummary struct {
-	ID              string
-	Name            string
-	AdminEmail      string
-	InviteID        string
-	InviteExpiresAt time.Time
-	CreatedAt       time.Time
+	ID                string
+	Name              string
+	AdminEmail        string
+	StorageQuotaBytes int64
+	StorageUsedBytes  int64
+	InviteID          string
+	InviteExpiresAt   time.Time
+	CreatedAt         time.Time
 }
 
-// ListAccounts returns every account with its Admin and any outstanding
-// new-account invitation, newest first.
+// ListAccounts returns every account with its Admin, storage usage and any
+// outstanding new-account invitation, newest first.
 func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
-	const q = `SELECT a.id,a.name,a.created_at,
+	const q = `SELECT a.id,a.name,a.created_at,a.storage_quota_bytes,a.storage_used_bytes,
 	  COALESCE((SELECT u.email FROM users u WHERE u.account_id=a.id AND u.is_admin=1 ORDER BY u.created_at LIMIT 1),''),
 	  COALESCE((SELECT i.id FROM invites i WHERE i.account_id=a.id AND i.kind='account_admin' AND i.accepted_at IS NULL AND i.revoked_at IS NULL ORDER BY i.created_at DESC LIMIT 1),''),
 	  (SELECT i.expires_at FROM invites i WHERE i.account_id=a.id AND i.kind='account_admin' AND i.accepted_at IS NULL AND i.revoked_at IS NULL ORDER BY i.created_at DESC LIMIT 1)
@@ -82,7 +85,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
 		var a AccountSummary
 		var created string
 		var expiry sql.NullString
-		if err = rows.Scan(&a.ID, &a.Name, &created, &a.AdminEmail, &a.InviteID, &expiry); err != nil {
+		if err = rows.Scan(&a.ID, &a.Name, &created, &a.StorageQuotaBytes, &a.StorageUsedBytes, &a.AdminEmail, &a.InviteID, &expiry); err != nil {
 			return nil, err
 		}
 		a.CreatedAt = parseTime(created)
@@ -92,6 +95,23 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// SetAccountStorageQuota changes an account's storage quota. A quota of 0
+// means unlimited, matching the enforcement in the storage, message and
+// outbound paths. It returns ErrNotFound when the account does not exist.
+func (s *Store) SetAccountStorageQuota(ctx context.Context, accountID string, quota int64) error {
+	if quota < 0 {
+		return fmt.Errorf("storage quota cannot be negative")
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET storage_quota_bytes=? WHERE id=?`, quota, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ListAccountUsers returns the account's human users. Non-admin members carry
