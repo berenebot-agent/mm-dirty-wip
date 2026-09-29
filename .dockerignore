@@ -9,3 +9,4 @@ tests/strix/accounts.txt
 *.zip
 tests/logs
 *.log
+**/__pycache__
