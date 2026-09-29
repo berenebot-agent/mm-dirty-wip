@@ -1222,10 +1222,56 @@ function aliasNameByAddress(list) {
     return;
   }
   var form = dlg.querySelector('form');
+  var input = document.getElementById('add-domain-name');
+  var panel = document.getElementById('add-domain-inherit');
+  var parentEl = document.getElementById('add-domain-parent');
+  var controls = document.getElementById('add-domain-inherit-controls');
+  var names = (form.getAttribute('data-domain-names') || '')
+    .split(',')
+    .map(function (s) { return s.trim().toLowerCase(); })
+    .filter(Boolean);
+  // detect reveals the reuse-parent checkboxes when the typed name is a
+  // subdomain of an existing domain; server-side detection is authoritative, so
+  // with JS off the domain is still created as a subdomain with inheritance on.
+  function detect() {
+    if (!input || !panel) {
+      return;
+    }
+    var v = (input.value || '').trim().toLowerCase().replace(/\.$/, '');
+    var parent = '';
+    names.forEach(function (d) {
+      if (v.length > d.length + 1 && v.slice(-(d.length + 1)) === '.' + d) {
+        if (d.length > parent.length) {
+          parent = d;
+        }
+      }
+    });
+    if (parent) {
+      if (parentEl) {
+        parentEl.textContent = parent;
+      }
+      document.querySelectorAll('.add-domain-parent').forEach(function (el) {
+        el.textContent = parent;
+      });
+      panel.hidden = false;
+      if (controls) {
+        controls.value = '1';
+      }
+    } else {
+      panel.hidden = true;
+      if (controls) {
+        controls.value = '';
+      }
+    }
+  }
+  if (input) {
+    input.addEventListener('input', detect);
+  }
   var add = document.getElementById('add-domain');
   if (add) {
     add.addEventListener('click', function () {
       form.reset();
+      detect();
       dlg.showModal();
     });
   }

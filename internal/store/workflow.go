@@ -160,7 +160,7 @@ func (s *Store) DomainSendingConfigForWorkflow(ctx context.Context, accountID, w
 	if err != nil {
 		return DomainSendingConfig{}, err
 	}
-	return s.GetDomainSendingConfig(ctx, accountID, domainID)
+	return s.ResolveDomainSendingConfig(ctx, accountID, domainID)
 }
 
 // ClaimNextWorkflow atomically claims the next due pending workflow job. It

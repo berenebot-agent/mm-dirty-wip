@@ -568,10 +568,10 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 			pausedURL = externalAliasConfigureURL(a.ID)
 		}
 	} else {
-		_, outErr := s.Service.Store.GetDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
+		_, outErr := s.Service.Store.ResolveDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
 		outboundReady = outErr == nil
 	}
-	_, inErr := s.Service.Store.GetDomainReceivingConfig(r.Context(), p.AccountID, box.DomainID)
+	recvDomain, inErr := s.Service.Store.GetDomain(r.Context(), p.AccountID, box.DomainID)
 	var sendRequests []SendRequestRow
 	if folder == "inbox" {
 		if all, lerr := s.Service.Store.ListSendRequests(r.Context(), p, id, true, 20); lerr == nil {
@@ -605,7 +605,7 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 		DraftCount:                 draftCount,
 		OutboxCount:                outboxCount,
 		OutboundReady:              outboundReady,
-		InboundReady:               inErr == nil,
+		InboundReady:               inErr == nil && recvDomain.ReceivingProvider != "",
 		SendingPausedExternal:      pausedExternal,
 		SendingPausedAddress:       pausedAddress,
 		SendingPausedURL:           pausedURL,

@@ -61,14 +61,31 @@ func (i Invite) Pending(now time.Time) bool {
 }
 
 type Domain struct {
-	ID                string    `json:"id"`
-	AccountID         string    `json:"account_id"`
-	Name              string    `json:"name"`
-	CatchAllInboxID   string    `json:"catch_all_inbox_id,omitempty"`
-	SendingProvider   string    `json:"sending_provider"`
-	ReceivingProvider string    `json:"receiving_provider"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                string `json:"id"`
+	AccountID         string `json:"account_id"`
+	Name              string `json:"name"`
+	CatchAllInboxID   string `json:"catch_all_inbox_id,omitempty"`
+	SendingProvider   string `json:"sending_provider"`
+	ReceivingProvider string `json:"receiving_provider"`
+	// ParentDomainID is set when this domain is a subdomain of another domain
+	// in the same account. Its own configuration is optional; when the matching
+	// Inherit* flag is set and no own configuration exists, the effective
+	// configuration is inherited from the nearest ancestor that has one.
+	ParentDomainID   string `json:"parent_domain_id,omitempty"`
+	ParentDomain     string `json:"parent_domain,omitempty"`
+	InheritReceiving bool   `json:"inherit_receiving"`
+	InheritSending   bool   `json:"inherit_sending"`
+	// ReceivingInheritedFrom/SendingInheritedFrom name the ancestor a provider
+	// was inherited from (empty when the provider is the domain's own). They are
+	// derived for display; the configuration itself is resolved at read time.
+	ReceivingInheritedFrom string    `json:"receiving_inherited_from,omitempty"`
+	SendingInheritedFrom   string    `json:"sending_inherited_from,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
 }
+
+// IsSubdomain reports whether the domain is a child of (a subdomain of) another
+// configured domain.
+func (d Domain) IsSubdomain() bool { return d.ParentDomainID != "" }
 
 type Inbox struct {
 	ID             string   `json:"id"`
