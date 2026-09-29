@@ -111,20 +111,19 @@ Walk through the Cloudflare navigation:
 1. Sign in to <https://dash.cloudflare.com>.
 2. Pick the Cloudflare account that owns the domain you want to receive on.
 3. In the top navigation, open **Workers & Pages**.
-4. Click **Create application** -> **Worker** -> **Deploy**.
-5. Give the Worker a name, e.g. `oa-mailmoose`.
-6. Click **Deploy** to create a stub Worker, then **Edit code**.
-7. Replace the default stub with the generated code from the dialog.
-8. Click **Deploy** (top-right) to publish the new code.
+4. Click **Create application** -> **Start with Hello World** -> **Deploy**.
+5. Open the new Worker and click **Edit code**.
+6. Replace the default stub with the generated code from the dialog.
+7. Click **Deploy** (top-right) to publish the new code.
 
 ## 4. Enable Email Routing for your domain
 
 1. In the same account, go to the **dashboard home**.
 2. Select your domain from **Domains** (e.g. `example.com`).
 3. In the left sidebar under **Email**, click **Email Routing**.
-4. Click **Get started** and confirm the MX records Cloudflare shows you are
-   applied at your DNS provider. Cloudflare-managed domains apply these
-   automatically.
+4. Onboard the domain and add the **DNS records** Cloudflare lists (the MX
+   record, and any SPF/TXT records it shows). Cloudflare-managed domains apply
+   these automatically.
 5. Follow the on-screen verification; Email Routing shows **Active** when
    done.
 
@@ -137,12 +136,12 @@ part internally (to an inbox, an alias, or the domain catch-all), and adding a
 new inbox never requires touching Cloudflare again.
 
 1. Still under **Email Routing**, open the **Routing rules** tab.
-2. Click **Create rule**.
+2. Edit the **catch-all** rule (the `@` local part, i.e. all addresses). If no
+   catch-all rule exists yet, create one.
 3. Choose **Send to a Worker**.
-4. Give the rule the catch-all address (the `@` local part, i.e. all addresses).
-5. For **Action**, select your Worker name (e.g. `oa-mailmoose`) from the
+4. For **Action**, select your Worker (e.g. `oa-mailmoose`) from the
    "Send to a Worker" dropdown.
-6. Click **Save**.
+5. **Enable** the rule and click **Save**.
 
 The server routes each local part according to the domain catch-all setting: a
 matching inbox or alias is delivered there, and anything else goes to the

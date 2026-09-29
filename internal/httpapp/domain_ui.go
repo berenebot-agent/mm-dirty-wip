@@ -632,8 +632,9 @@ func domainReceivingSteps(provider string) []string {
 	case "cloudflare":
 		return []string{
 			"Save this form to generate a shared secret and Worker code.",
-			"In Cloudflare, create a Worker and replace its code with the generated snippet.",
-			"Enable Email Routing for this domain and add a Send to a Worker rule for each receiving address.",
+			"In Cloudflare, create a Worker (Workers & Pages, Create application, Start with Hello World, Deploy).",
+			"Open the Worker, choose Edit code, replace the stub with the generated snippet, then Deploy.",
+			"Onboard Email Routing for this domain, edit the catch-all rule to Send to a Worker, select this Worker and enable it.",
 		}
 	case "mailgun":
 		return []string{
