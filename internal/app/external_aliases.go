@@ -10,12 +10,11 @@ import (
 )
 
 // ExternalAliasAdmin reports whether the principal may read or manage external
-// sending aliases. They are an operator-managed self-hosted capability;
-// ordinary mailbox roles still authorize using an already configured identity.
-// Reads and writes are gated identically so a hosted deployment never exposes
-// the alias inventory.
+// sending aliases. They are an operator-managed capability; ordinary mailbox
+// roles still authorize using an already configured identity. Reads and writes
+// are gated identically.
 func (s *Service) ExternalAliasAdmin(p model.Principal) error {
-	if !p.Admin || s.Config.Mode == "hosted" {
+	if !p.Admin {
 		return store.ErrForbidden
 	}
 	return nil
@@ -60,8 +59,8 @@ func (s *Service) SaveExternalAliasSendingConfig(ctx context.Context, p model.Pr
 	if provider == "" {
 		return store.ExternalAlias{}, store.ErrInvalidAlias
 	}
-	if t, ok := transport.LookupOutbound(provider); ok && !transport.OutboundAllowed(t, s.Config.Mode == "hosted") {
-		return store.ExternalAlias{}, invalidConfig("provider is not available in hosted mode")
+	if _, ok := transport.LookupOutbound(provider); !ok {
+		return store.ExternalAlias{}, invalidConfig("unknown provider")
 	}
 	fields, err := outboundConfigFields(provider)
 	if err != nil {

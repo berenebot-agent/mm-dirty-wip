@@ -157,24 +157,6 @@ func TestUIExternalAliasCSRF(t *testing.T) {
 	}
 }
 
-// TestUIExternalAliasHostedForbidden proves external aliases are self-hosted
-// only: even an Admin is refused in hosted mode.
-func TestUIExternalAliasHostedForbidden(t *testing.T) {
-	svc, h, u, _, box := httpFixture(t)
-	cookie, csrf := uiSession(t, svc, u.ID)
-	base := "/ui/inboxes/" + box.ID + "/external-aliases"
-
-	svc.Config.Mode = "hosted"
-	rr := domainGet(t, h, cookie, base+"/ea_missing")
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("hosted GET = %d", rr.Code)
-	}
-	rr = domainPost(t, h, cookie, base, url.Values{"_csrf": {csrf}, "external_alias": {"agent@gmail.com"}})
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("hosted POST = %d", rr.Code)
-	}
-}
-
 // TestUIExternalAliasDefaultSenderPreserved proves an inbox save through the
 // edit form does not drop an external default_sender, and that the compose From
 // select offers the external alias.

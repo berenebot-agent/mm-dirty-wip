@@ -360,7 +360,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registration is closed", 403)
 		return
 	}
-	// Bound signup abuse: a public hosted deployment cannot let a single source
+	// Bound signup abuse: a public deployment cannot let a single source
 	// create accounts without limit.
 	ip := clientIP(r, s.Service.Config)
 	if s.registerLimiter != nil && !s.registerLimiter.Allow(ip) {
@@ -772,8 +772,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// External sending aliases: build each connector popup. The alias named in
-	// the query (or a validation flash) opens its dialog. In hosted mode the
-	// capability is refused entirely, so no dialogs are rendered.
+	// the query (or a validation flash) opens its dialog. The capability is
+	// Admin-only, so non-admin principals render no dialogs.
 	var aliasDialogs []externalAliasDialogView
 	if s.Service.ExternalAliasAdmin(p) == nil {
 		openAlias := strings.TrimSpace(r.URL.Query().Get("alias"))

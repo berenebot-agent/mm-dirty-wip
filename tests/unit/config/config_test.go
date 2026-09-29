@@ -47,16 +47,15 @@ func TestRequirePublicOutboundByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.RequirePublicOutbound() {
-		t.Fatal("self-hosted opt-out must disable the requirement")
+		t.Fatal("opt-out must disable the requirement")
 	}
-	// Hosted mode ignores the opt-out.
+}
+
+func TestHostedModeIsRejected(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MODE", "hosted")
-	cfg, err = config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !cfg.RequirePublicOutbound() {
-		t.Fatal("hosted mode must always require public outbound")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("MODE=hosted must be rejected")
 	}
 }
 

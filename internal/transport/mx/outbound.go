@@ -42,7 +42,6 @@ func init() { transport.RegisterOutbound(outboundTransport{}) }
 func (outboundTransport) Name() string               { return Provider }
 func (outboundTransport) Description() string        { return "Direct MX" }
 func (outboundTransport) PreferRawMIME() bool        { return true }
-func (outboundTransport) SelfHostedOnly() bool       { return true }
 func (outboundTransport) MaxEnvelopeRecipients() int { return 1 }
 func (outboundTransport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{{Name: "helo", Label: "HELO hostname", Type: "text", Required: true, Placeholder: "mail.example.com"}}

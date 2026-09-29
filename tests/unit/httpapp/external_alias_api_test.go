@@ -10,7 +10,7 @@ import (
 
 // TestExternalAliasREST exercises the admin external-alias API end to end:
 // create, metadata update, address immutability, connector setup/redaction,
-// listing on the inbox, delivery history, non-admin rejection, hosted refusal
+// listing on the inbox, delivery history, and non-admin rejection.
 // and delete.
 func TestExternalAliasREST(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
@@ -87,16 +87,6 @@ func TestExternalAliasREST(t *testing.T) {
 			t.Fatalf("non-admin %s %s = %d", tc.method, tc.path, rr.Code)
 		}
 	}
-
-	// Hosted mode refuses even an Admin.
-	svc.Config.Mode = "hosted"
-	if rr = adminDo(h, "GET", base, "", key); rr.Code != http.StatusForbidden {
-		t.Fatalf("hosted GET = %d", rr.Code)
-	}
-	if rr = adminDo(h, "POST", base, `{"address":"x@gmail.com"}`, key); rr.Code != http.StatusForbidden {
-		t.Fatalf("hosted POST = %d", rr.Code)
-	}
-	svc.Config.Mode = "selfhosted"
 
 	// Delete removes it.
 	if rr = adminDo(h, "DELETE", aliasBase, "", key); rr.Code != http.StatusNoContent {
