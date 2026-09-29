@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 )
 
@@ -15,9 +16,15 @@ type InboundBinding struct {
 
 // ResolveInboundBinding maps an envelope recipient to the domain and its
 // configured receiving provider. The recipient's domain is globally unique, so
-// account ownership is derived from it rather than supplied by the caller. It
-// returns ErrNotFound for unknown domains or domains with no matching receiving
-// config.
+// account ownership is derived from it rather than supplied by the caller.
+//
+// The domain need not carry its own configuration: a subdomain that has been
+// created with receiving inheritance resolves to the nearest configured
+// ancestor (for example agent.example.com to example.com), so one receiver
+// serves a whole zone. DomainID is always the recipient's own domain, so the
+// downstream account/domain scope check still applies to that domain; only the
+// credential is inherited. It returns ErrNotFound for unknown domains or
+// domains with no applicable receiving config.
 func (s *Store) ResolveInboundBinding(ctx context.Context, provider, recipient string) (InboundBinding, error) {
 	var b InboundBinding
 	at := strings.LastIndex(recipient, "@")
@@ -25,13 +32,26 @@ func (s *Store) ResolveInboundBinding(ctx context.Context, provider, recipient s
 		return b, ErrNotFound
 	}
 	domain := normalizeDomain(recipient[at+1:])
-	err := s.read.QueryRowContext(ctx, `SELECT d.account_id,d.id,c.id,c.provider,c.encrypted_config FROM domains d JOIN domain_receiving_configs c ON c.domain_id=d.id AND c.account_id=d.account_id WHERE d.name=? AND c.provider=?`, domain, strings.ToLower(strings.TrimSpace(provider))).Scan(&b.AccountID, &b.DomainID, &b.CredentialID, &b.Provider, &b.EncryptedConfig)
+	var domainID, accountID string
+	err := s.read.QueryRowContext(ctx, `SELECT id, account_id FROM domains WHERE name=?`, domain).Scan(&domainID, &accountID)
 	if err == sql.ErrNoRows {
 		return b, ErrNotFound
 	}
 	if err != nil {
 		return b, err
 	}
+	cfg, err := s.ResolveDomainReceivingConfig(ctx, accountID, domainID, provider)
+	if err != nil {
+		if errors.Is(err, ErrNoProvider) {
+			return b, ErrNotFound
+		}
+		return b, err
+	}
+	b.AccountID = accountID
+	b.DomainID = domainID
+	b.CredentialID = cfg.ID
+	b.Provider = cfg.Provider
+	b.EncryptedConfig = cfg.EncryptedConfig
 	b.Recipient = normalizeAddress(recipient)
 	return b, nil
 }

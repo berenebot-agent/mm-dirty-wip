@@ -112,6 +112,11 @@ func migrations(dataDir string) []migration {
 			tableMissing("system_settings"),
 		)},
 		{version: "032", sql: migration032, fkOff: true, detect: allOf(tableExists("clients"), tableExists("client_api_keys"), tableExists("client_push"), tableExists("webhook_deliveries"), tableExists("client_inbox_bindings"))},
+		{version: "033", sql: migration033, detect: allOf(
+			columnAdded("domains", "parent_domain_id"),
+			columnAdded("domains", "inherit_receiving"),
+			columnAdded("domains", "inherit_sending"),
+		)},
 	}
 }
 

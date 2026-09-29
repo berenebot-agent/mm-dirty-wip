@@ -1027,3 +1027,23 @@ CREATE TABLE webhook_deliveries (
   PRIMARY KEY(client_id,event_id)
 );
 `
+// migration033 lets a domain reuse its parent domain's receiving and/or sending
+// configuration instead of configuring its own. A subdomain (for example
+// agent.example.com under example.com) is still a normal domain row that owns
+// its inboxes, addresses and catch-all, but when the matching inherit flag is
+// set and it has no configuration of its own, the effective configuration is
+// resolved by walking parent_domain_id to the nearest ancestor that has one.
+// This lets one provider connector (for example one Cloudflare Worker and its
+// shared secret, or one Mailgun route) serve every onboarded subdomain of a
+// zone, so a new subdomain address never needs a second receiver. Inheritance
+// is resolved at read time, so rotating the parent secret or switching the
+// parent provider applies to every descendant automatically. An explicit own
+// configuration always wins. Existing domains are roots (NULL parent) and are
+// unaffected; ON DELETE CASCADE removes a domain's descendants with it.
+const migration033 = `
+ALTER TABLE domains ADD COLUMN parent_domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE;
+ALTER TABLE domains ADD COLUMN inherit_receiving INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE domains ADD COLUMN inherit_sending INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent_domain_id);
+`
+

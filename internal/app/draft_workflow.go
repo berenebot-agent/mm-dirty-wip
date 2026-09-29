@@ -242,7 +242,7 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, path)
 
-	sending, cfgErr := s.Store.GetDomainSendingConfig(ctx, p.AccountID, inbox.DomainID)
+	sending, cfgErr := s.Store.ResolveDomainSendingConfig(ctx, p.AccountID, inbox.DomainID)
 	provider := ""
 	queuedReason := ""
 	if cfgErr != nil {

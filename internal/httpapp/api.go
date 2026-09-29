@@ -1553,12 +1553,21 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, v)
 	case http.MethodPost:
 		var in struct {
-			Name string `json:"name"`
+			Name             string `json:"name"`
+			InheritReceiving *bool  `json:"inherit_receiving"`
+			InheritSending   *bool  `json:"inherit_sending"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		v, err := s.Service.Store.CreateDomain(r.Context(), p.AccountID, in.Name)
+		opts := store.DomainCreateOptions{}
+		if in.InheritReceiving != nil {
+			opts.DisableReceiving = !*in.InheritReceiving
+		}
+		if in.InheritSending != nil {
+			opts.DisableSending = !*in.InheritSending
+		}
+		v, err := s.Service.Store.CreateDomainWithOptions(r.Context(), p.AccountID, in.Name, opts)
 		if err != nil {
 			mapStoreError(w, err)
 			return
@@ -1575,13 +1584,33 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var in struct {
-			CatchAllInboxID *string `json:"catch_all_inbox_id"`
+			CatchAllInboxID  *string `json:"catch_all_inbox_id"`
+			InheritReceiving *bool   `json:"inherit_receiving"`
+			InheritSending   *bool   `json:"inherit_sending"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
 		if in.CatchAllInboxID != nil {
 			if err := s.Service.Store.SetDomainCatchAll(r.Context(), p.AccountID, id, *in.CatchAllInboxID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		if in.InheritReceiving != nil || in.InheritSending != nil {
+			d, err := s.Service.Store.GetDomain(r.Context(), p.AccountID, id)
+			if err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			recv, send := d.InheritReceiving, d.InheritSending
+			if in.InheritReceiving != nil {
+				recv = *in.InheritReceiving
+			}
+			if in.InheritSending != nil {
+				send = *in.InheritSending
+			}
+			if err := s.Service.Store.SetDomainInheritance(r.Context(), p.AccountID, id, recv, send); err != nil {
 				mapStoreError(w, err)
 				return
 			}

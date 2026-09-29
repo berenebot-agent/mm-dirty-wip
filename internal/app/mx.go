@@ -342,7 +342,7 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 // moderate. The stored receiving config carries it in the "enforcement" field
 // once the domain editor exposes the control; absent values are moderate.
 func (s *Service) domainEnforcement(ctx context.Context, accountID, domainID string) mxwire.Enforcement {
-	b, err := s.Store.GetDomainReceivingConfig(ctx, accountID, domainID)
+	b, err := s.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, mxProvider)
 	if err != nil {
 		return mxwire.EnforcementModerate
 	}

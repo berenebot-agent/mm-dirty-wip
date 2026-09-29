@@ -267,7 +267,7 @@ func (s *Store) ResolveSendingTargetByID(ctx context.Context, accountID, inboxID
 
 func (s *Store) SendingConfigForTarget(ctx context.Context, accountID, inboxID string, target SendingTarget) (DomainSendingConfig, error) {
 	if target.ExternalAliasID == "" {
-		return s.GetDomainSendingConfig(ctx, accountID, target.DomainID)
+		return s.ResolveDomainSendingConfig(ctx, accountID, target.DomainID)
 	}
 	a, err := s.GetExternalAlias(ctx, accountID, inboxID, target.ExternalAliasID)
 	if errors.Is(err, ErrNotFound) {

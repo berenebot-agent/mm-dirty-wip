@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (s *Store) DomainSendingConfigForMessage(ctx context.Context, accountID, me
 	if err != nil {
 		return DomainSendingConfig{}, err
 	}
-	return s.GetDomainSendingConfig(ctx, accountID, domainID)
+	return s.ResolveDomainSendingConfig(ctx, accountID, domainID)
 }
 
 // LastSentByDomain returns the most recent successful send time for each domain
@@ -233,3 +234,135 @@ func scanDomainConfig(row interface{ Scan(...any) error }) (DomainConfig, error)
 	c.UpdatedAt = parseTime(updated)
 	return c, nil
 }
+// maxDomainAncestorDepth bounds a parent-domain walk so a corrupted or cyclic
+// parent chain can never loop forever.
+const maxDomainAncestorDepth = 16
+
+// domainInheritanceState is the parent pointer and inheritance switches needed
+// to walk from a subdomain toward its ancestors.
+type domainInheritanceState struct {
+	ParentID         string
+	InheritReceiving bool
+	InheritSending   bool
+}
+
+func (s *Store) domainInheritanceState(ctx context.Context, accountID, domainID string) (domainInheritanceState, error) {
+	var st domainInheritanceState
+	var parent sql.NullString
+	var recv, send int
+	err := s.read.QueryRowContext(ctx, `SELECT parent_domain_id, inherit_receiving, inherit_sending FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&parent, &recv, &send)
+	if err == sql.ErrNoRows {
+		return st, ErrNotFound
+	}
+	if err != nil {
+		return st, err
+	}
+	st.ParentID = parent.String
+	st.InheritReceiving = recv != 0
+	st.InheritSending = send != 0
+	return st, nil
+}
+
+// ResolveDomainReceivingConfig returns the receiving configuration that applies
+// to a domain for a provider: its own when configured for that provider,
+// otherwise the nearest ancestor's while inheritance is enabled. A domain that
+// is explicitly configured for a different provider does not fall through - it
+// is simply not configured for the requested provider (ErrNoProvider).
+func (s *Store) ResolveDomainReceivingConfig(ctx context.Context, accountID, domainID, provider string) (DomainReceivingConfig, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	id := domainID
+	for depth := 0; depth < maxDomainAncestorDepth; depth++ {
+		cfg, err := s.GetDomainReceivingConfig(ctx, accountID, id)
+		if err == nil {
+			if strings.EqualFold(cfg.Provider, provider) {
+				return cfg, nil
+			}
+			return DomainReceivingConfig{}, ErrNoProvider
+		}
+		if !errors.Is(err, ErrNoProvider) {
+			return DomainReceivingConfig{}, err
+		}
+		st, err := s.domainInheritanceState(ctx, accountID, id)
+		if err != nil {
+			return DomainReceivingConfig{}, err
+		}
+		if !st.InheritReceiving || st.ParentID == "" {
+			return DomainReceivingConfig{}, ErrNoProvider
+		}
+		id = st.ParentID
+	}
+	return DomainReceivingConfig{}, ErrNoProvider
+}
+
+// ResolveDomainSendingConfig returns the sending configuration that applies to a
+// domain: its own, otherwise the nearest ancestor's while inheritance is
+// enabled. ErrNoProvider when no domain in the chain is configured.
+func (s *Store) ResolveDomainSendingConfig(ctx context.Context, accountID, domainID string) (DomainSendingConfig, error) {
+	id := domainID
+	for depth := 0; depth < maxDomainAncestorDepth; depth++ {
+		cfg, err := s.GetDomainSendingConfig(ctx, accountID, id)
+		if err == nil {
+			return cfg, nil
+		}
+		if !errors.Is(err, ErrNoProvider) {
+			return DomainSendingConfig{}, err
+		}
+		st, err := s.domainInheritanceState(ctx, accountID, id)
+		if err != nil {
+			return DomainSendingConfig{}, err
+		}
+		if !st.InheritSending || st.ParentID == "" {
+			return DomainSendingConfig{}, ErrNoProvider
+		}
+		id = st.ParentID
+	}
+	return DomainSendingConfig{}, ErrNoProvider
+}
+
+// effectiveProvider reports the provider a domain effectively uses for display,
+// plus the name of the ancestor it was inherited from ("" when it is the
+// domain's own). It does not filter by a requested provider.
+func (s *Store) effectiveProvider(ctx context.Context, accountID, domainID string, sending bool) (provider, inheritedFrom string) {
+	id := domainID
+	for depth := 0; depth < maxDomainAncestorDepth; depth++ {
+		var providerHere string
+		var err error
+		if sending {
+			var c DomainSendingConfig
+			c, err = s.GetDomainSendingConfig(ctx, accountID, id)
+			if err == nil {
+				providerHere = c.Provider
+			}
+		} else {
+			var c DomainReceivingConfig
+			c, err = s.GetDomainReceivingConfig(ctx, accountID, id)
+			if err == nil {
+				providerHere = c.Provider
+			}
+		}
+		if err == nil {
+			if id == domainID {
+				return providerHere, ""
+			}
+			name, _ := s.domainName(ctx, accountID, id)
+			return providerHere, name
+		}
+		if !errors.Is(err, ErrNoProvider) {
+			return "", ""
+		}
+		st, serr := s.domainInheritanceState(ctx, accountID, id)
+		if serr != nil {
+			return "", ""
+		}
+		inherit := st.InheritSending
+		if !sending {
+			inherit = st.InheritReceiving
+		}
+		if !inherit || st.ParentID == "" {
+			return "", ""
+		}
+		id = st.ParentID
+	}
+	return "", ""
+}
+

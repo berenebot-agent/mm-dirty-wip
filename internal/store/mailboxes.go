@@ -27,21 +27,107 @@ func (s *Store) GetAccount(ctx context.Context, accountID string) (model.Account
 	return a, nil
 }
 
+// DomainCreateOptions controls subdomain inheritance when a domain is created.
+// Inheritance only ever applies to a detected subdomain (a name that is a
+// proper label-suffix of an existing domain in the same account); a root domain
+// ignores it.
+type DomainCreateOptions struct {
+	// DisableReceiving/DisableSending turn off the default inheritance of the
+	// parent's receiving/sending configuration. By default a detected subdomain
+	// inherits both, so one receiver serves the whole zone; the operator can opt
+	// out per slot.
+	DisableReceiving bool
+	DisableSending   bool
+	// ParentDomainID overrides parent auto-detection when non-empty. It must
+	// name a domain in the same account that is a proper suffix of the new name.
+	ParentDomainID string
+}
+
+// CreateDomain creates a root domain or a subdomain. When the name is a
+// subdomain of an existing domain in the account, the nearest such ancestor is
+// recorded and the new domain inherits its receiving and sending configuration
+// by default; see DomainCreateOptions to opt out per slot.
 func (s *Store) CreateDomain(ctx context.Context, accountID, name string) (model.Domain, error) {
+	return s.CreateDomainWithOptions(ctx, accountID, name, DomainCreateOptions{})
+}
+
+// CreateDomainWithOptions is CreateDomain with explicit inheritance control.
+func (s *Store) CreateDomainWithOptions(ctx context.Context, accountID, name string, opts DomainCreateOptions) (model.Domain, error) {
 	name = normalizeDomain(name)
 	if name == "" || !strings.Contains(name, ".") {
 		return model.Domain{}, fmt.Errorf("valid domain required")
 	}
+	parentID := strings.TrimSpace(opts.ParentDomainID)
+	if parentID == "" {
+		parentID, _ = s.nearestAncestorDomain(ctx, accountID, name)
+	}
+	parentName := ""
+	if parentID != "" {
+		if err := s.read.QueryRowContext(ctx, `SELECT name FROM domains WHERE id=? AND account_id=?`, parentID, accountID).Scan(&parentName); err != nil {
+			return model.Domain{}, fmt.Errorf("parent domain not found")
+		}
+		if !isSubdomainOf(name, parentName) {
+			return model.Domain{}, fmt.Errorf("%s is not a subdomain of %s", name, parentName)
+		}
+	}
+	inheritReceiving, inheritSending := false, false
+	if parentID != "" {
+		inheritReceiving = !opts.DisableReceiving
+		inheritSending = !opts.DisableSending
+	}
 	id := idgen.New("dom")
 	now := nowText()
-	_, err := s.write.ExecContext(ctx, `INSERT INTO domains(id,account_id,name,created_at) VALUES(?,?,?,?)`, id, accountID, name, now)
+	_, err := s.write.ExecContext(ctx, `INSERT INTO domains(id,account_id,name,parent_domain_id,inherit_receiving,inherit_sending,created_at) VALUES(?,?,?,?,?,?,?)`,
+		id, accountID, name, nullString(parentID), boolInt(inheritReceiving), boolInt(inheritSending), now)
 	if err != nil {
 		return model.Domain{}, err
 	}
-	return model.Domain{ID: id, AccountID: accountID, Name: name, CreatedAt: parseTime(now)}, nil
+	// Re-read through GetDomain so the returned view carries the effective
+	// (possibly inherited) providers and the parent name.
+	return s.GetDomain(ctx, accountID, id)
 }
 
-const domainSummarySelect = `SELECT d.id,d.account_id,d.name,COALESCE(d.catch_all_inbox_id,''),COALESCE(sc.provider,''),COALESCE(rc.provider,''),d.created_at
+// isSubdomainOf reports whether child is a proper label-suffix of parent (for
+// example agent.example.com under example.com), never equal to it.
+func isSubdomainOf(child, parent string) bool {
+	child = normalizeDomain(child)
+	parent = normalizeDomain(parent)
+	if child == "" || parent == "" || child == parent {
+		return false
+	}
+	return strings.HasSuffix(child, "."+parent)
+}
+
+// nearestAncestorDomain returns the id and name of the longest existing ancestor
+// domain of name within the account (its immediate parent if configured, else
+// the next suffix up), or ("","") when none exists. Only same-account domains
+// are considered, so a subdomain never inherits from another account's domain.
+func (s *Store) nearestAncestorDomain(ctx context.Context, accountID, name string) (string, string) {
+	labels := strings.Split(normalizeDomain(name), ".")
+	for i := 1; i < len(labels); i++ {
+		candidate := strings.Join(labels[i:], ".")
+		if candidate == "" {
+			continue
+		}
+		var id string
+		if err := s.read.QueryRowContext(ctx, `SELECT id FROM domains WHERE account_id=? AND name=?`, accountID, candidate).Scan(&id); err == nil {
+			return id, candidate
+		}
+	}
+	return "", ""
+}
+
+// domainName returns the stored (normalized) name of a domain in the account.
+func (s *Store) domainName(ctx context.Context, accountID, domainID string) (string, error) {
+	var name string
+	err := s.read.QueryRowContext(ctx, `SELECT name FROM domains WHERE id=? AND account_id=?`, domainID, accountID).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return name, err
+}
+
+const domainSummarySelect = `SELECT d.id,d.account_id,d.name,COALESCE(d.catch_all_inbox_id,''),COALESCE(d.parent_domain_id,''),d.inherit_receiving,d.inherit_sending,COALESCE(sc.provider,''),COALESCE(rc.provider,''),d.created_at
 	FROM domains d
 	LEFT JOIN domain_sending_configs sc ON sc.domain_id=d.id AND sc.account_id=d.account_id
 	LEFT JOIN domain_receiving_configs rc ON rc.domain_id=d.id AND rc.account_id=d.account_id`
@@ -56,27 +142,86 @@ func (s *Store) ListDomains(ctx context.Context, accountID string) ([]model.Doma
 	for rows.Next() {
 		var d model.Domain
 		var c string
-		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.SendingProvider, &d.ReceivingProvider, &c); err != nil {
+		var inheritRecv, inheritSend int
+		if err = rows.Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.ParentDomainID, &inheritRecv, &inheritSend, &d.SendingProvider, &d.ReceivingProvider, &c); err != nil {
 			return nil, err
 		}
+		d.InheritReceiving = inheritRecv != 0
+		d.InheritSending = inheritSend != 0
 		d.CreatedAt = parseTime(c)
 		out = append(out, d)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].ParentDomainID != "" {
+			if name, perr := s.domainName(ctx, accountID, out[i].ParentDomainID); perr == nil {
+				out[i].ParentDomain = name
+			}
+		}
+		s.applyInheritedProviders(ctx, accountID, &out[i])
+	}
+	return out, nil
 }
 
 func (s *Store) GetDomain(ctx context.Context, accountID, domainID string) (model.Domain, error) {
 	var d model.Domain
 	var c string
-	err := s.read.QueryRowContext(ctx, domainSummarySelect+` WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.SendingProvider, &d.ReceivingProvider, &c)
+	var inheritRecv, inheritSend int
+	err := s.read.QueryRowContext(ctx, domainSummarySelect+` WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&d.ID, &d.AccountID, &d.Name, &d.CatchAllInboxID, &d.ParentDomainID, &inheritRecv, &inheritSend, &d.SendingProvider, &d.ReceivingProvider, &c)
 	if err == sql.ErrNoRows {
 		return d, ErrNotFound
 	}
 	if err != nil {
 		return d, err
 	}
+	d.InheritReceiving = inheritRecv != 0
+	d.InheritSending = inheritSend != 0
 	d.CreatedAt = parseTime(c)
+	if d.ParentDomainID != "" {
+		if name, perr := s.domainName(ctx, accountID, d.ParentDomainID); perr == nil {
+			d.ParentDomain = name
+		}
+	}
+	s.applyInheritedProviders(ctx, accountID, &d)
 	return d, nil
+}
+
+// applyInheritedProviders fills a domain's effective sending/receiving provider
+// from the nearest ancestor when it has none of its own and inheritance is on,
+// recording the ancestor's name in SendingInheritedFrom/ReceivingInheritedFrom.
+func (s *Store) applyInheritedProviders(ctx context.Context, accountID string, d *model.Domain) {
+	if d.ParentDomainID == "" {
+		return
+	}
+	if d.SendingProvider == "" && d.InheritSending {
+		if p, from := s.effectiveProvider(ctx, accountID, d.ID, true); p != "" {
+			d.SendingProvider = p
+			d.SendingInheritedFrom = from
+		}
+	}
+	if d.ReceivingProvider == "" && d.InheritReceiving {
+		if p, from := s.effectiveProvider(ctx, accountID, d.ID, false); p != "" {
+			d.ReceivingProvider = p
+			d.ReceivingInheritedFrom = from
+		}
+	}
+}
+
+// SetDomainInheritance updates whether a subdomain inherits its parent's
+// receiving and/or sending configuration. It is a no-op for the flags on a root
+// domain (which has no parent to inherit from).
+func (s *Store) SetDomainInheritance(ctx context.Context, accountID, domainID string, inheritReceiving, inheritSending bool) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE domains SET inherit_receiving=?, inherit_sending=? WHERE id=? AND account_id=?`, boolInt(inheritReceiving), boolInt(inheritSending), domainID, accountID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inboxID string) error {
