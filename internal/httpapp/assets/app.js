@@ -1238,6 +1238,42 @@ function aliasNameByAddress(list) {
 })();
 
 (function () {
+  var dlg = document.getElementById('domain-delete-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('domain-delete-form');
+  var input = document.getElementById('domain-delete-input');
+  var submit = document.getElementById('domain-delete-submit');
+  var nameEl = document.getElementById('domain-delete-name');
+  var expected = '';
+  function matches() {
+    return input.value.trim().toLowerCase() === expected.toLowerCase();
+  }
+  function sync() {
+    submit.disabled = !matches();
+  }
+  document.querySelectorAll('.open-delete-domain').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      expected = btn.getAttribute('data-name') || '';
+      form.setAttribute('action', '/ui/domains/' + btn.getAttribute('data-domain') + '/delete');
+      nameEl.textContent = expected;
+      input.value = '';
+      sync();
+      dlg.showModal();
+      input.focus();
+    });
+  });
+  input.addEventListener('input', sync);
+  form.addEventListener('submit', function (e) {
+    if (!matches()) {
+      e.preventDefault();
+      sync();
+    }
+  });
+})();
+
+(function () {
   var form = document.getElementById('bulk-form');
   if (!form) {
     return;
