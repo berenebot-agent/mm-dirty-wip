@@ -224,6 +224,25 @@ func (s *Store) SetDomainInheritance(ctx context.Context, accountID, domainID st
 	return nil
 }
 
+// SetDomainInheritFlag updates a single inheritance switch for a domain,
+// leaving the other untouched. sending selects inherit_sending; otherwise
+// inherit_receiving is updated.
+func (s *Store) SetDomainInheritFlag(ctx context.Context, accountID, domainID string, sending, inherit bool) error {
+	column := "inherit_receiving"
+	if sending {
+		column = "inherit_sending"
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE domains SET `+column+`=? WHERE id=? AND account_id=?`, boolInt(inherit), domainID, accountID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inboxID string) error {
 	if inboxID != "" {
 		var n int

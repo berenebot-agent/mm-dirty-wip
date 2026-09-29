@@ -1787,21 +1787,30 @@ function aliasNameByAddress(list) {
 })();
 
 (function () {
-  var next = document.getElementById('cf-next');
-  if (!next) {
+  var dlg = document.getElementById('cf-setup-dialog');
+  if (!dlg) {
     return;
   }
-  next.addEventListener('click', function () {
-    var worker = document.getElementById('cf-worker-step');
-    var routing = document.getElementById('cf-routing-step');
-    if (worker) {
-      worker.hidden = true;
-    }
-    if (routing) {
-      routing.hidden = false;
-    }
-    window.scrollTo(0, 0);
-  });
+  var next = document.getElementById('cf-next');
+  var done = document.getElementById('cf-done');
+  if (next) {
+    next.addEventListener('click', function () {
+      var worker = document.getElementById('cf-worker-step');
+      var routing = document.getElementById('cf-routing-step');
+      if (worker) {
+        worker.hidden = true;
+      }
+      if (routing) {
+        routing.hidden = false;
+      }
+      dlg.scrollTop = 0;
+    });
+  }
+  if (done) {
+    done.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
 })();
 
 (function () {
@@ -1853,7 +1862,7 @@ function aliasNameByAddress(list) {
   if (openCardEl && openCardEl.getAttribute('data-open-inbox')) {
     inboxReopening = true;
   }
-  document.querySelectorAll('.domain-dialog[data-open="1"]').forEach(function (dlg) {
+  document.querySelectorAll('.domain-dialog[data-open="1"], .cf-setup-dialog[data-open="1"]').forEach(function (dlg) {
     if (inboxReopening) {
       return;
     }

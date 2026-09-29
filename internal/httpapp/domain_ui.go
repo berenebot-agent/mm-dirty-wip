@@ -150,9 +150,16 @@ func (s *Server) uiDomainCatchAll(w http.ResponseWriter, r *http.Request) {
 	s.domainNotice(w, r, "Catch-all inbox updated")
 }
 
+// providerInherited is the sentinel provider value used by the sending and
+// receiving editors for a subdomain that should reuse an ancestor's connector
+// instead of its own. It is a UI-only value, never persisted as a provider.
+const providerInherited = "inherited"
+
 // uiDomainSending creates, replaces or updates the domain's single sending
 // configuration. The provider is always taken from the submitted form, so any
-// provider (including a switch from another provider) can replace it.
+// provider (including a switch from another provider) can replace it. The
+// sentinel provider "inherited" instead removes the domain's own sending config
+// and switches it to reuse its parent's.
 func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -166,6 +173,14 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := normalizeDomainProvider(r.Form.Get("provider"))
+	if provider == providerInherited {
+		if err := s.setSendingInherited(ctx, p.AccountID, d); err != nil {
+			s.domainSaveError(w, r, d.ID, "sending", provider, err)
+			return
+		}
+		s.domainNotice(w, r, "Sending configuration now inherits from the parent domain")
+		return
+	}
 	fields, ok := outboundSchemaFields(provider)
 	if !ok {
 		s.domainEditorError(w, r, d.ID, "sending", provider, "Unknown sending provider")
@@ -180,7 +195,36 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 		s.domainSaveError(w, r, d.ID, "sending", provider, err)
 		return
 	}
+	// An explicit provider is the domain's own; stop it falling back to the
+	// parent if this config is later removed.
+	if d.InheritSending {
+		if err := s.Service.Store.SetDomainInheritFlag(ctx, p.AccountID, d.ID, true, false); err != nil {
+			s.domainSaveError(w, r, d.ID, "sending", provider, err)
+			return
+		}
+	}
 	s.domainNotice(w, r, "Sending configuration saved")
+}
+
+// setSendingInherited makes a subdomain reuse its parent's sending connector:
+// its own sending config is removed and inherit_sending is switched on. It
+// errors when the domain has no parent or the parent has no sending provider
+// to inherit.
+func (s *Server) setSendingInherited(ctx context.Context, accountID string, d model.Domain) error {
+	if d.ParentDomainID == "" {
+		return fmt.Errorf("%w: only a subdomain can inherit a sending configuration", app.ErrInvalidConfig)
+	}
+	parent, err := s.Service.Store.GetDomain(ctx, accountID, d.ParentDomainID)
+	if err != nil {
+		return err
+	}
+	if parent.SendingProvider == "" {
+		return fmt.Errorf("%w: the parent domain has no sending configuration to inherit", app.ErrInvalidConfig)
+	}
+	if err := s.Service.Store.DeleteDomainSendingConfig(ctx, accountID, d.ID); err != nil && !errors.Is(err, store.ErrNoProvider) {
+		return err
+	}
+	return s.Service.Store.SetDomainInheritFlag(ctx, accountID, d.ID, true, true)
 }
 
 // uiDomainSendingClear removes the domain's sending configuration. Mail for the
@@ -218,6 +262,14 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	provider := normalizeDomainProvider(r.Form.Get("provider"))
+	if provider == providerInherited {
+		if err := s.setReceivingInherited(ctx, p.AccountID, d); err != nil {
+			s.domainSaveError(w, r, d.ID, "receiving", provider, err)
+			return
+		}
+		s.domainNotice(w, r, "Receiving configuration now inherits from the parent domain")
+		return
+	}
 	t, ok := transport.LookupInbound(provider)
 	if !ok {
 		s.domainEditorError(w, r, d.ID, "receiving", provider, "Unknown receiving provider")
@@ -233,11 +285,40 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		s.domainSaveError(w, r, d.ID, "receiving", provider, err)
 		return
 	}
+	// An explicit provider is the domain's own; stop it falling back to the
+	// parent if this config is later removed.
+	if d.InheritReceiving {
+		if err := s.Service.Store.SetDomainInheritFlag(ctx, p.AccountID, d.ID, false, false); err != nil {
+			s.domainSaveError(w, r, d.ID, "receiving", provider, err)
+			return
+		}
+	}
 	if secret := generated["webhook_secret"]; secret != "" {
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
 		return
 	}
 	s.domainNotice(w, r, "Receiving configuration saved")
+}
+
+// setReceivingInherited makes a subdomain reuse its parent's receiving
+// connector: its own receiving config is removed and inherit_receiving is
+// switched on. It errors when the domain has no parent or the parent has no
+// receiving provider to inherit.
+func (s *Server) setReceivingInherited(ctx context.Context, accountID string, d model.Domain) error {
+	if d.ParentDomainID == "" {
+		return fmt.Errorf("%w: only a subdomain can inherit a receiving configuration", app.ErrInvalidConfig)
+	}
+	parent, err := s.Service.Store.GetDomain(ctx, accountID, d.ParentDomainID)
+	if err != nil {
+		return err
+	}
+	if parent.ReceivingProvider == "" {
+		return fmt.Errorf("%w: the parent domain has no receiving configuration to inherit", app.ErrInvalidConfig)
+	}
+	if err := s.Service.Store.DeleteDomainReceivingConfig(ctx, accountID, d.ID); err != nil && !errors.Is(err, store.ErrNoProvider) {
+		return err
+	}
+	return s.Service.Store.SetDomainInheritFlag(ctx, accountID, d.ID, false, true)
 }
 
 // uiDomainReceivingClear removes the domain's receiving configuration.
