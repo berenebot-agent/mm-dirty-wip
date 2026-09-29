@@ -34,34 +34,34 @@ func (s *Server) render(w http.ResponseWriter, body string, data any) {
 }
 
 type pageData struct {
-	Title                      string
-	Tab                        string
-	Principal                  model.Principal
-	CSRF                       string
-	Account                    model.Account
-	User                       model.User
-	Domains                    []model.Domain
-	DomainSendingReady         map[string]bool
-	DomainReceivingReady       map[string]bool
-	DomainIsMX                 map[string]bool
-	InboxSendingReady          map[string]bool
-	Domain                     *model.Domain
-	DomainInboxes              map[string][]model.Inbox
-	DomainSendingEditors       map[string][]*domainEditorView
-	DomainReceivingEditors     map[string][]*domainEditorView
-	DomainSendingSelected      map[string]string
-	DomainReceivingSelected    map[string]string
-	DomainSendingLabel         map[string]string
-	DomainReceivingLabel       map[string]string
-	DomainReceivingRegenerate  map[string]bool
-	DomainOpenID               string
-	DomainOpenKind             string
-	DomainWorkerCode           string
-	DomainWorkerWebhook        string
+	Title                     string
+	Tab                       string
+	Principal                 model.Principal
+	CSRF                      string
+	Account                   model.Account
+	User                      model.User
+	Domains                   []model.Domain
+	DomainSendingReady        map[string]bool
+	DomainReceivingReady      map[string]bool
+	DomainIsMX                map[string]bool
+	InboxSendingReady         map[string]bool
+	Domain                    *model.Domain
+	DomainInboxes             map[string][]model.Inbox
+	DomainSendingEditors      map[string][]*domainEditorView
+	DomainReceivingEditors    map[string][]*domainEditorView
+	DomainSendingSelected     map[string]string
+	DomainReceivingSelected   map[string]string
+	DomainSendingLabel        map[string]string
+	DomainReceivingLabel      map[string]string
+	DomainReceivingRegenerate map[string]bool
+	DomainOpenID              string
+	DomainOpenKind            string
+	DomainWorkerCode          string
+	DomainWorkerWebhook       string
 	// DomainNamesCSV lists the account's domain names (comma separated) so the
 	// Add Domain dialog can detect a typed subdomain client-side and offer to
 	// reuse the parent's connectors. Server-side detection is authoritative.
-	DomainNamesCSV string
+	DomainNamesCSV             string
 	DomainSendingSettingsURL   string
 	DomainReceivingSettingsURL string
 	// Sending-paused banner: when the selected/default sender is an external

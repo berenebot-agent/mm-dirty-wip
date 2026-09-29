@@ -234,6 +234,7 @@ func scanDomainConfig(row interface{ Scan(...any) error }) (DomainConfig, error)
 	c.UpdatedAt = parseTime(updated)
 	return c, nil
 }
+
 // maxDomainAncestorDepth bounds a parent-domain walk so a corrupted or cyclic
 // parent chain can never loop forever.
 const maxDomainAncestorDepth = 16
@@ -365,4 +366,3 @@ func (s *Store) effectiveProvider(ctx context.Context, accountID, domainID strin
 	}
 	return "", ""
 }
-

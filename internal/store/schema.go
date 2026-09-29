@@ -1027,6 +1027,7 @@ CREATE TABLE webhook_deliveries (
   PRIMARY KEY(client_id,event_id)
 );
 `
+
 // migration033 lets a domain reuse its parent domain's receiving and/or sending
 // configuration instead of configuring its own. A subdomain (for example
 // agent.example.com under example.com) is still a normal domain row that owns
@@ -1046,4 +1047,3 @@ ALTER TABLE domains ADD COLUMN inherit_receiving INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE domains ADD COLUMN inherit_sending INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent_domain_id);
 `
-
