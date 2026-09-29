@@ -23,10 +23,15 @@ services:
       # boot cleanly regardless of the proxy question, so the scan tests the app
       # rather than the deployment's TLS termination.
       BASE_URL: http://mailmoose-strix:8081
-      # System administrator credentials for the throwaway scan instance.
-      ADMIN_EMAIL: [REDACTED-THROWAWAY-EMAIL]
-      ADMIN_PASSWORD: [REDACTED-THROWAWAY-PASSWORD]
-      APP_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      # Throwaway scan-instance credentials. Not committed: a literal credential
+      # in the tree trips secret scanners even when it is worthless. Supply them
+      # via the environment (e.g. `set -a; . tests/strix/scan.env; set +a`
+      # before `docker compose up`, with tests/strix/scan.env gitignored).
+      # tests/strix/mint_scan_keys.sh bootstraps the same instance and can
+      # generate this file.
+      ADMIN_EMAIL: "${MAILMOOSE_STRIX_ADMIN_EMAIL:?set MAILMOOSE_STRIX_ADMIN_EMAIL}"
+      ADMIN_PASSWORD: "${MAILMOOSE_STRIX_ADMIN_PASSWORD:?set MAILMOOSE_STRIX_ADMIN_PASSWORD}"
+      APP_ENCRYPTION_KEY: "${MAILMOOSE_STRIX_APP_ENCRYPTION_KEY:?set MAILMOOSE_STRIX_APP_ENCRYPTION_KEY}"
     volumes:
       # Bind mount (never a named volume), inside the repo, gitignored.
       - ./tests/strix/data:/data
