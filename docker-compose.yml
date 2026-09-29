@@ -8,10 +8,9 @@
 # webhook provider (Mailgun, Cloudflare Email Routing, Resend).
 #
 # Project name pinned explicitly. Without this, Compose derives it from the
-# directory basename — and since the gatehouse layout puts the checkout in
-# repo/, both this project and the sibling router service resolve to the project name
-# "repo". That makes each project see the other's containers as orphans, and
-# `--remove-orphans` in one would tear down the other's live stack.
+# directory basename, so a checkout whose parent directory is also named
+# "repo" would collide with any sibling project and make each project see the
+# other's containers as orphans, tearing them down with `--remove-orphans`.
 name: mailmoose
 
 services:

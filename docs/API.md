@@ -168,8 +168,7 @@ GET    /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries
   connector). Saving a connector requeues only that alias's pending sends.
 - `/sending/deliveries` returns that alias's outbound attempts (same shape as
   the domain delivery log).
-- All of these require an Admin principal and are rejected with `403` in hosted
-  mode.
+- All of these require an Admin principal.
 
 `default_sender` may name an external alias; a send from it uses that alias's
 connector, and a message whose alias is later deleted fails with a clear error
@@ -643,7 +642,7 @@ Enrollment:
 POST /relay/enroll
 ```
 
-The hosted UI issues single-use enrollment tokens and displays the corresponding Hermes CLI command. The same management operations are available programmatically to an Admin principal:
+The UI issues single-use enrollment tokens and displays the corresponding Hermes CLI command. The same management operations are available programmatically to an Admin principal:
 
 ```http
 GET    /v1/admin/hermes

@@ -6,7 +6,7 @@
 
 **Open email infrastructure for AI agents.**
 
-Unlimited logical inbox identities, realtime replayable events, BYO outbound delivery — free hosted or self-hosted in one container.
+Unlimited logical inbox identities, realtime replayable events, BYO outbound delivery — self-hosted in one container.
 
 [![ci](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
@@ -35,7 +35,7 @@ you an ops project, not a feature.
 MailMoose gives every agent its own address — `research@yourdomain.com`,
 `task-8291@yourdomain.com`, as many as you want — with full-text search,
 durable event streams, scoped API keys, and sending through Mailgun, Brevo,
-Resend, Direct MX, or any SMTP relay you already pay for. Free hosted, or self-host the
+Resend, Direct MX, or any SMTP relay you already pay for. Self-host the
 whole thing in a single container.
 
 ## Why MailMoose vs Alternatives
@@ -84,8 +84,6 @@ Open `BASE_URL`, sign in with the system administrator credentials, and add your
 - Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - Direct-SMTP (MX) on port 25, hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
-
-> Prefer zero ops? The free hosted deployment at **[openagent.email](https://openagent.email)** runs the same codebase.
 
 ## Key Features
 
@@ -169,7 +167,7 @@ Permissions are assigned **per inbox**, so one key can hold different roles on d
 
 ## Hermes Relay
 
-For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain. A one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) remains available for hosted provisioning.
+For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain. A one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) is available for provisioning a gateway.
 
 ## Contributing
 

@@ -12,13 +12,12 @@ Vulnerability Reporting:
 <https://github.com/dellarb/mailmoose/security/advisories/new>
 
 **Do not open a public issue or pull request for a suspected vulnerability.**
-A public report exposes every self-hosted and hosted deployment before a fix is
-available.
+A public report exposes every deployment before a fix is available.
 
 Include as much of the following as you can:
 
 - affected version, tag, or commit;
-- deployment mode (hosted service, self-hosted Docker, or the MX edge);
+- which component is affected (the application, or the MX edge);
 - steps to reproduce, with a minimal request or input where possible;
 - the impact you believe is possible;
 - any proof-of-concept, logs, or a suggested fix.
