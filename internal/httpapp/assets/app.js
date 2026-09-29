@@ -2035,3 +2035,67 @@ function aliasNameByAddress(list) {
     b.addEventListener('click', function () { dlg.close(); });
   });
 })();
+
+// Per-account storage quota dialog (system admin plane).
+(function () {
+  var dlg = document.getElementById('quota-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = dlg.querySelector('form');
+  var valueInput = document.getElementById('quota-value');
+  var unitSelect = document.getElementById('quota-unit');
+  var usedNote = document.getElementById('quota-used');
+  var title = document.getElementById('quota-title');
+  var units = ['b', 'kb', 'mb', 'gb', 'tb'];
+  var mult = { b: 1, kb: 1024, mb: 1048576, gb: 1073741824, tb: 1099511627776 };
+  var used = 0;
+
+  function preferredUnit(bytes) {
+    var div = 1;
+    var idx = 0;
+    while (idx < units.length - 1 && bytes >= div * 1024) {
+      div *= 1024;
+      idx += 1;
+    }
+    return { unit: units[idx], value: bytes / div };
+  }
+
+  document.querySelectorAll('.edit-quota').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-id');
+      var quota = parseInt(btn.getAttribute('data-quota'), 10) || 0;
+      used = parseInt(btn.getAttribute('data-used'), 10) || 0;
+      form.setAttribute('action', '/ui/admin/accounts/' + encodeURIComponent(id) + '/quota');
+      if (quota === 0) {
+        valueInput.value = '0';
+        unitSelect.value = 'mb';
+      } else {
+        var pick = preferredUnit(quota);
+        valueInput.value = String(Math.round(pick.value * 1000) / 1000);
+        unitSelect.value = pick.unit;
+      }
+      if (title) {
+        title.textContent = 'Edit storage quota' + (btn.getAttribute('data-name') ? ' — ' + btn.getAttribute('data-name') : '');
+      }
+      if (usedNote) {
+        usedNote.textContent = used > 0 ? 'Currently using ' + used.toLocaleString() + ' bytes.' : '';
+      }
+      dlg.showModal();
+    });
+  });
+
+  form.addEventListener('submit', function (e) {
+    var v = parseFloat(valueInput.value);
+    var bytes = isFinite(v) && v > 0 ? Math.round(v * (mult[unitSelect.value] || 1)) : 0;
+    if (bytes > 0 && used > 0 && bytes < used) {
+      if (!window.confirm('This quota (' + bytes.toLocaleString() + ' bytes) is below the account\u2019s current usage (' + used.toLocaleString() + ' bytes). New mail will be rejected until usage drops. Continue?')) {
+        e.preventDefault();
+      }
+    }
+  });
+
+  dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+})();

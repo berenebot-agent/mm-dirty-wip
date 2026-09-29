@@ -299,6 +299,66 @@ func TestSystemAdminSendsNewAccountInviteFromOwnMailer(t *testing.T) {
 	}
 }
 
+func TestSystemAdminEditsAccountStorageQuota(t *testing.T) {
+	svc, h, root, _ := systemAdminFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, root.ID)
+
+	// The accounts table shows the quota and an edit control.
+	rr := uiGet(t, h, cookie, "/admin")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /admin = %d", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{">Quota</th>", "edit-quota", `data-id="` + root.AccountID + `"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("/admin missing %q", want)
+		}
+	}
+
+	// A value with a unit is converted to bytes.
+	rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"2"}, "quota_unit": {"gb"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("set quota = %d body=%s", rr.Code, rr.Body.String())
+	}
+	acc, err := svc.Store.GetAccount(ctx, root.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.StorageQuotaBytes != 2<<30 {
+		t.Fatalf("quota = %d, want %d", acc.StorageQuotaBytes, int64(2)<<30)
+	}
+
+	// Zero removes the limit.
+	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"0"}, "quota_unit": {"mb"}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("clear quota = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if acc, _ = svc.Store.GetAccount(ctx, root.AccountID); acc.StorageQuotaBytes != 0 {
+		t.Fatalf("quota after clear = %d, want 0", acc.StorageQuotaBytes)
+	}
+
+	// Invalid value, unknown unit and unknown account are rejected.
+	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"-5"}, "quota_unit": {"mb"}}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("negative quota status = %d, want 400", rr.Code)
+	}
+	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/"+root.AccountID+"/quota", url.Values{"_csrf": {csrf}, "quota_value": {"10"}, "quota_unit": {"parsecs"}}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("unknown unit status = %d, want 400", rr.Code)
+	}
+	if rr = domainPost(t, h, cookie, "/ui/admin/accounts/acct_missing/quota", url.Values{"_csrf": {csrf}, "quota_value": {"10"}, "quota_unit": {"mb"}}); rr.Code != http.StatusNotFound {
+		t.Fatalf("unknown account status = %d, want 404", rr.Code)
+	}
+
+	// An account Admin who is not a system administrator is refused.
+	plain, err := svc.Store.CreateAccountAndAdmin(ctx, "Plain", "plain@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainCookie, plainCSRF := uiSession(t, svc, plain.ID)
+	if rr = domainPost(t, h, plainCookie, "/ui/admin/accounts/"+plain.AccountID+"/quota", url.Values{"_csrf": {plainCSRF}, "quota_value": {"1"}, "quota_unit": {"gb"}}); rr.Code != http.StatusForbidden {
+		t.Fatalf("non-system-admin set quota = %d, want 403", rr.Code)
+	}
+}
+
 func TestSystemAdminCannotChangeLoginInUI(t *testing.T) {
 	svc, h, root, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, root.ID)

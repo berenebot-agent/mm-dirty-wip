@@ -1,8 +1,11 @@
 package httpapp
 
 import (
+	"errors"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -113,8 +116,9 @@ const adminPlaneBody = `<h1>Admin</h1>
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 {{if .InviteLink}}<section class="card"><h2>Setup link</h2><p class="muted">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><div class="secret"><pre>{{.InviteLink}}</pre></div></section>{{end}}
 <section class="card"><div class="card-head"><h2>Accounts</h2><button type="button" id="add-account">Create invitation</button></div><p class="muted">Each account has its own Admin, domains and mailboxes. Invite a new person to create a separate account.</p>
-{{if .Accounts}}<div class="table-wrap"><table class="dense"><thead><tr><th>Account</th><th>Admin</th><th>Status</th><th></th></tr></thead><tbody>{{range .Accounts}}<tr><td>{{.Name}}</td><td>{{if .AdminEmail}}{{.AdminEmail}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .AdminEmail}}<span class="pill">Active</span>{{else if .InviteID}}<span class="pill amber">Invitation pending</span> <span class="muted">· expires {{mailDate .InviteExpiresAt}}</span>{{else}}<span class="muted">No admin</span>{{end}}</td><td class="actions">{{if and (not .AdminEmail) .InviteID}}<form method="post" action="/ui/admin/invites/{{.InviteID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer on your account page first"{{end}}>Send</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No accounts yet.</p>{{end}}</section>
-<dialog id="account-invite-dialog"><form method="post" action="/ui/admin/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2>Invite a new account</h2><p class="muted">Creates a separate account whose Admin sets their own password from a link. The invitation is sent from your own account's mailer.</p><label>Email</label><input type="email" name="email" required><label>Account name (optional)</label><input name="account_name"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Create invitation</button></div></form></dialog>`
+{{if .Accounts}}<div class="table-wrap"><table class="dense"><thead><tr><th>Account</th><th>Admin</th><th>Status</th><th>Quota</th><th></th></tr></thead><tbody>{{range .Accounts}}<tr><td>{{.Name}}</td><td>{{if .AdminEmail}}{{.AdminEmail}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .AdminEmail}}<span class="pill">Active</span>{{else if .InviteID}}<span class="pill amber">Invitation pending</span> <span class="muted">· expires {{mailDate .InviteExpiresAt}}</span>{{else}}<span class="muted">No admin</span>{{end}}</td><td>{{if .StorageQuotaBytes}}{{filesize .StorageUsedBytes}} of {{filesize .StorageQuotaBytes}}{{else}}{{filesize .StorageUsedBytes}} of unlimited{{end}}</td><td class="actions">{{if and (not .AdminEmail) .InviteID}}<form method="post" action="/ui/admin/invites/{{.InviteID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer on your account page first"{{end}}>Send</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form>{{end}}<button type="button" class="secondary btn-sm edit-quota" data-id="{{.ID}}" data-name="{{.Name}}" data-quota="{{.StorageQuotaBytes}}" data-used="{{.StorageUsedBytes}}">Edit quota</button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No accounts yet.</p>{{end}}</section>
+<dialog id="account-invite-dialog"><form method="post" action="/ui/admin/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2>Invite a new account</h2><p class="muted">Creates a separate account whose Admin sets their own password from a link. The invitation is sent from your own account's mailer.</p><label>Email</label><input type="email" name="email" required><label>Account name (optional)</label><input name="account_name"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Create invitation</button></div></form></dialog>
+<dialog id="quota-dialog"><form method="post" id="quota-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="quota-title">Edit storage quota</h2><p class="muted">The account's storage limit. Enter 0 to make it unlimited.</p><label>Quota</label><div class="row"><input id="quota-value" name="quota_value" type="number" min="0" step="any" required style="flex:1;margin:4px 0"><select id="quota-unit" name="quota_unit" style="flex:0 0 96px;margin:4px 0"><option value="b">B</option><option value="kb">KB</option><option value="mb" selected>MB</option><option value="gb">GB</option><option value="tb">TB</option></select></div><p class="muted small" id="quota-used"></p><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Save</button></div></form></dialog>`
 
 func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -217,6 +221,59 @@ func (s *Server) uiAdminRevokeInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin?notice=Invitation+revoked", 303)
+}
+
+// quotaUnitMultiplier maps a storage-unit selector to its byte multiplier.
+func quotaUnitMultiplier(unit string) (int64, bool) {
+	switch strings.ToLower(strings.TrimSpace(unit)) {
+	case "b", "":
+		return 1, true
+	case "kb":
+		return 1 << 10, true
+	case "mb":
+		return 1 << 20, true
+	case "gb":
+		return 1 << 30, true
+	case "tb":
+		return 1 << 40, true
+	}
+	return 0, false
+}
+
+// uiAdminSetQuota lets the system administrator change an account's storage
+// quota. A value of 0 removes the limit.
+func (s *Server) uiAdminSetQuota(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !isSystemAdmin(w, p) {
+		return
+	}
+	accountID := r.PathValue("id")
+	m, ok := quotaUnitMultiplier(r.Form.Get("quota_unit"))
+	if !ok {
+		http.Error(w, "unknown storage unit", 400)
+		return
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(r.Form.Get("quota_value")), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		http.Error(w, "enter a storage quota of 0 (unlimited) or greater", 400)
+		return
+	}
+	bytes := value * float64(m)
+	if bytes > math.MaxInt64 {
+		http.Error(w, "storage quota is too large", 400)
+		return
+	}
+	quota := int64(math.Round(bytes))
+	if err := s.Service.Store.SetAccountStorageQuota(r.Context(), accountID, quota); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "account not found", 404)
+			return
+		}
+		http.Error(w, "cannot update storage quota", 500)
+		return
+	}
+	s.Service.Store.Audit(r.Context(), accountID, "account.quota_updated", formatBytes(quota))
+	http.Redirect(w, r, "/admin?notice=Storage+quota+updated", 303)
 }
 
 // ---------------------------------------------------------------------------

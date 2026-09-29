@@ -189,6 +189,51 @@ func TestAccountMailerOwnership(t *testing.T) {
 	}
 }
 
+func TestSetAccountStorageQuota(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, _ := testStore(t)
+	if err := s.SetAccountStorageQuota(ctx, u.AccountID, 123<<20); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := s.GetAccount(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.StorageQuotaBytes != 123<<20 {
+		t.Fatalf("quota = %d, want %d", acc.StorageQuotaBytes, int64(123<<20))
+	}
+	// Zero means unlimited.
+	if err := s.SetAccountStorageQuota(ctx, u.AccountID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if acc, err = s.GetAccount(ctx, u.AccountID); err != nil || acc.StorageQuotaBytes != 0 {
+		t.Fatalf("quota after clear = %d, %v", acc.StorageQuotaBytes, err)
+	}
+	summary, err := s.ListAccounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, a := range summary {
+		if a.ID == u.AccountID {
+			found = true
+			if a.StorageQuotaBytes != 0 {
+				t.Fatalf("ListAccounts quota = %d, want 0", a.StorageQuotaBytes)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("account %q missing from ListAccounts", u.AccountID)
+	}
+	// Negative is rejected; unknown accounts report not found.
+	if err := s.SetAccountStorageQuota(ctx, u.AccountID, -1); err == nil {
+		t.Fatal("negative quota must be rejected")
+	}
+	if err := s.SetAccountStorageQuota(ctx, "acct_missing", 1); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown account error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestAccountAdminInviteRedeemsSeparateAccount(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
