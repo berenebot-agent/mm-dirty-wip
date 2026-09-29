@@ -61,8 +61,8 @@ type EnrollResponse struct {
 }
 
 // Enroll implements the connector side of `hermes gateway enroll`.
-// The one-time token is the authority for enrollment. Hosted deployments can
-// additionally require the caller Authorization header to be present.
+// The one-time token is the authority for enrollment. The caller
+// Authorization header can additionally be required to be present.
 func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

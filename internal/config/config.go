@@ -88,9 +88,8 @@ type Config struct {
 	SendLimitPerMinute     int
 	RegisterLimitPerMinute int
 	// AllowPrivateOutbound disables the public-routable destination check for
-	// outbound transports in self-hosted mode. It is always ignored in hosted
-	// mode, where destinations must be public. It exists for operators who
-	// intentionally send through a private gateway or local relay.
+	// outbound transports. It exists for operators who intentionally send
+	// through a private gateway or local relay.
 	AllowPrivateOutbound bool
 	InboundConcurrency   int
 	MaxMultipartParts    int
@@ -194,8 +193,8 @@ func Load() (Config, error) {
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
 	}
-	if cfg.Mode != "selfhosted" && cfg.Mode != "hosted" {
-		return Config{}, fmt.Errorf("MODE must be selfhosted or hosted")
+	if cfg.Mode != "selfhosted" {
+		return Config{}, fmt.Errorf("MODE must be selfhosted")
 	}
 	if cfg.ListenAddr == InboundAddr {
 		return Config{}, fmt.Errorf("LISTEN_ADDR must differ from the inbound listener %s", InboundAddr)
@@ -449,10 +448,10 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 }
 
 // RequirePublicOutbound reports whether outbound transports must resolve only
-// public-routable destinations. Hosted mode always enforces it; self-hosted
-// mode enforces it unless the operator explicitly opts out.
+// public-routable destinations. It is enforced unless the operator explicitly
+// opts out.
 func (c Config) RequirePublicOutbound() bool {
-	return c.Mode == "hosted" || !c.AllowPrivateOutbound
+	return !c.AllowPrivateOutbound
 }
 
 func env(name, fallback string) string {

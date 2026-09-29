@@ -69,7 +69,7 @@ func fakeSMTP(t *testing.T) (host string, port int, got <-chan string, closeFn f
 	a := ln.Addr().(*net.TCPAddr)
 	return "localhost", a.Port, ch, func() { ln.Close() }
 }
-func TestPlainSMTPAndHostedSSRF(t *testing.T) {
+func TestPlainSMTPAndPublicRoutableSSRF(t *testing.T) {
 	host, port, got, closeFn := fakeSMTP(t)
 	defer closeFn()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -87,14 +87,14 @@ func TestPlainSMTPAndHostedSSRF(t *testing.T) {
 		t.Fatal("no message")
 	}
 	if err := smtp.Send(ctx, smtp.Config{Host: "127.0.0.1", Port: port, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, true); err == nil || !strings.Contains(err.Error(), "public-routable") {
-		t.Fatalf("hosted private SMTP should reject: %v", err)
+		t.Fatalf("private SMTP should reject when public is required: %v", err)
 	}
 	if err := smtp.Send(ctx, smtp.Config{Host: "localhost", Port: port, Security: "bogus"}, smtp.SendRequest{}, false); err == nil {
 		t.Fatal("invalid security accepted")
 	}
 }
 
-func TestOutboundAdapterHostedFlagAndRawMIME(t *testing.T) {
+func TestOutboundAdapterRequirePublicAndRawMIME(t *testing.T) {
 	host, port, got, closeFn := fakeSMTP(t)
 	defer closeFn()
 	smtp.SetRequirePublic(false)
@@ -114,6 +114,6 @@ func TestOutboundAdapterHostedFlagAndRawMIME(t *testing.T) {
 	smtp.SetRequirePublic(true)
 	err := smtp.Send(context.Background(), smtp.Config{Host: "127.0.0.1", Port: 25, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, true)
 	if err == nil || !strings.Contains(err.Error(), "public-routable") {
-		t.Fatalf("hosted flag not applied: %v", err)
+		t.Fatalf("require-public not applied: %v", err)
 	}
 }

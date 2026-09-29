@@ -29,8 +29,7 @@ type externalAliasDialogView struct {
 }
 
 // externalAliasAdmin authorizes an external-alias UI action and maps a
-// non-admin/hosted principal to 403. External aliases are a self-hosted,
-// Admin-only capability.
+// non-admin principal to 403. External aliases are an Admin-only capability.
 func (s *Server) externalAliasAdmin(w http.ResponseWriter, r *http.Request) (model.Principal, bool) {
 	p := principal(r)
 	if err := s.Service.ExternalAliasAdmin(p); err != nil {
@@ -232,9 +231,6 @@ func (s *Server) externalAliasSendingEditors(ctx context.Context, accountID, inb
 		return out
 	}
 	for _, t := range transport.ListOutbound() {
-		if !transport.OutboundAllowed(t, s.Service.Config.Mode == "hosted") {
-			continue
-		}
 		e, ok := newDomainEditor("sending", t.Name(), s.Service.Config.BaseURL)
 		if !ok {
 			continue

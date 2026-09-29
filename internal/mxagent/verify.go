@@ -265,7 +265,7 @@ func DomainsAlign(fromDomain, checked string, strict bool) bool {
 //
 // A domain that is itself a public suffix (or otherwise has no registrable
 // label) is returned unchanged, so alignment compares it exactly and two
-// tenants of the same hosted suffix are never treated as one organization.
+// tenants of the same public suffix are never treated as one organization.
 func OrganizationalDomain(domain string) string {
 	domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
 	if domain == "" {

@@ -132,7 +132,7 @@ type Inbox struct {
 // ExternalAlias is a send-only identity: it never participates in inbound
 // routing. This view carries provider metadata and connector status only; the
 // encrypted credentials never leave the store. External aliases are an
-// Admin-only, self-hosted capability.
+// Admin-only capability.
 type ExternalAlias struct {
 	ID          string    `json:"id"`
 	InboxID     string    `json:"inbox_id"`

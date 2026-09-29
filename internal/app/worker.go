@@ -57,7 +57,7 @@ func (w *OutboxWorker) Stop() {
 
 // maintenanceEvery is how many delivery ticks pass between maintenance sweeps.
 // Delivery runs on the short poll interval while expiry/cleanup run far less
-// often, so a large hosted database is not churned every few seconds.
+// often, so a large database is not churned every few seconds.
 const maintenanceEvery = 12
 
 func (w *OutboxWorker) run() {

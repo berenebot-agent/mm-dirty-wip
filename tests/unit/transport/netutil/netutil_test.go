@@ -9,7 +9,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
-func TestHTTPClientRejectsPrivateHosted(t *testing.T) {
+func TestHTTPClientRejectsPrivateWhenPublicRequired(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -17,7 +17,7 @@ func TestHTTPClientRejectsPrivateHosted(t *testing.T) {
 	netutil.SetRequirePublic(true)
 	defer netutil.SetRequirePublic(false)
 	if _, err := netutil.HTTPClient().Get(ts.URL); err == nil {
-		t.Fatal("expected a private destination to be rejected in hosted mode")
+		t.Fatal("expected a private destination to be rejected when public is required")
 	}
 }
 

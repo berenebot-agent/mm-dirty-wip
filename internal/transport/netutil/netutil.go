@@ -1,7 +1,7 @@
 // Package netutil provides shared network helpers for outbound transports,
 // notably the public-routable destination check used to prevent SSRF. The check
-// is on by default in every mode; self-hosted operators can opt out when they
-// intentionally send through a private gateway or local relay.
+// is on by default; operators who intentionally send through a private
+// gateway or local relay can opt out.
 package netutil
 
 import (

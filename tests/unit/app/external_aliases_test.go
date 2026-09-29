@@ -137,7 +137,7 @@ func TestExternalAliasDraftFreezesIDThroughApproval(t *testing.T) {
 }
 
 // TestExternalAliasAdminGate proves external aliases are Admin-only and, in
-// hosted mode, unavailable even to an Admin.
+// unavailable to non-admins.
 func TestExternalAliasAdminGate(t *testing.T) {
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
@@ -152,10 +152,5 @@ func TestExternalAliasAdminGate(t *testing.T) {
 	}
 	if _, err := svc.CreateExternalAlias(ctx, nonAdmin, box.ID, "x@gmail.com", ""); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("non-admin create err=%v", err)
-	}
-
-	svc.Config.Mode = "hosted"
-	if err := svc.ExternalAliasAdmin(admin); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("hosted admin gate err=%v", err)
 	}
 }
