@@ -14,6 +14,12 @@ Unlimited logical inbox identities, realtime replayable events, BYO outbound del
 
 </div>
 
+> [!WARNING]
+> **MailMoose is in active development and is not yet production-ready.**
+> APIs, configuration, and on-disk formats may change without notice before
+> the first stable release. Kick the tyres, break things, and tell us what's
+> missing — but don't point it at anything you depend on yet.
+
 ---
 
 ## The 5-Second Hook
