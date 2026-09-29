@@ -220,7 +220,7 @@ A selected simple openagent.email client fixture can execute compatible list/rea
 
 ---
 
-## Phase 9 — Hosted hardening
+## Phase 9 — Operations hardening
 
 ### Deliverables
 
@@ -238,7 +238,7 @@ A selected simple openagent.email client fixture can execute compatible list/rea
 
 ### Gate
 
-The hosted instance can be upgraded with preserved `/data`, restore from backup, enforce account storage, and sustain the agreed load-test profile.
+An instance can be upgraded with preserved `/data`, restored from backup, enforce account storage, and sustain the agreed load-test profile.
 
 ---
 

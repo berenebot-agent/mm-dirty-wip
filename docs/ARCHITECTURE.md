@@ -200,7 +200,7 @@ replace-set, so an inbox save cannot drop a connector. A send whose alias has no
 connector is held pending (not failed) and is requeued when the connector is
 saved; a send whose alias was deleted fails permanently with a missing-alias
 error rather than falling back to a domain connector. External aliases are an
-Admin-only, self-hosted capability.
+Admin-only capability.
 
 Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 
@@ -343,7 +343,7 @@ Brevo HTTP API
 
 Each adapter receives decrypted provider-specific configuration and may expose a `ConfigFields()` schema so the Admin UI can render provider-specific inputs instead of raw JSON. Each domain owns at most one optional sending configuration (`domain_sending_configs`); there is no account-level connector pool, no reusable named credential, and no assignment selector, so a domain with no sending configuration queues mail instead of sending through another domain's provider. A queued send resolves the domain's current configuration at worker delivery time; if the domain has none, the message is held without consuming a retry attempt. SES uses the generic SMTP path initially. Send and reply may carry bounded base64-JSON attachments; adapters translate them to Mailgun multipart fields, Brevo attachment objects, or raw SMTP MIME.
 
-Generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts. The same public-routable check guards every HTTP provider client and is on by default in all modes; self-hosted operators who intentionally send through a private gateway can opt out with `ALLOW_PRIVATE_OUTBOUND=true`, which hosted mode ignores.
+Generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts. The same public-routable check guards every HTTP provider client and is on by default; operators who intentionally send through a private gateway can opt out with `ALLOW_PRIVATE_OUTBOUND=true`.
 
 ### Optional MX receiving edge
 
@@ -419,9 +419,8 @@ managed and external aliases separately. A per-alias page
 (`/ui/inboxes/{id}/external-aliases/{aliasID}`) holds the sender name, the
 connector editor (reusing the domain provider-editor markup and secret
 retention) and the alias's outbound activity, mirroring the domain delivery log.
-State-changing UI routes are session + CSRF and Admin-only, and are refused in
-hosted mode; the equivalent bearer endpoints live under
-`/v1/admin/inboxes/{id}/external-aliases`.
+State-changing UI routes are session + CSRF and Admin-only; the equivalent
+bearer endpoints live under `/v1/admin/inboxes/{id}/external-aliases`.
 
 ## 11. Dependency policy
 
@@ -465,7 +464,7 @@ Use in-process goroutines for lightweight maintenance such as:
 
 Persist any work that must survive restart before execution.
 
-Use small in-process rate limiters for login and outbound-send endpoints. Hosted deployments apply account/IP limits through the same in-process limiter.
+Use small in-process rate limiters for login and outbound-send endpoints. Account and IP limits both run through the same in-process limiter.
 
 ## 13. HTTP and TLS boundary
 

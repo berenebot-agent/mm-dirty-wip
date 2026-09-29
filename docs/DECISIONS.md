@@ -26,7 +26,7 @@ This file records architectural decisions the implementation should treat as set
 
 **Reason:** Workload is initially modest, inbox records are lightweight, and SQLite keeps the operational footprint very small.
 
-**Extension point:** Add a PostgreSQL store when measured hosted load makes it beneficial.
+**Extension point:** Add a PostgreSQL store when measured load makes it beneficial.
 
 ## D005 — Local filesystem MIME store
 
@@ -34,7 +34,7 @@ This file records architectural decisions the implementation should treat as set
 
 **Reason:** Simple persistence and backup, efficient streaming, and minimal runtime dependencies.
 
-**Extension point:** Add object storage when hosted storage scale warrants it.
+**Extension point:** Add object storage when storage scale warrants it.
 
 ## D006 — Mailgun reference inbound transport
 
@@ -111,7 +111,8 @@ A domain with no credential is valid: mail is still accepted and queued as `pend
 
 ## D013 — Account storage as hosted capacity control
 
-**Decision:** Hosted V1 uses account-level storage/fair-use controls while logical inbox identities remain cheap to create.
+**Decision:** Account-level storage is the capacity control while logical inbox
+identities remain cheap to create.
 
 **Reason:** Storage reflects real infrastructure consumption more closely than inbox count.
 
@@ -159,7 +160,7 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 ## D018 — Direct relay credential issuance
 
-**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block. The one-time enrollment-token flow (`POST /relay/enroll` plus `hermes gateway enroll`) remains for the CLI and hosted provisioning.
+**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block. The one-time enrollment-token flow (`POST /relay/enroll` plus `hermes gateway enroll`) remains for CLI provisioning.
 
 **Reason:** A self-hosted operator should be able to create a relay connection and paste the resulting environment variables without a separate token-exchange step or a hosted identity token.
 
@@ -437,21 +438,20 @@ checkbox; no new dependency or runtime service.
 ## D028 — Public-routable outbound destinations by default
 
 **Decision:** Every outbound transport (HTTP provider clients and generic SMTP)
-must resolve its destination to a public-routable address before connecting,
-in all modes. `MODE=hosted` always enforces this. A self-hosted operator can opt
-out with `ALLOW_PRIVATE_OUTBOUND=true` for a private gateway or local relay; the
-opt-out is ignored in hosted mode. Provider HTTP API bases must also be HTTPS
+must resolve its destination to a public-routable address before connecting.
+An operator can opt out with `ALLOW_PRIVATE_OUTBOUND=true` for a private gateway
+or local relay. Provider HTTP API bases must also be HTTPS
 and must not name a loopback, private or link-local IP literal when enforcement
 is on. The shared `netutil` client validates inside `DialContext` (so DNS cannot
 rebind between validation and connection), refuses redirects, and bypasses the
 proxy environment while enforcement is active; enforcement off restores the
 default transport and proxy behaviour.
 
-**Reason:** The previous guard was gated behind `MODE=hosted`, so the default
-self-hosted deployment skipped it and an account Administrator could point a
+**Reason:** The previous guard was gated behind the hosted-mode flag, so the
+default deployment skipped it and an account Administrator could point a
 provider's `api_base` at loopback, RFC1918 or the cloud metadata address and
 read the upstream response through the delivery log. The control belongs on by
-default; the operator, not the mode default, should decide to weaken it. Turning
+default; the operator should decide to weaken it. Turning
 the proxy off while enforcing closes the proxy escape hatch.
 
 **Complexity:** One config flag, a shared `netutil` gate, and adapter wiring; no
@@ -1038,8 +1038,8 @@ mount to the runtime UID/GID, then `Setgroups`/`Setgid`/`Setuid` before the
 database is opened. `MAILMOOSE_RUN_UID`/`MAILMOOSE_RUN_GID` (default
 65532:65532) select the runtime user; the drop is a no-op when the process is
 already non-root, so the opt-in hardened compose (`user:`, `cap_drop: [ALL]`)
-needs no setuid capability. This mirrors the sibling router service: no host `chown` step,
-and the hardened `docker-compose.advanced.yml` ships `read_only`, `tmpfs /tmp`
+needs no setuid capability: there is no host `chown` step, and the hardened
+`docker-compose.advanced.yml` ships `read_only`, `tmpfs /tmp`
 and `no-new-privileges`.
 
 ## D043 — Free-text message labels (migration 020)
@@ -1274,19 +1274,17 @@ pack. A breaking rename before first deployment avoids carrying two brands.
 
 ## D057 — Self-hosted Direct MX outbound delivery
 
-**Decision:** Add a `mx` outbound provider for self-hosted deployments. It
-resolves the recipient domain's MX records and delivers raw MIME directly to
-port 25, using the configured HELO hostname and opportunistic STARTTLS without
-SMTP credentials. Each queued message is limited to one unique envelope
-recipient, so the existing atomic outbox state remains correct. Direct MX is
-hidden and rejected in hosted mode, and all resolved destinations continue to
-pass the public-routable outbound guard.
+**Decision:** Add a `mx` outbound provider. It resolves the recipient domain's
+MX records and delivers raw MIME directly to port 25, using the configured HELO
+hostname and opportunistic STARTTLS without SMTP credentials. Each queued
+message is limited to one unique envelope recipient, so the existing atomic
+outbox state remains correct. All resolved destinations continue to pass the
+public-routable outbound guard.
 
 **Reason:** Operators who own their sending IP and DNS should be able to send
-without paying for an SMTP relay. Keeping the feature self-hosted-only avoids
-turning the hosted service into an unmanaged reputation and abuse surface. The
-single-recipient constraint avoids claiming success for recipients that were
-not accepted when one SMTP transaction partially succeeds.
+without paying for an SMTP relay. The single-recipient constraint avoids
+claiming success for recipients that were not accepted when one SMTP
+transaction partially succeeds.
 
 **Operational requirements:** Operators are responsible for port 25 egress,
 forward and reverse DNS for the HELO identity, SPF, DKIM if desired, DMARC
@@ -1295,8 +1293,8 @@ delivery state and signing support.
 
 ## D058 — Strix security review remediation
 
-**Decision:** Apply the confirmed and hardening fixes from the Strix review
-(`the removed review report`, run `<review-run>`):
+**Decision:** Apply the confirmed and hardening fixes from an external
+security review of this codebase:
 
 - **Events feed role parity (vuln-0004).** `ListEvents` withholds the
   assistant-scoped payload fields `approver_email`, `decision_actor`,
@@ -1500,9 +1498,9 @@ it is enforced before the first request rather than after it.
   decision are byte-for-byte the same.
 - `log/slog` is no longer imported by `internal/config`; the file's only other
   logging call was this one.
-- `the removed review report` §O1 still records the WARN as a delivered
-  remediation. That row is left as the historical record of the review round; this
-  decision supersedes the behaviour, not the record.
+- The reviewed round's report recorded the WARN as a delivered remediation. That
+  record is superseded by this decision on the behaviour, not the history of the
+  review round.
 - D059's closing paragraph in this file is superseded on its second clause ("a peer
   found inside the trust set is logged at WARN").
 
@@ -1632,11 +1630,41 @@ and make subdomain `From:` impossible, so it was rejected.
   not the provider-side onboarding.
 - `ResolveRecipient` and the ingest scope check are unchanged; a subdomain's
   catch-all inbox must belong to the subdomain, not the parent.
-- Hosted domain-ownership rules for subdomains and parent domains remain open
-  (see `the removed hosted design notes`); this decision settles self-hosted
-  behaviour only.
+- Domain-ownership rules for subdomains and parent domains are out of scope
+  here; this decision settles the Cloudflare subdomain inheritance behaviour only.
 - `docs/CLOUDFLARE_INBOUND.md` is corrected: catch-all is apex-only, each
   subdomain must be onboarded, and one connector serves the zone.
+
+## D064 — Self-hosted-only product; hosted mode removed
+
+**Context:** The product was scoped for two deployment shapes from one codebase:
+a free multi-tenant hosted service and a self-hosted container. The hosted
+multi-tenant implementation was explored on a separate branch and then
+abandoned; it is archived outside this repository. The project is published as
+free, open-source, self-hosted software.
+
+**Decision:** MailMoose is self-hosted-only. `MODE` accepts only `selfhosted`.
+The hosted branches are removed from the codebase:
+
+- the `SelfHostedOnlyProvider` transport gate and the `OutboundAllowed` helper;
+- the hosted branch of `Config.RequirePublicOutbound`;
+- the hosted refusal in external-alias authorization and the UI/API gates;
+- the `(Admin, self-hosted)` distinction in the API spec;
+- the hosted design and review documents.
+
+**Reason:** Carrying a multi-tenant mode the project does not operate and does
+not test is a liability in a public repository: it advertises behaviour that has
+no implementation, and it keeps dead gating paths alive in security-relevant
+code. Behaviour for a self-hosted deployment is unchanged; the only
+user-visible difference is that `MODE=hosted` is now a startup error rather than
+a silently self-hosted boot.
+
+**Consequences:**
+
+- `the removed hosted design notes` and the hosted implementation are not part of this repository.
+- The account-level storage controls and the self-hosted Direct MX provider are
+  retained; only the hosted-mode gating around them is gone.
+- Account registration remains configuration-controlled and defaults to closed.
 
 ## Future extension register
 

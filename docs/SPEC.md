@@ -1,7 +1,7 @@
 # MailMoose — V1 Product Specification
 
 **Status:** Implementation-ready V1  
-**Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, free hosted or self-hosted.
+**Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, self-hosted.
 
 ## 1. Pitch
 
@@ -9,12 +9,11 @@ MailMoose is an API-native email inbox platform for autonomous agents.
 
 It gives agents persistent email identities, searchable mail history, attachments, scoped access, realtime delivery, and outbound sending through user-provided credentials.
 
-The same codebase supports:
+It is deployed as:
 
-1. **Hosted mode** — a free multi-tenant service operated by the project.
-2. **Self-hosted mode** — a single-container deployment using the operator's transport/provider credentials.
+1. **Self-hosted** — a single-container deployment using the operator's transport/provider credentials.
 
-> **Create as many agent email identities as you need, receive mail in realtime, bring your own outbound provider, or self-host the whole platform.**
+> **Create as many agent email identities as you need, receive mail in realtime, bring your own outbound provider, and self-host the whole platform.**
 
 ## 2. Primary use case
 
@@ -49,7 +48,7 @@ The application directly owns inbox and message state.
 
 Inbox creation is a lightweight database operation.
 
-Hosted capacity is governed primarily through account-level storage and fair-use controls.
+Inbox count is effectively unlimited; account disk footprint is the capacity to watch.
 
 ### 3.3 Realtime delivery
 
@@ -72,9 +71,9 @@ V1 supports:
 
 Send and reply accept optional base64-encoded attachments. The application translates them to each provider's native format and stores sent attachment metadata alongside the raw MIME message.
 
-### 3.5 Hosted and self-hosted from one codebase
+### 3.5 One codebase, one deployment model
 
-Hosted and self-hosted deployments share the same mailbox model, API, event semantics, UI, and integrations.
+Every deployment shares the same mailbox model, API, event semantics, UI, and integrations. There is no separate multi-tenant distribution.
 
 ### 3.6 Lean runtime
 
@@ -95,7 +94,7 @@ one HTTP port
 
 An account owns domains, inboxes, messages, API keys, storage allocation, and Hermes connections. Each domain owns at most one optional sending and one optional receiving provider configuration.
 
-Domains support hosted addresses and custom-domain operation.
+Domains support custom-domain operation.
 
 ### Logical inboxes
 
@@ -233,7 +232,7 @@ Hermes establishes an outbound authenticated WebSocket to the service.
 
 Incoming email can become a native Hermes message event immediately.
 
-The hosted UI generates a one-time enrollment command for the user.
+The UI generates a one-time enrollment command for the user.
 
 ### Human UI
 
@@ -267,28 +266,7 @@ Expose:
 
 A capable agent should be able to begin with a base URL and API key.
 
-## 5. Hosted V1
-
-The hosted service provides:
-
-- BYO receiving (managed SaaS receiving addresses are deferred)
-- effectively unlimited logical inbox identities
-- incoming mail
-- modest account-level storage
-- REST API
-- replayable event history
-- SSE / long-poll
-- Hermes Relay
-- scoped API keys
-- search
-- attachments
-- basic human UI
-- custom domains as supported by the deployment
-- BYO per-domain sending and receiving provider configuration
-
-The initial public service focuses on free access and operational simplicity.
-
-## 6. Self-hosted V1
+## 5. Self-hosted V1
 
 The same application is published as a prebuilt multi-architecture Docker image.
 
@@ -312,7 +290,7 @@ The installation has one **system administrator**: the login named by `ADMIN_EMA
 
 The application serves HTTP behind the operator's reverse proxy, which provides public TLS termination.
 
-## 7. Transport model
+## 6. Transport model
 
 ### Inbound
 
@@ -374,7 +352,7 @@ The mailbox core consumes a normalized inbound-message interface plus an explici
 
 Potential future adapters include direct SMTP/Maddy, SES inbound, and other webhook providers.
 
-## 8. API direction
+## 7. API direction
 
 The canonical API uses straightforward REST resources for:
 
@@ -391,7 +369,7 @@ Where openagent.email endpoint semantics map naturally to the data model, preser
 
 MailMoose extends the model with multi-inbox scopes, replayable event history, cross-inbox search, first-class threads, multi-domain operation, and Hermes Relay.
 
-## 9. Data and backup
+## 8. Data and backup
 
 Persistent self-hosted state lives under:
 
@@ -404,18 +382,15 @@ Persistent self-hosted state lives under:
 
 A consistent, quiesced or filesystem-snapshot copy of `/data` is sufficient for ordinary self-host recovery. `APP_ENCRYPTION_KEY` is backed up separately as a root secret.
 
-## 10. V1 success experience
+## 9. V1 success experience
 
-A hosted user can:
+An operator running the published Docker image can:
 
-1. create an account;
-2. create an inbox;
-3. receive an email address;
+1. bring the container up against a fresh `/data` directory;
+2. add a domain and configure its receiving and sending providers;
+3. create an inbox;
 4. create an agent API key;
 5. connect Hermes using one enrollment command;
 6. send a test email;
 7. see Hermes receive it immediately;
-8. configure a sending provider on the domain when sending is needed;
-9. create additional inbox identities immediately from the same domain configuration.
-
-A self-hosted user can run the same application from the published Docker image and receive the same API and Hermes experience.
+8. create additional inbox identities immediately from the same domain configuration.
