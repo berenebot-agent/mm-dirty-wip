@@ -10,7 +10,3 @@
 .DS_Store
 tests/logs/
 repo.zip
-
-# Strix live-app throwaway harness: disposable instance, credentials and
-# scratch. The whole directory is local-only and never committed.
-tests/strix/
