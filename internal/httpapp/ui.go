@@ -225,7 +225,8 @@ func dashboardActivityRows(entries []store.DomainLogEntry) []model.Message {
 	msgs := make([]model.Message, 0, len(entries))
 	for _, entry := range entries {
 		direction := "inbound"
-		if entry.Kind == "sent" || entry.Kind == "failed" {
+		switch entry.Kind {
+		case "sent", "failed", "sending", "interrupted":
 			direction = "outbound"
 		}
 		msgs = append(msgs, model.Message{

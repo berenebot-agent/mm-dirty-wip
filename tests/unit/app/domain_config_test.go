@@ -336,11 +336,14 @@ func TestProviderAcceptedWhileConfigDeletedStillRecordsSent(t *testing.T) {
 	if sent.Status != "sent" || sent.Provider != "brevo" || sent.ProviderMessageID != "<in-flight>" {
 		t.Fatalf("outcome lost: %+v", sent)
 	}
+	// Two rows now: the in-flight marker written before the provider call and
+	// the terminal sent outcome. Both must be attributed to the domain even
+	// though its config was deleted mid-flight.
 	attempts, err := svc.Store.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(attempts) != 1 || attempts[0].Status != "sent" || attempts[0].DomainID != d.ID {
+	if len(attempts) != 2 || attempts[0].Status != "sent" || attempts[0].DomainID != d.ID || attempts[1].Status != "sending" {
 		t.Fatalf("attempt not recorded against domain: %+v", attempts)
 	}
 }

@@ -86,6 +86,50 @@ func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, account
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)
 }
 
+// RecordDeliveryStarted appends a "sending" attempt row before the provider
+// call is made. It is the durable marker that a delivery is in flight: without
+// it an interrupted send (process restart, crash or dropped connection) leaves
+// no trace at all, so the message silently loops as pending with an empty
+// sending log. Any earlier "sending" row for the same message is marked
+// "interrupted" first, so a re-claim records the previous attempt's fate rather
+// than leaving a dangling in-flight row.
+func (s *Store) RecordDeliveryStarted(ctx context.Context, accountID, messageID, provider string) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	domainID, err := resolveAttemptDomainTx(ctx, tx, accountID, "", messageID)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_delivery_log SET status='interrupted' WHERE account_id=? AND message_id=? AND status='sending'`, accountID, messageID); err != nil {
+		return err
+	}
+	if err = s.insertDeliveryAttemptTx(ctx, tx, accountID, domainID, provider, messageID, "sending", "", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordWorkflowDeliveryStarted appends a "sending" attempt row for a workflow
+// handoff before the provider call, mirroring RecordDeliveryStarted. Any earlier
+// in-flight row for the job is marked "interrupted" first.
+func (s *Store) RecordWorkflowDeliveryStarted(ctx context.Context, accountID, inboxID, workflowID, provider string) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_delivery_log SET status='interrupted' WHERE account_id=? AND workflow_id=? AND status='sending'`, accountID, workflowID); err != nil {
+		return err
+	}
+	if err = s.insertWorkflowAttemptTx(ctx, tx, accountID, inboxID, provider, workflowID, "sending", "", ""); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // resolveAttemptDomainTx validates an explicitly supplied domain (it must belong
 // to the account) or derives one from the message's inbox. An attempt with no
 // surviving message is left unattributed.

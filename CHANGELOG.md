@@ -67,6 +67,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   original conversation even when the provider rewrites `Message-ID`.
 - Outbox delivery panics are contained instead of crashing the worker.
 - Non-UTF-8 encoded message headers are decoded correctly.
+- A delivery attempt is recorded in the sending log when it starts, before the
+  provider call, so an interrupted send (restart, crash or dropped connection)
+  is visible as `Sending…` or `Interrupted` instead of leaving the message
+  silently looping as pending with an empty log. The outbox shows an in-flight
+  message as `Sending…`.
+- Direct MX delivery no longer applies a single 45-second deadline to the whole
+  SMTP transaction, so a large message is not cut off mid-upload; and a message
+  the remote accepted is not reported as failed because the follow-up `QUIT`
+  did not complete.
 
 ### Security
 

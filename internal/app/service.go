@@ -1388,6 +1388,12 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 		}
 		outbound.Attachments = atts
 	}
+	// Record the attempt as in flight before the provider call, so an
+	// interrupted send (restart, crash or dropped connection) leaves a durable
+	// trace instead of looping as pending with an empty sending log.
+	if err := s.Store.RecordDeliveryStarted(outcomeCtx, m.AccountID, m.ID, sending.Provider); err != nil {
+		return err
+	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
 		return s.fail(outcomeCtx, m, err, sending.Provider)
@@ -1538,6 +1544,11 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 			return s.failWorkflow(outcomeCtx, w, aerr, sending.Provider)
 		}
 		outbound.Attachments = atts
+	}
+	// Record the handoff as in flight before the provider call, so an
+	// interrupted send leaves a durable trace in the domain log.
+	if err := s.Store.RecordWorkflowDeliveryStarted(outcomeCtx, accountID, w.InboxID, workflowID, sending.Provider); err != nil {
+		return err
 	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {

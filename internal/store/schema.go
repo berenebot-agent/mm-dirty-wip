@@ -1047,3 +1047,43 @@ ALTER TABLE domains ADD COLUMN inherit_receiving INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE domains ADD COLUMN inherit_sending INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_domains_parent ON domains(parent_domain_id);
 `
+
+// migration034 lets a delivery attempt be recorded while it is still in flight
+// ("sending") and, if a re-claim happens before an outcome is written, marks the
+// abandoned attempt "interrupted". Previously an attempt row was only written
+// once there was a terminal outcome, so a send interrupted by a process restart,
+// crash or dropped connection left no trace at all: the message silently looped
+// as pending with an empty sending log even though the remote may have accepted
+// it. SQLite cannot widen a CHECK constraint in place, so the table is rebuilt
+// with the expanded status set; every existing row is carried over unchanged.
+const migration034 = `
+CREATE TABLE outbound_delivery_log_new (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT REFERENCES domains(id) ON DELETE SET NULL,
+  provider TEXT NOT NULL DEFAULT '',
+  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  workflow_id TEXT,
+  external_alias_id TEXT NOT NULL DEFAULT '',
+  attempt INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL CHECK(status IN ('sent','failed','sending','interrupted')),
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  error_text TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  inbox_id TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  client_label TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO outbound_delivery_log_new(id,account_id,domain_id,provider,message_id,workflow_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label)
+  SELECT id,account_id,domain_id,provider,message_id,workflow_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label
+  FROM outbound_delivery_log;
+DROP TABLE outbound_delivery_log;
+ALTER TABLE outbound_delivery_log_new RENAME TO outbound_delivery_log;
+CREATE INDEX idx_outbound_log_domain ON outbound_delivery_log(account_id, domain_id, id DESC);
+CREATE INDEX idx_outbound_log_msg ON outbound_delivery_log(message_id);
+CREATE INDEX idx_outbound_log_workflow ON outbound_delivery_log(workflow_id);
+CREATE INDEX idx_outbound_log_external_alias ON outbound_delivery_log(account_id, external_alias_id, id DESC);
+CREATE INDEX idx_outbound_log_inbox ON outbound_delivery_log(account_id, inbox_id, id DESC);
+`

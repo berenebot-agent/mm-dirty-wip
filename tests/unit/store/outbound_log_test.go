@@ -105,6 +105,91 @@ func deliveryLogCount(t *testing.T, s *store.Store, accountID string) int {
 	return n
 }
 
+// TestDeliveryStartedRecordsInFlightAndInterruptsStale covers the outcome-safety
+// fix: a delivery attempt is visible while it is in flight, and a re-claim after
+// an interrupted attempt marks the previous in-flight row "interrupted" rather
+// than leaving a dangling "sending" row forever.
+func TestDeliveryStartedRecordsInFlightAndInterruptsStale(t *testing.T) {
+	ctx := context.Background()
+	s, u, d, b := testStore(t)
+	box := b[0]
+	rec := store.OutboundRecord{Inbox: box, Provider: "mx", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "big", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	m, _, err := s.CommitOutbound(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First attempt starts but is never resolved (interrupted send).
+	if err = s.RecordDeliveryStarted(ctx, u.AccountID, m.ID, "mx"); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := s.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0].Status != "sending" || attempts[0].MessageID != m.ID {
+		t.Fatalf("in-flight attempt %+v", attempts)
+	}
+	// A second attempt re-claims the message: the stale sending row must become
+	// interrupted, and the new attempt is visible as sending.
+	if err = s.RecordDeliveryStarted(ctx, u.AccountID, m.ID, "mx"); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err = s.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("attempts len %d", len(attempts))
+	}
+	if attempts[0].Status != "sending" || attempts[1].Status != "interrupted" {
+		t.Fatalf("newest %q oldest %q", attempts[0].Status, attempts[1].Status)
+	}
+	// A resolved outcome still records normally after the in-flight row.
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "mx"); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err = s.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newest first: the terminal sent row, the second (still open) sending row,
+	// then the interrupted first attempt.
+	if attempts[0].Status != "sent" || attempts[1].Status != "sending" || attempts[2].Status != "interrupted" {
+		t.Fatalf("after sent %+v", attempts)
+	}
+}
+
+// TestOutboxMarksSendingInFlight proves the outbox view distinguishes a message
+// whose delivery is in flight from one merely queued.
+func TestOutboxMarksSendingInFlight(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	rec := store.OutboundRecord{Inbox: box, Provider: "mx", RFCMessageID: "<out@test>", From: model.Address{Address: box.Address}, To: []string{"x@y.test"}, Subject: "s", Text: "t", RawPath: "messages/o.eml", SizeBytes: 100}
+	m, _, err := s.CommitOutbound(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	list, err := s.ListOutbox(ctx, p, box.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].Sending {
+		t.Fatalf("queued outbox %+v", list)
+	}
+	if err = s.RecordDeliveryStarted(ctx, u.AccountID, m.ID, "mx"); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListOutbox(ctx, p, box.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || !list[0].Sending {
+		t.Fatalf("in-flight outbox %+v", list)
+	}
+}
+
 func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, b := testStore(t)

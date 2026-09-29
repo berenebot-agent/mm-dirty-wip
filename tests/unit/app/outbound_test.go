@@ -197,15 +197,20 @@ func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
 	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
 		t.Fatal(err)
 	}
+	// A delivery records two rows: the "sending" in-flight marker written before
+	// the provider call and the terminal "sent" outcome.
 	attempts, err := svc.Store.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(attempts) != 1 {
+	if len(attempts) != 2 {
 		t.Fatalf("attempts len %d", len(attempts))
 	}
 	a := attempts[0]
 	if a.Status != "sent" || a.MessageID != res.Message.ID || a.DomainID != d.ID || a.Provider != "brevo" || a.ProviderMessageID != "<log-out>" || a.Attempt != 1 {
 		t.Fatalf("attempt %+v", a)
+	}
+	if attempts[1].Status != "sending" || attempts[1].MessageID != res.Message.ID {
+		t.Fatalf("in-flight attempt %+v", attempts[1])
 	}
 }

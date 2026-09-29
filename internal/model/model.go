@@ -318,7 +318,11 @@ type Message struct {
 	Attempts  int    `json:"attempts,omitempty"`
 	LastError string `json:"last_error,omitempty"`
 	NextRetry string `json:"next_retry,omitempty"`
-	IdemKey   string `json:"-"`
+	// Sending is set on outbox listings when a delivery attempt is currently in
+	// flight (an outbound_delivery_log row with status "sending"), so the outbox
+	// can distinguish an actively-sending message from one merely queued.
+	Sending bool   `json:"sending,omitempty"`
+	IdemKey string `json:"-"`
 	// Blocked marks a synthetic Message built for the admin Recent messages log.
 	// Blocked mail is never stored in the messages table; see BlockedMessage.
 	Blocked bool `json:"blocked,omitempty"`
