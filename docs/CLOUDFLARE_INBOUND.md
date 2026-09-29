@@ -130,10 +130,10 @@ Walk through the Cloudflare navigation:
 ## 5. Add a routing rule that sends mail to the Worker
 
 MailMoose's model is built around cheap, unlimited logical inbox identities, so
-the recommended setup is **one catch-all rule for the whole receiving
-domain/subdomain**, not one rule per address. MailMoose then routes every local
-part internally (to an inbox, an alias, or the domain catch-all), and adding a
-new inbox never requires touching Cloudflare again.
+the recommended setup is **one catch-all rule for the whole receiving domain,
+not one rule per address**. MailMoose then routes every local part internally
+(to an inbox, an alias, or the domain catch-all), and adding a new inbox never
+requires touching Cloudflare again.
 
 1. Still under **Email Routing**, open the **Routing rules** tab.
 2. Edit the **catch-all** rule (the `@` local part, i.e. all addresses). If no
@@ -146,6 +146,37 @@ new inbox never requires touching Cloudflare again.
 The server routes each local part according to the domain catch-all setting: a
 matching inbox or alias is delivered there, and anything else goes to the
 domain's configured catch-all inbox.
+
+### Subdomains: onboard each one, reuse the one Worker
+
+Cloudflare stores the catch-all rule on the **apex** domain only, and the
+dashboard's "match every address" selector lists only apex domains. To receive
+on a subdomain you must onboard it explicitly: under **Email Routing** open the
+domain's **Settings**, and under **Subdomains** add the subdomain (for example
+`agent.example.com`). Cloudflare writes the MX and SPF records for it; mail to
+the subdomain is then handled by the same zone catch-all and delivered to the
+same Worker. Catch-all entries in Wrangler's `addresses` field do not support
+subdomains (`*@sub.example.com` fails with error `2062`).
+
+Because a single Worker serves the whole zone, you do not need a second Worker
+(or a second secret) for a subdomain:
+
+- In MailMoose, add the subdomain as a domain. When it is a subdomain of a
+  domain that already has a receiving configuration, MailMoose detects the
+  parent and offers to reuse its receiving configuration (and sending
+  configuration, if configured). This is on by default; untick it to configure
+  the subdomain separately. The subdomain keeps its own inboxes, aliases and
+  catch-all, so `foo@agent.example.com` is a distinct address from
+  `foo@example.com`.
+- The one Worker forwards `message.to`, so the server knows which subdomain the
+  mail was for; the bearer is the parent's shared secret.
+- You can later give a subdomain its own receiver, or clear the inherited one,
+  from the subdomain's row in the **Domains** list. Rotating the parent's secret
+  updates every inheriting subdomain at once.
+
+Sending is separate: to send or reply `From: @agent.example.com`, onboard the
+subdomain for Cloudflare Email Sending (its own SPF/DKIM), independently of
+receiving.
 
 If you cannot dedicate a full domain/subdomain to MailMoose, per-address rules
 remain available as a fallback: repeat steps 2–6 with a **Custom email address**

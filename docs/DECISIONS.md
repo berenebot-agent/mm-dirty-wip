@@ -1570,6 +1570,74 @@ API-key and Hermes HTTP routes as aliases preserves existing integrations.
 - Mode and auth are editable without resetting the cursor; mode changes only
   the shape of future payloads.
 
+## D063 — Subdomains inherit their parent domain's receiver and sender
+
+**Context:** Cloudflare Email Routing is a zone-level feature whose catch-all
+rule is stored only on the apex domain, yet mail sent to an explicitly onboarded
+subdomain (Email Routing → Settings → Subdomains) is delivered to the single
+Worker that the zone catch-all points at. In other words one Cloudflare Worker
+and its generated shared secret connect a whole zone, and no separate Worker or
+secret is needed per subdomain. (Cloudflare documents the catch-all as
+apex-only and the "match every address" selector lists only apex domains; the
+observed behaviour that an onboarded subdomain is still delivered to that Worker
+is relied on, but Cloudflare's documentation does not state it explicitly, so a
+future change is a risk to watch.) MailMoose's model, however, required every
+recipient domain to have its own `domains` row with its own receiving config, so
+routing `foo@agent.example.com` needed a second domain row and a second receiver
+config/secret — even though Cloudflare already delivered it to the same Worker.
+The product goal is that adding one top-level domain and one connector lets new
+addresses be created on any of its (onboarded) subdomains without configuring
+another receiver.
+
+**Decision:** A domain may be a subdomain of another domain in the same account
+and optionally inherit the parent's receiving and/or sending configuration,
+resolved at read time rather than copied.
+
+- Migration 033 adds `domains.parent_domain_id` (nullable, self-reference,
+  `ON DELETE CASCADE`), `inherit_receiving` and `inherit_sending`.
+  `CreateDomainWithOptions` records the nearest same-account ancestor whose name
+  is a proper label-suffix of the new name and, by default, sets both inherit
+  flags; the operator can opt out per slot on create or toggle later.
+- `ResolveDomainReceivingConfig` / `ResolveDomainSendingConfig` return the
+  domain's own configuration when present, otherwise the nearest ancestor's
+  while the matching inherit flag is set. A domain explicitly configured for a
+  *different* provider does not fall through — it is simply unconfigured for the
+  requested provider.
+- `ResolveInboundBinding` resolves the recipient's own domain row (so the
+  downstream account/domain scope check is unchanged and always names the child)
+  but takes the credential from the effective resolver. This covers every
+  webhook provider and the MX edge, because they all resolve bindings the same
+  way. `ResolveRecipient` is untouched: a subdomain is an ordinary domain owning
+  its own inboxes, aliases and catch-all.
+- Inheritance is provider-agnostic. Rotating the parent's secret or switching
+  the parent's provider applies to every descendant automatically.
+- Sending inherits the same way, but a provider may still reject an outbound
+  From on a subdomain it has not authorised (for example Cloudflare Email
+  Sending onboarding, or Mailgun domain verification); the UI warns rather than
+  blocks, since the operator may have provisioned it externally.
+
+**Reason:** It keeps subdomain addresses first-class (each is its own `domains`
+row with its own catch-all, storage and future per-subdomain settings) while
+removing the receiver duplication that Cloudflare's zone model already implies.
+Resolving at read time means the connector stays singular per zone: one Worker,
+one secret, no repaste per subdomain. The alternative — treating subdomain mail
+as the parent's namespace with a wildcard flag — would collapse address identity
+and make subdomain `From:` impossible, so it was rejected.
+
+**Consequences:**
+
+- External routing is still per-provider: Cloudflare requires each subdomain to
+  be onboarded under Email Routing → Settings → Subdomains before its mail
+  reaches the Worker. Inheritance removes the *app-side* receiver duplication,
+  not the provider-side onboarding.
+- `ResolveRecipient` and the ingest scope check are unchanged; a subdomain's
+  catch-all inbox must belong to the subdomain, not the parent.
+- Hosted domain-ownership rules for subdomains and parent domains remain open
+  (see `the removed hosted design notes`); this decision settles self-hosted
+  behaviour only.
+- `docs/CLOUDFLARE_INBOUND.md` is corrected: catch-all is apex-only, each
+  subdomain must be onboarded, and one connector serves the zone.
+
 ## Future extension register
 
 

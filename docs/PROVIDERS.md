@@ -5,6 +5,14 @@ one optional receiving configuration and one optional sending configuration;
 there is no account-level connector pool and no assignment step, so mail can
 only enter or leave through the provider configured on its domain.
 
+A subdomain can instead **inherit** its parent domain's receiving and/or sending
+configuration. When a domain is added that is a subdomain of an existing domain,
+MailMoose records the parent and, by default, reuses the parent's connectors, so
+one connector (for example one Cloudflare Worker and its shared secret) can
+serve every onboarded subdomain of a zone. The subdomain still owns its own
+inboxes, aliases and catch-all, and can be given its own configuration instead.
+See `docs/DECISIONS.md` D063 and `docs/CLOUDFLARE_INBOUND.md`.
+
 Both directions are configured in the Admin UI (domain page → **Receiving** /
 **Sending**) or through the Admin API. Provider secrets are stored encrypted
 using `APP_ENCRYPTION_KEY`.
