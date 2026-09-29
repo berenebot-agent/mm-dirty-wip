@@ -1705,6 +1705,24 @@ function aliasNameByAddress(list) {
 })();
 
 (function () {
+  var next = document.getElementById('cf-next');
+  if (!next) {
+    return;
+  }
+  next.addEventListener('click', function () {
+    var worker = document.getElementById('cf-worker-step');
+    var routing = document.getElementById('cf-routing-step');
+    if (worker) {
+      worker.hidden = true;
+    }
+    if (routing) {
+      routing.hidden = false;
+    }
+    window.scrollTo(0, 0);
+  });
+})();
+
+(function () {
   document.querySelectorAll('.setup-copy').forEach(function (btn) {
     var dlg = btn.closest('dialog') || document;
     // Each provider group owns its own webhook URL and note. Resolve them from
