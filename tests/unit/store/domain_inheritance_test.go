@@ -189,3 +189,106 @@ func TestCreateSubdomainParentOverrideRejectsNonAncestor(t *testing.T) {
 		t.Fatal("expected error when parent is not an ancestor")
 	}
 }
+
+// A subdomain added before its parent can be linked to the parent afterwards,
+// inheriting its connector while keeping the child domain id. Unlinking clears
+// the switch and stops resolution.
+func TestLinkSubdomainToParentAddedLater(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, _ := testStore(t)
+	// Subdomain first: no ancestor exists, so it is created as a root domain.
+	sub, err := s.CreateDomain(ctx, u.AccountID, "agent.late.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.ParentDomainID != "" || sub.InheritReceiving || sub.InheritSending {
+		t.Fatalf("subdomain added first must be a root: %+v", sub)
+	}
+	// The ancestor is added later and configured.
+	parent, err := s.CreateDomain(ctx, u.AccountID, "late.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, parent.ID, "cloudflare", "enc-late", store.ConfigVersion{}); err != nil {
+		t.Fatal(err)
+	}
+	// It is offered as a candidate parent.
+	cands, err := s.InheritableAncestors(ctx, u.AccountID, sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range cands {
+		if c.ID == parent.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("parent must be offered as a candidate: %+v", cands)
+	}
+	// Link and inherit.
+	if err := s.SetDomainParent(ctx, u.AccountID, sub.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.ResolveInboundBinding(ctx, "cloudflare", "foo@agent.late.test")
+	if err != nil || b.EncryptedConfig != "enc-late" || b.DomainID != sub.ID {
+		t.Fatalf("linked subdomain must inherit while keeping its own id: %+v err=%v", b, err)
+	}
+	got, err := s.GetDomain(ctx, u.AccountID, sub.ID)
+	if err != nil || got.ParentDomain != "late.test" || !got.InheritReceiving || got.ReceivingInheritedFrom != "late.test" {
+		t.Fatalf("linked domain view %+v err=%v", got, err)
+	}
+	// Unlink: resolution stops and the switches clear.
+	if err := s.SetDomainParent(ctx, u.AccountID, sub.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetDomain(ctx, u.AccountID, sub.ID)
+	if err != nil || got.ParentDomainID != "" || got.InheritReceiving || got.InheritSending {
+		t.Fatalf("unlinked domain view %+v err=%v", got, err)
+	}
+	if _, err := s.ResolveInboundBinding(ctx, "cloudflare", "foo@agent.late.test"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unlinked subdomain must not resolve: err=%v", err)
+	}
+}
+
+// Linking rejects a parent that is not an ancestor, the domain itself, or a
+// descendant that would form a cycle.
+func TestLinkSubdomainRejectsInvalidParents(t *testing.T) {
+	ctx := context.Background()
+	s, u, d, _ := testStore(t)
+	sub, err := s.CreateDomain(ctx, u.AccountID, "agent.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDomainParent(ctx, u.AccountID, sub.ID, d.ID); err != nil {
+		t.Fatalf("linking to the real ancestor should succeed: %v", err)
+	}
+	// The parent is not an ancestor of a root domain.
+	root, err := s.CreateDomain(ctx, u.AccountID, "other.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDomainParent(ctx, u.AccountID, root.ID, d.ID); err == nil {
+		t.Fatal("expected rejection when parent is not an ancestor")
+	}
+	// A domain cannot be its own parent.
+	if err := s.SetDomainParent(ctx, u.AccountID, sub.ID, sub.ID); err == nil {
+		t.Fatal("expected rejection when linking a domain to itself")
+	}
+	// A descendant of the domain cannot become its parent (cycle).
+	if err := s.SetDomainParent(ctx, u.AccountID, d.ID, sub.ID); err == nil {
+		t.Fatal("expected rejection when linking to a descendant")
+	}
+	// A parent in another account is rejected.
+	u2, err := s.CreateAccountAndAdmin(ctx, "B", "admin@b.test", "correct horse battery staple", 100<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bd, err := s.CreateDomain(ctx, u2.AccountID, "elsewhere.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDomainParent(ctx, u2.AccountID, sub.ID, bd.ID); err == nil {
+		t.Fatal("expected rejection for cross-account parent")
+	}
+}

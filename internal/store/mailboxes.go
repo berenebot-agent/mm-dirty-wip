@@ -61,13 +61,9 @@ func (s *Store) CreateDomainWithOptions(ctx context.Context, accountID, name str
 	if parentID == "" {
 		parentID, _ = s.nearestAncestorDomain(ctx, accountID, name)
 	}
-	parentName := ""
 	if parentID != "" {
-		if err := s.read.QueryRowContext(ctx, `SELECT name FROM domains WHERE id=? AND account_id=?`, parentID, accountID).Scan(&parentName); err != nil {
-			return model.Domain{}, fmt.Errorf("parent domain not found")
-		}
-		if !isSubdomainOf(name, parentName) {
-			return model.Domain{}, fmt.Errorf("%s is not a subdomain of %s", name, parentName)
+		if _, err := s.validateParentDomain(ctx, accountID, "", name, parentID); err != nil {
+			return model.Domain{}, err
 		}
 	}
 	inheritReceiving, inheritSending := false, false
@@ -243,6 +239,110 @@ func (s *Store) SetDomainInheritFlag(ctx context.Context, accountID, domainID st
 	return nil
 }
 
+// validateParentDomain checks that parentID names a domain in the same account
+// that is a proper label-suffix ancestor of childName, returning the parent's
+// name. When childID is non-empty it rejects a parent that is the child itself
+// or one of the child's own descendants, and a link that would create a cycle.
+func (s *Store) validateParentDomain(ctx context.Context, accountID, childID, childName, parentID string) (string, error) {
+	var parentName string
+	err := s.read.QueryRowContext(ctx, `SELECT name FROM domains WHERE id=? AND account_id=?`, parentID, accountID).Scan(&parentName)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("parent domain not found")
+	}
+	if err != nil {
+		return "", err
+	}
+	if childID != "" && parentID == childID {
+		return "", fmt.Errorf("a domain cannot be its own parent")
+	}
+	if !isSubdomainOf(childName, parentName) {
+		return "", fmt.Errorf("%s is not a subdomain of %s", normalizeDomain(childName), parentName)
+	}
+	// Walking up from the proposed parent must never reach the child, which
+	// would form a cycle.
+	id := parentID
+	for depth := 0; depth < maxDomainAncestorDepth; depth++ {
+		if id == childID && childID != "" {
+			return "", fmt.Errorf("linking %s to %s would create a cycle", normalizeDomain(childName), parentName)
+		}
+		st, err := s.domainInheritanceState(ctx, accountID, id)
+		if err != nil {
+			// A parent without its own row (or a broken chain) simply ends the walk.
+			return parentName, nil
+		}
+		if st.ParentID == "" {
+			return parentName, nil
+		}
+		id = st.ParentID
+	}
+	return "", fmt.Errorf("linking %s to %s would create a cycle", normalizeDomain(childName), parentName)
+}
+
+// SetDomainParent links a root domain to an ancestor added later, or unlinks it.
+// parentID must name a proper suffix ancestor of the domain in the same account;
+// an empty parentID unlinks the domain and clears both inherit flags. Linking
+// turns both inheritance switches on (matching the create-time default); the
+// operator can opt out per slot with SetDomainInheritFlag afterwards. No parent
+// configuration is copied - it is resolved at read time.
+func (s *Store) SetDomainParent(ctx context.Context, accountID, domainID, parentID string) error {
+	name, err := s.domainName(ctx, accountID, domainID)
+	if err != nil {
+		return err
+	}
+	parentID = strings.TrimSpace(parentID)
+	if parentID == "" {
+		res, err := s.write.ExecContext(ctx, `UPDATE domains SET parent_domain_id=NULL, inherit_receiving=0, inherit_sending=0 WHERE id=? AND account_id=?`, domainID, accountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	}
+	if _, err := s.validateParentDomain(ctx, accountID, domainID, name, parentID); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE domains SET parent_domain_id=?, inherit_receiving=1, inherit_sending=1 WHERE id=? AND account_id=?`, parentID, domainID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// InheritableAncestors returns the candidate parent domains for a domain: every
+// other domain in the same account whose name is a proper label-suffix ancestor
+// of this domain's name. It is used to offer a manual parent link when a parent
+// is added after the subdomain already exists.
+func (s *Store) InheritableAncestors(ctx context.Context, accountID, domainID string) ([]model.Domain, error) {
+	name, err := s.domainName(ctx, accountID, domainID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.ListDomains(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	labels := strings.Split(normalizeDomain(name), ".")
+	out := []model.Domain{}
+	for _, d := range all {
+		if d.ID == domainID {
+			continue
+		}
+		for i := 1; i < len(labels); i++ {
+			if strings.Join(labels[i:], ".") == normalizeDomain(d.Name) {
+				out = append(out, d)
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// SetDomainCatchAll sets or clears the catch-all inbox for a domain.
 func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inboxID string) error {
 	if inboxID != "" {
 		var n int

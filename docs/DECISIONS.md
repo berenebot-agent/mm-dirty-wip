@@ -1635,6 +1635,24 @@ and make subdomain `From:` impossible, so it was rejected.
 - `docs/CLOUDFLARE_INBOUND.md` is corrected: catch-all is apex-only, each
   subdomain must be onboarded, and one connector serves the zone.
 
+**Amendment — linking a parent added after the subdomain.** Creation-time
+detection only links a subdomain to an ancestor that already exists, so a
+subdomain added first stays a root domain when its parent is added later.
+Rather than back-fill automatically (which would silently change the routing of
+existing mail), linking is an explicit action:
+
+- `Store.SetDomainParent` links or unlinks a domain. Linking validates that the
+  target is a proper suffix ancestor in the same account and is not the domain
+  itself or one of its descendants (cycle guard bounded by
+  `maxDomainAncestorDepth`), records the parent, and turns both inherit switches
+  on — matching the create-time default. An empty parent id unlinks and clears
+  both switches. No parent configuration is copied; resolution stays read-time.
+- The dashboard offers **Link to parent** for a root domain that has an
+  available ancestor, backed by `Store.InheritableAncestors`. The Admin API
+  accepts `parent_domain_id` on `PATCH /v1/admin/domains/{id}` (empty string to
+  unlink, omission to leave unchanged). `POST /v1/admin/domains` and the UI
+  creation dialog are unchanged.
+
 ## D064 — Self-hosted-only product; hosted mode removed
 
 **Context:** The product was scoped for two deployment shapes from one codebase:

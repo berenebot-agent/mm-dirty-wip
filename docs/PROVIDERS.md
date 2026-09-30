@@ -13,6 +13,14 @@ serve every onboarded subdomain of a zone. The subdomain still owns its own
 inboxes, aliases and catch-all, and can be given its own configuration instead.
 See `docs/DECISIONS.md` D063 and `docs/CLOUDFLARE_INBOUND.md`.
 
+If a subdomain is added **before** its parent domain, it is created as a root
+domain with no link. Adding the parent afterwards does not re-link it
+automatically. On the dashboard, such a domain shows a **Link to parent**
+action; selecting a parent there (or sending `parent_domain_id` on
+`PATCH /v1/admin/domains/{id}`) records the parent and turns on both inheritance
+switches. Sending an empty `parent_domain_id` unlinks the domain and clears the
+switches. Unlinking never touches the domain's own connectors.
+
 Both directions are configured in the Admin UI (domain page → **Receiving** /
 **Sending**) or through the Admin API. Provider secrets are stored encrypted
 using `APP_ENCRYPTION_KEY`.

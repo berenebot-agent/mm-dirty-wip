@@ -84,3 +84,83 @@ func TestAPICreateSubdomainInheritsParent(t *testing.T) {
 		t.Fatalf("explicit no-inherit ignored %+v", solo)
 	}
 }
+
+// TestAPILinkSubdomainToParentAddedLater covers linking a subdomain to a parent
+// created after it via PATCH parent_domain_id, and unlinking it.
+func TestAPILinkSubdomainToParentAddedLater(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	// Subdomain first, as a root domain.
+	rr := do("POST", "/v1/admin/domains", `{"name":"agent.late.test"}`)
+	if rr.Code != 201 {
+		t.Fatalf("create subdomain %d %s", rr.Code, rr.Body.String())
+	}
+	var sub struct {
+		ID           string `json:"id"`
+		ParentDomain string `json:"parent_domain"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &sub); err != nil {
+		t.Fatal(err)
+	}
+	if sub.ParentDomain != "" {
+		t.Fatalf("subdomain added first must have no parent: %+v", sub)
+	}
+	// Parent added later and configured.
+	rr = do("POST", "/v1/admin/domains", `{"name":"late.test"}`)
+	if rr.Code != 201 {
+		t.Fatalf("create parent %d %s", rr.Code, rr.Body.String())
+	}
+	var parent struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &parent); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, parent.ID, "cloudflare", map[string]any{}, false); err != nil {
+		t.Fatal(err)
+	}
+	// Link.
+	rr = do("PATCH", "/v1/admin/domains/"+sub.ID, `{"parent_domain_id":"`+parent.ID+`"}`)
+	if rr.Code != 200 {
+		t.Fatalf("patch link %d %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.Store.GetDomain(ctx, u.AccountID, sub.ID)
+	if err != nil || got.ParentDomainID != parent.ID || !got.InheritReceiving || !got.InheritSending || got.ReceivingInheritedFrom != "late.test" {
+		t.Fatalf("after link %+v err=%v", got, err)
+	}
+	// Unlink.
+	rr = do("PATCH", "/v1/admin/domains/"+sub.ID, `{"parent_domain_id":""}`)
+	if rr.Code != 200 {
+		t.Fatalf("patch unlink %d %s", rr.Code, rr.Body.String())
+	}
+	got, err = svc.Store.GetDomain(ctx, u.AccountID, sub.ID)
+	if err != nil || got.ParentDomainID != "" || got.InheritReceiving || got.InheritSending {
+		t.Fatalf("after unlink %+v err=%v", got, err)
+	}
+	// A non-ancestor parent is rejected.
+	rr = do("POST", "/v1/admin/domains", `{"name":"other.test"}`)
+	if rr.Code != 201 {
+		t.Fatalf("create other %d %s", rr.Code, rr.Body.String())
+	}
+	var other struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &other); err != nil {
+		t.Fatal(err)
+	}
+	if rr = do("PATCH", "/v1/admin/domains/"+sub.ID, `{"parent_domain_id":"`+other.ID+`"}`); rr.Code == 200 {
+		t.Fatalf("patching to a non-ancestor must fail: %s", rr.Body.String())
+	}
+}

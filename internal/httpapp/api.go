@@ -1587,9 +1587,19 @@ func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
 			CatchAllInboxID  *string `json:"catch_all_inbox_id"`
 			InheritReceiving *bool   `json:"inherit_receiving"`
 			InheritSending   *bool   `json:"inherit_sending"`
+			// ParentDomainID links the domain to an ancestor added after it (a
+			// non-empty domain id) or unlinks it (an empty string). Omission
+			// leaves the current parent unchanged.
+			ParentDomainID *string `json:"parent_domain_id"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
+		}
+		if in.ParentDomainID != nil {
+			if err := s.Service.Store.SetDomainParent(r.Context(), p.AccountID, id, *in.ParentDomainID); err != nil {
+				mapStoreError(w, err)
+				return
+			}
 		}
 		if in.CatchAllInboxID != nil {
 			if err := s.Service.Store.SetDomainCatchAll(r.Context(), p.AccountID, id, *in.CatchAllInboxID); err != nil {
