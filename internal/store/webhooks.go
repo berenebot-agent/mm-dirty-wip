@@ -96,6 +96,12 @@ func (s *Store) GetWebhookClient(ctx context.Context, accountID, id string) (Web
 }
 
 func (s *Store) UpdateWebhookClient(ctx context.Context, accountID, id, name, targetURL, mode, authMode string) error {
+	return s.UpdateWebhookClientWithSecret(ctx, accountID, id, name, targetURL, mode, authMode, "")
+}
+
+// UpdateWebhookClientWithSecret updates configuration and an optional encrypted
+// replacement secret atomically. An empty encrypted value preserves the secret.
+func (s *Store) UpdateWebhookClientWithSecret(ctx context.Context, accountID, id, name, targetURL, mode, authMode, encrypted string) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -111,6 +117,11 @@ func (s *Store) UpdateWebhookClient(ctx context.Context, accountID, id, name, ta
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE client_push SET url=?,payload_mode=?,auth_mode=? WHERE client_id=?`, targetURL, mode, authMode, id); err != nil {
 		return err
+	}
+	if encrypted != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE client_push SET signing_secret_encrypted=? WHERE client_id=?`, encrypted, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -191,6 +202,9 @@ func (s *Store) RecordWebhookSkipped(ctx context.Context, clientID string, event
 	if _, err = tx.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE client_id=? AND EXISTS (SELECT 1 FROM webhook_deliveries wd WHERE wd.client_id=? AND wd.event_id=? AND wd.status IN ('delivered','failed','skipped'))`, eventID, clientID, clientID, eventID); err != nil {
 		return err
 	}
+	if err = recordDeliveryLog(ctx, tx, clientID, eventID, "skipped", 0, "message not deliverable", "", now); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -219,6 +233,10 @@ func (s *Store) RecordWebhookDelivery(ctx context.Context, clientID string, even
 		return err
 	}
 	defer tx.Rollback()
+	var attempts int
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT attempts FROM webhook_deliveries WHERE client_id=? AND event_id=?),0) + 1`, clientID, eventID).Scan(&attempts); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO webhook_deliveries(client_id,event_id,attempts,next_attempt_at,last_error,status,created_at) VALUES(?,?,1,?,?,?,?) ON CONFLICT(client_id,event_id) DO UPDATE SET attempts=webhook_deliveries.attempts+1,next_attempt_at=excluded.next_attempt_at,last_error=excluded.last_error,status=excluded.status`, clientID, eventID, retryTimeText(retryAt), errText, status, now); err != nil {
 		return err
 	}
@@ -226,6 +244,13 @@ func (s *Store) RecordWebhookDelivery(ctx context.Context, clientID string, even
 		if _, err = tx.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?),last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END,last_error=? WHERE client_id=?`, eventID, boolInt(success), now, errText, clientID); err != nil {
 			return err
 		}
+	}
+	next := ""
+	if status == "pending" {
+		next = retryTimeText(retryAt)
+	}
+	if err = recordDeliveryLog(ctx, tx, clientID, eventID, status, attempts, errText, next, now); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

@@ -289,7 +289,7 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				}
 			case "inbound_ack":
 				if id := store.ParseCursor(f.BufferID); id > 0 {
-					_ = s.Store.AckHermesEvent(ctx, h.ID, id)
+					_ = s.Store.AckHermesEventLogged(ctx, h.ID, id, 1)
 					select {
 					case ackCh <- id:
 					default:
@@ -354,27 +354,41 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				after = ev.ID
 				continue
 			}
+			// Record the attempt before writing to the socket. If the socket
+			// drops before the gateway acknowledges, the durable cursor is
+			// untouched so the event is redelivered, and the log shows the
+			// outstanding attempt rather than silently losing it.
+			_ = s.Store.RecordHermesDeliveryPending(ctx, h.ID, ev.ID)
 			if err := wr.JSON(map[string]any{"type": "inbound", "event": messageEvent(m), "bufferId": ev.Cursor}); err != nil {
+				_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
 				return err
 			}
 			s.Log.Info("relay inbound", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", m.ID, "from", m.From.Address, "to", m.To)
-			for {
+			acked := false
+			for !acked {
 				select {
 				case id := <-ackCh:
 					if id >= ev.ID {
 						after = id
+						if m, mErr := s.Store.ClientDeliveryLog(ctx, h.AccountID, h.ID, 1, ev.ID+1); mErr == nil && len(m) == 1 {
+							_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, m[0].Attempts)
+						} else {
+							_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
+						}
 						s.Log.Info("relay acked", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
-						goto delivered
+						acked = true
 					}
 				case err := <-errCh:
+					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
 					return err
 				case <-ctx.Done():
+					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay connection closed before acknowledgement")
 					return ctx.Err()
 				case <-time.After(60 * time.Second):
+					_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay acknowledgement timeout")
 					return errors.New("relay acknowledgement timeout")
 				}
 			}
-		delivered:
 			continue
 		}
 		if !errors.Is(err, store.ErrNotFound) {

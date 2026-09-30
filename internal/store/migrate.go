@@ -123,6 +123,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("messages", "envelope_from"),
 			tableSQLContains("webhook_deliveries", "'skipped'"),
 		)},
+		{version: "036", sql: migration036, detect: stateOf(tableExists("client_delivery_log"))},
 	}
 }
 

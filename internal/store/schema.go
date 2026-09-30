@@ -1123,3 +1123,37 @@ INSERT INTO webhook_deliveries_new(client_id,event_id,attempts,next_attempt_at,l
 DROP TABLE webhook_deliveries;
 ALTER TABLE webhook_deliveries_new RENAME TO webhook_deliveries;
 `
+
+// migration036 adds client_delivery_log, the per-event delivery history behind
+// the Dashboard "Log" button on a Webhook or Hermes relay client. One row is
+// appended per (client, event) when a delivery outcome is reached and updated in
+// place while a retry or acknowledgement is still outstanding, so an operator
+// can see queued, delivered, acknowledged, skipped and failed events without
+// re-deriving them from the live queue.
+//
+//   - status is the transport-neutral outcome ("pending", "delivered",
+//     "acknowledged", "skipped" or "failed"); the UI derives the label.
+//   - attempts counts delivery or acknowledgement attempts; last_error and
+//     next_attempt_at carry the retry context for a pending row.
+//   - created_at/updated_at drive ordering and retention. History is bounded:
+//     terminal rows older than the retention window are pruned, and a client's
+//     delivery cursor plus the outstanding (pending) rows are always kept so a
+//     restart still resumes correctly.
+//   - ON DELETE CASCADE removes a client's history with the client, and the
+//     account index lets retention and the account-scoped read prune and page
+//     without scanning every account's rows.
+const migration036 = `
+CREATE TABLE client_delivery_log (
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','delivered','acknowledged','skipped','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  next_attempt_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(client_id,event_id)
+);
+CREATE INDEX idx_client_delivery_log_client ON client_delivery_log(client_id, event_id DESC, updated_at DESC);
+CREATE INDEX idx_client_delivery_log_account ON client_delivery_log(client_id, updated_at);
+`

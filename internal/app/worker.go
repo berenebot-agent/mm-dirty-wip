@@ -134,8 +134,27 @@ func (w *OutboxWorker) maintain() {
 		{"expireApprovals", w.expireApprovals},
 		{"sweepWorkflows", w.sweepWorkflows},
 		{"sweepMXReceipts", w.sweepMXReceipts},
+		{"sweepClientDeliveryLog", w.sweepClientDeliveryLog},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// clientDeliveryLogRetention bounds the per-client Webhook/Hermes delivery
+// history. It matches the delivery log's 30-day floor; outstanding (pending)
+// rows are never pruned.
+const clientDeliveryLogRetention = 30 * 24 * time.Hour
+
+// sweepClientDeliveryLog removes terminal Webhook and Hermes delivery-history
+// rows older than the retention window, keeping the dashboard Log view bounded.
+func (w *OutboxWorker) sweepClientDeliveryLog() {
+	n, err := w.svc.Store.PruneClientDeliveryLog(context.Background(), clientDeliveryLogRetention, time.Now().UTC())
+	if err != nil {
+		w.log.Error("client delivery log sweep", "error", err)
+		return
+	}
+	if n > 0 {
+		w.log.Info("swept client delivery log", "count", n)
 	}
 }
 

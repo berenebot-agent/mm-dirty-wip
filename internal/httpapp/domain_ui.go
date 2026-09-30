@@ -150,38 +150,6 @@ func (s *Server) uiDomainCatchAll(w http.ResponseWriter, r *http.Request) {
 	s.domainNotice(w, r, "Catch-all inbox updated")
 }
 
-// uiDomainLinkParent links a root domain to a parent domain that was added after
-// the subdomain already existed, or unlinks it. An empty parent_domain_id
-// unlinks; a non-empty one must name an ancestor domain in the same account.
-// Linking turns both inheritance switches on, matching the create-time default.
-func (s *Server) uiDomainLinkParent(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
-	ctx := r.Context()
-	id := r.PathValue("id")
-	if _, err := s.Service.Store.GetDomain(ctx, p.AccountID, id); err != nil {
-		http.Error(w, "domain not found", 404)
-		return
-	}
-	parentID := strings.TrimSpace(r.Form.Get("parent_domain_id"))
-	if err := s.Service.Store.SetDomainParent(ctx, p.AccountID, id, parentID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "domain not found", 404)
-			return
-		}
-		s.domainNotice(w, r, err.Error())
-		return
-	}
-	if parentID == "" {
-		s.domainNotice(w, r, "Parent domain link removed")
-		return
-	}
-	s.domainNotice(w, r, "Subdomain linked to its parent domain")
-}
-
 // providerInherited is the sentinel provider value used by the sending and
 // receiving editors for a subdomain that should reuse an ancestor's connector
 // instead of its own. It is a UI-only value, never persisted as a provider.
@@ -239,12 +207,17 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 }
 
 // setSendingInherited makes a subdomain reuse its parent's sending connector:
-// its own sending config is removed and inherit_sending is switched on. It
-// errors when the domain has no parent or the parent has no sending provider
-// to inherit.
+// its own sending config is removed and inherit_sending is switched on. When the
+// domain was added before its parent and is not linked yet, it is linked to the
+// nearest existing ancestor first. It errors when no parent can serve it or the
+// parent has no sending provider to inherit.
 func (s *Server) setSendingInherited(ctx context.Context, accountID string, d model.Domain) error {
 	if d.ParentDomainID == "" {
-		return fmt.Errorf("%w: only a subdomain can inherit a sending configuration", app.ErrInvalidConfig)
+		linked, err := s.linkNearestAncestor(ctx, accountID, d)
+		if err != nil {
+			return err
+		}
+		d = linked
 	}
 	parent, err := s.Service.Store.GetDomain(ctx, accountID, d.ParentDomainID)
 	if err != nil {
@@ -257,6 +230,23 @@ func (s *Server) setSendingInherited(ctx context.Context, accountID string, d mo
 		return err
 	}
 	return s.Service.Store.SetDomainInheritFlag(ctx, accountID, d.ID, true, true)
+}
+
+// linkNearestAncestor links a domain that has no parent yet to the nearest
+// existing ancestor in the same account (the parent added after it). It errors
+// when no ancestor exists.
+func (s *Server) linkNearestAncestor(ctx context.Context, accountID string, d model.Domain) (model.Domain, error) {
+	candidates, err := s.Service.Store.InheritableAncestors(ctx, accountID, d.ID)
+	if err != nil {
+		return d, err
+	}
+	if len(candidates) == 0 {
+		return d, fmt.Errorf("%w: only a subdomain can inherit a configuration", app.ErrInvalidConfig)
+	}
+	if err := s.Service.Store.SetDomainParent(ctx, accountID, d.ID, candidates[0].ID); err != nil {
+		return d, err
+	}
+	return s.Service.Store.GetDomain(ctx, accountID, d.ID)
 }
 
 // uiDomainSendingClear removes the domain's sending configuration. Mail for the
@@ -334,11 +324,16 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 
 // setReceivingInherited makes a subdomain reuse its parent's receiving
 // connector: its own receiving config is removed and inherit_receiving is
-// switched on. It errors when the domain has no parent or the parent has no
-// receiving provider to inherit.
+// switched on. When the domain was added before its parent and is not linked
+// yet, it is linked to the nearest existing ancestor first. It errors when no
+// parent can serve it or the parent has no receiving provider to inherit.
 func (s *Server) setReceivingInherited(ctx context.Context, accountID string, d model.Domain) error {
 	if d.ParentDomainID == "" {
-		return fmt.Errorf("%w: only a subdomain can inherit a receiving configuration", app.ErrInvalidConfig)
+		linked, err := s.linkNearestAncestor(ctx, accountID, d)
+		if err != nil {
+			return err
+		}
+		d = linked
 	}
 	parent, err := s.Service.Store.GetDomain(ctx, accountID, d.ParentDomainID)
 	if err != nil {
@@ -762,6 +757,9 @@ func domainReceivingSteps(provider string) []string {
 		return []string{"Register the webhook URL above with the provider, then fill in the fields below and save."}
 	}
 }
+
+const clientDeliveriesBody = `<div class="toolbar"><a href="/">← Clients</a></div>
+<section class="card"><h1>{{.ClientLogClient.Name}} · Log</h1><p class="muted">{{if eq .ClientLogClient.Kind "webhook"}}Events delivered to this Webhook client, newest first. “Acknowledged” means the endpoint returned 2xx; queued and retrying rows are still being attempted. Completed history is retained for about 30 days.{{else}}Events delivered to this Hermes relay, newest first. “Acknowledged” means the gateway accepted the event — not that the agent finished processing it. Completed history is retained for about 30 days.{{end}}</p>{{if .ClientLogEntries}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Status</th><th>Event</th><th>Message</th><th>Detail</th><th></th></tr></thead><tbody>{{range .ClientLogEntries}}<tr><td style="white-space:nowrap">{{.At.Format "2006-01-02 15:04"}}</td><td><span class="pill{{if eq .Status "failed"}} danger{{else if or (eq .Status "pending") (eq .Status "skipped")}} amber{{end}}">{{deliveryStatus .Status .Attempts .LastError}}</span></td><td>{{if .EventType}}{{.EventType}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Detail}}{{.Detail}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted log-detail">attempt {{.Attempts}}{{if .NextAttemptAt}} · next {{.NextAttemptAt}}{{end}}{{if .LastError}} · {{.LastError}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .ClientLogHasMore}}<p><a href="/ui/clients/{{.ClientLogClient.ID}}/log?before={{.ClientLogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No deliveries yet.</p>{{end}}</section>`
 
 const domainDeliveriesBody = `<div class="toolbar"><a href="/?domain={{.Domain.ID}}">← {{.Domain.Name}}</a></div>
 <section class="card"><h1>Domain log</h1><p class="muted">Two-way activity for {{.Domain.Name}}: delivered, blocked and approval-control inbound mail, plus every outbound send attempt, newest first. Outbound attempts are retained for about 30 days; received and blocked mail follows normal message retention.</p>{{if .LogEntries}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th>Detail</th><th></th></tr></thead><tbody>{{range .LogEntries}}<tr><td style="white-space:nowrap">{{.At.Format "2006-01-02 15:04"}}</td><td>{{if eq .Kind "sent"}}<span class="pill">Sent</span>{{else if eq .Kind "sending"}}<span class="pill amber">Sending…</span>{{else if eq .Kind "interrupted"}}<span class="pill danger">Interrupted</span>{{else if eq .Kind "failed"}}<span class="pill danger">Failed</span>{{else if or (eq .Kind "received") (eq .Kind "approval")}}<span class="pill">Received</span>{{else}}<span class="pill amber">Blocked</span>{{end}}</td><td>{{if .FromAddress}}{{.FromAddress}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted log-detail">{{if eq .Kind "sent"}}attempt {{.Attempt}}{{if .ProviderMessageID}} · {{.ProviderMessageID}}{{end}}{{else if eq .Kind "sending"}}attempt {{.Attempt}} in progress{{if .Provider}} · {{.Provider}}{{end}}{{else if eq .Kind "interrupted"}}attempt {{.Attempt}} interrupted before an outcome was recorded{{if .Provider}} · {{.Provider}}{{end}}{{else if eq .Kind "failed"}}attempt {{.Attempt}}{{if .ErrorText}} · {{.ErrorText}}{{end}}{{else if eq .Kind "blocked"}}{{if .Reason}}{{.Reason}}{{else}}blocked{{end}}{{else if eq .Kind "approval"}}{{.Status}}{{if .Reason}} · {{.Reason}}{{end}}{{else}}{{if .Provider}}{{.Provider}}{{end}}{{if .SizeBytes}} · {{bytes .SizeBytes}}{{end}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .LogHasMore}}<p><a href="/ui/domains/{{.Domain.ID}}/sending/deliveries?before={{.LogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No activity yet.</p>{{end}}</section>`
