@@ -157,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /invite/{token}", s.withPreAuthCSRF(s.invitePost))
 	m.HandleFunc("POST /ui/domains", s.withSession(s.withCSRF(s.uiCreateDomain)))
 	m.HandleFunc("POST /ui/domains/{id}/catchall", s.withSession(s.withCSRF(s.uiDomainCatchAll)))
+	m.HandleFunc("POST /ui/domains/{id}/parent", s.withSession(s.withCSRF(s.uiDomainLinkParent)))
 	m.HandleFunc("POST /ui/domains/{id}/sending", s.withSession(s.withCSRF(s.uiDomainSending)))
 	m.HandleFunc("POST /ui/domains/{id}/sending/clear", s.withSession(s.withCSRF(s.uiDomainSendingClear)))
 	m.HandleFunc("POST /ui/domains/{id}/receiving", s.withSession(s.withCSRF(s.uiDomainReceiving)))

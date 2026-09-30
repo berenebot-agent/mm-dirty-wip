@@ -150,6 +150,38 @@ func (s *Server) uiDomainCatchAll(w http.ResponseWriter, r *http.Request) {
 	s.domainNotice(w, r, "Catch-all inbox updated")
 }
 
+// uiDomainLinkParent links a root domain to a parent domain that was added after
+// the subdomain already existed, or unlinks it. An empty parent_domain_id
+// unlinks; a non-empty one must name an ancestor domain in the same account.
+// Linking turns both inheritance switches on, matching the create-time default.
+func (s *Server) uiDomainLinkParent(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	ctx := r.Context()
+	id := r.PathValue("id")
+	if _, err := s.Service.Store.GetDomain(ctx, p.AccountID, id); err != nil {
+		http.Error(w, "domain not found", 404)
+		return
+	}
+	parentID := strings.TrimSpace(r.Form.Get("parent_domain_id"))
+	if err := s.Service.Store.SetDomainParent(ctx, p.AccountID, id, parentID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "domain not found", 404)
+			return
+		}
+		s.domainNotice(w, r, err.Error())
+		return
+	}
+	if parentID == "" {
+		s.domainNotice(w, r, "Parent domain link removed")
+		return
+	}
+	s.domainNotice(w, r, "Subdomain linked to its parent domain")
+}
+
 // providerInherited is the sentinel provider value used by the sending and
 // receiving editors for a subdomain that should reuse an ancestor's connector
 // instead of its own. It is a UI-only value, never persisted as a provider.
