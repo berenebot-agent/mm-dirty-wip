@@ -55,6 +55,19 @@ if [ -t 1 ]; then TTY_FLAG="-it"; fi
 
 ENV_FLAGS="-e GOFLAGS=-p=2 -e CGO_ENABLED=1"
 
+# Optional contract-fixture passthrough: when BILLBOT_CONTRACT_FIXTURE names a
+# file, mount its parent directory at the identical container path and pass the
+# variable through, so an in-container test that writes the fixture lands on the
+# host. Without it the path is invisible inside the container (and the var is
+# not exported): the fixture test skips. This is how the mailmoose/Billbot
+# webhook wire contract is exported from a real worker test run.
+FIXTURE_FLAGS=""
+if [ -n "${BILLBOT_CONTRACT_FIXTURE:-}" ]; then
+    fixture_dir=$(dirname -- "$BILLBOT_CONTRACT_FIXTURE")
+    fixture_dir=$(CDPATH= cd -- "$fixture_dir" && pwd)
+    FIXTURE_FLAGS="-e BILLBOT_CONTRACT_FIXTURE=$BILLBOT_CONTRACT_FIXTURE -v $fixture_dir:$fixture_dir"
+fi
+
 # Log capture: always write full output to a repo-local log file under
 # tests/logs/ (gitignored, persistent across runs). The summary printed at
 # the end shows the path; on failure the first FAIL line is also inlined.
@@ -82,6 +95,7 @@ if [ "${1:-}" = "gofmt" ]; then
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
         $ENV_FLAGS \
+        $FIXTURE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \
@@ -93,6 +107,7 @@ else
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
         $ENV_FLAGS \
+        $FIXTURE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \

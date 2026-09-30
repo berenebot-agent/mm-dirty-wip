@@ -119,6 +119,10 @@ func migrations(dataDir string) []migration {
 			columnAdded("domains", "inherit_sending"),
 		)},
 		{version: "034", sql: migration034, fkOff: true, detect: stateOf(tableSQLContains("outbound_delivery_log", "'sending'"))},
+		{version: "035", sql: migration035, fkOff: true, detect: allOf(
+			columnAdded("messages", "envelope_from"),
+			tableSQLContains("webhook_deliveries", "'skipped'"),
+		)},
 	}
 }
 

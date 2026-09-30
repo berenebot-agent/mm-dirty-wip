@@ -283,6 +283,14 @@ type Message struct {
 	Provider          string   `json:"provider,omitempty"`
 	ProviderMessageID string   `json:"provider_message_id,omitempty"`
 	EnvelopeTo        []string `json:"envelope_to,omitempty"`
+	// EnvelopeFrom is the transport-supplied SMTP envelope sender (MAIL FROM)
+	// exactly as the receiving adapter observed it, or empty when the transport
+	// supplied none. It is never derived from the MIME From header.
+	EnvelopeFrom string `json:"envelope_from,omitempty"`
+	// EnvelopeRecipient is the canonical original envelope recipient the
+	// transport addressed, which may be a catch-all or alias address rather
+	// than the resolved inbox address.
+	EnvelopeRecipient string `json:"envelope_recipient,omitempty"`
 	// Client is the denormalized snapshot of the API key / Hermes credential
 	// that sent an outbound message. It is empty for inbound mail and for sends
 	// with no credential (for example an email-approved send).

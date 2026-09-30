@@ -93,6 +93,21 @@ verify the approval reply's DKIM signature locally against the staged MIME
 before acting on the sender's identity. Revisit only alongside an explicit
 decision to change approval behaviour.
 
+### Forwarded webhook envelope metadata is relay-supplied, not attested
+
+**Status:** accepted risk — decision `D066` in `docs/DECISIONS.md`.
+
+An outbound **forward** webhook carries the original transport envelope sender
+and recipient in the `X-MailMoose-Envelope-From` / `X-MailMoose-Envelope-To`
+headers alongside the unchanged raw MIME. The values are exactly what the
+inbound transport reported, so their trustworthiness is the inbound transport's:
+Cloudflare and Mailgun envelope senders are caller-asserted (see above), while
+Resend's is Svix-attested. A receiver must treat these headers as **relay
+metadata to record, not authority to act on**, unless it independently
+establishes provenance. The headers are bounded and bounded-decoded, and a
+missing sender is sent as an empty value so a receiver that requires one fails
+closed rather than falling back to the spoofable MIME `From:` header.
+
 **The general rule for reporters:** attestation is a property of *what a
 signature covers*, never of a provider's name. A shared secret or bearer token
 authenticates the caller; it says nothing about whether a value the caller

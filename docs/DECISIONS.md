@@ -1732,6 +1732,80 @@ failure as a failure would itself cause duplicate delivery.
 - The delivery-log retention (newest 5000 rows / 30 days) is unchanged; the
   extra in-flight row counts toward it.
 
+## D066 — Persist the transport envelope sender; forward envelope metadata; terminal webhook skips
+
+**Context:** Two gaps surfaced while wiring MailMoose to an agent that consumes
+forwarded inbound mail:
+
+1. Inbound messages persisted the canonical original envelope recipient
+   (`messages.envelope_recipient`, D029/D030) but **dropped the transport-supplied
+   envelope sender** at the shared ingest boundary. Every adapter already parsed
+   it into `transport.InboundMessage.EnvelopeFrom` (Cloudflare Worker header,
+   Mailgun `sender` form field, Resend Svix payload, MX `MAIL FROM`), but
+   `deliverStaged` never wrote it to the message row. The approval workflow used
+   the in-memory value and then lost it, so a durable consumer had no way to
+   read the original envelope sender.
+2. D062 stated that webhook delivery "skips currently-Spam mail, matching
+   Hermes", but `NextWebhookDelivery` did not filter on Spam (or anything else).
+   A message that was Spam, internal, or deleted could pin the head of a
+   client's queue indefinitely, and a forward of a deleted message failed on
+   every retry.
+
+**Decision:**
+
+- **Persist the envelope sender.** Migration 035 adds
+  `messages.envelope_from TEXT NOT NULL DEFAULT ''`. The shared ingest
+  (`deliverStaged`) normalizes the relay value once and passes it through
+  `store.InboundRecord.EnvelopeFrom` for both the approval control path and the
+  message row. It is bounded to 254 octets (RFC 5321 address maximum) and
+  rejected as empty if it exceeds that or contains control characters. A
+  missing/null sender stays empty: there is **no MIME-header fallback and no
+  backfill guessing**, on upgraded or fresh databases. The message reads back
+  `envelope_from` and `envelope_recipient` on the normalized API model.
+- **Forward envelope metadata on the wire.** A forward webhook adds two headers
+  to the byte-for-byte `message/rfc822` body: `X-MailMoose-Envelope-From` and
+  `X-MailMoose-Envelope-To`. Values are percent-encoded UTF-8 using RFC 3986
+  escaping (space `%20`, plus `%2B`, `@` `%40`; not query/`form` encoding where
+  `+` means space). Exactly one header each; a missing sender is sent as an
+  empty value so the receiver fails closed. The values come from the persisted
+  transport metadata, so they are identical on retries. Existing event,
+  delivery, message and cursor headers, the `message/rfc822` content type, the
+  raw MIME bytes, and the bearer/signature scheme are unchanged. The sender is
+  **relay-supplied**, not provider-attested (D029/D058): this is metadata a
+  receiver may record and display, not authority it should trust without a
+  provenance check.
+- **Skip non-deliverable events terminally.** Migration 035 widens
+  `webhook_deliveries.status` to include `skipped`. Immediately before dispatch
+  the worker re-checks the message: if the event is a "moved to Spam"
+  transition, or the message is currently Spam, internal, or has been deleted,
+  it records a terminal `skipped` delivery and advances the cursor, with no
+  network call. `message.spam_state_changed` uses the event's own new state, so
+  a stale spam transition is skipped even if the message is later released
+  (releasing enqueues its own deliverable event). The worker drains a run of
+  skipped events and then delivers the first genuine head, so a Spam/deleted/
+  internal event cannot block the queue and the `skipped` status is filtered
+  from future head selection.
+
+**Reason:** Durable truth before notification applies to inbound metadata too:
+persisting the envelope sender makes the approval boundary's input auditable and
+lets downstream consumers read exactly what the transport observed without
+re-parsing MIME. The webhook skip completes D062's stated behaviour and closes a
+head-of-line stall: a delivery accelerator must never be able to wedge a
+mailbox's event stream because one message was later quarantined or deleted.
+Bounding the value and rejecting malformed metadata keeps the persisted field
+safe and prevents a crafted relay value from being echoed as authority.
+
+**Consequences:**
+
+- A forward receiver that needs an attested sender must establish provenance
+  itself; the header is documented as relay-supplied in `SECURITY.md`.
+- Older messages keep an empty `envelope_from`; nothing is fabricated for them.
+- Webhook clients gain a terminal `skipped` state; a delivery in that state is
+  not retried and does not advance a client's error state. The dashboard-facing
+  `last_error` is not set by a skip.
+- No backward-compatibility alias is needed for a capability that has not yet
+  shipped.
+
 ## Future extension register
 
 

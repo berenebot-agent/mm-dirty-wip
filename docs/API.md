@@ -203,6 +203,12 @@ By default (neither set) Spam is excluded from ordinary reads. `PATCH
 /v1/messages/{id}` also accepts `spam` to release (`false`) or quarantine
 (`true`) a message, which commits a durable `message.spam_state_changed` event.
 
+`envelope_from` is the transport-supplied SMTP envelope sender (MAIL FROM),
+exactly as the receiving adapter observed it; it is empty when the transport
+supplied none and is never derived from the MIME `From` header.
+`envelope_recipient` is the canonical original envelope recipient, which may be
+a catch-all or alias address rather than the resolved inbox address.
+
 Normalized message:
 
 ```json
@@ -212,6 +218,8 @@ Normalized message:
   "direction": "inbound",
   "inbox_id": "in_01K...",
   "envelope_to": ["hermes@example.com"],
+  "envelope_from": "sender@example.org",
+  "envelope_recipient": "hermes@example.com",
   "from": {"name":"Jane","address":"jane@example.org"},
   "to": ["hermes@example.com"],
   "cc": [],
@@ -628,7 +636,66 @@ names (`sending_provider`, `receiving_provider`) but no secrets or settings.
 This configuration surface is provider-facing (Admin role) rather than
 agent-facing.
 
-## 12. Hermes Relay
+## 12. Outbound webhook delivery
+
+A **webhook** client (`type` `webhook` in `/v1/admin/clients`) is an inbox-bound
+push destination. It has two payload modes:
+
+- **notify** — `POST` with `Content-Type: application/json` and a fixed body:
+
+  ```json
+  {"event":"message.received","cursor":"evt_123","inbox_id":"in_01K...","message_id":"msg_01K..."}
+  ```
+
+- **forward** — `POST` with `Content-Type: message/rfc822` whose body is the raw
+  stored MIME, byte-for-byte unchanged.
+
+Every delivery carries the durable event headers:
+
+```text
+X-MailMoose-Event:      message.received | message.spam_state_changed
+X-MailMoose-Delivery:   <client_id>:<cursor>
+X-MailMoose-Message-Id: <message_id>
+X-MailMoose-Cursor:     evt_<n>
+```
+
+A forward delivery additionally carries the original transport envelope
+metadata, read from the persisted message and therefore identical on retries:
+
+```text
+X-MailMoose-Envelope-From: <percent-encoded original envelope sender, or empty>
+X-MailMoose-Envelope-To:   <percent-encoded canonical original envelope recipient>
+```
+
+- Values are **percent-encoded UTF-8 using RFC 3986 escaping**: a space is
+  `%20`, a literal plus is `%2B`, and `@` is `%40`. This is *not*
+  `application/x-www-form-urlencoded`, where `+` would mean a space. A receiver
+  must decode strictly and treat an unparseable value as absent.
+- Exactly one header of each name is sent. A missing/null envelope sender is
+  sent as an empty value, so a receiver that requires one fails closed rather
+  than falling back to the spoofable MIME `From:` header. The decoded value is
+  bounded to 254 octets (RFC 5321); a receiver should reject a longer encoded
+  value (a 2048-octet encoded bound is generous).
+- The sender is **relay-supplied, not provider-attested** (see `SECURITY.md`).
+  Record it; do not treat it as authority without an independent provenance
+  check.
+
+Authentication is chosen per client:
+
+- **bearer** — `Authorization: Bearer <secret>` (the same generated token shown
+  once at creation/rotation).
+- **signature** — `X-MailMoose-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over
+  `t + "." + body` with the client secret.
+
+Delivery is durable and inbox-ordered: HTTP 2xx acknowledges and advances the
+cursor; failures retry with capped exponential backoff and a delivery not
+succeeded within the retry window is marked failed with the cursor advanced.
+Mail that is currently Spam, internal, or has since been deleted is terminally
+**skipped** (no request) with the cursor advanced, so it cannot block the queue.
+An empty `X-MailMoose-Envelope-From` means the transport supplied no envelope
+sender; it never reflects the MIME header.
+
+## 13. Hermes Relay
 
 Relay endpoint:
 
@@ -662,7 +729,7 @@ connection's outbound role: `owner` lets the relay send directly, while
 
 Relay protocol implementation should follow the Hermes connector contract while isolating its versioning from the canonical API.
 
-## 13. openagent.email compatibility
+## 14. openagent.email compatibility
 
 Where semantics align naturally, support familiar compatibility operations such as:
 

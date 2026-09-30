@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/store"
 )
@@ -65,6 +66,81 @@ func TestResolveInboundBindingAndIsolation(t *testing.T) {
 	}
 	if _, err = s.ResolveInboundBinding(ctx, "mailgun", "hermes@example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("cleared resolve err=%v", err)
+	}
+}
+
+func TestInboundPersistsTransportEnvelopeMetadata(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, b := testStore(t)
+	box := b[0]
+
+	// The transport-supplied envelope sender and the canonical original
+	// envelope recipient are persisted verbatim and read back on the message.
+	rec := inbound(box, "env-1", "<env@test>", "", nil, "s", "body")
+	rec.EnvelopeFrom = "Sender@Outside.Test"
+	rec.EnvelopeRecipient = "catchall@example.com"
+	m, _, dup, err := s.CommitInbound(ctx, rec)
+	if err != nil || dup {
+		t.Fatalf("commit %v dup=%v", err, dup)
+	}
+	if m.EnvelopeFrom != "Sender@Outside.Test" || m.EnvelopeRecipient != "catchall@example.com" {
+		t.Fatalf("envelope metadata %#v", m)
+	}
+	got, err := s.GetMessageByID(ctx, rec.Inbox.AccountID, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EnvelopeFrom != "Sender@Outside.Test" || got.EnvelopeRecipient != "catchall@example.com" {
+		t.Fatalf("read back %#v", got)
+	}
+
+	// A transport that supplied no sender leaves the column empty; nothing is
+	// inferred from the MIME From header.
+	empty := inbound(box, "env-2", "<env2@test>", "", nil, "s2", "body2")
+	empty.EnvelopeFrom = ""
+	m2, _, _, err := s.CommitInbound(ctx, empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.EnvelopeFrom != "" {
+		t.Fatalf("missing sender was backfilled: %q", m2.EnvelopeFrom)
+	}
+}
+
+func TestWebhookSkippedDeliveryAdvancesCursor(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	c, err := s.CreateWebhookClient(ctx, u.AccountID, b[0].ID, "ep", "https://hooks.example.test/x", "notify", "signature", "enc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, e1, _, err := s.CommitInbound(ctx, inbound(b[0], "sk-1", "<sk1@test>", "", nil, "one", "body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, e2, _, err := s.CommitInbound(ctx, inbound(b[0], "sk-2", "<sk2@test>", "", nil, "two", "body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if got, err := s.NextWebhookDelivery(ctx, now); err != nil || got.EventID != e1.ID {
+		t.Fatalf("head %v %#v", err, got)
+	}
+	// A skipped event is terminal and the cursor advances, so the next event is
+	// the new head without any network call.
+	if err := s.RecordWebhookSkipped(ctx, c.ID, e1.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.NextWebhookDelivery(ctx, now)
+	if err != nil || next.EventID != e2.ID {
+		t.Fatalf("after skip %v %#v", err, next)
+	}
+	if next.Client.LastAckEventID != e1.ID {
+		t.Fatalf("cursor %d, want %d", next.Client.LastAckEventID, e1.ID)
+	}
+	// Skipping again is idempotent and a skipped event is never re-picked.
+	if err := s.RecordWebhookSkipped(ctx, c.ID, e1.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
