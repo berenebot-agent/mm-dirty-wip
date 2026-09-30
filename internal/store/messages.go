@@ -25,14 +25,18 @@ type InboundRecord struct {
 	Inbox                                           model.Inbox
 	Provider, ProviderDeliveryID, ProviderMessageID string
 	EnvelopeRecipient                               string
-	RFCMessageID, InReplyTo                         string
-	References                                      []string
-	From                                            model.Address
-	To, CC, EnvelopeTo                              []string
-	Subject, Text, HTML, RawPath                    string
-	SizeBytes                                       int64
-	ReceivedAt                                      time.Time
-	Attachments                                     []AttachmentInput
+	// EnvelopeFrom is the transport-supplied envelope sender. It is persisted
+	// verbatim (bounded by the ingest layer) and is empty when the transport
+	// supplied none; it is never inferred from the MIME From header.
+	EnvelopeFrom                 string
+	RFCMessageID, InReplyTo      string
+	References                   []string
+	From                         model.Address
+	To, CC, EnvelopeTo           []string
+	Subject, Text, HTML, RawPath string
+	SizeBytes                    int64
+	ReceivedAt                   time.Time
+	Attachments                  []AttachmentInput
 	// Spam is the local auth-policy disposition for MX mail. SpamReason is the
 	// bounded reason and AuthResults is the bounded normalized evidence. All
 	// three are empty/false for provider webhook mail.
@@ -123,7 +127,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
@@ -295,11 +299,13 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var received, sent sql.NullString
 	var read, arch int
 	var has, internal, spam int
-	var authResults string
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason)
+	var authResults, envelopeFrom, envelopeRecipient string
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient)
 	if err != nil {
 		return m, err
 	}
+	m.EnvelopeFrom = envelopeFrom
+	m.EnvelopeRecipient = envelopeRecipient
 	m.Internal = internal != 0
 	m.Spam = spam != 0
 	if strings.TrimSpace(authResults) != "" && authResults != "{}" {
@@ -323,7 +329,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))

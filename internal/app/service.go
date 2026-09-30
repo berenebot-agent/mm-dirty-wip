@@ -282,6 +282,13 @@ func (m *mxDeliverAuth) receiptTTL() time.Duration {
 // case); for fan-out a copy is made so each inbox owns its raw MIME. mx carries
 // the optional MX auth-policy disposition; it is nil for provider webhook mail.
 func (s *Service) deliverStaged(ctx context.Context, provider string, msg transport.InboundMessage, inbox model.Inbox, parsed mailparse.Parsed, single bool, mx *mxDeliverAuth) (model.Message, bool, error) {
+	// The transport-supplied envelope sender is untrusted relay metadata. Bound
+	// it once here so both the approval control path and the persisted value
+	// (message row and forward webhook headers) see the same safe value: over
+	// the address-length limit or carrying control characters, it is discarded
+	// rather than truncated, so malformed metadata can neither authorize an
+	// approval nor be echoed downstream.
+	msg.EnvelopeFrom = normalizeEnvelopeSender(msg.EnvelopeFrom)
 	// A strict approval control subject, or a reply quoting the approval email's
 	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
 	// ordinary delivery, so the token never becomes mailbox content. It is
@@ -342,7 +349,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, EnvelopeFrom: msg.EnvelopeFrom, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err
@@ -382,6 +389,28 @@ func firstNonEmpty(vs ...string) string {
 		}
 	}
 	return ""
+}
+
+// maxEnvelopeSenderLength bounds the transport-supplied envelope sender to the
+// maximum length of an email address (RFC 5321 4.5.3.1.3, 254 octets). A value
+// beyond it is discarded rather than truncated.
+const maxEnvelopeSenderLength = 254
+
+// normalizeEnvelopeSender returns the transport-supplied envelope sender as
+// bounded safe metadata, or the empty string when it is absent or malformed. It
+// never derives a value from the MIME headers: a null return path and a
+// provider that passes no sender both stay empty.
+func normalizeEnvelopeSender(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" || len(v) > maxEnvelopeSenderLength {
+		return ""
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return v
 }
 
 // rateLimiter is a small in-process per-key limiter used to bound audit-log

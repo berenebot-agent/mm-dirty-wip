@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/store"
@@ -74,5 +75,57 @@ func TestMigrateFresh(t *testing.T) {
 	// A two-column composite foreign key is reported as two rows.
 	if n != 2 {
 		t.Fatalf("domain_sending_configs foreign key columns = %d, want 2", n)
+	}
+}
+
+// TestMigration035EnvelopeFromAndSkippedStatus proves migration 035 adds the
+// transport envelope sender column and widens the webhook delivery status set
+// to include the terminal "skipped" outcome, on both a fresh database and an
+// upgrade from the v012 fixture.
+func TestMigration035EnvelopeFromAndSkippedStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(t *testing.T) *store.Store
+	}{
+		{"fresh", func(t *testing.T) *store.Store {
+			st, err := store.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}},
+		{"upgrade-v012", func(t *testing.T) *store.Store {
+			dir := newV012(t)
+			seedV012(t, dir)
+			st, err := store.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return st
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := tc.open(t)
+			defer st.Close()
+			if n := markerCount(t, st, "035"); n != 1 {
+				t.Fatalf("migration 035 marker count %d", n)
+			}
+			db := rawDB(t, st.Path())
+			defer db.Close()
+			var n int
+			if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM pragma_table_info('messages') WHERE name='envelope_from'`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n != 1 {
+				t.Fatal("messages.envelope_from missing after migration 035")
+			}
+			var sqlText string
+			if err := db.QueryRowContext(context.Background(), `SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type='table' AND name='webhook_deliveries'),'')`).Scan(&sqlText); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(sqlText, "'skipped'") {
+				t.Fatalf("webhook_deliveries status set not widened: %s", sqlText)
+			}
+		})
 	}
 }

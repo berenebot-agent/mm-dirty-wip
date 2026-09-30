@@ -147,6 +147,8 @@ var schemas = map[string]any{
 		"provider":            str("Provider that carried the message."),
 		"provider_message_id": str("Provider-assigned message id."),
 		"envelope_to":         stringList("SMTP envelope recipients."),
+		"envelope_from":       str("Transport-supplied SMTP envelope sender (MAIL FROM); empty when the transport supplied none. Never derived from the MIME From header."),
+		"envelope_recipient":  str("Canonical original envelope recipient, which may be a catch-all or alias address."),
 		"client":              str("Credential that sent an outbound message."),
 		"is_spam":             boolean("Whether the message is classified as spam."),
 		"spam_reason":         str("Bounded spam classification reason."),

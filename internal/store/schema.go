@@ -1087,3 +1087,39 @@ CREATE INDEX idx_outbound_log_workflow ON outbound_delivery_log(workflow_id);
 CREATE INDEX idx_outbound_log_external_alias ON outbound_delivery_log(account_id, external_alias_id, id DESC);
 CREATE INDEX idx_outbound_log_inbox ON outbound_delivery_log(account_id, inbox_id, id DESC);
 `
+
+// migration035 persists the transport-supplied envelope sender on inbound
+// messages and lets a webhook delivery be terminally skipped.
+//
+//   - messages.envelope_from holds the SMTP envelope sender (MAIL FROM) the
+//     receiving transport observed, exactly as the adapter supplied it. It is
+//     bounded metadata, not a second copy of the MIME From header: when the
+//     transport supplied no sender (a null return path, or a provider that does
+//     not pass one) the column stays empty, and it is never backfilled from the
+//     MIME headers. The approval workflow already binds its decision to this
+//     value (D029/D058); persisting it makes the same original envelope sender
+//     available to durable consumers such as an outbound forward webhook.
+//   - webhook_deliveries.status gains 'skipped', a terminal outcome for an
+//     event whose message is currently spam, internal or has since been
+//     deleted. A skipped delivery advances the client cursor exactly like a
+//     delivered or failed one, so such an event cannot block the head of the
+//     queue indefinitely. SQLite cannot widen a CHECK constraint in place, so
+//     the table is rebuilt and every existing row is carried over unchanged.
+const migration035 = `
+ALTER TABLE messages ADD COLUMN envelope_from TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE webhook_deliveries_new (
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  event_id INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  last_error TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','delivered','failed','skipped')),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(client_id,event_id)
+);
+INSERT INTO webhook_deliveries_new(client_id,event_id,attempts,next_attempt_at,last_error,status,created_at)
+  SELECT client_id,event_id,attempts,next_attempt_at,last_error,status,created_at FROM webhook_deliveries;
+DROP TABLE webhook_deliveries;
+ALTER TABLE webhook_deliveries_new RENAME TO webhook_deliveries;
+`

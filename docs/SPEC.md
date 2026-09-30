@@ -187,7 +187,17 @@ Every consumer of an inbox is a **client**. A client has one of three types:
 A webhook is delivery-only: it has no API access and cannot send. It chooses
 either a small JSON notification (carrying the event, cursor, inbox id and
 message id, so the receiver fetches the body at leisure with its own API key)
-or a full forward of the raw MIME, byte-for-byte. The receiver authenticates
+or a full forward of the raw MIME, byte-for-byte. In forward mode the original
+transport envelope metadata is carried alongside the unchanged MIME in two
+dedicated headers: `X-MailMoose-Envelope-From` and `X-MailMoose-Envelope-To`,
+percent-encoded UTF-8 using RFC 3986 escaping (so a space is `%20`, a literal
+plus is `%2B` and `@` is `%40`). The values are the persisted transport-supplied
+envelope sender (empty when the transport supplied none) and the canonical
+original envelope recipient; they are never derived from the MIME headers. Both
+payload modes deliver `message.received` and `message.spam_state_changed`, and
+skip mail that is currently Spam, internal, or has since been deleted, recording
+a terminal `skipped` delivery that advances the cursor so it cannot block the
+queue. The receiver authenticates
 each delivery by a timestamped HMAC-SHA256 signature or a static bearer token,
 chosen per client. Deliveries reuse the durable event cursor: HTTP 2xx
 acknowledges, failures retry with backoff for a configurable window (seven days

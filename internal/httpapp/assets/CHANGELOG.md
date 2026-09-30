@@ -8,6 +8,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Inbound messages persist the transport-supplied SMTP envelope sender
+  (`envelope_from`) alongside the canonical original envelope recipient
+  (`envelope_recipient`); both are exposed on the normalized message. A missing
+  sender stays empty and is never inferred from the MIME `From` header.
+- Forward webhooks carry the original envelope metadata in
+  `X-MailMoose-Envelope-From` / `X-MailMoose-Envelope-To` (RFC 3986
+  percent-encoded UTF-8), with the raw MIME body unchanged.
 - System administrator, account Admins, and non-admin mailbox operators. The
   system administrator (configured with `ADMIN_EMAIL` / `ADMIN_PASSWORD`) has an
   Admin page listing accounts, from which they invite a new person as a separate
@@ -67,6 +74,19 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   original conversation even when the provider rewrites `Message-ID`.
 - Outbox delivery panics are contained instead of crashing the worker.
 - Non-UTF-8 encoded message headers are decoded correctly.
+- Webhook delivery now skips mail that is currently Spam, internal, or has since
+  been deleted, recording a terminal `skipped` delivery and advancing the cursor
+  so such an event cannot block the head of a client's queue; releasing a
+  message from Spam makes it deliverable again.
+- A delivery attempt is recorded in the sending log when it starts, before the
+  provider call, so an interrupted send (restart, crash or dropped connection)
+  is visible as `Sending…` or `Interrupted` instead of leaving the message
+  silently looping as pending with an empty log. The outbox shows an in-flight
+  message as `Sending…`.
+- Direct MX delivery no longer applies a single 45-second deadline to the whole
+  SMTP transaction, so a large message is not cut off mid-upload; and a message
+  the remote accepted is not reported as failed because the follow-up `QUIT`
+  did not complete.
 
 ### Security
 
