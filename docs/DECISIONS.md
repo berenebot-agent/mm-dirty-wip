@@ -1805,6 +1805,11 @@ safe and prevents a crafted relay value from being echoed as authority.
   `last_error` is not set by a skip.
 - No backward-compatibility alias is needed for a capability that has not yet
   shipped.
+- The joint wire contract with the consuming agent (Billbot) is documented in
+  `docs/MAILMOOSE_CONTRACT.md`, with a byte-identical fixture committed at
+  `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. Both
+  are maintained by hand; the generating worker test is
+  `TestWebhookForwardContractFixture`.
 
 ## Future extension register
 
