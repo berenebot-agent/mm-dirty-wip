@@ -165,8 +165,91 @@ func (s *Store) MarkHermesConnected(ctx context.Context, id string) {
 	_, _ = s.write.ExecContext(ctx, `UPDATE client_push SET last_connected_at=? WHERE client_id=?`, nowText(), id)
 }
 func (s *Store) AckHermesEvent(ctx context.Context, id string, eventID int64) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE client_id=?`, eventID, id)
+	return s.AckHermesEventLogged(ctx, id, eventID, 1)
+}
+
+// AckHermesEventLogged advances a relay's acknowledgement cursor and records the
+// acknowledged outcome in the client delivery log in the same transaction, so
+// the durable cursor and the visible log cannot disagree. attempts is the number
+// of deliveries the gateway took to acknowledge (1 for a first-try ack).
+func (s *Store) AckHermesEventLogged(ctx context.Context, id string, eventID int64, attempts int) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	now := nowText()
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE client_id=?`, eventID, id); err != nil {
+		return err
+	}
+	if err = recordDeliveryLog(ctx, tx, id, eventID, "acknowledged", attempts, "", "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordHermesDeliveryPending records that a relay event was written to the
+// socket and is awaiting the gateway's acknowledgement. It increments the
+// attempt count and, on a reconnect before the acknowledgement arrives, leaves
+// the durable cursor untouched so the event is delivered again. It is
+// best-effort: a failure to record the pending state must never block delivery.
+func (s *Store) RecordHermesDeliveryPending(ctx context.Context, clientID string, eventID int64) error {
+	now := nowText()
+	_, err := s.write.ExecContext(ctx, `INSERT INTO client_delivery_log(client_id,event_id,status,attempts,last_error,next_attempt_at,created_at,updated_at)
+		VALUES(?,?,?,1,'','',?,?)
+		ON CONFLICT(client_id,event_id) DO UPDATE SET
+			status=CASE WHEN client_delivery_log.status IN ('acknowledged') THEN client_delivery_log.status ELSE 'pending' END,
+			attempts=CASE WHEN client_delivery_log.status IN ('acknowledged') THEN client_delivery_log.attempts ELSE client_delivery_log.attempts+1 END,
+			updated_at=CASE WHEN client_delivery_log.status IN ('acknowledged') THEN client_delivery_log.updated_at ELSE excluded.updated_at END`,
+		clientID, eventID, "pending", now, now)
 	return err
+}
+
+// RecordHermesDeliveryAcknowledged records that a relay event was acknowledged
+// and, in the same transaction, advances the cursor. attempts is the attempt
+// count already accumulated in the log, so the summary reflects how many
+// deliveries it took.
+func (s *Store) RecordHermesDeliveryAcknowledged(ctx context.Context, clientID string, eventID int64, attempts int) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	now := nowText()
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE client_push SET last_ack_event_id=MAX(last_ack_event_id,?) WHERE client_id=?`, eventID, clientID); err != nil {
+		return err
+	}
+	if err = recordDeliveryLog(ctx, tx, clientID, eventID, "acknowledged", attempts, "", "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RecordHermesDeliveryFailed records that a relay socket dropped while an event
+// was awaiting acknowledgement and the delivery window closed. The event stays
+// unacknowledged, so it is redelivered on the next connection; the log surfaces
+// why the attempt did not settle.
+func (s *Store) RecordHermesDeliveryFailed(ctx context.Context, clientID string, eventID int64, errText string) error {
+	now := nowText()
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var attempts int
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT attempts FROM client_delivery_log WHERE client_id=? AND event_id=?),0)+1`, clientID, eventID).Scan(&attempts); err != nil {
+		return err
+	}
+	if err = recordDeliveryLog(ctx, tx, clientID, eventID, "failed", attempts, errText, "", now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 func (s *Store) UpdateHermesConnectionName(ctx context.Context, accountID, id, name string) error {
 	res, err := s.write.ExecContext(ctx, `UPDATE clients SET name=? WHERE id=? AND account_id=? AND type='hermes'`, strings.TrimSpace(name), id, accountID)

@@ -25,6 +25,46 @@
   var hermesAck = document.getElementById('key-hermes-ack');
   var adminSnapshot = null;
   var currentKind = 'api';
+  var webhookFields = form.querySelector('.key-fields[data-type=webhook]');
+  var webhookAuth = webhookFields.querySelector('select[name=auth]');
+  var bearerFields = document.createElement('div');
+  bearerFields.hidden = true;
+  bearerFields.innerHTML = '<label for="webhook-bearer-secret">Bearer secret</label><div class="row"><input id="webhook-bearer-secret" name="bearer_secret" type="password" autocomplete="new-password" placeholder="Paste a secret here…" aria-describedby="webhook-bearer-hint"><button type="button" class="secondary btn-narrow" id="webhook-generate">Generate</button></div><p class="muted small" id="webhook-bearer-hint"></p>';
+  webhookFields.appendChild(bearerFields);
+  var bearerInput = bearerFields.querySelector('input');
+  var generateBtn = bearerFields.querySelector('button');
+
+  function syncBearer() {
+    var active = sel.value === 'webhook' && webhookAuth.value === 'bearer';
+    var editing = form.getAttribute('action') !== '/ui/keys';
+    bearerFields.hidden = !active;
+    bearerInput.disabled = !active;
+    bearerInput.required = active && !editing;
+    document.getElementById('webhook-bearer-hint').textContent = editing
+      ? 'Leave blank to keep the current secret. Paste only the token, without Bearer, or Generate a replacement. It changes when you save.'
+      : 'Paste only the token, without Bearer, or click Generate. Copy it before saving if another app needs it.';
+    if (rotateBtn && sel.value === 'webhook') {
+      rotateBtn.hidden = !editing || active;
+      rotateBtn.textContent = 'Rotate signing secret';
+    }
+  }
+
+  webhookAuth.addEventListener('change', syncBearer);
+  generateBtn.addEventListener('click', function () {
+    errorBox.hidden = true;
+    try {
+      var bytes = new Uint8Array(32);
+      window.crypto.getRandomValues(bytes);
+      var raw = '';
+      bytes.forEach(function (b) { raw += String.fromCharCode(b); });
+      bearerInput.value = window.btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      bearerInput.type = 'text';
+      bearerInput.focus();
+    } catch (err) {
+      errorBox.textContent = 'Could not generate a secret. Paste a secret from your other app.';
+      errorBox.hidden = false;
+    }
+  });
 
   function sync() {
     document.querySelectorAll('.key-fields').forEach(function (fs) {
@@ -36,6 +76,7 @@
     });
     dlg.classList.toggle('key-dialog--wide', sel.value === 'api');
     syncHermesRisk();
+    syncBearer();
   }
 
   function rolesRadios() {
@@ -209,6 +250,7 @@
 
   function openCreate() {
     form.reset();
+    bearerInput.type = 'password';
     form.action = '/ui/keys';
     idInput.value = '';
     adminSnapshot = null;
@@ -219,6 +261,7 @@
     }
     if (rotateBtn) {
       rotateBtn.hidden = true;
+      rotateBtn.textContent = 'Rotate Key';
     }
     showForm();
     sync();
@@ -228,6 +271,7 @@
 
   function openEdit(btn) {
     form.reset();
+    bearerInput.type = 'password';
     adminSnapshot = null;
     var kind = btn.dataset.kind === 'hermes' ? 'hermes' : (btn.dataset.kind === 'webhook' ? 'webhook' : 'api');
     currentKind = kind;
@@ -241,6 +285,7 @@
     }
     if (rotateBtn) {
       rotateBtn.hidden = kind === 'hermes';
+      rotateBtn.textContent = 'Rotate Key';
     }
     nameInput.value = btn.dataset.name || '';
     if (adminInput) {
@@ -314,6 +359,11 @@
       }
       return res.json();
     }).then(function (data) {
+      if (sel.value === 'webhook' && webhookAuth.value === 'bearer') {
+        dlg.close();
+        window.location.reload();
+        return;
+      }
       showResult(data);
     }).catch(function (err) {
       errorBox.textContent = err.message || 'Could not create client';

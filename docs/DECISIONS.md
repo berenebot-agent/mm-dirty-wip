@@ -1647,11 +1647,12 @@ existing mail), linking is an explicit action:
   `maxDomainAncestorDepth`), records the parent, and turns both inherit switches
   on — matching the create-time default. An empty parent id unlinks and clears
   both switches. No parent configuration is copied; resolution stays read-time.
-- The dashboard offers **Link to parent** for a root domain that has an
-  available ancestor, backed by `Store.InheritableAncestors`. The Admin API
-  accepts `parent_domain_id` on `PATCH /v1/admin/domains/{id}` (empty string to
-  unlink, omission to leave unchanged). `POST /v1/admin/domains` and the UI
-  creation dialog are unchanged.
+- The dashboard's sending/receiving provider menus offer **Inherited (from
+  <parent>)** for such a domain, naming the nearest existing ancestor; saving
+  that choice links the domain and turns on the matching inherit switch. The
+  Admin API accepts `parent_domain_id` on `PATCH /v1/admin/domains/{id}` (empty
+  string to unlink, omission to leave unchanged). `POST /v1/admin/domains` and
+  the UI creation dialog are unchanged.
 
 ## D064 — Self-hosted-only product; hosted mode removed
 

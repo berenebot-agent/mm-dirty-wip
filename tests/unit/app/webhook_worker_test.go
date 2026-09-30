@@ -183,4 +183,47 @@ func TestWebhookWorkerRetriesOnServerError(t *testing.T) {
 	if got.LastError == "" {
 		t.Fatal("failure was not recorded")
 	}
+	// The retry is visible in the client delivery log with its attempt count
+	// and last error, so an operator can see the outstanding delivery.
+	entries, err := svc.Store.ClientDeliveryLog(ctx, u.AccountID, cl.ID, 10, 1<<62)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("delivery log %v %#v", err, entries)
+	}
+	if entries[0].Status == "delivered" || entries[0].Status == "acknowledged" || entries[0].Attempts != 1 || entries[0].LastError == "" {
+		t.Fatalf("retry log entry %#v", entries[0])
+	}
+}
+
+// TestWebhookWorkerDeliveryLogRecordsSuccess proves a successful delivery is
+// recorded as "delivered" in the client delivery log.
+func TestWebhookWorkerDeliveryLogRecordsSuccess(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	messageID := seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
+
+	enc, _ := svc.EncryptSecret([]byte("s"))
+	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "notify", "signature", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	if err := svc.Store.UpdateWebhookClient(ctx, u.AccountID, cl.ID, "ep", srv.URL, "notify", "signature"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := app.NewWebhookWorker(svc)
+	w.SetHTTPClient(srv.Client())
+	if err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	entries, err := svc.Store.ClientDeliveryLog(ctx, u.AccountID, cl.ID, 10, 1<<62)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("delivery log %v %#v", err, entries)
+	}
+	if entries[0].Status != "delivered" || entries[0].MessageID != messageID {
+		t.Fatalf("delivered log entry %#v", entries[0])
+	}
 }

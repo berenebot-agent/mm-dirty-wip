@@ -781,6 +781,46 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 	}
 }
 
+// TestUIDomainProviderInheritLinksLateParent proves that a subdomain added
+// before its parent can pick "Inherited (from parent)" in the sending/receiving
+// provider menus, and that saving links it to the parent and inherits.
+func TestUIDomainProviderInheritLinksLateParent(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+
+	// Subdomain first: no ancestor exists yet, so it is a root domain.
+	sub, err := svc.Store.CreateDomain(ctx, u.AccountID, "agent.late.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sub.ParentDomainID != "" {
+		t.Fatalf("subdomain added first must be unlinked: %+v", sub)
+	}
+	// The parent is added later and configured for receiving.
+	parent, err := svc.Store.CreateDomain(ctx, u.AccountID, "late.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, parent.ID, "cloudflare", map[string]any{}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	cookie, csrf := uiSession(t, svc, u.ID)
+	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+sub.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+sub.ID)
+	if !strings.Contains(body, `Inherited (from late.test)`) {
+		t.Fatalf("receiving menu must offer inheritance from the late parent:\n%s", body)
+	}
+
+	// Selecting it links the domain and enables receiving inheritance.
+	if rr := domainPost(t, h, cookie, "/ui/domains/"+sub.ID+"/receiving", url.Values{"_csrf": {csrf}, "provider": {"inherited"}}); rr.Code != 303 {
+		t.Fatalf("selecting inherited receiving %d %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.Store.GetDomain(ctx, u.AccountID, sub.ID)
+	if err != nil || got.ParentDomainID != parent.ID || !got.InheritReceiving || got.ReceivingInheritedFrom != "late.test" {
+		t.Fatalf("after inheriting receiving %+v err=%v", got, err)
+	}
+}
+
 // TestDashboardWebhookCopyScopesToProviderGroup pins the fix for the copy
 // handler: it resolves the URL within the button's provider group instead of
 // the whole dialog.

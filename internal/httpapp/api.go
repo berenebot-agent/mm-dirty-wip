@@ -1705,11 +1705,12 @@ func (s *Server) apiClients(w http.ResponseWriter, r *http.Request) {
 }
 
 type webhookCreateRequest struct {
-	InboxID string `json:"inbox_id"`
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	Mode    string `json:"mode"`
-	Auth    string `json:"auth"`
+	InboxID      string `json:"inbox_id"`
+	Name         string `json:"name"`
+	URL          string `json:"url"`
+	Mode         string `json:"mode"`
+	Auth         string `json:"auth"`
+	BearerSecret string `json:"bearer_secret"`
 }
 
 func (s *Server) apiWebhookClients(w http.ResponseWriter, r *http.Request) {
@@ -1737,7 +1738,11 @@ func (s *Server) apiWebhookClients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	secret, err := auth.RandomToken(32)
+	if err := validateWebhookBearerSecret(in.Auth, in.BearerSecret); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	secret, err := webhookSecret(in.BearerSecret)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "webhook client creation failed"})
 		return
@@ -1782,7 +1787,20 @@ func (s *Server) apiWebhookClient(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
-	if err := s.Service.Store.UpdateWebhookClient(r.Context(), p.AccountID, id, strings.TrimSpace(in.Name), strings.TrimSpace(in.URL), in.Mode, in.Auth); err != nil {
+	if err := validateWebhookBearerSecret(in.Auth, in.BearerSecret); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	encrypted := ""
+	if in.BearerSecret != "" {
+		var err error
+		encrypted, err = s.Service.EncryptSecret([]byte(in.BearerSecret))
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": "webhook client update failed"})
+			return
+		}
+	}
+	if err := s.Service.Store.UpdateWebhookClientWithSecret(r.Context(), p.AccountID, id, strings.TrimSpace(in.Name), strings.TrimSpace(in.URL), in.Mode, in.Auth, encrypted); err != nil {
 		mapStoreError(w, err)
 		return
 	}
@@ -1827,6 +1845,35 @@ func (s *Server) apiWebhookEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"enabled": in.Enabled})
+}
+
+func webhookSecret(supplied string) (string, error) {
+	if supplied != "" {
+		return supplied, nil
+	}
+	return auth.RandomToken(32)
+}
+
+func validateWebhookBearerSecret(authMode, secret string) error {
+	if secret == "" {
+		return nil
+	}
+	if authMode != "bearer" {
+		return fmt.Errorf("bearer_secret requires bearer authentication")
+	}
+	// RFC 6750 b64token: header-safe token characters followed by optional padding.
+	padding := false
+	for i := 0; i < len(secret); i++ {
+		c := secret[i]
+		if c == '=' && i > 0 {
+			padding = true
+			continue
+		}
+		if padding || !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-._~+/", rune(c))) {
+			return fmt.Errorf("paste only the bearer token, without the Bearer prefix, whitespace or control characters")
+		}
+	}
+	return nil
 }
 
 func validateWebhookConfig(raw, mode, authMode string) error {
