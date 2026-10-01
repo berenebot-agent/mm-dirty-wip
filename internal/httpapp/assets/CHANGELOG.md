@@ -17,7 +17,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   /v1/outbox/{id}` now moves a pending/failed send to Trash. The list filter
   `trashed=true` selects the Trash view.
 - Per-account trash retention: `GET`/`PATCH /v1/account/settings` reads and
-  writes `trash_retention_days` (default 30, `0` keeps trash until emptied by
+  writes `trash_retention_days` (default 0, meaning keep trash until emptied by
   hand). The maintenance sweep purges trashed messages older than the window and
   unlinks their raw files.
 - Durable `message.trashed`, `message.restored` and `message.purged` events

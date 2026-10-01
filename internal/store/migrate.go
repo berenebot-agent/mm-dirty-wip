@@ -135,6 +135,9 @@ func migrations(dataDir string) []migration {
 			columnAdded("accounts", "timezone"),
 			columnAdded("users", "timezone"),
 		)},
+		{version: "041", sql: migration041, fkOff: true, detect: stateOf(
+			tableSQLContains("accounts", "trash_retention_days INTEGER NOT NULL DEFAULT 0"),
+		)},
 	}
 }
 

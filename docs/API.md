@@ -220,8 +220,9 @@ permanently and unlinks its raw file; a message must be trashed first, otherwise
 the call answers `409`. `POST /v1/inboxes/{id}/trash/empty` (Owner) purges every
 trashed message in an inbox.
 
-Each account has a `trash_retention_days` preference (default 30; `0` keeps
-trashed mail until it is emptied by hand), read and written through
+Each account has a `trash_retention_days` preference (default 0; `0` keeps
+trashed mail until it is emptied by hand, a positive value purges it after that
+many days), read and written through
 `GET`/`PATCH /v1/account/settings`. Trashed messages older than the window are
 purged by the maintenance sweep. The events `message.trashed`,
 `message.restored` and `message.purged` are emitted and streamed; they are not
