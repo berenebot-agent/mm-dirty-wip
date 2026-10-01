@@ -50,6 +50,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - Labels may no longer contain `/` or `\` (path separators); existing labels
   with those characters still render and filter. The web UI now uses the full
   window width instead of a fixed 1180px column.
+- The mailbox and message lists reflow for narrow screens: on phones the
+  header row is hidden and each message becomes a compact two-line row with
+  the action icons beneath, and the dashboard, forms and top bar stack.
 
 - Removing an inbox now opens a confirmation dialog that displays the full
   email address and requires typing it back, matching the domain delete flow.
