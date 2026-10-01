@@ -1157,3 +1157,15 @@ CREATE TABLE client_delivery_log (
 CREATE INDEX idx_client_delivery_log_client ON client_delivery_log(client_id, event_id DESC, updated_at DESC);
 CREATE INDEX idx_client_delivery_log_account ON client_delivery_log(client_id, updated_at);
 `
+
+const migration037 = `
+CREATE TABLE dialmx_domain_credentials (
+  domain_id TEXT PRIMARY KEY REFERENCES domains(id) ON DELETE CASCADE,
+  key_id TEXT NOT NULL,
+  encrypted_private_seed TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`

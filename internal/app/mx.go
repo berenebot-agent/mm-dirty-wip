@@ -38,6 +38,14 @@ type MXResolveResult struct {
 // domain's receiving provider is "mx"; unknown, disabled or foreign-provider
 // recipients are uniformly rejected as unknown so existence is not leaked.
 func (s *Service) ResolveMXRecipients(ctx context.Context, recipients []string) []MXResolveResult {
+	return s.resolveMXRecipients(ctx, mxProvider, recipients)
+}
+
+func (s *Service) ResolveDialMXRecipients(ctx context.Context, recipients []string) []MXResolveResult {
+	return s.resolveMXRecipients(ctx, "dialmx", recipients)
+}
+
+func (s *Service) resolveMXRecipients(ctx context.Context, routingProvider string, recipients []string) []MXResolveResult {
 	out := make([]MXResolveResult, 0, len(recipients))
 	seen := map[string]bool{}
 	for _, raw := range recipients {
@@ -47,7 +55,7 @@ func (s *Service) ResolveMXRecipients(ctx context.Context, recipients []string) 
 		}
 		seen[r] = true
 		res := MXResolveResult{Recipient: r}
-		binding, err := s.Store.ResolveInboundBinding(ctx, mxProvider, r)
+		binding, err := s.Store.ResolveInboundBinding(ctx, routingProvider, r)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				res.Code = mxwire.CodeUnknownRecipient
@@ -122,7 +130,21 @@ type MXIngestResult struct {
 // failure is a durable Spam delivery, not a rejection. It must not be reached
 // through provider webhook dispatch.
 func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResult, error) {
-	if !s.Config.MXReceiveEnabled {
+	return s.ingestMX(ctx, mxProvider, in)
+}
+
+func (s *Service) IngestDialMX(ctx context.Context, in MXIngestInput) (MXIngestResult, error) {
+	select {
+	case s.dialMXIngestSem <- struct{}{}:
+		defer func() { <-s.dialMXIngestSem }()
+	case <-ctx.Done():
+		return MXIngestResult{}, ctx.Err()
+	}
+	return s.ingestMX(ctx, "dialmx", in)
+}
+
+func (s *Service) ingestMX(ctx context.Context, routingProvider string, in MXIngestInput) (MXIngestResult, error) {
+	if routingProvider == mxProvider && !s.Config.MXReceiveEnabled {
 		return MXIngestResult{}, ErrMXDisabled
 	}
 	recipients := in.Recipients
@@ -187,7 +209,7 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 	seenInbox := map[string]bool{}
 	for i, t := range targets {
 		if t.inboxID == "" {
-			res := s.ingestMXRecipient(ctx, in, t.recipient, parsed, single)
+			res := s.ingestMXRecipient(ctx, routingProvider, in, t.recipient, parsed, single)
 			committed[i] = res
 			if out.MessageID == "" && res.MessageID != "" {
 				out.MessageID = res.MessageID
@@ -198,7 +220,7 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 			continue
 		}
 		seenInbox[t.inboxID] = true
-		res := s.ingestMXRecipient(ctx, in, t.recipient, parsed, single)
+		res := s.ingestMXRecipient(ctx, routingProvider, in, t.recipient, parsed, single)
 		committed[i] = res
 		if out.MessageID == "" && res.MessageID != "" {
 			out.MessageID = res.MessageID
@@ -231,8 +253,8 @@ func (s *Service) IngestMX(ctx context.Context, in MXIngestInput) (MXIngestResul
 // ingestMXRecipient resolves, authorizes and persists one recipient. Each
 // envelope recipient gets its own durable message and receipt, so a retry of the
 // same recipient set deduplicates per recipient.
-func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recipient string, parsed mailparse.Parsed, single bool) mxwire.RecipientIngestResult {
-	binding, err := s.Store.ResolveInboundBinding(ctx, mxProvider, recipient)
+func (s *Service) ingestMXRecipient(ctx context.Context, routingProvider string, in MXIngestInput, recipient string, parsed mailparse.Parsed, single bool) mxwire.RecipientIngestResult {
+	binding, err := s.Store.ResolveInboundBinding(ctx, routingProvider, recipient)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
@@ -265,7 +287,7 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 		return mxwire.RecipientIngestResult{Recipient: recipient, MachineCode: mxwire.CodeUnknownRecipient}
 	}
 
-	enforcement := s.domainEnforcement(ctx, binding.AccountID, binding.DomainID)
+	enforcement := s.domainEnforcement(ctx, binding.AccountID, binding.DomainID, routingProvider)
 	class := mxwire.Classify(mxAuthPtr(in.AuthResults, in.TrustedAuth), enforcement)
 	authJSON := ""
 	if in.TrustedAuth {
@@ -341,8 +363,8 @@ func (s *Service) ingestMXRecipient(ctx context.Context, in MXIngestInput, recip
 // domainEnforcement reads the per-domain auth enforcement mode, defaulting to
 // moderate. The stored receiving config carries it in the "enforcement" field
 // once the domain editor exposes the control; absent values are moderate.
-func (s *Service) domainEnforcement(ctx context.Context, accountID, domainID string) mxwire.Enforcement {
-	b, err := s.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, mxProvider)
+func (s *Service) domainEnforcement(ctx context.Context, accountID, domainID, routingProvider string) mxwire.Enforcement {
+	b, err := s.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, routingProvider)
 	if err != nil {
 		return mxwire.EnforcementModerate
 	}

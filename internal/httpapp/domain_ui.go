@@ -315,6 +315,10 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if provider == "dialmx" {
+		http.Redirect(w, r, "/?"+url.Values{"domain": {d.ID}, "kind": {"receiving"}, "provider": {"dialmx"}}.Encode(), http.StatusSeeOther)
+		return
+	}
 	if secret := generated["webhook_secret"]; secret != "" {
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
 		return
@@ -379,6 +383,14 @@ func (s *Server) uiDomainReceivingRegenerate(w http.ResponseWriter, r *http.Requ
 	d, err := s.Service.Store.GetDomain(ctx, p.AccountID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "domain not found", 404)
+		return
+	}
+	if d.ReceivingProvider == "dialmx" {
+		if _, err := s.Service.RotateDialMXCredential(ctx, p.AccountID, d.ID); err != nil {
+			s.domainSaveError(w, r, d.ID, "receiving", "dialmx", err)
+			return
+		}
+		http.Redirect(w, r, "/?"+url.Values{"domain": {d.ID}, "kind": {"receiving"}, "provider": {"dialmx"}}.Encode(), http.StatusSeeOther)
 		return
 	}
 	cfg, err := s.Service.Store.GetDomainReceivingConfig(ctx, p.AccountID, d.ID)
@@ -745,6 +757,14 @@ func domainReceivingSteps(provider string) []string {
 		return []string{
 			"In Mailgun, add this URL as the inbound route for raw MIME delivery.",
 			"Paste the HTTP webhook signing key below, then save.",
+		}
+	case "dialmx":
+		return []string{
+			"Add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
+			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain>.",
+			"Publish MX records for this domain pointing at the Dial MX receiver service.",
+			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
+			"Choose moderate or hard authentication enforcement, then save.",
 		}
 	case "mx":
 		return []string{

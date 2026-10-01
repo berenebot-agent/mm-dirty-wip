@@ -3,7 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +30,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/safepath"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
@@ -34,6 +38,7 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/cloudflare"
 	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
 	_ "github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 	_ "github.com/dellarb/mailmoose/internal/transport/resend"
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
@@ -43,12 +48,14 @@ type Service struct {
 	Config        config.Config
 	Store         *store.Store
 	Hub           *events.Hub
+	DialMX        *mxdial.Manager
 	Log           *slog.Logger
 	EncryptionKey []byte
 	// encryptionKeys holds the primary key first and any legacy derivation
 	// after it, so decrypting pre-upgrade ciphertext still works.
-	encryptionKeys [][]byte
-	unroutedLim    *rateLimiter
+	encryptionKeys  [][]byte
+	unroutedLim     *rateLimiter
+	dialMXIngestSem chan struct{}
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
@@ -60,7 +67,11 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 		return nil, err
 	}
 	netutil.SetRequirePublic(cfg.RequirePublicOutbound())
-	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute)}, nil
+	concurrency := cfg.InboundConcurrency
+	if concurrency < 1 {
+		concurrency = 32
+	}
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
 }
 
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
@@ -574,6 +585,9 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 		return store.DomainReceivingConfig{}, nil, err
 	}
 	provider = normalizeProvider(provider)
+	if provider == "dialmx" {
+		return s.saveDialMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
+	}
 	fields, err := inboundConfigFields(provider)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
@@ -615,6 +629,71 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 		return saved, nil, nil
 	}
 	return saved, generated, nil
+}
+
+func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, cfg map[string]any, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
+	if regenerate {
+		return store.DomainReceivingConfig{}, nil, invalidConfig("use the domain credential rotation action")
+	}
+	domain, err := s.Store.GetDomain(ctx, accountID, domainID)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if _, err := mxwire.CanonicalDomain(domain.Name); err != nil {
+		return store.DomainReceivingConfig{}, nil, invalidConfig("Dial MX requires a DNS domain name (use punycode for international names)")
+	}
+	merged, err := validateConfig(mxdial.Transport{}.ConfigFields(), cfg, nil, false)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	urlsRaw, _ := merged["receiver_urls"].(string)
+	urls, err := validateDialMXReceiverURLs(urlsRaw)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, invalidConfig("%s", err.Error())
+	}
+	merged["receiver_urls"] = strings.Join(urls, ",")
+	enc, err := s.encryptConfig(merged)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	expected := store.ConfigVersion{}
+	if exists {
+		expected = store.ConfigVersion{ID: existing.ID, Revision: existing.Revision}
+	}
+	saved, err := s.Store.SaveDomainReceivingConfig(ctx, accountID, domainID, provider, enc, expected)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if _, err = s.EnsureDialMXCredential(ctx, accountID, domainID); err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if s.DialMX != nil {
+		s.DialMX.Wake()
+	}
+	return saved, nil, nil
+}
+
+func validateDialMXReceiverURLs(raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	if len(parts) > 8 {
+		return nil, fmt.Errorf("at most eight receiver URLs are supported")
+	}
+	urls := make([]string, 0, len(parts))
+	seen := map[string]bool{}
+	for _, part := range parts {
+		canonical, err := mxwire.ReceiverURL(strings.TrimSpace(part))
+		if err != nil {
+			return nil, fmt.Errorf("receiver URLs must be HTTPS base URLs without paths, userinfo, query or fragment")
+		}
+		if !seen[canonical] {
+			urls = append(urls, canonical)
+			seen[canonical] = true
+		}
+	}
+	if len(urls) == 0 || strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("at least one receiver URL is required")
+	}
+	return urls, nil
 }
 
 func (s *Service) DecryptDomainSendingConfig(c store.DomainSendingConfig) (map[string]any, error) {
@@ -858,6 +937,59 @@ func wholeFloat(v float64) (int, error) {
 // so data written before a key-derivation upgrade remains readable.
 func (s *Service) DecryptSecret(encrypted string) ([]byte, error) {
 	return cryptox.DecryptFirst(s.encryptionKeys, encrypted)
+}
+
+// EnsureDialMXCredential creates an exact-domain key without copying inherited
+// receiving settings. Concurrent creators converge on the first saved key.
+func (s *Service) EnsureDialMXCredential(ctx context.Context, accountID, domainID string) (store.DialMXCredential, error) {
+	if _, err := s.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, mxdial.Provider); err != nil {
+		return store.DialMXCredential{}, err
+	}
+	c, err := s.Store.GetDialMXCredential(ctx, accountID, domainID)
+	if err == nil {
+		return c, nil
+	}
+	if !errors.Is(err, store.ErrNoProvider) {
+		return store.DialMXCredential{}, err
+	}
+	c, err = s.newDialMXCredential()
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	saved, _, err := s.Store.EnsureDialMXCredential(ctx, accountID, domainID, c.KeyID, c.EncryptedPrivateSeed, c.PublicKey)
+	return saved, err
+}
+
+func (s *Service) RotateDialMXCredential(ctx context.Context, accountID, domainID string) (store.DialMXCredential, error) {
+	current, err := s.EnsureDialMXCredential(ctx, accountID, domainID)
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	next, err := s.newDialMXCredential()
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	credential, err := s.Store.RotateDialMXCredentialCAS(ctx, accountID, domainID, next.KeyID, next.EncryptedPrivateSeed, next.PublicKey, store.ConfigVersion{ID: current.KeyID, Revision: current.Revision})
+	if err == nil && s.DialMX != nil {
+		s.DialMX.Wake()
+	}
+	return credential, err
+}
+
+func (s *Service) newDialMXCredential() (store.DialMXCredential, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	encrypted, err := s.EncryptSecret(private.Seed())
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	keyID, err := auth.RandomToken(16)
+	if err != nil {
+		return store.DialMXCredential{}, err
+	}
+	return store.DialMXCredential{KeyID: keyID, EncryptedPrivateSeed: encrypted, PublicKey: base64.RawURLEncoding.EncodeToString(public)}, nil
 }
 
 // EncryptSecret encrypts a secret with the current primary key.

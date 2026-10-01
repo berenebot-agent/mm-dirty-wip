@@ -1,6 +1,8 @@
 package httpapp
 
 import (
+	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strconv"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
 )
@@ -23,6 +26,9 @@ type domainConfigResponse struct {
 	UpdatedAt  *time.Time        `json:"updated_at,omitempty"`
 	WebhookURL string            `json:"webhook_url,omitempty"`
 	Generated  map[string]string `json:"generated,omitempty"`
+	KeyID      string            `json:"key_id,omitempty"`
+	PublicKey  string            `json:"public_key,omitempty"`
+	TXTRecord  string            `json:"txt_record,omitempty"`
 }
 
 // apiDomainSending serves the domain-scoped sending provider config:
@@ -97,13 +103,26 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		cfg, err := s.Service.Store.GetDomainReceivingConfig(r.Context(), p.AccountID, id)
 		if err != nil {
 			if errors.Is(err, store.ErrNoProvider) {
+				if effective, resolveErr := s.Service.Store.ResolveDomainReceivingConfig(r.Context(), p.AccountID, id, "dialmx"); resolveErr == nil {
+					resp, responseErr := s.domainReceivingResponse(r.Context(), id, effective)
+					if responseErr != nil {
+						mapDomainConfigError(w, responseErr)
+						return
+					}
+					writeDomainConfigJSON(w, 200, resp)
+					return
+				}
+				if _, domainErr := s.Service.Store.GetDomain(r.Context(), p.AccountID, id); domainErr != nil {
+					mapDomainConfigError(w, domainErr)
+					return
+				}
 				writeDomainConfigJSON(w, 200, domainConfigResponse{DomainID: id, Provider: "", Config: map[string]any{}})
 				return
 			}
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainReceivingResponse(id, cfg)
+		resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -118,12 +137,34 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &in) {
 			return
 		}
+		if in.Provider == "dialmx" && in.RegenerateSecret {
+			if len(in.Config) != 0 {
+				writeError(w, 400, "save configuration separately from key rotation")
+				return
+			}
+			if _, err := s.Service.RotateDialMXCredential(r.Context(), p.AccountID, id); err != nil {
+				mapDomainConfigError(w, err)
+				return
+			}
+			cfg, err := s.Service.Store.ResolveDomainReceivingConfig(r.Context(), p.AccountID, id, "dialmx")
+			if err != nil {
+				mapDomainConfigError(w, err)
+				return
+			}
+			resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
+			if err != nil {
+				mapDomainConfigError(w, err)
+				return
+			}
+			writeDomainConfigJSON(w, 200, resp)
+			return
+		}
 		cfg, generated, err := s.Service.SaveDomainReceivingConfig(r.Context(), p.AccountID, id, in.Provider, in.Config, in.RegenerateSecret)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainReceivingResponse(id, cfg)
+		resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -217,20 +258,30 @@ func (s *Server) domainSendingResponse(domainID string, cfg store.DomainSendingC
 	}, nil
 }
 
-func (s *Server) domainReceivingResponse(domainID string, cfg store.DomainReceivingConfig) (domainConfigResponse, error) {
+func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, cfg store.DomainReceivingConfig) (domainConfigResponse, error) {
 	dec, err := s.Service.DecryptDomainReceivingConfig(cfg)
 	if err != nil {
 		return domainConfigResponse{}, err
 	}
 	updated := cfg.UpdatedAt
-	return domainConfigResponse{
+	resp := domainConfigResponse{
 		DomainID:   domainID,
 		Configured: true,
 		Provider:   cfg.Provider,
 		Config:     inboundNonsecretConfig(cfg.Provider, dec),
 		UpdatedAt:  &updated,
 		WebhookURL: s.inboundWebhookURL(cfg.Provider),
-	}, nil
+	}
+	if strings.EqualFold(cfg.Provider, "dialmx") {
+		credential, err := s.Service.EnsureDialMXCredential(ctx, cfg.AccountID, domainID)
+		if err != nil {
+			return domainConfigResponse{}, err
+		}
+		resp.KeyID, resp.PublicKey = credential.KeyID, credential.PublicKey
+		pub, _ := base64.RawURLEncoding.DecodeString(credential.PublicKey)
+		resp.TXTRecord = mxwire.DomainTXT(credential.KeyID, pub)
+	}
+	return resp, nil
 }
 
 // outboundNonsecretConfig filters a decrypted outbound config down to the

@@ -131,6 +131,8 @@ type Config struct {
 	// over TLS, so a remote MX edge can reach it over verified TLS.
 	InboundTLSCertFile string
 	InboundTLSKeyFile  string
+	// DialMXCAFile optionally adds private receiver CAs to the system trust roots.
+	DialMXCAFile string
 }
 
 func Load() (Config, error) {
@@ -189,6 +191,7 @@ func Load() (Config, error) {
 		MXGID:                  envInt("MX_GID", 65533),
 		InboundTLSCertFile:     strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
 		InboundTLSKeyFile:      strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
+		DialMXCAFile:           strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
