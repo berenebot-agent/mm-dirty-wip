@@ -213,6 +213,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes/{id}/bulk", s.withSession(s.withCSRF(s.uiBulk)))
 	m.HandleFunc("GET /ui/messages/{id}/reply", s.withSession(s.uiReplyForm))
 	m.HandleFunc("POST /ui/messages/{id}/reply", s.withSession(s.withCSRF(s.uiReplySend)))
+	m.HandleFunc("GET /ui/messages/{id}/reply-all", s.withSession(s.uiReplyAllForm))
+	m.HandleFunc("POST /ui/messages/{id}/reply-all", s.withSession(s.withCSRF(s.uiReplyAllSend)))
 	m.HandleFunc("GET /ui/messages/{id}/forward", s.withSession(s.uiForwardForm))
 	m.HandleFunc("POST /ui/messages/{id}/forward", s.withSession(s.withCSRF(s.uiForwardSend)))
 	m.HandleFunc("POST /ui/messages/{id}/delete", s.withSession(s.withCSRF(s.uiMessageDelete)))

@@ -49,6 +49,7 @@ const (
 	iconDeleteFore  = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M6 4.5V3.3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.2"/><path d="M4.3 4.5 5 12.6a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9l.7-8.1"/><path d="M6 6.5l4 5M10 6.5l-4 5"/></svg>`
 	iconNotSpam     = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 3.2 8.2h2.4L4.2 12.5l3.8-1.1 3.8 1.1-1.4-4.3h2.4L8 2.5Z"/></svg>`
 	iconReply       = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5 2.5 7.2l4 3.7"/><path d="M2.5 7.2h6.3a4.7 4.7 0 0 1 4.7 4.7v.6"/></svg>`
+	iconReplyAll    = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.7 3.4 1.9 7.2l3.8 3.8"/><path d="M9.4 3.4 5.6 7.2l3.8 3.8"/><path d="M1.9 7.2h7a4.7 4.7 0 0 1 4.7 4.7v.6"/></svg>`
 	iconForward     = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 3.5 4 3.7-4 3.7"/><path d="M13.5 7.2H7.2a4.7 4.7 0 0 0-4.7 4.7v.6"/></svg>`
 	iconSettingsSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`
 )
@@ -854,6 +855,10 @@ func (s *Server) uiReplyForm(w http.ResponseWriter, r *http.Request) {
 	s.composeMessage(w, r, "reply")
 }
 
+func (s *Server) uiReplyAllForm(w http.ResponseWriter, r *http.Request) {
+	s.composeMessage(w, r, "reply-all")
+}
+
 func (s *Server) uiForwardForm(w http.ResponseWriter, r *http.Request) {
 	s.composeMessage(w, r, "forward")
 }
@@ -871,7 +876,9 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	data := pageData{Principal: p, CSRF: csrf(r), Account: acc, ComposeCancel: "/ui/messages/" + m.ID}
-	if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, m.InboxID); err == nil {
+	var box model.Inbox
+	if b, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, m.InboxID); err == nil {
+		box = b
 		data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, "")
 	}
 	switch kind {
@@ -885,6 +892,14 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 		data.ComposeTo = to
 		data.ComposeSubject = app.ReplySubject(m.Subject)
 		data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply", csrf(r))
+	case "reply-all":
+		to, cc := replyAllRecipients(m, box)
+		data.Title = "Reply all"
+		data.ComposeTitle = "Reply all"
+		data.ComposeTo = to
+		data.ComposeCC = cc
+		data.ComposeSubject = app.ReplySubject(m.Subject)
+		data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply-all", csrf(r))
 	case "forward":
 		data.Title = "Forward"
 		data.ComposeTitle = "Forward"
@@ -897,6 +912,10 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 
 func (s *Server) uiReplySend(w http.ResponseWriter, r *http.Request) {
 	s.sendMessage(w, r, "reply")
+}
+
+func (s *Server) uiReplyAllSend(w http.ResponseWriter, r *http.Request) {
+	s.sendMessage(w, r, "reply-all")
 }
 
 func (s *Server) uiForwardSend(w http.ResponseWriter, r *http.Request) {
@@ -913,24 +932,77 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string
 	formURL := "/ui/messages/" + m.ID + "/" + kind
 	in, err := s.parseMessageForm(w, r)
 	if err != nil {
-		title := "Reply"
-		if kind == "forward" {
-			title = "Forward"
-		}
+		title := replyTitle(kind)
 		s.renderComposeError(w, r, title, formURL, "/ui/messages/"+m.ID+"/"+kind, "/ui/messages/"+m.ID, in, err)
 		return
 	}
 	in.InboxID = m.InboxID
-	title := "Reply"
+	title := replyTitle(kind)
 	action := "/ui/messages/" + m.ID + "/reply"
 	if kind == "forward" {
-		title = "Forward"
 		action = "/ui/messages/" + m.ID + "/forward"
 		in.ForwardOfMessageID = m.ID
+	} else if kind == "reply-all" {
+		action = "/ui/messages/" + m.ID + "/reply-all"
+		in.ReplyToMessageID = m.ID
 	} else {
 		in.ReplyToMessageID = m.ID
 	}
 	s.submitMessage(w, r, p, in, title, formURL, action, "/ui/messages/"+m.ID)
+}
+
+// replyTitle returns the compose-page title for a reply, reply-all or forward.
+func replyTitle(kind string) string {
+	switch kind {
+	case "forward":
+		return "Forward"
+	case "reply-all":
+		return "Reply all"
+	default:
+		return "Reply"
+	}
+}
+
+// replyAllRecipients computes the To and Cc addresses for a reply-all: the
+// original sender goes in To (the original To list for an outbound message),
+// and the remaining original To/Cc recipients go in Cc. Addresses belonging to
+// the mailbox itself (its primary address and aliases) are removed so the
+// reply does not copy the sender's own mailbox. Order is preserved and
+// duplicates (case-insensitive) are dropped.
+func replyAllRecipients(m model.Message, box model.Inbox) (string, string) {
+	self := map[string]bool{strings.ToLower(box.Address): true}
+	for _, a := range box.Aliases {
+		self[strings.ToLower(a)] = true
+	}
+	seen := map[string]bool{}
+	var to []string
+	var cc []string
+	add := func(list *[]string, addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			return
+		}
+		key := strings.ToLower(addr)
+		if self[key] || seen[key] {
+			return
+		}
+		seen[key] = true
+		*list = append(*list, addr)
+	}
+	if m.Direction == "inbound" {
+		add(&to, m.From.Address)
+		for _, a := range m.To {
+			add(&cc, a)
+		}
+	} else {
+		for _, a := range m.To {
+			add(&to, a)
+		}
+	}
+	for _, a := range m.CC {
+		add(&cc, a)
+	}
+	return strings.Join(to, ", "), strings.Join(cc, ", ")
 }
 
 func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.Principal, in app.SendInput, title, formURL, action, cancel string) {
