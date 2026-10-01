@@ -14,8 +14,7 @@ import (
 // Config is the standalone Dial MX receiver configuration. The HTTPS/2 session
 // listener is the receiver's own; the SMTP edge, verification toggles and DNS
 // resolver reuse the operator's existing MX_* environment via mxagent.Config.
-// Unlike the relay edge, the standalone receiver needs no HMAC ingest URL/secret:
-// it hands Delivery straight to the in-process receiver.
+// Delivery hands SMTP transactions straight to the in-process receiver.
 type Config struct {
 	ListenAddr, TLSCertFile, TLSKeyFile string
 	SMTP                                mxagent.Config
@@ -28,8 +27,9 @@ func Load() (Config, error) {
 		TLSCertFile: strings.TrimSpace(os.Getenv("DIALMX_TLS_CERT")),
 		TLSKeyFile:  strings.TrimSpace(os.Getenv("DIALMX_TLS_KEY")),
 	}
-	// The SMTP edge keeps the documented MX_* environment. IngestURL, KeyID and
-	// Secret are deliberately left empty: the receiver wires Delivery in process.
+	c.Receiver.Mode = env("DIALMX_MODE", "single")
+	c.Receiver.CoreKey = strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY"))
+	// The SMTP edge keeps the documented MX_* environment.
 	c.SMTP = mxagent.Config{
 		Hostname:        env("MX_HOSTNAME", "localhost"),
 		ListenAddr:      env("MX_LISTEN_ADDR", ":2525"),
@@ -72,8 +72,17 @@ func Load() (Config, error) {
 // floor), the message cap must be at least 1 MiB, and the listener certificate
 // pair must be set together.
 func (c *Config) validate() error {
-	if c.TLSCertFile == "" || c.TLSKeyFile == "" {
-		return fmt.Errorf("DIALMX_TLS_CERT and DIALMX_TLS_KEY are required")
+	if c.Receiver.Mode != "single" && c.Receiver.Mode != "shared" {
+		return fmt.Errorf("DIALMX_MODE must be single or shared")
+	}
+	if c.Receiver.Mode == "single" && c.Receiver.CoreKey == "" {
+		return fmt.Errorf("DIALMX_CORE_KEY is required in single mode")
+	}
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return fmt.Errorf("DIALMX_TLS_CERT and DIALMX_TLS_KEY must be set together")
+	}
+	if c.Receiver.Mode == "shared" && c.TLSCertFile == "" {
+		return fmt.Errorf("shared mode requires DIALMX_TLS_CERT and DIALMX_TLS_KEY")
 	}
 	s := c.SMTP
 	if s.MaxMessageBytes < 1<<20 {

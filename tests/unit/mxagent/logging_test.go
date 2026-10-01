@@ -106,7 +106,7 @@ func (d *ctxDelivery) Resolve(ctx context.Context, addresses []string) (mxwire.R
 		d.resolve = append(d.resolve, a)
 		d.mu.Unlock()
 	}
-	resp := mxwire.ResolveResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.ResolveResponse{Version: mxwire.V2Protocol}
 	for _, a := range addresses {
 		resp.Results = append(resp.Results, mxwire.ResolveRecipient{Recipient: a, Accept: true, Domain: "example.test"})
 	}
@@ -122,7 +122,7 @@ func (d *ctxDelivery) Ingest(ctx context.Context, meta mxwire.IngestMetadata, _ 
 	d.mu.Lock()
 	d.ingested++
 	d.mu.Unlock()
-	resp := mxwire.IngestResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.IngestResponse{Version: mxwire.V2Protocol}
 	for _, r := range meta.Recipients {
 		resp.PerRecipient = append(resp.PerRecipient, mxwire.RecipientIngestResult{
 			Recipient: r, Disposition: mxwire.DispositionStored, MachineCode: mxwire.CodeOK,
@@ -547,7 +547,7 @@ func TestEdgeCoreAckSeparateFromDecision(t *testing.T) {
 type transientDelivery struct{}
 
 func (d *transientDelivery) Resolve(_ context.Context, addresses []string) (mxwire.ResolveResponse, error) {
-	resp := mxwire.ResolveResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.ResolveResponse{Version: mxwire.V2Protocol}
 	for _, a := range addresses {
 		resp.Results = append(resp.Results, mxwire.ResolveRecipient{Recipient: a, Accept: true, Domain: "example.test"})
 	}
@@ -555,7 +555,7 @@ func (d *transientDelivery) Resolve(_ context.Context, addresses []string) (mxwi
 }
 
 func (d *transientDelivery) Ingest(_ context.Context, meta mxwire.IngestMetadata, _ io.Reader, _ int64, _ string) (mxwire.IngestResponse, error) {
-	resp := mxwire.IngestResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.IngestResponse{Version: mxwire.V2Protocol}
 	for _, r := range meta.Recipients {
 		resp.PerRecipient = append(resp.PerRecipient, mxwire.RecipientIngestResult{
 			Recipient: r, MachineCode: mxwire.CodeTempFail,
@@ -584,7 +584,7 @@ func (d *errorResolveDelivery) Close() error { return nil }
 type unknownRcptDelivery struct{}
 
 func (d *unknownRcptDelivery) Resolve(context.Context, []string) (mxwire.ResolveResponse, error) {
-	return mxwire.ResolveResponse{Version: mxwire.ProtocolVersion, Results: []mxwire.ResolveRecipient{{Recipient: "nobody@example.test"}}}, nil
+	return mxwire.ResolveResponse{Version: mxwire.V2Protocol, Results: []mxwire.ResolveRecipient{{Recipient: "nobody@example.test"}}}, nil
 }
 
 func (d *unknownRcptDelivery) Ingest(context.Context, mxwire.IngestMetadata, io.Reader, int64, string) (mxwire.IngestResponse, error) {

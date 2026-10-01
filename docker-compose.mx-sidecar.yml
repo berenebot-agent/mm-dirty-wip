@@ -5,8 +5,7 @@
 #
 #   docker compose -f docker-compose.mx-sidecar.yml up -d
 #
-# Set MX_EDGE_SECRET in .env; the core accepts the edge's key and the edge signs
-# with it.
+# Set DIALMX_CORE_KEY in .env; the core connects to the receiver using that key.
 services:
   mailmoose:
     image: mailmoose:latest
@@ -14,10 +13,10 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Remote mode: enable the core MX endpoints; the separate edge container
-      # below terminates SMTP. The credential must be shared, not generated.
+      # The core opens a bearer-authenticated HTTP/2 session to the receiver.
       MX_ENABLE: remote
-      MX_EDGE_KEYS: ${MX_EDGE_KEYS:-edge-1:${MX_EDGE_SECRET:?set MX_EDGE_SECRET in .env}}
+      MX_RECEIVER_URL: http://mailmoose-mx:8443
+      DIALMX_CORE_KEY: ${DIALMX_CORE_KEY:?set DIALMX_CORE_KEY in .env}
     volumes:
       - ./data:/data
     ports:
@@ -31,14 +30,11 @@ services:
       dockerfile: Dockerfile.mx
     restart: unless-stopped
     environment:
-      MAILMOOSE_INGEST_URL: ${MX_INGEST_URL:-http://mailmoose:8082}
-      MX_EDGE_KEY_ID: ${MX_EDGE_KEY_ID:-edge-1}
-      MX_EDGE_SECRET: ${MX_EDGE_SECRET:?set MX_EDGE_SECRET in .env}
+      DIALMX_MODE: single
+      DIALMX_CORE_KEY: ${DIALMX_CORE_KEY:?set DIALMX_CORE_KEY in .env}
       MX_HOSTNAME: ${MX_HOSTNAME:-mailmoose-mx}
     ports:
       - "0.0.0.0:25:2525"
-    depends_on:
-      - mailmoose
     # The edge image already runs as a non-root user and stages in memory, so no
     # user:/read_only: overrides are required.
     security_opt:

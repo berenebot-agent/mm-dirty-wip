@@ -34,7 +34,7 @@ type blockingDelivery struct {
 
 func (d *blockingDelivery) Resolve(_ context.Context, addresses []string) (mxwire.ResolveResponse, error) {
 	atomic.AddInt64(&d.resolves, 1)
-	resp := mxwire.ResolveResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.ResolveResponse{Version: mxwire.V2Protocol}
 	for _, a := range addresses {
 		resp.Results = append(resp.Results, mxwire.ResolveRecipient{Recipient: a, Accept: true, Domain: "example.test"})
 	}
@@ -50,7 +50,7 @@ func (d *blockingDelivery) Ingest(ctx context.Context, meta mxwire.IngestMetadat
 			return mxwire.IngestResponse{}, ctx.Err()
 		}
 	}
-	resp := mxwire.IngestResponse{Version: mxwire.ProtocolVersion}
+	resp := mxwire.IngestResponse{Version: mxwire.V2Protocol}
 	for _, r := range meta.Recipients {
 		resp.PerRecipient = append(resp.PerRecipient, mxwire.RecipientIngestResult{
 			Recipient:   r,

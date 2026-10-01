@@ -9,12 +9,11 @@
 #
 # The receiver is one process with two listeners: the SMTP edge (host :25 ->
 # container :2525) and the HTTPS/2 dialer session endpoint (host :443 ->
-# container :8443). It holds no /data mount, no database and no core HMAC key:
-# it verifies each dialer against the domain's published _mailmoose-mx TXT
-# record and hands accepted mail to the core over an outbound HTTPS/2 session.
+# container :8443). It holds no /data mount or database. Single mode uses a
+# shared bearer key and optional TLS; shared mode uses domain TXT proofs and TLS.
 #
 # Certificates: mount the receiver's TLS material read-only. Both listeners use
-# the same certificate unless MX_TLS_CERT/MX_TLS_KEY override the SMTP side.
+# independent certificate settings for SMTP STARTTLS and core sessions.
 #
 #   mkdir -p dialmx/certs
 #   cp /path/to/fullchain.pem /path/to/privkey.pem dialmx/certs/
@@ -37,13 +36,15 @@ services:
         max-size: "20m"
         max-file: "10"
     environment:
+      DIALMX_MODE: "${DIALMX_MODE:-single}"
+      DIALMX_CORE_KEY: "${DIALMX_CORE_KEY:-}"
       # SMTP greeting hostname. Independent of the session listener address.
       MX_HOSTNAME: "${MX_HOSTNAME:-mail.example.com}"
-      # The receiver's own HTTPS/2 listener certificate. Required.
-      DIALMX_TLS_CERT: /certs/fullchain.pem
-      DIALMX_TLS_KEY: /certs/privkey.pem
-      MX_TLS_CERT: /certs/fullchain.pem
-      MX_TLS_KEY: /certs/privkey.pem
+      # Optional in single mode; shared mode requires the session pair.
+      DIALMX_TLS_CERT: "${DIALMX_TLS_CERT:-}"
+      DIALMX_TLS_KEY: "${DIALMX_TLS_KEY:-}"
+      MX_TLS_CERT: "${MX_TLS_CERT:-}"
+      MX_TLS_KEY: "${MX_TLS_KEY:-}"
       # The SMTP edge reuses the documented MX_* surface. Defaults match the
       # core's MX edge; MX_TLS_CERT/MX_TLS_KEY default to the listener pair.
       MX_VERIFY_SPF: "${MX_VERIFY_SPF:-true}"

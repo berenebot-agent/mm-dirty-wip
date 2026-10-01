@@ -42,9 +42,8 @@ type Status struct {
 	ExpiresAt    time.Time
 }
 
-// Backend is the shared application surface the dialer consumes. Resolve and
-// Ingest are only ever called after the receiver has proven control of the
-// exact core signing key via a DNS-anchored Ed25519 challenge.
+// Backend is the application surface shared by private bearer sessions and
+// shared sessions with DNS-authenticated domain channels.
 type Backend interface {
 	Domains(context.Context) ([]Domain, error)
 	Resolve(context.Context, string, []string) (mxwire.ResolveResponse, error)
@@ -53,6 +52,8 @@ type Backend interface {
 
 // Config bounds the manager. Zero values select the documented defaults.
 type Config struct {
+	ReceiverURL        string
+	CoreKey            string
 	DataDir            string
 	MaxMessageBytes    int64
 	MaxTransactions    int
@@ -219,6 +220,9 @@ func (m *Manager) reconcile(parent context.Context) {
 		return
 	}
 	desired := map[string]map[string]Domain{}
+	if m.cfg.ReceiverURL != "" {
+		desired[m.cfg.ReceiverURL] = map[string]Domain{}
+	}
 	for _, d := range domains {
 		name, e := mxwire.CanonicalDomain(d.Name)
 		if e != nil || len(d.PrivateKey) != ed25519.PrivateKeySize || d.KeyID == "" {
@@ -576,6 +580,11 @@ func (s *session) connect() error {
 		TLSHandshakeTimeout:   5 * time.Second,
 		ResponseHeaderTimeout: readyTimeout,
 	}
+	tr.Protocols = new(http.Protocols)
+	tr.Protocols.SetHTTP2(true)
+	if s.single() {
+		tr.Protocols.SetUnencryptedHTTP2(true)
+	}
 	reqCtx, cancel := context.WithCancel(s.ctx)
 	s.connectionCtx = reqCtx
 	s.requestCancel = cancel
@@ -599,6 +608,9 @@ func (s *session) connect() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
+	if s.single() {
+		req.Header.Set("Authorization", "Bearer "+s.m.cfg.CoreKey)
+	}
 
 	type doResult struct {
 		resp *http.Response
@@ -655,6 +667,9 @@ func (s *session) connect() error {
 		return err
 	}
 	s.ready = ready
+	if s.single() && ready.Mode != "single" || !s.single() && ready.Mode == "single" {
+		return errors.New("receiver mode mismatch")
+	}
 	if err = s.authenticateAll(); err != nil {
 		return err
 	}
@@ -857,6 +872,10 @@ func (s *session) applyConfig() {
 // auth, re-issuing for unauthenticated, expired, rejected-after-retry, or
 // superseded domains.
 func (s *session) authenticateAll() error {
+	if s.single() {
+		s.sawAuth = true
+		return nil
+	}
 	now := time.Now()
 	var pending []*auth
 	for name, d := range s.domains {
@@ -1097,6 +1116,9 @@ func (s *session) resolve(f mxwire.Frame) error {
 // authorized reports whether a channel carries live authority for the domain.
 // Replaced bindings are not authorized for new work.
 func (s *session) authorized(ad *auth, domain string, channel uint64) bool {
+	if s.single() {
+		return channel == 1
+	}
 	if ad == nil || ad.state != authActive {
 		return false
 	}
@@ -1107,11 +1129,18 @@ func (s *session) authorized(ad *auth, domain string, channel uint64) bool {
 // domain. A replaced binding that is still authorized and unchanged may finish
 // DATA for an already-pinned transaction.
 func (s *session) pinnedAuthorized(domain string, pinned uint64) bool {
+	if s.single() {
+		return pinned == 1
+	}
 	cur, ok := s.auths[domain]
 	if !ok || cur.channel != pinned {
 		return false
 	}
 	return (cur.state == authActive || cur.state == authReplaced) && time.Now().Before(cur.expires)
+}
+
+func (s *session) single() bool {
+	return s.m.cfg.ReceiverURL != "" && s.url == s.m.cfg.ReceiverURL
 }
 
 var errTxLimit = errors.New("transaction limit")
@@ -1331,7 +1360,7 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 		if !s.pinnedAuthorized(d, pinned) {
 			return errors.New("ingest authority lapsed")
 		}
-		if _, ok := s.domains[d]; !ok {
+		if _, ok := s.domains[d]; !ok && !s.single() {
 			return errors.New("ingest configuration changed")
 		}
 	}

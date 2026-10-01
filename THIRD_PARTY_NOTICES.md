@@ -155,7 +155,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## github.com/emersion/go-smtp v0.25.0
 
-SMTP server used by the optional MX edge (`cmd/mx`, `internal/mxagent`).
+SMTP server used by the unified MX receiver (`dialmx/cmd/receiver`, `internal/mxagent`).
 Licence: MIT.
 
 The MIT License (MIT)

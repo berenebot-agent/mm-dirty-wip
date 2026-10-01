@@ -104,7 +104,7 @@ flowchart LR
 
     subgraph Inbound["Inbound transports"]
         WG["Mailgun / Cloudflare / Resend\nHTTPS webhooks"]
-        MX["MX edge :25\nSPF · DKIM · DMARC\n(HMAC-signed, no /data)"]
+        MX["MX receiver :25\nSPF · DKIM · DMARC\n(single bearer / shared DNS, no /data)"]
     end
 
     subgraph Core["MailMoose core — 1 binary · 1 process"]
@@ -128,7 +128,7 @@ flowchart LR
     SE --> WG
     SE --> MX
     WG --> ING
-    MX -- "signed ingest" --> ING
+    CORE -- "outbound HTTP/2 MX session" --> MX
     ING --> CORE
     AUTH --> CORE
     CORE --> DB

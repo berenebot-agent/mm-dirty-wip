@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -29,9 +28,7 @@ type Spec struct {
 	// UID/GID the edge runs as, separate from the app runtime user.
 	UID int
 	GID int
-	// KeyID/Secret are the credential the edge signs core requests with. They
-	// are derived from the app's MX_EDGE_KEYS when present, or generated.
-	KeyID  string
+	// Secret authenticates the core's session to this receiver.
 	Secret string
 	// Hostname is the SMTP greeting hostname.
 	Hostname string
@@ -39,38 +36,27 @@ type Spec struct {
 	Env []string
 }
 
-// ResolveEdgeCredential picks the edge credential. When the operator supplied
-// MX_EDGE_KEYS, the lexicographically smallest key id is used (deterministic
-// across restarts); otherwise a fresh key is generated. The core is told the
-// same credential via EdgeKeysEnv. A random-generation failure is returned
-// rather than ignored: continuing with a weak or zero secret would silently
-// weaken the edge authentication boundary.
-func ResolveEdgeCredential(edgeKeys map[string]string) (keyID, secret string, err error) {
-	if len(edgeKeys) > 0 {
-		ids := make([]string, 0, len(edgeKeys))
-		for id := range edgeKeys {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		return ids[0], edgeKeys[ids[0]], nil
+// ResolveCoreKey preserves an operator key or generates a fresh random key.
+func ResolveCoreKey(key string) (string, error) {
+	if key != "" {
+		return key, nil
 	}
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "", "", fmt.Errorf("launcher: generate edge credential: %w", err)
+		return "", fmt.Errorf("launcher: generate core key: %w", err)
 	}
-	return "edge-1", hex.EncodeToString(b[:]), nil
+	return hex.EncodeToString(b[:]), nil
 }
 
 // EdgeEnv builds the child's environment. It is an allowlist: the edge never
-// receives APP_ENCRYPTION_KEY, DATA_DIR or MX_EDGE_KEYS, and staging is
-// in-memory so no filesystem path is needed. MAILMOOSE_INGEST_URL points at the
-// core's loopback inbound connector.
-func EdgeEnv(hostname, keyID, secret string, shutdownFD int) []string {
+// receives APP_ENCRYPTION_KEY or DATA_DIR. The session listener binds loopback
+// and staging is in-memory, so no writable filesystem is needed.
+func EdgeEnv(hostname, secret string, shutdownFD int) []string {
 	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
-		"MX_EDGE_KEY_ID=" + keyID,
-		"MX_EDGE_SECRET=" + secret,
-		"MAILMOOSE_INGEST_URL=http://127.0.0.1:8082",
+		"DIALMX_MODE=single",
+		"DIALMX_CORE_KEY=" + secret,
+		"DIALMX_LISTEN_ADDR=127.0.0.1:8443",
 		"MX_LISTEN_ADDR=:2525",
 		fmt.Sprintf("MX_SHUTDOWN_FD=%d", shutdownFD),
 	}
@@ -81,7 +67,6 @@ func EdgeEnv(hostname, keyID, secret string, shutdownFD int) []string {
 	// Forward the operator-tunable MX edge settings, but never the core's
 	// secrets or paths.
 	for _, name := range []string{
-		"MX_EDGE_NAME",
 		"MX_TLS_CERT", "MX_TLS_KEY", "MX_REQUIRE_TLS",
 		"MX_VERIFY_SPF", "MX_VERIFY_DKIM", "MX_VERIFY_DMARC",
 		"MX_DNS_RESOLVER", "MX_DNS_TIMEOUT_SECONDS",

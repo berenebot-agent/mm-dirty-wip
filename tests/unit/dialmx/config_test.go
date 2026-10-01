@@ -11,6 +11,7 @@ import (
 func loadWith(t *testing.T, overrides map[string]string) (dialmx.Config, error) {
 	t.Helper()
 	base := map[string]string{
+		"DIALMX_MODE":                        "shared",
 		"DIALMX_TLS_CERT":                    "/tls/cert.pem",
 		"DIALMX_TLS_KEY":                     "/tls/key.pem",
 		"MX_MAX_MESSAGE_BYTES":               "1048576",
@@ -105,9 +106,33 @@ func TestLoadRejectsTransactionLimitAboveConnections(t *testing.T) {
 }
 
 func TestLoadRequiresListenerCertificates(t *testing.T) {
+	t.Setenv("DIALMX_MODE", "shared")
 	t.Setenv("DIALMX_TLS_CERT", "")
 	t.Setenv("DIALMX_TLS_KEY", "")
 	if _, err := dialmx.Load(); err == nil {
 		t.Fatal("expected missing listener certificates to be rejected")
+	}
+}
+
+func TestSingleModeConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values map[string]string
+		valid  bool
+	}{
+		{"default cleartext", map[string]string{"DIALMX_MODE": "", "DIALMX_CORE_KEY": "private-key", "DIALMX_TLS_CERT": "", "DIALMX_TLS_KEY": ""}, true},
+		{"TLS", map[string]string{"DIALMX_MODE": "single", "DIALMX_CORE_KEY": "private-key"}, true},
+		{"missing key", map[string]string{"DIALMX_MODE": "single", "DIALMX_CORE_KEY": ""}, false},
+		{"unknown mode", map[string]string{"DIALMX_MODE": "other"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadWith(t, tc.values)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+			if tc.valid && cfg.Receiver.Mode != "single" {
+				t.Fatalf("mode=%q", cfg.Receiver.Mode)
+			}
+		})
 	}
 }

@@ -72,7 +72,6 @@ type Server struct {
 	flashes         *flashStore
 	assetVersion    string
 	inboundSem      chan struct{}
-	mxReplay        *mxReplayCache
 	streamLimiter   *concurrentLimiter
 	waitLimiter     *concurrentLimiter
 }
@@ -363,7 +362,6 @@ func (s *Server) InboundHandler() http.Handler {
 	s.registerInbound(m)
 	// MX routes are only on the dedicated inbound connector, never the main
 	// API/UI listener, so an operator can expose just the connector to the edge.
-	s.registerMX(m)
 	return s.securityHeaders(s.recoverer(m))
 }
 

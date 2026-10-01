@@ -231,7 +231,7 @@ func (t *transaction) acceptedBinding(c *connection, d string) *binding {
 func (t *transaction) live(b *binding) bool {
 	t.r.mu.Lock()
 	defer t.r.mu.Unlock()
-	return (b.state == bindActive || b.state == bindReplaced) && !b.c.closing && time.Now().Before(b.expires)
+	return (b.state == bindActive || b.state == bindReplaced) && !b.c.closing && b.c.ctx.Err() == nil && (t.r.cfg.Mode == "single" || time.Now().Before(b.expires))
 }
 
 func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, body io.Reader, size int64, digest string) (mxwire.IngestResponse, error) {

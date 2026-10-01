@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./cmd/mx
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./dialmx/cmd/receiver
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
@@ -32,5 +32,5 @@ RUN groupadd -g ${MAILMOOSE_GID} mailmoose 2>/dev/null || true \
 COPY --from=build /out/mailmoose-mx /usr/local/bin/mailmoose-mx
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
 USER ${MAILMOOSE_UID}:${MAILMOOSE_GID}
-EXPOSE 2525
+EXPOSE 2525 8443
 ENTRYPOINT ["/usr/local/bin/mailmoose-mx"]

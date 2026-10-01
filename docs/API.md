@@ -544,20 +544,11 @@ receiving configuration, unknown domains, and bad authentication return `401`.
 Resend event types other than `email.received` are acknowledged with `200` and
 ignored.
 
-Optional MX (direct SMTP) ingest uses two authenticated endpoints on the same
-inbound listener, called only by the `mailmoose-mx` edge with an operator
-HMAC edge key (not a provider webhook and not a tenant credential):
-
-```http
-POST /internal/mx/resolve
-POST /internal/mx/ingest
-```
-
-`resolve` maps a bounded recipient list to routing decisions (distinguishing an
-unknown recipient from a transient internal failure); `ingest` persists one
-recipient's original MIME and returns a durable disposition (`stored`, `spam`,
-or a typed error). Duplicate delivery fingerprints return the recorded
-disposition. See [MX.md](MX.md).
+Direct SMTP uses a core-established HTTP/2 session to the unified receiver.
+Private MX sessions use bearer authentication; shared Dial MX sessions use
+DNS-backed domain proofs. Recipient resolution and durable ingestion are framed
+session operations, not core HTTP endpoints. Duplicate delivery fingerprints
+return the recorded disposition. See [MX.md](MX.md) and [DIALMX.md](DIALMX.md).
 
 Sending and receiving are configured per domain. A domain owns at most one
 optional sending configuration and at most one optional receiving

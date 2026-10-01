@@ -47,13 +47,18 @@ func main() {
 		log.Error("invalid configuration", "error", err)
 		os.Exit(2)
 	}
-	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
-	if err != nil {
-		log.Error("load TLS certificate", "error", err)
-		os.Exit(2)
+	var cert tls.Certificate
+	if cfg.TLSCertFile != "" {
+		cert, err = tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			log.Error("load TLS certificate", "error", err)
+			os.Exit(2)
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ctx, stopFD := mxagent.WatchShutdownFD(ctx)
+	defer stopFD()
 
 	r := receiver.New(cfg.Receiver, log)
 
@@ -77,6 +82,11 @@ func main() {
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2"}},
 		ConnContext:       tracker.ConnContext,
 		ConnState:         tracker.ConnState,
+	}
+	srv.Protocols = new(http.Protocols)
+	srv.Protocols.SetHTTP2(true)
+	if cfg.Receiver.Mode == "single" && cfg.TLSCertFile == "" {
+		srv.Protocols.SetUnencryptedHTTP2(true)
 	}
 
 	var wg sync.WaitGroup
@@ -109,7 +119,12 @@ func main() {
 	log.Info(receiver.EventReceiverReady, "boot_duration", time.Since(started).Round(time.Millisecond).String())
 
 	run("mx edge", func() error { return edge.ListenAndServe(ctx, smtpLn) })
-	run("session", func() error { return srv.ServeTLS(tlsLn, "", "") })
+	run("session", func() error {
+		if cfg.TLSCertFile == "" {
+			return srv.Serve(tlsLn)
+		}
+		return srv.ServeTLS(tlsLn, "", "")
+	})
 
 	<-ctx.Done()
 	// Either listener failing calls stop via the run wrapper, so shutdown is
@@ -149,6 +164,7 @@ func mxwireProtocol() string { return "mx-v2" }
 // verification toggles, the DNS resolver and the receiver's own bounds. It
 // carries no secrets: certificate paths and key material are never logged.
 func logSettings(log *slog.Logger, cfg dialmx.Config) {
+	log.Info("dialmx mode", "mode", cfg.Receiver.Mode, "session_tls", cfg.TLSCertFile != "")
 	log.Info(receiver.EventSettings,
 		"version", buildVersion,
 		"go", runtime.Version(),

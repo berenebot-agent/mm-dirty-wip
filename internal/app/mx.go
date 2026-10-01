@@ -97,7 +97,7 @@ func recipientAuthorizedForBinding(inbox model.Inbox, route store.RecipientRoute
 }
 
 // MXIngestInput is one authenticated ingest request: the staged original MIME
-// plus the signed metadata the core already verified. Recipients is the whole
+// plus metadata received on an authorized session. Recipients is the whole
 // accepted envelope recipient set for this one message.
 type MXIngestInput struct {
 	Recipients []string

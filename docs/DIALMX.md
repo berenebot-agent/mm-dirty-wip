@@ -1,18 +1,18 @@
 # Dial MX — standalone receiver
 
-Dial MX is the inverse of the [optional MX edge](MX.md). With `mailmoose-mx`,
-the core **listens** on `:8082` and a policy-free edge calls in with HMAC-signed
-ingest requests. With Dial MX, the core **dials out**: a standalone receiver
+All MX deployments now use the same Dial MX session transport. The core
+**dials out**: a standalone receiver
 terminates SMTP, verifies the core's right to receive for a domain using
 a DNS-anchored Ed25519 challenge, and streams received mail to that core over the
 outbound-established session. No public inbound port on the core is required — only outbound
 HTTPS/2 from the core to the receiver.
 
-Use it when the core cannot accept an inbound connection (behind a NAT, no
-public `:8082`, no reverse proxy) but you still want direct SMTP delivery. It is
-an alternative to `MX_ENABLE=true|remote`, not a replacement: a domain's
-receiving provider is either `mx` (edge calls core) or `dialmx` (core dials
-receiver), never both.
+The receiver defaults to `DIALMX_MODE=single`: bearer authentication, one core,
+no domain registration, and optional session TLS. See [MX.md](MX.md) for built-in
+and private standalone setup. The remainder of this guide describes
+`DIALMX_MODE=shared`: the existing DNS-authenticated multi-tenant mode, with TLS
+required. A domain's provider is `mx` for a private receiver or `dialmx` for a
+shared receiver; both use core-established sessions.
 
 The receiver is a single pure-Go process with no `/data`, no database and no
 `APP_ENCRYPTION_KEY`. The core remains the durable source of truth.
@@ -71,7 +71,7 @@ operator-managed TLS certificates.
 The core only starts its dialer for domains that have a `dialmx` receiving
 configuration. `MX_ENABLE` is about the **inbound** MX edge only: Dial MX works
 with `MX_ENABLE=false`, `true`, or `remote`. A Dial-MX-only deployment can use
-`MX_ENABLE=false` and needs no `MX_EDGE_SECRET`/`MX_EDGE_KEYS`. The core always runs its dedicated
+`MX_ENABLE=false` and needs no shared bearer key. The core always runs its dedicated
 inbound webhook listener on `:8082`; that listener continues to accept the
 webhook connectors, so do not expose it to the internet unless you also use
 those — Dial MX itself opens no inbound port on the core.
@@ -83,10 +83,12 @@ session listener and certificate settings:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `DIALMX_MODE` | `single` | `single` for one bearer-authenticated core; `shared` for DNS-authenticated domains. |
+| `DIALMX_CORE_KEY` | — | Required bearer key in single mode; unused in shared mode. |
 | `MX_HOSTNAME` | `localhost` | SMTP greeting hostname; independent of the session listener address. |
 | `DIALMX_LISTEN_ADDR` | `:8443` | HTTPS/2 session listener. |
-| `DIALMX_TLS_CERT` | — | Session listener certificate (required). |
-| `DIALMX_TLS_KEY` | — | Session listener private key (required). |
+| `DIALMX_TLS_CERT` | — | Session certificate; optional in single mode, required in shared mode. |
+| `DIALMX_TLS_KEY` | — | Session private key; set together with certificate. |
 | `MX_TLS_CERT` / `MX_TLS_KEY` | unset | Optional SMTP STARTTLS pair; set together. |
 | `MX_REQUIRE_TLS` | `false` | Refuse plaintext SMTP. |
 | `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
@@ -104,7 +106,8 @@ session listener and certificate settings:
 | `MX_INGEST_TIMEOUT_SECONDS` | `180` | Bounds one staged message handoff. |
 | `MX_REVALIDATE_SECONDS` | `240` | Nominal binding renewal period. |
 
-The supplied Compose file enables SMTP STARTTLS using the mounted certificate.
+Select `DIALMX_MODE=shared` and set the session certificate paths explicitly
+when following this shared-mode guide. SMTP STARTTLS is configured separately.
 The non-root receiver uid must be able to read both certificate files. Mount
 renewed certificates and restart the receiver to reload them.
 

@@ -1,214 +1,104 @@
-# Optional MX (direct SMTP) ingress
+# Private MX receiving
 
-MailMoose receives mail two ways:
+All direct SMTP deployments use the same receiver binary and HTTP/2 session
+transport. The receiver terminates SMTP and computes SPF/DKIM/DMARC evidence;
+the MailMoose core connects outward, resolves recipients, applies policy and
+durably stores mail. SMTP success is returned only after durable acknowledgement.
 
-- **Webhook providers** (Mailgun, Cloudflare Email Routing, Resend) — the
-  minimal, app-only mode. No port 25 and no extra process; select it with
-  `MX_ENABLE=false`.
-- **Direct SMTP (MX)** — the default in the shipped `docker-compose.yml`: a
-  policy-free edge binary, `mailmoose-mx`, built into the same image, that
-  terminates SMTP on port 25 and calls the core over signed HTTPS. Use it when
-  you own the domain and want mail delivered straight to MailMoose without a
-  third-party receiver.
+## Built-in receiver
 
-The edge holds **no** `/data` mount, no database access and no
-`APP_ENCRYPTION_KEY`. Routing, policy, quota and durable storage stay in the
-core. See decision `D031` in [DECISIONS.md](DECISIONS.md).
+Set `MX_ENABLE=true` on the core and select **Receiving → MX** for the domain.
+The core starts a separate-uid receiver child, generates a bearer key when one
+is not configured, and connects over cleartext HTTP/2 on `127.0.0.1:8443`.
+No certificates or domain authentication TXT records are needed. The child
+receives neither `/data` access nor `APP_ENCRYPTION_KEY`.
 
-If the core cannot accept an inbound connection, use [Dial MX](DIALMX.md)
-instead: a standalone receiver the core **dials out** to, with no inbound port
-on the core. A domain uses one path or the other, not both.
+The container must start as root to launch the isolated child before the core
+drops privileges. `MX_UID` / `MX_GID` default to `65533` and must differ from
+the core's runtime identity. For namespace isolation use the sidecar deployment.
 
-## Architecture
+## Standalone / sidecar receiver
 
-```text
-Internet TCP :25
-       |
-       v
-mailmoose-mx (non-root, in-memory staging, SMTP + SPF/DKIM/DMARC)
-       | RCPT: POST /internal/mx/resolve
-       | DATA: POST /internal/mx/ingest   (one request per message)
-       v
-mailmoose inbound connector :8082
-       | HMAC-verified edge identity + recipient binding
-       | core fans out per accepted recipient: per-domain auth policy + mailbox rules
-       v
-SQLite + raw MIME under /data -> durable events -> API / UI / Relay
+Receiver environment:
+
+```dotenv
+DIALMX_MODE=single
+DIALMX_CORE_KEY=<random-secret>
+DIALMX_LISTEN_ADDR=:8443
+MX_HOSTNAME=mx.example.com
+MX_LISTEN_ADDR=:2525
 ```
 
-The edge stages the original MIME once and sends the whole accepted recipient
-set in a single signed ingest; the core parses once and fans out internally, so
-neither side holds a full copy per recipient. The edge returns SMTP success only
-after the core has durably handled every accepted recipient. Auth failure is a
-durable **Spam** delivery, not a rejection. There is no local durable queue:
-temporary failures return `451`/`452` and rely on the sending MTA to retry.
+Core environment:
 
-## 1. Configure the core
-
-One setting selects the MX deployment. `docker-compose.yml` sets it to `true` by
-default; the server binary defaults to `false` when the variable is unset.
-
-```env
-MX_ENABLE=true   # true (compose default) | false (webhook-only) | remote
-#MX_HOSTNAME=mail.example.com   # optional; defaults to mailmoose-mx
+```dotenv
+MX_ENABLE=remote
+MX_RECEIVER_URL=http://receiver:8443
+DIALMX_CORE_KEY=<same-random-secret>
 ```
 
-- `true` embeds the edge in this container (below).
-- `remote` enables the core endpoints for an edge running as a separate
-  container/host, and requires a shared credential:
+Generate a key with `openssl rand -hex 32`. The core sends it in the session's
+`Authorization: Bearer` header. The receiver compares hashed values in constant
+time and does not log the credential. It forwards all recipient decisions to
+one authenticated core; the core only accepts configured MX recipients. It is
+not an open relay and unknown recipients remain rejected.
 
-  ```env
-  MX_EDGE_KEYS=edge-1:<secret>   # or MX_EDGE_SECRET with the sidecar compose
-  ```
+The newest successfully established core session receives new transactions.
+Already-pinned transactions may finish on the old live session. Disconnection
+does not restore an older session as the default. An unavailable core results
+in temporary SMTP failures so sending MTAs retry.
 
-  Every operator-supplied secret must carry 32 bytes / 256 bits of entropy
-  (hex, base64 or 32+ raw bytes); generate with `openssl rand -hex 32`. The
-  core and the edge both refuse to start with a weaker value, because the
-  secret authenticates every edge request and the core trusts the edge's
-  SPF/DKIM/DMARC evidence on a valid signature.
-
-In `true` (embedded) mode no secret is required: the edge credential is generated
-automatically and shared with the core in-process. To use a fixed or rotating
-credential there, set `MX_EDGE_KEYS` yourself:
-
-```env
-#MX_EDGE_KEYS=edge-1:<old>,edge-2:<new>
-```
-
-The core then serves `POST /internal/mx/resolve` and
-`POST /internal/mx/ingest` on the inbound listener (`:8082`). Both use
-HMAC-SHA256 over the SHA-256 digests of the request metadata and body; the
-ingest body is a raw two-part stream (a 4-byte metadata length, the metadata
-JSON, then the original MIME), so the message is streamed and hashed, never
-buffered. Unsupported versions, stale timestamps, replayed request IDs and
-unsigned fields are rejected.
-
-For a **remote** edge, terminate TLS at the core (or a proxy in front of it) so
-the edge reaches `:8082` over verified TLS. HMAC is always required even on a
-private network.
-
-Optionally serve the inbound listener over TLS directly:
-
-```env
-INBOUND_TLS_CERT_FILE=/certs/inbound.crt
-INBOUND_TLS_KEY_FILE=/certs/inbound.key
-```
-
-## 2. Run the edge
-
-The mode chooses how the edge runs. `true` (embedded) is the `docker-compose.yml`
-default and needs no second service.
-
-### true (single container, Compose default)
+For the bundled sidecar:
 
 ```bash
-# .env — MX_ENABLE=true is already the docker-compose.yml default
-docker compose up -d --build
+# Put DIALMX_CORE_KEY in .env first.
+docker compose -f docker-compose.mx-sidecar.yml up -d --build
 ```
 
-The app spawns `mailmoose-mx` as a child under a separate uid (`MX_UID`/`MX_GID`,
-default 65533) with a scrubbed environment, then drops its own privileges to the
-app runtime uid (65532). The edge has no `/data` access and no
-`APP_ENCRYPTION_KEY`, and writes nothing to disk (staging is in memory). This is
-DAC + separate-uid isolation, not namespaces. Because it must spawn the child
-before dropping, the container **must start as root**: a strict compose `user:`
-or `cap_drop: [ALL]` disables the uid separation and startup refuses with a
-clear error. In that case use `remote`.
+The receiver needs inbound SMTP and the session listener; the core needs only
+outbound connectivity to it. No MX ingest HTTP endpoint exists on the core.
+Its separate `:8082` listener remains for webhook receiving providers.
 
-The embedded edge is told to stop by closing an inherited pipe (the dropped
-parent cannot signal a child owned by a different uid).
+## TLS and proxies
 
-### remote — separate edge container/image (`docker-compose.mx-sidecar.yml`)
+Single mode supports cleartext HTTP/2 (prior knowledge, no HTTP/1 upgrade) for
+loopback/LAN connections. Supplying both `DIALMX_TLS_CERT` and `DIALMX_TLS_KEY`
+enables verified HTTPS/HTTP2 instead; set `MX_RECEIVER_URL=https://...` on the
+core. `DIALMX_CA_FILE` adds private CAs while retaining hostname verification.
+Cleartext sessions carry both the bearer credential and email content without
+encryption.
 
-The edge runs from its own minimal image (`Dockerfile.mx`, tag `mailmoose-mx`)
-in its own filesystem and network namespace. This is the strongest isolation and
-is recommended when you can run two containers:
+SMTP STARTTLS is independent: use `MX_TLS_CERT` / `MX_TLS_KEY`, optionally
+`MX_REQUIRE_TLS=true`. Session certificates do not automatically enable SMTP TLS.
 
-```bash
-# .env
-MX_EDGE_SECRET=<long random secret>
-docker compose -f docker-compose.mx-sidecar.yml up -d
-```
+Trusted proxies are not required. Forwarded IP headers are ignored; connection
+limits use the socket peer. A proxy must support bidirectional streaming and
+HTTP/2 to the receiver, including cleartext HTTP/2 if it terminates TLS itself.
 
-The sidecar file sets `MX_ENABLE=remote` on the core and runs the `mailmoose-mx`
-image for the edge. The edge image runs as a non-root user and holds no `/data`,
-so it needs no writable filesystem or privilege. It listens on an unprivileged
-internal port; publish host `25:2525`.
+## Bounds and policy
 
-### remote — another host
+The existing `MX_VERIFY_SPF|DKIM|DMARC`, DNS resolver, message-size, staging,
+recipient, connection, transaction and timeout settings are documented in
+[DIALMX.md](DIALMX.md). Domain ownership proof/renewal settings apply only to
+shared mode. In single mode the core's receiving configuration is authoritative;
+adding or removing a domain needs no receiver-side registration.
 
-The same `mailmoose-mx` image on another host, pointed at the core's public
-HTTPS inbound address. No cert files are needed if a reverse proxy terminates
-TLS: the signature covers the method and path only, not the host or scheme.
-Forward to the core's `:8082` **without rewriting the path**.
+Authentication failure under the core's moderate/hard policy is a durable Spam
+delivery, not an SMTP rejection. SMTP success requires a durable outcome for
+every accepted recipient; quota/transient failures cause sender retries.
+`MX_RECEIPT_RETENTION_HOURS` defaults to 168 hours, preserving retry deduplication
+even after the original message is deleted. This is not exactly-once delivery.
 
-Set `MX_HEALTH_ADDR` to expose `/healthz` (liveness plus counters) and
-`/readyz` (readiness, which reflects usable core connectivity) on a separate
-port.
+## Shared receivers
 
-## 3. DNS and domain setup
+Use `DIALMX_MODE=shared` for a public multi-tenant receiver. It retains TLS and
+per-domain DNS-backed Ed25519 authentication; the core selects **Dial MX** per
+domain. See [DIALMX.md](DIALMX.md).
 
-1. Point the domain's **MX** record at the edge hostname (`MX_HOSTNAME`).
-2. Publish an **SPF** record for the domain; the edge evaluates it.
-3. Add **DKIM** keys at the sending side and a **DMARC** record for the domain.
-4. In the Admin UI, set the domain's receiving provider to **MX** and choose an
-   enforcement mode.
+## Breaking change
 
-PTR is operationally useful for outbound deliverability but does **not**
-authorize inbound recipients.
-
-## Authentication policy
-
-The edge computes normalized SPF/DKIM/DMARC evidence on the **original bytes**,
-before any local trace header is added. Incoming `Authentication-Results`,
-`Received-SPF`, `Received` and `Return-Path` headers are never trusted as
-substitutes for the actual peer IP, HELO and MAIL FROM.
-
-Per-domain enforcement:
-
-- **moderate** (default): Spam on a definitive DMARC failure, or when SPF and
-  DKIM both definitively fail.
-- **hard**: Spam on any one of SPF fail, DKIM fail or a definitive DMARC fail.
-
-`none`, `neutral`, `softfail`, `temperror`, `permerror` and missing/unsupported
-evidence never count as a failure on their own. A cryptographically valid but
-unaligned DKIM signature is a pass with `aligned=false`, not a failure. The
-published DMARC policy (`p=`) is preserved and displayed even when the local
-disposition differs. A DMARC pass does not clear an independent SPF failure in
-hard mode; forwarded mail may therefore be quarantined even when aligned DKIM
-passes. Authentication is evidence, not a general spam filter.
-
-The `MX_VERIFY_SPF`, `MX_VERIFY_DKIM` and `MX_VERIFY_DMARC` toggles control
-which evidence classes the edge computes. Core policy consumes whatever the
-authenticated edge supplies.
-
-## Spam handling
-
-Spam is a computed view over `messages.is_spam` — not a separate table — so
-Spam still counts toward quota and retains MIME, attachments, identity and
-recovery. Spam is excluded from the inbox, unread counts, default search, normal
-threads and default message waits, and is reachable through the inbox **Spam**
-tab (or `?spam=true` on the API). Releasing a message commits a durable
-`message.spam_state_changed` event and makes it visible again. A Spam message
-must be released before it can be used as a reply source.
-
-## Retry identity and deduplication
-
-The delivery fingerprint is a versioned digest over canonical envelope sender,
-canonical recipient and the SHA-256 of the original MIME — computed before any
-local change. RFC Message-ID is descriptive metadata, never the delivery token.
-Core records a durable receipt per recipient for **7 days**, so a sender retry
-(including one that arrives after the message was deleted) returns the recorded
-disposition without a second message, quota charge or event.
-
-There is no perfect sender-independent SMTP delivery ID: identical intentional
-resends inside the window collapse, and changed upstream trace headers can
-defeat cross-node deduplication. This is documented rather than claimed as
-exactly-once.
-
-## Deferred
-
-Authentication-based SMTP rejection and `on_auth_fail=delete`; ARC and BIMI;
-an all-in-one supervisor; a durable edge queue / end-to-end HA; policy
-snapshots and local rejection; scoped credential-to-domain binding; reputation
-and content filtering; DMARC report generation; authenticated submission/relay.
+The old edge-to-core HTTP/HMAC transport, `/internal/mx/resolve` and
+`/internal/mx/ingest` routes, `MX_EDGE_KEYS`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`,
+`MX_EDGE_NAME`, `MAILMOOSE_INGEST_URL` and `MX_SIGNATURE_SKEW_SECONDS` are removed.
+Update private deployments to the receiver URL and bearer key above. Existing
+public Dial MX receivers must explicitly select `DIALMX_MODE=shared`.

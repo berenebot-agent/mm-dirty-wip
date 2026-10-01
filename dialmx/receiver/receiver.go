@@ -3,6 +3,8 @@ package receiver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -63,7 +65,10 @@ const (
 // own DNS call for the _mailmoose-mx proof; when nil the system resolver is
 // used.
 type Config struct {
-	SMTP mxagent.Config
+	// Mode selects single-core bearer authentication or shared DNS authentication.
+	Mode    string
+	CoreKey string
+	SMTP    mxagent.Config
 
 	// LookupTXT resolves the _mailmoose-mx.<domain> TXT records proving domain
 	// authority. It is separate from mxagent's resolver because the proof is a
@@ -93,6 +98,9 @@ type Config struct {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Mode == "" {
+		c.Mode = "single"
+	}
 	s := &c.SMTP
 	if s.Hostname == "" {
 		s.Hostname = "localhost"
@@ -171,8 +179,9 @@ const (
 // Receiver is one logical MX receiver. All mutable state is guarded by mu;
 // network writes never happen while mu is held.
 type Receiver struct {
-	cfg Config
-	log *slog.Logger
+	single *connection
+	cfg    Config
+	log    *slog.Logger
 
 	mu          sync.Mutex
 	domains     map[string]*binding
@@ -334,9 +343,18 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 			peer = host
 		}
 	}
-	if q.TLS == nil || q.ProtoMajor != 2 {
+	if q.ProtoMajor != 2 {
+		r.logRejected(peer, "not_h2")
+		http.Error(w, "HTTP/2 required", 426)
+		return
+	}
+	if r.cfg.Mode == "shared" && q.TLS == nil {
 		r.logRejected(peer, "not_tls_h2")
 		http.Error(w, "TLS HTTP/2 required", 426)
+		return
+	}
+	if r.cfg.Mode == "single" && !r.authenticateCore(q) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	if r.stopping.Load() {
@@ -430,7 +448,11 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	r.mu.Unlock()
 	r.active.Add(1)
 	started := time.Now()
-	r.logSession(c, "opened", "active_connections", r.active.Load(), "tls_version", q.TLS.Version, "tls_cipher", q.TLS.CipherSuite, "protocol", q.Proto, "peer_address", q.RemoteAddr)
+	var tlsVersion, tlsCipher uint16
+	if q.TLS != nil {
+		tlsVersion, tlsCipher = q.TLS.Version, q.TLS.CipherSuite
+	}
+	r.logSession(c, "opened", "active_connections", r.active.Load(), "tls_version", tlsVersion, "tls_cipher", tlsCipher, "protocol", q.Proto, "peer_address", q.RemoteAddr)
 	var closeReason string
 	defer func() {
 		cancel()
@@ -438,6 +460,9 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		// the handler returns, then wait for jobs to drain and release state.
 		r.mu.Lock()
 		c.closing = true
+		if r.single == c {
+			r.single = nil
+		}
 		r.mu.Unlock()
 		c.writer.close()
 		c.jobs.Wait()
@@ -504,7 +529,12 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	// string ("gatehouse" for every core) and is deliberately NOT unique:
 	// correlation keys are connection_id and receiver_id, never this label.
 	r.logSession(c, "hello", "version", h.Version, "core_label", h.Instance)
-	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: c.receiver, ConnectionID: c.id, SMTPHostname: r.cfg.SMTP.Hostname, MaxMessageBytes: r.cfg.SMTP.MaxMessageBytes})
+	if r.cfg.Mode == "single" {
+		r.mu.Lock()
+		r.single = c
+		r.mu.Unlock()
+	}
+	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{Mode: r.cfg.Mode, Version: mxwire.V2Protocol, ReceiverID: c.receiver, ConnectionID: c.id, SMTPHostname: r.cfg.SMTP.Hostname, MaxMessageBytes: r.cfg.SMTP.MaxMessageBytes})
 	for {
 		if c.ctx.Err() != nil {
 			closeReason = "canceled"
@@ -661,6 +691,9 @@ func (r *Receiver) maintenance(c *connection) {
 }
 
 func (r *Receiver) handle(c *connection, f mxwire.Frame) error {
+	if r.cfg.Mode == "single" && (f.Type == mxwire.FrameDomainAuth || f.Type == mxwire.FrameChallengeResponse || f.Type == mxwire.FrameDomainUnregister) {
+		return errors.New("domain authentication unavailable in single mode")
+	}
 	switch f.Type {
 	case mxwire.FramePong:
 		return nil
@@ -677,6 +710,15 @@ func (r *Receiver) handle(c *connection, f mxwire.Frame) error {
 	default:
 		return errors.New("unexpected frame")
 	}
+}
+
+func (r *Receiver) authenticateCore(q *http.Request) bool {
+	if r.cfg.CoreKey == "" {
+		return false
+	}
+	want := sha256.Sum256([]byte("Bearer " + r.cfg.CoreKey))
+	got := sha256.Sum256([]byte(q.Header.Get("Authorization")))
+	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
 }
 
 // auth starts an initial authentication. The DNS check runs asynchronously, so
@@ -1076,6 +1118,12 @@ func (r *Receiver) revoke(b *binding, why string) {
 func (r *Receiver) lookup(d string) (*binding, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.cfg.Mode == "single" {
+		if r.single == nil || r.single.closing || r.single.ctx.Err() != nil {
+			return nil, errors.New("unavailable")
+		}
+		return &binding{c: r.single, domain: d, channel: 1, state: bindActive}, nil
+	}
 	b := r.domains[d]
 	if b == nil || b.state != bindActive || !time.Now().Before(b.expires) {
 		return nil, errors.New("unavailable")

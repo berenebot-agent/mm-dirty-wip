@@ -168,6 +168,7 @@ type Hello struct {
 }
 
 type Ready struct {
+	Mode            string `json:"mode"`
 	Version         string `json:"version"`
 	ReceiverID      string `json:"receiver_id"`
 	ConnectionID    string `json:"connection_id"`

@@ -1,6 +1,6 @@
 // Package mx registers the "mx" receiving provider. Unlike the webhook
 // providers, MX delivery does not arrive as a provider HTTP request that this
-// adapter parses: the optional Go edge (cmd/mx, internal/mxagent) terminates
+// adapter parses: the unified Go receiver (dialmx/cmd/receiver) terminates
 // SMTP and calls the explicit authenticated MX service entry point. This
 // adapter exists so the receiving-provider editor can offer "mx" with its
 // setup guidance and so the provider registry is complete.

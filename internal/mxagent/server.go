@@ -26,7 +26,7 @@ import (
 
 // Server is the policy-free SMTP edge. It enforces connection/recipient/size
 // bounds and strict framing, streams the original message to bounded staging,
-// computes auth evidence and issues one signed ingest for the whole accepted
+// computes auth evidence and issues one session ingest for the whole accepted
 // recipient set. The core fans out internally. It never returns SMTP success
 // until the core has durably handled every accepted recipient.
 type Delivery interface {
@@ -43,7 +43,6 @@ func NewServerWithHandoff(cfg Config, log *slog.Logger, factory DeliveryFactory)
 
 type Server struct {
 	cfg     Config
-	core    *CoreClient
 	factory DeliveryFactory
 	verify  *Verifier
 	log     *slog.Logger
@@ -59,19 +58,11 @@ type Server struct {
 	authTemp int64
 }
 
-func NewServer(cfg Config, log *slog.Logger) *Server {
-	// One CoreClient (and therefore one http.Client/transport pool) is shared by
-	// every SMTP session and by the readiness probe. Creating a client per
-	// session would leak a transport pool per message.
-	core := NewCoreClient(cfg)
-	return newServer(cfg, log, func() Delivery { return core }, core)
-}
-
 func NewServerWithDelivery(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
-	return newServer(cfg, log, factory, NewCoreClient(cfg))
+	return newServer(cfg, log, factory)
 }
 
-func newServer(cfg Config, log *slog.Logger, factory DeliveryFactory, core *CoreClient) *Server {
+func newServer(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -84,7 +75,7 @@ func newServer(cfg Config, log *slog.Logger, factory DeliveryFactory, core *Core
 		stagingBytes = cfg.MaxMessageBytes + 1
 	}
 	return &Server{
-		cfg: cfg, core: core, factory: factory, verify: NewVerifier(cfg), log: log,
+		cfg: cfg, factory: factory, verify: NewVerifier(cfg), log: log,
 		sem:     make(chan struct{}, cfg.MaxConnections),
 		staging: newByteBudget(stagingBytes),
 		iplim:   newIPLimiter(defaultMaxPerIP),
@@ -1007,9 +998,8 @@ func (s *Server) Stats() map[string]int64 {
 	}
 }
 
-// HealthHandler serves the edge's health and readiness. Readiness reflects
-// usable core connectivity: it calls the core resolve endpoint with an empty
-// recipient list, which the core accepts without side effects.
+// HealthHandler serves the SMTP process health and readiness. Receiver/core
+// session connectivity is tracked by the receiver, not this SMTP layer.
 func (s *Server) HealthHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -1017,13 +1007,6 @@ func (s *Server) HealthHandler() http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "stats": s.Stats()})
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-		if _, err := s.core.Resolve(ctx, nil); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "degraded", "error": "core unreachable"})
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ready"})
 	})
