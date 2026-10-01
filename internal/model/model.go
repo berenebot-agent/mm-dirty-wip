@@ -256,15 +256,16 @@ const MaxLabelLength = 64
 
 // NormalizeLabel trims and collapses a free-text label to its stored form. It
 // returns ok=false for empty labels, labels over MaxLabelLength, or labels
-// containing control characters. Case is preserved for display; the stored
-// column compares NOCASE so matching ignores case.
+// containing control characters, '/' or '\' (path separators, which the label
+// URLs cannot carry). Case is preserved for display; the stored column
+// compares NOCASE so matching ignores case.
 func NormalizeLabel(raw string) (string, bool) {
 	v := strings.Join(strings.Fields(raw), " ")
 	if v == "" || len([]rune(v)) > MaxLabelLength {
 		return "", false
 	}
 	for _, r := range v {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' {
 			return "", false
 		}
 	}

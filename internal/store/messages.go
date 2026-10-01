@@ -648,6 +648,52 @@ func (s *Store) ListLabels(ctx context.Context, p model.Principal) ([]string, er
 	return out, rows.Err()
 }
 
+// ListInboxLabels returns the distinct labels carried by an inbox's visible
+// messages, ordered case-insensitively. Used by the mailbox sidebar.
+func (s *Store) ListInboxLabels(ctx context.Context, p model.Principal, inboxID string) ([]string, error) {
+	if !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NULL ORDER BY ml.label COLLATE NOCASE`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var v string
+		if err = rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// InboxLabelUnreadCounts returns the number of unread inbound, non-spam
+// messages carrying each label in an inbox, keyed by label. Used by the
+// mailbox sidebar label badges.
+func (s *Store) InboxLabelUnreadCounts(ctx context.Context, p model.Principal, inboxID string) (map[string]int, error) {
+	if !p.CanRead(inboxID) {
+		return nil, ErrForbidden
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT ml.label,COUNT(*) FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NULL AND m.is_read=0 AND m.is_spam=0 AND m.direction='inbound' GROUP BY ml.label`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var label string
+		var n int
+		if err = rows.Scan(&label, &n); err != nil {
+			return nil, err
+		}
+		out[label] = n
+	}
+	return out, rows.Err()
+}
+
 // TrashMessage soft-deletes a message: it sets deleted_at so the message is
 // hidden from every ordinary read surface but retains its row, raw MIME, FTS
 // entry, attachments and storage accounting until it is purged. It requires

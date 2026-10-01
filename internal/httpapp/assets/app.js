@@ -2297,3 +2297,59 @@ function aliasNameByAddress(list) {
     b.addEventListener('click', function () { dlg.close(); });
   });
 })();
+
+(function () {
+  var toast = null;
+  var toastTimer = null;
+
+  function showToast(message) {
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'ok notice';
+      toast.setAttribute('role', 'status');
+      toast.setAttribute('aria-live', 'polite');
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.remove('dismissing');
+    /* Force reflow so a repeated copy restarts the fade-out animation. */
+    void toast.offsetWidth;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toast.classList.add('dismissing');
+      setTimeout(function () {
+        if (toast) {
+          toast.remove();
+          toast = null;
+        }
+      }, 300);
+    }, 1500);
+  }
+
+  function copyText(text) {
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return Promise.reject(new Error('clipboard unavailable'));
+  }
+
+  document.querySelectorAll('[data-copy]').forEach(function (el) {
+    function activate() {
+      var text = el.getAttribute('data-copy');
+      copyText(text).then(function () {
+        el.classList.add('copied');
+        setTimeout(function () { el.classList.remove('copied'); }, 1200);
+        showToast('Copied to clipboard');
+      }).catch(function () {
+        /* Clipboard blocked; selection fallback would be intrusive here. */
+      });
+    }
+    el.addEventListener('click', activate);
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        activate();
+      }
+    });
+  });
+})();

@@ -274,6 +274,12 @@ exists only while at least one message carries it. Labels are shared across the
 account and a message may have many. Matching ignores case and surrounding
 whitespace; the displayed casing is the one first assigned.
 
+A label is trimmed and internal runs of whitespace collapsed. It must be
+non-empty, at most 64 characters, and must not contain control characters, `/`
+or `\`. (The path separators are rejected so a label can be addressed by its own
+URL query parameter without path-encoding ambiguity.) An invalid label is
+rejected with a validation error.
+
 ```http
 GET /v1/labels
 ```

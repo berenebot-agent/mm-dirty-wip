@@ -34,6 +34,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Mailbox views now use a left-hand sidebar: Compose stays at the top and the
+  folders (Inbox, Drafts, Sent, Outbox, Trash, Spam) run down the side with
+  their counts. The sidebar stacks above the content on narrow screens.
+- Right-hand mail actions are now icons: mark read / mark unread, move to
+  trash, restore and delete forever, in both the message list and the message
+  view. The duplicate Trash folder tab is also removed.
+- The mailbox sidebar lists the inbox's labels under a Labels heading (between
+  Outbox and Trash), each with an unread count; selecting a label filters the
+  message list to messages carrying it. Reply and Forward are now icons in the
+  message view. The inbox address in the header is click-to-copy and shows a
+  brief "Copied to clipboard" confirmation that clears itself.
+- Labels may no longer contain `/` or `\` (path separators); existing labels
+  with those characters still render and filter. The web UI now uses the full
+  window width instead of a fixed 1180px column.
+
 - Removing an inbox now opens a confirmation dialog that displays the full
   email address and requires typing it back, matching the domain delete flow.
   Removing a client opens a dialog that names the client and type and requires

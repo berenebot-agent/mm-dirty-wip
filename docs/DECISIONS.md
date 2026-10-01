@@ -1054,7 +1054,12 @@ tag on messages, plus an index on `(label, message_id)`.
 - `label` is `TEXT COLLATE NOCASE` and Go (`model.NormalizeLabel`) trims and
   collapses whitespace first, so `Invoices`, `invoices` and `" Invoices "` are
   the same tag. Display casing is the first-assigned form. NOCASE folds ASCII
-  only, which is acceptable for typical tags.
+  only, which is acceptable for typical tags. Labels may not contain control
+  characters, `/` or `\`; the path separators are rejected so a label can be
+  addressed by its own URL query parameter without path-encoding ambiguity.
+- The web UI renders the inbox's in-use labels in the mailbox sidebar under a
+  Labels heading; selecting one filters the list via
+  `GET /ui/inboxes/{id}/label?name=...`.
 - Assignment is a replace-set: `PATCH /v1/messages/{id}` with
   `{"labels":[...]}` sets the exact set, `[]` clears, omission leaves it
   unchanged. It requires Assistant or Owner on the message's inbox, matching
