@@ -72,13 +72,16 @@ var routes = []Route{
 	// Discovery.
 	{Method: "GET", Path: "/v1/bootstrap", Summary: "Discover key capabilities and accessible inboxes", Role: "", Group: "Discovery"},
 	{Method: "GET", Path: "/v1/limits", Summary: "Get server pagination, size and rate limits", Role: "read", Group: "Discovery"},
+	{Method: "GET", Path: "/v1/account/settings", Summary: "Get account preferences (Owner/Admin)", Description: "Account-level mailbox preferences. Today: trash_retention_days, the number of days a trashed message is kept before the maintenance sweep purges it permanently; 0 keeps trashed mail until it is purged manually.", Role: "owner", Group: "Discovery"},
+	{Method: "PATCH", Path: "/v1/account/settings", Summary: "Update account preferences (Owner/Admin)", Description: "Accepts trash_retention_days (0 or a positive integer).", Role: "owner", Group: "Discovery"},
 
 	// Inboxes.
 	{Method: "GET", Path: "/v1/inboxes", Summary: "List inboxes", Role: "read", Group: "Inboxes"},
 	{Method: "POST", Path: "/v1/inboxes", Summary: "Create an inbox (Admin)", Role: "admin", Group: "Inboxes", Success: 201},
 	{Method: "GET", Path: "/v1/inboxes/{id}", Summary: "Get an inbox", Role: "read", Group: "Inboxes"},
-	{Method: "PATCH", Path: "/v1/inboxes/{id}", Summary: "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender)", Description: "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. aliases route inbound mail to this inbox and may be chosen as the From address when sending; alias_names maps an alias address to its optional sender display name (falling back to the inbox display_name). default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", Role: "owner", Group: "Inboxes"},
+	{Method: "PATCH", Path: "/v1/inboxes/{id}", Summary: "Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender)", Description: "aliases replaces the inbox's alias set; each entry is a full local@domain address on any domain the account owns. aliases route inbound mail to this inbox and may be chosen as the From address when sending; alias_names maps an alias to its optional sender display name (falling back to the inbox display_name). default_sender preselects the compose/reply From address (the inbox primary or one of its aliases); empty clears it to the primary.", Role: "owner", Group: "Inboxes"},
 	{Method: "DELETE", Path: "/v1/inboxes/{id}", Summary: "Delete an inbox (Admin)", Role: "admin", Group: "Inboxes", Success: 204},
+	{Method: "POST", Path: "/v1/inboxes/{id}/trash/empty", Summary: "Empty an inbox's Trash (Owner)", Description: "Permanently purges every trashed message in the inbox, removing rows, raw MIME and storage accounting. Returns the purged count.", Role: "owner", Group: "Inboxes"},
 
 	// Identities (openagent.email compatibility).
 	{Method: "GET", Path: "/v1/identities", Summary: "List identities (openagent.email compat)", Role: "admin", Group: "Identities"},
@@ -86,12 +89,14 @@ var routes = []Route{
 	{Method: "DELETE", Path: "/v1/identities/{address}", Summary: "Delete an identity (openagent.email compat)", Role: "admin", Group: "Identities"},
 
 	// Messages.
-	{Method: "GET", Path: "/v1/messages", Summary: "List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before)", Description: "Filters: inbox, thread, label (repeatable; messages must carry all listed labels), from, to, unread, has_attachment, before (keyset cursor) and limit. Spam is excluded by default; spam=true lists only Spam and include_spam=true includes it. The address query parameter is an openagent.email compatibility alias for inbox.", Role: "read", Group: "Messages"},
+	{Method: "GET", Path: "/v1/messages", Summary: "List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before, trashed)", Description: "Filters: inbox, thread, label (repeatable; messages must carry all listed labels), from, to, unread, has_attachment, before (keyset cursor) and limit. Spam is excluded by default; spam=true lists only Spam and include_spam=true includes it. Trashed messages are excluded by default; trashed=true lists only trashed messages (the Trash view). The address query parameter is an openagent.email compatibility alias for inbox.", Role: "read", Group: "Messages"},
 	{Method: "GET", Path: "/v1/messages/wait", Summary: "Long-poll for a new message", Role: "read", Group: "Messages"},
 	{Method: "POST", Path: "/v1/messages/wait", Summary: "Long-poll for a new message (compat)", Role: "read", Group: "Messages"},
 	{Method: "GET", Path: "/v1/messages/{id}", Summary: "Get a message", Role: "read", Group: "Messages"},
-	{Method: "PATCH", Path: "/v1/messages/{id}", Summary: "Update read/archived/labels state", Description: "Sets read, archived, labels and/or spam. labels replaces the whole label set ([] clears; omit the field to leave it unchanged). Requires Assistant or Owner.", Role: "assistant", Group: "Messages"},
-	{Method: "DELETE", Path: "/v1/messages/{id}", Summary: "Delete a message (Assistant/Owner)", Role: "assistant", Group: "Messages", Success: 204},
+	{Method: "PATCH", Path: "/v1/messages/{id}", Summary: "Update read/labels/spam state", Description: "Sets read, labels and/or spam. labels replaces the whole label set ([] clears; omit the field to leave it unchanged). Requires Assistant or Owner.", Role: "assistant", Group: "Messages"},
+	{Method: "DELETE", Path: "/v1/messages/{id}", Summary: "Move a message to Trash (Assistant/Owner)", Description: "Soft-deletes the message: it is hidden from ordinary reads but retains its raw MIME, attachments and storage accounting until purged. Use the purge route to erase it permanently.", Role: "assistant", Group: "Messages", Success: 204},
+	{Method: "POST", Path: "/v1/messages/{id}/restore", Summary: "Restore a trashed message (Assistant/Owner)", Description: "Clears the trashed state, returning the message to the mailbox.", Role: "assistant", Group: "Messages"},
+	{Method: "DELETE", Path: "/v1/messages/{id}/purge", Summary: "Permanently delete a trashed message (Owner)", Description: "Erases the message row, raw MIME, attachments, FTS entry and storage accounting. The message must already be trashed.", Role: "owner", Group: "Messages", Success: 204},
 	{Method: "POST", Path: "/v1/messages/{id}/seen", Summary: "Mark a message seen (compat)", Description: "Sets the message read state; requires Assistant or Owner.", Role: "assistant", Group: "Messages"},
 
 	// Attachments.

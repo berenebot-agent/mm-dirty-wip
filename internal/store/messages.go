@@ -127,7 +127,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
@@ -296,11 +296,11 @@ func stripHTMLText(v string) string {
 func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var m model.Message
 	var refs, to, cc, bcc, env, labels, created string
-	var received, sent sql.NullString
-	var read, arch int
+	var received, sent, deleted sql.NullString
+	var read int
 	var has, internal, spam int
 	var authResults, envelopeFrom, envelopeRecipient string
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &arch, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient)
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient)
 	if err != nil {
 		return m, err
 	}
@@ -317,7 +317,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	m.BCC = decodeStrings(bcc)
 	m.EnvelopeTo = decodeStrings(env)
 	m.Read = read != 0
-	m.Archived = arch != 0
+	m.DeletedAt = nullableTime(deleted)
 	m.ReceivedAt = nullableTime(received)
 	m.SentAt = nullableTime(sent)
 	m.CreatedAt = parseTime(created)
@@ -329,7 +329,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.is_archived,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -381,13 +381,17 @@ type MessageFilter struct {
 	// sets SpamOnly.
 	SpamOnly    bool
 	IncludeSpam bool
-	Before      string
-	Limit       int
+	// Trashed selects the Trash view: only messages with deleted_at set. The
+	// default (false) excludes trashed messages from ordinary reads.
+	Trashed bool
+	Before  string
+	Limit   int
 }
 
 func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
 	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0`
 	args := []any{p.AccountID}
+	q += trashClause("m", f.Trashed)
 	q += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
@@ -479,12 +483,12 @@ func (s *Store) CountSpam(ctx context.Context, p model.Principal, inboxID string
 		return 0, ErrForbidden
 	}
 	var n int
-	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND is_spam=1`, p.AccountID, inboxID).Scan(&n)
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND deleted_at IS NULL AND is_spam=1`, p.AccountID, inboxID).Scan(&n)
 	return n, err
 }
 
 func (s *Store) UnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
-	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND is_archived=0 AND direction='inbound' AND is_spam=0`
+	q := `SELECT inbox_id,COUNT(*) FROM messages WHERE account_id=? AND is_read=0 AND deleted_at IS NULL AND direction='inbound' AND is_spam=0`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -546,7 +550,7 @@ func (s *Store) MessageSizesByInbox(ctx context.Context, p model.Principal) (map
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read, archived *bool) error {
+func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read *bool) error {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
 		return err
@@ -556,12 +560,6 @@ func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id st
 	}
 	if read != nil {
 		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=?`, boolInt(*read), id)
-		if err != nil {
-			return err
-		}
-	}
-	if archived != nil {
-		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_archived=? WHERE id=?`, boolInt(*archived), id)
 	}
 	return err
 }
@@ -620,7 +618,7 @@ func (s *Store) ReplaceMessageLabels(ctx context.Context, p model.Principal, id 
 // ListLabels returns the distinct labels visible to the principal, ordered
 // case-insensitively. There is no catalogue; the set is derived from usage.
 func (s *Store) ListLabels(ctx context.Context, p model.Principal) ([]string, error) {
-	q := `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.internal=0`
+	q := `SELECT DISTINCT ml.label FROM message_labels ml JOIN messages m ON m.id=ml.message_id WHERE m.account_id=? AND m.internal=0 AND m.deleted_at IS NULL`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -649,15 +647,290 @@ func (s *Store) ListLabels(ctx context.Context, p model.Principal) ([]string, er
 	return out, rows.Err()
 }
 
+// TrashMessage soft-deletes a message: it sets deleted_at so the message is
+// hidden from every ordinary read surface but retains its row, raw MIME, FTS
+// entry, attachments and storage accounting until it is purged. It requires
+// Assistant or Owner on the message's inbox. It returns the durable
+// message.trashed event. A message that is already trashed is a no-op that
+// returns the current message and no event.
+func (s *Store) TrashMessage(ctx context.Context, p model.Principal, id string) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.DeletedAt != nil {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	now := time.Now().UTC()
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=? WHERE id=? AND account_id=?`, timeText(now), id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageTrashed, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.DeletedAt = timePtr(now)
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
+// RestoreMessage clears deleted_at, returning a trashed message to the mailbox.
+// It requires Assistant or Owner on the message's inbox. A message that is not
+// trashed is a no-op that returns the current message and no event.
+func (s *Store) RestoreMessage(ctx context.Context, p model.Principal, id string) (model.Message, *model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	if !p.CanAssist(m.InboxID) {
+		return model.Message{}, nil, ErrForbidden
+	}
+	if m.Internal {
+		return model.Message{}, nil, ErrNotFound
+	}
+	if m.DeletedAt == nil {
+		if err = tx.Commit(); err != nil {
+			return model.Message{}, nil, err
+		}
+		return m, nil, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
+		return model.Message{}, nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageRestored, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return model.Message{}, nil, err
+	}
+	m.DeletedAt = nil
+	if err = tx.Commit(); err != nil {
+		return model.Message{}, nil, err
+	}
+	return m, &ev, nil
+}
+
+// PurgeMessage permanently erases a trashed message: it removes the row, FTS
+// entry and stored bytes, and returns the raw MIME path (and size) so the
+// caller can unlink the file. It requires Owner on the message's inbox. Only a
+// trashed message can be purged; an ordinary message returns ErrConflict and
+// must be trashed first. It returns the durable message.purged event.
+func (s *Store) PurgeMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	defer tx.Rollback()
+	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if !p.CanOwn(m.InboxID) {
+		return "", 0, model.Event{}, ErrForbidden
+	}
+	if m.Internal {
+		return "", 0, model.Event{}, ErrNotFound
+	}
+	if m.DeletedAt == nil {
+		return "", 0, model.Event{}, ErrConflict
+	}
+	if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessagePurged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
+	if err != nil {
+		return "", 0, model.Event{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", 0, model.Event{}, err
+	}
+	return m.RawPath, m.SizeBytes, ev, nil
+}
+
+// purgeMessageTx removes a message row, its FTS entry and its stored bytes
+// within the caller's transaction. It assumes authorization already happened.
+func purgeMessageTx(ctx context.Context, tx *sql.Tx, accountID string, m model.Message) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, m.ID); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id=? AND account_id=?`, m.ID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, m.SizeBytes, accountID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// EmptyTrash permanently purges every trashed message in an inbox and returns
+// the raw MIME paths to unlink. It requires Owner on the inbox. The purge is a
+// single transaction; events are emitted per purged message.
+func (s *Store) EmptyTrash(ctx context.Context, p model.Principal, inboxID string) ([]string, []model.Event, error) {
+	if !p.CanOwn(inboxID) {
+		return nil, nil, ErrForbidden
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.inbox_id=? AND m.internal=0 AND m.deleted_at IS NOT NULL`, p.AccountID, inboxID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var victims []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		victims = append(victims, m)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+	paths := make([]string, 0, len(victims))
+	events := make([]model.Event, 0, len(victims))
+	for _, m := range victims {
+		if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
+			return nil, nil, err
+		}
+		ev, err := insertEventTx(ctx, tx, p.AccountID, inboxID, model.EventMessagePurged, m.ID, map[string]any{"message_id": m.ID, "inbox_id": inboxID, "thread_id": m.ThreadID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if m.RawPath != "" {
+			paths = append(paths, m.RawPath)
+		}
+		events = append(events, ev)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return paths, events, nil
+}
+
+// PurgeExpiredTrash permanently purges trashed messages whose deleted_at is
+// older than the owning account's trash_retention_days. Accounts with a
+// retention of 0 are skipped (trash is retained until purged explicitly). It
+// returns the raw MIME paths to unlink; events are emitted per purged message.
+func (s *Store) PurgeExpiredTrash(ctx context.Context) ([]string, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m JOIN accounts a ON a.id=m.account_id WHERE m.deleted_at IS NOT NULL AND a.trash_retention_days > 0 AND m.deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || a.trash_retention_days || ' days')`)
+	if err != nil {
+		return nil, err
+	}
+	var victims []model.Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		victims = append(victims, m)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	paths := make([]string, 0, len(victims))
+	for _, m := range victims {
+		if err = purgeMessageTx(ctx, tx, m.AccountID, m); err != nil {
+			return nil, err
+		}
+		if _, err = insertEventTx(ctx, tx, m.AccountID, m.InboxID, model.EventMessagePurged, m.ID, map[string]any{"message_id": m.ID, "inbox_id": m.InboxID, "thread_id": m.ThreadID, "reason": "retention"}); err != nil {
+			return nil, err
+		}
+		if m.RawPath != "" {
+			paths = append(paths, m.RawPath)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// CountTrash returns the number of trashed messages in an inbox, used by the
+// mailbox Trash tab count.
+func (s *Store) CountTrash(ctx context.Context, p model.Principal, inboxID string) (int, error) {
+	if !p.CanRead(inboxID) {
+		return 0, ErrForbidden
+	}
+	var n int
+	err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE account_id=? AND inbox_id=? AND internal=0 AND deleted_at IS NOT NULL`, p.AccountID, inboxID).Scan(&n)
+	return n, err
+}
+
+// GetTrashRetention returns the account's trash retention in days (0 =
+// never auto-purge).
+func (s *Store) GetTrashRetention(ctx context.Context, p model.Principal) (int, error) {
+	var days int
+	err := s.read.QueryRowContext(ctx, `SELECT trash_retention_days FROM accounts WHERE id=?`, p.AccountID).Scan(&days)
+	if err == sql.ErrNoRows {
+		return 0, ErrNotFound
+	}
+	return days, err
+}
+
+// SetTrashRetention sets the account's trash retention in days. days must be 0
+// (never auto-purge) or positive. Callers enforce Owner/Admin authorization.
+func (s *Store) SetTrashRetention(ctx context.Context, p model.Principal, days int) error {
+	if days < 0 {
+		return fmt.Errorf("trash retention must be zero or positive")
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET trash_retention_days=? WHERE id=?`, days, p.AccountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteMessage permanently removes a message without requiring it to be
+// trashed first. It is the low-level administrative primitive (and is used by
+// account/domain purge and by tests); the public API moves messages to Trash
+// via TrashMessage and only erases them through PurgeMessage. It requires
+// Assistant or Owner on the message's inbox and emits message.purged.
 func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, model.Event{}, err
 	}
 	defer tx.Rollback()
-	// Load and authorise inside the serialized write transaction so a
-	// concurrent duplicate delete cannot subtract storage twice or emit a
-	// second event.
 	m, err := s.getMessageTx(ctx, tx, p.AccountID, id)
 	if err != nil {
 		return "", 0, model.Event{}, err
@@ -665,20 +938,10 @@ func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string)
 	if !p.CanAssist(m.InboxID) {
 		return "", 0, model.Event{}, ErrForbidden
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, id); err != nil {
+	if err = purgeMessageTx(ctx, tx, p.AccountID, m); err != nil {
 		return "", 0, model.Event{}, err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE id=? AND account_id=?`, id, p.AccountID)
-	if err != nil {
-		return "", 0, model.Event{}, err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return "", 0, model.Event{}, ErrNotFound
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, m.SizeBytes, p.AccountID); err != nil {
-		return "", 0, model.Event{}, err
-	}
-	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, "message.deleted", id, map[string]any{"message_id": id})
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessagePurged, id, map[string]any{"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID})
 	if err != nil {
 		return "", 0, model.Event{}, err
 	}
@@ -796,7 +1059,7 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 WHERE t.account_id=?`
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
@@ -832,6 +1095,20 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 		out = append(out, t)
 	}
 	return out, rows.Err()
+}
+
+// trashClause returns the SQL fragment that applies Trash visibility. The
+// ordinary read path (trashed=false) excludes trashed messages; the Trash view
+// (trashed=true) selects only them. alias is the messages table alias.
+func trashClause(alias string, trashed bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	if trashed {
+		return " AND " + prefix + "deleted_at IS NOT NULL"
+	}
+	return " AND " + prefix + "deleted_at IS NULL"
 }
 
 // spamClause returns the SQL fragment that applies the Spam visibility rule:
@@ -1006,6 +1283,7 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 		return []model.Message{}, nil
 	}
 	args := []any{match, p.AccountID}
+	sqlq += trashClause("m", f.Trashed)
 	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {

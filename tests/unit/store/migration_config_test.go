@@ -305,3 +305,39 @@ func TestMigration013PartialSchemaFailsFast(t *testing.T) {
 		t.Fatalf("expected partial-schema error, got %v", err)
 	}
 }
+
+// TestMigration039DropsArchiveAddsTrash upgrades a v012 database to current and
+// verifies the Trash migration: messages.is_archived is gone, messages.deleted_at
+// and accounts.trash_retention_days exist with their defaults, existing rows are
+// carried over live (deleted_at NULL), and the FTS index survives the rebuild.
+func TestMigration039DropsArchiveAddsTrash(t *testing.T) {
+	dir := newV012(t)
+	seedV012(t, dir)
+
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("upgrade open: %v", err)
+	}
+	defer st.Close()
+
+	if columnPresent(t, st, "messages", "is_archived") {
+		t.Fatal("messages.is_archived survived migration 039")
+	}
+	if !columnPresent(t, st, "messages", "deleted_at") {
+		t.Fatal("messages.deleted_at missing after 039")
+	}
+	if !columnPresent(t, st, "accounts", "trash_retention_days") {
+		t.Fatal("accounts.trash_retention_days missing after 039")
+	}
+	if n := queryInt(t, st, `SELECT trash_retention_days FROM accounts WHERE id='acc1'`); n != 30 {
+		t.Fatalf("default retention = %d, want 30", n)
+	}
+	// The seeded message survived the rebuild and is live.
+	if n := queryInt(t, st, `SELECT count(*) FROM messages WHERE id='msgA' AND deleted_at IS NULL`); n != 1 {
+		t.Fatalf("message not preserved as live after 039 (n=%d)", n)
+	}
+	// FTS is untouched by the messages rebuild.
+	if n := queryInt(t, st, `SELECT count(*) FROM message_fts WHERE message_fts MATCH 'preserved'`); n != 1 {
+		t.Fatal("FTS index not preserved across 039")
+	}
+}

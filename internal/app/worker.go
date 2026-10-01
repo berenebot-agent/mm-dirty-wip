@@ -135,6 +135,7 @@ func (w *OutboxWorker) maintain() {
 		{"sweepWorkflows", w.sweepWorkflows},
 		{"sweepMXReceipts", w.sweepMXReceipts},
 		{"sweepClientDeliveryLog", w.sweepClientDeliveryLog},
+		{"purgeExpiredTrash", w.purgeExpiredTrash},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
 	}
@@ -196,6 +197,25 @@ func (w *OutboxWorker) sweepMXReceipts() {
 	}
 	if n > 0 {
 		w.log.Info("swept expired mx receipts", "count", n)
+	}
+}
+
+// purgeExpiredTrash permanently removes trashed messages older than their
+// account's retention window and unlinks their raw files. Accounts with a
+// retention of 0 are skipped, so their trash is retained until purged by hand.
+func (w *OutboxWorker) purgeExpiredTrash() {
+	paths, err := w.svc.Store.PurgeExpiredTrash(context.Background())
+	if err != nil {
+		w.log.Error("trash purge", "error", err)
+		return
+	}
+	for _, p := range paths {
+		if path, perr := safepath.Join(w.svc.Config.DataDir, p); perr == nil {
+			_ = os.Remove(path)
+		}
+	}
+	if len(paths) > 0 {
+		w.log.Info("purged expired trash", "count", len(paths))
 	}
 }
 

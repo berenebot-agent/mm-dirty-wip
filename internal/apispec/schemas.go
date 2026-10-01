@@ -156,7 +156,7 @@ var schemas = map[string]any{
 		"sent_at":             ts("Outbound delivery time."),
 		"created_at":          ts("Creation time."),
 		"read":                boolean("Read state."),
-		"archived":            boolean("Archived state."),
+		"deleted_at":          ts("Set when the message is in Trash; absent otherwise."),
 		"labels":              stringList("Free-text labels."),
 		"has_attachments":     boolean("Whether the message has attachments."),
 		"size_bytes":          integer("Stored raw size in bytes."),
@@ -245,10 +245,9 @@ var schemas = map[string]any{
 	"Deleted": obj(map[string]any{"deleted": boolean("Always true on success.")}),
 
 	"MessagePatch": obj(map[string]any{
-		"read":     boolean("Set the read state."),
-		"archived": boolean("Set the archived state."),
-		"labels":   stringList("Replace the full label set; empty clears."),
-		"spam":     boolean("Move into or out of Spam."),
+		"read":   boolean("Set the read state."),
+		"labels": stringList("Replace the full label set; empty clears."),
+		"spam":   boolean("Move into or out of Spam."),
 	}),
 	"SeenBody": obj(map[string]any{
 		"address": str("Compatibility inbox address guard."),

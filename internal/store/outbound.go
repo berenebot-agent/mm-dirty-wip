@@ -92,7 +92,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	id := idgen.New("msg")
 	// The message is enqueued as pending; the worker marks it sent after the
 	// provider accepts it. sent_at is left NULL until delivery succeeds.
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,is_archived,status,idem_key,last_error,internal,sending_domain_id,sending_external_alias_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0,'pending',?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, boolInt(r.Internal), nullString(r.SendingDomainID), r.SendingExternalAliasID, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,client_label,client_id,subject,text_body,html_body,raw_path,size_bytes,is_read,status,idem_key,last_error,internal,sending_domain_id,sending_external_alias_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'pending',?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "outbound", r.Provider, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, r.From.Address, jsonString(r.To), jsonString(r.CC), jsonString(r.BCC), `[]`, r.ClientLabel, r.ClientID, r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, r.IdemKey, r.LastError, boolInt(r.Internal), nullString(r.SendingDomainID), r.SendingExternalAliasID, now)
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
@@ -300,7 +300,7 @@ func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner strin
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND deleted_at IS NULL AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -376,7 +376,7 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 // ListOutbox lists pending and failed outbound messages for an account,
 // optionally scoped to an inbox.
 func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Message, error) {
-	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.deleted_at IS NULL AND m.direction='outbound' AND m.status IN ('pending','failed')`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		if !p.CanRead(inboxID) {
@@ -460,7 +460,7 @@ func (s *Store) markOutboxSending(ctx context.Context, accountID string, msgs []
 // CountOutbox returns the number of pending or failed outbound messages for
 // an inbox (or across all accessible inboxes when inboxID is empty).
 func (s *Store) CountOutbox(ctx context.Context, p model.Principal, inboxID string) (int, error) {
-	q := `SELECT count(*) FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.direction='outbound' AND m.status IN ('pending','failed')`
+	q := `SELECT count(*) FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.deleted_at IS NULL AND m.direction='outbound' AND m.status IN ('pending','failed')`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		if !p.CanRead(inboxID) {
@@ -485,20 +485,21 @@ func (s *Store) CountOutbox(ctx context.Context, p model.Principal, inboxID stri
 	return n, nil
 }
 
-// DeleteOutboxMessage removes a pending or failed outbound message (cancelling
-// a queued send or discarding a failed one).
-func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
+// DeleteOutboxMessage moves a pending or failed outbound message to Trash
+// (cancelling a queued send or discarding a failed one). The message is hidden
+// from the outbox immediately but retained until purged or expired.
+func (s *Store) DeleteOutboxMessage(ctx context.Context, p model.Principal, id string) (model.Message, *model.Event, error) {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
-		return "", 0, model.Event{}, err
+		return model.Message{}, nil, err
 	}
 	if m.Direction != "outbound" || (m.Status != "pending" && m.Status != "failed") {
-		return "", 0, model.Event{}, ErrConflict
+		return model.Message{}, nil, ErrConflict
 	}
 	if !p.CanOwn(m.InboxID) {
-		return "", 0, model.Event{}, ErrForbidden
+		return model.Message{}, nil, ErrForbidden
 	}
-	return s.DeleteMessage(ctx, p, id)
+	return s.TrashMessage(ctx, p, id)
 }
 
 // idempotencyLease bounds how long a pending reservation may block the same
@@ -575,7 +576,7 @@ func (s *Store) RecoverStaleIdempotency(ctx context.Context, now time.Time) (int
 }
 
 func (s *Store) LatestMessageInThread(ctx context.Context, accountID, threadID string) (model.Message, error) {
-	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.thread_id=? AND m.internal=0 ORDER BY m.created_at DESC LIMIT 1`, accountID, threadID))
+	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.thread_id=? AND m.internal=0 AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 1`, accountID, threadID))
 	if err == sql.ErrNoRows {
 		return m, ErrNotFound
 	}
@@ -583,7 +584,7 @@ func (s *Store) LatestMessageInThread(ctx context.Context, accountID, threadID s
 }
 
 func (s *Store) LatestInboundMessageInThread(ctx context.Context, accountID, inboxID, threadID string) (model.Message, error) {
-	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.inbox_id=? AND m.thread_id=? AND m.direction='inbound' ORDER BY m.created_at DESC LIMIT 1`, accountID, inboxID, threadID))
+	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.inbox_id=? AND m.thread_id=? AND m.direction='inbound' AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 1`, accountID, inboxID, threadID))
 	if err == sql.ErrNoRows {
 		return m, ErrNotFound
 	}

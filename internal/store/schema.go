@@ -1192,3 +1192,77 @@ CREATE TABLE mx_settings (
   updated_at TEXT NOT NULL
 );
 `
+
+// migration039 adds the Trash: messages.deleted_at marks a message as trashed
+// rather than erasing it, and accounts.trash_retention_days is the per-account
+// window after which the maintenance worker permanently purges trashed mail
+// (0 disables automatic purging).
+//
+// The dormant messages.is_archived column is dropped in the same rebuild.
+// SQLite cannot drop a column in place on every supported version, so messages
+// is rebuilt; unlike earlier rebuilds this one has no foreign keys pointing in
+// other than attachments (ON DELETE CASCADE, re-established by name) and the
+// message_fts contentless table, which is untouched. All rows are carried over
+// with deleted_at NULL (nothing was trashed before this change).
+const migration039 = `
+CREATE TABLE messages_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+  provider TEXT NOT NULL DEFAULT '',
+  provider_delivery_id TEXT,
+  provider_message_id TEXT NOT NULL DEFAULT '',
+  rfc_message_id TEXT NOT NULL DEFAULT '',
+  in_reply_to TEXT NOT NULL DEFAULT '',
+  references_json TEXT NOT NULL DEFAULT '[]',
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  cc_json TEXT NOT NULL DEFAULT '[]',
+  bcc_json TEXT NOT NULL DEFAULT '[]',
+  envelope_to_json TEXT NOT NULL DEFAULT '[]',
+  envelope_recipient TEXT NOT NULL DEFAULT '',
+  envelope_from TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  text_body TEXT NOT NULL DEFAULT '',
+  html_body TEXT NOT NULL DEFAULT '',
+  raw_path TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  received_at TEXT,
+  sent_at TEXT,
+  internal INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'sent',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  next_attempt_at TEXT NOT NULL DEFAULT '',
+  idem_key TEXT NOT NULL DEFAULT '',
+  claim_owner TEXT NOT NULL DEFAULT '',
+  claim_expires_at TEXT NOT NULL DEFAULT '',
+  client_label TEXT NOT NULL DEFAULT '',
+  client_id TEXT NOT NULL DEFAULT '',
+  sending_domain_id TEXT,
+  sending_external_alias_id TEXT,
+  is_spam INTEGER NOT NULL DEFAULT 0,
+  auth_results_json TEXT NOT NULL DEFAULT '{}',
+  spam_reason TEXT NOT NULL DEFAULT '',
+  UNIQUE(account_id, provider, envelope_recipient, provider_delivery_id)
+);
+INSERT INTO messages_new(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,deleted_at,received_at,sent_at,internal,created_at,status,attempts,last_error,next_attempt_at,idem_key,claim_owner,claim_expires_at,client_label,client_id,sending_domain_id,sending_external_alias_id,is_spam,auth_results_json,spam_reason)
+  SELECT id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,bcc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,NULL,received_at,sent_at,internal,created_at,status,attempts,last_error,next_attempt_at,idem_key,claim_owner,claim_expires_at,client_label,client_id,sending_domain_id,sending_external_alias_id,is_spam,auth_results_json,spam_reason FROM messages;
+DROP TABLE messages;
+ALTER TABLE messages_new RENAME TO messages;
+CREATE INDEX IF NOT EXISTS idx_messages_inbox_created ON messages(inbox_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_created ON messages(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_rfc_thread ON messages(account_id, inbox_id, rfc_message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_outbox ON messages(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_messages_claim ON messages(status, claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_messages_internal ON messages(inbox_id, internal);
+CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(account_id, deleted_at);
+
+ALTER TABLE accounts ADD COLUMN trash_retention_days INTEGER NOT NULL DEFAULT 30;
+`

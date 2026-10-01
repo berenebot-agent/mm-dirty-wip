@@ -126,6 +126,11 @@ func migrations(dataDir string) []migration {
 		{version: "036", sql: migration036, detect: stateOf(tableExists("client_delivery_log"))},
 		{version: "037", sql: migration037, detect: stateOf(tableExists("dialmx_domain_credentials"))},
 		{version: "038", sql: migration038, detect: stateOf(tableExists("mx_settings"))},
+		{version: "039", sql: migration039, fkOff: true, detect: allOf(
+			columnAdded("messages", "deleted_at"),
+			columnMissing("messages", "is_archived"),
+			columnAdded("accounts", "trash_retention_days"),
+		)},
 	}
 }
 

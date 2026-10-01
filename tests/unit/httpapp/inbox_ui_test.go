@@ -290,16 +290,101 @@ func TestUIDeleteMessage(t *testing.T) {
 	m := seedInbound(t, svc, box, "d1", "<m1@test>", "Delete me", "bye")
 	cookie, csrf := uiSession(t, svc, u.ID)
 
+	post := func(path string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", path, strings.NewReader("_csrf="+csrf))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Delete moves the message to Trash; it is retained, not erased.
+	if rr := post("/ui/messages/" + m.ID + "/delete"); rr.Code != 303 {
+		t.Fatalf("delete %d: %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, m.ID)
+	if err != nil {
+		t.Fatalf("trashed message should still exist: %v", err)
+	}
+	if got.DeletedAt == nil {
+		t.Fatal("message should be trashed")
+	}
+	// It is hidden from the ordinary inbox list.
+	list, err := svc.Store.ListMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lm := range list {
+		if lm.ID == m.ID {
+			t.Fatal("trashed message should not appear in the inbox list")
+		}
+	}
+
+	// Restore returns it to the mailbox.
+	if rr := post("/ui/messages/" + m.ID + "/restore"); rr.Code != 303 {
+		t.Fatalf("restore %d: %s", rr.Code, rr.Body.String())
+	}
+	if got, err = svc.Store.GetMessageByID(context.Background(), u.AccountID, m.ID); err != nil || got.DeletedAt != nil {
+		t.Fatalf("restore should clear trashed state: %v %+v", err, got)
+	}
+
+	// Trash then purge erases it permanently.
+	if rr := post("/ui/messages/" + m.ID + "/delete"); rr.Code != 303 {
+		t.Fatalf("re-delete %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := post("/ui/messages/" + m.ID + "/purge"); rr.Code != 303 {
+		t.Fatalf("purge %d: %s", rr.Code, rr.Body.String())
+	}
+	if _, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, m.ID); err == nil {
+		t.Fatal("purged message should be gone")
+	}
+}
+
+func TestUITrashFolderAndEmpty(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	a := seedInbound(t, svc, box, "ui-t1", "<ui-t1@test>", "one", "one")
+	b := seedInbound(t, svc, box, "ui-t2", "<ui-t2@test>", "two", "two")
+	keep := seedInbound(t, svc, box, "ui-t3", "<ui-t3@test>", "keep", "keep")
+	cookie, csrf := uiSession(t, svc, u.ID)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	for _, id := range []string{a.ID, b.ID} {
+		if _, _, err := svc.Store.TrashMessage(ctx, p, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The Trash folder lists the trashed messages and hides live ones.
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/ui/messages/"+m.ID+"/delete", strings.NewReader("_csrf="+csrf))
+	req := httptest.NewRequest("GET", "/ui/inboxes/"+box.ID+"/trash", nil)
+	req.AddCookie(cookie)
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("trash view %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, a.ID) || !strings.Contains(body, b.ID) {
+		t.Fatalf("trash view missing messages: %s", body)
+	}
+	if strings.Contains(body, keep.ID) {
+		t.Fatalf("trash view leaked live message")
+	}
+
+	// Empty trash purges them and returns to the Trash view.
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/trash/empty", strings.NewReader("_csrf="+csrf))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	h.ServeHTTP(rr, req)
 	if rr.Code != 303 {
-		t.Fatalf("delete %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("empty trash %d: %s", rr.Code, rr.Body.String())
 	}
-	if _, err := svc.Store.GetMessageByID(context.Background(), u.AccountID, m.ID); err == nil {
-		t.Fatal("message should be deleted")
+	if _, err := svc.Store.GetMessageByID(ctx, u.AccountID, a.ID); err == nil {
+		t.Fatal("trashed message not purged")
+	}
+	if _, err := svc.Store.GetMessageByID(ctx, u.AccountID, keep.ID); err != nil {
+		t.Fatalf("live message removed: %v", err)
 	}
 }
 

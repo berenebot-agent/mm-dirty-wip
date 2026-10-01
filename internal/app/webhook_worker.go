@@ -63,8 +63,8 @@ func (w *WebhookWorker) RunOnce(ctx context.Context) error {
 // deliverableMessage reports whether the event at the head of the queue should
 // be delivered. It applies the accepted policy (D062): both payload modes skip
 // currently-Spam mail. It also skips a message that is internal (workflow mail
-// hidden from every read surface) or has been deleted, neither of which can be
-// forwarded. The event's own spam state is authoritative for a
+// hidden from every read surface) or has been trashed or purged, none of which
+// can be forwarded. The event's own spam state is authoritative for a
 // message.spam_state_changed event, so a stale "moved to Spam" transition is
 // skipped even if the message was later released (which enqueues its own,
 // deliverable event).
@@ -79,7 +79,7 @@ func (w *WebhookWorker) deliverableMessage(ctx context.Context, d store.PendingW
 		}
 		return model.Message{}, false, err
 	}
-	if m.Internal || m.Spam {
+	if m.Internal || m.Spam || m.DeletedAt != nil {
 		return model.Message{}, true, nil
 	}
 	return m, false, nil

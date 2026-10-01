@@ -8,6 +8,8 @@ Generated from `internal/apispec`; do not edit by hand.
 | --- | --- | --- | --- |
 | GET | /v1/bootstrap | Discover key capabilities and accessible inboxes |  |
 | GET | /v1/limits | Get server pagination, size and rate limits | read |
+| GET | /v1/account/settings | Get account preferences (Owner/Admin) | owner |
+| PATCH | /v1/account/settings | Update account preferences (Owner/Admin) | owner |
 
 ## Inboxes
 
@@ -18,6 +20,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes/{id} | Get an inbox | read |
 | PATCH | /v1/inboxes/{id} | Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender) | owner |
 | DELETE | /v1/inboxes/{id} | Delete an inbox (Admin) | admin |
+| POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Owner) | owner |
 
 ## Identities
 
@@ -31,12 +34,14 @@ Generated from `internal/apispec`; do not edit by hand.
 
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
-| GET | /v1/messages | List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before) | read |
+| GET | /v1/messages | List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before, trashed) | read |
 | GET | /v1/messages/wait | Long-poll for a new message | read |
 | POST | /v1/messages/wait | Long-poll for a new message (compat) | read |
 | GET | /v1/messages/{id} | Get a message | read |
-| PATCH | /v1/messages/{id} | Update read/archived/labels state | assistant |
-| DELETE | /v1/messages/{id} | Delete a message (Assistant/Owner) | assistant |
+| PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
+| DELETE | /v1/messages/{id} | Move a message to Trash (Assistant/Owner) | assistant |
+| POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Owner) | owner |
 | POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
 
 ## Attachments
