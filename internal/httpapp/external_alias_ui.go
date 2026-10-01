@@ -405,7 +405,7 @@ const externalAliasConnectorDialogs = `{{range .ExternalAliasDialogs}}<dialog id
 // alias, mirroring the domain log page. Name, connector and delete controls
 // live on the dashboard (inbox edit dialog Aliases tab and connector popup).
 const externalAliasBody = `<div class="toolbar"><a href="/?inbox={{.Inbox.ID}}">← Back to inbox settings</a></div>
-<section class="card"><div class="msghead"><div><h1>{{.ExternalAlias.Address}}</h1><p class="muted">External sending alias · sending only. Mail addressed here remains with its email provider.</p></div></div>
+<section class="card"><div class="msghead"><div><h1>{{.ExternalAlias.Address}}</h1><p class="muted">External sending alias · send-only. Mail sent here stays with that provider, not MailMoose.</p></div></div>
 </section>
 <section class="card"><h2>Activity</h2>
 <p class="muted">Every outbound send attempt from this alias, newest first. Attempts are retained for about 30 days.</p>
