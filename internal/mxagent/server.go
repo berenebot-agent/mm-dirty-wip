@@ -29,11 +29,24 @@ import (
 // computes auth evidence and issues one signed ingest for the whole accepted
 // recipient set. The core fans out internally. It never returns SMTP success
 // until the core has durably handled every accepted recipient.
+type Delivery interface {
+	Resolve(context.Context, []string) (mxwire.ResolveResponse, error)
+	Ingest(context.Context, mxwire.IngestMetadata, io.Reader, int64, string) (mxwire.IngestResponse, error)
+	Close() error
+}
+
+type DeliveryFactory func() Delivery
+
+func NewServerWithHandoff(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
+	return NewServerWithDelivery(cfg, log, factory)
+}
+
 type Server struct {
-	cfg    Config
-	core   *CoreClient
-	verify *Verifier
-	log    *slog.Logger
+	cfg     Config
+	core    *CoreClient
+	factory DeliveryFactory
+	verify  *Verifier
+	log     *slog.Logger
 
 	sem      chan struct{}
 	staging  *byteBudget
@@ -47,15 +60,31 @@ type Server struct {
 }
 
 func NewServer(cfg Config, log *slog.Logger) *Server {
+	// One CoreClient (and therefore one http.Client/transport pool) is shared by
+	// every SMTP session and by the readiness probe. Creating a client per
+	// session would leak a transport pool per message.
+	core := NewCoreClient(cfg)
+	return newServer(cfg, log, func() Delivery { return core }, core)
+}
+
+func NewServerWithDelivery(cfg Config, log *slog.Logger, factory DeliveryFactory) *Server {
+	return newServer(cfg, log, factory, NewCoreClient(cfg))
+}
+
+func newServer(cfg Config, log *slog.Logger, factory DeliveryFactory, core *CoreClient) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	// Each staged message reserves MaxMessageBytes+1 (the extra byte detects an
+	// oversize message), so the aggregate budget must admit at least one full
+	// reservation even when the operator configured staging equal to the
+	// message cap.
 	stagingBytes := cfg.MaxStagingBytes
-	if stagingBytes < cfg.MaxMessageBytes {
-		stagingBytes = cfg.MaxMessageBytes
+	if stagingBytes < cfg.MaxMessageBytes+1 {
+		stagingBytes = cfg.MaxMessageBytes + 1
 	}
 	return &Server{
-		cfg: cfg, core: NewCoreClient(cfg), verify: NewVerifier(cfg), log: log,
+		cfg: cfg, core: core, factory: factory, verify: NewVerifier(cfg), log: log,
 		sem:     make(chan struct{}, cfg.MaxConnections),
 		staging: newByteBudget(stagingBytes),
 		iplim:   newIPLimiter(defaultMaxPerIP),
@@ -168,11 +197,12 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections from your address"}
 	}
 	return &session{
-		srv:    b.s,
-		peerIP: ip,
-		ipKey:  ipKey,
-		tls:    isTLS,
-		helo:   strings.TrimSuffix(c.Hostname(), "."),
+		srv:     b.s,
+		factory: b.s.factory,
+		peerIP:  ip,
+		ipKey:   ipKey,
+		tls:     isTLS,
+		helo:    strings.TrimSuffix(c.Hostname(), "."),
 	}, nil
 }
 
@@ -191,14 +221,16 @@ func PeerIP(addr net.Addr) net.IP {
 // core, and DATA stages, verifies and hands the whole accepted recipient set to
 // the core in one signed request.
 type session struct {
-	srv     *Server
-	peerIP  net.IP
-	ipKey   string
-	tls     bool
-	helo    string
-	from    string
-	hasFrom bool
-	rcpts   []acceptedRcpt
+	srv      *Server
+	factory  DeliveryFactory
+	delivery Delivery
+	peerIP   net.IP
+	ipKey    string
+	tls      bool
+	helo     string
+	from     string
+	hasFrom  bool
+	rcpts    []acceptedRcpt
 	// releaseOnce guarantees the connection slot is returned exactly once even
 	// though go-smtp may call Logout more than once (on STARTTLS re-greet and on
 	// connection close).
@@ -222,6 +254,10 @@ func (s *session) Reset() {
 	s.from = ""
 	s.hasFrom = false
 	s.rcpts = nil
+	if s.delivery != nil {
+		_ = s.delivery.Close()
+		s.delivery = nil
+	}
 }
 
 func (s *session) Logout() error {
@@ -249,6 +285,10 @@ func (s *session) Mail(from string, opts *smtp.MailOptions) error {
 	if s.srv.cfg.RequireTLS && !s.tls {
 		return &smtp.SMTPError{Code: 530, EnhancedCode: smtp.EnhancedCode{5, 7, 0}, Message: "Must issue a STARTTLS command first"}
 	}
+	if s.delivery != nil {
+		_ = s.delivery.Close()
+	}
+	s.delivery = s.factory()
 	s.from = from
 	s.hasFrom = true
 	_ = opts
@@ -267,7 +307,10 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DNSTimeout)
 	defer cancel()
-	resp, err := s.srv.core.Resolve(ctx, []string{to})
+	if s.delivery == nil {
+		return &smtp.SMTPError{Code: 503, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "Need MAIL before RCPT"}
+	}
+	resp, err := s.delivery.Resolve(ctx, []string{to})
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
 		s.srv.log.Warn("mx rcpt temporary failure", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
@@ -278,6 +321,11 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			continue
 		}
 		if r.Accept {
+			for _, accepted := range s.rcpts {
+				if strings.EqualFold(accepted.address, to) {
+					return nil
+				}
+			}
 			s.rcpts = append(s.rcpts, acceptedRcpt{address: strings.ToLower(to), domain: r.Domain})
 			return nil
 		}
@@ -304,19 +352,47 @@ func (s *session) Data(r io.Reader) error {
 	if len(s.rcpts) == 0 {
 		return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "No valid recipients"}
 	}
-	// Reserve the maximum this message could consume before reading it, so
-	// concurrent in-memory staging cannot exceed MX_STAGING_BYTES. If the
+	// Reserve one byte over the message cap before reading it: the staged
+	// buffer is exactly MaxMessageBytes+1 so an oversize message is detected
+	// rather than truncated. The reservation is held until the raw bytes have
+	// been cleared/handed off AND the staging copy goroutine has exited: the
+	// bytes are still resident through verification and ingest, so releasing at
+	// copy completion would misstate the aggregate in-memory staging. If the
 	// reservation does not fit, fail the transaction temporarily rather than
 	// risk unbounded memory growth.
-	if !s.srv.staging.tryAcquire(s.srv.cfg.MaxMessageBytes) {
+	const stageOverhead = 1
+	reserve := s.srv.cfg.MaxMessageBytes + stageOverhead
+	if !s.srv.staging.tryAcquire(reserve) {
 		atomic.AddInt64(&s.srv.authTemp, 1)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Server busy, try again later"}
 	}
-	// The reservation is released by the staging copy goroutine when it exits,
-	// not when Data returns: a timed-out read may outlive the transaction, and
-	// releasing early would misstate the aggregate in-memory staging.
+	// copyDone is closed by the staging copy goroutine exactly once when it has
+	// stopped touching the staged buffer. The deferred cleanup below clears the
+	// buffer, then releases the reservation as soon as the goroutine is known
+	// to be gone. On a timeout the goroutine can still be draining a slow
+	// reader; the cleanup must not block SMTP for the sender, so it hands the
+	// release to a short-lived goroutine instead. That goroutine is itself
+	// bounded because it only waits for a copy that the cancelled reader will
+	// terminate, and the reservation it holds is accounted by the global budget.
+	copyDone := make(chan struct{})
+	var raw []byte
+	defer func() {
+		for i := range raw {
+			raw[i] = 0
+		}
+		raw = nil
+		select {
+		case <-copyDone:
+			s.srv.staging.release(reserve)
+		default:
+			go func() {
+				<-copyDone
+				s.srv.staging.release(reserve)
+			}()
+		}
+	}()
 	raw, size, digest, err := StageMessageCtx(r, s.srv.cfg.MaxMessageBytes, s.srv.cfg.DataTimeout, func() {
-		s.srv.staging.release(s.srv.cfg.MaxMessageBytes)
+		close(copyDone)
 	}, &s.dataCancel)
 	if err != nil {
 		if errors.Is(err, ErrTooLarge) {
@@ -324,15 +400,6 @@ func (s *session) Data(r io.Reader) error {
 		}
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
-	// Zero the staging buffer (and drop the reference) once the transaction
-	// completes, so the message bytes do not linger in this long-lived SMTP
-	// process until GC.
-	defer func() {
-		for i := range raw {
-			raw[i] = 0
-		}
-		raw = nil
-	}()
 
 	fromDomain := FromHeaderDomain(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
@@ -352,7 +419,7 @@ func (s *session) Data(r io.Reader) error {
 	}
 	accepted := len(s.rcpts)
 	from := s.from
-	resp, err := s.srv.core.Ingest(ctx, meta, bytes.NewReader(raw), size, digest)
+	resp, err := s.delivery.Ingest(ctx, meta, bytes.NewReader(raw), size, digest)
 	s.Reset()
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
@@ -412,12 +479,15 @@ func StageMessage(r io.Reader, maxBytes int64, timeout time.Duration) ([]byte, i
 }
 
 // StageMessageCtx is StageMessage with a cancellable read. When timeout fires,
-// the reader handed to the copy is cancelled, so the stranded goroutine stops
-// promptly instead of continuing to fill the freed staging buffer. cancelOut
-// may be nil; when non-nil it receives the cancel function for the read, which
-// the caller must invoke (or hand lifecycle to a session Reset) once done.
-// onDone, when non-nil, runs once when the copy goroutine exits, so a caller
-// can release a resource (the RAM budget) the goroutine still holds.
+// the reader handed to the copy is cancelled and the call always returns a
+// timeout error, even if the stranded copy later completes successfully: the
+// caller has already failed the transaction, so accepting the late bytes would
+// report success for work it has abandoned. cancelOut may be nil; when non-nil
+// it receives the cancel function for the read, which the caller must invoke (or
+// hand lifecycle to a session Reset) once done. onDone, when non-nil, runs
+// exactly once when the copy goroutine has finished touching the staged buffer,
+// before any result is delivered, so a caller can wait on it before releasing a
+// resource (the RAM budget) the bytes occupy.
 func StageMessageCtx(r io.Reader, maxBytes int64, timeout time.Duration, onDone func(), cancelOut *context.CancelFunc) ([]byte, int64, string, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -436,33 +506,65 @@ func StageMessageCtx(r io.Reader, maxBytes int64, timeout time.Duration, onDone 
 	defer readerCancel()
 	type result struct {
 		b   []byte
+		n   int64
 		err error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		defer onDone()
-		var buf bytes.Buffer
-		h := sha256.New()
-		// Read one byte past the cap so an oversize message is detected rather
-		// than silently truncated.
-		n, err := io.Copy(io.MultiWriter(&buf, h), io.LimitReader(r, maxBytes+1))
-		if err == nil && n > maxBytes {
-			err = ErrTooLarge
-		}
-		// go-smtp's DATA reader enforces the same cap and surfaces its own
-		// sentinel once the cap is reached; normalize it so the caller maps
-		// both paths to the same permanent 552.
-		if errors.Is(err, smtp.ErrDataTooLarge) {
-			err = ErrTooLarge
-		}
-		if err == nil && n == 0 {
-			err = fmt.Errorf("empty message")
-		}
-		if err != nil {
-			ch <- result{err: err}
+		// Exactly cap+1 bytes are allocated: the extra byte is how an oversize
+		// message is detected, and nothing beyond it is ever read. No buffer
+		// growth heuristic can over-allocate past the reservation.
+		cap1 := maxBytes + 1
+		out := result{}
+		// Allocate lazily only when a safe, positive cap is known; a huge or
+		// negative cap is rejected by the read below rather than by a wild
+		// allocation.
+		if cap1 <= 0 {
+			out.err = ErrTooLarge
+			onDone()
+			ch <- out
 			return
 		}
-		ch <- result{b: buf.Bytes()}
+		buf := make([]byte, cap1)
+		// io.ReadFull fills the whole cap+1 unless the reader ends first. A
+		// short message ends with io.ErrUnexpectedEOF (or io.EOF for an empty
+		// one); that is a successful read of n bytes, not a failure.
+		n, err := io.ReadFull(io.LimitReader(r, cap1), buf)
+		switch {
+		case err == nil:
+			// Filled cap+1 bytes: oversize.
+			out.err = ErrTooLarge
+		case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+			if n == 0 {
+				out.err = fmt.Errorf("empty message")
+			} else {
+				out.b = buf[:n]
+				out.n = int64(n)
+			}
+		case errors.Is(err, smtp.ErrDataTooLarge):
+			// go-smtp's DATA reader enforces the same cap; normalize its
+			// sentinel so the caller maps both paths to the same permanent 552.
+			out.err = ErrTooLarge
+		default:
+			out.err = err
+		}
+		if ctx.Err() != nil {
+			out.err = ctx.Err()
+			out.b = nil
+		}
+		if out.err != nil && buf != nil {
+			// Clear the whole staged buffer on any error (including a
+			// cancellation/timeout) so abandoned bytes do not linger in this
+			// long-lived process.
+			for i := range buf {
+				buf[i] = 0
+			}
+		}
+		// onDone runs before the result is published, so a caller that receives
+		// a result also observes copyDone closed: the goroutine holds no
+		// reference to the buffer after this point.
+		onDone()
+		ch <- out
 	}()
 	select {
 	case res := <-ch:
@@ -470,23 +572,13 @@ func StageMessageCtx(r io.Reader, maxBytes int64, timeout time.Duration, onDone 
 			return nil, 0, "", res.err
 		}
 		sum := sha256.Sum256(res.b)
-		return res.b, int64(len(res.b)), hex.EncodeToString(sum[:]), nil
+		return res.b, res.n, hex.EncodeToString(sum[:]), nil
 	case <-time.After(timeout):
-		// Cancel the read first so the goroutine releases the budget-protected
-		// memory promptly, then wait a bounded moment for it to exit before
-		// the caller's deferred release makes the budget available again.
+		// Cancel the read so the stranded goroutine releases the
+		// budget-protected memory promptly, then fail immediately. The caller
+		// owns waiting on onDone to release the reservation; SMTP is never
+		// blocked here waiting for a slow sender to drain.
 		cancel()
-		timer := time.NewTimer(5 * time.Second)
-		defer timer.Stop()
-		select {
-		case res := <-ch:
-			if res.err != nil {
-				return nil, 0, "", res.err
-			}
-			sum := sha256.Sum256(res.b)
-			return res.b, int64(len(res.b)), hex.EncodeToString(sum[:]), nil
-		case <-timer.C:
-		}
 		return nil, 0, "", fmt.Errorf("data read timeout")
 	}
 }
