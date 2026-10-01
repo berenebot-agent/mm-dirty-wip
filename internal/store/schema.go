@@ -1266,3 +1266,11 @@ CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(account_id, deleted_
 
 ALTER TABLE accounts ADD COLUMN trash_retention_days INTEGER NOT NULL DEFAULT 30;
 `
+
+// migration040 adds the display-only time zone preferences. An empty value
+// means "inherit": a user inherits the account default, and an account default
+// of empty falls back to UTC. Timestamps remain stored and served as UTC.
+const migration040 = `
+ALTER TABLE accounts ADD COLUMN timezone TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT '';
+`

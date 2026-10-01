@@ -20,6 +20,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/timezone"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
@@ -90,8 +91,11 @@ func dialMXExpiry(st mxdial.Status) string {
 	return fmt.Sprintf("%ds", int(d.Seconds()))
 }
 
-func (s *Server) render(w http.ResponseWriter, body string, data any) {
-	t, err := template.New("page").Funcs(template.FuncMap{"bytes": formatBytes, "join": strings.Join, "snippet": snippetText, "mailDate": mailDate, "filesize": filesize, "asset": s.assetURL, "linkify": linkifyText, "aliasNames": aliasNamesCSV, "externalAliases": externalAliasesJSON, "deliveryStatus": deliveryStatus, "dialmxReady": dialMXReady, "dialmxReason": dialMXReason, "dialmxExpiry": dialMXExpiry}).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
+// render renders body with timestamp helpers bound to the request's effective
+// display zone, so the human UI shows local time without changing stored or API
+// timestamps.
+func (s *Server) render(w http.ResponseWriter, r *http.Request, body string, data any) {
+	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "body"}}` + body + `{{end}}`)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -99,6 +103,30 @@ func (s *Server) render(w http.ResponseWriter, body string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err = t.Execute(w, data); err != nil {
 		s.Log.Error("render", "error", err)
+	}
+}
+
+// templateFuncs builds the template helper set. Formatting helpers close over
+// loc so they can render UTC timestamps in the viewer's zone.
+func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return template.FuncMap{
+		"bytes":           formatBytes,
+		"join":            strings.Join,
+		"snippet":         snippetText,
+		"mailDate":        func(t time.Time) string { return formatMailDate(loc, t) },
+		"localDateTime":   func(t time.Time) string { return formatLocalDateTime(loc, t) },
+		"filesize":        filesize,
+		"asset":           s.assetURL,
+		"linkify":         linkifyText,
+		"aliasNames":      aliasNamesCSV,
+		"externalAliases": externalAliasesJSON,
+		"deliveryStatus":  deliveryStatus,
+		"dialmxReady":     dialMXReady,
+		"dialmxReason":    dialMXReason,
+		"dialmxExpiry":    dialMXExpiry,
 	}
 }
 
@@ -226,6 +254,12 @@ type pageData struct {
 	ReviewDraft  *model.Draft
 
 	TrashRetentionDays int
+
+	// Timezone settings on the account page: the account default and the
+	// signed-in user's override, plus the selectable zone names.
+	AccountTimezone string
+	UserTimezone    string
+	TimezoneOptions []string
 
 	Email string
 }
@@ -368,6 +402,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := context.WithValue(r.Context(), principalKey, p)
 	ctx = context.WithValue(ctx, csrfKey, cval)
+	ctx = withTimezone(ctx, p)
 	r = r.WithContext(ctx)
 	if p.Admin {
 		s.dashboard(w, r)
@@ -414,7 +449,7 @@ func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
 		}
 	}
-	s.render(w, authBody, data)
+	s.render(w, r, authBody, data)
 }
 
 // flashAuth stores an auth error and redirects back to the form.
@@ -439,7 +474,7 @@ func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", 303)
 		return
 	}
-	s.render(w, unconfiguredBody, pageData{Title: "MailMoose has not been configured"})
+	s.render(w, r, unconfiguredBody, pageData{Title: "MailMoose has not been configured"})
 }
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
 	if !s.Service.Config.AllowRegistration {
@@ -520,6 +555,10 @@ const settingsBody = `<h1>Account</h1>{{if .Notice}}<div class="ok notice" role=
 {{if .User.SystemAdmin}}<section class="card"><h2>Login credentials</h2><p class="muted">Your login is managed by the deployment configuration. Update <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> (or their <code>_FILE</code> secrets) and restart MailMoose; the new credentials take effect and other sessions are signed out.</p></section>{{else}}<section class="card"><h2>Change email address</h2><p class="muted">Used to log in. Current: {{.User.Email}}</p><form method="post" action="/ui/account/email"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>New email</label><input type="email" name="email" required><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><div class="dialog-actions"><button>Update email</button></div></form></section>
 <section class="card"><h2>Change password</h2><form method="post" action="/ui/account/password"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><label>New password</label><input type="password" name="new_password" minlength="10" autocomplete="new-password" required><label>Confirm new password</label><input type="password" name="confirm_password" minlength="10" autocomplete="new-password" required><div class="dialog-actions"><button>Change password</button></div></form></section>{{end}}
 {{if or .Principal.Admin .Principal.OwnsAccount}}<section class="card"><h2>Trash</h2><p class="muted">Deleted messages are moved to Trash and kept until purged. Trashed messages count toward storage until permanently deleted.</p><form method="post" action="/ui/account/trash-retention"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Auto-purge trashed messages after (days)</label><input type="number" name="days" value="{{.TrashRetentionDays}}" min="0" max="3650" required><p class="muted small">Set to 0 to keep trashed messages until you empty the trash manually.</p><div class="dialog-actions"><button>Save</button></div></form></section>{{end}}
+<section class="card"><h2>Time zone</h2><p class="muted">Times are stored and served in UTC. This setting only changes how they are shown in this web interface.</p><form method="post" action="/ui/account/timezone/me"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Your time zone</label><input name="timezone" list="tz-options-me" value="{{.UserTimezone}}" placeholder="Leave blank to use the account default" autocomplete="off"><p class="muted small">Leave blank to follow the account default.</p><div class="dialog-actions"><button>Save</button></div></form>
+{{if or .Principal.Admin .Principal.OwnsAccount}}<form method="post" action="/ui/account/timezone"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account default time zone</label><input name="timezone" list="tz-options-account" value="{{.AccountTimezone}}" placeholder="UTC" autocomplete="off"><p class="muted small">Used by operators who have not set their own. Leave blank for UTC.</p><div class="dialog-actions"><button>Save</button></div></form>{{end}}</section>
+<datalist id="tz-options-me">{{range .TimezoneOptions}}<option value="{{.}}"></option>{{end}}</datalist>
+<datalist id="tz-options-account">{{range .TimezoneOptions}}<option value="{{.}}"></option>{{end}}</datalist>
 </div>` + accountOperatorsSection
 
 // settingsRedirect stores a settings flash and redirects back to the settings
@@ -544,7 +583,8 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user not found", 404)
 		return
 	}
-	data := pageData{Title: "Account", Tab: "account", Principal: p, CSRF: csrf(r), Account: acc, User: user}
+	data := pageData{Title: "Account", Tab: "account", Principal: p, CSRF: csrf(r), Account: acc, User: user,
+		AccountTimezone: acc.Timezone, UserTimezone: user.Timezone, TimezoneOptions: timezone.Options()}
 	if p.OwnsAccount() {
 		if days, derr := s.Service.Store.GetTrashRetention(r.Context(), p); derr == nil {
 			data.TrashRetentionDays = days
@@ -595,7 +635,7 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 			data.Invites = append(data.Invites, newInviteView(inv, now))
 		}
 	}
-	s.render(w, settingsBody, data)
+	s.render(w, r, settingsBody, data)
 }
 
 func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
@@ -627,6 +667,36 @@ func (s *Server) uiSettingsTrashRetention(w http.ResponseWriter, r *http.Request
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "account.trash_retention", strconv.Itoa(days))
 	s.settingsRedirect(w, r, "Trash retention updated", "")
+}
+
+// uiSettingsAccountTimezone sets the account default display time zone. It
+// requires an account Owner (or Admin). An empty value means UTC.
+func (s *Server) uiSettingsAccountTimezone(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.OwnsAccount() {
+		s.settingsRedirect(w, r, "", "You do not have permission to change this setting")
+		return
+	}
+	tz := strings.TrimSpace(r.Form.Get("timezone"))
+	if err := s.Service.Store.SetAccountTimezone(r.Context(), p, tz); err != nil {
+		s.settingsRedirect(w, r, "", err.Error())
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "account.timezone", tz)
+	s.settingsRedirect(w, r, "Account time zone updated", "")
+}
+
+// uiSettingsUserTimezone sets the signed-in user's display time zone override.
+// An empty value clears the override so the account default applies.
+func (s *Server) uiSettingsUserTimezone(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	tz := strings.TrimSpace(r.Form.Get("timezone"))
+	if err := s.Service.Store.SetUserTimezone(r.Context(), p, tz); err != nil {
+		s.settingsRedirect(w, r, "", err.Error())
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "user.timezone", tz)
+	s.settingsRedirect(w, r, "Time zone updated", "")
 }
 
 func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
@@ -701,7 +771,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 <div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions">{{if or (eq .Kind "webhook") (eq .Kind "hermes")}}<a class="btn secondary icon-btn" href="/ui/clients/{{.ID}}/log" title="Delivery log" aria-label="Delivery log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5h9M3.5 6.5h9M3.5 9.5h6"/><path d="M11.5 12.5h1M3.5 12.5h5"/></svg></a>{{end}}<button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" data-url="{{.URL}}" data-mode="{{.Mode}}" data-auth="{{.AuthMode}}" title="Client settings" aria-label="Client settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><button type="button" class="secondary icon-btn danger open-delete-client" data-kind="{{if eq .Kind "hermes"}}hermes{{else if eq .Kind "webhook"}}webhooks{{else}}keys{{end}}" data-id="{{.ID}}" data-name="{{.Name}}" data-type="{{.Type}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<div class="table-wrap"><table class="domains-table"><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}{{$d := .}}<tr><td><b>{{.Name}}</b>{{if .ParentDomainID}} <span class="subdomain-tag" title="Subdomain of {{.ParentDomain}}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 4.6 7h1.8L4 10.6h8L9.6 7h1.8L8 2.2Z"/><path d="M8 10.6V14"/><path d="M5.8 14h4.4"/></svg></span>{{end}}</td><td>{{if .CatchAllInboxID}}<button type="button" class="cell-link domain-catchall-link open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall" title="{{index $.InboxAddr .CatchAllInboxID}}">{{index $.InboxAddr .CatchAllInboxID}}</button>{{else}}<button type="button" class="secondary btn-sm cell-edit domain-catchall-add open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall">Add</button>{{end}}</td><td><button type="button" class="{{if .SendingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="sending">{{if .SendingProvider}}{{if .SendingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainSendingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><button type="button" class="{{if .ReceivingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="receiving">{{if .ReceivingProvider}}{{if .ReceivingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainReceivingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><span class="domain-actions"><a class="btn secondary icon-btn" href="/ui/domains/{{.ID}}/sending/deliveries" title="Activity log" aria-label="Activity log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="2.5" width="9" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg></a><button type="button" class="secondary icon-btn danger open-delete-domain" data-domain="{{.ID}}" data-name="{{.Name}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></span></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">Add your first domain.</p>{{end}}</section></div>
-<section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval (not .ID)}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
+<section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{localDateTime .CreatedAt}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval (not .ID)}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
 </div>
 
 <dialog id="key-dialog"><form method="post" action="/ui/keys" id="key-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="id"><label>Type</label><select name="type" id="key-type"><option value="api">API key</option><option value="hermes">Hermes relay connection</option><option value="webhook">Webhook delivery</option></select><label>Name</label><input name="name" placeholder="Hermes EA" required><fieldset class="key-fields" data-type="api" style="border:0;padding:0;margin:0"><label><input type="checkbox" name="admin" value="1"> Account Admin Key (Full permission on all mailboxes and can create and delete mailboxes)</label><fieldset id="key-matrix" style="border:0;padding:0;margin:0">{{if .Inboxes}}<table class="key-matrix"><thead><tr><th>Inbox</th><th><span class="muted">Set all:</span> <div class="seg" data-set-scope="all"><button type="button" data-set-role="">None</button><button type="button" data-set-role="read">Read</button><button type="button" data-set-role="assistant">Assistant</button><button type="button" data-set-role="owner">Owner</button></div></th></tr></thead>{{range .Domains}}{{$d := .}}{{if index $.DomainInboxes $d.ID}}<tbody data-domain="{{$d.ID}}"><tr class="domain-row"><td><b>{{$d.Name}}</b></td><td><div class="seg" data-set-scope="{{$d.ID}}"><button type="button" data-set-role="" data-domain="{{$d.ID}}">None</button><button type="button" data-set-role="read" data-domain="{{$d.ID}}">Read</button><button type="button" data-set-role="assistant" data-domain="{{$d.ID}}">Assistant</button><button type="button" data-set-role="owner" data-domain="{{$d.ID}}">Owner</button></div></td></tr>{{range index $.DomainInboxes $d.ID}}<tr><td class="domain-inbox">{{.Address}}</td><td><div class="seg"><input type="radio" id="role_{{.ID}}_none" name="role_{{.ID}}" value="" checked><label for="role_{{.ID}}_none">None</label><input type="radio" id="role_{{.ID}}_read" name="role_{{.ID}}" value="read"><label for="role_{{.ID}}_read">Read</label><input type="radio" id="role_{{.ID}}_assistant" name="role_{{.ID}}" value="assistant"><label for="role_{{.ID}}_assistant">Assistant</label><input type="radio" id="role_{{.ID}}_owner" name="role_{{.ID}}" value="owner"><label for="role_{{.ID}}_owner">Owner</label></div></td></tr>{{end}}</tbody>{{end}}{{end}}</table>{{else}}<p class="muted">Create an inbox first to grant mailbox access.</p>{{end}}<table class="role-legend"><thead><tr><th>Role</th><th>Grants</th></tr></thead><tbody><tr><td>Read</td><td>Read messages/threads, search, download attachments.</td></tr><tr><td>Assistant</td><td>Read plus delete messages and create/edit drafts. Cannot send.</td></tr><tr><td>Owner</td><td>Full mailbox access: read, delete, send.</td></tr></tbody></table></fieldset></fieldset><fieldset class="key-fields" data-type="hermes" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}" data-allowlist="{{if .SenderRestricted}}1{{end}}">{{.Address}}</option>{{end}}</select><label>Outbound authority</label><select name="role"><option value="owner">Owner — relay sends directly</option><option value="assistant">Assistant — relay drafts and requests approval</option></select><div class="banner" id="key-hermes-warning" hidden style="background:#fdecef;border-color:#e0a0aa;color:#b00020"><b>This inbox has no allow list.</b> The Hermes agent will respond to anyone who emails this inbox. We strongly recommend you set an allow list of permitted senders before creating a Hermes relay connection to this mailbox. Click edit next to the mailbox to configure an allow list.</div><label id="key-hermes-ack-row" hidden style="display:flex;align-items:flex-start;gap:8px;margin-top:8px"><input type="checkbox" name="ack" value="1" id="key-hermes-ack" style="width:auto;margin:2px 0 0;flex:0 0 auto"> <span>I understand the risk of my agent responding to anyone who emails it</span></label></fieldset><fieldset class="key-fields" data-type="webhook" style="border:0;padding:0;margin:0"><label>Inbox</label><select name="inbox">{{range .Inboxes}}<option value="{{.ID}}">{{.Address}}</option>{{end}}</select><label>Destination URL</label><input name="url" type="url" placeholder="https://example.com/hook" autocomplete="off"><label>Payload</label><select name="mode"><option value="notify">Notify — small JSON with the message id</option><option value="forward">Forward — full raw MIME</option></select><label>Authentication</label><select name="auth"><option value="signature">Signature — signed HMAC-SHA256 header</option><option value="bearer">Bearer — static token</option></select></fieldset><div class="error" id="key-error" hidden></div><div class="dialog-actions"><button type="button" class="amber" id="key-rotate" hidden>Rotate Key</button><button type="button" class="secondary" id="key-cancel">Cancel</button><button id="key-submit">Add Client</button></div></form><div id="key-result" hidden><h3 id="key-result-title"></h3><p class="muted" id="key-result-label"></p><div class="secret"><pre id="key-result-secret"></pre></div><p class="copy-note" id="key-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the key above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="key-copy">Copy</button><button type="button" id="key-done">Done</button></div></div></dialog>
@@ -987,7 +1057,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns, webhooks), Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, conns, webhooks), Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -1603,7 +1673,7 @@ func (s *Server) clientDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, clientDeliveriesBody, pageData{
+	s.render(w, r, clientDeliveriesBody, pageData{
 		Title:            client.Name + " · Log",
 		Tab:              "home",
 		Principal:        p,
@@ -1790,12 +1860,12 @@ const messageBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Message.InboxI
 {{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
 <section class="card"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions">{{if .Message.DeletedAt}}<a class="btn secondary btn-sm" href="/ui/inboxes/{{.Message.InboxID}}/trash">← Trash</a><form method="post" action="/ui/messages/{{.Message.ID}}/restore"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm">Restore</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/purge" data-confirm="Delete this message permanently? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Delete forever</button></form>{{else}}<a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/reply">Reply</a><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/forward">Forward</a><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary btn-sm">Mark unread</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/delete"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Move to trash</button></form>{{end}}</div></div>
-<div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{.Message.CreatedAt.Format "2006-01-02 15:04"}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p><form class="labeladd" method="post" action="/ui/messages/{{.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="action" value="add"><input name="label" placeholder="Add label" maxlength="64"><button class="btn-sm" title="Add label" aria-label="Add label">+</button></form></div>
+<div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{localDateTime .Message.CreatedAt}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p><form class="labeladd" method="post" action="/ui/messages/{{.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="action" value="add"><input name="label" placeholder="Add label" maxlength="64"><button class="btn-sm" title="Add label" aria-label="Add label">+</button></form></div>
 {{if .Message.Labels}}<div class="labelbar"><b>Labels:</b>{{range .Message.Labels}}<form class="labelpill" method="post" action="/ui/messages/{{$.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="remove"><input type="hidden" name="label" value="{{.}}"><span>{{.}}</span><button class="labelx" title="Remove label" aria-label="Remove label">×</button></form>{{end}}</div>{{end}}
 {{if .Attachments}}<h3>Attachments</h3><ul class="attachments">{{range .Attachments}}<li><a href="/ui/attachments/{{.ID}}">{{.Filename}}</a> <span class="muted">· {{bytes .Size}}</span></li>{{end}}</ul>{{end}}
 <hr>{{if .Message.HTML}}{{if .MessageHasRemoteImages}}<div class="banner warn" id="remote-img-banner" style="margin-bottom:8px">Remote images are hidden to prevent read-tracking. <button type="button" class="secondary btn-sm" data-remote-img-show>Show images</button></div>{{end}}<iframe class="mailframe" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy" src="/ui/messages/{{.Message.ID}}/html" data-mailframe></iframe>{{else}}<div class="msgbody">{{linkify .Message.Text}}</div>{{end}}
 {{if and .Message.HTML .Message.Text}}<details><summary>Plain text</summary><div class="msgbody">{{linkify .Message.Text}}</div></details>{{end}}</section>
-{{if gt (len .ThreadMessages) 1}}<section class="card"><h3>Conversation ({{len .ThreadMessages}})</h3><table>{{range .ThreadMessages}}<tr><td class="muted">{{.CreatedAt.Format "2006-01-02 15:04"}}</td><td>{{if eq .Direction "outbound"}}To: {{join .To ", "}}{{else}}{{.From.Address}}{{end}}</td><td>{{if eq .ID $.Message.ID}}<b>{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</b>{{else}}<a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{end}}</td></tr>{{end}}</table></section>{{end}}`
+{{if gt (len .ThreadMessages) 1}}<section class="card"><h3>Conversation ({{len .ThreadMessages}})</h3><table>{{range .ThreadMessages}}<tr><td class="muted">{{localDateTime .CreatedAt}}</td><td>{{if eq .Direction "outbound"}}To: {{join .To ", "}}{{else}}{{.From.Address}}{{end}}</td><td>{{if eq .ID $.Message.ID}}<b>{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</b>{{else}}<a href="/ui/messages/{{.ID}}">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</a>{{end}}</td></tr>{{end}}</table></section>{{end}}`
 
 func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -1846,7 +1916,7 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 		inboundReady = inErr == nil && recvDomain.ReceivingProvider != ""
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	s.render(w, messageBody, pageData{Title: title, Principal: p, CSRF: csrf(r), Account: acc, Message: &m, MessageHasRemoteImages: htmlsanitize.HasRemoteImages(m.HTML), Attachments: atts, Inbox: box, ThreadMessages: thread, OutboundReady: outboundReady, InboundReady: inboundReady, SendingPausedExternal: pausedExternal, SendingPausedAddress: pausedAddress, SendingPausedURL: pausedURL, DomainSendingSettingsURL: domainSendingURL, DomainReceivingSettingsURL: domainReceivingURL})
+	s.render(w, r, messageBody, pageData{Title: title, Principal: p, CSRF: csrf(r), Account: acc, Message: &m, MessageHasRemoteImages: htmlsanitize.HasRemoteImages(m.HTML), Attachments: atts, Inbox: box, ThreadMessages: thread, OutboundReady: outboundReady, InboundReady: inboundReady, SendingPausedExternal: pausedExternal, SendingPausedAddress: pausedAddress, SendingPausedURL: pausedURL, DomainSendingSettingsURL: domainSendingURL, DomainReceivingSettingsURL: domainReceivingURL})
 }
 
 // aliasNamesCSV returns a comma-joined name list aligned by index with the
@@ -1878,8 +1948,14 @@ func snippetText(v string, n int) string {
 	return strings.TrimSpace(string(r[:n])) + "…"
 }
 
-func mailDate(t time.Time) string {
-	return t.Format("15:04 2-Jan-06")
+// formatMailDate renders a stored (UTC) timestamp in loc as a short date.
+func formatMailDate(loc *time.Location, t time.Time) string {
+	return t.In(loc).Format("15:04 2-Jan-06")
+}
+
+// formatLocalDateTime renders a stored (UTC) timestamp in loc as a full date.
+func formatLocalDateTime(loc *time.Location, t time.Time) string {
+	return t.In(loc).Format("2006-01-02 15:04")
 }
 
 func filesize(n int64) string {
