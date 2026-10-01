@@ -2054,10 +2054,11 @@ Spam is a view over `is_spam`; there is no separate Trash table.
   listing immediately.
 - Trashed messages continue to count toward `accounts.storage_used_bytes` until
   purged, matching how Spam and every other retained message are accounted.
-- Each account has `trash_retention_days` (default 30). The maintenance worker's
+- Each account has `trash_retention_days` (default 0). The maintenance worker's
   `purgeExpiredTrash` sweep permanently purges trashed messages older than the
   window and unlinks their raw files. A value of 0 disables automatic purging,
-  so trash is retained until emptied by hand. It is read/written through
+  so trash is retained until emptied by hand; a positive value enables the
+  sweep. It is read/written through
   `GET`/`PATCH /v1/account/settings` and the Account page (Owner/Admin).
 - Durable events `message.trashed`, `message.restored` and `message.purged` are
   emitted transactionally and published to SSE/long-poll. They are deliberately

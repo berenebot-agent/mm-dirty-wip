@@ -1274,3 +1274,25 @@ const migration040 = `
 ALTER TABLE accounts ADD COLUMN timezone TEXT NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT '';
 `
+
+// migration041 changes the default Trash retention to 0 (keep trashed mail
+// until it is emptied by hand) for new and existing accounts. SQLite cannot
+// change a column default in place, so accounts is rebuilt; existing rows are
+// carried over with their retention reset to 0. Thirty tables reference
+// accounts, so the rebuild runs with foreign keys disabled (fkOff).
+const migration041 = `
+CREATE TABLE accounts_new (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  storage_quota_bytes INTEGER NOT NULL,
+  storage_used_bytes INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  mailer_inbox_id TEXT REFERENCES inboxes(id) ON DELETE SET NULL,
+  trash_retention_days INTEGER NOT NULL DEFAULT 0,
+  timezone TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO accounts_new(id,name,storage_quota_bytes,storage_used_bytes,created_at,mailer_inbox_id,trash_retention_days,timezone)
+  SELECT id,name,storage_quota_bytes,storage_used_bytes,created_at,mailer_inbox_id,0,timezone FROM accounts;
+DROP TABLE accounts;
+ALTER TABLE accounts_new RENAME TO accounts;
+`
