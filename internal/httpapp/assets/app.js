@@ -1370,6 +1370,60 @@ function aliasNameByAddress(list) {
 })();
 
 (function () {
+  var dlg = document.getElementById('inbox-delete-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('inbox-delete-form');
+  var input = document.getElementById('inbox-delete-input');
+  var submit = document.getElementById('inbox-delete-submit');
+  var addressEl = document.getElementById('inbox-delete-address');
+  var expected = '';
+  function matches() {
+    return input.value.trim().toLowerCase() === expected.toLowerCase();
+  }
+  function sync() {
+    submit.disabled = !matches();
+  }
+  document.querySelectorAll('.open-delete-inbox').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      expected = btn.getAttribute('data-address') || '';
+      form.setAttribute('action', '/ui/inboxes/' + btn.getAttribute('data-id') + '/delete');
+      addressEl.textContent = expected;
+      input.value = '';
+      sync();
+      dlg.showModal();
+      input.focus();
+    });
+  });
+  input.addEventListener('input', sync);
+  form.addEventListener('submit', function (e) {
+    if (!matches()) {
+      e.preventDefault();
+      sync();
+    }
+  });
+})();
+
+(function () {
+  var dlg = document.getElementById('client-delete-dialog');
+  if (!dlg) {
+    return;
+  }
+  var form = document.getElementById('client-delete-form');
+  var label = document.getElementById('client-delete-label');
+  document.querySelectorAll('.open-delete-client').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      form.setAttribute('action', '/ui/' + btn.getAttribute('data-kind') + '/' + btn.getAttribute('data-id') + '/delete');
+      var type = btn.getAttribute('data-type') || '';
+      var name = btn.getAttribute('data-name') || '';
+      label.textContent = name ? name + ' (' + type + ')' : type;
+      dlg.showModal();
+    });
+  });
+})();
+
+(function () {
   var form = document.getElementById('bulk-form');
   if (!form) {
     return;
@@ -1417,7 +1471,7 @@ function aliasNameByAddress(list) {
     return;
   }
   var form = document.getElementById('inbox-edit-form');
-  var deleteForm = document.getElementById('inbox-edit-delete-form');
+  var deleteBtn = document.getElementById('inbox-edit-delete');
   var address = document.getElementById('inbox-edit-address');
   var display = form.querySelector('[name=display]');
   var usage = document.getElementById('inbox-edit-usage');
@@ -1495,7 +1549,10 @@ function aliasNameByAddress(list) {
       var id = encodeURIComponent(btn.dataset.id || '');
       editInboxID = btn.dataset.id || '';
       form.action = '/ui/inboxes/' + id + '/edit';
-      deleteForm.action = '/ui/inboxes/' + id + '/delete';
+      if (deleteBtn) {
+        deleteBtn.dataset.id = btn.dataset.id || '';
+        deleteBtn.dataset.address = btn.dataset.address || '';
+      }
       display.value = btn.dataset.name || '';
       address.value = btn.dataset.address || '';
       editor.setApprover(btn.dataset.approverEmail || '');

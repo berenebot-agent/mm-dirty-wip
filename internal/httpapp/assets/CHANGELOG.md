@@ -27,6 +27,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Removing an inbox now opens a confirmation dialog that displays the full
+  email address and requires typing it back, matching the domain delete flow.
+  Removing a client opens a dialog that names the client and type and requires
+  an explicit confirmation click.
+
 - Removed the dormant `messages.is_archived` column and the `archived` field on
   `PATCH /v1/messages/{id}`; archive is superseded by Trash.
 

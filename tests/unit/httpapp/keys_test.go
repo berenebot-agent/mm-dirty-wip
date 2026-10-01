@@ -68,6 +68,47 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 	}
 }
 
+// TestDashboardRendersClientDeleteDialog locks in that a client row routes its
+// delete through the confirmation dialog (which names the client and type)
+// rather than a data-confirm attribute, and that the delete route still works.
+func TestDashboardRendersClientDeleteDialog(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`id="client-delete-dialog"`,
+		`id="client-delete-form"`,
+		`id="client-delete-label"`,
+		`id="client-delete-submit"`,
+		`class="secondary icon-btn danger open-delete-client" data-kind="keys" data-id="` + key.ID + `" data-name="Agent" data-type="API key"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+
+	post := httptest.NewRecorder()
+	delReq := httptest.NewRequest("POST", "/ui/keys/"+key.ID+"/delete", strings.NewReader("_csrf="+csrf))
+	delReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	delReq.AddCookie(cookie)
+	h.ServeHTTP(post, delReq)
+	if post.Code != http.StatusSeeOther {
+		t.Fatalf("delete key %d: %s", post.Code, post.Body.String())
+	}
+}
+
 func TestCreateKeyReturnsJSONSecret(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
