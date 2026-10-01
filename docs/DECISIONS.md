@@ -2029,6 +2029,52 @@ core HA or resource-fairness identity accounting.
 bounded authentication scheduling and receiver capability fields stay within
 the existing Go processes. Durable delivery and retry receipts are unchanged.
 
+## D073 — Trash: soft-delete, restore, configurable retention
+
+**Decision:** Deleting a message moves it to Trash instead of erasing it.
+A message carries a `deleted_at` timestamp (NULL when live) and is hidden from
+every ordinary read surface — message lists, search, thread listings and unread
+counts — while its row, raw MIME, attachments, FTS entry and storage accounting
+are retained. Trashed mail is a computed view over `deleted_at`, exactly like
+Spam is a view over `is_spam`; there is no separate Trash table.
+
+- `DELETE /v1/messages/{id}` and the UI delete actions move to Trash
+  (Assistant/Owner on the inbox). `POST /v1/messages/{id}/restore` clears
+  `deleted_at` (Assistant/Owner). `DELETE /v1/messages/{id}/purge` erases a
+  trashed message permanently and unlinks its raw file (Owner). A message must
+  be trashed before it can be purged.
+- `POST /v1/inboxes/{id}/trash/empty` (Owner) purges every trashed message in an
+  inbox. `DELETE /v1/outbox/{id}` now moves a pending/failed outbound message to
+  Trash rather than erasing it; trashed outbound messages leave the outbox
+  listing immediately.
+- Trashed messages continue to count toward `accounts.storage_used_bytes` until
+  purged, matching how Spam and every other retained message are accounted.
+- Each account has `trash_retention_days` (default 30). The maintenance worker's
+  `purgeExpiredTrash` sweep permanently purges trashed messages older than the
+  window and unlinks their raw files. A value of 0 disables automatic purging,
+  so trash is retained until emptied by hand. It is read/written through
+  `GET`/`PATCH /v1/account/settings` and the Account page (Owner/Admin).
+- Durable events `message.trashed`, `message.restored` and `message.purged` are
+  emitted transactionally and published to SSE/long-poll. They are deliberately
+  **not** relayed over Hermes (which still carries only `message.received` and
+  `message.spam_state_changed`); Webhook delivery treats a trashed message like
+  a deleted one (terminal `skipped`).
+- The dormant `messages.is_archived` column and the `archived` PATCH field are
+  removed. Archive was never a real folder (it only excluded messages from the
+  unread count); Trash is the first real mailbox state. Migration 039 rebuilds
+  the `messages` table to drop `is_archived` and add `deleted_at`, and adds
+  `accounts.trash_retention_days`.
+
+**Reason:** A delete that erases mail with no recovery is hostile to both human
+and agent users. Trash gives reversible deletion with bounded storage growth,
+and per-account retention lets an operator choose between aggressive reclamation
+and keep-until-manual-purge without a global policy.
+
+**Complexity:** No dependency or service is added. Trash is one nullable column
+plus a per-account integer, a handful of store methods, a maintenance sweep that
+reuses the existing file-unlink path, and new API/UI routes. The `messages`
+table rebuild in migration 039 carries every row over unchanged.
+
 ## Future extension register
 
 

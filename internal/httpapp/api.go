@@ -477,7 +477,15 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	trashed, ok := boolQuery(w, r, "trashed")
+	if !ok {
+		return
+	}
 	f := store.MessageFilter{InboxID: r.URL.Query().Get("inbox"), ThreadID: r.URL.Query().Get("thread"), From: r.URL.Query().Get("from"), To: r.URL.Query().Get("to"), Unread: unread, HasAttachment: hasAttachment, Labels: r.URL.Query()["label"], Limit: limit}
+	if trashed != nil && *trashed {
+		f.Trashed = true
+		f.IncludeSpam = true
+	}
 	if spam != nil && *spam {
 		f.SpamOnly = true
 	} else if includeSpam != nil && *includeSpam {
@@ -529,16 +537,15 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, m)
 	case http.MethodPatch:
 		var in struct {
-			Read     *bool     `json:"read"`
-			Archived *bool     `json:"archived"`
-			Labels   *[]string `json:"labels"`
-			Spam     *bool     `json:"spam"`
+			Read   *bool     `json:"read"`
+			Labels *[]string `json:"labels"`
+			Spam   *bool     `json:"spam"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		if in.Read != nil || in.Archived != nil {
-			if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read, in.Archived); err != nil {
+		if in.Read != nil {
+			if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read); err != nil {
 				mapStoreError(w, err)
 				return
 			}
@@ -570,18 +577,68 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, 200, m)
 	case http.MethodDelete:
-		path, _, ev, err := s.Service.Store.DeleteMessage(r.Context(), p, id)
+		// Delete moves the message to Trash (recoverable); use the purge route
+		// to erase it permanently.
+		_, ev, err := s.Service.Store.TrashMessage(r.Context(), p, id)
 		if err != nil {
 			mapStoreError(w, err)
 			return
 		}
-		if path != "" {
-			s.removeDataFile(path)
+		if ev != nil {
+			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+			s.Service.Hub.Publish(*ev)
 		}
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(ev)
 		w.WriteHeader(204)
 	}
+}
+
+// apiMessageRestore returns a trashed message to the mailbox.
+func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	m, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if ev != nil {
+		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.Service.Hub.Publish(*ev)
+	}
+	writeJSON(w, 200, m)
+}
+
+// apiMessagePurge permanently erases a trashed message and unlinks its file.
+func (s *Server) apiMessagePurge(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if path != "" {
+		s.removeDataFile(path)
+	}
+	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+	s.Service.Hub.Publish(ev)
+	w.WriteHeader(204)
+}
+
+// apiInboxTrashEmpty permanently purges every trashed message in an inbox.
+func (s *Server) apiInboxTrashEmpty(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	paths, events, err := s.Service.Store.EmptyTrash(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	for _, path := range paths {
+		s.removeDataFile(path)
+	}
+	for _, ev := range events {
+		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.Service.Hub.Publish(ev)
+	}
+	writeJSON(w, 200, map[string]int{"purged": len(events)})
 }
 func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -608,7 +665,7 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &seen, nil); err != nil {
+	if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &seen); err != nil {
 		mapStoreError(w, err)
 		return
 	}
@@ -1226,16 +1283,15 @@ func (s *Server) apiOutboxRetry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	path, _, ev, err := s.Service.Store.DeleteOutboxMessage(r.Context(), p, r.PathValue("id"))
+	_, ev, err := s.Service.Store.DeleteOutboxMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
-	if path != "" {
-		s.removeDataFile(path)
+	if ev != nil {
+		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.Service.Hub.Publish(*ev)
 	}
-	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-	s.Service.Hub.Publish(ev)
 	w.WriteHeader(204)
 }
 

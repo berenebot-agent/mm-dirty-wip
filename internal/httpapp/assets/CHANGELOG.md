@@ -8,6 +8,30 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Trash: deleting a message moves it to Trash instead of erasing it. Trashed
+  messages are hidden from lists, search, threads and unread counts but keep
+  their raw MIME, attachments and storage accounting. `POST
+  /v1/messages/{id}/restore` returns a message to the mailbox; `DELETE
+  /v1/messages/{id}/purge` erases a trashed message permanently; `POST
+  /v1/inboxes/{id}/trash/empty` empties an inbox's Trash; `DELETE
+  /v1/outbox/{id}` now moves a pending/failed send to Trash. The list filter
+  `trashed=true` selects the Trash view.
+- Per-account trash retention: `GET`/`PATCH /v1/account/settings` reads and
+  writes `trash_retention_days` (default 30, `0` keeps trash until emptied by
+  hand). The maintenance sweep purges trashed messages older than the window and
+  unlinks their raw files.
+- Durable `message.trashed`, `message.restored` and `message.purged` events
+  (streamed over SSE/long-poll; not relayed over Hermes).
+- Trash UI: a Trash folder with Restore and Delete forever actions, an Empty
+  trash button, and a Trash retention field on the Account page.
+
+### Changed
+
+- Removed the dormant `messages.is_archived` column and the `archived` field on
+  `PATCH /v1/messages/{id}`; archive is superseded by Trash.
+
+### Added
+
 - Inbound messages persist the transport-supplied SMTP envelope sender
   (`envelope_from`) alongside the canonical original envelope recipient
   (`envelope_recipient`); both are exposed on the normalized message. A missing

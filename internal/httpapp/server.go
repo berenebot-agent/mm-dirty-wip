@@ -136,6 +136,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/account/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
+	m.HandleFunc("POST /ui/account/trash-retention", s.withSession(s.withCSRF(s.uiSettingsTrashRetention)))
 	// System administrator plane (new accounts, all invitations).
 	m.HandleFunc("GET /admin", s.withSession(s.adminPlane))
 	m.HandleFunc("POST /ui/admin/invites", s.withSession(s.withCSRF(s.uiAdminCreateInvite)))
@@ -189,6 +190,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
 	m.HandleFunc("GET /ui/inboxes/{id}/spam", s.withSession(s.uiSpam))
+	m.HandleFunc("GET /ui/inboxes/{id}/trash", s.withSession(s.uiTrash))
+	m.HandleFunc("POST /ui/inboxes/{id}/trash/empty", s.withSession(s.withCSRF(s.uiInboxTrashEmpty)))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts", s.withSession(s.uiDrafts))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts/{draftId}/edit", s.withSession(s.uiDraftEdit))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/save", s.withSession(s.withCSRF(s.uiDraftSave)))
@@ -208,6 +211,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/messages/{id}/forward", s.withSession(s.uiForwardForm))
 	m.HandleFunc("POST /ui/messages/{id}/forward", s.withSession(s.withCSRF(s.uiForwardSend)))
 	m.HandleFunc("POST /ui/messages/{id}/delete", s.withSession(s.withCSRF(s.uiMessageDelete)))
+	m.HandleFunc("POST /ui/messages/{id}/restore", s.withSession(s.withCSRF(s.uiMessageRestore)))
+	m.HandleFunc("POST /ui/messages/{id}/purge", s.withSession(s.withCSRF(s.uiMessagePurge)))
 	m.HandleFunc("POST /ui/messages/{id}/read", s.withSession(s.withCSRF(s.uiMessageRead)))
 	m.HandleFunc("POST /ui/messages/{id}/spam", s.withSession(s.withCSRF(s.uiMessageSpam)))
 	m.HandleFunc("POST /ui/messages/{id}/labels", s.withSession(s.withCSRF(s.uiMessageLabels)))
@@ -266,11 +271,14 @@ func (rt apiRoute) bind(s *Server) http.HandlerFunc {
 var v1Routes = []apiRoute{
 	{"GET /v1/bootstrap", (*Server).apiBootstrap},
 	{"GET /v1/limits", (*Server).apiLimits},
+	{"GET /v1/account/settings", (*Server).apiAccountSettings},
+	{"PATCH /v1/account/settings", (*Server).apiAccountSettings},
 	{"GET /v1/inboxes", (*Server).apiInboxes},
 	{"POST /v1/inboxes", (*Server).apiInboxes},
 	{"GET /v1/inboxes/{id}", (*Server).apiInbox},
 	{"PATCH /v1/inboxes/{id}", (*Server).apiInbox},
 	{"DELETE /v1/inboxes/{id}", (*Server).apiInbox},
+	{"POST /v1/inboxes/{id}/trash/empty", (*Server).apiInboxTrashEmpty},
 	{"GET /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
 	{"POST /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
 	{"PATCH /v1/admin/inboxes/{id}/external-aliases/{aliasID}", (*Server).apiExternalAlias},
@@ -291,6 +299,8 @@ var v1Routes = []apiRoute{
 	{"PATCH /v1/messages/{id}", (*Server).apiMessage},
 	{"DELETE /v1/messages/{id}", (*Server).apiMessage},
 	{"POST /v1/messages/{id}/seen", (*Server).apiSeen},
+	{"POST /v1/messages/{id}/restore", (*Server).apiMessageRestore},
+	{"DELETE /v1/messages/{id}/purge", (*Server).apiMessagePurge},
 	{"GET /v1/messages/{id}/attachments", (*Server).apiMessageAttachments},
 	{"POST /v1/messages/{id}/reply", (*Server).apiReply},
 	{"GET /v1/attachments/{id}", (*Server).apiAttachment},
@@ -853,6 +863,43 @@ func (s *Server) changelog(w http.ResponseWriter, r *http.Request) {
 // that only knows the /v1 surface can still discover the caps.
 func (s *Server) apiLimits(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.discoveryLimits())
+}
+
+// apiAccountSettings reads or updates account-level mailbox preferences. The
+// only preference today is trash_retention_days (0 = never auto-purge;
+// otherwise trashed messages are permanently purged by the maintenance sweep
+// once older than the window). It requires an account Owner (or Admin).
+func (s *Server) apiAccountSettings(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.OwnsAccount() {
+		writeError(w, 403, "forbidden")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		days, err := s.Service.Store.GetTrashRetention(r.Context(), p)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"trash_retention_days": days})
+	case http.MethodPatch:
+		var in struct {
+			TrashRetentionDays *int `json:"trash_retention_days"`
+		}
+		if !decodeJSON(w, r, &in) {
+			return
+		}
+		if in.TrashRetentionDays == nil {
+			writeError(w, 400, "no settings to update")
+			return
+		}
+		if err := s.Service.Store.SetTrashRetention(r.Context(), p, *in.TrashRetentionDays); err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"trash_retention_days": *in.TrashRetentionDays})
+	}
 }
 
 // clientIP returns the rate-limit identity for a request. When the peer is a

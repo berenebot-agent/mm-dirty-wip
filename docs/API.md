@@ -180,6 +180,9 @@ rather than falling back to a domain connector.
 GET /v1/messages
 GET /v1/messages/{id}
 PATCH /v1/messages/{id}
+DELETE /v1/messages/{id}
+POST /v1/messages/{id}/restore
+DELETE /v1/messages/{id}/purge
 ```
 
 Filters may include:
@@ -196,12 +199,33 @@ unread
 has_attachment
 spam
 include_spam
+trashed
 ```
 
 `spam=true` lists only Spam; `include_spam=true` includes Spam and non-Spam.
-By default (neither set) Spam is excluded from ordinary reads. `PATCH
-/v1/messages/{id}` also accepts `spam` to release (`false`) or quarantine
-(`true`) a message, which commits a durable `message.spam_state_changed` event.
+By default (neither set) Spam is excluded from ordinary reads. `trashed=true`
+lists only messages in Trash; by default trashed messages are excluded from
+every read. `PATCH /v1/messages/{id}` also accepts `spam` to release (`false`)
+or quarantine (`true`) a message, which commits a durable
+`message.spam_state_changed` event.
+
+### Trash
+
+Deleting a message (`DELETE /v1/messages/{id}`, Assistant or Owner) moves it to
+Trash rather than erasing it: the message is hidden from lists, search, threads
+and unread counts, but its raw MIME, attachments and storage accounting are
+retained. `POST /v1/messages/{id}/restore` (Assistant or Owner) returns it to
+the mailbox. `DELETE /v1/messages/{id}/purge` (Owner) erases a trashed message
+permanently and unlinks its raw file; a message must be trashed first, otherwise
+the call answers `409`. `POST /v1/inboxes/{id}/trash/empty` (Owner) purges every
+trashed message in an inbox.
+
+Each account has a `trash_retention_days` preference (default 30; `0` keeps
+trashed mail until it is emptied by hand), read and written through
+`GET`/`PATCH /v1/account/settings`. Trashed messages older than the window are
+purged by the maintenance sweep. The events `message.trashed`,
+`message.restored` and `message.purged` are emitted and streamed; they are not
+relayed over Hermes.
 
 `envelope_from` is the transport-supplied SMTP envelope sender (MAIL FROM),
 exactly as the receiving adapter observed it; it is empty when the transport
@@ -228,7 +252,7 @@ Normalized message:
   "text": "Hi...",
   "has_attachments": true,
   "read": false,
-  "archived": false,
+  "deleted_at": null,
   "is_spam": false,
   "labels": ["Invoices", "Unpaid"]
 }

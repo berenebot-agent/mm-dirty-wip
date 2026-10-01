@@ -179,6 +179,7 @@ type pageData struct {
 	MailboxSizes   map[string]int64
 	UnreadCount    int
 	SpamCount      int
+	TrashCount     int
 	DraftCount     int
 	OutboxCount    int
 	HasMore        bool
@@ -223,6 +224,8 @@ type pageData struct {
 	DraftCounts  map[string]int
 	SendRequests []SendRequestRow
 	ReviewDraft  *model.Draft
+
+	TrashRetentionDays int
 
 	Email string
 }
@@ -516,6 +519,7 @@ const settingsBody = `<h1>Account</h1>{{if .Notice}}<div class="ok notice" role=
 <section class="card"><h2>Change account name</h2><p class="muted">Shown in the header. This is a display name, not your email address.</p><form method="post" action="/ui/account/account"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account name</label><input name="name" value="{{.Account.Name}}" maxlength="80" required><div class="dialog-actions"><button>Save</button></div></form></section>
 {{if .User.SystemAdmin}}<section class="card"><h2>Login credentials</h2><p class="muted">Your login is managed by the deployment configuration. Update <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> (or their <code>_FILE</code> secrets) and restart MailMoose; the new credentials take effect and other sessions are signed out.</p></section>{{else}}<section class="card"><h2>Change email address</h2><p class="muted">Used to log in. Current: {{.User.Email}}</p><form method="post" action="/ui/account/email"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>New email</label><input type="email" name="email" required><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><div class="dialog-actions"><button>Update email</button></div></form></section>
 <section class="card"><h2>Change password</h2><form method="post" action="/ui/account/password"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><label>New password</label><input type="password" name="new_password" minlength="10" autocomplete="new-password" required><label>Confirm new password</label><input type="password" name="confirm_password" minlength="10" autocomplete="new-password" required><div class="dialog-actions"><button>Change password</button></div></form></section>{{end}}
+{{if or .Principal.Admin .Principal.OwnsAccount}}<section class="card"><h2>Trash</h2><p class="muted">Deleted messages are moved to Trash and kept until purged. Trashed messages count toward storage until permanently deleted.</p><form method="post" action="/ui/account/trash-retention"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Auto-purge trashed messages after (days)</label><input type="number" name="days" value="{{.TrashRetentionDays}}" min="0" max="3650" required><p class="muted small">Set to 0 to keep trashed messages until you empty the trash manually.</p><div class="dialog-actions"><button>Save</button></div></form></section>{{end}}
 </div>` + accountOperatorsSection
 
 // settingsRedirect stores a settings flash and redirects back to the settings
@@ -541,6 +545,11 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := pageData{Title: "Account", Tab: "account", Principal: p, CSRF: csrf(r), Account: acc, User: user}
+	if p.OwnsAccount() {
+		if days, derr := s.Service.Store.GetTrashRetention(r.Context(), p); derr == nil {
+			data.TrashRetentionDays = days
+		}
+	}
 	// The account page can receive two flash kinds: a settings result and a
 	// one-time invitation link. Dispatch on the stored type.
 	if tok := r.URL.Query().Get("_flash"); tok != "" {
@@ -597,6 +606,27 @@ func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "account.rename", "")
 	s.settingsRedirect(w, r, "Account name updated", "")
+}
+
+// uiSettingsTrashRetention updates the account's Trash auto-purge window. It
+// requires an account Owner (or Admin).
+func (s *Server) uiSettingsTrashRetention(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.OwnsAccount() {
+		s.settingsRedirect(w, r, "", "You do not have permission to change this setting")
+		return
+	}
+	days, err := strconv.Atoi(strings.TrimSpace(r.Form.Get("days")))
+	if err != nil || days < 0 {
+		s.settingsRedirect(w, r, "", "Retention must be a whole number of days (0 or more)")
+		return
+	}
+	if err := s.Service.Store.SetTrashRetention(r.Context(), p, days); err != nil {
+		s.settingsRedirect(w, r, "", err.Error())
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "account.trash_retention", strconv.Itoa(days))
+	s.settingsRedirect(w, r, "Trash retention updated", "")
 }
 
 func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
@@ -1757,7 +1787,7 @@ func hermesEnvBlock(baseURL, gatewayID, secret, deliveryKey string) string {
 const messageBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Message.InboxID}}{{if eq .Message.Direction "outbound"}}/sent{{end}}">← {{if eq .Message.Direction "outbound"}}Sent{{else}}Inbox{{end}}</a></div>
 {{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
-<section class="card"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions"><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/reply">Reply</a><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/forward">Forward</a><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary btn-sm">Mark unread</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/delete" data-confirm="Delete this message permanently?"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Delete</button></form></div></div>
+<section class="card"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions">{{if .Message.DeletedAt}}<a class="btn secondary btn-sm" href="/ui/inboxes/{{.Message.InboxID}}/trash">← Trash</a><form method="post" action="/ui/messages/{{.Message.ID}}/restore"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm">Restore</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/purge" data-confirm="Delete this message permanently? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Delete forever</button></form>{{else}}<a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/reply">Reply</a><a class="btn secondary btn-sm" href="/ui/messages/{{.Message.ID}}/forward">Forward</a><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary btn-sm">Mark unread</button></form><form method="post" action="/ui/messages/{{.Message.ID}}/delete"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary btn-sm danger">Move to trash</button></form>{{end}}</div></div>
 <div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{.Message.CreatedAt.Format "2006-01-02 15:04"}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p><form class="labeladd" method="post" action="/ui/messages/{{.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="action" value="add"><input name="label" placeholder="Add label" maxlength="64"><button class="btn-sm" title="Add label" aria-label="Add label">+</button></form></div>
 {{if .Message.Labels}}<div class="labelbar"><b>Labels:</b>{{range .Message.Labels}}<form class="labelpill" method="post" action="/ui/messages/{{$.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="remove"><input type="hidden" name="label" value="{{.}}"><span>{{.}}</span><button class="labelx" title="Remove label" aria-label="Remove label">×</button></form>{{end}}</div>{{end}}
 {{if .Attachments}}<h3>Attachments</h3><ul class="attachments">{{range .Attachments}}<li><a href="/ui/attachments/{{.ID}}">{{.Filename}}</a> <span class="muted">· {{bytes .Size}}</span></li>{{end}}</ul>{{end}}
@@ -1774,7 +1804,7 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if !m.Read {
 		read := true
-		if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read, nil); err == nil {
+		if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err == nil {
 			m.Read = true
 		}
 	}

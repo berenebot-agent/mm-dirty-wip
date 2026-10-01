@@ -314,7 +314,11 @@ type Message struct {
 	SentAt      *time.Time      `json:"sent_at,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	Read        bool            `json:"read"`
-	Archived    bool            `json:"archived"`
+	// DeletedAt is set when the message has been moved to Trash. A trashed
+	// message is hidden from every ordinary read surface but retains its row,
+	// raw MIME, FTS entry, attachments and storage accounting until it is
+	// permanently purged (explicitly, or by the per-account retention sweep).
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// Labels are free-text tags on the message. There is no account catalogue;
 	// matching ignores case (COLLATE NOCASE) and surrounding whitespace.
 	Labels         []string `json:"labels,omitempty"`
@@ -453,6 +457,15 @@ const (
 // Durable message event types.
 const EventMessageLabelsChanged = "message.labels_changed"
 const EventMessageSpamChanged = "message.spam_state_changed"
+
+// Trash lifecycle event types. A trashed message is hidden but retained;
+// restored returns it to the mailbox; purged erases it permanently (removing
+// its row, raw MIME, attachments and storage accounting).
+const (
+	EventMessageTrashed  = "message.trashed"
+	EventMessageRestored = "message.restored"
+	EventMessagePurged   = "message.purged"
+)
 
 type Draft struct {
 	ID               string `json:"id"`
@@ -594,3 +607,21 @@ func (p Principal) CanAssist(inboxID string) bool {
 	return r == "assistant" || r == "owner"
 }
 func (p Principal) CanOwn(inboxID string) bool { return p.Role(inboxID) == "owner" }
+
+// OwnsAccount reports whether the principal holds Owner on every mailbox it can
+// reach (and at least one). Account-level preferences are exposed to such a
+// principal in addition to an account Admin.
+func (p Principal) OwnsAccount() bool {
+	if p.Admin {
+		return true
+	}
+	if len(p.MailboxRoles) == 0 {
+		return false
+	}
+	for _, role := range p.MailboxRoles {
+		if role != "owner" {
+			return false
+		}
+	}
+	return true
+}
