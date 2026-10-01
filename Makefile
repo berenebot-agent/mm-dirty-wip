@@ -1,12 +1,15 @@
-.PHONY: build test run fmt vet dist docs changelog
+.PHONY: build test run fmt vet dist docs changelog dialmx
 build:
 	./mailmoose-go.sh build ./cmd/server
+# dialmx builds the standalone Dial MX receiver (see docs/DIALMX.md).
+dialmx:
+	./mailmoose-go.sh build -buildvcs=false ./dialmx/cmd/receiver
 test:
-	./mailmoose-go.sh test -race -count=1 ./...
+	timeout 90s ./mailmoose-go.sh test -race -count=1 -timeout=45s ./...
 run:
 	./mailmoose-go.sh run ./cmd/server
 fmt:
-	./mailmoose-go.sh gofmt -w cmd internal
+	./mailmoose-go.sh gofmt -w cmd internal dialmx
 vet:
 	./mailmoose-go.sh vet ./...
 # docs regenerates the checked-in API reference. The Go command runs in a root

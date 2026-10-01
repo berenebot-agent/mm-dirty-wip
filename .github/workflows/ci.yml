@@ -10,15 +10,15 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l cmd internal tests)"
+          unformatted="$(gofmt -l cmd internal tests dialmx)"
           if [ -n "$unformatted" ]; then
             echo "Unformatted Go files:"
             echo "$unformatted"
             exit 1
           fi
       - run: go vet ./...
-      - run: go build -buildvcs=false ./cmd/...
-      - run: go test -race -count=1 ./...
+      - run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/...
+      - run: go test -race -count=1 -timeout=60s ./...
   image:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -42,3 +42,11 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ghcr.io/${{ github.repository }}-mx:latest
+      # Standalone Dial MX receiver (core dials out over HTTPS/2; see docs/DIALMX.md).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dialmx/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository }}-dialmx:latest

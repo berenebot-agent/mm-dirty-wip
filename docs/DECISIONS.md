@@ -1812,6 +1812,83 @@ safe and prevents a crafted relay value from being echoed as authority.
   are maintained by hand; the generating worker test is
   `TestWebhookForwardContractFixture`.
 
+## D067 — Dial MX: an outbound-dialing standalone receiver
+
+**Context:** Direct SMTP ingress needs the core to accept a connection. The
+existing optional edge (`D031`) runs as a policy-free process that calls the core
+over signed HTTPS, but the core still exposes an inbound `:8082`. A deployment
+that cannot publish an inbound port — behind NAT, with no reverse proxy, or with
+a policy against opening one — could not use direct SMTP at all. The requirement
+is to receive direct SMTP for a domain with only **outbound** HTTPS/2 from the
+core to a receiver the operator runs.
+
+**Decision:** Add Dial MX, a second, independent direct-SMTP path. Per domain,
+the receiving provider is either `mx` (the edge calls the core) or `dialmx` (the
+core dials a receiver); never both. The receiver is one pure-Go process, built
+from `dialmx/cmd/receiver` and shipped as a separate minimal image
+(`dialmx/Dockerfile`), that:
+
+- terminates SMTP and computes SPF/DKIM/DMARC evidence on the original bytes,
+  exactly as the MX edge does (`MX_VERIFY_*` reuses the documented surface);
+- exposes an HTTPS/2 session endpoint (`POST /mx/v2/session`) to which the core
+  dials out, proves control of the domain's Ed25519 signing key via a
+  DNS-anchored challenge against `_mailmoose-mx.<domain>`, and then serves
+  `Resolve`/`Ingest` requests;
+- holds no `/data`, no database, no `APP_ENCRYPTION_KEY` and no core HMAC
+  secret, stages messages in memory, and returns SMTP success only after the
+  core durably handled every accepted recipient (a partial/lost ack is `451`).
+
+The core stores a per-domain Ed25519 key pair encrypted with
+`APP_ENCRYPTION_KEY`; the matching public record is published in DNS. A
+subdomain may inherit receiver settings but always has its own exact-domain key
+and DNS proof. Key rotation uses the credential revision, independently of the
+receiving configuration revision, and never copies inherited settings.
+Receiver URLs are bounded (at most eight, HTTPS origins with no path, userinfo,
+query or fragment) and each is authorised independently. `MX_ENABLE` governs
+only the existing inbound MX edge. Local/remote MX domains and Dial MX domains
+can coexist, and a Dial-MX-only deployment needs no shared edge secret.
+
+**Reason:** Reversing the connection direction removes the public inbound-core
+requirement while retaining synchronous SMTP disposition. The new `mx-v2`
+session contract (24-byte header, bounded JSON metadata, chunked body) is shared
+by the dialer and receiver; existing `mx-v1` POST/HMAC behaviour is retained.
+Making the receiver stateless with in-memory staging preserves the project's
+invariants — durable truth stays in the core, realtime/transport layers never
+hold it — and keeps the receiver outside the app's trust boundary: it never sees
+the database or the app key. Reusing the `MX_*` names avoids a parallel
+configuration vocabulary.
+
+**Consequences:**
+
+- The standalone receiver is a deliberate **optional component** outside the
+  single-process default. It is an operator-chosen exception, like the MX edge,
+  and does not restore a hosted/account mode: `D064` stands, only self-hosted
+  `MODE` is accepted.
+- The core opens one outbound HTTPS/2 session per receiver URL and registers the
+  union of that receiver's domains; direct SMTP needs no inbound port on the
+  core, though the general inbound webhook listener on `:8082` still runs for
+  the webhook connectors unless the operator does not expose it.
+- Revocation is DNS-driven: the receiver re-resolves the TXT record at every
+  proof, so a removed or rotated key fails closed as soon as the receiver's
+  resolver observes it. An upstream DNS cache with a long TTL can delay that
+  observation beyond the 5-minute local binding lifetime; the binding itself is
+  never extended past `AuthLifetime` from the last proof.
+- The protocol is **not exactly-once** (same limits as `D031`): deduplication is
+  the core's 7-day `mxfp-v1` receipt window, and a replaced binding may keep
+  serving already-pinned DATA until it expires.
+- Domain authentication expires after five minutes and renews with fresh DNS
+  and a fresh, connection-bound Ed25519 proof. Last valid authentication wins
+  on each receiver; old unexpired pins may finish DATA but receive no new RCPT.
+- No mTLS is required. `DIALMX_CA_FILE` optionally adds private receiver CAs to
+  system roots with mandatory hostname verification. Multi-core HA, a durable
+  receiver queue, wildcard authority and overlap rotation remain deferred.
+  Private seeds are encrypted using the existing root key, superseding the
+  roadmap's original plaintext-at-rest assumption.
+- `MODE=hosted`, account billing and a service-wide registry are not introduced:
+  the receiver is configured per domain through the existing encrypted receiving
+  configuration, and the UI provider is named **Dial MX** (slug `dialmx`,
+  retained for compatibility).
+
 ## Future extension register
 
 
