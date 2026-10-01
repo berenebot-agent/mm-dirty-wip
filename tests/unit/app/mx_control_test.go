@@ -90,7 +90,7 @@ func TestMXControlApprovalRequiresAuthEvidence(t *testing.T) {
 		t.Fatalf("authenticated approval did not apply: %+v", srAuth)
 	}
 
-	// A byte-identical replay is deduplicated by the control receipt.
+	// A byte-identical replay is deduplicated before changing the receive path.
 	resDup, err := svc.IngestMX(ctx, mxControlInput(t, svc, box.Address, approverAddress, rawAuth, auth))
 	if err != nil {
 		t.Fatal(err)
@@ -98,4 +98,28 @@ func TestMXControlApprovalRequiresAuthEvidence(t *testing.T) {
 	if r := mxResult(t, resDup); !r.Duplicate || r.MachineCode != mxwire.CodeDuplicate {
 		t.Fatalf("control replay was not deduplicated: %+v", r)
 	}
+
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, box.DomainID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example"}, false); err != nil {
+		t.Fatal(err)
+	}
+	secondDraft, err := svc.Store.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"next@y.test"}, Subject: "proposal two", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.RequestSend(ctx, asst, secondDraft.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	handOffWorkflow(t, svc, u.AccountID, box.ID)
+	dialRaw := mxControlRaw(approverAddress, box.Address, "[GH-APPROVE:"+approvalToken(t, svc, u.AccountID, box.ID)+"]", "approve with Dial MX")
+	resDial, err := svc.IngestDialMX(ctx, mxControlInput(t, svc, box.Address, approverAddress, dialRaw, auth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mxResult(t, resDial); got.MachineCode != mxwire.CodeOK {
+		t.Fatalf("Dial MX control auth not accepted: %+v", got)
+	}
+	if _, err = svc.Store.LookupMXReceipt(ctx, u.AccountID, "mx", box.Address, mxwire.DeliveryFingerprint(approverAddress, box.Address, mxwire.BodyDigest([]byte(dialRaw)))); err != nil {
+		t.Fatalf("Dial MX receipt identity changed: %v", err)
+	}
+
 }

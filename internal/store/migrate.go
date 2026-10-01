@@ -124,6 +124,7 @@ func migrations(dataDir string) []migration {
 			tableSQLContains("webhook_deliveries", "'skipped'"),
 		)},
 		{version: "036", sql: migration036, detect: stateOf(tableExists("client_delivery_log"))},
+		{version: "037", sql: migration037, detect: stateOf(tableExists("dialmx_domain_credentials"))},
 	}
 }
 

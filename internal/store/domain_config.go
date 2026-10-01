@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // DomainConfig is the single optional sending or receiving provider
@@ -32,6 +33,138 @@ type (
 	DomainSendingConfig   = DomainConfig
 	DomainReceivingConfig = DomainConfig
 )
+
+type DialMXCredential struct {
+	DomainID             string
+	KeyID                string
+	EncryptedPrivateSeed string
+	PublicKey            string
+	Revision             int64
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+func (s *Store) ListDialMXDomains(ctx context.Context) ([]model.Domain, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id FROM domains ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	var domains []model.Domain
+	for rows.Next() {
+		var d model.Domain
+		if err := rows.Scan(&d.ID, &d.AccountID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		domains = append(domains, d)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]model.Domain, 0)
+	for _, d := range domains {
+		var full model.Domain
+		full, err = s.GetDomain(ctx, d.AccountID, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(full.ReceivingProvider, "dialmx") {
+			out = append(out, full)
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) GetDialMXCredential(ctx context.Context, accountID, domainID string) (DialMXCredential, error) {
+	var c DialMXCredential
+	var created, updated string
+	err := s.read.QueryRowContext(ctx, `SELECT c.domain_id,c.key_id,c.encrypted_private_seed,c.public_key,c.revision,c.created_at,c.updated_at FROM dialmx_domain_credentials c JOIN domains d ON d.id=c.domain_id WHERE c.domain_id=? AND d.account_id=?`, domainID, accountID).Scan(&c.DomainID, &c.KeyID, &c.EncryptedPrivateSeed, &c.PublicKey, &c.Revision, &created, &updated)
+	if errors.Is(err, sql.ErrNoRows) {
+		if ok, e := s.domainExists(ctx, accountID, domainID); e != nil {
+			return DialMXCredential{}, e
+		} else if !ok {
+			return DialMXCredential{}, ErrNotFound
+		}
+		return DialMXCredential{}, ErrNoProvider
+	}
+	if err != nil {
+		return DialMXCredential{}, err
+	}
+	c.CreatedAt, c.UpdatedAt = parseTime(created), parseTime(updated)
+	return c, nil
+}
+
+func (s *Store) RotateDialMXCredentialCAS(ctx context.Context, accountID, domainID, keyID, encryptedSeed, publicKey string, expected ConfigVersion) (DialMXCredential, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return DialMXCredential{}, err
+	}
+	defer tx.Rollback()
+	ok, err := domainExistsTx(ctx, tx, accountID, domainID)
+	if err != nil {
+		return DialMXCredential{}, err
+	}
+	if !ok {
+		return DialMXCredential{}, ErrNotFound
+	}
+	now := nowText()
+	// expected identifies the credential's own key and revision, never an
+	// ancestor's receiving configuration. Rotation does not materialize settings.
+	res, err := tx.ExecContext(ctx, `UPDATE dialmx_domain_credentials SET key_id=?,encrypted_private_seed=?,public_key=?,updated_at=?,revision=revision+1 WHERE domain_id=? AND key_id=? AND revision=?`, keyID, encryptedSeed, publicKey, now, domainID, expected.ID, expected.Revision)
+	if err != nil {
+		return DialMXCredential{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return DialMXCredential{}, ErrConflict
+	}
+	var c DialMXCredential
+	var ca, ua string
+	err = tx.QueryRowContext(ctx, `SELECT domain_id,key_id,encrypted_private_seed,public_key,revision,created_at,updated_at FROM dialmx_domain_credentials WHERE domain_id=?`, domainID).Scan(&c.DomainID, &c.KeyID, &c.EncryptedPrivateSeed, &c.PublicKey, &c.Revision, &ca, &ua)
+	if err != nil {
+		return DialMXCredential{}, err
+	}
+	c.CreatedAt, c.UpdatedAt = parseTime(ca), parseTime(ua)
+	if err = tx.Commit(); err != nil {
+		return DialMXCredential{}, err
+	}
+	return c, nil
+}
+
+func (s *Store) EnsureDialMXCredential(ctx context.Context, accountID, domainID, keyID, encryptedSeed, publicKey string) (DialMXCredential, bool, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return DialMXCredential{}, false, err
+	}
+	defer tx.Rollback()
+	ok, err := domainExistsTx(ctx, tx, accountID, domainID)
+	if err != nil {
+		return DialMXCredential{}, false, err
+	}
+	if !ok {
+		return DialMXCredential{}, false, ErrNotFound
+	}
+	now := nowText()
+	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO dialmx_domain_credentials(domain_id,key_id,encrypted_private_seed,public_key,created_at,updated_at) VALUES(?,?,?,?,?,?)`, domainID, keyID, encryptedSeed, publicKey, now, now)
+	if err != nil {
+		return DialMXCredential{}, false, err
+	}
+	n, _ := res.RowsAffected()
+	created := n > 0
+	var c DialMXCredential
+	var ca, ua string
+	err = tx.QueryRowContext(ctx, `SELECT domain_id,key_id,encrypted_private_seed,public_key,revision,created_at,updated_at FROM dialmx_domain_credentials WHERE domain_id=?`, domainID).Scan(&c.DomainID, &c.KeyID, &c.EncryptedPrivateSeed, &c.PublicKey, &c.Revision, &ca, &ua)
+	if err != nil {
+		return DialMXCredential{}, false, err
+	}
+	c.CreatedAt, c.UpdatedAt = parseTime(ca), parseTime(ua)
+	if err = tx.Commit(); err != nil {
+		return DialMXCredential{}, false, err
+	}
+	return c, created, nil
+}
 
 // ConfigVersion is the optimistic-concurrency token a save must present. A zero
 // value means "create only".

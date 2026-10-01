@@ -22,6 +22,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/logging"
 	"github.com/dellarb/mailmoose/internal/privdrop"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
 func main() {
@@ -94,6 +95,17 @@ func main() {
 		os.Exit(1)
 	}
 	svc.Log = log
+	dialTLS, err := mxdial.ReceiverTLS(cfg.DialMXCAFile)
+	if err != nil {
+		log.Error("invalid Dial MX TLS configuration", "error", err)
+		os.Exit(2)
+	}
+	dialManager := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS})
+	svc.DialMX = dialManager
+	dialCtx, dialCancel := context.WithCancel(context.Background())
+	dialDone := make(chan struct{})
+	go func() { defer close(dialDone); dialManager.Run(dialCtx) }()
+	defer dialCancel()
 	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
@@ -152,12 +164,18 @@ func main() {
 		// or the operator notices.
 		log.Error("embedded mx edge exited unexpectedly", "error", edge.ExitError())
 	}
+	dialCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	for _, l := range listeners {
 		if err := l.srv.Shutdown(ctx); err != nil {
 			log.Warn("HTTP shutdown failed", "listener", l.name, "error", err)
 		}
+	}
+	select {
+	case <-dialDone:
+	case <-ctx.Done():
+		log.Warn("Dial MX shutdown timed out")
 	}
 }
 

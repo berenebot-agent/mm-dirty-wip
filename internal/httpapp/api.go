@@ -1979,7 +1979,7 @@ func (s *Server) ingestInbound(w http.ResponseWriter, r *http.Request) {
 	}
 	// The MX provider does not accept webhook dispatch; its mail arrives through
 	// the signed /internal/mx endpoints.
-	if provider == "mx" {
+	if provider == "mx" || provider == "dialmx" {
 		http.NotFound(w, r)
 		return
 	}

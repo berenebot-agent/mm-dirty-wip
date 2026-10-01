@@ -189,9 +189,6 @@ func (w *OutboxWorker) recoverUnit(name string, fn func()) (panicked error) {
 // sweepMXReceipts removes MX delivery receipts past their retention horizon.
 // Receipts are the retry dedup key; once expired a delivery is treated as new.
 func (w *OutboxWorker) sweepMXReceipts() {
-	if !w.svc.Config.MXReceiveEnabled {
-		return
-	}
 	n, err := w.svc.Store.SweepMXReceipts(context.Background(), time.Now().UTC())
 	if err != nil {
 		w.log.Error("mx receipt sweep", "error", err)
