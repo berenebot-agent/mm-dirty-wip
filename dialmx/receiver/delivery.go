@@ -69,75 +69,149 @@ func (t *transaction) Resolve(ctx context.Context, addresses []string) (mxwire.R
 		return out, fmt.Errorf("transaction closed")
 	}
 	for _, address := range addresses {
-		at := strings.LastIndex(address, "@")
-		if at < 1 {
-			out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address})
-			continue
-		}
-		d, e := mxwire.CanonicalDomain(address[at+1:])
-		if e != nil {
-			out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address})
-			continue
-		}
-		b, e := t.r.lookup(d)
-		if e != nil {
-			out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address, Temporary: true})
-			continue
-		}
-		p, e := t.group(b)
-		if e != nil {
-			t.failed = true
+		if e := t.resolveOne(ctx, address, &out); e != nil {
 			return out, e
-		}
-		t.r.mu.Lock()
-		p.bindings[d] = b
-		p.ch = b.channel
-		t.r.mu.Unlock()
-		if e = t.r.send(b.c, mxwire.FrameResolve, p.tx, b.channel, mxwire.V2Resolve{Domain: d, Recipient: address}); e != nil {
-			t.failed = true
-			return out, e
-		}
-		select {
-		case <-ctx.Done():
-			t.r.release(b.c, p)
-			t.failed = true
-			return out, ctx.Err()
-		case <-b.c.ctx.Done():
-			t.r.release(b.c, p)
-			t.failed = true
-			return out, context.Canceled
-		case f := <-p.result:
-			t.r.mu.Lock()
-			cancelled := p.cancelled
-			t.r.mu.Unlock()
-			if cancelled || f.Type == 0 {
-				// Released by Close/revocation: do not report a result.
-				t.failed = true
-				return out, fmt.Errorf("transaction canceled")
-			}
-			var response mxwire.ResolveResponse
-			if e = mxwire.DecodeFrame(f, &response); e != nil {
-				t.failed = true
-				return out, e
-			}
-			matched := false
-			for _, rr := range response.Results {
-				if strings.EqualFold(rr.Recipient, address) {
-					rr.Domain = d
-					out.Results = append(out.Results, rr)
-					matched = true
-					if rr.Accept {
-						t.accepted[strings.ToLower(address)] = b
-					}
-					break
-				}
-			}
-			if !matched {
-				out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address, Domain: d, Temporary: true})
-			}
 		}
 	}
 	return out, nil
+}
+
+// resolveOne routes a single recipient. It always emits exactly one routing
+// record through a deferred completion, so every path — early rejection,
+// timeout, protocol error or a core decision — reports the actual selected
+// authority and core identity, never a guessed default.
+func (t *transaction) resolveOne(ctx context.Context, address string, out *mxwire.ResolveResponse) (retErr error) {
+	started := time.Now()
+	rc := &resolveCompletion{recipient: address, selected: "none", outcome: "rejected"}
+	defer rc.finish(t, ctx, started)
+
+	at := strings.LastIndex(address, "@")
+	if at < 1 {
+		rc.reason = "invalid_address"
+		out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address})
+		return nil
+	}
+	d, e := mxwire.CanonicalDomain(address[at+1:])
+	if e != nil {
+		rc.domain = address[at+1:]
+		rc.reason = "invalid_domain"
+		out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address})
+		return nil
+	}
+	rc.domain = d
+	b, e := t.r.lookup(d)
+	if e != nil {
+		rc.selected, rc.reason = "no_binding", "unavailable"
+		out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address, Temporary: true})
+		return nil
+	}
+	rc.selected = "core"
+	rc.coreConnectionID, rc.keyID, rc.transportID = b.c.id, b.keyID, b.c.transportID
+	p, e := t.group(b)
+	if e != nil {
+		rc.selected, rc.reason = "core", "transaction_limit"
+		t.failed = true
+		return e
+	}
+	t.r.mu.Lock()
+	p.bindings[d] = b
+	p.ch = b.channel
+	t.r.mu.Unlock()
+	rc.wireTxID, rc.channel = p.tx, b.channel
+	if e = t.r.send(b.c, mxwire.FrameResolve, p.tx, b.channel, mxwire.V2Resolve{Domain: d, Recipient: address}); e != nil {
+		rc.reason = "send_failed"
+		t.failed = true
+		return e
+	}
+	select {
+	case <-ctx.Done():
+		t.r.release(b.c, p)
+		t.failed = true
+		rc.outcome, rc.reason = "timeout", "resolve_timeout"
+		return ctx.Err()
+	case <-b.c.ctx.Done():
+		t.r.release(b.c, p)
+		t.failed = true
+		rc.reason = "connection_gone"
+		return context.Canceled
+	case f := <-p.result:
+		t.r.mu.Lock()
+		cancelled := p.cancelled
+		t.r.mu.Unlock()
+		if cancelled || f.Type == 0 {
+			// Released by Close/revocation: do not report a result.
+			t.failed = true
+			rc.reason = "release"
+			return fmt.Errorf("transaction canceled")
+		}
+		var response mxwire.ResolveResponse
+		if e = mxwire.DecodeFrame(f, &response); e != nil {
+			t.failed = true
+			rc.reason = "bad_response"
+			return e
+		}
+		for _, rr := range response.Results {
+			if strings.EqualFold(rr.Recipient, address) {
+				rr.Domain = d
+				out.Results = append(out.Results, rr)
+				if rr.Accept {
+					t.accepted[strings.ToLower(address)] = b
+					rc.outcome = "accepted"
+				} else if rr.Temporary {
+					rc.outcome, rc.reason = "temporary", "routing"
+				} else {
+					rc.reason = "unknown"
+				}
+				return nil
+			}
+		}
+		out.Results = append(out.Results, mxwire.ResolveRecipient{Recipient: address, Domain: d, Temporary: true})
+		rc.outcome, rc.reason = "temporary", "no_result"
+		return nil
+	}
+}
+
+// resolveCompletion accumulates the actual per-recipient routing facts so the
+// deferred finish can log one routing event with the real values.
+type resolveCompletion struct {
+	recipient, domain         string
+	selected, outcome, reason string
+	coreConnectionID, keyID   string
+	transportID               string
+	wireTxID, channel         uint64
+}
+
+func (rc *resolveCompletion) finish(t *transaction, ctx context.Context, started time.Time) {
+	log := t.r.log
+	if log == nil {
+		return
+	}
+	args := txnLog(ctx,
+		"recipient", rc.recipient,
+		"domain", rc.domain,
+		"selected", rc.selected,
+		"outcome", rc.outcome,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
+	if rc.coreConnectionID != "" {
+		args = append(args, "core_connection_id", rc.coreConnectionID)
+	}
+	if rc.transportID != "" {
+		args = append(args, "transport_id", rc.transportID)
+	}
+	if rc.keyID != "" {
+		args = append(args, "key_id", rc.keyID)
+	}
+	if rc.channel != 0 {
+		args = append(args, "channel", rc.channel)
+	}
+	if rc.wireTxID != 0 {
+		args = append(args, "wire_transaction_id", rc.wireTxID)
+	}
+	if rc.reason != "" {
+		args = append(args, "reason", rc.reason)
+	}
+	log.Info(eventResolve, args...)
 }
 
 // acceptedBinding returns the accepted binding for a domain on a connection.
@@ -196,88 +270,217 @@ func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, bo
 	for _, c := range conns {
 		recips := groups[c]
 		p := t.groups[c]
-		for _, d := range domains[c] {
-			b := t.acceptedBinding(c, d)
-			if b == nil || !t.live(b) {
+		started := time.Now()
+		t.r.log.Info(eventHandoff, txnLog(ctx,
+			"handoff_id", handoffID(c.id, p.tx), "core_connection_id", c.id,
+			"wire_transaction_id", p.tx, "phase", "start", "outcome", "pending",
+			"recipients", recips, "domains", domains[c], "size", size, "digest", digest)...)
+		// A deferred completion guarantees the terminal handoff record is
+		// emitted on every path, carrying the actual bytes streamed and the
+		// right outcome for the path taken.
+		hc := &handoffCompletion{
+			recipients: recips,
+			domains:    domains[c],
+			size:       size,
+			digest:     digest,
+		}
+		hErr := func() error {
+			defer hc.finish(t, ctx, c, p, started)
+			for _, d := range domains[c] {
+				b := t.acceptedBinding(c, d)
+				if b == nil || !t.live(b) {
+					t.failed = true
+					_ = c.writer.write(mxwire.Frame{Type: mxwire.FrameCancel, TxID: p.tx})
+					t.r.release(c, p)
+					hc.phase, hc.outcome, hc.reason = "preflight", "fail", "pinned_unavailable"
+					return fmt.Errorf("pinned destination revoked or expired")
+				}
+			}
+			t.r.mu.Lock()
+			p.expected = mxwire.FrameIngestResult
+			p.ch = 0
+			p.domains = domains[c]
+			for _, d := range domains[c] {
+				if b := t.acceptedBinding(c, d); b != nil {
+					p.bindings[d] = b
+				}
+			}
+			t.r.mu.Unlock()
+			md := meta
+			md.Recipients = recips
+			md.Size = size
+			md.ContentDigest = digest
+			if e := t.r.send(c, mxwire.FrameIngestStart, p.tx, 0, mxwire.V2IngestStart{Domains: domains[c], Metadata: md}); e != nil {
+				t.failed = true
+				t.r.release(c, p)
+				hc.phase, hc.outcome, hc.reason = "start", "fail", "start_send_failed"
+				return e
+			}
+			n, e := t.streamBody(c, p, body, size, digest, buf)
+			hc.streamed = n
+			if e != nil {
 				t.failed = true
 				_ = c.writer.write(mxwire.Frame{Type: mxwire.FrameCancel, TxID: p.tx})
 				t.r.release(c, p)
-				return out, fmt.Errorf("pinned destination revoked or expired")
+				hc.phase, hc.outcome, hc.reason = "stream", "fail", boundedReason(e)
+				return e
 			}
-		}
-		t.r.mu.Lock()
-		p.expected = mxwire.FrameIngestResult
-		p.ch = 0
-		p.domains = domains[c]
-		for _, d := range domains[c] {
-			if b := t.acceptedBinding(c, d); b != nil {
-				p.bindings[d] = b
-			}
-		}
-		t.r.mu.Unlock()
-		md := meta
-		md.Recipients = recips
-		md.Size = size
-		md.ContentDigest = digest
-		if e := t.r.send(c, mxwire.FrameIngestStart, p.tx, 0, mxwire.V2IngestStart{Domains: domains[c], Metadata: md}); e != nil {
-			t.failed = true
-			t.r.release(c, p)
-			return out, e
-		}
-		if e := t.streamBody(c, p, body, size, digest, buf); e != nil {
-			t.failed = true
-			_ = c.writer.write(mxwire.Frame{Type: mxwire.FrameCancel, TxID: p.tx})
-			t.r.release(c, p)
-			return out, e
-		}
-		if e := t.r.send(c, mxwire.FrameIngestEnd, p.tx, 0, mxwire.V2IngestEnd{Size: size, ContentDigest: digest}); e != nil {
-			t.failed = true
-			t.r.release(c, p)
-			return out, e
-		}
-		timer, cancel := context.WithTimeout(ctx, t.r.cfg.IngestTimeout)
-		select {
-		case <-timer.Done():
-			cancel()
-			_ = c.writer.write(mxwire.Frame{Type: mxwire.FrameCancel, TxID: p.tx})
-			t.r.release(c, p)
-			t.failed = true
-			return out, timer.Err()
-		case <-c.ctx.Done():
-			cancel()
-			t.r.release(c, p)
-			t.failed = true
-			return out, context.Canceled
-		case f := <-p.result:
-			cancel()
-			t.r.mu.Lock()
-			cancelled := p.cancelled
-			t.r.mu.Unlock()
-			if cancelled || f.Type == 0 {
+			if e := t.r.send(c, mxwire.FrameIngestEnd, p.tx, 0, mxwire.V2IngestEnd{Size: size, ContentDigest: digest}); e != nil {
 				t.failed = true
-				return out, fmt.Errorf("transaction canceled")
+				t.r.release(c, p)
+				hc.phase, hc.outcome, hc.reason = "end", "unknown", "end_send_failed"
+				return e
 			}
-			var response mxwire.IngestResponse
-			if e := mxwire.DecodeFrame(f, &response); e != nil {
+			// From here the core may have durably committed the message, so a
+			// wait/protocol failure is classified "unknown", never "fail".
+			// The failed transaction still closes; a new SMTP retry deduplicates.
+			timer, cancel := context.WithTimeout(ctx, t.r.cfg.IngestTimeout)
+			select {
+			case <-timer.Done():
 				t.failed = true
-				return out, e
-			}
-			if e := validateIngest(response, recips); e != nil {
+				cancel()
+				_ = c.writer.write(mxwire.Frame{Type: mxwire.FrameCancel, TxID: p.tx})
+				t.r.release(c, p)
+				hc.phase, hc.outcome, hc.reason = "await", "unknown", "timeout"
+				return timer.Err()
+			case <-c.ctx.Done():
 				t.failed = true
-				return out, e
+				cancel()
+				t.r.release(c, p)
+				hc.phase, hc.outcome, hc.reason = "await", "unknown", "connection_gone"
+				return context.Canceled
+			case f := <-p.result:
+				cancel()
+				t.r.mu.Lock()
+				cancelled := p.cancelled
+				t.r.mu.Unlock()
+				if cancelled || f.Type == 0 {
+					t.failed = true
+					hc.phase, hc.outcome, hc.reason = "await", "unknown", "release"
+					return fmt.Errorf("transaction canceled")
+				}
+				var response mxwire.IngestResponse
+				if e := mxwire.DecodeFrame(f, &response); e != nil {
+					t.failed = true
+					hc.phase, hc.outcome, hc.reason = "result", "unknown", "bad_response"
+					return e
+				}
+				if e := validateIngest(response, recips); e != nil {
+					t.failed = true
+					hc.phase, hc.outcome, hc.reason = "result", "unknown", "invalid_result"
+					return e
+				}
+				for _, rr := range response.PerRecipient {
+					t.logHandoffResult(ctx, c, p.tx, rr)
+				}
+				// A valid response is "acknowledged", not "ok": a quota or
+				// transient per-recipient code is still an acknowledgement.
+				hc.phase, hc.outcome = "result", "acknowledged"
+				hc.acked = len(response.PerRecipient)
+				out.PerRecipient = append(out.PerRecipient, response.PerRecipient...)
+				return nil
 			}
-			out.PerRecipient = append(out.PerRecipient, response.PerRecipient...)
+		}()
+		if hErr != nil {
+			return out, hErr
 		}
 	}
 	return out, nil
 }
 
+// handoffCompletion accumulates the actual per-connection handoff facts so the
+// deferred finish emits exactly one terminal handoff record with the real
+// outcome, byte count and identity on every path.
+type handoffCompletion struct {
+	recipients, domains []string
+	size, streamed      int64
+	digest              string
+	phase               string
+	outcome, reason     string
+	acked               int
+}
+
+func (hc *handoffCompletion) finish(t *transaction, ctx context.Context, c *connection, p *pending, started time.Time) {
+	log := t.r.log
+	if log == nil {
+		return
+	}
+	if hc.outcome == "" {
+		hc.outcome = "fail"
+	}
+	// On a failure before any bytes were streamed, report the bytes actually
+	// written (hc.streamed), never the full intended size that was not sent.
+	bytes := hc.streamed
+	if hc.outcome == "acknowledged" {
+		bytes = hc.size
+	}
+	args := txnLog(ctx,
+		"handoff_id", handoffID(c.id, p.tx),
+		"core_connection_id", c.id,
+		"wire_transaction_id", p.tx,
+		"phase", hc.phase,
+		"outcome", hc.outcome,
+		"recipients", hc.recipients,
+		"domains", hc.domains,
+		"bytes", bytes,
+		"digest", hc.digest,
+		"duration_ms", time.Since(started).Milliseconds(),
+	)
+	if hc.acked > 0 {
+		args = append(args, "acked", hc.acked)
+	}
+	if hc.reason != "" {
+		args = append(args, "reason", hc.reason)
+	}
+	log.Info(eventHandoff, args...)
+}
+
+// logHandoffResult records the durable per-recipient outcome the core reported,
+// keyed by the full recipient address so a reader can correlate a decision to
+// the exact recipient.
+func (t *transaction) logHandoffResult(ctx context.Context, c *connection, tx uint64, rr mxwire.RecipientIngestResult) {
+	log := t.r.log
+	if log == nil {
+		return
+	}
+	args := txnLog(ctx,
+		"recipient", rr.Recipient,
+		"code", string(rr.MachineCode),
+		"disposition", string(rr.Disposition),
+		"duplicate", rr.Duplicate,
+	)
+	if c != nil {
+		args = append(args,
+			"handoff_id", handoffID(c.id, tx),
+			"core_connection_id", c.id,
+			"wire_transaction_id", tx,
+		)
+	}
+	if rr.MessageID != "" {
+		args = append(args, "message_id", rr.MessageID)
+	}
+	if rr.Reason != "" {
+		args = append(args, "reason", boundedField(rr.Reason))
+	}
+	log.Info(eventHandoffResult, args...)
+}
+
+// boundedField truncates a provider-supplied field to a bounded length so a
+// log record can never be inflated by it.
+func boundedField(s string) string {
+	if len(s) > 128 {
+		return s[:128]
+	}
+	return s
+}
+
 // streamBody rewrites the staged body once, chunk by chunk, verifying the exact
 // size and digest. The caller supplies a reusable buffer, so fan-out across
-// groups allocates once.
-func (t *transaction) streamBody(c *connection, p *pending, body io.Reader, size int64, digest string, buf []byte) error {
+// groups allocates once. It returns the number of bytes actually written, so a
+// failed handoff never claims the full intended size was streamed.
+func (t *transaction) streamBody(c *connection, p *pending, body io.Reader, size int64, digest string, buf []byte) (int64, error) {
 	if _, e := seekStart(body); e != nil {
-		return e
+		return 0, e
 	}
 	h := sha256.New()
 	body = io.LimitReader(body, size)
@@ -285,24 +488,31 @@ func (t *transaction) streamBody(c *connection, p *pending, body io.Reader, size
 	for seq := uint32(0); nbytes < size; seq++ {
 		n, e := io.ReadFull(body, buf)
 		if e != nil && e != io.ErrUnexpectedEOF {
-			return e
+			return nbytes, e
 		}
 		if n == 0 {
-			return io.ErrUnexpectedEOF
+			return nbytes, io.ErrUnexpectedEOF
 		}
-		nbytes += int64(n)
 		_, _ = h.Write(buf[:n])
 		if e = c.writer.write(mxwire.ChunkFrame(p.tx, 0, seq, buf[:n])); e != nil {
-			return e
+			return nbytes, e
 		}
+		nbytes += int64(n)
 		if e == io.ErrUnexpectedEOF {
 			break
 		}
 	}
 	if nbytes != size || hex.EncodeToString(h.Sum(nil)) != digest {
-		return fmt.Errorf("staged message integrity mismatch")
+		return nbytes, fmt.Errorf("staged message integrity mismatch")
 	}
-	return nil
+	return nbytes, nil
+}
+
+// handoffID is the stable correlation key for one core connection's wire
+// transaction. The core connection id is unique per session and the wire
+// transaction id is unique per connection, so their pair identifies a handoff.
+func handoffID(coreConn string, wireTx uint64) string {
+	return fmt.Sprintf("%s:%d", coreConn, wireTx)
 }
 
 // seekStart rewinds a staged body. mxagent hands the receiver a *bytes.Reader,

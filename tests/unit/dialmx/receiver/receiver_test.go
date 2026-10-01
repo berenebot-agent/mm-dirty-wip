@@ -7,7 +7,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -66,10 +68,10 @@ func (b *backend) Ingest(_ context.Context, _ []string, m mxwire.IngestMetadata,
 		return mxwire.IngestResponse{}, e
 	}
 	b.raw = string(raw)
-	x := mxwire.IngestResponse{MachineCode: mxwire.CodeOK}
+	x := mxwire.IngestResponse{MachineCode: mxwire.CodeOK, MessageID: "msg-" + m.ContentDigest}
 	for _, a := range m.Recipients {
 		b.stored = append(b.stored, a)
-		x.PerRecipient = append(x.PerRecipient, mxwire.RecipientIngestResult{Recipient: a, MachineCode: mxwire.CodeOK, Disposition: mxwire.DispositionStored})
+		x.PerRecipient = append(x.PerRecipient, mxwire.RecipientIngestResult{Recipient: a, MachineCode: mxwire.CodeOK, Disposition: mxwire.DispositionStored, MessageID: "msg-" + m.ContentDigest})
 	}
 	return x, nil
 }
@@ -460,6 +462,16 @@ type fakeDialer struct {
 	ready  chan struct{}
 	// reject maps recipient -> not accepted.
 	reject map[string]bool
+	// transient maps recipient -> answered with a transient machine code at
+	// ingest time.
+	transient map[string]bool
+	// dropIngestResult makes the dialer swallow the ingest result, simulating a
+	// core that committed but never answered.
+	dropIngestResult bool
+	// ingestRecipients is the last IngestStart recipient set, used to answer
+	// IngestEnd with a per-recipient result.
+	mu               sync.Mutex
+	ingestRecipients []string
 }
 
 func newFakeDialer(t *testing.T, base string, client *tls.Config, priv ed25519.PrivateKey, domain string) *fakeDialer {
@@ -540,10 +552,33 @@ func (d *fakeDialer) run() {
 			}
 			out, _ := mxwire.JSONFrame(mxwire.FrameResolveResult, f.TxID, f.ChannelID, resp)
 			_ = mxwire.WriteFrame(d.pw, out)
-		case mxwire.FrameIngestStart, mxwire.FrameIngestChunk:
+		case mxwire.FrameIngestStart:
+			var st mxwire.V2IngestStart
+			if mxwire.DecodeFrame(f, &st) == nil {
+				d.mu.Lock()
+				d.ingestRecipients = append([]string(nil), st.Metadata.Recipients...)
+				d.mu.Unlock()
+			}
+		case mxwire.FrameIngestChunk:
 			// Keep draining until end; no reply yet.
 		case mxwire.FrameIngestEnd:
-			out, _ := mxwire.JSONFrame(mxwire.FrameIngestResult, f.TxID, 0, mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK})
+			if d.dropIngestResult {
+				continue
+			}
+			d.mu.Lock()
+			recips := append([]string(nil), d.ingestRecipients...)
+			d.mu.Unlock()
+			resp := mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK}
+			for i, r := range recips {
+				rr := mxwire.RecipientIngestResult{Recipient: r, MachineCode: mxwire.CodeOK, Disposition: mxwire.DispositionStored, MessageID: fmt.Sprintf("msg-%d", i)}
+				if d.transient[strings.ToLower(r)] {
+					rr.MachineCode = mxwire.CodeTempFail
+					rr.Disposition = ""
+					rr.MessageID = ""
+				}
+				resp.PerRecipient = append(resp.PerRecipient, rr)
+			}
+			out, _ := mxwire.JSONFrame(mxwire.FrameIngestResult, f.TxID, 0, resp)
 			_ = mxwire.WriteFrame(d.pw, out)
 		case mxwire.FramePing:
 			pong, _ := mxwire.JSONFrame(mxwire.FramePong, 0, 0, struct{}{})
@@ -651,8 +686,16 @@ func (s *rawSession) close() {
 // edge's Delivery factory shares the exact receiver under test.
 func startEdge(t *testing.T, maxConns int, baseURL string, _ *tls.Config) string {
 	t.Helper()
+	return startEdgeWithLogger(t, maxConns, baseURL, nil)
+}
+
+// startEdgeWithLogger serves the real mxagent SMTP edge sharing the given
+// logger, so tests can assert the shared-edge records carry the receiver
+// envelope.
+func startEdgeWithLogger(t *testing.T, maxConns int, baseURL string, logger *slog.Logger) string {
+	t.Helper()
 	r := lookupReceiver(t, baseURL)
-	edge := mxagent.NewServerWithHandoff(mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: maxConns, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second}, nil, func() mxagent.Delivery {
+	edge := mxagent.NewServerWithHandoff(mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: maxConns, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second}, logger, func() mxagent.Delivery {
 		return r.NewDelivery()
 	})
 	ln, e := net.Listen("tcp", "127.0.0.1:0")

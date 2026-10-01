@@ -65,3 +65,14 @@ Then, in the core's Admin UI, add the receiver for each domain:
 
 See [docs/DIALMX.md](../docs/DIALMX.md) for the session protocol and the DNS
 authorisation flow, and [docs/MX.md](../docs/MX.md) for the shared SMTP options.
+
+## Metadata logs
+
+The receiver emits structured JSON to the container stream: SMTP and core
+connection lifecycle, domain DNS proofs and renewals, recipient routing,
+message authentication, per-core handoffs and per-recipient acknowledgements.
+Correlation IDs link each message to its destination domain and core session.
+The bundled Compose uses Docker's `local` driver with `20m` × 10 rotated files.
+Logs survive restarts but are removed when the container is removed/recreated;
+they are not stored in `/data`. See the logging contract in
+[docs/DIALMX.md](../docs/DIALMX.md#metadata-logging).

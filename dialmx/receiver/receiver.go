@@ -232,10 +232,13 @@ type challenge struct {
 
 type connection struct {
 	id, receiver string
-	ip           string
-	ctx          context.Context
-	cancel       context.CancelFunc
-	writer       *lockedWriter
+	// transportID is the HTTPS transport connection id assigned at accept time
+	// by the transport tracker, when the listener provided one.
+	transportID string
+	ip          string
+	ctx         context.Context
+	cancel      context.CancelFunc
+	writer      *lockedWriter
 
 	domains     map[uint64]*binding
 	challenges  map[uint64]challenge
@@ -293,7 +296,7 @@ func New(cfg Config, l *slog.Logger) *Receiver {
 		l = slog.Default()
 	}
 	cfg.applyDefaults()
-	return &Receiver{
+	r := &Receiver{
 		cfg:         cfg,
 		log:         l,
 		domains:     map[string]*binding{},
@@ -303,6 +306,7 @@ func New(cfg Config, l *slog.Logger) *Receiver {
 		ips:         map[string]*ipState{},
 		domainTx:    map[string]int{},
 	}
+	return r
 }
 
 // Handler serves the HTTP/2 session endpoint and minimal health.
@@ -323,15 +327,23 @@ func (r *Receiver) Handler() http.Handler {
 }
 
 func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
+	ip, _, _ := net.SplitHostPort(q.RemoteAddr)
+	peer := ip
+	if r.log != nil {
+		if host, _, err := net.SplitHostPort(q.RemoteAddr); err == nil {
+			peer = host
+		}
+	}
 	if q.TLS == nil || q.ProtoMajor != 2 {
+		r.logRejected(peer, "not_tls_h2")
 		http.Error(w, "TLS HTTP/2 required", 426)
 		return
 	}
 	if r.stopping.Load() {
+		r.logRejected(peer, "stopping")
 		http.Error(w, "stopping", 503)
 		return
 	}
-	ip, _, _ := net.SplitHostPort(q.RemoteAddr)
 	r.mu.Lock()
 	st := r.ips[ip]
 	if st == nil {
@@ -343,6 +355,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 			}
 			if len(r.ips) >= ipMapCap {
 				r.mu.Unlock()
+				r.logRejected(peer, "ip_map_full")
 				http.Error(w, "limited", 429)
 				return
 			}
@@ -360,6 +373,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	}
 	if st.conns >= perIPConnLimit || st.connCount >= perIPConnWindowMax {
 		r.mu.Unlock()
+		r.logRejected(peer, "ip_limit")
 		http.Error(w, "limited", 429)
 		return
 	}
@@ -378,11 +392,13 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	case r.sem <- struct{}{}:
 		defer func() { <-r.sem }()
 	default:
+		r.logRejected(peer, "connection_limit")
 		http.Error(w, "limited", 503)
 		return
 	}
 	ctl := http.NewResponseController(w)
 	if ctl.EnableFullDuplex() != nil {
+		r.logRejected(peer, "full_duplex_unavailable")
 		http.Error(w, "full duplex unavailable", 500)
 		return
 	}
@@ -406,10 +422,16 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		ctx: ctx, cancel: cancel, writer: &lockedWriter{w: w, ctl: ctl},
 		domains: map[uint64]*binding{}, challenges: map[uint64]challenge{}, pending: map[uint64]*pending{},
 	}
+	if st, ok := transportFromContext(q.Context()); ok {
+		c.transportID = st.id
+	}
 	r.mu.Lock()
 	r.connections[c.id] = c
 	r.mu.Unlock()
 	r.active.Add(1)
+	started := time.Now()
+	r.logSession(c, "opened", "active_connections", r.active.Load(), "tls_version", q.TLS.Version, "tls_cipher", q.TLS.CipherSuite, "protocol", q.Proto, "peer_address", q.RemoteAddr)
+	var closeReason string
 	defer func() {
 		cancel()
 		// Stop accepting new jobs, close the writer so no job can write after
@@ -437,8 +459,14 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 			r.release(c, p)
 		}
 		r.active.Add(-1)
+		r.logSession(c, "closed",
+			"duration_ms", time.Since(started).Milliseconds(),
+			"reason", closeReason,
+			"active_connections", r.active.Load(),
+		)
 	}()
 	if !r.spawn(c, func() { r.maintenance(c) }) {
+		closeReason = "spawn_failed"
 		return
 	}
 	// When the connection context is cancelled (maintenance saw an external
@@ -464,26 +492,116 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	_ = ctl.SetReadDeadline(time.Now().Add(r.cfg.AuthTimeout))
 	f, e := mxwire.ReadFrame(q.Body)
 	if e != nil || f.Type != mxwire.FrameHello {
+		closeReason = "handshake"
 		return
 	}
 	var h mxwire.Hello
 	if mxwire.DecodeFrame(f, &h) != nil || h.Version != mxwire.V2Protocol {
+		closeReason = "protocol_mismatch"
 		return
 	}
+	// core_label is the dialer's self-declared instance label. It is a display
+	// string ("gatehouse" for every core) and is deliberately NOT unique:
+	// correlation keys are connection_id and receiver_id, never this label.
+	r.logSession(c, "hello", "version", h.Version, "core_label", h.Instance)
 	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: c.receiver, ConnectionID: c.id, SMTPHostname: r.cfg.SMTP.Hostname, MaxMessageBytes: r.cfg.SMTP.MaxMessageBytes})
 	for {
 		if c.ctx.Err() != nil {
+			closeReason = "canceled"
 			return
 		}
 		_ = ctl.SetReadDeadline(time.Now().Add(readDeadline))
 		f, e = mxwire.ReadFrame(q.Body)
 		if e != nil {
+			if closeReason == "" {
+				closeReason = boundedReason(e)
+			}
 			return
 		}
 		if r.handle(c, f) != nil {
+			closeReason = "protocol_error"
 			return
 		}
 	}
+}
+
+// logSession emits a session lifecycle event (opened/hello/closed) with the
+// receiver and connection identity. It is safe to log: the event carries no
+// protocol bytes, only ids, bounded facts and a duration.
+func (r *Receiver) logSession(c *connection, stage string, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	event := ""
+	switch stage {
+	case "opened":
+		event = eventSessionOpened
+	case "hello":
+		event = eventSessionHello
+	case "closed":
+		event = eventSessionClosed
+	default:
+		return
+	}
+	args := []any{"stage", stage}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+		args = append(args, "peer", c.ip)
+	}
+	args = append(args, extra...)
+	r.log.Info(event, args...)
+}
+
+// logProof records one step of the domain-ownership proof. phase is a bounded
+// token; the record never carries a raw TXT record, signature or key material.
+func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason string, d time.Duration, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	args := []any{
+		"phase", phase,
+		"domain", domain,
+		"key_id", keyID,
+		"result", result,
+	}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+	}
+	if reason != "" {
+		args = append(args, "reason", reason)
+	}
+	if phase == "dns_lookup" {
+		resolver := r.cfg.SMTP.DNSResolver
+		if resolver == "" {
+			resolver = "system"
+		}
+		args = append(args, "query_name", "_mailmoose-mx."+domain, "resolver", resolver)
+	}
+	if d > 0 {
+		args = append(args, "duration_ms", d.Milliseconds())
+	}
+	args = append(args, extra...)
+	r.log.Info(eventDomainProof, args...)
+}
+
+// logRejected records a session that was refused before it was ever admitted.
+// The reason is a bounded classifier; no request content is logged. It is
+// emitted before any core connection exists, so it carries no core id.
+func (r *Receiver) logRejected(peer, reason string) {
+	if r.log == nil {
+		return
+	}
+	args := []any{"reason", reason}
+	if peer != "" {
+		args = append(args, "peer", peer)
+	}
+	r.log.Info(eventSessionRejected, args...)
 }
 
 func (r *Receiver) send(c *connection, t mxwire.FrameType, tx, ch uint64, v any) error {
@@ -617,8 +735,10 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 }
 
 func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
+	started := time.Now()
 	if !r.acquireAuth(c) {
 		r.dropChallenge(c, ch)
+		r.logProof(c, "start", d, keyID, "rejected", "source_limit", time.Since(started))
 		_ = r.authReply(c, ch, d, keyID, false, "source_limit", time.Time{})
 		return
 	}
@@ -626,13 +746,16 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	ctx, cancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
 	defer cancel()
 	txt, err := r.lookupTXT(ctx, d)
+	r.logProof(c, "dns_lookup", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
 	if err != nil {
 		r.dropChallenge(c, ch)
 		r.failIP(c)
 		_ = r.authReply(c, ch, d, keyID, false, "dns_unavailable", time.Time{})
 		return
 	}
-	if _, err = mxwire.ParseDomainTXT(txt, keyID); err != nil {
+	_, err = mxwire.ParseDomainTXT(txt, keyID)
+	r.logProof(c, "parse_key", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
+	if err != nil {
 		r.dropChallenge(c, ch)
 		r.failIP(c)
 		_ = r.authReply(c, ch, d, keyID, false, "key_unavailable", time.Time{})
@@ -663,6 +786,7 @@ func (r *Receiver) dropChallenge(c *connection, ch uint64) {
 }
 
 func (r *Receiver) authReply(c *connection, ch uint64, d, k string, ok bool, reason string, exp time.Time) error {
+	r.logProof(c, "grant", d, k, resultWord(ok), reason, 0, "domain_channel_id", ch, "accepted", ok, "expires_at", exp)
 	return r.send(c, mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: d, KeyID: k, Accepted: ok, Reason: reason, ExpiresAt: exp})
 }
 
@@ -691,10 +815,12 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 }
 
 func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxwire.ChallengeResponse) {
+	started := time.Now()
 	if !r.acquireAuth(c) {
 		if issued.binding != nil {
 			r.revoke(issued.binding, "reauth_failed")
 		}
+		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", "source_limit", time.Since(started))
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "source_limit", time.Time{})
 		return
 	}
@@ -702,8 +828,12 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	ctx, cancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
 	txt, e := r.lookupTXT(ctx, x.Domain)
 	cancel()
+	r.logProof(c, "dns_lookup", x.Domain, x.KeyID, resultWord(e == nil), boundedReason(e), time.Since(started))
 	pub, e2 := mxwire.ParseDomainTXT(txt, x.KeyID)
-	if e != nil || e2 != nil || !mxwire.VerifyChallenge(pub, issued.value, x.Signature) {
+	r.logProof(c, "parse_key", x.Domain, x.KeyID, resultWord(e2 == nil), boundedReason(e2), time.Since(started))
+	sigOK := e == nil && e2 == nil && mxwire.VerifyChallenge(pub, issued.value, x.Signature)
+	r.logProof(c, "signature", x.Domain, x.KeyID, resultWord(sigOK), "", time.Since(started))
+	if e != nil || e2 != nil || !sigOK {
 		r.failIP(c)
 		if issued.binding != nil {
 			// A failed renewal invalidates the domain fail-closed: the proof
@@ -718,6 +848,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		if issued.binding != nil {
 			r.revoke(issued.binding, "reauth_failed")
 		}
+		r.logProof(c, "challenge", x.Domain, x.KeyID, "rejected", "challenge_expired", time.Since(started))
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "challenge_expired", time.Time{})
 		return
 	}
@@ -729,6 +860,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		b := issued.binding
 		if c.closing || b.state != bindActive || b.c != c || b.channel != ch || c.domains[ch] != b || r.domains[b.domain] != b {
 			r.mu.Unlock()
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "rejected", "superseded", time.Since(started))
 			_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "superseded", time.Time{})
 			return
 		}
@@ -738,7 +870,9 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		// renewal always starts before expiry even when auth completed late.
 		b.renewAt = now.Add(r.cfg.RevalidateInterval)
 		exp := b.expires
+		expiresIn := time.Until(exp)
 		r.mu.Unlock()
+		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds())
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, true, "", exp)
 		return
 	}
@@ -746,10 +880,12 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	r.mu.Lock()
 	if c.closing {
 		r.mu.Unlock()
+		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "closing", time.Since(started))
 		return
 	}
 	if len(c.domains) >= r.cfg.MaxDomainsPerConnection && c.domains[ch] == nil {
 		r.mu.Unlock()
+		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "domain_limit", time.Since(started))
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "domain_limit", time.Time{})
 		return
 	}
@@ -765,10 +901,15 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	c.domains[ch] = b
 	r.domains[x.Domain] = b
 	r.mu.Unlock()
+	r.logProof(c, "registration", x.Domain, x.KeyID, "active", "", time.Since(started))
 	if replaced != nil && replaced.c != c {
 		sc := replaced.c
 		sdomain := replaced.domain
 		sch := replaced.channel
+		oldKeyID := replaced.keyID
+		newKeyID := b.keyID
+		r.logProof(replaced.c, "replacement", sdomain, oldKeyID, "replaced", "", 0,
+			"old_key_id", oldKeyID, "new_key_id", newKeyID, "old_channel", sch, "new_channel", ch, "old_core_connection_id", replaced.c.id, "new_core_connection_id", c.id)
 		r.spawn(c, func() {
 			_ = r.send(sc, mxwire.FrameDomainRevoked, 0, sch, mxwire.DomainNotice{Domain: sdomain, Reason: "replaced"})
 		})
@@ -798,7 +939,14 @@ func (r *Receiver) unregister(c *connection, f mxwire.Frame) error {
 			pending = append(pending, p)
 		}
 	}
+	var domain, keyID string
+	if b != nil {
+		domain, keyID = b.domain, b.keyID
+	}
 	r.mu.Unlock()
+	if b != nil {
+		r.logProof(c, "revocation", domain, keyID, "revoked", "unregistered", 0)
+	}
 	for _, p := range pending {
 		r.release(c, p)
 	}
@@ -912,10 +1060,13 @@ func (r *Receiver) revoke(b *binding, why string) {
 	c := b.c
 	ch := b.channel
 	domain := b.domain
+	keyID := b.keyID
+	wasActive := active
 	r.mu.Unlock()
-	if active {
+	if wasActive {
 		_ = r.send(c, mxwire.FrameDomainRevoked, 0, ch, mxwire.DomainNotice{Domain: domain, Reason: why})
 	}
+	r.logProof(c, "revocation", domain, keyID, "revoked", why, 0, "active", wasActive)
 	for _, p := range wake {
 		r.release(c, p)
 	}

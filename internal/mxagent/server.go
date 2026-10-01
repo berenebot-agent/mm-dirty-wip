@@ -176,16 +176,30 @@ type SMTPBackend struct {
 }
 
 func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
+	// Recover the per-TCP-connection wrapper installed in ListenAndServe. This
+	// is the same wrapper before and after STARTTLS (unwrapConn peels the
+	// *tls.Conn), so the smtp_connection_id is retained across the upgrade.
+	conn := unwrapConn(c.Conn())
+	helo := strings.TrimSuffix(c.Hostname(), ".")
+	// A nil wrapper (a test that served a bare listener) still gets a
+	// connection id so correlation never silently degrades.
+	connID := newCorrelationID()
+	if conn != nil {
+		connID = conn.id
+	}
 	// Bound total concurrent connections: Reject politely when over the cap
-	// rather than accumulating unbounded goroutines.
+	// rather than accumulating unbounded goroutines. The global cap rejection
+	// is logged distinctly from the per-source rejection.
 	select {
 	case b.s.sem <- struct{}{}:
 	default:
+		b.s.log.Warn("mx connection rejected: too many connections",
+			AttrConnectionID, connID, "reason", "global_cap", "limit", b.s.cfg.MaxConnections)
 		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections"}
 	}
 	atomic.AddInt64(&b.s.active, 1)
 	ip := PeerIP(c.Conn().RemoteAddr())
-	_, isTLS := c.TLSConnectionState()
+	state, isTLS := c.TLSConnectionState()
 	ipKey := ipString(ip)
 	if !b.s.iplim.acquire(ipKey) {
 		select {
@@ -193,17 +207,63 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 		default:
 		}
 		atomic.AddInt64(&b.s.active, -1)
-		b.s.log.Warn("mx connection rejected: too many from source", "peer", ipKey)
+		b.s.log.Warn("mx connection rejected: too many from source",
+			AttrConnectionID, connID, "reason", "source_cap", "peer", ipKey, "limit", defaultMaxPerIP)
 		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections from your address"}
 	}
-	return &session{
+	sess := &session{
 		srv:     b.s,
 		factory: b.s.factory,
+		conn:    conn,
+		connID:  connID,
 		peerIP:  ip,
 		ipKey:   ipKey,
 		tls:     isTLS,
-		helo:    strings.TrimSuffix(c.Hostname(), "."),
-	}, nil
+		helo:    helo,
+	}
+	sess.logSessionStarted(state, isTLS)
+	return sess, nil
+}
+
+// logSessionStarted records the session greeting and, when the session is
+// encrypted, the negotiated TLS parameters. A second session on the same
+// connection with TLS active means STARTTLS succeeded.
+func (s *session) logSessionStarted(state tls.ConnectionState, isTLS bool) {
+	// Count every backend session on this connection: a second session with TLS
+	// active means STARTTLS upgraded an existing plaintext session.
+	count := 0
+	if s.conn != nil {
+		count = s.conn.noteSession()
+	}
+	args := []any{AttrConnectionID, s.connID, "helo", s.helo, "tls", isTLS}
+	if isTLS {
+		args = append(args, "tls_version", tlsVersionName(state.Version), "tls_cipher", tlsCipherName(state.CipherSuite))
+	}
+	s.srv.log.Info("mx session started", args...)
+	if isTLS && count > 1 {
+		s.srv.log.Info("mx starttls established",
+			AttrConnectionID, s.connID,
+			"helo", s.helo,
+			"tls_version", tlsVersionName(state.Version),
+			"tls_cipher", tlsCipherName(state.CipherSuite),
+		)
+	}
+}
+
+// tlsVersionName renders a TLS version as a stable token.
+func tlsVersionName(v uint16) string {
+	if name := tls.VersionName(v); name != "" {
+		return name
+	}
+	return fmt.Sprintf("0x%04x", v)
+}
+
+// tlsCipherName renders a TLS cipher suite as a stable token.
+func tlsCipherName(id uint16) string {
+	if name := tls.CipherSuiteName(id); name != "" {
+		return name
+	}
+	return fmt.Sprintf("0x%04x", id)
 }
 
 func PeerIP(addr net.Addr) net.IP {
@@ -224,6 +284,8 @@ type session struct {
 	srv      *Server
 	factory  DeliveryFactory
 	delivery Delivery
+	conn     *connWrapper
+	connID   string
 	peerIP   net.IP
 	ipKey    string
 	tls      bool
@@ -231,6 +293,13 @@ type session struct {
 	from     string
 	hasFrom  bool
 	rcpts    []acceptedRcpt
+	// txnID is the current MAIL transaction's correlation id; txnStart is when
+	// it began; txnTerminal is set once Data has emitted that transaction's
+	// terminal event, so Reset can tell a completed transaction from an
+	// abandoned one.
+	txnID       string
+	txnStart    time.Time
+	txnTerminal bool
 	// releaseOnce guarantees the connection slot is returned exactly once even
 	// though go-smtp may call Logout more than once (on STARTTLS re-greet and on
 	// connection close).
@@ -247,10 +316,34 @@ type acceptedRcpt struct {
 }
 
 func (s *session) Reset() {
+	s.resetTransaction("reset")
+}
+
+func (s *session) Logout() error {
+	s.resetTransaction("connection_closed")
+	s.release()
+	return nil
+}
+
+// resetTransaction clears the in-flight MAIL transaction. When a transaction
+// was started but never reached its terminal event (no DATA decision), it was
+// abandoned by RSET, a new MAIL, STARTTLS or connection close, and that is
+// recorded as a lifecycle event.
+func (s *session) resetTransaction(reason string) {
+	if s.txnID != "" && !s.txnTerminal {
+		s.logTxn(s.srv.log.Info, "mx transaction abandoned",
+			"reason", reason,
+			"recipients", len(s.rcpts),
+			"duration_ms", durationMs(time.Since(s.txnStart)),
+		)
+	}
 	if s.dataCancel != nil {
 		s.dataCancel()
 		s.dataCancel = nil
 	}
+	s.txnID = ""
+	s.txnStart = time.Time{}
+	s.txnTerminal = false
 	s.from = ""
 	s.hasFrom = false
 	s.rcpts = nil
@@ -260,10 +353,24 @@ func (s *session) Reset() {
 	}
 }
 
-func (s *session) Logout() error {
-	s.Reset()
-	s.release()
-	return nil
+// txnAttrs is the correlation identity of the current transaction, attached to
+// the contexts handed to the Delivery so the receiver can log correlated
+// events.
+func (s *session) txnAttrs() TransactionAttrs {
+	return TransactionAttrs{
+		ConnectionID:  s.connID,
+		TransactionID: s.txnID,
+		PeerIP:        ipString(s.peerIP),
+		HELO:          s.helo,
+	}
+}
+
+// logTxn invokes a logger with the connection/transaction correlation keys
+// prepended, then the caller's own attributes.
+func (s *session) logTxn(log func(string, ...any), msg string, extra ...any) {
+	args := s.txnAttrs().SlogArgs()
+	args = append(args, extra...)
+	log(msg, args...)
 }
 
 // release returns the global and per-source concurrency slots acquired in
@@ -280,18 +387,39 @@ func (s *session) release() {
 }
 
 func (s *session) Mail(from string, opts *smtp.MailOptions) error {
+	// Every MAIL attempt is assigned a transaction id before any policy check,
+	// so even a rejected attempt is correlatable. This does not change the SMTP
+	// outcome.
+	if s.txnID != "" && !s.txnTerminal {
+		s.logTxn(s.srv.log.Info, "mx transaction abandoned", "reason", "superseded_by_mail", "recipients", len(s.rcpts), "duration_ms", time.Since(s.txnStart).Milliseconds())
+	}
+	s.txnID = newCorrelationID()
+	s.txnStart = time.Now()
+	// A MAIL that is rejected outright is terminal: Reset must not report it as
+	// abandoned later. The success path clears this again below.
+	s.txnTerminal = true
+	var declaredSize int64
+	if opts != nil {
+		declaredSize = opts.Size
+	}
 	// No relay: accept any MAIL FROM including the null path, but never
 	// advertise or permit AUTH/submission.
 	if s.srv.cfg.RequireTLS && !s.tls {
+		s.logTxn(s.srv.log.Info, "mx mail transaction rejected",
+			"reason", "tls_required", "from", from, "declared_size", declaredSize)
 		return &smtp.SMTPError{Code: 530, EnhancedCode: smtp.EnhancedCode{5, 7, 0}, Message: "Must issue a STARTTLS command first"}
 	}
 	if s.delivery != nil {
 		_ = s.delivery.Close()
 	}
 	s.delivery = s.factory()
+	s.txnTerminal = false
 	s.from = from
 	s.hasFrom = true
-	_ = opts
+	s.logTxn(s.srv.log.Info, "mx mail transaction started",
+		"from", from,
+		"declared_size", declaredSize,
+	)
 	return nil
 }
 
@@ -303,17 +431,23 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	_ = opts
 	to = strings.TrimSpace(to)
 	if to == "" {
+		s.logRcpt("rejected", to, "empty")
 		return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "Unknown recipient"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DNSTimeout)
 	defer cancel()
 	if s.delivery == nil {
+		s.logRcpt("rejected", to, "need_mail")
 		return &smtp.SMTPError{Code: 503, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "Need MAIL before RCPT"}
 	}
+	// Attach the transaction correlation so the receiver's Resolve log lines
+	// share the edge's ids.
+	ctx = WithTransactionContext(ctx, s.txnAttrs())
 	resp, err := s.delivery.Resolve(ctx, []string{to})
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
-		s.srv.log.Warn("mx rcpt temporary failure", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
+		s.logRcpt("temporary", to, "resolve_error")
+		s.srv.log.Warn("mx rcpt temporary failure", append(s.txnAttrs().SlogArgs(), "recipient", to)...)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary routing failure"}
 	}
 	for _, r := range resp.Results {
@@ -323,20 +457,34 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		if r.Accept {
 			for _, accepted := range s.rcpts {
 				if strings.EqualFold(accepted.address, to) {
+					s.logRcpt("accepted", to, "duplicate")
 					return nil
 				}
 			}
 			s.rcpts = append(s.rcpts, acceptedRcpt{address: strings.ToLower(to), domain: r.Domain})
+			s.logRcpt("accepted", to, "")
 			return nil
 		}
 		if r.Temporary {
-			s.srv.log.Warn("mx rcpt temporary failure", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
+			s.logRcpt("temporary", to, "routing")
+			s.srv.log.Warn("mx rcpt temporary failure", append(s.txnAttrs().SlogArgs(), "recipient", to)...)
 			return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary routing failure"}
 		}
 	}
 	atomic.AddInt64(&s.srv.reject, 1)
-	s.srv.log.Warn("mx recipient rejected", "recipient", to, "peer", ipString(s.peerIP), "helo", s.helo)
+	s.logRcpt("rejected", to, "unknown")
+	s.srv.log.Warn("mx recipient rejected", append(s.txnAttrs().SlogArgs(), "recipient", to)...)
 	return &smtp.SMTPError{Code: 550, EnhancedCode: smtp.EnhancedCode{5, 1, 1}, Message: "Unknown recipient"}
+}
+
+// logRcpt records one recipient routing outcome. The reason is a bounded,
+// non-secret classifier, never the recipient's content.
+func (s *session) logRcpt(outcome, recipient, reason string) {
+	extra := []any{"outcome", outcome, "recipient", recipient}
+	if reason != "" {
+		extra = append(extra, "reason", reason)
+	}
+	s.logTxn(s.srv.log.Info, "mx recipient routing", extra...)
 }
 
 // Data streams the whole original message to bounded staging, computes auth
@@ -346,10 +494,24 @@ func (s *session) Rcpt(to string, opts *smtp.RcptOptions) error {
 // a recorded duplicate; a transient failure makes the whole transaction
 // temporary so the sender retries and committed recipients deduplicate.
 func (s *session) Data(r io.Reader) error {
+	// Capture the transaction id now: s.Reset() clears it before Data returns,
+	// but the connection wrapper still needs it for the final-reply write
+	// event, and Data's own terminal events must carry it.
+	txID := s.txnID
+	txnStart := s.txnStart
+	// The transaction always reaches a terminal decision in Data (even for the
+	// early protocol errors below), so Reset after DATA must not report it as
+	// abandoned. s.Reset() clears txnStart before Data returns, so use the
+	// captured value for durations.
+	s.txnTerminal = true
+	defer s.finishData(txID)
+
 	if !s.hasFrom {
+		s.logDataDecision(txID, "503", "need_mail", 0)
 		return &smtp.SMTPError{Code: 503, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "Need MAIL before DATA"}
 	}
 	if len(s.rcpts) == 0 {
+		s.logDataDecision(txID, "554", "no_recipients", 0)
 		return &smtp.SMTPError{Code: 554, EnhancedCode: smtp.EnhancedCode{5, 5, 1}, Message: "No valid recipients"}
 	}
 	// Reserve one byte over the message cap before reading it: the staged
@@ -364,8 +526,11 @@ func (s *session) Data(r io.Reader) error {
 	reserve := s.srv.cfg.MaxMessageBytes + stageOverhead
 	if !s.srv.staging.tryAcquire(reserve) {
 		atomic.AddInt64(&s.srv.authTemp, 1)
+		s.logDataDecision(txID, "451", "staging_busy", 0)
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Server busy, try again later"}
 	}
+	s.logDataStaging(txID, "start", "recipients", len(s.rcpts), "reserved_bytes", reserve)
+	stageStart := time.Now()
 	// copyDone is closed by the staging copy goroutine exactly once when it has
 	// stopped touching the staged buffer. The deferred cleanup below clears the
 	// buffer, then releases the reservation as soon as the goroutine is known
@@ -395,16 +560,24 @@ func (s *session) Data(r io.Reader) error {
 		close(copyDone)
 	}, &s.dataCancel)
 	if err != nil {
+		reason := stagingErrorReason(err)
+		s.logDataStaging(txID, "failed", "outcome", reason, "duration_ms", durationMs(time.Since(stageStart)))
 		if errors.Is(err, ErrTooLarge) {
+			s.logDataDecision(txID, "552", "too_large", durationMs(time.Since(txnStart)))
 			return &smtp.SMTPError{Code: 552, EnhancedCode: smtp.EnhancedCode{5, 3, 4}, Message: fmt.Sprintf("Message too large: maximum size is %d bytes", s.srv.cfg.MaxMessageBytes)}
 		}
+		s.logDataDecision(txID, "451", reason, durationMs(time.Since(txnStart)))
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Staging failure"}
 	}
+	s.logDataStaging(txID, "staged", "size", size, "digest", digest, "duration_ms", durationMs(time.Since(stageStart)))
 
 	fromDomain := FromHeaderDomain(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
 	defer cancel()
+	verifyStart := time.Now()
 	auth := s.srv.verify.Verify(ctx, bytes.NewReader(raw), s.peerIP, s.helo, s.from, fromDomain)
+	s.logAuthEvidence(txID, auth)
+	s.logTxn(s.srv.log.Info, "mx auth verification completed", "duration_ms", time.Since(verifyStart).Milliseconds())
 
 	recipients := make([]string, 0, len(s.rcpts))
 	for _, rcpt := range s.rcpts {
@@ -419,15 +592,24 @@ func (s *session) Data(r io.Reader) error {
 	}
 	accepted := len(s.rcpts)
 	from := s.from
+	// The receiver consumes the correlation ids from the context; this is the
+	// public helper contract (observability.go), not a Delivery signature
+	// change.
+	ctx = WithTransactionContext(ctx, s.txnAttrs())
+	ingestStart := time.Now()
 	resp, err := s.delivery.Ingest(ctx, meta, bytes.NewReader(raw), size, digest)
+	ingestMs := durationMs(time.Since(ingestStart))
+	attrs := s.txnAttrs().SlogArgs()
 	s.Reset()
 	if err != nil {
 		atomic.AddInt64(&s.srv.authTemp, 1)
-		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "error", err)
+		s.logCoreAck(txID, "error", "recipients", accepted, "size", size, "duration_ms", ingestMs)
+		s.srv.log.Warn("mx message deferred", append(attrs, "from", from, "recipients", recipients, "size", size, "error", err)...)
+		s.logDataDecision(txID, "451", "ingest_error", durationMs(time.Since(txnStart)))
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
 	}
 
-	var transientFail, quotaFail, delivered, spamCount int
+	var transientFail, quotaFail, delivered, spamCount, dupCount int
 	for _, rr := range resp.PerRecipient {
 		switch rr.MachineCode {
 		case mxwire.CodeOK, mxwire.CodeDuplicate:
@@ -437,6 +619,7 @@ func (s *session) Data(r io.Reader) error {
 				atomic.AddInt64(&s.srv.spam, 1)
 			}
 			if rr.MachineCode == mxwire.CodeDuplicate {
+				dupCount++
 				atomic.AddInt64(&s.srv.dup, 1)
 			}
 		case mxwire.CodeQuota:
@@ -454,17 +637,124 @@ func (s *session) Data(r io.Reader) error {
 		transientFail += accepted - (delivered + quotaFail + transientFail)
 	}
 	atomic.AddInt64(&s.srv.accepted, int64(delivered))
+	// Core acknowledgement is logged separately from the final SMTP decision:
+	// the same durable outcome can map to different SMTP replies, and a reader
+	// needs both to tell "core stored it" from "we told the sender 250".
+	s.logCoreAck(txID, "acknowledged",
+		"recipients", accepted,
+		"delivered", delivered,
+		"duplicate", dupCount,
+		"spam", spamCount,
+		"quota_failed", quotaFail,
+		"transient_failed", transientFail,
+		"size", size,
+		"duration_ms", ingestMs,
+	)
 	if quotaFail > 0 {
-		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "reason", "quota")
+		s.srv.log.Warn("mx message deferred", append(attrs, "from", from, "recipients", recipients, "size", size, "reason", "quota")...)
+		s.logDataDecision(txID, "452", "quota", durationMs(time.Since(txnStart)))
 		return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 2, 2}, Message: "Insufficient storage"}
 	}
 	if transientFail > 0 {
 		atomic.AddInt64(&s.srv.authTemp, 1)
-		s.srv.log.Warn("mx message deferred", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "reason", "transient")
+		s.srv.log.Warn("mx message deferred", append(attrs, "from", from, "recipients", recipients, "size", size, "reason", "transient")...)
+		s.logDataDecision(txID, "451", "transient", durationMs(time.Since(txnStart)))
 		return &smtp.SMTPError{Code: 451, EnhancedCode: smtp.EnhancedCode{4, 3, 0}, Message: "Temporary delivery failure"}
 	}
-	s.srv.log.Info("mx message accepted", "from", from, "recipients", recipients, "peer", ipString(s.peerIP), "helo", s.helo, "size", size, "delivered", delivered, "spam", spamCount)
+	s.srv.log.Info("mx message accepted", append(attrs, "from", from, "recipients", recipients, "size", size, "delivered", delivered, "spam", spamCount)...)
+	s.logDataDecision(txID, "250", "accepted", durationMs(time.Since(txnStart)))
 	return nil
+}
+
+// finishData is deferred by Data and runs after the decision has been computed
+// but before go-smtp writes the SMTP response. Arming here (rather than at the
+// start) keeps a panic or an early re-entrant write from consuming the probe.
+func (s *session) finishData(txID string) {
+	s.armFinalReply(txID)
+}
+
+// armFinalReply asks the connection wrapper to record the outcome of the next
+// transport write (the DATA response). Under STARTTLS the wrapper sees only the
+// encrypted first fragment, so the resulting event reports transport success,
+// not proof that the full SMTP reply reached the peer.
+func (s *session) armFinalReply(txID string) {
+	if s.conn != nil {
+		s.conn.armReply(txID)
+	}
+}
+
+// logDataStaging records a DATA staging lifecycle outcome.
+func (s *session) logDataStaging(txID, stage string, extra ...any) {
+	args := []any{AttrConnectionID, s.connID, AttrTransactionID, txID, "stage", stage}
+	args = append(args, extra...)
+	s.srv.log.Info("mx data staging", args...)
+}
+
+// logAuthEvidence records the full normalized SPF/DKIM/DMARC evidence array
+// alongside the enabled toggles, so a reader can distinguish "verification
+// disabled" (enabled false, empty result) from "enabled but no evidence"
+// (enabled true, empty/none result). It never logs message content, subject,
+// header values or key material. The evidence types are bounded diagnostics:
+// results, domains, selectors and classifier strings only.
+func (s *session) logAuthEvidence(txID string, auth mxwire.AuthResults) {
+	s.srv.log.Info("mx auth evidence",
+		AttrConnectionID, s.connID,
+		AttrTransactionID, txID,
+		"spf_enabled", s.srv.cfg.VerifySPF,
+		"dkim_enabled", s.srv.cfg.VerifyDKIM,
+		"dmarc_enabled", s.srv.cfg.VerifyDMARC,
+		"auth_results", auth,
+	)
+}
+
+// logCoreAck records the durable outcome the core reported, separate from the
+// SMTP reply the sender eventually receives.
+func (s *session) logCoreAck(txID, outcome string, extra ...any) {
+	args := []any{AttrConnectionID, s.connID, AttrTransactionID, txID, "outcome", outcome}
+	args = append(args, extra...)
+	s.srv.log.Info("mx core ingest result", args...)
+}
+
+// logDataDecision records the final SMTP decision for the transaction, with the
+// whole-transaction duration in milliseconds. It is deliberately separate from
+// the core acknowledgement and from the transport reply-write outcome observed
+// by the connection wrapper.
+func (s *session) logDataDecision(txID, code, reason string, durationMs int64) {
+	enhanced := map[string]string{"250": "2.0.0", "451": "4.3.0", "452": "4.2.2", "552": "5.3.4", "503": "5.5.1", "554": "5.5.1"}[code]
+	s.srv.log.Info("mx smtp transaction decision",
+		AttrConnectionID, s.connID,
+		AttrTransactionID, txID,
+		"smtp_code", code,
+		"enhanced_code", enhanced,
+		"reason", reason,
+		"duration_ms", durationMs,
+	)
+}
+
+// stagingErrorReason classifies a StageMessage error into a bounded,
+// non-content token for logs. It does not change the SMTP behaviour.
+func stagingErrorReason(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrTooLarge):
+		return "too_large"
+	case errors.Is(err, smtp.ErrTooLongLine):
+		return "line_too_long"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "empty"):
+		return "empty"
+	default:
+		return "read_error"
+	}
 }
 
 var ErrTooLarge = errors.New("message too large")
@@ -687,8 +977,12 @@ func (s *Server) ListenAndServe(ctx context.Context, ln net.Listener) error {
 		}
 		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	}
+	// Wrap the listener so every accepted TCP connection is a connWrapper: it
+	// carries the stable smtp_connection_id and observes connection lifecycle
+	// and reply-write outcomes. go-smtp's Serve accepts from this listener.
+	tracked := &trackingListener{Listener: ln, srv: s}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
+	go func() { errCh <- srv.Serve(tracked) }()
 	s.log.Info("mx edge listening", "addr", ln.Addr().String(), "hostname", s.cfg.Hostname)
 	select {
 	case <-ctx.Done():

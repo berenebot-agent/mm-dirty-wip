@@ -29,6 +29,13 @@ services:
       context: ..
       dockerfile: dialmx/Dockerfile
     restart: unless-stopped
+    # Docker-managed metadata history; size-based rotation, not age-based.
+    # Removed with the container, including when Compose recreates it.
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "10"
     environment:
       # SMTP greeting hostname. Independent of the session listener address.
       MX_HOSTNAME: "${MX_HOSTNAME:-mail.example.com}"

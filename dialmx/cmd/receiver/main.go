@@ -1,16 +1,23 @@
 // Command receiver runs the standalone Dial MX receiver: the SMTP edge and the
 // HTTPS/2 dialer session endpoint in one process. A failure in either listener
 // stops both, and shutdown is bounded so a wedged peer cannot hang the process.
+//
+// Every log line is a JSON record carrying schema_version, service and boot_id.
+// The boot id is generated once here and injected into the one logger shared by
+// the receiver and the SMTP edge, so all process events correlate.
 package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -20,37 +27,56 @@ import (
 	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
+// buildVersion is stamped at build time with -ldflags. It defaults to "dev".
+var buildVersion = "dev"
+
 func main() {
+	bootID := newBootID()
+	log := receiver.NewLogger(slog.LevelInfo, bootID, os.Stderr)
+	slog.SetDefault(log)
+
+	started := time.Now()
+	log.Info(receiver.EventReceiverStarting,
+		"version", buildVersion,
+		"protocol", mxwireProtocol(),
+		"pid", os.Getpid(),
+	)
+
 	cfg, err := dialmx.Load()
 	if err != nil {
-		slog.Error("invalid configuration", "error", err)
+		log.Error("invalid configuration", "error", err)
 		os.Exit(2)
 	}
 	cert, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
 	if err != nil {
-		slog.Error("load TLS certificate", "error", err)
+		log.Error("load TLS certificate", "error", err)
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	r := receiver.New(cfg.Receiver, slog.Default())
+	r := receiver.New(cfg.Receiver, log)
 
 	// The SMTP edge hands each message to the in-process receiver's Delivery.
 	// The receiver owns domain registration, so the edge is policy-free.
-	edge := mxagent.NewServerWithHandoff(cfg.SMTP, slog.Default(), func() mxagent.Delivery {
+	edge := mxagent.NewServerWithHandoff(cfg.SMTP, log, func() mxagent.Delivery {
 		return r.NewDelivery()
 	})
 
 	// The session listener serves the HTTP/2 dialer protocol over TLS. Only the
 	// header read is bounded globally; the session itself relies on per-read
 	// deadlines and context cancellation so a long-lived dialer is not killed
-	// by a blanket server read timeout.
+	// by a blanket server read timeout. ServeTLS is retained: it configures
+	// HTTP/2 and its ConnState callback already observes the *tls.Conn, so the
+	// transport tracker can classify a handshake that fails before any session.
+	tracker := receiver.NewTransportTracker(log)
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           r.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2"}},
+		ConnContext:       tracker.ConnContext,
+		ConnState:         tracker.ConnState,
 	}
 
 	var wg sync.WaitGroup
@@ -59,7 +85,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			if err := fn(); err != nil && ctx.Err() == nil {
-				slog.Error(name+" failed", "error", err)
+				log.Error(receiver.EventListenerFailed, "listener", name, "error", err)
 				stop()
 			}
 		}()
@@ -67,21 +93,28 @@ func main() {
 
 	smtpLn, err := net.Listen("tcp", cfg.SMTP.ListenAddr)
 	if err != nil {
-		slog.Error("listen SMTP", "error", err)
+		log.Error("listen SMTP", "error", err)
 		os.Exit(1)
 	}
-	run("mx edge", func() error { return edge.ListenAndServe(ctx, smtpLn) })
+	logSettings(log, cfg)
 
 	tlsLn, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
-		slog.Error("listen session", "error", err)
+		log.Error("listen session", "error", err)
 		os.Exit(1)
 	}
+
+	log.Info(receiver.EventListenerBound, "listener", "smtp", "addr", smtpLn.Addr().String())
+	log.Info(receiver.EventListenerBound, "listener", "session", "addr", tlsLn.Addr().String())
+	log.Info(receiver.EventReceiverReady, "boot_duration", time.Since(started).Round(time.Millisecond).String())
+
+	run("mx edge", func() error { return edge.ListenAndServe(ctx, smtpLn) })
 	run("session", func() error { return srv.ServeTLS(tlsLn, "", "") })
 
 	<-ctx.Done()
 	// Either listener failing calls stop via the run wrapper, so shutdown is
 	// shared. Bound it so a stuck peer cannot hold the process open.
+	log.Info(receiver.EventReceiverStopping)
 	r.Stop()
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -93,4 +126,52 @@ func main() {
 	case <-shutdown.Done():
 		_ = srv.Close()
 	}
+	log.Info(receiver.EventReceiverStopped, "uptime", time.Since(started).Round(time.Millisecond).String())
+}
+
+// newBootID returns a random 128-bit hex id that is stable for one process boot.
+// It is not a credential and is not accepted as one.
+func newBootID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "unavailable"
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// mxwireProtocol is the wire protocol the process speaks. It is referenced from
+// the logging envelope rather than from the receiver package so the startup
+// record can state the protocol before any session exists.
+func mxwireProtocol() string { return "mx-v2" }
+
+// logSettings emits the effective startup settings once: build and protocol,
+// listener addresses, message/staging/connection/recipient limits, the
+// verification toggles, the DNS resolver and the receiver's own bounds. It
+// carries no secrets: certificate paths and key material are never logged.
+func logSettings(log *slog.Logger, cfg dialmx.Config) {
+	log.Info(receiver.EventSettings,
+		"version", buildVersion,
+		"go", runtime.Version(),
+		"protocol", mxwireProtocol(),
+		"session_listen", cfg.ListenAddr,
+		"smtp_listen", cfg.SMTP.ListenAddr,
+		"hostname", cfg.SMTP.Hostname,
+		"require_tls", cfg.SMTP.RequireTLS,
+		"verify_spf", cfg.SMTP.VerifySPF,
+		"verify_dkim", cfg.SMTP.VerifyDKIM,
+		"verify_dmarc", cfg.SMTP.VerifyDMARC,
+		"dns_resolver", cfg.SMTP.DNSResolver,
+		"max_message_bytes", cfg.SMTP.MaxMessageBytes,
+		"max_staging_bytes", cfg.SMTP.MaxStagingBytes,
+		"max_recipients", cfg.SMTP.MaxRecipients,
+		"max_connections", cfg.SMTP.MaxConnections,
+		"max_domains_per_connection", cfg.Receiver.MaxDomainsPerConnection,
+		"max_transactions", cfg.Receiver.MaxTransactions,
+		"max_transactions_per_connection", cfg.Receiver.MaxTransactionsPerConnection,
+		"max_transactions_per_domain", cfg.Receiver.MaxTransactionsPerDomain,
+		"auth_timeout", cfg.Receiver.AuthTimeout.String(),
+		"resolve_timeout", cfg.Receiver.ResolveTimeout.String(),
+		"ingest_timeout", cfg.Receiver.IngestTimeout.String(),
+		"revalidate_interval", cfg.Receiver.RevalidateInterval.String(),
+	)
 }

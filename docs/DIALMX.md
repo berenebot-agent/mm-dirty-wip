@@ -300,6 +300,93 @@ successes, and every such result must carry a valid disposition
   add a PEM private-CA bundle mounted in the core; hostname verification remains
   mandatory. There is no insecure TLS mode.
 
+## Metadata logging
+
+The standalone receiver writes JSON records to stderr. All records have `time`
+(UTC), `level`, `msg`, `event`, `schema_version: 1`, `service: dialmx` and
+`boot_id`. Normal lifecycle events are INFO; failures also retain warning/error
+diagnostics. Message bodies, subjects, raw headers, TXT records, challenge
+payloads, signatures and credentials are not logged. Envelope addresses, IPs,
+domains and normalized authentication evidence are logged.
+
+### Correlation and events
+
+- **Transport:** `dialmx transport accepted`, `tls failure`, `closed` record
+  HTTPS peer/port, `transport_id`, duration and TLS handshake failure. The
+  transport ID links to admitted sessions.
+- **Core sessions:** `dialmx session rejected`, `opened`, `hello`, `closed`
+  record protocol/TLS details, `core_connection_id`, advertised `core_label`,
+  duration, close reason and counters. The label is caller-advertised, not a
+  unique or authenticated core identity (the current core sends `gatehouse`).
+  Domain/key bindings identify the authority proved on that connection.
+- **Domain authority:** `dialmx domain proof` records initial and renewal
+  DNS lookup, key parsing, signature validation, grants, expiry, revocation and
+  replacement. Fields include domain, key ID, core session, phase, outcome,
+  reason, query name, resolver setting, duration and grant expiry as applicable.
+  DNS lookup success and signature validity are distinct outcomes. `system`
+  denotes resolver configuration, not a known upstream resolver address.
+- **SMTP:** `mx connection opened/closed`, `mx session started` and
+  `mx starttls established` record `smtp_connection_id`, endpoints, HELO,
+  TLS details, byte counts and duration. Identity persists across STARTTLS.
+  Open/close coverage includes peers that never reach HELO. The backend
+  observes successful STARTTLS; failed SMTP handshakes and syntax errors handled
+  internally by go-smtp may only appear in its error diagnostics/connection
+  closure, rather than a classified transaction event.
+- **Messages:** `mx mail transaction started/rejected`, `mx recipient routing`,
+  `mx data staging`, `mx transaction abandoned`, and
+  `mx smtp transaction decision` record `message_transaction_id`, envelope
+  addresses, staging size/digest, duration, routing and final SMTP decision.
+  Reset, replacement MAIL and disconnect terminate unfinished transactions.
+- **Recipient destinations:** `dialmx resolve` records the full recipient,
+  destination domain, selected core/key/channel, wire transaction, duration and
+  accepted/rejected/temporary result. No binding is recorded explicitly rather
+  than attributed to a core.
+- **Authentication:** `mx auth evidence` records normalized `auth_results`
+  (SPF, DKIM signatures, DMARC policy/alignment and diagnostic reasons), enabled
+  flags and duration. Disabled verification differs from absent evidence. DKIM
+  selector/algorithm are omitted because the current evaluator does not populate
+  them.
+- **Handoff:** `dialmx handoff` start and terminal records contain recipients,
+  domains, size/digest, completed body-chunk bytes, duration, phase and outcome.
+  `handoff_id` combines `core_connection_id` and `wire_transaction_id`; wire
+  IDs alone are not globally unique. `dialmx handoff result` records each
+  recipient's machine code, disposition, duplicate flag, core message ID and
+  bounded reason. Partial fan-out retains earlier acknowledgements even when
+  a later core fails.
+- **Reply observation:** `mx core ingest result` and
+  `mx smtp transaction decision` separate core response from chosen SMTP reply.
+  `mx smtp reply transport write` observes the next underlying transport write,
+  not remote receipt of a full reply; with TLS it can be the first encrypted
+  fragment. Connection read outcomes classify timeout/EOF/error where observed.
+- **Process:** receiver starting/settings/listener bound/ready/stopping/stopped
+  events report build/protocol, effective limits and verification settings.
+  Abrupt process termination cannot emit terminal events; unmatched starts
+  from an earlier `boot_id` remain interrupted/unknown.
+
+A valid core response is `acknowledged`, including quota/transient responses;
+only individual `ok`/`duplicate` results with a valid durable disposition prove
+durable handling. Failure while sending `IngestEnd` or awaiting/validating a
+response is `unknown`: the core may have committed. The sender still receives
+a temporary failure. Logs never substitute for durable receipts in the core.
+
+### Retention and viewing
+
+The bundled Compose explicitly selects Docker's `local` log driver with
+`max-size: 20m` and `max-file: 10` (approximately 200 MB per container before
+compression). Rotation is size-based, not a guaranteed number of days. Docker
+retains logs across stop/start and host restarts, but removes them when the
+container is removed/recreated. They are outside `/data` and its backups.
+
+```bash
+docker compose -f dialmx/compose.yml logs --timestamps --tail=200 dialmx
+docker compose -f dialmx/compose.yml logs --follow dialmx
+```
+
+Trace a message using its `message_transaction_id`, then follow its resolve and
+handoff records to `core_connection_id`; use that ID for DNS proof and session
+history. Use `smtp_connection_id` for multiple messages on one SMTP connection.
+Export needed history before replacing the container.
+
 ## 8. Testing
 
 Go is not on the host. Run focused tests through the wrapper with a bounded
