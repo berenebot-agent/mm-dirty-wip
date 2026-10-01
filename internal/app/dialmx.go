@@ -12,9 +12,19 @@ import (
 
 func (s *Service) DialMXBackend() mxdial.Backend { return dialMXBackend{service: s} }
 
-type dialMXBackend struct{ service *Service }
+func (s *Service) PrivateMXBackend() mxdial.Backend {
+	return dialMXBackend{service: s, private: true}
+}
+
+type dialMXBackend struct {
+	service *Service
+	private bool
+}
 
 func (b dialMXBackend) Domains(ctx context.Context) ([]mxdial.Domain, error) {
+	if b.private {
+		return nil, nil
+	}
 	domains, err := b.service.Store.ListDialMXDomains(ctx)
 	if err != nil {
 		return nil, err
@@ -56,7 +66,12 @@ func (b dialMXBackend) Resolve(ctx context.Context, domain string, recipients []
 			return mxwire.ResolveResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 		}
 	}
-	for _, result := range b.service.ResolveDialMXRecipients(ctx, recipients) {
+	provider := "dialmx"
+	if b.private {
+		provider = mxProvider
+	}
+	results := b.service.resolveMXRecipients(ctx, provider, recipients)
+	for _, result := range results {
 		response.Results = append(response.Results, mxwire.ResolveRecipient{Recipient: result.Recipient, Accept: result.Accept, Domain: result.Domain, Code: string(result.Code), Temporary: result.Temporary})
 	}
 	return response, nil
@@ -71,7 +86,14 @@ func (b dialMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire
 			return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 		}
 	}
-	result, err := b.service.IngestDialMX(ctx, MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID})
+	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID}
+	var result MXIngestResult
+	var err error
+	if b.private {
+		result, err = b.service.IngestMX(ctx, input)
+	} else {
+		result, err = b.service.IngestDialMX(ctx, input)
+	}
 	if err != nil {
 		return mxwire.IngestResponse{}, err
 	}

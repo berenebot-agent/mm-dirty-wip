@@ -128,7 +128,7 @@ filesystem and network namespace. Recommended when you can run two containers:
 
 ```bash
 # .env
-MX_EDGE_SECRET=<long random secret>   # generate: openssl rand -hex 32
+DIALMX_CORE_KEY=<long random secret>   # generate: openssl rand -hex 32
 docker compose -f docker-compose.mx-sidecar.yml up -d
 ```
 
@@ -148,17 +148,19 @@ Core service (`mailmoose`):
 | Variable | Default | Meaning |
 |---|---|---|
 | `MX_UID` / `MX_GID` | `65533` | Uid/gid the embedded edge runs as (must differ from the app's). |
-| `MX_SIGNATURE_SKEW_SECONDS` | `600` | How old a signed edge request may be (replay window bound). |
 | `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
-| `MX_EDGE_KEYS` | auto-generated (embedded) | Override the edge credential (`key_id:secret`, comma-separated for rotation). Required for `remote`. Every secret must carry 32 bytes / 256 bits of entropy; startup refuses weaker values. |
+| `MX_RECEIVER_URL` | built-in loopback | Receiver HTTP/HTTPS origin; required for `remote`. |
+| `DIALMX_CORE_KEY` | auto-generated (embedded) | Bearer key shared with the private receiver; required for `remote`. |
 | `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
 
 Edge service (`mailmoose-mx`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MAILMOOSE_INGEST_URL` | `http://127.0.0.1:8082` | Core URL (a public HTTPS proxy for a remote edge). |
-| `MX_EDGE_NAME` | `mx-1` | Edge name shown in logs and signed metadata. |
+| `DIALMX_MODE` | `single` | Private single-core bearer mode; `shared` uses DNS-backed domain authentication. |
+| `DIALMX_LISTEN_ADDR` | `:8443` | Session listener; built-in binds `127.0.0.1:8443`. |
+| `DIALMX_CORE_KEY` | required in single | Matching core bearer key. |
+| `DIALMX_TLS_CERT` / `DIALMX_TLS_KEY` | empty | Optional session TLS in single mode; required in shared mode. |
 | `MX_LISTEN_ADDR` | `:2525` | SMTP listener (unprivileged internally; publish host `25`). |
 | `MX_TLS_CERT` / `MX_TLS_KEY` | empty | Optional STARTTLS; set both or neither. |
 | `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
@@ -178,13 +180,11 @@ semantics are in [docs/MX.md](MX.md).
 
 ### Remote edge
 
-A remote edge is the same binary pointed at a public HTTPS endpoint. You do
-**not** need cert files if a reverse proxy terminates TLS: the signature covers
-the method and path only, not the host or scheme. Point `MAILMOOSE_INGEST_URL`
-at the proxy (for example `https://inbound.example.com`) and forward to the
-core's `:8082` **without rewriting the path**. Use `MX_TLS_CERT`/`MX_TLS_KEY`
-only when the edge speaks directly to the core with no proxy. See
-[docs/MX.md](MX.md).
+A remote receiver is the same binary with `DIALMX_MODE=single` and a shared
+bearer key. The core connects outward using `MX_RECEIVER_URL`; it no longer
+exposes MX ingest endpoints. Session TLS is optional for LAN use and verified
+when the URL is HTTPS. A reverse proxy must support bidirectional HTTP/2
+streaming to the receiver. See [docs/MX.md](MX.md).
 
 ## Backup
 

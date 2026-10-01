@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/auth"
-	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // InboundAddr is the fixed address of the dedicated inbound webhook listener.
@@ -30,7 +29,7 @@ const (
 	// separate-uid child process. It is the default-on form of the switch.
 	MXLocal MXMode = "true"
 	// MXRemote enables MX for an edge that runs as a separate container/host and
-	// authenticates with operator-supplied MX_EDGE_KEYS.
+	// authenticates with an operator-supplied bearer key.
 	MXRemote MXMode = "remote"
 )
 
@@ -103,19 +102,14 @@ type Config struct {
 	WebhookRetryWindow  time.Duration
 	// MXMode selects the optional direct-SMTP (MX) deployment: off, true (edge
 	// embedded in this container as a separate-uid child) or remote (edge runs
-	// as a separate container/host and shares MX_EDGE_KEYS). It is the single
+	// as a separate container/host and shares DIALMX_CORE_KEY). It is the single
 	// user-facing MX switch; MXReceiveEnabled/MXEmbedded are derived.
 	MXMode MXMode
-	// MXReceiveEnabled turns on the direct-SMTP ingress endpoints on the inbound
-	// listener. Derived: true for embedded and remote.
+	// MXReceiveEnabled enables private direct-SMTP delivery. Derived from MXMode.
 	MXReceiveEnabled bool
-	// MXEdgeKeys maps an operator edge key ID to its HMAC secret. MX requests
-	// are authenticated by key ID, not by a self-reported edge name. Overlapping
-	// keys are accepted so a credential can be rotated without downtime. In
-	// embedded mode the key may be generated; remote mode requires it.
-	MXEdgeKeys map[string]string
-	// MXSignatureSkew bounds how old a signed MX request may be.
-	MXSignatureSkew time.Duration
+	// Private receiver session URL and bearer credential.
+	MXReceiverURL string
+	MXCoreKey     string
 	// MXReceiptRetention is how long a durable MX delivery receipt is kept. It
 	// must cover the supported sender retry window and expected outage recovery.
 	MXReceiptRetention time.Duration
@@ -137,10 +131,6 @@ type Config struct {
 
 func Load() (Config, error) {
 	mxMode, err := parseMXMode(env("MX_ENABLE", "false"))
-	if err != nil {
-		return Config{}, err
-	}
-	mxEdgeKeys, err := parseEdgeKeys(env("MX_EDGE_KEYS", ""))
 	if err != nil {
 		return Config{}, err
 	}
@@ -184,8 +174,8 @@ func Load() (Config, error) {
 		MXMode:                 mxMode,
 		MXReceiveEnabled:       mxMode != MXOff,
 		MXEmbedded:             mxMode == MXLocal,
-		MXEdgeKeys:             mxEdgeKeys,
-		MXSignatureSkew:        time.Duration(envInt("MX_SIGNATURE_SKEW_SECONDS", 600)) * time.Second,
+		MXReceiverURL:          strings.TrimRight(env("MX_RECEIVER_URL", ""), "/"),
+		MXCoreKey:              strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")),
 		MXReceiptRetention:     time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
 		MXUID:                  envInt("MX_UID", 65533),
 		MXGID:                  envInt("MX_GID", 65533),
@@ -216,14 +206,17 @@ func Load() (Config, error) {
 	}
 	// embedded mode auto-generates an edge credential; remote mode shares an
 	// operator secret and must be given one.
-	if cfg.MXMode == MXRemote && len(cfg.MXEdgeKeys) == 0 {
-		return Config{}, fmt.Errorf("MX_ENABLE=remote requires at least one MX_EDGE_KEYS entry")
+	if cfg.MXMode == MXRemote && (cfg.MXReceiverURL == "" || cfg.MXCoreKey == "") {
+		return Config{}, fmt.Errorf("MX_ENABLE=remote requires MX_RECEIVER_URL and DIALMX_CORE_KEY")
+	}
+	if cfg.MXReceiverURL != "" {
+		u, err := url.Parse(cfg.MXReceiverURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return Config{}, fmt.Errorf("MX_RECEIVER_URL must be an HTTP or HTTPS origin")
+		}
 	}
 	if cfg.MXEmbedded && (cfg.MXUID <= 0 || cfg.MXGID <= 0) {
 		return Config{}, fmt.Errorf("MX_UID and MX_GID must be positive non-zero integers")
-	}
-	if cfg.MXSignatureSkew < 0 {
-		return Config{}, fmt.Errorf("MX_SIGNATURE_SKEW_SECONDS must be zero or greater")
 	}
 	if cfg.MXReceiptRetention <= 0 {
 		return Config{}, fmt.Errorf("MX_RECEIPT_RETENTION_HOURS must be positive")
@@ -259,37 +252,6 @@ func Load() (Config, error) {
 	}
 	cfg.TrustedProxies = proxies
 	return cfg, nil
-}
-
-// parseEdgeKeys parses MX_EDGE_KEYS, a comma-separated list of
-// "key_id:secret" pairs. Both halves are required; a malformed entry is
-// ignored so one bad pair cannot silently disable the rest. Every
-// operator-supplied secret must meet the mxwire entropy bar (32 bytes / 256
-// bits); a weak secret is a startup error, never silently accepted, because it
-// authenticates the edge and the core trusts edge auth evidence on a valid
-// signature. The secret is never logged or included in the error.
-func parseEdgeKeys(raw string) (map[string]string, error) {
-	out := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		id, secret, ok := strings.Cut(part, ":")
-		id = strings.TrimSpace(id)
-		secret = strings.TrimSpace(secret)
-		if !ok || id == "" || secret == "" {
-			continue
-		}
-		if err := mxwire.CheckEdgeSecret(secret); err != nil {
-			return nil, fmt.Errorf("MX_EDGE_KEYS entry %q too weak: need 32 bytes of entropy (generate: openssl rand -hex 32)", id)
-		}
-		out[id] = secret
-	}
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
 }
 
 // adminConfig carries the configured system-administrator credentials.

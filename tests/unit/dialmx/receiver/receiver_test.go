@@ -88,6 +88,9 @@ func rootTLS(t *testing.T, srv *httptest.Server) *tls.Config {
 // newReceiver builds a receiver with the test SMTP edge bounds.
 func newReceiver(t *testing.T, cfg receiver.Config) *receiver.Receiver {
 	t.Helper()
+	if cfg.Mode == "" {
+		cfg.Mode = "shared"
+	}
 	if cfg.SMTP.Hostname == "" {
 		cfg.SMTP.Hostname = "mx.test"
 	}

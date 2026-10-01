@@ -225,6 +225,10 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 	if tr.log == nil {
 		return
 	}
+	transport := "http"
+	if _, ok := c.(handshakeCompleter); ok {
+		transport = "https"
+	}
 	switch s {
 	case http.StateNew:
 		tr.mu.Lock()
@@ -235,7 +239,7 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 		}
 		tr.log.Info(eventTransportAccepted,
 			"transport_id", st.id,
-			"transport", "https",
+			"transport", transport,
 			"peer", st.peer,
 			"peer_port", st.port,
 		)
@@ -262,7 +266,7 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 		}
 		tr.log.Info(eventTransportClosed,
 			"transport_id", st.id,
-			"transport", "https",
+			"transport", transport,
 			"peer", st.peer,
 			"peer_port", st.port,
 			"duration_ms", ms,

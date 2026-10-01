@@ -7,29 +7,25 @@ import (
 	"github.com/dellarb/mailmoose/internal/launcher"
 )
 
-func TestResolveEdgeCredentialPicksDeterministic(t *testing.T) {
-	keys := map[string]string{"edge-2": "b", "edge-1": "a", "edge-10": "c"}
-	id, secret, err := launcher.ResolveEdgeCredential(keys)
+func TestResolveCoreKeyPreservesConfigured(t *testing.T) {
+	secret, err := launcher.ResolveCoreKey("configured-key")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != "edge-1" || secret != "a" {
-		t.Fatalf("got %q/%q, want edge-1/a", id, secret)
+	if secret != "configured-key" {
+		t.Fatalf("got %q", secret)
 	}
 }
 
 func TestResolveEdgeCredentialGenerates(t *testing.T) {
-	id, secret, err := launcher.ResolveEdgeCredential(nil)
+	secret, err := launcher.ResolveCoreKey("")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if id != "edge-1" {
-		t.Fatalf("generated key id %q", id)
 	}
 	if len(secret) != 64 {
 		t.Fatalf("generated secret length %d", len(secret))
 	}
-	_, secret2, err := launcher.ResolveEdgeCredential(nil)
+	secret2, err := launcher.ResolveCoreKey("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +40,7 @@ func TestEdgeEnvScrubsAppSecrets(t *testing.T) {
 	t.Setenv("MX_EDGE_KEYS", "edge-1:sekret")
 	t.Setenv("MX_MAX_MESSAGE_BYTES", "1048576")
 
-	env := launcher.EdgeEnv("mail.example.com", "edge-1", "sekret", 3)
+	env := launcher.EdgeEnv("mail.example.com", "sekret", 3)
 	joined := strings.Join(env, "\n")
 	for _, forbidden := range []string{"APP_ENCRYPTION_KEY", "DATA_DIR", "MX_EDGE_KEYS"} {
 		if strings.Contains(joined, forbidden) {
@@ -52,9 +48,9 @@ func TestEdgeEnvScrubsAppSecrets(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"MX_EDGE_KEY_ID=edge-1",
-		"MX_EDGE_SECRET=sekret",
-		"MAILMOOSE_INGEST_URL=http://127.0.0.1:8082",
+		"DIALMX_MODE=single",
+		"DIALMX_CORE_KEY=sekret",
+		"DIALMX_LISTEN_ADDR=127.0.0.1:8443",
 		"MX_LISTEN_ADDR=:2525",
 		"MX_HOSTNAME=mail.example.com",
 		"MX_SHUTDOWN_FD=3",
@@ -74,7 +70,7 @@ func TestEdgeEnvScrubsAppSecrets(t *testing.T) {
 }
 
 func TestEdgeEnvDefaultHostname(t *testing.T) {
-	env := launcher.EdgeEnv("", "edge-1", "s", 3)
+	env := launcher.EdgeEnv("", "s", 3)
 	found := false
 	for _, e := range env {
 		if e == "MX_HOSTNAME=mailmoose-mx" {

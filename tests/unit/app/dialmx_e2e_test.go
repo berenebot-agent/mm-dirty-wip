@@ -52,8 +52,7 @@ func dialMXDomain(t *testing.T, name, local string) (*dialMXCore, model.Inbox) {
 		AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901",
 		MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour,
 		LoginLimitPerMinute: 10, SendLimitPerMinute: 60, InboundConcurrency: 8,
-		MXReceiveEnabled: true, MXEdgeKeys: map[string]string{"edge": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-		MXSignatureSkew: 10 * time.Minute, MXReceiptRetention: time.Hour,
+		MXReceiveEnabled: true, MXReceiptRetention: time.Hour,
 	}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
@@ -116,6 +115,7 @@ func dialMXReceiver(t *testing.T, records *dialMXRecords) (*receiver.Receiver, *
 		return records.lookup(strings.TrimPrefix(q, "_mailmoose-mx.")), nil
 	}
 	r := receiver.New(receiver.Config{
+		Mode:      "shared",
 		SMTP:      mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: 16, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second},
 		LookupTXT: lookup,
 	}, nil)

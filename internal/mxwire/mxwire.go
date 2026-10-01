@@ -1,94 +1,12 @@
-// Package mxwire is the shared, versioned contract between the optional MX
-// edge (cmd/mx, internal/mxagent) and the core (internal/app). It holds the
-// request envelope, the normalized authentication-evidence model, the bound
-// limits, the machine codes and the HMAC sign/verify helpers. Both binaries are
-// built from this module, but deployed version skew is still possible, so the
-// protocol version is mandatory and unsupported versions are rejected.
+// Package mxwire defines MX session framing, normalized authentication evidence,
+// bounds, durable outcome codes and retry fingerprints shared by receiver/core.
 package mxwire
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
-	"errors"
-	"fmt"
-	"io"
 	"strings"
-	"time"
 )
-
-// ProtocolVersion is the only wire version this build speaks.
-const ProtocolVersion = "mx-v1"
-
-// Endpoint paths. They live on the dedicated inbound connector listener.
-const (
-	PathResolve = "/internal/mx/resolve"
-	PathIngest  = "/internal/mx/ingest"
-)
-
-// Ingest framing. The ingest request body is a raw two-part stream, not JSON:
-//
-//	[4-byte big-endian metadata length][metadata JSON][raw original MIME]
-//
-// The raw MIME is never base64-encoded or JSON-escaped, so both ends can stream
-// it with bounded memory and no 8-bit corruption. The signature covers
-// SHA-256(metadata) and SHA-256(raw MIME), so it is independent of this framing.
-const (
-	// IngestPreludeLen is the fixed size of the metadata-length prefix.
-	IngestPreludeLen = 4
-	// IngestContentType is the Content-Type of a framed ingest request body.
-	IngestContentType = "application/octet-stream"
-)
-
-// WritePrelude writes the 4-byte big-endian metadata length followed by the
-// metadata JSON. It does not write the body.
-func WritePrelude(w io.Writer, meta []byte) error {
-	if len(meta) == 0 || len(meta) > MaxMetadataBytes {
-		return fmt.Errorf("mxwire: metadata length %d out of range", len(meta))
-	}
-	var hdr [IngestPreludeLen]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(meta)))
-	if _, err := w.Write(hdr[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(meta)
-	return err
-}
-
-// ReadPrelude reads the 4-byte length and the metadata JSON from r, leaving r
-// positioned at the first body byte. It fails if the length is zero or exceeds
-// MaxMetadataBytes.
-func ReadPrelude(r io.Reader) ([]byte, error) {
-	var hdr [IngestPreludeLen]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return nil, err
-	}
-	n := binary.BigEndian.Uint32(hdr[:])
-	if n == 0 || n > MaxMetadataBytes {
-		return nil, fmt.Errorf("mxwire: metadata length %d out of range", n)
-	}
-	meta := make([]byte, n)
-	if _, err := io.ReadFull(r, meta); err != nil {
-		return nil, err
-	}
-	return meta, nil
-}
-
-// SplitPreludeBytes splits an already-buffered framed body into metadata and
-// body. It is used for small bodies (resolve) where buffering is fine.
-func SplitPreludeBytes(raw []byte) ([]byte, []byte, error) {
-	if len(raw) < IngestPreludeLen {
-		return nil, nil, fmt.Errorf("mxwire: short prelude")
-	}
-	n := binary.BigEndian.Uint32(raw[:IngestPreludeLen])
-	if n == 0 || n > MaxMetadataBytes || int(n) > len(raw)-IngestPreludeLen {
-		return nil, nil, fmt.Errorf("mxwire: metadata length %d out of range", n)
-	}
-	return raw[IngestPreludeLen : IngestPreludeLen+n], raw[IngestPreludeLen+n:], nil
-}
 
 // Bounds. These are the package defaults; the core may apply a tighter
 // configured body cap. Metadata must stay well under typical proxy header
@@ -100,49 +18,9 @@ const (
 	MaxResolveRecipients = 100
 	// DefaultMaxBodyBytes mirrors the core default 30 MiB message cap.
 	DefaultMaxBodyBytes = 30 << 20
-	// MaxSignatureSkew bounds how old a signed request may be. It bounds the
-	// replay duration, not replay itself; request IDs are recorded to reject
-	// conflicting reuse.
-	MaxSignatureSkew = 10 * time.Minute
 	// MaxDKIMSignatures bounds how many signatures the edge evaluates.
 	MaxDKIMSignatures = 10
 )
-
-// MinEdgeSecretBytes is the minimum decoded entropy for an operator-supplied
-// MX edge HMAC secret: 32 bytes / 256 bits. The secret authenticates every
-// edge->core request, and the core trusts the edge's SPF/DKIM/DMARC evidence
-// on a valid signature, so a guessable secret lets anyone inject mail and burn
-// quota. Length is an enforceable proxy for unguessability: generate with
-// `openssl rand -hex 32`. This cannot prove randomness; it rejects the
-// obviously weak.
-const MinEdgeSecretBytes = 32
-
-// CheckEdgeSecret reports whether an operator-supplied edge HMAC secret meets
-// the minimum entropy bar. It accepts hex, base64 (std/raw, padded or not) or
-// raw secrets that decode to at least MinEdgeSecretBytes. Auto-generated
-// embedded credentials already carry 32 random bytes, so this gates only
-// operator values. The secret itself is never included in the error.
-func CheckEdgeSecret(secret string) error {
-	s := strings.TrimSpace(secret)
-	if s == "" {
-		return fmt.Errorf("mxwire: edge secret must not be empty (generate: openssl rand -hex 32)")
-	}
-	if b, err := hex.DecodeString(s); err == nil && len(b) >= MinEdgeSecretBytes {
-		return nil
-	}
-	for _, enc := range []*base64.Encoding{
-		base64.StdEncoding, base64.RawStdEncoding,
-		base64.URLEncoding, base64.RawURLEncoding,
-	} {
-		if b, err := enc.DecodeString(s); err == nil && len(b) >= MinEdgeSecretBytes {
-			return nil
-		}
-	}
-	if len([]byte(s)) >= MinEdgeSecretBytes {
-		return nil
-	}
-	return fmt.Errorf("mxwire: edge secret too weak: need at least %d bytes of entropy as hex, base64 or raw text (generate: openssl rand -hex 32)", MinEdgeSecretBytes)
-}
 
 // Disposition is the durable outcome the core returns for an ingest.
 type Disposition string
@@ -168,16 +46,6 @@ const (
 	CodeInvalid          MachineCode = "invalid_message"
 	CodeTempFail         MachineCode = "temporary_failure"
 	CodeReplay           MachineCode = "replay_rejected"
-)
-
-var (
-	// ErrSignature is returned when a request signature does not verify.
-	ErrSignature = errors.New("mxwire: invalid signature")
-	// ErrSkew is returned when a signed request timestamp is outside the
-	// accepted window.
-	ErrSkew = errors.New("mxwire: timestamp outside accepted window")
-	// ErrVersion is returned for an unsupported protocol version.
-	ErrVersion = errors.New("mxwire: unsupported protocol version")
 )
 
 // AuthResults is the bounded, normalized authentication evidence the
@@ -327,23 +195,6 @@ func Classify(a *AuthResults, mode Enforcement) Classification {
 	return Classification{}
 }
 
-// ResolveRequest is the metadata envelope of POST /internal/mx/resolve. Per
-// the frozen wire contract, the bounded recipient JSON is the request BODY
-// (hashed into the signature), and irrelevant ingest metadata is absent under
-// this schema.
-type ResolveRequest struct {
-	Version   string `json:"version"`
-	KeyID     string `json:"key_id"`
-	Timestamp int64  `json:"timestamp"`
-	RequestID string `json:"request_id"`
-	Edge      string `json:"edge,omitempty"`
-}
-
-// ResolveBody is the bounded resolve body: the recipient list.
-type ResolveBody struct {
-	Recipients []string `json:"recipients"`
-}
-
 // ResolveRecipient is one routing decision.
 type ResolveRecipient struct {
 	Recipient string `json:"recipient"`
@@ -362,18 +213,9 @@ type ResolveResponse struct {
 	MachineCode MachineCode        `json:"machine_code"`
 }
 
-// IngestMetadata is the signed metadata for one POST /internal/mx/ingest. Its
-// exact transmitted JSON bytes are hashed into the signature; core never reads
-// routing or auth material from unsigned headers. One ingest carries the whole
-// accepted recipient set and the original MIME once; the core fans out
-// internally so the edge never streams a copy per recipient.
+// IngestMetadata carries SMTP evidence and original MIME integrity information
+// over an authorized session. The core fans out the accepted recipient set.
 type IngestMetadata struct {
-	Version string `json:"version"`
-	KeyID   string `json:"key_id"`
-	// Timestamp is unix seconds; skew-bounded.
-	Timestamp int64  `json:"timestamp"`
-	RequestID string `json:"request_id"`
-	Edge      string `json:"edge,omitempty"`
 	// Recipients is the accepted envelope recipient set this ingest covers.
 	Recipients []string `json:"recipients"`
 	// EnvelopeFrom is the SMTP MAIL FROM (may be empty for the null path).
@@ -409,72 +251,13 @@ type RecipientIngestResult struct {
 	Duplicate   bool        `json:"duplicate,omitempty"`
 }
 
-// CanonicalString builds the exact string that is signed. method and path are
-// fixed by the endpoint; metaDigest and bodyDigest are the hex SHA-256 digests
-// of the exact transmitted metadata and body. Signing digests rather than raw
-// bytes lets both ends stream a large body through the hash without holding it
-// in memory.
-func CanonicalString(version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest string) string {
-	return version + "\n" +
-		fmt.Sprintf("%d", ts) + "\n" +
-		requestID + "\n" +
-		keyID + "\n" +
-		method + "\n" +
-		path + "\n" +
-		metaDigest + "\n" +
-		bodyDigest
-}
-
 func hexHash(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
 
-// Sign returns the hex HMAC-SHA256 over the canonical string built from the
-// metadata and body digests.
-func Sign(key []byte, version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest string) string {
-	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write([]byte(CanonicalString(version, keyID, ts, requestID, method, path, metaDigest, bodyDigest)))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// Verify checks version, timestamp skew, key id and constant-time signature over
-// the supplied metadata and body digests. Callers supply the resolved key for
-// keyID and the clock/skew.
-func Verify(key []byte, version, keyID string, ts int64, requestID, method, path, metaDigest, bodyDigest, signature string, now time.Time, skew time.Duration) error {
-	if version != ProtocolVersion {
-		return fmt.Errorf("%w: %q", ErrVersion, version)
-	}
-	if keyID == "" {
-		return fmt.Errorf("%w: unknown key id", ErrSignature)
-	}
-	if skew <= 0 {
-		skew = MaxSignatureSkew
-	}
-	delta := now.Sub(time.Unix(ts, 0))
-	if delta < -skew || delta > skew {
-		return ErrSkew
-	}
-	want, err := hex.DecodeString(Sign(key, version, keyID, ts, requestID, method, path, metaDigest, bodyDigest))
-	if err != nil {
-		return ErrSignature
-	}
-	got, err := hex.DecodeString(strings.TrimSpace(signature))
-	if err != nil {
-		return ErrSignature
-	}
-	if subtle.ConstantTimeCompare(want, got) != 1 {
-		return ErrSignature
-	}
-	return nil
-}
-
-// MetaDigest and BodyDigest return the hex SHA-256 digests used in the signed
-// canonical string.
-func MetaDigest(b []byte) string { return hexHash(b) }
-
 // BodyDigest returns the hex SHA-256 of b, the content digest carried in the
-// signed metadata and re-checked against the streamed body.
+// session metadata and re-checked against the streamed body.
 func BodyDigest(b []byte) string { return hexHash(b) }
 
 // FingerprintVersion is prefixed to a delivery fingerprint so its scheme is

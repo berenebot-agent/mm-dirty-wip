@@ -132,6 +132,7 @@ func TestBinaryHTTP2AndSMTP(t *testing.T) {
 
 	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(),
+		"DIALMX_MODE=shared",
 		"DIALMX_LISTEN_ADDR="+sessionAddr,
 		"DIALMX_TLS_CERT="+certFile,
 		"DIALMX_TLS_KEY="+keyFile,

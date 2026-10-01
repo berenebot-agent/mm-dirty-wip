@@ -1,7 +1,9 @@
 # Dial MX — standalone receiver
 
-A single-process SMTP receiver that terminates mail for domains the core has
-registered, verifies each dialer against a DNS-anchored Ed25519 key, and hands
+A single-process SMTP receiver with two modes: `single` (default) authenticates
+one core with `DIALMX_CORE_KEY`, with optional TLS and no domain registration;
+`shared` verifies each domain against a DNS-anchored Ed25519 key and requires TLS.
+Both hand
 accepted messages to the MailMoose core. See [docs/DIALMX.md](../docs/DIALMX.md)
 for the full deployment guide and wire contract.
 
@@ -10,9 +12,9 @@ for the full deployment guide and wire contract.
 - One binary (`./dialmx/cmd/receiver`), one process, two listeners:
   - **SMTP edge** on `:2525` (map host `:25`), policy-free. It computes
     SPF/DKIM/DMARC evidence on the original bytes.
-  - **HTTPS/2 session endpoint** on `:8443` (map host `:443`), where the core
-    dials in, proves control of a domain's signing key, and receives mail.
-- **Stateless**: no `/data` mount, no database, no core HMAC secret, no
+  - **HTTP/2 session endpoint** on `:8443`, where the core dials in and receives
+    mail after bearer authentication (single) or domain key proof (shared).
+- **Stateless**: no `/data` mount, no database, no
   `APP_ENCRYPTION_KEY`. Messages stage in memory and are streamed to the core.
 - **Non-root**: the image runs as uid/gid `65532` and needs no capabilities.
 
@@ -29,7 +31,12 @@ cp /path/to/fullchain.pem /path/to/privkey.pem dialmx/certs/
 docker compose -f dialmx/compose.yml up -d --build
 ```
 
-Then, in the core's Admin UI, add the receiver for each domain:
+For private mode, set `DIALMX_CORE_KEY` on the receiver and core, and set
+`MX_ENABLE=remote` and `MX_RECEIVER_URL=http://receiver:8443` on the core. Select
+**Receiving → MX** for its domains. See [docs/MX.md](../docs/MX.md).
+
+For shared mode, set `DIALMX_MODE=shared` and the session certificates. Then,
+in the core's Admin UI, add the receiver for each domain:
 
 1. Set the domain's **Receiving** provider to **Dial MX**.
 2. Enter the receiver's HTTPS base URL (for example `https://mx.example.com`).
@@ -42,11 +49,13 @@ Then, in the core's Admin UI, add the receiver for each domain:
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `DIALMX_MODE` | `single` | Single bearer-authenticated core or shared DNS-authenticated domains. |
+| `DIALMX_CORE_KEY` | — | Required in single mode; unused in shared mode. |
 | `MX_HOSTNAME` | `localhost` | SMTP greeting hostname; independent of the listener address. |
 | `DIALMX_LISTEN_ADDR` | `:8443` | HTTPS/2 session listener. |
-| `DIALMX_TLS_CERT` | — | Session listener certificate (required). |
-| `DIALMX_TLS_KEY` | — | Session listener private key (required). |
-| `MX_TLS_CERT` / `MX_TLS_KEY` | unset | Optional SMTP STARTTLS pair; set together. With the bundled compose they default to the listener pair. |
+| `DIALMX_TLS_CERT` | — | Optional single-mode certificate; required in shared mode. |
+| `DIALMX_TLS_KEY` | — | Session private key; set together with certificate. |
+| `MX_TLS_CERT` / `MX_TLS_KEY` | unset | Optional SMTP STARTTLS pair, independent of the session pair; set together. |
 | `MX_REQUIRE_TLS` | `false` | Refuse plaintext SMTP. |
 | `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
 | `MX_DNS_RESOLVER` | system | Resolver for SPF/DKIM/DMARC and the TXT proof. |

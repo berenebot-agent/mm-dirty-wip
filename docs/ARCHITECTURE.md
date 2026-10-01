@@ -8,7 +8,7 @@
                      ┌─────────┴─────────┐
                   Mailgun/CF/Resend   optional mailmoose-mx
                    SMTP / MX edge       direct SMTP :25 edge
-                     │                      │ signed HMAC
+                     │                      │ HTTP/2 session
                   HTTPS webhook              │
                      └───────────┬────────────┘
                                ▼
@@ -356,8 +356,11 @@ Generic SMTP validates resolved destinations as public-routable addresses before
 
 An operator may enable direct-SMTP ingress. The `mailmoose-mx` edge (same
 module and image, separate non-root process) terminates SMTP, strictly frames
-and stages the original bytes, computes SPF/DKIM/DMARC evidence, and calls two
-HMAC-authenticated core endpoints. It holds no policy snapshot, database access
+and stages the original bytes and computes SPF/DKIM/DMARC evidence. The core
+connects outward over HTTP/2; private `single` mode uses a bearer key and optional
+TLS, while public `shared` mode uses TLS and DNS-backed domain proofs. Both use
+the same resolution, streaming and durable acknowledgement machinery.
+The receiver holds no policy snapshot, database access
 or encryption key. Auth failure becomes a durable Spam delivery rather than an
 SMTP rejection. Durable per-recipient receipts (7 days) make sender retries
 idempotent, including after the original message is deleted. See

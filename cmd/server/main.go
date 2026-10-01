@@ -34,9 +34,7 @@ func main() {
 	}
 	log := logging.New(os.Stdout, slog.LevelInfo, logging.PrefixCore)
 
-	// In the embedded single-container mode, generate (or select) the edge
-	// credential BEFORE config.Load so the core's MX_EDGE_KEYS includes it and
-	// authorizes the edge this process is about to spawn.
+	// Provision the built-in receiver's shared key and loopback URL before load.
 	installEmbeddedCredential(log)
 
 	cfg, err := config.Load()
@@ -104,7 +102,16 @@ func main() {
 	svc.DialMX = dialManager
 	dialCtx, dialCancel := context.WithCancel(context.Background())
 	dialDone := make(chan struct{})
-	go func() { defer close(dialDone); dialManager.Run(dialCtx) }()
+	go func() {
+		defer close(dialDone)
+		if cfg.MXReceiveEnabled {
+			private := mxdial.New(svc.PrivateMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS, ReceiverURL: cfg.MXReceiverURL, CoreKey: cfg.MXCoreKey})
+			privateDone := make(chan struct{})
+			go func() { defer close(privateDone); private.Run(dialCtx) }()
+			defer func() { <-privateDone }()
+		}
+		dialManager.Run(dialCtx)
+	}()
 	defer dialCancel()
 	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
@@ -218,10 +225,7 @@ func edgeExit(edge *launcher.Edge) <-chan struct{} {
 	return edge.Wait()
 }
 
-// installEmbeddedCredential selects or generates the edge credential and, when
-// the operator supplied none, exports MX_EDGE_KEYS so config.Load accepts it.
-// The derived credential is also stashed in an env var the spawner reads, so
-// both the core and the child agree without the operator setting anything.
+// installEmbeddedCredential provisions the same bearer key to core and child.
 // Only embedded mode (MX_ENABLE=true) embeds an edge.
 func installEmbeddedCredential(log *slog.Logger) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("MX_ENABLE"))) {
@@ -229,17 +233,13 @@ func installEmbeddedCredential(log *slog.Logger) {
 	default:
 		return
 	}
-	keyID, secret, err := launcher.ResolveEdgeCredential(parseEnvEdgeKeys(os.Getenv("MX_EDGE_KEYS")))
+	secret, err := launcher.ResolveCoreKey(strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")))
 	if err != nil {
 		log.Error("cannot generate embedded mx edge credential", "error", err)
 		os.Exit(1)
 	}
-	if v := os.Getenv("MX_EDGE_KEYS"); v == "" {
-		_ = os.Setenv("MX_EDGE_KEYS", keyID+":"+secret)
-		log.Info("embedded mx edge credential generated", "key_id", keyID)
-	} else {
-		log.Info("embedded mx edge credential selected", "key_id", keyID)
-	}
+	_ = os.Setenv("DIALMX_CORE_KEY", secret)
+	_ = os.Setenv("MX_RECEIVER_URL", "http://127.0.0.1:8443")
 }
 
 // startEmbeddedEdge validates the privilege requirements and spawns the edge.
@@ -253,39 +253,16 @@ func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) 
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
 	}
-	keyID, secret, err := launcher.ResolveEdgeCredential(cfg.MXEdgeKeys)
-	if err != nil {
-		return nil, err
-	}
 	hostname := edgeHostname()
 	spec := launcher.Spec{
 		Binary:   launcher.ResolveBinary(),
 		UID:      cfg.MXUID,
 		GID:      cfg.MXGID,
-		KeyID:    keyID,
-		Secret:   secret,
+		Secret:   cfg.MXCoreKey,
 		Hostname: hostname,
-		Env:      launcher.EdgeEnv(hostname, keyID, secret, 3),
+		Env:      launcher.EdgeEnv(hostname, cfg.MXCoreKey, 3),
 	}
 	return launcher.Start(context.Background(), spec, log)
-}
-
-// parseEnvEdgeKeys parses the same key_id:secret list config.Load uses, kept
-// local so cmd/server does not depend on config internals.
-func parseEnvEdgeKeys(raw string) map[string]string {
-	out := map[string]string{}
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		id, secret, ok := strings.Cut(part, ":")
-		id, secret = strings.TrimSpace(id), strings.TrimSpace(secret)
-		if ok && id != "" && secret != "" {
-			out[id] = secret
-		}
-	}
-	return out
 }
 
 func edgeHostname() string {

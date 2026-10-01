@@ -1889,6 +1889,39 @@ configuration vocabulary.
   configuration, and the UI provider is named **Dial MX** (slug `dialmx`,
   retained for compatibility).
 
+## D070 — One MX receiver transport, private single-core and public shared modes
+
+**Requirement:** Simplify MX code and maintenance by replacing the private
+edge-to-core HTTP/HMAC transport with Dial MX sessions. The operator explicitly
+accepts breaking compatibility; only a test instance is live.
+
+**Decision:** Build `mailmoose-mx` from `dialmx/cmd/receiver` for standalone and
+embedded deployments. `DIALMX_MODE` defaults to `single`, authenticating one
+core using `DIALMX_CORE_KEY` in an HTTP bearer header. No domain registrations
+or ownership proofs occur; the core's `mx` receiving configuration decides
+recipients. `shared` preserves DNS-backed Ed25519 domain authentication and TLS.
+
+Single-mode sessions use verified TLS when configured, or cleartext HTTP/2
+when certificates are absent. The built-in isolated child binds loopback and
+gets an automatically provisioned bearer key. Cleartext transmission of the
+bearer credential and email content on operator-controlled loopback/LAN is an
+explicitly accepted tradeoff. SMTP STARTTLS remains independent. Forwarded IP
+headers are not trusted and no proxy configuration is required.
+
+The newest established private session receives new work; old pinned work may
+finish while its session remains live. The core is the durable source of truth,
+and no SMTP success precedes durable acknowledgement. Retry receipts remain.
+
+**Complexity:** No dependency or runtime service is added. The existing Go HTTP/2
+support handles both encrypted and unencrypted sessions. A mode-specific session
+authorization/routing boundary replaces the signed HTTP client, core endpoints,
+replay cache and HMAC/framing helpers. One delivery implementation serves both
+modes. Old transport configuration has no compatibility aliases.
+
+This supersedes prior MX decisions on transport direction, HMAC request
+authentication and embedded credentials, while retaining isolation, email
+authentication policy and durable delivery semantics.
+
 ## Future extension register
 
 

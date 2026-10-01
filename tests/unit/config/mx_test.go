@@ -1,14 +1,12 @@
 package config_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/config"
 )
 
-// testEdgeSecret is a fixed 32-byte (256-bit) hex secret for MX fixtures.
-// Operator MX_EDGE_KEYS entries must meet the mxwire entropy bar.
+// testEdgeSecret is a fixed bearer secret for private MX fixtures.
 const testEdgeSecret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 func TestMXDefaultsDisabled(t *testing.T) {
@@ -21,8 +19,8 @@ func TestMXDefaultsDisabled(t *testing.T) {
 	if cfg.MXMode != config.MXOff || cfg.MXReceiveEnabled || cfg.MXEmbedded {
 		t.Fatalf("expected MX off, got mode=%q enabled=%v embedded=%v", cfg.MXMode, cfg.MXReceiveEnabled, cfg.MXEmbedded)
 	}
-	if len(cfg.MXEdgeKeys) != 0 {
-		t.Fatal("MX edge keys should default empty")
+	if cfg.MXCoreKey != "" || cfg.MXReceiverURL != "" {
+		t.Fatal("private MX connection should default empty")
 	}
 	if cfg.MXReceiptRetention.Hours() != 7*24 {
 		t.Fatalf("receipt retention %v", cfg.MXReceiptRetention)
@@ -32,10 +30,9 @@ func TestMXDefaultsDisabled(t *testing.T) {
 func TestMXEmbeddedAutoEmbeds(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "true")
-	t.Setenv("MX_EDGE_KEYS", "")
 	cfg, err := config.Load()
 	if err != nil {
-		t.Fatalf("embedded MX should not require MX_EDGE_KEYS: %v", err)
+		t.Fatalf("embedded MX should provision its key automatically: %v", err)
 	}
 	if cfg.MXMode != config.MXLocal || !cfg.MXReceiveEnabled || !cfg.MXEmbedded {
 		t.Fatalf("embedded mode not derived: mode=%q enabled=%v embedded=%v", cfg.MXMode, cfg.MXReceiveEnabled, cfg.MXEmbedded)
@@ -45,16 +42,18 @@ func TestMXEmbeddedAutoEmbeds(t *testing.T) {
 func TestMXRemoteRequiresKeys(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "remote")
-	t.Setenv("MX_EDGE_KEYS", "")
+	t.Setenv("DIALMX_CORE_KEY", "")
+	t.Setenv("MX_RECEIVER_URL", "")
 	if _, err := config.Load(); err == nil {
-		t.Fatal("remote MX should require MX_EDGE_KEYS")
+		t.Fatal("remote MX should require receiver URL and key")
 	}
 }
 
 func TestMXRemoteDoesNotEmbed(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "remote")
-	t.Setenv("MX_EDGE_KEYS", "edge-1:"+testEdgeSecret)
+	t.Setenv("DIALMX_CORE_KEY", testEdgeSecret)
+	t.Setenv("MX_RECEIVER_URL", "http://receiver:8443")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
@@ -81,29 +80,14 @@ func TestMXEmbeddedRejectsZeroUID(t *testing.T) {
 	}
 }
 
-func TestMXEdgeKeysParsed(t *testing.T) {
+func TestMXReceiverURLValidation(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MX_ENABLE", "remote")
-	t.Setenv("MX_EDGE_KEYS", "edge1:"+testEdgeSecret+", edge2:"+testEdgeSecret+", malformed")
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.MXEdgeKeys["edge1"] != testEdgeSecret || cfg.MXEdgeKeys["edge2"] != testEdgeSecret {
-		t.Fatalf("edge keys %+v", cfg.MXEdgeKeys)
-	}
-	if _, ok := cfg.MXEdgeKeys["malformed"]; ok {
-		t.Fatal("malformed entry should be ignored")
-	}
-}
-
-func TestMXEdgeKeysRejectWeakSecret(t *testing.T) {
-	t.Setenv("APP_ENCRYPTION_KEY", testKey)
-	t.Setenv("MX_ENABLE", "remote")
-	for _, weak := range []string{"secret", "short", strings.Repeat("a", 31)} {
-		t.Setenv("MX_EDGE_KEYS", "edge-1:"+weak)
+	t.Setenv("DIALMX_CORE_KEY", testEdgeSecret)
+	for _, bad := range []string{"ftp://receiver", "http://user@receiver", "http://receiver/path", "http://receiver?x=1", "http://receiver#fragment"} {
+		t.Setenv("MX_RECEIVER_URL", bad)
 		if _, err := config.Load(); err == nil {
-			t.Fatalf("weak MX_EDGE_KEYS secret %q accepted", weak)
+			t.Fatalf("invalid receiver URL %q accepted", bad)
 		}
 	}
 }

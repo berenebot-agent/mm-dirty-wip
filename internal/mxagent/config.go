@@ -1,10 +1,6 @@
-// Package mxagent implements the optional policy-free SMTP edge (cmd/mx). The
-// edge terminates SMTP on port 25, strictly frames and stages the original
-// message, computes SPF/DKIM/DMARC evidence, and hands one signed ingest
-// request per message (carrying the whole accepted recipient set) to the core.
-// It holds no domain/policy snapshot, no database access and no application
-// encryption key: routing, policy, quota and durable storage all live in the
-// core behind authenticated endpoints.
+// Package mxagent implements the shared policy-free SMTP edge. It stages the
+// original message, computes SPF/DKIM/DMARC evidence and hands it to Delivery.
+// Routing, policy, quota and durable storage live in the core.
 package mxagent
 
 import (
@@ -13,21 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // Config is the edge's operator configuration. Secrets are read from the
 // environment and never logged.
 type Config struct {
-	// IngestURL is the base URL of the core's inbound connector, e.g.
-	// http://mailmoose:8082.
-	IngestURL string
-	// KeyID and Secret authenticate signed requests to the core.
-	KeyID  string
-	Secret string
-	// EdgeName identifies this node in logs and signed metadata.
-	EdgeName string
 	// Hostname is the SMTP greeting hostname (MX hostname).
 	Hostname string
 	// ListenAddr is the SMTP listener, e.g. :2525 internally, published as :25.
@@ -69,10 +55,6 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		IngestURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("MAILMOOSE_INGEST_URL")), "/"),
-		KeyID:           strings.TrimSpace(os.Getenv("MX_EDGE_KEY_ID")),
-		Secret:          strings.TrimSpace(os.Getenv("MX_EDGE_SECRET")),
-		EdgeName:        env("MX_EDGE_NAME", "mx-1"),
 		Hostname:        env("MX_HOSTNAME", "localhost"),
 		ListenAddr:      env("MX_LISTEN_ADDR", ":2525"),
 		HealthAddr:      env("MX_HEALTH_ADDR", ""),
@@ -91,18 +73,6 @@ func Load() (Config, error) {
 		WriteTimeout:    time.Duration(envInt("MX_WRITE_TIMEOUT_SECONDS", 60)) * time.Second,
 		DataTimeout:     time.Duration(envInt("MX_DATA_TIMEOUT_SECONDS", 300)) * time.Second,
 		DNSTimeout:      time.Duration(envInt("MX_DNS_TIMEOUT_SECONDS", 10)) * time.Second,
-	}
-	if cfg.IngestURL == "" {
-		return Config{}, fmt.Errorf("MAILMOOSE_INGEST_URL is required")
-	}
-	if cfg.KeyID == "" || cfg.Secret == "" {
-		return Config{}, fmt.Errorf("MX_EDGE_KEY_ID and MX_EDGE_SECRET are required")
-	}
-	// The secret authenticates every edge->core request and the core trusts
-	// edge auth evidence on a valid signature, so a guessable secret is a
-	// startup error, not a warning. Generate with `openssl rand -hex 32`.
-	if err := mxwire.CheckEdgeSecret(cfg.Secret); err != nil {
-		return Config{}, fmt.Errorf("MX_EDGE_SECRET too weak: need 32 bytes of entropy (generate: openssl rand -hex 32)")
 	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MX_MAX_MESSAGE_BYTES is too small")

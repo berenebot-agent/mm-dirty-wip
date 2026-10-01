@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # with MX_ENABLE=remote.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./cmd/mx
+    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./dialmx/cmd/receiver
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 && rm -rf /var/lib/apt/lists/*

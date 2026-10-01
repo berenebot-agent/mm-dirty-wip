@@ -91,7 +91,7 @@ sets it to `true`.
   this in `.env` for a webhook-only deployment.
 - **`remote`** — receive on port 25 with the edge in its own container/image
   (`mailmoose-mx`, via `docker-compose.mx-sidecar.yml`) or on another host. Needs
-  a shared `MX_EDGE_SECRET`.
+  `MX_RECEIVER_URL` and a shared `DIALMX_CORE_KEY`.
 
 The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages
 messages in memory only.
@@ -101,14 +101,14 @@ Deployment modes, tuning, and the wire contract are covered in
 
 ## Inbound: Dial MX
 
-When the core cannot accept an inbound connection (NAT, no reverse proxy, no
-public inbound port), receive direct SMTP with **Dial MX** instead. The core
+For a public shared receiver, receive direct SMTP with **Dial MX**. The core
 **dials out** to a standalone receiver the operator runs: the receiver
 terminates SMTP, verifies the core's right to speak for the domain with a
 DNS-anchored Ed25519 challenge, and hands accepted mail to the core over
-verified HTTPS/2. No `MX_EDGE_SECRET` and no inbound MX mode are needed.
+verified HTTPS/2. Set `DIALMX_MODE=shared` on the receiver. No shared bearer key
+or private MX mode is needed.
 
-A domain's receiving provider is either **MX** (edge calls core) or **Dial MX**
+A domain's receiving provider is either **MX** (private bearer session) or **Dial MX**
 (core dials receiver), never both. Configure it per domain in the Admin UI under
 **Receiving → Dial MX**: enter one or more HTTPS receiver base URLs and publish
 the shown `_mailmoose-mx.<domain>` TXT record and the domain's MX record. The
