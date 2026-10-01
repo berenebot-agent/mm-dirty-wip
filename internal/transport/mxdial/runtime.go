@@ -9,15 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 // Domain is one configured receiving domain the core is willing to speak for.
@@ -63,6 +66,21 @@ type Config struct {
 	// AuthRetryInterval overrides the base rejected-authentication cooldown so
 	// deterministic tests need not wait the production window.
 	AuthRetryInterval time.Duration
+	// MaxDomainsPerShard is the local fallback cap on distinct domains sharing
+	// one shared-mode session when a receiver does not advertise Ready.MaxDomains.
+	// Zero selects mxwire.MaxAdvertisedDomains. It never applies to single mode.
+	MaxDomainsPerShard int
+	// MaxShardsPerReceiver caps how many stable shards the core opens to one
+	// receiver URL in shared mode. Zero means derive from the domain count and
+	// the per-shard cap, up to hardMaxShards.
+	MaxShardsPerReceiver int
+	// MaxAuthInflight bounds concurrent domain authentications across every
+	// session. Zero selects defaultMaxAuthInflight. It paces authentication so a
+	// receiver is never flooded by a burst of DomainAuth frames.
+	MaxAuthInflight int
+	// AllowPrivateDestinations applies only to this manager's receiver connections.
+	// Private installation receivers deliberately allow loopback/LAN destinations.
+	AllowPrivateDestinations bool
 }
 
 const (
@@ -81,6 +99,9 @@ const (
 	maxBackoff             = 60 * time.Second
 	minStableLifetime      = 30 * time.Second
 	frameQueueDepth        = 64
+	defaultMaxAuthInflight = 8
+	hardMaxShards          = 8
+	shardKeySep            = "\x1f"
 )
 
 // Manager dials every configured receiver URL with a dedicated HTTP/2 session,
@@ -91,20 +112,34 @@ type Manager struct {
 	cfg     Config
 	wake    chan struct{}
 
-	// mu guards only the desired sessions map and the per-receiver statuses. It
-	// is never held across a session call, a network operation, or a backend
-	// call.
-	mu       sync.Mutex
-	runCtx   context.Context
-	started  bool
-	sessions map[string]*session
-	status   map[string]Status // key: domain + "\x00" + receiver URL
+	// mu guards only the session map, the domain-ownership map, the per-receiver
+	// statuses and the advertised receiver caps. It is never held across a
+	// session call, a network operation, or a backend call.
+	mu         sync.Mutex
+	runCtx     context.Context
+	started    bool
+	sessions   map[string]*session // key: shardKey(receiver URL, shard index)
+	owner      map[string]*session // key: statusKey(domain, receiver URL) -> owning shard
+	status     map[string]Status   // key: domain + "\x00" + receiver URL
+	connection Status              // single-mode connection readiness, guarded by mu
+	// readyCaps records the advertised Ready limits per receiver URL, learned
+	// once a shard completes its handshake. It lets a later reconcile resize the
+	// shard count to what the receiver actually admits.
+	readyCaps map[string]mxwire.Ready
+	// assign is the persisted stable shard assignment: receiver URL -> domain ->
+	// shard index. It is what makes sharding capacity-packed and churn-free: an
+	// existing domain keeps its shard until it is removed, and a new domain is
+	// placed in the lowest-index shard with spare capacity.
+	assign   map[string]map[string]int
 	stopping bool
 	ownWG    sync.WaitGroup
 
 	// slots is the single global transaction cap shared across every
 	// connection.
 	slots chan struct{}
+	// authSem is the global authentication pacing budget shared across every
+	// session, so many shards cannot burst DomainAuth frames at one receiver.
+	authSem chan struct{}
 }
 
 func New(backend Backend, cfg Config) *Manager {
@@ -123,6 +158,15 @@ func New(backend Backend, cfg Config) *Manager {
 	if cfg.AuthRetryInterval <= 0 {
 		cfg.AuthRetryInterval = authRetryMin
 	}
+	if cfg.MaxDomainsPerShard <= 0 {
+		cfg.MaxDomainsPerShard = mxwire.MaxAdvertisedDomains
+	}
+	if cfg.MaxShardsPerReceiver < 0 {
+		cfg.MaxShardsPerReceiver = 0
+	}
+	if cfg.MaxAuthInflight <= 0 {
+		cfg.MaxAuthInflight = defaultMaxAuthInflight
+	}
 	if cfg.TLSConfig != nil {
 		// Never permit a caller to disable certificate verification on the
 		// production dialer; a custom root pool is the supported override.
@@ -130,13 +174,17 @@ func New(backend Backend, cfg Config) *Manager {
 		cfg.TLSConfig.InsecureSkipVerify = false
 	}
 	return &Manager{
-		backend:  backend,
-		cfg:      cfg,
-		wake:     make(chan struct{}, 1),
-		sessions: map[string]*session{},
-		status:   map[string]Status{},
-		runCtx:   context.Background(),
-		slots:    make(chan struct{}, cfg.MaxTransactions),
+		backend:   backend,
+		cfg:       cfg,
+		wake:      make(chan struct{}, 1),
+		sessions:  map[string]*session{},
+		owner:     map[string]*session{},
+		status:    map[string]Status{},
+		readyCaps: map[string]mxwire.Ready{},
+		assign:    map[string]map[string]int{},
+		runCtx:    context.Background(),
+		slots:     make(chan struct{}, cfg.MaxTransactions),
+		authSem:   make(chan struct{}, cfg.MaxAuthInflight),
 	}
 }
 
@@ -146,6 +194,25 @@ func (m *Manager) Wake() {
 	case m.wake <- struct{}{}:
 	default:
 	}
+}
+
+// ConnectionStatus reports the private receiver's actual handshake state.
+func (m *Manager) ConnectionStatus() Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.connection.State == "" {
+		return Status{ReceiverURL: m.cfg.ReceiverURL, State: "connecting"}
+	}
+	return m.connection
+}
+
+func (s *session) connectionStatus(state, reason string) {
+	if !s.single() {
+		return
+	}
+	s.m.mu.Lock()
+	s.m.connection = Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: s.ready.SMTPHostname}
+	s.m.mu.Unlock()
 }
 
 // Status returns the current per-receiver status for a canonical domain.
@@ -209,9 +276,9 @@ func (m *Manager) stopAll() {
 	m.ownWG.Wait()
 }
 
-// reconcile computes the desired URL->domain set and starts, updates or stops
-// sessions. It holds m.mu only for map bookkeeping and never calls into a
-// session while holding it.
+// reconcile computes the desired URL->[shard]->domain set and starts, updates
+// or stops sessions. It holds m.mu only for map bookkeeping and never calls
+// into a session while holding it.
 func (m *Manager) reconcile(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, domainsBackendTimeout)
 	domains, err := m.backend.Domains(ctx)
@@ -219,9 +286,10 @@ func (m *Manager) reconcile(parent context.Context) {
 	if err != nil {
 		return
 	}
-	desired := map[string]map[string]Domain{}
+	// perURL collects the domain set configured for each receiver URL.
+	perURL := map[string]map[string]Domain{}
 	if m.cfg.ReceiverURL != "" {
-		desired[m.cfg.ReceiverURL] = map[string]Domain{}
+		perURL[m.cfg.ReceiverURL] = map[string]Domain{}
 	}
 	for _, d := range domains {
 		name, e := mxwire.CanonicalDomain(d.Name)
@@ -234,10 +302,10 @@ func (m *Manager) reconcile(parent context.Context) {
 			if e != nil {
 				continue
 			}
-			if desired[u] == nil {
-				desired[u] = map[string]Domain{}
+			if perURL[u] == nil {
+				perURL[u] = map[string]Domain{}
 			}
-			desired[u][name] = d
+			perURL[u][name] = d
 		}
 	}
 
@@ -246,10 +314,21 @@ func (m *Manager) reconcile(parent context.Context) {
 		m.mu.Unlock()
 		return
 	}
+	// Build the desired shard -> domain assignment for every URL under the
+	// current advertised caps, retaining existing assignments and packing only
+	// new domains. Domains that cannot fit within the shard limit are deferred.
+	desired := map[string]map[int]map[string]Domain{}
+	deferred := map[string][]string{}
+	for u, ds := range perURL {
+		shards, over := m.packShardsLocked(u, ds)
+		desired[u] = shards
+		deferred[u] = over
+	}
+
 	var toClose []*session
-	for u, s := range m.sessions {
-		if _, ok := desired[u]; !ok {
-			delete(m.sessions, u)
+	for key, s := range m.sessions {
+		if _, ok := desired[s.url][s.shard]; !ok {
+			delete(m.sessions, key)
 			toClose = append(toClose, s)
 		}
 	}
@@ -259,21 +338,58 @@ func (m *Manager) reconcile(parent context.Context) {
 		ds map[string]Domain
 	}
 	var toUpdate []upd
-	for u, ds := range desired {
-		if s := m.sessions[u]; s == nil {
-			s := m.newSession(u, ds)
-			m.sessions[u] = s
-			m.ownWG.Add(1)
-			toStart = append(toStart, s)
-		} else {
-			toUpdate = append(toUpdate, upd{s, ds})
+	for u, shards := range desired {
+		for shard, ds := range shards {
+			key := shardKey(u, shard)
+			if s := m.sessions[key]; s == nil {
+				s := m.newSession(u, shard, ds)
+				m.sessions[key] = s
+				m.ownWG.Add(1)
+				toStart = append(toStart, s)
+			} else {
+				toUpdate = append(toUpdate, upd{s, ds})
+			}
 		}
 	}
-	// Drop any status whose session is no longer tracked, so a vanished
-	// receiver cannot leave stale rows behind.
-	for k := range m.status {
-		if url, ok := statusURL(k); !ok || m.sessions[url] == nil {
-			delete(m.status, k)
+	// Reassign status ownership to the shard that now owns each domain. A
+	// domain that moved shards has its old status cleared so the new shard's
+	// first write is never blocked by a stale owner.
+	active := map[string]bool{}
+	for u, shards := range desired {
+		for _, ds := range shards {
+			for name := range ds {
+				active[statusKey(name, u)] = true
+			}
+		}
+	}
+	for key := range m.status {
+		if !active[key] {
+			delete(m.status, key)
+		}
+	}
+	for key := range m.owner {
+		if !active[key] {
+			delete(m.owner, key)
+		}
+	}
+	for u, shards := range desired {
+		for shard, ds := range shards {
+			s := m.sessions[shardKey(u, shard)]
+			for name := range ds {
+				k := statusKey(name, u)
+				if m.owner[k] != s {
+					m.owner[k] = s
+					delete(m.status, k)
+				}
+			}
+		}
+	}
+	// A domain that could not be placed because every shard is at the advertised
+	// cap gets an explicit deferred status and is never folded into an oversized
+	// shard. When capacity frees up it is packed on a later pass.
+	for u, names := range deferred {
+		for _, name := range names {
+			m.status[statusKey(name, u)] = Status{ReceiverURL: u, State: "deferred", Reason: "domain_capacity"}
 		}
 	}
 	m.mu.Unlock()
@@ -289,30 +405,178 @@ func (m *Manager) reconcile(parent context.Context) {
 	}
 }
 
-func statusKey(domain, url string) string { return domain + "\x00" + url }
-
-func statusURL(key string) (string, bool) {
-	i := strings.IndexByte(key, 0)
-	if i < 0 {
-		return "", false
+// shardCapLocked returns the effective domain capacity of one shard for a URL,
+// and the maximum number of shards it may use. Single mode is always one shard
+// of unbounded capacity. It must be called with m.mu held.
+func (m *Manager) shardCapLocked(url string) (perShard, limit int) {
+	if m.cfg.ReceiverURL != "" {
+		return 1 << 30, 1
 	}
-	return key[i+1:], true
+	perShard = m.cfg.MaxDomainsPerShard
+	if adv := m.readyCaps[url].MaxDomains; adv > 0 && adv < perShard {
+		perShard = adv
+	}
+	if perShard <= 0 {
+		perShard = mxwire.MaxAdvertisedDomains
+	}
+	limit = hardMaxShards
+	if m.cfg.MaxShardsPerReceiver > 0 && m.cfg.MaxShardsPerReceiver < limit {
+		limit = m.cfg.MaxShardsPerReceiver
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	return perShard, limit
 }
 
-func (m *Manager) setStatus(url, domain, state, reason, host string, expires time.Time) {
+// packShardsLocked computes the stable, capacity-packed shard assignment for a
+// URL. It must be called with m.mu held.
+//
+// Existing domains keep their shard, so adding a domain never re-authenticates
+// the domains already placed. New domains are sorted deterministically and
+// placed in the lowest-index shard with spare capacity; a new shard is opened
+// only when every existing shard is full and the shard limit allows. A domain
+// that cannot be placed returns in the over slice, never in an oversized shard.
+//
+// A shard is only rebalanced when a reduced advertised cap would leave it over
+// capacity; in that case its overflow (highest channel order) is moved to the
+// lowest shard with room. Shrinking never compacts healthy shards.
+func (m *Manager) packShardsLocked(url string, ds map[string]Domain) (map[int]map[string]Domain, []string) {
+	perShard, limit := m.shardCapLocked(url)
+	assign := m.assign[url]
+	if assign == nil {
+		assign = map[string]int{}
+		m.assign[url] = assign
+	}
+	// Prune assignments for domains no longer configured.
+	for name := range assign {
+		if _, ok := ds[name]; !ok {
+			delete(assign, name)
+		}
+	}
+	// Shard -> domains, from retained assignments, preserving insertion order by
+	// sorting names so packing is deterministic.
+	shards := map[int]map[string]Domain{}
+	add := func(shard int, name string) {
+		if shards[shard] == nil {
+			shards[shard] = map[string]Domain{}
+		}
+		shards[shard][name] = ds[name]
+	}
+	var unassigned []string
+	for name := range ds {
+		if shard, ok := assign[name]; ok {
+			add(shard, name)
+			continue
+		}
+		unassigned = append(unassigned, name)
+	}
+	sort.Strings(unassigned)
+
+	// Rebalance any shard left over capacity (by a reduced advertised cap) or
+	// above the shard limit: move its lexicographically greatest names back to
+	// the unassigned pool, to be repacked below. This only moves overflow; a
+	// healthy, in-bounds shard keeps every domain it has.
+	var over []string
+	shardKeys := make([]int, 0, len(shards))
+	for shard := range shards {
+		shardKeys = append(shardKeys, shard)
+	}
+	sort.Ints(shardKeys)
+	for _, shard := range shardKeys {
+		members := shards[shard]
+		keep := perShard
+		if shard >= limit {
+			keep = 0
+		}
+		if len(members) <= keep {
+			continue
+		}
+		names := make([]string, 0, len(members))
+		for name := range members {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names[keep:] {
+			delete(members, name)
+			delete(assign, name)
+			unassigned = append(unassigned, name)
+		}
+	}
+	sort.Strings(unassigned)
+
+	// Place unassigned domains into the lowest-index shard with spare capacity,
+	// opening new shards up to the limit.
+	for _, name := range unassigned {
+		placed := false
+		for shard := 0; shard < limit; shard++ {
+			if len(shards[shard]) < perShard {
+				add(shard, name)
+				assign[name] = shard
+				placed = true
+				break
+			}
+		}
+		if !placed {
+			over = append(over, name)
+		}
+	}
+	// Drop empty shards so a shard that lost all its domains is closed, but do
+	// not move domains between non-empty shards.
+	for shard, members := range shards {
+		if len(members) == 0 {
+			delete(shards, shard)
+		}
+	}
+	if len(shards) == 0 {
+		shards[0] = map[string]Domain{}
+	}
+	return shards, over
+}
+
+func shardKey(url string, shard int) string {
+	return url + shardKeySep + strconv.Itoa(shard)
+}
+
+func statusKey(domain, url string) string { return domain + "\x00" + url }
+
+// setStatus records a domain's state, but only when s is still the shard that
+// owns the domain for this receiver URL. A shard that lost a domain to another
+// shard (or was torn down) can therefore never overwrite the current owner's
+// status with a stale row.
+func (m *Manager) setStatus(s *session, domain, state, reason, host string, expires time.Time) {
 	m.mu.Lock()
 	if !m.stopping {
-		if _, ok := m.sessions[url]; ok {
-			m.status[statusKey(domain, url)] = Status{ReceiverURL: url, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
+		k := statusKey(domain, s.url)
+		if m.owner[k] == s {
+			m.status[k] = Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
 		}
 	}
 	m.mu.Unlock()
 }
 
-func (m *Manager) clearStatus(url, domain string) {
+// clearStatus removes a domain's status row only when s currently owns it. A
+// shard that lost the domain leaves the new owner's row untouched.
+func (m *Manager) clearStatus(s *session, domain string) {
 	m.mu.Lock()
-	delete(m.status, statusKey(domain, url))
+	k := statusKey(domain, s.url)
+	if m.owner[k] == s {
+		delete(m.status, k)
+	}
 	m.mu.Unlock()
+}
+
+// recordReadyCaps stores a receiver's advertised Ready limits and wakes the
+// manager so the shard count can be resized to the advertised domain cap.
+func (m *Manager) recordReadyCaps(url string, ready mxwire.Ready) {
+	m.mu.Lock()
+	prev := m.readyCaps[url]
+	changed := prev.MaxDomains != ready.MaxDomains
+	m.readyCaps[url] = ready
+	m.mu.Unlock()
+	if changed {
+		m.Wake()
+	}
 }
 
 func keyFingerprint(d Domain) string {
@@ -366,6 +630,9 @@ type auth struct {
 	// proof* bind the challenge we actually signed: an AuthResult is only
 	// trusted when the nonce and session identity match the local challenge.
 	proofNonce string
+	// holdsSlot records whether this auth holds one of the manager's bounded
+	// authentication-pacing slots, so it is released exactly once.
+	holdsSlot bool
 }
 
 // txState is the transaction state machine, owned by the loop.
@@ -404,11 +671,12 @@ type tx struct {
 	state       txState
 }
 
-// session owns one receiver URL. All auth and transaction maps are touched only
-// by the run goroutine; no lock protects them.
+// session owns one stable shard of one receiver URL. All auth and transaction
+// maps are touched only by the run goroutine; no lock protects them.
 type session struct {
-	m   *Manager
-	url string
+	m     *Manager
+	url   string
+	shard int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -436,6 +704,10 @@ type session struct {
 	ready   mxwire.Ready
 	txs     map[uint64]*tx
 	sawAuth bool // an auth reached active during this connection
+	// authInflight is the number of initial authentications this session has
+	// outstanding, bounded by authLimit so one shard cannot burst the receiver.
+	authInflight int
+	authLimit    int
 
 	// jobs carries backend worker completions to the loop, including cancellation.
 	jobs          chan jobResult
@@ -444,11 +716,12 @@ type session struct {
 	connWG sync.WaitGroup
 }
 
-func (m *Manager) newSession(u string, initial map[string]Domain) *session {
+func (m *Manager) newSession(u string, shard int, initial map[string]Domain) *session {
 	ctx, cancel := context.WithCancel(m.runCtx)
 	return &session{
 		m:        m,
 		url:      u,
+		shard:    shard,
 		ctx:      ctx,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -490,6 +763,24 @@ func (s *session) close() {
 
 func (m *Manager) closeSession(s *session) { m.ownWG.Done() }
 
+// acquireAuthSlot takes one global authentication-pacing slot without blocking.
+// A false result means the caller must defer the attempt to a later tick.
+func (m *Manager) acquireAuthSlot() bool {
+	select {
+	case m.authSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Manager) releaseAuthSlot() {
+	select {
+	case <-m.authSem:
+	default:
+	}
+}
+
 func jitter(d time.Duration) time.Duration {
 	if d <= 1 {
 		return d
@@ -508,6 +799,7 @@ func (s *session) run() {
 		started := time.Now()
 		s.sawAuth = false
 		err := s.connect()
+		s.connectionStatus("disconnected", "connection_failed")
 		live := s.trackedDomains()
 		s.resetConnection()
 		if s.ctx.Err() != nil {
@@ -526,7 +818,7 @@ func (s *session) run() {
 			reason = "idle_timeout"
 		}
 		for _, d := range live {
-			s.m.setStatus(s.url, d, "disconnected", reason, "", time.Time{})
+			s.m.setStatus(s, d, "disconnected", reason, "", time.Time{})
 		}
 		wait := jitter(backoff)
 		select {
@@ -561,6 +853,7 @@ var (
 // auth and transaction state for the connection's lifetime; backend workers
 // report back through s.jobs.
 func (s *session) connect() error {
+	s.connectionStatus("connecting", "")
 	pr, pw := io.Pipe()
 	s.lifeMu.Lock()
 	if s.ctx.Err() != nil {
@@ -575,6 +868,9 @@ func (s *session) connect() error {
 		tlsCfg = s.m.cfg.TLSConfig.Clone()
 	}
 	tr := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return netutil.DialContext(ctx, network, addr, !s.m.cfg.AllowPrivateDestinations)
+		},
 		TLSClientConfig:       tlsCfg,
 		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   5 * time.Second,
@@ -659,6 +955,7 @@ func (s *session) connect() error {
 	s.auths = map[string]*auth{}
 	s.byChan = map[uint64]*auth{}
 	s.nextCh = 0
+	s.authInflight = 0
 	s.txs = map[uint64]*tx{}
 	s.jobs = make(chan jobResult, s.m.cfg.MaxTransactions)
 
@@ -670,9 +967,20 @@ func (s *session) connect() error {
 	if s.single() && ready.Mode != "single" || !s.single() && ready.Mode == "single" {
 		return errors.New("receiver mode mismatch")
 	}
+	// Bound this session's concurrent authentications by both the manager's
+	// global pacing budget and the receiver's advertised limit, whichever is
+	// tighter.
+	s.authLimit = s.m.cfg.MaxAuthInflight
+	if ready.MaxAuthInflight > 0 && ready.MaxAuthInflight < s.authLimit {
+		s.authLimit = ready.MaxAuthInflight
+	}
+	// Advertised limits may resize the shard count; record them before the
+	// first authenticate pass and let reconcile apply any change.
+	s.m.recordReadyCaps(s.url, ready)
 	if err = s.authenticateAll(); err != nil {
 		return err
 	}
+	s.connectionStatus("ready", "")
 
 	// Reader goroutine: bounded frame queue plus a terminal error result. It
 	// never touches loop-owned state.
@@ -797,6 +1105,7 @@ func resetTimer(t *time.Timer, d time.Duration) {
 // for backend workers to finish (so no file is deleted while in use), then
 // discard connection state.
 func (s *session) resetConnection() {
+	s.releaseAllAuths()
 	for _, t := range s.txs {
 		t.cancel()
 	}
@@ -815,7 +1124,14 @@ func (s *session) handleFrame(f mxwire.Frame) error {
 	case mxwire.FrameChallenge:
 		return s.challenge(f)
 	case mxwire.FrameAuthResult:
-		return s.authResult(f)
+		if err := s.authResult(f); err != nil {
+			return err
+		}
+		// A completed authentication frees a pacing slot. Draining further
+		// authentications immediately (rather than waiting for the 1s tick)
+		// keeps a session with many domains authenticating in bounded batches
+		// back-to-back.
+		return s.authenticateAll()
 	case mxwire.FrameDomainRevoked:
 		return s.notice(f, true)
 	case mxwire.FrameDomainUnregister:
@@ -862,7 +1178,7 @@ func (s *session) applyConfig() {
 		if ad := s.auths[name]; ad != nil {
 			_ = s.writeJSON(mxwire.FrameDomainUnregister, 0, ad.channel, mxwire.DomainNotice{Domain: name, Reason: "configuration_changed"})
 		}
-		s.m.clearStatus(s.url, name)
+		s.m.clearStatus(s, name)
 		s.retire(name)
 		s.cancelDomain(name)
 	}
@@ -897,6 +1213,13 @@ func (s *session) authenticateAll() error {
 				continue
 			}
 		}
+		// Authentication is paced: a session never has more than authLimit
+		// authentications outstanding, and the manager never exceeds its global
+		// budget. Anything that cannot be started now is retried on the next
+		// tick, after an outstanding challenge completes.
+		if s.authInflight >= s.authLimit || !s.m.acquireAuthSlot() {
+			break
+		}
 		s.retire(name)
 		s.nextCh++
 		ad := &auth{
@@ -905,7 +1228,9 @@ func (s *session) authenticateAll() error {
 			generation: keyFingerprint(d),
 			state:      authPending,
 			deadline:   now.Add(10 * time.Second),
+			holdsSlot:  true,
 		}
+		s.authInflight++
 		s.auths[name] = ad
 		s.byChan[ad.channel] = ad
 		pending = append(pending, ad)
@@ -918,11 +1243,36 @@ func (s *session) authenticateAll() error {
 	return nil
 }
 
+// retire removes a domain's auth binding and returns its pacing slot if it held
+// one.
 func (s *session) retire(name string) {
 	if ad := s.auths[name]; ad != nil {
 		delete(s.byChan, ad.channel)
+		s.releaseAuth(ad)
 	}
 	delete(s.auths, name)
+}
+
+// releaseAuth returns one authentication-pacing slot exactly once.
+func (s *session) releaseAuth(ad *auth) {
+	if ad == nil || !ad.holdsSlot {
+		return
+	}
+	ad.holdsSlot = false
+	if s.authInflight > 0 {
+		s.authInflight--
+	}
+	s.m.releaseAuthSlot()
+}
+
+// releaseAllAuths returns every pacing slot held by this connection's auths.
+// It is called when a physical connection ends so slots never leak across a
+// reconnect.
+func (s *session) releaseAllAuths() {
+	for _, ad := range s.auths {
+		s.releaseAuth(ad)
+	}
+	s.authInflight = 0
 }
 
 // challenge answers a challenge. A revalidation reuses the same channel and
@@ -970,13 +1320,16 @@ func (s *session) authResult(f mxwire.Frame) error {
 	if a.Domain != ad.domain.Name || a.KeyID != ad.domain.KeyID {
 		return errors.New("invalid auth identity")
 	}
+	// Every accepted or rejected result is terminal for the initial
+	// authentication, so its pacing slot is returned here in all cases.
+	s.releaseAuth(ad)
 	now := time.Now()
 	if !a.Accepted {
 		ad.state = authRejected
 		ad.proofNonce = ""
 		ad.retryAt = now.Add(s.retryDelay(a.Reason))
 		s.cancelDomain(a.Domain)
-		s.m.setStatus(s.url, a.Domain, "rejected", authReason(a.Reason), s.ready.SMTPHostname, ad.expires)
+		s.m.setStatus(s, a.Domain, "rejected", authReason(a.Reason), s.ready.SMTPHostname, ad.expires)
 		return nil
 	}
 	// An accepted result is trusted only after we locally signed the matching
@@ -986,20 +1339,20 @@ func (s *session) authResult(f mxwire.Frame) error {
 		ad.state = authRejected
 		ad.proofNonce = ""
 		ad.retryAt = now.Add(s.m.cfg.AuthRetryInterval)
-		s.m.setStatus(s.url, a.Domain, "rejected", "authentication_failed", s.ready.SMTPHostname, time.Time{})
+		s.m.setStatus(s, a.Domain, "rejected", "authentication_failed", s.ready.SMTPHostname, time.Time{})
 		return nil
 	}
 	// A renewal must not shorten a still-valid authorization window.
 	if ad.state == authActive && now.Before(ad.expires) && a.ExpiresAt.Before(ad.expires) {
 		ad.proofNonce = ""
-		s.m.setStatus(s.url, a.Domain, "ready", "", s.ready.SMTPHostname, ad.expires)
+		s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, ad.expires)
 		return nil
 	}
 	ad.state = authActive
 	ad.proofNonce = ""
 	ad.expires = a.ExpiresAt
 	s.sawAuth = true
-	s.m.setStatus(s.url, a.Domain, "ready", "", s.ready.SMTPHostname, a.ExpiresAt)
+	s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, a.ExpiresAt)
 	return nil
 }
 
@@ -1039,6 +1392,9 @@ func (s *session) notice(f mxwire.Frame, revoked bool) error {
 	if n.Domain != ad.domain.Name {
 		return errors.New("invalid notice channel")
 	}
+	// A notice ends this binding regardless of state, so return any pacing slot
+	// it still held.
+	s.releaseAuth(ad)
 	reason := n.Reason
 	switch {
 	case n.Reason == "replaced":
@@ -1061,7 +1417,7 @@ func (s *session) notice(f mxwire.Frame, revoked bool) error {
 	if ad.state != authReplaced {
 		s.cancelDomain(n.Domain)
 	}
-	s.m.setStatus(s.url, n.Domain, "unavailable", reason, "", ad.expires)
+	s.m.setStatus(s, n.Domain, "unavailable", reason, "", ad.expires)
 	return nil
 }
 

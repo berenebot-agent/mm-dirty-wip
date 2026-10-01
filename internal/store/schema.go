@@ -1169,3 +1169,26 @@ CREATE TABLE dialmx_domain_credentials (
   updated_at TEXT NOT NULL
 );
 `
+
+// migration038 adds mx_settings, the single installation-wide MX receiver
+// configuration once owned by environment variables (MX_ENABLE,
+// MX_RECEIVER_URL, DIALMX_CORE_KEY). It is editable from the system
+// administrator UI/API and reconciled into the running receiver at startup and
+// on every change. The table is a singleton: id is always the fixed "mx" row.
+// Routing fields (mode, receiver_url) are plaintext so a status/read does not
+// need the application key; the bearer credential and any private CA bundle are
+// encrypted at rest with APP_ENCRYPTION_KEY, exactly like every other stored
+// provider secret. revision is the optimistic-concurrency token a save must
+// present; it also orders runtime reconciliation.
+const migration038 = `
+CREATE TABLE mx_settings (
+  id TEXT PRIMARY KEY,
+  mode TEXT NOT NULL DEFAULT '',
+  receiver_url TEXT NOT NULL DEFAULT '',
+  encrypted_secret TEXT NOT NULL DEFAULT '',
+  encrypted_config TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`

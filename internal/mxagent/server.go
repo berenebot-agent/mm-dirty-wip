@@ -961,7 +961,11 @@ func (s *Server) ListenAndServe(ctx context.Context, ln net.Listener) error {
 	srv.EnableREQUIRETLS = false
 	srv.EnableBINARYMIME = false
 	srv.EnableDSN = false
-	if s.cfg.TLSCertFile != "" {
+	if s.cfg.TLSCertificate != nil {
+		// An in-memory certificate (the included receiver, delivered as PEM over
+		// the control channel) takes precedence over the file pair.
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{*s.cfg.TLSCertificate}, MinVersion: tls.VersionTLS12}
+	} else if s.cfg.TLSCertFile != "" {
 		cert, err := tls.LoadX509KeyPair(s.cfg.TLSCertFile, s.cfg.TLSKeyFile)
 		if err != nil {
 			return err
@@ -973,10 +977,22 @@ func (s *Server) ListenAndServe(ctx context.Context, ln net.Listener) error {
 	// and reply-write outcomes. go-smtp's Serve accepts from this listener.
 	tracked := &trackingListener{Listener: ln, srv: s}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(tracked) }()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		errCh <- srv.Serve(tracked)
+	}()
 	s.log.Info("mx edge listening", "addr", ln.Addr().String(), "hostname", s.cfg.Hostname)
 	select {
 	case <-ctx.Done():
+		// Close the listener and wait for Serve to return before starting the
+		// graceful drain. go-smtp's Shutdown waits on a WaitGroup that Serve
+		// adds to from an in-flight accept, so calling Shutdown while Serve can
+		// still accept races Add against Wait and can panic. Closing here stops
+		// new accepts; Serve returns once the accept fails; Shutdown then only
+		// has to wait out connections already accepted.
+		_ = ln.Close()
+		<-served
 		shCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shCtx)

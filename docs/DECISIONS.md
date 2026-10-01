@@ -1922,6 +1922,113 @@ This supersedes prior MX decisions on transport direction, HMAC request
 authentication and embedded credentials, while retaining isolation, email
 authentication policy and durable delivery semantics.
 
+## D071 — MX receiver configuration is persisted and reconciled at runtime
+
+**Requirement:** The installation-wide MX receiver must be configurable from the
+system-administrator UI/API and survive restarts, instead of being fixed by the
+process environment (`MX_ENABLE`, `MX_RECEIVER_URL`, `DIALMX_CORE_KEY`). The
+embedded child must be spawnable before the database is open, and a receiver
+failure must never take the core down.
+
+**Decision:** Add a singleton `mx_settings` row (migration 038): `mode`
+(`included` or `remote`), a cleartext receiver URL, an encrypted bearer
+credential and an encrypted auxiliary configuration, plus a CAS `revision`. The
+encrypted configuration covers the whole included-edge SMTP surface: hostname,
+message/staging/recipient/connection limits, RequireTLS, the SPF/DKIM/DMARC
+verification toggles, the DNS resolver and DNS/read/write/data timeouts, and an
+optional STARTTLS certificate/private-key PEM pair (the blob is encrypted with
+`APP_ENCRYPTION_KEY`, so the private key is protected at rest like the bearer
+credential). The public read returns the certificate but never the private key,
+reporting `smtp_tls_key_configured` instead; the runtime accessor decrypts the
+key. Environment variables are no longer authoritative, and `Load` never rejects
+them: a stale or partial value must not block a deployment whose configuration is
+already persisted. On first start, if no row exists, the legacy environment is
+imported once through the same validated save path — every `MX_*` included
+tunable, the `MX_VERIFY_*` toggles (default on), and the `MX_TLS_CERT`/`MX_TLS_KEY`
+files read once into the stored PEM pair (a partial or unreadable pair aborts
+the import, leaving MX unconfigured while the core remains available) — and a partial remote environment
+(`MX_ENABLE=remote` without URL or key) is rejected at that point. Once a row
+exists (including an explicitly cleared one) the environment is ignored, and
+clearing keeps the row so the import never re-fires. Unset legacy values stay
+zero so the child's own defaults apply, and a save with blank values normalises
+rather than persisting environment-style defaults.
+
+`cmd/server` spawns the included child in standby before the privilege drop,
+unconditionally when root, with no credential in its environment; the persisted
+key and, when configured, the STARTTLS certificate/key PEM are sent over the
+private control channel on activation (the child cannot read the core's `/data`,
+so file paths cannot be used; `control.Settings` carries
+`TLSCertificatePEM`/`TLSPrivateKeyPEM` and the runtime builds the certificate in
+memory). The child stays dormant when no receiver is configured. An `mxRuntime`
+controller in `cmd/server` reconciles the persisted revision to the live
+receiver. Every mode change first
+drains the child (deactivates it, letting the still-running private session finish
+in-flight work) and only then stops the private dialer, so reconfiguring an
+already-active child never fails with "already active". A failed apply does not
+advance the applied revision, so the 30-second reconcile tick retries it; a
+rootless core supports `remote` only and reports `included` as unavailable rather
+than failing. Remote readiness is taken from the dialer's live connection status
+(never inferred from the mere existence of a dialer), so a receiver that has not
+completed a handshake reports `connecting`, not `active`. Receiver failures are
+surfaced in `MXReceiverStatus` and never exit the core. `MXReceiverStatus`
+consults the runtime even when no settings are persisted, so a fresh install
+still reports whether the included shape is available. A second, shared dial
+manager continues to serve per-domain Dial MX domains.
+
+The bearer key is mode-bound: switching `remote`→`included` generates a fresh
+included key (the remote key is never reused), and switching `included`→`remote`
+requires the operator to supply the remote key rather than reusing the generated
+one.
+
+**Complexity:** No dependency or runtime service is added. One table, one
+controller goroutine, bounded child control framing and a status read. The bearer credential is stored through
+the existing application-key encryption; the runtime reads it through an
+internal-only service accessor and the UI/API never sees it. The controller sits
+behind a small interface so its ordering and retry behaviour are unit-tested
+without spawning a child.
+
+This supersedes D038/D039's environment-driven activation and default-on MX:
+the included process starts dormant, and saved UI configuration activates it.
+Installation API operations use the system-administrator session and require
+CSRF protection on writes; account API keys gain no installation privileges.
+Auto MX is a deferred, predefined shared service with manual DNS publication
+but no core/edge credentials or enrollment for its users. No platform mTLS,
+hosted-core domain claims, resource-fairness quotas or overlap rotation are
+introduced by this change.
+
+## D072 — Bounded shared MX shards and dial-time destination policy
+
+**Requirement:** A shared receiver must serve more domains than one session's
+domain cap without losing healthy registrations, while preserving private
+loopback/LAN receivers and preventing arbitrary shared URLs from bypassing the
+existing public-destination boundary.
+
+**Decision:** Shared domains are packed into bounded sessions with stable
+assignments, a local domain ceiling, advertised receiver limits and a bounded
+number of shards. New domains fill available capacity without moving healthy
+bindings; exhausted capacity is reported explicitly. Initial proofs and
+receiver-driven renewals are paced. Temporary local authentication saturation
+can retry within an existing grant, but cannot extend that grant's expiry.
+Private single-core receivers remain one session.
+
+The dedicated streaming transport checks DNS inside the actual dial and connects
+to the checked numeric IP. Included and explicitly configured Remote sessions
+allow local destinations; that permission is connection-scoped. Existing custom
+shared URL configurations follow public-outbound enforcement and its deliberate
+self-hosted opt-out. A future predefined Auto service must always use its
+public-only policy. Redirects remain disabled and TLS hostname verification
+remains mandatory on HTTPS sessions.
+
+**Compatibility:** New Ready limit fields require coordinated core/receiver
+upgrades because old strict JSON decoders reject unknown fields. Old Ready
+frames remain readable by the new core using bounded local defaults. This
+supersedes D067's one-session-per-URL assumption; it does not introduce automatic
+core HA or resource-fairness identity accounting.
+
+**Complexity:** No dependency or service is added. Session assignment bookkeeping,
+bounded authentication scheduling and receiver capability fields stay within
+the existing Go processes. Durable delivery and retry receipts are unchanged.
+
 ## Future extension register
 
 

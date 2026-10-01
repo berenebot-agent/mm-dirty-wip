@@ -143,6 +143,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/admin/invites/{id}/reissue", s.withSession(s.withCSRF(s.uiAdminReissueInvite)))
 	m.HandleFunc("POST /ui/admin/invites/{id}/revoke", s.withSession(s.withCSRF(s.uiAdminRevokeInvite)))
 	m.HandleFunc("POST /ui/admin/accounts/{id}/quota", s.withSession(s.withCSRF(s.uiAdminSetQuota)))
+	m.HandleFunc("POST /ui/admin/mx", s.withSession(s.withCSRF(s.uiAdminMXSave)))
+	m.HandleFunc("POST /ui/admin/mx/clear", s.withSession(s.withCSRF(s.uiAdminMXClear)))
 	// Account page: mailer and mailbox-operator management.
 	m.HandleFunc("POST /ui/account/mailer", s.withSession(s.withCSRF(s.uiAccountMailer)))
 	m.HandleFunc("POST /ui/account/operators/invites", s.withSession(s.withCSRF(s.uiOperatorCreateInvite)))
@@ -232,6 +234,15 @@ func (s *Server) Handler() http.Handler {
 	api := func(h http.HandlerFunc) http.HandlerFunc { return s.withBearer(h) }
 	for _, rt := range v1Routes {
 		m.HandleFunc(rt.pattern, api(rt.bind(s)))
+	}
+
+	// Installation-management API. These routes edit installation-wide state
+	// (currently the MX receiver) and authenticate with the system
+	// administrator's cookie session, never a bearer API key: an account-scoped
+	// key must not reach them. Writes additionally require a CSRF token. They
+	// are the second registration table checked against internal/apispec.
+	for _, rt := range sessionRoutes {
+		m.HandleFunc(rt.pattern, s.withInstallSession(rt.bind(s)))
 	}
 
 	return s.httpsRedirect(s.securityHeaders(s.recoverer(m)))
@@ -342,12 +353,33 @@ var v1Routes = []apiRoute{
 	{"POST /v1/admin/clients/webhooks/{id}/enabled", (*Server).apiWebhookEnable},
 }
 
+// sessionRoutes is the registration list for installation-management API
+// routes that authenticate with a system administrator's cookie session
+// instead of a bearer key. It is the second half of the auto-discovery
+// contract; internal/apispec marks these entries with Auth "session" and a
+// test fails when the two disagree.
+var sessionRoutes = []apiRoute{
+	{"GET /v1/admin/mx", (*Server).apiMXReceiver},
+	{"PUT /v1/admin/mx", (*Server).apiMXReceiver},
+	{"DELETE /v1/admin/mx", (*Server).apiMXReceiver},
+}
+
 // RegisteredAPIRoutes returns the authenticated /v1 registrations as
 // "METHOD /path" strings, for the route coverage test. It is the live half of
 // the auto-discovery contract documented in internal/apispec.
 func (s *Server) RegisteredAPIRoutes() []string {
 	out := make([]string, 0, len(v1Routes))
 	for _, rt := range v1Routes {
+		out = append(out, rt.pattern)
+	}
+	return out
+}
+
+// RegisteredSessionRoutes returns the session-authenticated installation
+// registrations as "METHOD /path" strings, for the route coverage test.
+func (s *Server) RegisteredSessionRoutes() []string {
+	out := make([]string, 0, len(sessionRoutes))
+	for _, rt := range sessionRoutes {
 		out = append(out, rt.pattern)
 	}
 	return out

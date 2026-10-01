@@ -31,6 +31,12 @@ type fakeReceiver struct {
 	receiverID string
 	hostname   string
 
+	// maxDomains, when non-zero, is advertised in Ready.MaxDomains and tells the
+	// dialer how many domains one session may carry.
+	maxDomains int
+	// maxAuthInflight, when non-zero, is advertised in Ready.MaxAuthInflight.
+	maxAuthInflight int
+
 	// authMode selects how a DomainAuth is answered:
 	//   "accept"    - full challenge/proof exchange
 	//   "reject"    - immediate AuthResult accepted=false (e.g. missing TXT)
@@ -55,7 +61,9 @@ type fakeReceiver struct {
 	server *httptest.Server
 	tlsCfg *tls.Config
 
-	conns int
+	conns  int    // cumulative accepted sessions
+	live   int    // currently open sessions
+	readyM string // Mode advertised in Ready
 }
 
 type fakeConn struct {
@@ -106,9 +114,32 @@ func (rc *fakeReceiver) connections() int {
 	return rc.conns
 }
 
+// liveConnections reports currently open sessions, which is what the shard
+// count settles at.
+func (rc *fakeReceiver) liveConnections() int {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.live
+}
+
+// setReadyMode sets the Mode advertised in Ready (e.g. "single").
+func (rc *fakeReceiver) setReadyMode(m string) {
+	rc.mu.Lock()
+	rc.readyM = m
+	rc.mu.Unlock()
+}
+
 func (rc *fakeReceiver) mode(m string) {
 	rc.mu.Lock()
 	rc.authMode = m
+	rc.mu.Unlock()
+}
+
+// setCaps updates the Ready limits the receiver advertises.
+func (rc *fakeReceiver) setCaps(maxDomains, maxAuthInflight int) {
+	rc.mu.Lock()
+	rc.maxDomains = maxDomains
+	rc.maxAuthInflight = maxAuthInflight
 	rc.mu.Unlock()
 }
 
@@ -125,15 +156,24 @@ func (rc *fakeReceiver) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	rc.mu.Lock()
 	rc.conns++
+	rc.live++
 	mode := rc.authMode
+	readyMode := rc.readyM
+	maxDomains := rc.maxDomains
+	maxAuthInflight := rc.maxAuthInflight
 	rc.mu.Unlock()
+	defer func() {
+		rc.mu.Lock()
+		rc.live--
+		rc.mu.Unlock()
+	}()
 
 	f, err := mxwire.ReadFrame(r.Body)
 	if err != nil || f.Type != mxwire.FrameHello {
 		return
 	}
 	fc := &fakeConn{rc: rc, w: w, flusher: w.(http.Flusher), chans: map[string]uint64{}, pending: map[uint64]mxwire.Challenge{}}
-	fc.send(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: rc.receiverID, ConnectionID: rc.connID(), SMTPHostname: rc.hostname, MaxMessageBytes: 1 << 20})
+	fc.send(mxwire.FrameReady, 0, 0, mxwire.Ready{Mode: readyMode, Version: mxwire.V2Protocol, ReceiverID: rc.receiverID, ConnectionID: rc.connID(), SMTPHostname: rc.hostname, MaxMessageBytes: 1 << 20, MaxDomains: maxDomains, MaxAuthInflight: maxAuthInflight})
 
 	for {
 		f, err := mxwire.ReadFrame(r.Body)
@@ -252,6 +292,9 @@ func managerFor(t *testing.T, backend mxdial.Backend, rc *fakeReceiver, dataDir 
 		// Deterministic, fast rejection cooldown so same-connection retry tests
 		// need not wait the production 5s window.
 		AuthRetryInterval: 200 * time.Millisecond,
+		// The fake receiver listens on loopback; opt in explicitly rather than
+		// weakening the public-destination guard for functional tests.
+		AllowPrivateDestinations: true,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

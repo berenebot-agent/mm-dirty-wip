@@ -176,7 +176,7 @@ func TestTLSHTTP2SMTPDelivery(t *testing.T) {
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	manager := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
+	manager := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	go manager.Run(ctx)
 	defer cancel()
@@ -200,7 +200,7 @@ func TestTwoManagersOneReceiverFansOut(t *testing.T) {
 
 	mk := func(domain string) (*backend, *mxdial.Manager) {
 		be := &backend{domains: []mxdial.Domain{{Name: domain, KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-		m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
+		m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 		return be, m
 	}
 	beA, mA := mk("example.test")
@@ -237,7 +237,7 @@ func TestOneCoreTwoDomainsOnePhysicalConnection(t *testing.T) {
 		{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}},
 		{Name: "other.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}},
 	}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
@@ -301,7 +301,7 @@ func TestFreshReauthThenTXTRemovalRenewsAndRevokes(t *testing.T) {
 	}
 	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns, RevalidateInterval: 50 * time.Millisecond})
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
@@ -342,8 +342,8 @@ func TestReplacementPinnedDataStillDelivers(t *testing.T) {
 
 	beOld := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
 	beNew := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	mOld := mxdial.New(beOld, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
-	mNew := mxdial.New(beNew, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond})
+	mOld := mxdial.New(beOld, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
+	mNew := mxdial.New(beNew, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go mOld.Run(ctx)

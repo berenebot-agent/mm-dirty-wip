@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -212,6 +213,12 @@ type pageData struct {
 	InviteLink           string
 	Operators            []memberView
 	Accounts             []store.AccountSummary
+	// Installation MX receiver panel shown on /admin. MXForm carries the
+	// non-secret editable values (including any preserved failed submission);
+	// the private STARTTLS key is never part of it.
+	MXForm              mxFormView
+	MXStatus            app.MXReceiverStatus
+	MXIncludedSupported bool
 
 	DraftCounts  map[string]int
 	SendRequests []SendRequestRow

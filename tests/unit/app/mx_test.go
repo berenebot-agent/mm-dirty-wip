@@ -50,7 +50,29 @@ func mxService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbo
 		t.Fatal(err)
 	}
 	seedInbound(t, svc, u.AccountID, d.ID, "mx", map[string]any{"enforcement": "moderate"})
+	// The persisted receiver configuration, not MX_ENABLE, now gates the mx
+	// ingest path. Seed it directly so the helper exercises the same gate a
+	// configured deployment would.
+	enableMXReceiver(t, svc)
 	return svc, u, d, b
+}
+
+// enableMXReceiver records an installed MX receiver so the mx-routed ingest
+// path accepts work. It mirrors a system administrator saving the receiver in
+// the UI without depending on the generated credential.
+func enableMXReceiver(t *testing.T, svc *app.Service) {
+	t.Helper()
+	encSecret, err := svc.EncryptSecret([]byte("test-receiver-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encConfig, err := svc.EncryptSecret([]byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Store.SaveMXSettingsCAS(context.Background(), store.MXModeRemote, "https://receiver.example", encSecret, encConfig, store.ConfigVersion{}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // stageMX writes raw bytes to the service staging dir and returns the path.
@@ -305,10 +327,13 @@ func TestMXRequireAuthenticatedSender(t *testing.T) {
 	}
 }
 
-// TestMXDisabled verifies app-only deployments reject MX ingest.
+// TestMXDisabled verifies deployments with no configured receiver reject the
+// mx-routed ingest path.
 func TestMXDisabled(t *testing.T) {
 	svc, _, _, box := mxService(t)
-	svc.Config.MXReceiveEnabled = false
+	if err := svc.Store.ClearMXSettingsCAS(context.Background(), store.ConfigVersion{}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := svc.IngestMX(context.Background(), mxInput(t, svc, box.Address, goodRaw, mxwire.AuthResults{})); err == nil {
 		t.Fatal("expected MX disabled error")
 	}

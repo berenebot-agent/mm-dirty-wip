@@ -215,7 +215,7 @@ func TestSharedSMTPRecordsCarryEnvelope(t *testing.T) {
 	_, srv, log := newLoggedServerLogger(t, sink, receiver.Config{LookupTXT: dns})
 
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
@@ -247,7 +247,7 @@ func TestDomainProofPhaseLogging(t *testing.T) {
 	_, srv := newLoggedServer(t, sink, receiver.Config{LookupTXT: dns, RevalidateInterval: 60 * time.Millisecond})
 
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
@@ -345,7 +345,7 @@ func TestResolveRecipientCoreCorrelation(t *testing.T) {
 	_, srv := newLoggedServer(t, sink, receiver.Config{LookupTXT: dns})
 
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)
@@ -400,7 +400,7 @@ func TestHandoffOutcomeLogging(t *testing.T) {
 	_, srv := newLoggedServer(t, sink, receiver.Config{LookupTXT: dns})
 
 	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
-	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: rootTLS(t, srv), ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)

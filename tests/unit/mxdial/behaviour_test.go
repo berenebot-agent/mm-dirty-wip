@@ -219,10 +219,11 @@ func TestGlobalTransactionCapAnswersPerRecipient(t *testing.T) {
 	}
 
 	m := mxdial.New(b, mxdial.Config{
-		DataDir:           t.TempDir(),
-		TLSConfig:         rc.tls(),
-		ReconcileInterval: 20 * time.Millisecond,
-		MaxTransactions:   1,
+		DataDir:                  t.TempDir(),
+		TLSConfig:                rc.tls(),
+		ReconcileInterval:        20 * time.Millisecond,
+		MaxTransactions:          1,
+		AllowPrivateDestinations: true,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	go m.Run(ctx)

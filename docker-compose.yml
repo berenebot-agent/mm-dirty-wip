@@ -2,10 +2,12 @@
 # toolchain). For a pull-and-run quickstart using the prebuilt
 # ghcr.io/dellarb/mailmoose image, see the README.
 #
-# Direct SMTP (MX) ingress is ON by default: the embedded edge listens
-# internally on :2525, published here on host port 25. Comment the :25 mapping
-# out (or set MX_ENABLE=false in .env) if you receive mail only through a
-# webhook provider (Mailgun, Cloudflare Email Routing, Resend).
+# Direct SMTP (MX) ingress is configured in the UI, not with environment
+# variables: sign in as the system administrator and set Admin -> MX receiver to
+# Included (this deployment runs the receiver on :2525) or Remote (a separate
+# receiver). Host port 25 is published here for Included; remove the :25 mapping
+# if you receive mail only through a webhook provider (Mailgun, Cloudflare Email
+# Routing, Resend).
 #
 # Project name pinned explicitly. Without this, Compose derives it from the
 # directory basename, so a checkout whose parent directory is also named
@@ -20,22 +22,16 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    environment:
-      # Compose default. Override with MX_ENABLE=false (or remote) in .env.
-      MX_ENABLE: "${MX_ENABLE:-true}"
-      # System administrator credentials. When set they are authoritative and
-      # rotate the stored login on restart. Prefer a Docker secret:
-      #   ADMIN_PASSWORD_FILE: /run/secrets/admin_password
-      # and add `secrets: [admin_password]` below.
-      #ADMIN_EMAIL: admin@example.com
-      #ADMIN_PASSWORD: "${MAILMOOSE_ADMIN_PASSWORD}"
+    # System administrator credentials: when set in .env they are authoritative
+    # and rotate the stored login on restart. Prefer a Docker secret by adding an
+    # `environment:` block with ADMIN_PASSWORD_FILE and a `secrets:` entry below.
+    # MX receiver settings are configured in Admin -> MX receiver, not here.
     volumes:
       - ./data:/data
     ports:
       # :8081 = API + web UI + webhook delivery connector.
       - "0.0.0.0:8081:8081"
-      # :8082 = dedicated inbound listener (webhook connectors, plus the MX
-      # resolve/ingest routes when MX is enabled).
+      # :8082 = dedicated inbound listener (webhook connectors).
       - "0.0.0.0:8082:8082"
-      # :25 = direct SMTP when using this as an MX receiver (MX_ENABLE=true|remote).
+      # :25 = direct SMTP when using this as an Included MX receiver.
       - "0.0.0.0:25:2525"

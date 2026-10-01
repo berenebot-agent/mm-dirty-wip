@@ -108,7 +108,7 @@ func TestSessionAuthResolveAndIngest(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m := mxdial.New(backend, mxdial.Config{DataDir: dataDir, TLSConfig: tlsConfig, ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(backend, mxdial.Config{DataDir: dataDir, TLSConfig: tlsConfig, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	go m.Run(ctx)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

@@ -5,16 +5,94 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
+
+// newMXServiceWithOutboundPolicy builds a minimal service whose public-outbound
+// policy is explicit, so the receiver-URL guard can be exercised in both the
+// enforcing and opt-out directions without cross-test state leakage.
+func newMXServiceWithOutboundPolicy(t *testing.T, allowPrivate bool) (*app.Service, model.User, model.Domain) {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	cfg := config.Config{
+		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted",
+		AllowPrivateOutbound: allowPrivate, AppEncryptionKey: "01234567890123456789012345678901",
+		MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour,
+		LoginLimitPerMinute: 10, SendLimitPerMinute: 60,
+	}
+	// app.New installs the process-wide netutil policy from the config; capture
+	// and restore it so later tests are not affected by this service's choice.
+	prevRequire := netutil.RequirePublic()
+	svc, err := app.New(cfg, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { netutil.SetRequirePublic(prevRequire) })
+	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateDomain(context.Background(), u.AccountID, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc, u, d
+}
+
+// TestDialMXReceiverURLPrivateLiteralGuardedWhenPublicRequired proves the
+// dialmx receiver URL validation rejects loopback and private-literal origins
+// while the public-destination policy is enforced.
+func TestDialMXReceiverURLPrivateLiteralGuardedWhenPublicRequired(t *testing.T) {
+	svc, u, d := newMXServiceWithOutboundPolicy(t, false)
+	ctx := context.Background()
+	for _, private := range []string{
+		"https://127.0.0.1:8443",
+		"https://[::1]:8443",
+		"https://169.254.169.254",
+		"https://10.0.0.5:8443",
+	} {
+		if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{"receiver_urls": private}, false); !errors.Is(err, app.ErrInvalidConfig) {
+			t.Fatalf("receiver URL %q err=%v, want ErrInvalidConfig", private, err)
+		}
+	}
+}
+
+// TestDialMXReceiverURLPrivateLiteralAllowedOnOptOut proves the explicit
+// private-outbound opt-out admits loopback and private-literal origins.
+func TestDialMXReceiverURLPrivateLiteralAllowedOnOptOut(t *testing.T) {
+	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
+	ctx := context.Background()
+	for _, private := range []string{
+		"https://127.0.0.1:8443",
+		"https://[::1]:8443",
+		"https://10.0.0.5:8443",
+	} {
+		if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{"receiver_urls": private}, false); err != nil {
+			t.Fatalf("opt-out rejected private receiver URL %q: %v", private, err)
+		}
+	}
+}
 
 func TestDialMXProviderIsolationAndMXIdentity(t *testing.T) {
 	svc, u, d, box := mxService(t)
-	svc.Config.MXReceiveEnabled = false
+	// Clear the receiver so the mx-routed path is disabled while the dialmx
+	// per-domain path stays configured.
+	if err := svc.Store.ClearMXSettingsCAS(context.Background(), store.ConfigVersion{}); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, d.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example"}, false); err != nil {
 		t.Fatal(err)
 	}

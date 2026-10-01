@@ -45,10 +45,15 @@ import (
 )
 
 type Service struct {
-	Config        config.Config
-	Store         *store.Store
-	Hub           *events.Hub
-	DialMX        *mxdial.Manager
+	Config config.Config
+	Store  *store.Store
+	Hub    *events.Hub
+	DialMX *mxdial.Manager
+	// MXRuntime is the process-owned MX receiver controller. cmd/server sets it
+	// before serving; when nil (tests, and deployments that wire no receiver)
+	// settings persist and reconcile on the next start, and status reports the
+	// persisted configuration without a live state.
+	MXRuntime     MXReceiverRuntime
 	Log           *slog.Logger
 	EncryptionKey []byte
 	// encryptionKeys holds the primary key first and any legacy derivation
@@ -684,6 +689,9 @@ func validateDialMXReceiverURLs(raw string) ([]string, error) {
 		canonical, err := mxwire.ReceiverURL(strings.TrimSpace(part))
 		if err != nil {
 			return nil, fmt.Errorf("receiver URLs must be HTTPS base URLs without paths, userinfo, query or fragment")
+		}
+		if err := netutil.ValidateBaseURL(canonical); err != nil {
+			return nil, err
 		}
 		if !seen[canonical] {
 			urls = append(urls, canonical)

@@ -156,6 +156,11 @@ var routeIOByKey = map[string]routeIO{
 	"PUT /v1/admin/hermes/{id}":    {Request: "HermesUpdateBody", Response: "HermesUpdateResult"},
 	"DELETE /v1/admin/hermes/{id}": {},
 
+	// Admin: MX.
+	"GET /v1/admin/mx":    {Response: "MXSettings"},
+	"PUT /v1/admin/mx":    {Request: "MXSettingsPut", Response: "MXSettings"},
+	"DELETE /v1/admin/mx": {},
+
 	// Admin: clients.
 	"GET /v1/admin/clients":                        {Response: "ClientList"},
 	"GET /v1/admin/clients/webhooks":               {Response: "WebhookClientList"},
