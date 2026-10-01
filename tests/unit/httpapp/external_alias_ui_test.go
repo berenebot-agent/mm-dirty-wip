@@ -62,7 +62,7 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 		t.Fatalf("activity page cache-control = %q", got)
 	}
 	body = rr.Body.String()
-	for _, want := range []string{"agent@gmail.com", "sending only", "Activity", "Back to inbox settings", "/?inbox=" + box.ID} {
+	for _, want := range []string{"agent@gmail.com", "send-only", "Activity", "Back to inbox settings", "/?inbox=" + box.ID} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("activity page missing %q", want)
 		}
