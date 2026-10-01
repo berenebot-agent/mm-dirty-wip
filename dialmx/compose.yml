@@ -1,0 +1,69 @@
+# Standalone Dial MX receiver.
+#
+# This compose file lives in dialmx/ and builds from the repository root, so it
+# runs from either the repository root or this folder:
+#
+#   docker compose -f dialmx/compose.yml up -d --build
+#   # or, from dialmx/:
+#   docker compose up -d --build
+#
+# The receiver is one process with two listeners: the SMTP edge (host :25 ->
+# container :2525) and the HTTPS/2 dialer session endpoint (host :443 ->
+# container :8443). It holds no /data mount, no database and no core HMAC key:
+# it verifies each dialer against the domain's published _mailmoose-mx TXT
+# record and hands accepted mail to the core over an outbound HTTPS/2 session.
+#
+# Certificates: mount the receiver's TLS material read-only. Both listeners use
+# the same certificate unless MX_TLS_CERT/MX_TLS_KEY override the SMTP side.
+#
+#   mkdir -p dialmx/certs
+#   cp /path/to/fullchain.pem /path/to/privkey.pem dialmx/certs/
+#   # or point DIALMX_CERT_DIR at an existing directory
+#
+# See docs/DIALMX.md.
+
+services:
+  dialmx:
+    image: mailmoose-dialmx:latest
+    build:
+      context: ..
+      dockerfile: dialmx/Dockerfile
+    restart: unless-stopped
+    environment:
+      # SMTP greeting hostname. Independent of the session listener address.
+      MX_HOSTNAME: "${MX_HOSTNAME:-mail.example.com}"
+      # The receiver's own HTTPS/2 listener certificate. Required.
+      DIALMX_TLS_CERT: /certs/fullchain.pem
+      DIALMX_TLS_KEY: /certs/privkey.pem
+      MX_TLS_CERT: /certs/fullchain.pem
+      MX_TLS_KEY: /certs/privkey.pem
+      # The SMTP edge reuses the documented MX_* surface. Defaults match the
+      # core's MX edge; MX_TLS_CERT/MX_TLS_KEY default to the listener pair.
+      MX_VERIFY_SPF: "${MX_VERIFY_SPF:-true}"
+      MX_VERIFY_DKIM: "${MX_VERIFY_DKIM:-true}"
+      MX_VERIFY_DMARC: "${MX_VERIFY_DMARC:-true}"
+      MX_DNS_RESOLVER: "${MX_DNS_RESOLVER:-}"
+      MX_MAX_MESSAGE_BYTES: "${MX_MAX_MESSAGE_BYTES:-31457280}"
+      MX_STAGING_BYTES: "${MX_STAGING_BYTES:-268435456}"
+      MX_MAX_RECIPIENTS: "${MX_MAX_RECIPIENTS:-100}"
+      MX_MAX_CONNECTIONS: "${MX_MAX_CONNECTIONS:-256}"
+      MX_MAX_DOMAINS_PER_CONNECTION: "${MX_MAX_DOMAINS_PER_CONNECTION:-128}"
+      MX_MAX_TRANSACTIONS: "${MX_MAX_TRANSACTIONS:-128}"
+      MX_MAX_TRANSACTIONS_PER_CONNECTION: "${MX_MAX_TRANSACTIONS_PER_CONNECTION:-16}"
+      MX_MAX_TRANSACTIONS_PER_DOMAIN: "${MX_MAX_TRANSACTIONS_PER_DOMAIN:-8}"
+      #MX_DNS_RESOLVER=1.1.1.1:53
+      #MX_MAX_MESSAGE_BYTES=31457280
+      #MX_MAX_CONNECTIONS=256
+    volumes:
+      # Read-only: the receiver writes nothing to disk (staging is in memory).
+      - "${DIALMX_CERT_DIR:-./certs}:/certs:ro"
+    ports:
+      - "0.0.0.0:25:2525"
+      - "0.0.0.0:443:8443"
+    # No writable filesystem, no extra capabilities. Inside the container both
+    # listeners are on unprivileged ports, so nothing is required.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
