@@ -42,8 +42,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   view. The duplicate Trash folder tab is also removed.
 - The mailbox sidebar lists the inbox's labels under a Labels heading (between
   Outbox and Trash), each with an unread count; selecting a label filters the
-  message list to messages carrying it. Reply and Forward are now icons in the
-  message view. The inbox address in the header is click-to-copy and shows a
+  message list to messages carrying it. Reply, Reply all and Forward are now
+  icons in the message view (Reply all pre-fills the original sender and the
+  other recipients, excluding the mailbox's own addresses). The inbox address in
+  the header is click-to-copy and shows a
   brief "Copied to clipboard" confirmation that clears itself.
 - Labels may no longer contain `/` or `\` (path separators); existing labels
   with those characters still render and filter. The web UI now uses the full
