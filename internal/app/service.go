@@ -1482,6 +1482,26 @@ func (s *Service) sendDraftCore(ctx context.Context, accountID string, d model.D
 	return res, nil
 }
 
+// outcomeTimeout bounds how long the store may take to persist a delivery
+// outcome (sent/failed/held). It is a var so tests can shrink it without
+// waiting the production timeout.
+var outcomeTimeout = 15 * time.Second
+
+// SetOutcomeTimeoutForTest overrides the delivery-outcome write budget.
+func SetOutcomeTimeoutForTest(d time.Duration) { outcomeTimeout = d }
+
+// outcomeContext returns a context for recording a delivery outcome. It is
+// detached from ctx so a cancelled delivery still records its result, and it is
+// bounded so a hung store cannot leak the worker. Critically, the caller must
+// create it only when the outcome is actually written: creating it before the
+// provider send would let a slow send consume the entire budget, leaving the
+// outcome context already expired when fail/mark-sent runs, so no outcome is
+// recorded, attempts never advance, and the message loops forever on the claim
+// lease.
+func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
+}
+
 // Deliver performs the actual provider send for a pending outbound message and
 // marks it sent or failed. It is called by the outbox worker with the owner of
 // the claim so a stale worker cannot deliver a message re-claimed elsewhere.
@@ -1502,35 +1522,35 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 			return fmt.Errorf("message %s is claimed by another worker", msgID)
 		}
 	}
-	// Outcome bookkeeping must survive cancellation of the delivery context but
-	// stay bounded, so a failed send is always recorded.
-	outcomeCtx, cancelOutcome := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	defer cancelOutcome()
+	// The outcome context is created per-outcome, immediately before the write,
+	// so the (possibly long) provider send cannot consume its budget.
 	sending, err := s.Store.SendingConfigForMessage(ctx, m.AccountID, m.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNoProvider) {
+			outcomeCtx, cancelOutcome := outcomeContext(ctx)
+			defer cancelOutcome()
 			return s.Store.HoldPending(outcomeCtx, m.AccountID, m.ID, "sending paused: selected sender has no connector", time.Now().UTC().Add(5*time.Minute))
 		}
-		return s.fail(outcomeCtx, m, err, "")
+		return s.failDetached(ctx, m, err, "")
 	}
 	cfg, err := s.DecryptDomainSendingConfig(sending)
 	if err != nil {
-		return s.fail(outcomeCtx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider)
 	}
 	rawPath, err := s.dataPath(m.RawPath)
 	if err != nil {
-		return s.fail(outcomeCtx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider)
 	}
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
-		return s.fail(outcomeCtx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider)
 	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
-		return s.fail(outcomeCtx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+		return s.failDetached(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
 	}
 	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(m.To, m.CC, m.BCC)) > limit {
-		return s.fail(outcomeCtx, m, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
+		return s.failDetached(ctx, m, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
 	}
 	outbound := transport.OutboundMessage{
 		FromName:       m.From.Name,
@@ -1553,20 +1573,28 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if !prefersRawMIME(provider) {
 		atts, aerr := s.deliveryAttachments(m)
 		if aerr != nil {
-			return s.fail(outcomeCtx, m, aerr, sending.Provider)
+			return s.failDetached(ctx, m, aerr, sending.Provider)
 		}
 		outbound.Attachments = atts
 	}
 	// Record the attempt as in flight before the provider call, so an
 	// interrupted send (restart, crash or dropped connection) leaves a durable
-	// trace instead of looping as pending with an empty sending log.
-	if err := s.Store.RecordDeliveryStarted(outcomeCtx, m.AccountID, m.ID, sending.Provider); err != nil {
+	// trace instead of looping as pending with an empty sending log. This is a
+	// fast pre-send write, so it gets its own bounded context.
+	startedCtx, cancelStarted := outcomeContext(ctx)
+	err = s.Store.RecordDeliveryStarted(startedCtx, m.AccountID, m.ID, sending.Provider)
+	cancelStarted()
+	if err != nil {
 		return err
 	}
+	// The provider send uses the delivery context only; recording the outcome
+	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
-		return s.fail(outcomeCtx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider)
 	}
+	outcomeCtx, cancelOutcome := outcomeContext(ctx)
+	defer cancelOutcome()
 	_, events, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -1639,6 +1667,17 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 	return err
 }
 
+// failDetached records a failed delivery attempt with a fresh, bounded outcome
+// context so it is always persisted regardless of how long the delivery itself
+// took. It is the form used by Deliver/DeliverWorkflow for every failure on the
+// send path; fail itself keeps taking the caller's context so the panic
+// recovery path (which already supplies a bounded context) is unchanged.
+func (s *Service) failDetached(ctx context.Context, m model.Message, err error, provider string) error {
+	outcomeCtx, cancelOutcome := outcomeContext(ctx)
+	defer cancelOutcome()
+	return s.fail(outcomeCtx, m, err, provider)
+}
+
 // AccountIDForWorkflow resolves the account id for a workflow job id. The
 // worker claims jobs without a principal, so it needs a way to look up the
 // account.
@@ -1668,33 +1707,35 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 			return fmt.Errorf("workflow %s is claimed by another worker", workflowID)
 		}
 	}
-	outcomeCtx, cancelOutcome := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	defer cancelOutcome()
+	// The outcome context is created per-outcome, immediately before the write,
+	// so the (possibly long) provider send cannot consume its budget.
 	sending, err := s.Store.DomainSendingConfigForWorkflow(ctx, accountID, workflowID)
 	if err != nil {
 		if errors.Is(err, store.ErrNoProvider) {
+			outcomeCtx, cancelOutcome := outcomeContext(ctx)
+			defer cancelOutcome()
 			return s.Store.HoldWorkflow(outcomeCtx, accountID, workflowID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute))
 		}
-		return s.failWorkflow(outcomeCtx, w, err, "")
+		return s.failWorkflowDetached(ctx, w, err, "")
 	}
 	cfg, err := s.DecryptDomainSendingConfig(sending)
 	if err != nil {
-		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
 	}
 	rawPath, err := s.dataPath(w.RawPath)
 	if err != nil {
-		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
 	}
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
-		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
 	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
-		return s.failWorkflow(outcomeCtx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+		return s.failWorkflowDetached(ctx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
 	}
 	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(w.To, w.CC, w.BCC)) > limit {
-		return s.failWorkflow(outcomeCtx, w, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
 	}
 	outbound := transport.OutboundMessage{
 		FromName:    w.From.Name,
@@ -1710,20 +1751,28 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if !prefersRawMIME(provider) {
 		atts, aerr := s.workflowAttachments(w)
 		if aerr != nil {
-			return s.failWorkflow(outcomeCtx, w, aerr, sending.Provider)
+			return s.failWorkflowDetached(ctx, w, aerr, sending.Provider)
 		}
 		outbound.Attachments = atts
 	}
 	// Record the handoff as in flight before the provider call, so an
-	// interrupted send leaves a durable trace in the domain log.
-	if err := s.Store.RecordWorkflowDeliveryStarted(outcomeCtx, accountID, w.InboxID, workflowID, sending.Provider); err != nil {
+	// interrupted send leaves a durable trace in the domain log. This is a fast
+	// pre-send write, so it gets its own bounded context.
+	startedCtx, cancelStarted := outcomeContext(ctx)
+	err = s.Store.RecordWorkflowDeliveryStarted(startedCtx, accountID, w.InboxID, workflowID, sending.Provider)
+	cancelStarted()
+	if err != nil {
 		return err
 	}
+	// The provider send uses the delivery context only; recording the outcome
+	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
-		return s.failWorkflow(outcomeCtx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
 	}
 	tokenExpiry := time.Duration(s.Config.ApprovalExpiryHours) * time.Hour
+	outcomeCtx, cancelOutcome := outcomeContext(ctx)
+	defer cancelOutcome()
 	events, err := s.Store.MarkWorkflowSent(outcomeCtx, accountID, workflowID, providerResult.ProviderMessageID, sending.Provider, tokenExpiry)
 	if err != nil {
 		return err
@@ -1762,6 +1811,15 @@ func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error,
 		s.Hub.Publish(ev)
 	}
 	return err
+}
+
+// failWorkflowDetached records a failed workflow handoff with a fresh, bounded
+// outcome context so it is always persisted regardless of how long the delivery
+// took. See failDetached.
+func (s *Service) failWorkflowDetached(ctx context.Context, w store.Workflow, err error, provider string) error {
+	outcomeCtx, cancelOutcome := outcomeContext(ctx)
+	defer cancelOutcome()
+	return s.failWorkflow(outcomeCtx, w, err, provider)
 }
 
 // failWorkflowPanic records a workflow delivery panic as a failed attempt so a
