@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -34,16 +33,10 @@ func main() {
 	}
 	log := logging.New(os.Stdout, slog.LevelInfo, logging.PrefixCore)
 
-	// Provision the built-in receiver's shared key and loopback URL before load.
-	installEmbeddedCredential(log)
-
 	cfg, err := config.Load()
 	if err != nil {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
-	}
-	if cfg.MXEmbedded {
-		log.Info("embedded MX edge enabled (SMTP ingress); set MX_ENABLE=false to run webhook-only")
 	}
 
 	runUID, runGID, err := privdrop.ResolvedIdentity()
@@ -52,16 +45,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Embedded MX: in embedded mode, spawn the edge as a separate process under a
-	// different uid before dropping privileges, then supervise it. Remote mode
-	// leaves MXEmbedded false and the edge runs separately.
-	var edge *launcher.Edge
-	if cfg.MXReceiveEnabled && cfg.MXEmbedded {
-		edge, err = startEmbeddedEdge(cfg, runUID, runGID, log)
-		if err != nil {
-			log.Error("cannot start embedded MX edge", "error", err)
-			os.Exit(1)
-		}
+	// Spawn the included receiver in standby before dropping privileges, so the
+	// child runs under a separate uid that can never read /data or the
+	// application key. This happens unconditionally when the process is root and
+	// an edge binary is present: the child binds nothing until the persisted
+	// settings activate it, so an unconfigured (or remote-only) deployment
+	// pays only a dormant process. A missing binary or a non-root process is
+	// not fatal: the receiver is then remote-only and the admin UI reports the
+	// included shape as unavailable.
+	edge, edgeErr := startStandbyEdge(cfg, runUID, runGID, log)
+	if edgeErr != nil {
+		log.Warn("embedded MX edge unavailable; remote receiver remains available", "error", edgeErr)
+	}
+	if edge != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), launcher.StopTimeout)
 			defer cancel()
@@ -98,21 +94,26 @@ func main() {
 		log.Error("invalid Dial MX TLS configuration", "error", err)
 		os.Exit(2)
 	}
-	dialManager := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS})
+	// The shared dial manager serves per-domain Dial MX domains. It keeps
+	// running regardless of the installation receiver mode: a domain may route
+	// to its own receiver. The installation-wide receiver is owned separately by
+	// mxRuntime.
+	dialManager := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS, AllowPrivateDestinations: !cfg.RequirePublicOutbound()})
 	svc.DialMX = dialManager
 	dialCtx, dialCancel := context.WithCancel(context.Background())
 	dialDone := make(chan struct{})
 	go func() {
 		defer close(dialDone)
-		if cfg.MXReceiveEnabled {
-			private := mxdial.New(svc.PrivateMXBackend(), mxdial.Config{DataDir: cfg.DataDir, MaxMessageBytes: cfg.MaxMessageBytes, MaxTransactions: cfg.InboundConcurrency, TLSConfig: dialTLS, ReceiverURL: cfg.MXReceiverURL, CoreKey: cfg.MXCoreKey})
-			privateDone := make(chan struct{})
-			go func() { defer close(privateDone); private.Run(dialCtx) }()
-			defer func() { <-privateDone }()
-		}
 		dialManager.Run(dialCtx)
 	}()
 	defer dialCancel()
+
+	// Transition the legacy environment MX configuration into the store once,
+	// then start the process-owned receiver controller. The controller reads the
+	// persisted settings and reconciles the included child or the private dialer
+	// without ever crashing the core on a receiver failure.
+	importLegacyMXSettings(context.Background(), svc, cfg, log)
+	mxrt := startMXRuntime(svc, edge, log)
 	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
@@ -163,14 +164,19 @@ func main() {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-stop:
-	case <-edgeExit(edge):
-		// An unexpected edge exit is fatal: the core would keep running and
-		// silently stop receiving direct SMTP. Stop so the container restarts
-		// or the operator notices.
-		log.Error("embedded mx edge exited unexpectedly", "error", edge.ExitError())
-	}
+	// An unexpected embedded edge exit is reported but not fatal: the core's
+	// mailboxes, API and webhook ingest stay up, and the MX receiver status
+	// reports the failure so the operator can act. A remote receiver is
+	// unaffected. This is the "no core crash on unused child failure" contract.
+	go func() {
+		if ch := edgeExit(edge); ch != nil {
+			<-ch
+			if err := edge.ExitError(); err != nil {
+				log.Error("embedded mx edge exited unexpectedly", "error", err)
+			}
+		}
+	}()
+	<-stop
 	dialCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -183,6 +189,14 @@ func main() {
 	case <-dialDone:
 	case <-ctx.Done():
 		log.Warn("Dial MX shutdown timed out")
+	}
+	// Stop the MX receiver and wait (bounded) for the included child to drain
+	// and the private dialer to stop, before the deferred store close runs. The
+	// bound is the child's stop grace plus a small margin.
+	mxCtx, mxCancel := context.WithTimeout(context.Background(), launcher.StopTimeout+5*time.Second)
+	defer mxCancel()
+	if err := mxrt.Shutdown(mxCtx); err != nil {
+		log.Warn("MX receiver shutdown timed out", "error", err)
 	}
 }
 
@@ -225,30 +239,17 @@ func edgeExit(edge *launcher.Edge) <-chan struct{} {
 	return edge.Wait()
 }
 
-// installEmbeddedCredential provisions the same bearer key to core and child.
-// Only embedded mode (MX_ENABLE=true) embeds an edge.
-func installEmbeddedCredential(log *slog.Logger) {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("MX_ENABLE"))) {
-	case "true", "local", "on", "1", "yes":
-	default:
-		return
-	}
-	secret, err := launcher.ResolveCoreKey(strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")))
-	if err != nil {
-		log.Error("cannot generate embedded mx edge credential", "error", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("DIALMX_CORE_KEY", secret)
-	_ = os.Setenv("MX_RECEIVER_URL", "http://127.0.0.1:8443")
-}
-
-// startEmbeddedEdge validates the privilege requirements and spawns the edge.
-// It refuses when the process cannot separate the edge's uid from the app's
-// runtime uid, with the two concrete remedies.
-func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
+// startStandbyEdge spawns the included receiver as a standby child under a
+// separate uid, before the core drops privileges. The child binds no listeners
+// and holds no credential until the persisted settings activate it over the
+// private control channel, so no MX_ENABLE value or bootstrap secret is needed
+// to start it: an unconfigured deployment simply leaves it dormant. It returns
+// an error (and a nil edge) when the process is not root or the child cannot be
+// isolated; that is not fatal because remote mode remains available.
+func startStandbyEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) (*launcher.Edge, error) {
 	if os.Getuid() != 0 {
-		return nil, fmt.Errorf("MX_ENABLE=true requires the container to start as root so the edge can run under a separate uid; " +
-			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or set MX_ENABLE=remote and run the mailmoose-mx container (docker-compose.mx-sidecar.yml) for hard isolation")
+		return nil, fmt.Errorf("the container must start as root so the embedded edge can run under a separate uid; " +
+			"remove a strict `user:`/`cap_drop: [ALL]` from the service, or use remote mode with the mailmoose-mx container (docker-compose.mx-sidecar.yml)")
 	}
 	if cfg.MXUID == runUID || cfg.MXGID == runGID {
 		return nil, fmt.Errorf("MX_UID/MX_GID must differ from the app runtime uid/gid (%d:%d) for the edge isolation to be meaningful", runUID, runGID)
@@ -258,11 +259,10 @@ func startEmbeddedEdge(cfg config.Config, runUID, runGID int, log *slog.Logger) 
 		Binary:   launcher.ResolveBinary(),
 		UID:      cfg.MXUID,
 		GID:      cfg.MXGID,
-		Secret:   cfg.MXCoreKey,
 		Hostname: hostname,
-		Env:      launcher.EdgeEnv(hostname, cfg.MXCoreKey, 3),
+		Env:      launcher.StandbyEnv(3, 4),
 	}
-	return launcher.Start(context.Background(), spec, log)
+	return launcher.StartStandby(context.Background(), spec, log)
 }
 
 func edgeHostname() string {

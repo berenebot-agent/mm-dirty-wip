@@ -110,7 +110,7 @@ func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
 		mxdial.Domain{Name: "a.test", KeyID: "ka", PrivateKey: keyA, ReceiverURLs: []string{receiver.URL}},
 		mxdial.Domain{Name: "b.test", KeyID: "kb", PrivateKey: keyB, ReceiverURLs: []string{receiver.URL}},
 	)
-	m := mxdial.New(b, mxdial.Config{DataDir: dataDir, TLSConfig: &tls.Config{RootCAs: pool, ServerName: parsed.Hostname()}, ReconcileInterval: 20 * time.Millisecond})
+	m := mxdial.New(b, mxdial.Config{DataDir: dataDir, TLSConfig: &tls.Config{RootCAs: pool, ServerName: parsed.Hostname()}, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.Run(ctx)

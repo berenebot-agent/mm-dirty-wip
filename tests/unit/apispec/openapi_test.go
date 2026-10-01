@@ -202,6 +202,52 @@ func TestContractKeysMatchRoutes(t *testing.T) {
 	}
 }
 
+// TestOpenAPISessionAuthentication asserts the installation-management routes
+// advertise cookie-session authentication (with CSRF on writes) instead of the
+// global bearer requirement, and that the session security scheme is declared.
+func TestOpenAPISessionAuthentication(t *testing.T) {
+	doc := apispec.RenderOpenAPI("https://mail.example.test", apispec.Routes())
+	components := doc["components"].(map[string]any)
+	schemes := components["securitySchemes"].(map[string]any)
+	if _, ok := schemes["sessionAuth"]; !ok {
+		t.Fatalf("sessionAuth security scheme not declared: %#v", schemes)
+	}
+	paths := doc["paths"].(map[string]any)
+	item := paths["/v1/admin/mx"].(map[string]any)
+	for _, method := range []string{"get", "put", "delete"} {
+		op := item[method].(map[string]any)
+		if op["x-authentication"] != apispec.AuthSession {
+			t.Errorf("%s /v1/admin/mx x-authentication = %#v, want session", method, op["x-authentication"])
+		}
+		sec, ok := op["security"].([]map[string]any)
+		if !ok || len(sec) != 1 {
+			t.Fatalf("%s /v1/admin/mx security = %#v", method, op["security"])
+		}
+		if _, ok := sec[0]["sessionAuth"]; !ok {
+			t.Errorf("%s /v1/admin/mx must require sessionAuth: %#v", method, sec)
+		}
+		responses := op["responses"].(map[string]any)
+		if _, ok := responses["403"]; !ok {
+			t.Errorf("%s /v1/admin/mx must document 403: %#v", method, responses)
+		}
+	}
+	// A bearer route keeps the global bearer requirement and no session marker.
+	inc := paths["/v1/inboxes"].(map[string]any)["get"].(map[string]any)
+	if _, ok := inc["x-authentication"]; ok {
+		t.Errorf("bearer route must not carry x-authentication: %#v", inc["x-authentication"])
+	}
+}
+
+// TestSessionRoutesAreInstallationOnly pins that only installation-management
+// operations are session-authenticated; the bearer surface stays unchanged.
+func TestSessionRoutesAreInstallationOnly(t *testing.T) {
+	for _, key := range apispec.SessionRoutes() {
+		if key != "GET /v1/admin/mx" && key != "PUT /v1/admin/mx" && key != "DELETE /v1/admin/mx" {
+			t.Errorf("unexpected session-authenticated route %q", key)
+		}
+	}
+}
+
 // TestOpenAPISchemasAndReferencesResolve renders the real document and checks
 // every $ref resolves to a declared component schema, and that every route's
 // named request/response schema exists.

@@ -130,7 +130,7 @@ func dialMXReceiver(t *testing.T, records *dialMXRecords) (*receiver.Receiver, *
 
 func dialMXManager(t *testing.T, be mxdial.Backend, client *tls.Config, dataDir string) *mxdial.Manager {
 	t.Helper()
-	m := mxdial.New(be, mxdial.Config{DataDir: dataDir, TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AuthRetryInterval: 200 * time.Millisecond})
+	m := mxdial.New(be, mxdial.Config{DataDir: dataDir, TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AuthRetryInterval: 200 * time.Millisecond, AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); m.Run(ctx) }()

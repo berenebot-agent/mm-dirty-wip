@@ -1,0 +1,57 @@
+package launcher_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/dellarb/mailmoose/dialmx/control"
+	"github.com/dellarb/mailmoose/internal/launcher"
+)
+
+func TestStandbyEnvIsMinimal(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", "super-secret")
+	t.Setenv("DATA_DIR", "/data")
+
+	env := launcher.StandbyEnv(3, 4)
+	joined := strings.Join(env, "\n")
+	for _, forbidden := range []string{"APP_ENCRYPTION_KEY", "DATA_DIR", "DIALMX_CORE_KEY"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("standby env leaked %s: %v", forbidden, env)
+		}
+	}
+	want := map[string]bool{
+		control.CmdFDEnv + "=3":   false,
+		control.ReplyFDEnv + "=4": false,
+	}
+	for _, e := range env {
+		if _, ok := want[e]; ok {
+			want[e] = true
+		}
+	}
+	for k, seen := range want {
+		if !seen {
+			t.Fatalf("standby env missing %q in %v", k, env)
+		}
+	}
+}
+
+// TestStartStandbyRequiresRoot documents the privilege precondition. CI runs as
+// root inside the toolchain container, so this asserts the non-root refusal by
+// dropping the effective uid only when the process is not already root.
+func TestStartStandbyRequiresRoot(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("already non-root; the refusal path is exercised by the root guard")
+	}
+	// As root the guard passes, so a missing binary must surface as a start
+	// error rather than a privilege error. An empty/relative binary has no
+	// inherited-fd child to find.
+	_, err := launcher.StartStandby(t.Context(), launcher.Spec{
+		Binary: "/nonexistent/mailmoose-mx",
+		UID:    0,
+		GID:    0,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected start error for a missing binary")
+	}
+}

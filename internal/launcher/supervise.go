@@ -10,12 +10,14 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/dellarb/mailmoose/dialmx/control"
 )
 
 // Edge is a running embedded edge child.
 type Edge struct {
 	cmd    *exec.Cmd
-	writer *os.File // parent's end of the shutdown pipe
+	writer *os.File // parent's end of the legacy shutdown pipe
 	log    *slog.Logger
 	// done is closed exactly once when the child exits. A closed channel is a
 	// broadcast, so the main monitor and Stop can both observe the exit without
@@ -24,6 +26,12 @@ type Edge struct {
 	once sync.Once
 	mu   sync.Mutex
 	err  error
+
+	// client is the standby control channel, set only by StartStandby. cmdW and
+	// repR are its parent-side pipe ends, closed by Stop.
+	client *control.Client
+	cmdW   *os.File
+	repR   *os.File
 }
 
 // Start spawns the edge as a child under spec.UID/GID using SysProcAttr.
@@ -76,10 +84,23 @@ func Start(ctx context.Context, spec Spec, log *slog.Logger) (*Edge, error) {
 // channel is closed once, so a waiter can never block on a value already
 // consumed elsewhere.
 func (e *Edge) Stop(ctx context.Context) error {
-	// Closing the write end gives the child EOF on fd 3, which it treats as a
-	// shutdown request. This is the only cross-uid channel available after the
-	// parent drops privileges.
-	_ = e.writer.Close()
+	if e.client != nil {
+		// Standby edge: ask the child to close and exit over the control
+		// channel, then close the parent's pipe ends so the child's blocking
+		// read releases even if the request was lost.
+		_, _ = e.client.Shutdown(ctx)
+		if e.cmdW != nil {
+			_ = e.cmdW.Close()
+		}
+		if e.repR != nil {
+			_ = e.repR.Close()
+		}
+	} else {
+		// Closing the write end gives the child EOF on fd 3, which it treats as
+		// a shutdown request. This is the only cross-uid channel available
+		// after the parent drops privileges.
+		_ = e.writer.Close()
+	}
 	select {
 	case <-e.done:
 		return e.ExitError()
@@ -102,6 +123,15 @@ func (e *Edge) Stop(ctx context.Context) error {
 // Wait returns a channel closed when the child exits. It is used by the
 // parent's reaper so an unexpected edge exit is observed.
 func (e *Edge) Wait() <-chan struct{} { return e.done }
+
+// Pid returns the child's process id, or 0 before it is started. It is used for
+// supervision and resource measurement.
+func (e *Edge) Pid() int {
+	if e.cmd == nil || e.cmd.Process == nil {
+		return 0
+	}
+	return e.cmd.Process.Pid
+}
 
 // ExitError returns the child's exit error, or nil if it has not exited or
 // exited cleanly. It is safe to call from any goroutine.

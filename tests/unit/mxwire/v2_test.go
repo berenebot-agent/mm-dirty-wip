@@ -92,3 +92,41 @@ func TestV2ExactDomainAndURL(t *testing.T) {
 		}
 	}
 }
+
+// TestV2ReadyAdvertisedLimits pins the coordinated wire upgrade: Ready
+// advertises optional limits, and Hello stays strictly versioned. A Ready with
+// none of the optional fields must still decode.
+func TestV2ReadyAdvertisedLimits(t *testing.T) {
+	hello, err := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotHello mxwire.Hello
+	if err := mxwire.DecodeFrame(hello, &gotHello); err != nil || gotHello.Version != mxwire.V2Protocol {
+		t.Fatalf("hello rejected: %#v %v", gotHello, err)
+	}
+
+	ready, err := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{
+		Version: mxwire.V2Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test",
+		MaxMessageBytes: 1 << 20, MaxDomains: 8, MaxAuthInflight: 4, RevalidateSeconds: 240,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotReady mxwire.Ready
+	if err := mxwire.DecodeFrame(ready, &gotReady); err != nil {
+		t.Fatal(err)
+	}
+	if gotReady.MaxDomains != 8 || gotReady.MaxAuthInflight != 4 || gotReady.RevalidateSeconds != 240 {
+		t.Fatalf("ready limits not decoded: %#v", gotReady)
+	}
+	// An older Ready with none of the optional fields must still decode.
+	legacy, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test", MaxMessageBytes: 1 << 20})
+	var gotLegacy mxwire.Ready
+	if err := mxwire.DecodeFrame(legacy, &gotLegacy); err != nil || gotLegacy.MaxDomains != 0 {
+		t.Fatalf("legacy ready rejected: %#v %v", gotLegacy, err)
+	}
+	if mxwire.MaxAdvertisedDomains != 128 {
+		t.Fatalf("fallback domain cap drift: %d", mxwire.MaxAdvertisedDomains)
+	}
+}

@@ -26,7 +26,7 @@ func TestSingleCoreSessionDelivery(t *testing.T) {
 			srv.Config.Protocols = new(http.Protocols)
 			srv.Config.Protocols.SetHTTP2(true)
 			srv.Config.Protocols.SetUnencryptedHTTP2(true)
-			cfg := mxdial.Config{DataDir: t.TempDir(), CoreKey: "private-key", ReconcileInterval: 20 * time.Millisecond}
+			cfg := mxdial.Config{DataDir: t.TempDir(), CoreKey: "private-key", ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true}
 			if encrypted {
 				srv.EnableHTTP2 = true
 				srv.StartTLS()

@@ -1,6 +1,14 @@
-// Command receiver runs the standalone Dial MX receiver: the SMTP edge and the
-// HTTPS/2 dialer session endpoint in one process. A failure in either listener
-// stops both, and shutdown is bounded so a wedged peer cannot hang the process.
+// Command receiver runs the Dial MX receiver. It has two entry paths:
+//
+//   - standalone (default): the SMTP edge and the HTTPS/2 dialer session
+//     endpoint in one process, configured entirely from the environment. This
+//     is the standalone image and the shared/remote deployment. A failure in
+//     either listener stops both, and shutdown is bounded.
+//   - included standby: when the core spawns this binary with the inherited
+//     DIALMX_CONTROL_CMD_FD/DIALMX_CONTROL_REPLY_FD descriptors, the process
+//     binds nothing until the core activates it over the private control
+//     channel. It then serves the same SMTP edge and session endpoint against
+//     fixed endpoints and can be deactivated and reactivated without exiting.
 //
 // Every log line is a JSON record carrying schema_version, service and boot_id.
 // The boot id is generated once here and injected into the one logger shared by
@@ -12,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,7 +32,9 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/dialmx"
+	"github.com/dellarb/mailmoose/dialmx/control"
 	"github.com/dellarb/mailmoose/dialmx/receiver"
+	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
 	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
@@ -35,6 +46,65 @@ func main() {
 	log := receiver.NewLogger(slog.LevelInfo, bootID, os.Stderr)
 	slog.SetDefault(log)
 
+	// The included receiver is spawned by the core in standby with an inherited
+	// private control channel. When those descriptors are present, run the
+	// controlled lifecycle instead of the environment-configured standalone
+	// receiver. Standalone, single and shared deployments without the channel
+	// are unchanged.
+	if control.Enabled() {
+		runIncluded(log)
+		return
+	}
+	runStandalone(log)
+}
+
+// runIncluded serves the core's standby control channel. The child binds
+// nothing until Configure arrives and never exits between activate/deactivate
+// cycles; it closes and returns on shutdown, a lost channel, or a process
+// signal.
+func runIncluded(log *slog.Logger) {
+	cmdFile, err := control.CommandFile()
+	if err != nil {
+		log.Error("included receiver control channel", "error", err)
+		os.Exit(2)
+	}
+	defer cmdFile.Close()
+	replyFile, err := control.ReplyFile()
+	if err != nil {
+		log.Error("included receiver control channel", "error", err)
+		os.Exit(2)
+	}
+	defer replyFile.Close()
+
+	rt := receiverruntime.New(log)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	// Closing the command descriptor releases the blocked control read when the
+	// process is signalled.
+	go func() {
+		<-ctx.Done()
+		_ = cmdFile.Close()
+	}()
+
+	log.Info(receiver.EventReceiverStarting,
+		"version", buildVersion,
+		"protocol", mxwireProtocol(),
+		"pid", os.Getpid(),
+		"mode", "included-standby",
+	)
+	if err := control.Serve(ctx, cmdFile, replyFile, rt, log); err != nil && !errors.Is(err, context.Canceled) {
+		log.Error("included receiver control loop failed", "error", err)
+	}
+	if err := rt.Close(); err != nil {
+		log.Warn("included receiver shutdown", "error", err)
+	}
+	log.Info(receiver.EventReceiverStopped)
+}
+
+// runStandalone runs the environment-configured receiver: one process with the
+// SMTP edge and the HTTPS/2 dialer session endpoint. It is used by the
+// standalone image and the shared remote deployment.
+func runStandalone(log *slog.Logger) {
 	started := time.Now()
 	log.Info(receiver.EventReceiverStarting,
 		"version", buildVersion,

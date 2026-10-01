@@ -36,9 +36,19 @@ SQLite + raw MIME under /data -> durable events -> API / UI / Relay
 ```
 
 The receiver holds the SMTP connection; the core establishes the bidirectional
-session. On its own schedule the core opens a session per receiver URL, proves
-key control, registers the domains it is responsible for, and then serves
-`Resolve` and `Ingest` requests as SMTP mail arrives.
+session. On its own schedule the core proves key control, registers the domains
+it is responsible for, and then serves `Resolve` and `Ingest` requests as SMTP
+mail arrives.
+
+In shared mode the core does **not** open a single session per receiver URL: it
+packs the configured domains into a bounded number of **stable shards**, each
+one a session to that receiver, so a large domain set is not forced through one
+session and the receiver's advertised `max_domains` is respected. A domain keeps
+its shard across reconciles (adding a domain never re-authenticates the ones
+already placed), and a new shard is opened only when every existing shard is
+full and the shard limit allows. Single mode (the installation **Included** /
+**Remote** receiver) always uses one session of unbounded domain capacity, since
+it serves exactly one core.
 
 ## 2. Deployment
 
@@ -69,12 +79,19 @@ operator-managed TLS certificates.
 ### Core side
 
 The core only starts its dialer for domains that have a `dialmx` receiving
-configuration. `MX_ENABLE` is about the **inbound** MX edge only: Dial MX works
-with `MX_ENABLE=false`, `true`, or `remote`. A Dial-MX-only deployment can use
-`MX_ENABLE=false` and needs no shared bearer key. The core always runs its dedicated
-inbound webhook listener on `:8082`; that listener continues to accept the
-webhook connectors, so do not expose it to the internet unless you also use
-those — Dial MX itself opens no inbound port on the core.
+configuration. Per-domain Dial MX is **legacy compatibility**, configured in the
+domain's receiving wizard with its own per-domain key and `_mailmoose-mx` TXT
+record. It is independent of the installation-wide **Admin → MX receiver**
+setting (Included or Remote), which is the shared receiver the direct-SMTP **MX**
+provider uses; Dial MX is not a fourth global choice. The installation setting
+also replaces the old core MX environment variables, which are now imported once
+and then ignored.
+
+The core always runs its dedicated inbound webhook listener on `:8082`; that
+listener continues to accept the webhook connectors, so do not expose it to the
+internet unless you also use those — Dial MX itself opens no inbound port on the
+core. (The `auto` receiver choice is deferred: it is shown disabled in the UI and
+rejected by the API.)
 
 ### Configuration
 
@@ -110,6 +127,21 @@ Select `DIALMX_MODE=shared` and set the session certificate paths explicitly
 when following this shared-mode guide. SMTP STARTTLS is configured separately.
 The non-root receiver uid must be able to read both certificate files. Mount
 renewed certificates and restart the receiver to reload them.
+
+These are the **receiver container's** settings. When the core runs the receiver
+itself (**Included** under Admin → MX receiver), the same SMTP surface is instead
+configured in the core's database through that panel — the hostname, limits,
+verification, DNS resolver, timeouts and the STARTTLS certificate/private key —
+and the core never reads the receiver env for them.
+
+**Legacy `MX_TLS_CERT`/`MX_TLS_KEY` files are imported once and fail closed.**
+On first start the core reads any legacy STARTTLS file paths into the persisted
+Included configuration. If only one path is set, or a file cannot be read, the
+one-time import is abandoned: no Included settings are written, the core keeps
+running unconfigured, and the error is logged, so a deployment that intended to
+require STARTTLS can never come up offering plaintext. Fix the paths (or set the
+pair in Admin → MX receiver) and restart. Check `smtp_tls_key_configured` after a
+successful import; `RequireTLS` is rejected at save without a certificate.
 
 See `dialmx/.env.example` for a commented template.
 
@@ -202,6 +234,34 @@ retries. A partial fan-out (some connections accepted, some not) or a lost
 acknowledgement also returns `451`: the receiver never claims success on behalf
 of the core.
 
+### Source-IP fairness and authentication pacing
+
+The receiver's shared session listener is reachable by many cores, so it bounds
+per source IP as well as in aggregate:
+
+- a per-IP concurrent connection cap and a per-IP connection window (openings
+  per minute) stop one source consuming every connection slot or cycling
+  short-lived connections to evade the concurrent cap;
+- a per-IP authentication window bounds how many domain challenges a source may
+  start per minute, and a per-IP concurrent-auth cap bounds DNS work in flight,
+  so a burst of `DomainAuth` frames cannot become unbounded resolver load;
+- a short failure cooldown is applied during `AUTH`, not on connection open, so
+  a legitimate sender opening many short connections is not punished for a
+  single failed lookup.
+
+The core paces its own `DomainAuth` frames: `MaxAuthInflight` bounds concurrent
+authentications across every session (and is further clamped to a receiver's
+advertised `max_auth_inflight`), so the core never floods a receiver even when
+many domains are reconciled at once. Both sides bound the DNS work a burst can
+start; neither relies on the other to be polite.
+
+**Resource fairness is a deliberate V1 boundary.** A richer scheduling pass —
+per-domain or per-recipient bandwidth/queue fairness across shards — was
+described but is **not implemented**; the current guarantee is the bounded
+per-IP and per-session caps above, not a global fair-share scheduler. Treat
+queueing between domains on one receiver as best-effort.
+
+
 Deduplication and retry identity are the core's: the delivery fingerprint
 (`mxfp-v1`) is a versioned digest over the canonical envelope sender, canonical
 recipient and the SHA-256 of the original MIME, and the core records a durable
@@ -237,12 +297,31 @@ A metadata payload is JSON, decoded with unknown fields rejected, and is
 capped at 16 KiB. A chunk payload is a 4-byte big-endian sequence number
 followed by up to 32 KiB of body.
 
+### Compatibility and versioning
+
+`Ready` now carries three advisory fields the core uses to size its shards and
+pace authentication: `max_domains` (distinct domains the receiver admits per
+session), `max_auth_inflight` (concurrent domain authentications the receiver
+will service per session) and `revalidate_seconds` (its nominal binding renewal
+cadence). All three are **optional** in the JSON (`omitempty`) so an older
+receiver that does not send them still decodes.
+
+However, metadata is decoded **with unknown fields rejected**, so the change is
+a **strict break in the other direction**: a receiver or core that starts sending
+these fields to a peer built before they existed will have its `Ready`/metadata
+frame rejected as malformed. The new `Ready` fields and the shard/pacing
+behaviour therefore require a **coordinated core and receiver release** — do not
+roll a new receiver into a deployment still running an older core (or vice
+versa) and expect the session to come up. A mismatch fails closed as a session
+error, not as silent misrouting, so it is safe but not transparent; upgrade both
+sides together.
+
 ### Frame types
 
 | Value | Type | Direction | Purpose |
 |---|---|---|---|
 | 1 | `Hello` | core → receiver | `{version, instance}`. |
-| 2 | `Ready` | receiver → core | `{version, receiver_id, connection_id, smtp_hostname, max_message_bytes}`. |
+| 2 | `Ready` | receiver → core | `{version, receiver_id, connection_id, smtp_hostname, max_message_bytes, max_domains?, max_auth_inflight?, revalidate_seconds?}`. |
 | 3 | `DomainAuth` | core → receiver | `{domain, key_id}`. |
 | 4 | `Challenge` | receiver → core | `{domain, key_id, receiver_id, connection_id, nonce}`. |
 | 5 | `ChallengeResponse` | core → receiver | `{domain, key_id, nonce, signature}`. |
@@ -285,23 +364,38 @@ successes, and every such result must carry a valid disposition
 
 - **Not exactly-once.** Deduplication is sender-independent within the 7-day
   receipt window only; see above.
-- **One receiver per session.** The core opens one physical session per receiver
-  URL and registers the union of the domains configured for it. Domains on
-  inherited configurations are served through the parent's receivers.
+- **Domains are sharded, not one-per-session.** In shared mode the core packs the
+  configured domains into a bounded number of stable shards, each a session to
+  the receiver, respecting the receiver's advertised `max_domains`. Domains on
+  inherited configurations are served through the parent's receivers. Single mode
+  uses one session of unbounded capacity. The shard set is bounded by a hard cap
+  (`hardMaxShards`), so a very large domain set is divided across at most that
+  many sessions rather than opening one per domain.
 - **A replaced binding still serves pinned DATA** until it expires: new RCPT
   lookups go to the new binding; an already accepted transaction may finish on
   the old connection while its grant remains valid. Revocation/expiry aborts it.
 - **No automatic core HA.** The last valid authentication wins for an exact
   domain on each receiver. This permits a deliberate takeover, not coordinated
   active-active cores or automatic failover.
+- **No core credential rotation.** The core has no scheduled rotation of its
+  session bearer credential on this release; a leaked key is rotated manually by
+  reconfiguring the receiver. Binding renewal (§4) rotates domain *proofs*, not
+  the core's bearer key.
 - **No mTLS.** The receiver authenticates the core by the DNS-anchored challenge
-  in §4, not by client certificates. Session traffic is TLS-encrypted but the
-  peer is identified by the signed challenge, and DNS freshness is the
-  revocation mechanism.
+  in §4 (or, in single mode, by the shared bearer key), not by client
+  certificates. Session traffic is TLS-encrypted but the peer is identified by
+  the signed challenge or bearer key, and DNS freshness is the shared-mode
+  revocation mechanism. There is no per-core identity or certificate claim
+  beyond that.
 - **Local DNS cache TTL** delays observed revocation; see §4.
-- **Operator-managed CA trust.** The core uses system roots. `DIALMX_CA_FILE` can
-  add a PEM private-CA bundle mounted in the core; hostname verification remains
-  mandatory. There is no insecure TLS mode.
+- **Operator-managed CA trust.** The core uses system roots for the legacy
+  per-domain Dial MX dialer, optionally extended by a `DIALMX_CA_FILE` PEM bundle
+  mounted in the core; hostname verification remains mandatory and there is no
+  insecure TLS mode. For the installation **Remote** receiver the private CA is
+  the non-secret setting in Admin → MX receiver (see [MX.md](MX.md)).
+- **Resource fairness is bounded, not scheduled.** See the source-IP fairness
+  section in §5: the guarantee is bounded per-IP and per-session caps, not a
+  global fair-share scheduler between domains.
 
 ## Metadata logging
 

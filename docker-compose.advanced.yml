@@ -10,10 +10,8 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    environment:
-      # Compose default; override with MX_ENABLE=false (webhook-only) or
-      # MX_ENABLE=remote (separate mailmoose-mx container) in .env.
-      MX_ENABLE: "${MX_ENABLE:-true}"
+    # MX receiver is configured in Admin -> MX receiver (Included or Remote),
+    # not with environment variables.
     volumes:
       - ./data:/data
     ports:
@@ -36,8 +34,9 @@ services:
     # `user:` skips the boot chown and a fresh rootful-Docker ./data would fail
     # to open, `cap_drop: [ALL]` removes the setuid/setgid/chown capabilities
     # the drop requires, and the embedded edge cannot be spawned under a
-    # separate uid. With `user:`/`cap_drop:` set, use MX_ENABLE=remote (the
-    # separate mailmoose-mx container) instead of the default MX_ENABLE=true.
+    # separate uid. With `user:`/`cap_drop:` set, choose Remote in Admin -> MX
+    # receiver and run the separate mailmoose-mx container; Included is
+    # unavailable in a strictly non-root core.
     #
     #   cap_drop: [ALL]
     #   user: "${MAILMOOSE_RUN_UID:-65532}:${MAILMOOSE_RUN_GID:-65532}"

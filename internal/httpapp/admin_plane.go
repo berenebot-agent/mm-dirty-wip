@@ -133,7 +133,30 @@ func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	}
 	mailer, _ := s.Service.Store.AccountMailerInboxID(ctx, p.AccountID)
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
-	s.render(w, adminPlaneBody, pageData{Title: "Admin", Tab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice")})
+	mxForm := mxFormView{}
+	if settings, err := s.Service.GetMXReceiverSettings(ctx); err == nil {
+		mxForm = newMXFormView(settings)
+	} else {
+		s.Log.Error("cannot read MX receiver settings", "error", err)
+	}
+	// A failed submission is carried as a user-bound flash holding only the
+	// non-secret values, so the form is repopulated and the private key is never
+	// re-rendered. It is applied before the form is rendered.
+	mxError := r.URL.Query().Get("error")
+	if f, ok := s.takeMXFormFlash(r.URL.Query().Get("_flash"), p.UserID); ok {
+		applyMXFlash(&mxForm, f)
+	} else {
+		mxForm.Error = mxError
+	}
+	var mxStatus app.MXReceiverStatus
+	if status, err := s.Service.MXReceiverStatus(ctx); err == nil {
+		mxStatus = status
+	}
+	// MXIncludedSupported comes from the live status: the included receiver is
+	// available only when the process wired a runtime with an embedded child
+	// (i.e. it started as root). Without one, the UI steers the operator to
+	// remote mode rather than offering an option that cannot work.
+	s.render(w, adminPlaneBody+mxAdminSection, pageData{Title: "Admin", Tab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice"), MXForm: mxForm, MXStatus: mxStatus, MXIncludedSupported: mxStatus.IncludedSupported})
 }
 
 // createInvite handles the shared invite creation. accountID is the target

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,39 @@ type Config struct {
 	// than from a fixed per-connection tick, so a late-authenticated binding is
 	// not expired early. Tests may set it below one second.
 	RevalidateInterval time.Duration
+
+	// MaxAuthConcurrent bounds authentication jobs running concurrently for one
+	// source IP. Zero selects perIPAuthConcurrent.
+	MaxAuthConcurrent int
+	// AuthWindowMax bounds how many authentication jobs one source IP may start
+	// per minute. Zero selects perIPAuthWindowMax.
+	AuthWindowMax int
+	// MaxRenewalsInFlight bounds receiver-driven renewal challenges outstanding
+	// on one session at once. Zero selects the effective auth-concurrency limit.
+	// Raising it lets tests observe paced renewals without changing production
+	// defaults.
+	MaxRenewalsInFlight int
+}
+
+func (c *Config) maxAuthConcurrent() int {
+	if c.MaxAuthConcurrent > 0 {
+		return c.MaxAuthConcurrent
+	}
+	return perIPAuthConcurrent
+}
+
+func (c *Config) authWindowMax() int {
+	if c.AuthWindowMax > 0 {
+		return c.AuthWindowMax
+	}
+	return perIPAuthWindowMax
+}
+
+func (c *Config) maxRenewalsInFlight() int {
+	if c.MaxRenewalsInFlight > 0 {
+		return c.MaxRenewalsInFlight
+	}
+	return c.maxAuthConcurrent()
 }
 
 func (c *Config) applyDefaults() {
@@ -529,12 +563,22 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	// string ("gatehouse" for every core) and is deliberately NOT unique:
 	// correlation keys are connection_id and receiver_id, never this label.
 	r.logSession(c, "hello", "version", h.Version, "core_label", h.Instance)
+	r.mu.Lock()
 	if r.cfg.Mode == "single" {
-		r.mu.Lock()
 		r.single = c
-		r.mu.Unlock()
 	}
-	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{Mode: r.cfg.Mode, Version: mxwire.V2Protocol, ReceiverID: c.receiver, ConnectionID: c.id, SMTPHostname: r.cfg.SMTP.Hostname, MaxMessageBytes: r.cfg.SMTP.MaxMessageBytes})
+	r.mu.Unlock()
+	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{
+		Mode:              r.cfg.Mode,
+		Version:           mxwire.V2Protocol,
+		ReceiverID:        c.receiver,
+		ConnectionID:      c.id,
+		SMTPHostname:      r.cfg.SMTP.Hostname,
+		MaxMessageBytes:   r.cfg.SMTP.MaxMessageBytes,
+		MaxDomains:        r.cfg.MaxDomainsPerConnection,
+		MaxAuthInflight:   r.cfg.maxAuthConcurrent(),
+		RevalidateSeconds: int(r.cfg.RevalidateInterval / time.Second),
+	})
 	for {
 		if c.ctx.Err() != nil {
 			closeReason = "canceled"
@@ -860,7 +904,13 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	started := time.Now()
 	if !r.acquireAuth(c) {
 		if issued.binding != nil {
-			r.revoke(issued.binding, "reauth_failed")
+			// A renewal that could not start because the source is at its
+			// temporary authentication capacity is NOT a failed proof: the
+			// existing grant is still valid. Leave the binding untouched and let
+			// revalidateConn re-issue the renewal on a later tick, before the
+			// grant expires. Only the grant's own expiry fails the binding.
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "source_limit", time.Since(started))
+			return
 		}
 		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", "source_limit", time.Since(started))
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "source_limit", time.Time{})
@@ -1047,17 +1097,26 @@ func (r *Receiver) expireConn(c *connection) {
 	}
 }
 
-// revalidateConn starts a renewal challenge for every binding whose renewAt
-// deadline has passed. It returns immediately; proof completion renews the
-// binding asynchronously.
+// revalidateConn starts renewal challenges for bindings whose renewAt deadline
+// has passed. Renewals are paced: only enough are issued to keep at most
+// maxRenewalsInFlight outstanding on the connection, in deterministic domain
+// order. A renewal that cannot start (source capacity) is simply retried on a
+// later tick while its grant is still valid; it is never revoked early.
 func (r *Receiver) revalidateConn(c *connection) {
 	now := time.Now()
-	type renewal struct {
+	type due struct {
 		channel uint64
-		value   mxwire.Challenge
+		binding *binding
 	}
-	var issued []renewal
+	limit := r.cfg.maxRenewalsInFlight()
+	var ready []due
 	r.mu.Lock()
+	inflight := 0
+	for _, chl := range c.challenges {
+		if chl.binding != nil {
+			inflight++
+		}
+	}
 	for ch, b := range c.domains {
 		if b.state != bindActive || r.domains[b.domain] != b || now.Before(b.renewAt) {
 			continue
@@ -1065,13 +1124,31 @@ func (r *Receiver) revalidateConn(c *connection) {
 		if _, ok := c.challenges[ch]; ok {
 			continue
 		}
+		ready = append(ready, due{channel: ch, binding: b})
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		if ready[i].binding.domain != ready[j].binding.domain {
+			return ready[i].binding.domain < ready[j].binding.domain
+		}
+		return ready[i].channel < ready[j].channel
+	})
+	type renewal struct {
+		channel uint64
+		value   mxwire.Challenge
+	}
+	var issued []renewal
+	for _, item := range ready {
+		if inflight >= limit {
+			break
+		}
 		nonce := make([]byte, 32)
 		if _, err := rand.Read(nonce); err != nil {
 			continue
 		}
-		challengeValue := mxwire.Challenge{Domain: b.domain, KeyID: b.keyID, ReceiverID: c.receiver, ConnectionID: c.id, Nonce: base64.RawURLEncoding.EncodeToString(nonce)}
-		c.challenges[ch] = challenge{keyID: b.keyID, domain: b.domain, expires: now.Add(challengeTTL), binding: b, value: challengeValue}
-		issued = append(issued, renewal{ch, challengeValue})
+		challengeValue := mxwire.Challenge{Domain: item.binding.domain, KeyID: item.binding.keyID, ReceiverID: c.receiver, ConnectionID: c.id, Nonce: base64.RawURLEncoding.EncodeToString(nonce)}
+		c.challenges[item.channel] = challenge{keyID: item.binding.keyID, domain: item.binding.domain, expires: now.Add(challengeTTL), binding: item.binding, value: challengeValue}
+		issued = append(issued, renewal{item.channel, challengeValue})
+		inflight++
 	}
 	r.mu.Unlock()
 	for _, item := range issued {
@@ -1232,7 +1309,7 @@ func (r *Receiver) acquireAuth(c *connection) bool {
 		st.authWindow = now
 		st.authCount = 0
 	}
-	if st.authCount >= perIPAuthWindowMax || st.auths >= perIPAuthConcurrent {
+	if st.authCount >= r.cfg.authWindowMax() || st.auths >= r.cfg.maxAuthConcurrent() {
 		return false
 	}
 	st.auths++

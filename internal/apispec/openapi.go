@@ -39,6 +39,12 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 		"components": map[string]any{
 			"securitySchemes": map[string]any{
 				"bearerAuth": map[string]any{"type": "http", "scheme": "bearer"},
+				"sessionAuth": map[string]any{
+					"type":        "apiKey",
+					"in":          "cookie",
+					"name":        "mmm_session",
+					"description": "System administrator session cookie; write operations additionally require a CSRF token (X-CSRF-Token header or _csrf form field). Account bearer API keys are not accepted on installation routes.",
+				},
 			},
 			"schemas": Schemas(),
 		},
@@ -61,6 +67,13 @@ func openAPIOperation(r Route) map[string]any {
 			"401":                errorResponse("Unauthorized"),
 			"default":            errorResponse("Unexpected error"),
 		},
+	}
+	if r.Auth == AuthSession {
+		// Session-authenticated installation route: override the global bearer
+		// requirement and describe the extra CSRF and system-admin failures.
+		op["security"] = []map[string]any{{"sessionAuth": []string{}}}
+		op["x-authentication"] = AuthSession
+		op["responses"].(map[string]any)["403"] = errorResponse("Forbidden (system administrator session or CSRF token required)")
 	}
 	if r.Description != "" {
 		op["description"] = r.Description

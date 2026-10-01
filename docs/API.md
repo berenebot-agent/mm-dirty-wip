@@ -550,6 +550,136 @@ DNS-backed domain proofs. Recipient resolution and durable ingestion are framed
 session operations, not core HTTP endpoints. Duplicate delivery fingerprints
 return the recorded disposition. See [MX.md](MX.md) and [DIALMX.md](DIALMX.md).
 
+### Installation MX receiver (system administrator, session-authenticated)
+
+A domain chooses whether it receives by MX; the **installation** decides how the
+core reaches the receiver every MX domain uses. That installation setting is the
+single `mx_settings` row, edited from the Admin UI or this API:
+
+```http
+GET    /v1/admin/mx
+PUT    /v1/admin/mx
+DELETE /v1/admin/mx?revision=<n>
+```
+
+These are **installation-management routes**: they authenticate with a logged-in
+system administrator's cookie session (`mmm_session`), not a bearer API key.
+Writes additionally require a CSRF token (`X-CSRF-Token` header or `_csrf` form
+field). An account bearer key is rejected (`401`), and a logged-in non-system
+administrator is rejected (`403`); API keys can never be system administrators.
+The OpenAPI operation for each carries `x-authentication: session` and requires
+the `sessionAuth` security scheme.
+
+`GET` returns the redacted settings plus a live `status`:
+
+```json
+{
+  "mode": "remote",
+  "url": "https://receiver.example:8443",
+  "bearer_key": "",
+  "key_configured": true,
+  "ca": "",
+  "hostname": "",
+  "max_message_bytes": 0,
+  "max_staging_bytes": 0,
+  "max_recipients": 0,
+  "max_connections": 0,
+  "require_tls": false,
+  "verify_spf": true,
+  "verify_dkim": true,
+  "verify_dmarc": true,
+  "dns_resolver": "",
+  "dns_timeout_seconds": 0,
+  "read_timeout_seconds": 0,
+  "write_timeout_seconds": 0,
+  "data_timeout_seconds": 0,
+  "smtp_tls_cert": "",
+  "smtp_tls_key_configured": false,
+  "revision": 3,
+  "updated_at": "2026-10-01T00:00:00Z",
+  "status": {
+    "mode": "remote",
+    "configured": true,
+    "revision": 3,
+    "state": "active",
+    "included_supported": true,
+    "smtp_addr": "",
+    "session_addr": "",
+    "active_connections": 0
+  }
+}
+```
+
+`mode` is `included` (the embedded receiver runs inside this deployment:
+credentials are generated automatically and the port forward and DNS are handled
+by the container) or `remote` (a receiver in its own container, on another host,
+or on the LAN, reached at `url` with `bearer_key`). There is no `auto` mode yet —
+it is a deferred UI-only placeholder and is rejected here.
+
+- `bearer_key` is never returned; `key_configured` reports whether one is
+  stored. On `PUT` a blank `bearer_key` retains the stored credential, and for
+  included mode the core generates and retains the key (a supplied value is
+  ignored). A remote receiver requires a `url` and a key.
+- `hostname`, `max_message_bytes`, `max_staging_bytes`, `max_recipients`,
+  `max_connections`, `require_tls`, `verify_spf`, `verify_dkim`, `verify_dmarc`,
+  `dns_resolver`, `dns_timeout_seconds`, `read_timeout_seconds`,
+  `write_timeout_seconds`, `data_timeout_seconds`, `smtp_tls_cert` and
+  `smtp_tls_key` tune the included receiver; a zero value uses the receiver
+  default for a limit or timeout.
+- `max_message_bytes` defaults to `31457280` (30 MiB), `max_staging_bytes` to
+  `268435456` (256 MiB, and never below the message cap), `max_recipients` to
+  `100`, `max_connections` to `256`, the DNS timeout to `10 s`, and the read,
+  write and DATA timeouts to `60 s`, `60 s` and `300 s`.
+- `require_tls` defaults **off** and refuses plaintext SMTP; it requires a
+  STARTTLS certificate and key.
+- `verify_spf` / `verify_dkim` / `verify_dmarc` default **on**. They are a
+  tri-state: omit a toggle to leave the default, or send an explicit `true` /
+  `false` to set it. A GET omits a toggle that was never explicitly set, so a
+  GET→PUT round-trip cannot turn "default" into "explicitly on".
+- `smtp_tls_cert` is the public STARTTLS certificate (PEM) and is returned by
+  GET. `smtp_tls_key` is the private key (PEM) and is **write-only**: it is never
+  returned, and GET reports `smtp_tls_key_configured` (always present) instead. A
+  blank `smtp_tls_key` retains the stored key; supplying a certificate with a
+  blank key keeps the pair; clearing `smtp_tls_cert` (with a blank key) removes
+  the pair and clears the key. A certificate and key must be supplied together,
+  and the pair must parse as a valid X.509 key pair, or the save is rejected
+  (`400`).
+- A remote save that carries any included-only field (the SMTP/staging limits,
+  the TLS pair, the DNS/timeout settings, `require_tls` or a verification
+  toggle) is rejected (`400`), so the operator is never misled by values the
+  runtime ignores.
+- `revision` is an optimistic-concurrency token; a stale `PUT` returns `409`.
+  Zero creates the configuration when none exists.
+- **Readiness is never claimed before the receiver is live.** `state` is
+  `disabled`, `unknown`, `standby`, `connecting`, `active`, `draining`, `failed`
+  or `unavailable`. `connecting` means a settings change or the receiver's
+  session handshake is still in progress; `active` is reported only once the
+  handshake completes, so a receiver that never connects is never described as
+  ready. Without an attached runtime (e.g. `included` in a rootless deployment)
+  the state is `unknown`/`unavailable` rather than `active`, and
+  `included_supported` is false.
+- `DELETE` clears the configured receiver and preserves the initialized marker,
+  so the one-time environment import never re-fires. It requires the current
+  `revision`.
+
+The legacy `MX_ENABLE`, `MX_RECEIVER_URL` and `DIALMX_CORE_KEY` environment
+values, together with the legacy `MX_*` SMTP settings (hostname, limits,
+verification, DNS resolver, timeouts and the `MX_TLS_CERT`/`MX_TLS_KEY` files),
+are imported once on first start when no row exists; thereafter the persisted
+settings are authoritative and the environment is ignored. The only MX
+environment that still belongs to the core deployment is the standalone receiver
+container's own configuration (see [MX.md](MX.md)); the core itself is
+configured here.
+
+> **Legacy STARTTLS files.** The one-time import reads `MX_TLS_CERT` and
+> `MX_TLS_KEY` from disk. If only one path is set, or a file cannot be read, the
+> import currently continues **without** TLS and logs a warning rather than
+> failing closed. This is a known weakness during the transition: a deployment
+> that intended to require STARTTLS can come up offering plaintext. Until the
+> importer fails closed, verify after upgrading that `smtp_tls_key_configured`
+> is `true` (or set the pair here), and do not rely on the environment to
+> enforce TLS.
+
 Sending and receiving are configured per domain. A domain owns at most one
 optional sending configuration and at most one optional receiving
 configuration. There is no account-level connector pool, no reusable named

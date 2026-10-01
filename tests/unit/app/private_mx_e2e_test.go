@@ -21,7 +21,7 @@ func TestPrivateMXSessionPersistsAndDeduplicates(t *testing.T) {
 	srv.Config.Protocols.SetUnencryptedHTTP2(true)
 	srv.Start()
 	defer srv.Close()
-	m := mxdial.New(svc.PrivateMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, MaxMessageBytes: svc.Config.MaxMessageBytes, ReceiverURL: srv.URL, CoreKey: "private-key"})
+	m := mxdial.New(svc.PrivateMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, MaxMessageBytes: svc.Config.MaxMessageBytes, ReceiverURL: srv.URL, CoreKey: "private-key", AllowPrivateDestinations: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); m.Run(ctx) }()

@@ -4,6 +4,7 @@
 package mxagent
 
 import (
+	"crypto/tls"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,12 +22,18 @@ type Config struct {
 	// HealthAddr is an optional health/readiness listener, e.g. :8090. Empty
 	// disables it.
 	HealthAddr string
-	// TLSCertFile/TLSKeyFile optionally enable STARTTLS. RequireTLS refuses
-	// plaintext sessions so a deployment can guarantee opportunistic senders
-	// encrypt (at the cost of bouncing those that cannot).
+	// TLSCertFile/TLSKeyFile optionally enable STARTTLS from files on disk.
+	// RequireTLS refuses plaintext sessions so a deployment can guarantee
+	// opportunistic senders encrypt (at the cost of bouncing those that cannot).
 	TLSCertFile string
 	TLSKeyFile  string
-	RequireTLS  bool
+	// TLSCertificate is an in-memory STARTTLS certificate that takes precedence
+	// over the file pair. The included receiver receives the PEM over the private
+	// control channel and builds it here, so the child never reads the core's
+	// filesystem. It is not serialised (json:"-"): it is local to the process
+	// that owns it and is never sent over the wire as a struct field.
+	TLSCertificate *tls.Certificate `json:"-"`
+	RequireTLS     bool
 
 	// Verification toggles. Core policy consumes whatever the edge supplies.
 	VerifySPF   bool

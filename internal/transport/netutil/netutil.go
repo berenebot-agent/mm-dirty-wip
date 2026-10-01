@@ -46,8 +46,13 @@ func SetRequirePublic(v bool) {
 // RequirePublic reports whether public-destination enforcement is active.
 func RequirePublic() bool { return requirePublic.Load() }
 
-// lookupIP is overridable in tests.
-var lookupIP = net.DefaultResolver.LookupIP
+// lookupIP resolves a host. It consults net.DefaultResolver at call time rather
+// than binding the method value at package init, so a test can install a
+// deterministic loopback resolver on net.DefaultResolver without a production
+// test hook.
+var lookupIP = func(ctx context.Context, network, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, network, host)
+}
 
 // nonPublicPrefixes are special-use ranges that net.IP's IsPrivate/IsLoopback
 // helpers do not cover. They must not be treated as public Internet targets.
@@ -206,7 +211,13 @@ func guardedTransport() http.RoundTripper {
 }
 
 func dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if !requirePublic.Load() {
+	return DialContext(ctx, network, addr, requirePublic.Load())
+}
+
+// DialContext applies the connection's destination policy at dial time and
+// connects to the checked numeric address, avoiding a second DNS resolution.
+func DialContext(ctx context.Context, network, addr string, publicOnly bool) (net.Conn, error) {
+	if !publicOnly {
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, addr)
 	}
 	host, port, err := net.SplitHostPort(addr)

@@ -36,6 +36,12 @@ type Route struct {
 	// Success is the status code of the operation's primary success response.
 	// Zero is treated as 200.
 	Success int
+	// Auth names the authentication scheme for the operation. Empty means the
+	// standard bearer API key (the default for the /v1 surface). "session" marks
+	// an installation-management route that requires a logged-in system
+	// administrator's cookie session and a CSRF token on writes; account bearer
+	// keys are not accepted for it.
+	Auth string
 	// Request is the component schema name of the JSON request body, or "" when
 	// the operation has no body. RequestContentType defaults to
 	// application/json and is only set for the multipart upload.
@@ -172,6 +178,13 @@ var routes = []Route{
 	{Method: "PUT", Path: "/v1/admin/hermes/{id}", Summary: "Update a Hermes connection outbound role (Admin)", Description: "Body: role. owner lets the relay send directly; assistant makes it draft and request approval instead.", Role: "admin", Group: "Admin: Hermes"},
 	{Method: "DELETE", Path: "/v1/admin/hermes/{id}", Summary: "Delete a Hermes connection (Admin)", Role: "admin", Group: "Admin: Hermes", Success: 204},
 
+	// Admin: MX. These installation-management routes authenticate with the
+	// system administrator's cookie session, not a bearer API key: one receiver
+	// serves every account, so an account-scoped key must never reach them.
+	{Method: "GET", Path: "/v1/admin/mx", Summary: "Get the installation MX receiver settings and live status (System admin session)", Description: "Session-authenticated installation route: requires a logged-in system administrator's cookie session; account bearer API keys are not accepted. Returns the installation-wide MX receiver configuration with its secret redacted (key_configured reports whether a bearer credential is stored) plus a status object carrying the live receiver state. A configured receiver is one whose mode is included or remote. Readiness comes from status.state and is never claimed before the receiver is live: state is connecting while a change or session handshake is still in progress and active only once it completes.", Role: "admin", Group: "Admin: MX", Auth: "session"},
+	{Method: "PUT", Path: "/v1/admin/mx", Summary: "Set the installation MX receiver settings (System admin session)", Description: "Session-authenticated installation route: requires a logged-in system administrator's cookie session and a CSRF token (X-CSRF-Token header or _csrf form field); account bearer API keys are not accepted. Body: mode (included or remote), url, bearer_key, ca, hostname, max_message_bytes, max_staging_bytes, max_recipients, max_connections, require_tls, verify_spf, verify_dkim, verify_dmarc, dns_resolver, dns_timeout_seconds, read_timeout_seconds, write_timeout_seconds, data_timeout_seconds, smtp_tls_cert, smtp_tls_key and revision. Included mode generates and retains the bearer key (a supplied key is ignored) and takes no url, and may set the hostname, SMTP/staging limits, STARTTLS certificate and private key, DNS resolver and timeouts, RequireTLS and the verification toggles; verification defaults on and RequireTLS defaults off, an explicit true/false is honoured. smtp_tls_key is write-only: the GET never returns it, a blank value retains the stored key, and clearing smtp_tls_cert (with a blank key) removes the pair. Remote mode requires a url and a bearer_key, where a blank key retains the stored one, and rejects included-only fields. The revision is an optimistic-concurrency token a save must echo; zero creates the configuration.", Role: "admin", Group: "Admin: MX", Auth: "session"},
+	{Method: "DELETE", Path: "/v1/admin/mx", Summary: "Clear the installation MX receiver settings (System admin session)", Description: "Session-authenticated installation route: requires a logged-in system administrator's cookie session and a CSRF token; account bearer API keys are not accepted. Removes the configured receiver, preserving the initialized marker so the one-time environment import never re-fires. Requires the current revision as a query parameter.", Role: "admin", Group: "Admin: MX", Auth: "session", Success: 204},
+
 	// Admin: clients.
 	{Method: "GET", Path: "/v1/admin/clients", Summary: "List clients (Admin)", Description: "Returns every client of the account grouped by type: API keys, Hermes relays and webhooks. Never includes secrets.", Role: "admin", Group: "Admin: clients"},
 	{Method: "GET", Path: "/v1/admin/clients/webhooks", Summary: "List webhook clients (Admin)", Description: "Returns webhook delivery clients (id, inbox, name, url, mode, auth mode, enabled, cursor and status); never the signing secret.", Role: "admin", Group: "Admin: clients"},
@@ -200,11 +213,13 @@ func Groups() []string {
 	return out
 }
 
-// Missing compares the table against the live registrations. registered holds
-// net/http ServeMux patterns of the form "METHOD /v1/path". It returns routes
-// that are registered but absent from the table (undocumented) and table
-// entries with no registered route (phantom). A non-empty result is a
-// documentation bug.
+// Missing compares the bearer-authenticated table against the live bearer
+// registrations. registered holds net/http ServeMux patterns of the form
+// "METHOD /v1/path". It returns routes that are registered but absent from the
+// table (undocumented) and bearer table entries with no registered route
+// (phantom). Session-authenticated installation routes are compared separately
+// by SessionMissing, because they are not registered by the bearer mechanism.
+// A non-empty result is a documentation bug.
 func Missing(registered []string) (undocumented, phantom []string) {
 	reg := make(map[string]bool, len(registered))
 	for _, p := range registered {
@@ -212,6 +227,54 @@ func Missing(registered []string) (undocumented, phantom []string) {
 	}
 	table := make(map[string]bool, len(routes))
 	for _, r := range routes {
+		if r.Auth == AuthSession {
+			continue
+		}
+		table[strings.TrimSpace(r.Method+" "+r.Path)] = true
+	}
+	for p := range reg {
+		if !table[p] {
+			undocumented = append(undocumented, p)
+		}
+	}
+	for p := range table {
+		if !reg[p] {
+			phantom = append(phantom, p)
+		}
+	}
+	sort.Strings(undocumented)
+	sort.Strings(phantom)
+	return undocumented, phantom
+}
+
+// AuthSession is the Auth value for installation-management routes that require
+// a logged-in system administrator's cookie session (with a CSRF token on
+// writes) rather than a bearer API key.
+const AuthSession = "session"
+
+// SessionRoutes returns the session-authenticated route keys ("METHOD /path").
+func SessionRoutes() []string {
+	var out []string
+	for _, r := range routes {
+		if r.Auth == AuthSession {
+			out = append(out, r.Method+" "+r.Path)
+		}
+	}
+	return out
+}
+
+// SessionMissing compares the session-authenticated table entries against the
+// live session registrations, mirroring Missing for the bearer surface.
+func SessionMissing(registered []string) (undocumented, phantom []string) {
+	reg := make(map[string]bool, len(registered))
+	for _, p := range registered {
+		reg[strings.TrimSpace(p)] = true
+	}
+	table := make(map[string]bool)
+	for _, r := range routes {
+		if r.Auth != AuthSession {
+			continue
+		}
 		table[strings.TrimSpace(r.Method+" "+r.Path)] = true
 	}
 	for p := range reg {

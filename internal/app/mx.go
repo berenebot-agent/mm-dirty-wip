@@ -144,8 +144,18 @@ func (s *Service) IngestDialMX(ctx context.Context, in MXIngestInput) (MXIngestR
 }
 
 func (s *Service) ingestMX(ctx context.Context, routingProvider string, in MXIngestInput) (MXIngestResult, error) {
-	if routingProvider == mxProvider && !s.Config.MXReceiveEnabled {
-		return MXIngestResult{}, ErrMXDisabled
+	if routingProvider == mxProvider {
+		// The persisted MX receiver configuration is authoritative, not the
+		// legacy MX_ENABLE environment. A configured receiver of either mode
+		// enables the mx-routed ingest path; an absent or cleared one rejects
+		// it, so a deployment that never configured MX cannot ingest.
+		enabled, err := s.mxReceiverConfigured(ctx)
+		if err != nil {
+			return MXIngestResult{}, err
+		}
+		if !enabled {
+			return MXIngestResult{}, ErrMXDisabled
+		}
 	}
 	recipients := in.Recipients
 	if len(recipients) == 0 && strings.TrimSpace(in.Recipient) != "" {

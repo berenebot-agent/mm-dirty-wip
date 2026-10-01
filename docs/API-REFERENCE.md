@@ -162,6 +162,14 @@ Generated from `internal/apispec`; do not edit by hand.
 | PUT | /v1/admin/hermes/{id} | Update a Hermes connection outbound role (Admin) | admin |
 | DELETE | /v1/admin/hermes/{id} | Delete a Hermes connection (Admin) | admin |
 
+## Admin: MX
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/mx | Get the installation MX receiver settings and live status (System admin session) | admin |
+| PUT | /v1/admin/mx | Set the installation MX receiver settings (System admin session) | admin |
+| DELETE | /v1/admin/mx | Clear the installation MX receiver settings (System admin session) | admin |
+
 ## Admin: clients
 
 | Method | Path | Summary | Role |

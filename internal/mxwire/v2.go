@@ -24,6 +24,11 @@ const (
 	FrameHeaderSize = 24
 )
 
+// MaxAdvertisedDomains is the local fallback a core applies when a receiver
+// does not advertise Ready.MaxDomains: at most this many domains share one
+// physical session before the core opens another stable shard.
+const MaxAdvertisedDomains = 128
+
 type FrameType uint8
 
 const (
@@ -174,6 +179,17 @@ type Ready struct {
 	ConnectionID    string `json:"connection_id"`
 	SMTPHostname    string `json:"smtp_hostname"`
 	MaxMessageBytes int64  `json:"max_message_bytes"`
+	// MaxDomains bounds how many distinct domains a receiver admits on one
+	// session. Zero means unspecified: the core applies MaxAdvertisedDomains.
+	MaxDomains int `json:"max_domains,omitempty"`
+	// MaxAuthInflight bounds concurrent domain authentications the receiver
+	// will service on one session. Zero means unspecified; the core never
+	// exceeds its own configured cap regardless.
+	MaxAuthInflight int `json:"max_auth_inflight,omitempty"`
+	// RevalidateSeconds is the receiver's nominal binding renewal cadence,
+	// letting the core pace its own re-authentication to the receiver's
+	// schedule rather than assume a fixed period.
+	RevalidateSeconds int `json:"revalidate_seconds,omitempty"`
 }
 
 type DomainAuth struct {
