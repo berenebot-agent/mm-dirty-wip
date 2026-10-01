@@ -27,6 +27,8 @@ type CoreClient struct {
 	timeout time.Duration
 }
 
+func (c *CoreClient) Close() error { return nil }
+
 func NewCoreClient(cfg Config) *CoreClient {
 	return &CoreClient{
 		base:    cfg.IngestURL,
