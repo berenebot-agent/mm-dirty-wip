@@ -766,3 +766,50 @@ func TestUIDraftSendDeletesDraft(t *testing.T) {
 		t.Fatalf("sent %#v", msgs)
 	}
 }
+
+// TestUIDeleteInboxConfirmDialog locks in that the dashboard renders the
+// type-to-confirm inbox delete modal, that every delete entry point carries the
+// inbox address so the dialog can display it, and that the existing delete
+// route still works.
+func TestUIDeleteInboxConfirmDialog(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`id="inbox-delete-dialog"`,
+		`id="inbox-delete-form"`,
+		`id="inbox-delete-input"`,
+		`id="inbox-delete-submit"`,
+		`id="inbox-delete-address"`,
+		`class="secondary icon-btn danger open-delete-inbox" data-id="` + box.ID + `" data-address="` + box.Address + `"`,
+		`class="secondary danger open-delete-inbox" id="inbox-edit-delete"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	if strings.Contains(body, `/ui/inboxes/`+box.ID+`/delete" data-confirm=`) {
+		t.Fatal("inbox delete should route through the confirm dialog, not data-confirm")
+	}
+
+	// The delete route is unchanged.
+	post := httptest.NewRecorder()
+	delReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/delete", strings.NewReader("_csrf="+csrf))
+	delReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	delReq.AddCookie(cookie)
+	h.ServeHTTP(post, delReq)
+	if post.Code != http.StatusSeeOther {
+		t.Fatalf("delete inbox %d: %s", post.Code, post.Body.String())
+	}
+	if _, err := svc.Store.GetInbox(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, box.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("inbox still present after delete: %v", err)
+	}
+}
