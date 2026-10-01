@@ -24,6 +24,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   (streamed over SSE/long-poll; not relayed over Hermes).
 - Trash UI: a Trash folder with Restore and Delete forever actions, an Empty
   trash button, and a Trash retention field on the Account page.
+- Time zone display preference: an account default and a per-user override on
+  the Account page, chosen from the full IANA list with type-ahead. `GET`/`PATCH
+  /v1/account/settings` reads and writes the account `timezone` (an IANA name;
+  empty means UTC). Stored and API timestamps remain UTC; the setting changes
+  only how times are shown in the web interface. The IANA database is embedded
+  via the Go standard library's `time/tzdata`, so conversions work on hosts
+  without a system tzdata tree.
 
 ### Changed
 

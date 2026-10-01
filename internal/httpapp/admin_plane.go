@@ -156,7 +156,7 @@ func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	// available only when the process wired a runtime with an embedded child
 	// (i.e. it started as root). Without one, the UI steers the operator to
 	// remote mode rather than offering an option that cannot work.
-	s.render(w, adminPlaneBody+mxAdminSection, pageData{Title: "Admin", Tab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice"), MXForm: mxForm, MXStatus: mxStatus, MXIncludedSupported: mxStatus.IncludedSupported})
+	s.render(w, r, adminPlaneBody+mxAdminSection, pageData{Title: "Admin", Tab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice"), MXForm: mxForm, MXStatus: mxStatus, MXIncludedSupported: mxStatus.IncludedSupported})
 }
 
 // createInvite handles the shared invite creation. accountID is the target
@@ -499,7 +499,7 @@ func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 		mailboxSizes = map[string]int64{}
 	}
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
-	s.render(w, operatorBody, pageData{
+	s.render(w, r, operatorBody, pageData{
 		Title:                "Mailboxes",
 		Principal:            p,
 		CSRF:                 csrf(r),

@@ -117,7 +117,7 @@ func (s *Store) SetAccountStorageQuota(ctx context.Context, accountID string, qu
 // ListAccountUsers returns the account's human users. Non-admin members carry
 // their per-inbox roles; an Admin has no explicit role rows.
 func (s *Store) ListAccountUsers(ctx context.Context, accountID string) ([]model.User, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at FROM users WHERE account_id=? ORDER BY created_at`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone FROM users WHERE account_id=? ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (s *Store) ListAccountUsers(ctx context.Context, accountID string) ([]model
 		var u model.User
 		var admin, sysadmin int
 		var created string
-		if err = rows.Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created); err != nil {
+		if err = rows.Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone); err != nil {
 			return nil, err
 		}
 		u.IsAdmin = admin != 0

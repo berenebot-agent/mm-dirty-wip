@@ -10,6 +10,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/timezone"
 )
 
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
@@ -222,7 +223,7 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	var u model.User
 	var ph, created string
 	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,is_system_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &sysadmin, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,is_system_admin,created_at,timezone FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &sysadmin, &created, &u.Timezone)
 	if err == sql.ErrNoRows {
 		// Equalize the work done for an unknown account so login timing cannot
 		// be used to enumerate accounts.
@@ -245,7 +246,7 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 	var u model.User
 	var created string
 	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -264,7 +265,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, e
 	var u model.User
 	var created string
 	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created)
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -447,9 +448,9 @@ func (s *Store) DeleteSession(ctx context.Context, token string) {
 }
 func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
 	var p model.Principal
-	var csrf, exp string
+	var csrf, exp, userTZ, acctTZ string
 	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,u.is_system_admin,s.csrf_token,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &sysadmin, &csrf, &exp)
+	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,u.is_system_admin,s.csrf_token,s.expires_at,u.timezone,a.timezone FROM sessions s JOIN users u ON u.id=s.user_id JOIN accounts a ON a.id=u.account_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &sysadmin, &csrf, &exp, &userTZ, &acctTZ)
 	if err == sql.ErrNoRows {
 		return p, "", ErrNotFound
 	}
@@ -464,6 +465,7 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 	p.SystemAdmin = sysadmin != 0
 	p.ViaSession = true
 	p.SessionHash = auth.HashToken(token)
+	p.Timezone = timezone.Resolve(userTZ, acctTZ).String()
 	p.MailboxRoles = map[string]string{}
 	if !p.Admin {
 		roles, err := s.userMailboxRoles(ctx, p.UserID)

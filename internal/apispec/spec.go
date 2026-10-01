@@ -72,8 +72,8 @@ var routes = []Route{
 	// Discovery.
 	{Method: "GET", Path: "/v1/bootstrap", Summary: "Discover key capabilities and accessible inboxes", Role: "", Group: "Discovery"},
 	{Method: "GET", Path: "/v1/limits", Summary: "Get server pagination, size and rate limits", Role: "read", Group: "Discovery"},
-	{Method: "GET", Path: "/v1/account/settings", Summary: "Get account preferences (Owner/Admin)", Description: "Account-level mailbox preferences. Today: trash_retention_days, the number of days a trashed message is kept before the maintenance sweep purges it permanently; 0 keeps trashed mail until it is purged manually.", Role: "owner", Group: "Discovery"},
-	{Method: "PATCH", Path: "/v1/account/settings", Summary: "Update account preferences (Owner/Admin)", Description: "Accepts trash_retention_days (0 or a positive integer).", Role: "owner", Group: "Discovery"},
+	{Method: "GET", Path: "/v1/account/settings", Summary: "Get account preferences (Owner/Admin)", Description: "Account-level mailbox preferences: trash_retention_days, the number of days a trashed message is kept before the maintenance sweep purges it permanently (0 keeps trashed mail until purged manually); and timezone, the account default display time zone as an IANA name (empty means UTC). timezone affects only how the web UI renders timestamps; API timestamps are always UTC.", Role: "owner", Group: "Discovery"},
+	{Method: "PATCH", Path: "/v1/account/settings", Summary: "Update account preferences (Owner/Admin)", Description: "Accepts trash_retention_days (0 or a positive integer) and/or timezone (an IANA zone name, or an empty string for UTC).", Role: "owner", Group: "Discovery"},
 
 	// Inboxes.
 	{Method: "GET", Path: "/v1/inboxes", Summary: "List inboxes", Role: "read", Group: "Inboxes"},

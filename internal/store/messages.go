@@ -14,6 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/limits"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/timezone"
 )
 
 type AttachmentInput struct {
@@ -949,6 +950,49 @@ func (s *Store) DeleteMessage(ctx context.Context, p model.Principal, id string)
 		return "", 0, model.Event{}, err
 	}
 	return m.RawPath, m.SizeBytes, ev, nil
+}
+
+// GetAccountTimezone returns the account's default display time zone name, or
+// "" when unset (meaning UTC). The value is an IANA name.
+func (s *Store) GetAccountTimezone(ctx context.Context, p model.Principal) (string, error) {
+	var tz string
+	err := s.read.QueryRowContext(ctx, `SELECT timezone FROM accounts WHERE id=?`, p.AccountID).Scan(&tz)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	return tz, err
+}
+
+// SetAccountTimezone sets the account's default display time zone. An empty
+// string clears it to UTC. Callers enforce Owner/Admin authorization.
+func (s *Store) SetAccountTimezone(ctx context.Context, p model.Principal, tz string) error {
+	if err := timezone.Validate(tz); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE accounts SET timezone=? WHERE id=?`, tz, p.AccountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUserTimezone sets the calling user's display time zone override. An empty
+// string clears the override so the account default applies.
+func (s *Store) SetUserTimezone(ctx context.Context, p model.Principal, tz string) error {
+	if err := timezone.Validate(tz); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE users SET timezone=? WHERE id=?`, tz, p.UserID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetMessageSpam moves a message between Spam and non-Spam and commits the

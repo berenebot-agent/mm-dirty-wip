@@ -14,6 +14,10 @@ type Account struct {
 	StorageQuotaBytes int64     `json:"storage_quota_bytes"`
 	StorageUsedBytes  int64     `json:"storage_used_bytes"`
 	CreatedAt         time.Time `json:"created_at"`
+	// Timezone is the account's default display time zone (IANA name). Empty
+	// means UTC. It affects only how the human web UI renders timestamps;
+	// stored and API timestamps are always UTC.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 type User struct {
@@ -30,6 +34,9 @@ type User struct {
 	// keyed by inbox id. It is populated on listings and is empty for Admins.
 	Roles     map[string]string `json:"mailboxes,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
+	// Timezone is the user's display time zone override (IANA name). Empty
+	// means "inherit the account default". UI-only; never exposed over the API.
+	Timezone string `json:"-"`
 }
 
 // Invite kinds. An account_admin invite provisions a new, separate account
@@ -574,6 +581,10 @@ type Principal struct {
 	SystemAdmin  bool
 	MailboxRoles map[string]string
 	ViaSession   bool
+	// Timezone is the effective display time zone (IANA name) for this session,
+	// resolved from the user override then the account default. Empty means UTC.
+	// It is only populated for web-UI sessions.
+	Timezone string
 }
 
 // Scopes returns the revocation scopes a live connection for this principal is

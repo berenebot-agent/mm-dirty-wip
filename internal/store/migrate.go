@@ -131,6 +131,10 @@ func migrations(dataDir string) []migration {
 			columnMissing("messages", "is_archived"),
 			columnAdded("accounts", "trash_retention_days"),
 		)},
+		{version: "040", sql: migration040, detect: allOf(
+			columnAdded("accounts", "timezone"),
+			columnAdded("users", "timezone"),
+		)},
 	}
 }
 

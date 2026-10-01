@@ -17,10 +17,10 @@ const inviteInvalidBody = `<div class="card" style="max-width:460px;margin:60px 
 func (s *Server) inviteGet(w http.ResponseWriter, r *http.Request) {
 	inv, err := s.Service.Store.GetInviteByToken(r.Context(), r.PathValue("token"))
 	if err != nil {
-		s.render(w, inviteInvalidBody, pageData{Title: "Invitation"})
+		s.render(w, r, inviteInvalidBody, pageData{Title: "Invitation"})
 		return
 	}
-	s.render(w, inviteBody, pageData{Title: "Set your password", CSRF: s.setPreAuthCSRF(w, r), Email: inv.Email})
+	s.render(w, r, inviteBody, pageData{Title: "Set your password", CSRF: s.setPreAuthCSRF(w, r), Email: inv.Email})
 }
 
 func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
@@ -30,10 +30,10 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 	renderErr := func(msg string) {
 		inv, err := s.Service.Store.GetInviteByToken(r.Context(), token)
 		if err != nil {
-			s.render(w, inviteInvalidBody, pageData{Title: "Invitation"})
+			s.render(w, r, inviteInvalidBody, pageData{Title: "Invitation"})
 			return
 		}
-		s.render(w, inviteBody, pageData{Title: "Set your password", CSRF: s.setPreAuthCSRF(w, r), Email: inv.Email, Error: msg})
+		s.render(w, r, inviteBody, pageData{Title: "Set your password", CSRF: s.setPreAuthCSRF(w, r), Email: inv.Email, Error: msg})
 	}
 	if password != r.Form.Get("confirm_password") {
 		renderErr("Passwords do not match.")
@@ -47,7 +47,7 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrInviteExpired):
-			s.render(w, inviteInvalidBody, pageData{Title: "Invitation"})
+			s.render(w, r, inviteInvalidBody, pageData{Title: "Invitation"})
 		case errors.Is(err, store.ErrConflict):
 			renderErr("That email address is already in use.")
 		default:

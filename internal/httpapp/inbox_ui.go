@@ -133,7 +133,7 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 			data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, f.Input.FromAddress)
 		}
 	}
-	s.render(w, composeBody, data)
+	s.render(w, r, composeBody, data)
 }
 
 // externalSenderFor returns the external sending alias the inbox's
@@ -215,7 +215,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
-	s.render(w, draftsBody, pageData{
+	s.render(w, r, draftsBody, pageData{
 		Title:       box.Address + " · Drafts",
 		Principal:   p,
 		CSRF:        csrf(r),
@@ -244,7 +244,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
-	s.render(w, outboxBody, pageData{
+	s.render(w, r, outboxBody, pageData{
 		Title:       box.Address + " · Outbox",
 		Principal:   p,
 		CSRF:        csrf(r),
@@ -285,7 +285,7 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	if d.Status == model.DraftStatusPendingApproval && d.SendRequest != nil {
-		s.render(w, draftReviewBody, pageData{
+		s.render(w, r, draftReviewBody, pageData{
 			Title:       "Review Draft",
 			Principal:   p,
 			CSRF:        csrf(r),
@@ -304,7 +304,7 @@ func (s *Server) uiDraftEdit(w http.ResponseWriter, r *http.Request) {
 		note += "Rejected: " + d.SendRequest.Feedback
 	}
 	fromOptions, from := composeFromOptions(box, d.FromAddress)
-	s.render(w, composeBody, pageData{
+	s.render(w, r, composeBody, pageData{
 		Title:              "Edit Draft",
 		Principal:          p,
 		CSRF:               csrf(r),
@@ -596,7 +596,7 @@ func (s *Server) renderMailbox(w http.ResponseWriter, r *http.Request, folder st
 			}
 		}
 	}
-	s.render(w, inboxBody, pageData{
+	s.render(w, r, inboxBody, pageData{
 		Title:                      box.Address,
 		Principal:                  p,
 		CSRF:                       csrf(r),
@@ -716,7 +716,7 @@ func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	fromOptions, from := composeFromOptions(box, "")
-	s.render(w, composeBody, pageData{
+	s.render(w, r, composeBody, pageData{
 		Title:              "Compose",
 		Principal:          p,
 		CSRF:               csrf(r),
@@ -814,7 +814,7 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 		data.ComposeNote = "The original message and its attachments are included automatically."
 		data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/forward", csrf(r))
 	}
-	s.render(w, composeBody, data)
+	s.render(w, r, composeBody, data)
 }
 
 func (s *Server) uiReplySend(w http.ResponseWriter, r *http.Request) {

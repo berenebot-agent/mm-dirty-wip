@@ -28,6 +28,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/safepath"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/timezone"
 )
 
 //go:embed assets/app.js
@@ -80,6 +81,7 @@ type ctxKey int
 
 const principalKey ctxKey = 1
 const csrfKey ctxKey = 2
+const tzKey ctxKey = 3
 
 func New(svc *app.Service, log *slog.Logger) *Server {
 	if log == nil {
@@ -137,6 +139,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
 	m.HandleFunc("POST /ui/account/trash-retention", s.withSession(s.withCSRF(s.uiSettingsTrashRetention)))
+	m.HandleFunc("POST /ui/account/timezone", s.withSession(s.withCSRF(s.uiSettingsAccountTimezone)))
+	m.HandleFunc("POST /ui/account/timezone/me", s.withSession(s.withCSRF(s.uiSettingsUserTimezone)))
 	// System administrator plane (new accounts, all invitations).
 	m.HandleFunc("GET /admin", s.withSession(s.adminPlane))
 	m.HandleFunc("POST /ui/admin/invites", s.withSession(s.withCSRF(s.uiAdminCreateInvite)))
@@ -495,6 +499,21 @@ func principal(r *http.Request) model.Principal {
 }
 func csrf(r *http.Request) string { v, _ := r.Context().Value(csrfKey).(string); return v }
 
+// requestTZ returns the effective display time zone for a request, defaulting
+// to UTC when no session zone was resolved.
+func requestTZ(r *http.Request) *time.Location {
+	if v, ok := r.Context().Value(tzKey).(*time.Location); ok && v != nil {
+		return v
+	}
+	return time.UTC
+}
+
+// withTimezone resolves and attaches the effective display zone for a principal
+// so renderers can format timestamps without another query.
+func withTimezone(ctx context.Context, p model.Principal) context.Context {
+	return context.WithValue(ctx, tzKey, timezone.Resolve(p.Timezone, ""))
+}
+
 func (s *Server) setPreAuthCSRF(w http.ResponseWriter, r *http.Request) string {
 	if c, err := r.Cookie("mmm_csrf"); err == nil && len(c.Value) >= 20 {
 		return c.Value
@@ -558,6 +577,7 @@ func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 		}
 		ctx := context.WithValue(r.Context(), principalKey, p)
 		ctx = context.WithValue(ctx, csrfKey, cval)
+		ctx = withTimezone(ctx, p)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -882,23 +902,41 @@ func (s *Server) apiAccountSettings(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"trash_retention_days": days})
+		tz, err := s.Service.Store.GetAccountTimezone(r.Context(), p)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"trash_retention_days": days, "timezone": tz})
 	case http.MethodPatch:
 		var in struct {
-			TrashRetentionDays *int `json:"trash_retention_days"`
+			TrashRetentionDays *int    `json:"trash_retention_days"`
+			Timezone           *string `json:"timezone"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		if in.TrashRetentionDays == nil {
+		if in.TrashRetentionDays == nil && in.Timezone == nil {
 			writeError(w, 400, "no settings to update")
 			return
 		}
-		if err := s.Service.Store.SetTrashRetention(r.Context(), p, *in.TrashRetentionDays); err != nil {
-			mapStoreError(w, err)
-			return
+		out := map[string]any{}
+		if in.TrashRetentionDays != nil {
+			if err := s.Service.Store.SetTrashRetention(r.Context(), p, *in.TrashRetentionDays); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			out["trash_retention_days"] = *in.TrashRetentionDays
 		}
-		writeJSON(w, 200, map[string]any{"trash_retention_days": *in.TrashRetentionDays})
+		if in.Timezone != nil {
+			tz := strings.TrimSpace(*in.Timezone)
+			if err := s.Service.Store.SetAccountTimezone(r.Context(), p, tz); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			out["timezone"] = tz
+		}
+		writeJSON(w, 200, out)
 	}
 }
 
