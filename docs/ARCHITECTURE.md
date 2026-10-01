@@ -33,8 +33,15 @@
 
 The optional `mailmoose-mx` edge is built into the same image but runs as a
 separate, non-root process with no `/data` mount and no encryption key; it is
-the only exception to the one-process topology (decision `D031`). See
+an optional exception to the one-process topology (decision `D031`). See
 [MX.md](MX.md).
+
+A second optional direct-SMTP path, **Dial MX**, inverts the direction: a
+standalone receiver terminates SMTP and the core **dials out** to it over
+verified HTTPS/2, so no inbound port is needed on the core. Like the MX edge it
+is a deliberate, operator-chosen optional component outside the default
+single-process topology; it does not introduce a hosted/account mode. See
+[DIALMX.md](DIALMX.md) and decision `D067`.
 
 Production runtime:
 

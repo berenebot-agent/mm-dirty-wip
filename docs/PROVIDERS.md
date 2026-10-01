@@ -99,6 +99,26 @@ messages in memory only.
 Deployment modes, tuning, and the wire contract are covered in
 [docs/SELFHOSTING.md](SELFHOSTING.md) and [docs/MX.md](MX.md).
 
+## Inbound: Dial MX
+
+When the core cannot accept an inbound connection (NAT, no reverse proxy, no
+public inbound port), receive direct SMTP with **Dial MX** instead. The core
+**dials out** to a standalone receiver the operator runs: the receiver
+terminates SMTP, verifies the core's right to speak for the domain with a
+DNS-anchored Ed25519 challenge, and hands accepted mail to the core over
+verified HTTPS/2. No `MX_EDGE_SECRET` and no inbound MX mode are needed.
+
+A domain's receiving provider is either **MX** (edge calls core) or **Dial MX**
+(core dials receiver), never both. Configure it per domain in the Admin UI under
+**Receiving → Dial MX**: enter one or more HTTPS receiver base URLs and publish
+the shown `_mailmoose-mx.<domain>` TXT record and the domain's MX record. The
+signing key is generated per exact domain and stored encrypted. Subdomains can
+inherit receiver URLs and enforcement but always have their own key and TXT
+proof. Other domains may continue using local/remote MX or webhook providers.
+
+Full setup, the session protocol, and known limitations are in
+[docs/DIALMX.md](DIALMX.md).
+
 ---
 
 ## Outbound

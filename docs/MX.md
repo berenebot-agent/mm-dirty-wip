@@ -15,6 +15,10 @@ The edge holds **no** `/data` mount, no database access and no
 `APP_ENCRYPTION_KEY`. Routing, policy, quota and durable storage stay in the
 core. See decision `D031` in [DECISIONS.md](DECISIONS.md).
 
+If the core cannot accept an inbound connection, use [Dial MX](DIALMX.md)
+instead: a standalone receiver the core **dials out** to, with no inbound port
+on the core. A domain uses one path or the other, not both.
+
 ## Architecture
 
 ```text

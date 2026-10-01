@@ -84,7 +84,9 @@ mkdir -p "$LOG_DIR"
 if [ -n "${MAILMOOSE_TEST_DIR:-}" ]; then
     LOG_FILE="$LOG_DIR/out.log"
 else
-    LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%S)-go-$(echo "$*" | tr ' /' '__').log"
+    LOG_SLUG=$(echo "$*" | tr ' /' '__')
+    # Package lists can exceed the filesystem's 255-byte filename limit.
+    LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%S)-go-${LOG_SLUG:0:160}-$$.log"
 fi
 ts=$(date +%s)
 
