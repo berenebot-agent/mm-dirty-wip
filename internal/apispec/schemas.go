@@ -157,7 +157,7 @@ var schemas = map[string]any{
 		"created_at":          ts("Creation time."),
 		"read":                boolean("Read state."),
 		"deleted_at":          ts("Set when the message is in Trash; absent otherwise."),
-		"labels":              stringList("Free-text labels."),
+		"labels":              stringList("Free-text labels. Each is trimmed, at most 64 characters, and may not contain control characters, '/' or '\\'."),
 		"has_attachments":     boolean("Whether the message has attachments."),
 		"size_bytes":          integer("Stored raw size in bytes."),
 		"status":              str("Outbox status: pending, sent or failed. In an outbox listing, sending is true while a delivery attempt is in flight."),
@@ -246,7 +246,7 @@ var schemas = map[string]any{
 
 	"MessagePatch": obj(map[string]any{
 		"read":   boolean("Set the read state."),
-		"labels": stringList("Replace the full label set; empty clears."),
+		"labels": stringList("Replace the full label set; empty clears. Each label is trimmed, at most 64 characters, and may not contain control characters, '/' or '\\'."),
 		"spam":   boolean("Move into or out of Spam."),
 	}),
 	"SeenBody": obj(map[string]any{
