@@ -1,0 +1,5 @@
+# Runtime state and secrets for the local OpenClaw connector test.
+# .env.example is tracked on purpose; the real .env is not.
+state/
+.env
+!.env.example

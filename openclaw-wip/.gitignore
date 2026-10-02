@@ -1,4 +1,0 @@
-# Local end-to-end test rig for the OpenClaw plugin: compose files, a .env
-# holding live credentials, and generated runtime state (sqlite WAL/journal
-# files, plugin build captures, nested git checkouts). Never commit it.
-local-test/
