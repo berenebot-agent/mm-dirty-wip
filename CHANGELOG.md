@@ -17,7 +17,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   /v1/outbox/{id}` now moves a pending/failed send to Trash. The list filter
   `trashed=true` selects the Trash view.
 - Per-account trash retention: `GET`/`PATCH /v1/account/settings` reads and
-  writes `trash_retention_days` (default 30, `0` keeps trash until emptied by
+  writes `trash_retention_days` (default 0, meaning keep trash until emptied by
   hand). The maintenance sweep purges trashed messages older than the window and
   unlinks their raw files.
 - Durable `message.trashed`, `message.restored` and `message.purged` events
@@ -33,6 +33,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   without a system tzdata tree.
 
 ### Changed
+
+- Mailbox views now use a left-hand sidebar: Compose stays at the top and the
+  folders (Inbox, Drafts, Sent, Outbox, Trash, Spam) run down the side with
+  their counts. The sidebar stacks above the content on narrow screens.
+- Right-hand mail actions are now icons: mark read / mark unread, move to
+  trash, restore and delete forever, in both the message list and the message
+  view. The duplicate Trash folder tab is also removed.
+- The mailbox sidebar lists the inbox's labels under a Labels heading (between
+  Outbox and Trash), each with an unread count; selecting a label filters the
+  message list to messages carrying it. Reply, Reply all and Forward are now
+  icons in the message view (Reply all pre-fills the original sender and the
+  other recipients, excluding the mailbox's own addresses). The inbox address in
+  the header is click-to-copy and shows a
+  brief "Copied to clipboard" confirmation that clears itself.
+- Labels may no longer contain `/` or `\` (path separators); existing labels
+  with those characters still render and filter. The web UI now uses the full
+  window width instead of a fixed 1180px column.
+- The mailbox and message lists reflow for narrow screens: on phones the
+  header row is hidden and each message becomes a compact two-line row with
+  the action icons beneath, and the dashboard, forms and top bar stack.
 
 - Removing an inbox now opens a confirmation dialog that displays the full
   email address and requires typing it back, matching the domain delete flow.

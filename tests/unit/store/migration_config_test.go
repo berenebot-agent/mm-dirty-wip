@@ -307,9 +307,10 @@ func TestMigration013PartialSchemaFailsFast(t *testing.T) {
 }
 
 // TestMigration039DropsArchiveAddsTrash upgrades a v012 database to current and
-// verifies the Trash migration: messages.is_archived is gone, messages.deleted_at
-// and accounts.trash_retention_days exist with their defaults, existing rows are
-// carried over live (deleted_at NULL), and the FTS index survives the rebuild.
+// verifies the Trash migrations: messages.is_archived is gone, messages.deleted_at
+// and accounts.trash_retention_days exist, the later retention-default migration
+// leaves upgraded accounts at 0 (no auto-purge), existing rows are carried over
+// live (deleted_at NULL), and the FTS index survives the rebuild.
 func TestMigration039DropsArchiveAddsTrash(t *testing.T) {
 	dir := newV012(t)
 	seedV012(t, dir)
@@ -329,8 +330,8 @@ func TestMigration039DropsArchiveAddsTrash(t *testing.T) {
 	if !columnPresent(t, st, "accounts", "trash_retention_days") {
 		t.Fatal("accounts.trash_retention_days missing after 039")
 	}
-	if n := queryInt(t, st, `SELECT trash_retention_days FROM accounts WHERE id='acc1'`); n != 30 {
-		t.Fatalf("default retention = %d, want 30", n)
+	if n := queryInt(t, st, `SELECT trash_retention_days FROM accounts WHERE id='acc1'`); n != 0 {
+		t.Fatalf("default retention = %d, want 0 after migration 041", n)
 	}
 	// The seeded message survived the rebuild and is live.
 	if n := queryInt(t, st, `SELECT count(*) FROM messages WHERE id='msgA' AND deleted_at IS NULL`); n != 1 {
