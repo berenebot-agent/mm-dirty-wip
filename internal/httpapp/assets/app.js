@@ -1557,6 +1557,7 @@ function aliasNameByAddress(list) {
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
   var connectorAdd = document.getElementById('inbox-connector-add');
+  var connectorHeader = connectorAdd ? connectorAdd.closest('.card-head') : null;
   var connectorFocusID = '';
   var editConnectors = [];
   var csrfValue = (form.querySelector('[name=_csrf]') || {}).value || '';
@@ -1639,6 +1640,21 @@ function aliasNameByAddress(list) {
     return c.Kind === 'hermes' ? 'Hermes Relay' : 'Webhook';
   }
 
+  function setConnectorEditorMode(editing) {
+    if (connectorList) {
+      connectorList.classList.toggle('connector-view-hidden', !!editing);
+    }
+    if (connectorHeader) {
+      connectorHeader.classList.toggle('connector-view-hidden', !!editing);
+    }
+    if (connectorEditor) {
+      connectorEditor.classList.toggle('connector-view-hidden', !editing);
+      if (!editing) {
+        connectorEditor.textContent = '';
+      }
+    }
+  }
+
   function renderConnectorEditor(c) {
     if (!connectorEditor || !c) {
       return;
@@ -1659,12 +1675,11 @@ function aliasNameByAddress(list) {
       var nextEnabled = c.Enabled ? '0' : '1';
       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><form method="post" action="/ui/webhooks/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form></div>';
     }
-    connectorEditor.hidden = false;
+    setConnectorEditorMode(true);
     var close = connectorEditor.querySelector('[data-connector-close]');
     if (close) {
       close.addEventListener('click', function () {
-        connectorEditor.hidden = true;
-        connectorEditor.textContent = '';
+        setConnectorEditorMode(false);
       });
     }
     connectorEditor.querySelectorAll('[data-inline-connector-delete]').forEach(function (deleteForm) {
@@ -1720,8 +1735,24 @@ function aliasNameByAddress(list) {
       return;
     }
     connectorList.textContent = '';
-    connectorEditor.hidden = true;
-    connectorEditor.textContent = '';
+    setConnectorEditorMode(false);
+
+    var settingsSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z"/></svg>';
+    var hermesSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="7" r="3"/><path d="M6.5 9.2C6.5 5.8 8.9 4 12 4s5.5 1.8 5.5 5.2V14c0 3-2.4 5.5-5.5 5.5S6.5 17 6.5 14z"/><circle cx="10" cy="11.5" r=".7" fill="currentColor" stroke="none"/><circle cx="14" cy="11.5" r=".7" fill="currentColor" stroke="none"/><path d="M12 13.2l1.2 1.1L12 15.2l-1.2-.9z"/><path d="M8.7 14.2 5 13.5M8.7 15.4 5.2 16M15.3 14.2l3.7-.7M15.3 15.4l3.5.6"/></svg>';
+    var webhookSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="M9.2 8.2 10.8 14M14.8 8.2 13.2 14M9.4 17h-3a3.4 3.4 0 0 1-3.4-3.4V11M14.6 17h3a3.4 3.4 0 0 0 3.4-3.4V11"/></svg>';
+    var logSVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h8v11H4z"/><path d="M6 5h4M6 8h4M6 11h3"/></svg>';
+    var deleteSVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>';
+
+    function iconButton(label, svg, extraClass) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary icon-btn' + (extraClass ? ' ' + extraClass : '');
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      button.innerHTML = svg;
+      return button;
+    }
+
     if (!editConnectors.length) {
       var empty = document.createElement('p');
       empty.className = 'muted';
@@ -1729,21 +1760,67 @@ function aliasNameByAddress(list) {
       connectorList.appendChild(empty);
       return;
     }
+
     editConnectors.forEach(function (c) {
       var row = document.createElement('div');
       row.className = 'connector-row';
-      var main = document.createElement('button');
-      main.type = 'button';
-      main.className = 'secondary connector-row-main';
+
+      var kindIcon = document.createElement('span');
+      kindIcon.className = 'connector-type-icon';
+      kindIcon.title = connectorLabel(c);
+      kindIcon.setAttribute('aria-hidden', 'true');
+      kindIcon.innerHTML = c.Kind === 'hermes' ? hermesSVG : webhookSVG;
+      row.appendChild(kindIcon);
+
+      var text = document.createElement('div');
+      text.className = 'connector-row-main';
       var status = c.Kind === 'webhook' ? (c.Enabled ? 'Active' : 'Paused') : (c.Scope || 'Configured');
-      main.innerHTML = '<div class="connector-row-name">' + escapeConnector(c.Name || connectorLabel(c)) + '</div><div class="connector-row-meta">' + connectorLabel(c) + ' · ' + escapeConnector(status) + '</div>';
-      main.addEventListener('click', function () { renderConnectorEditor(c); });
-      row.appendChild(main);
+      text.innerHTML = '<div class="connector-row-name">' + escapeConnector(c.Name || connectorLabel(c)) + '</div><div class="connector-row-meta">' + connectorLabel(c) + ' · ' + escapeConnector(status) + '</div>';
+      row.appendChild(text);
+
+      var settings = iconButton('Settings', settingsSVG, '');
+      settings.addEventListener('click', function () {
+        renderConnectorEditor(c);
+      });
+      row.appendChild(settings);
+
       var log = document.createElement('a');
-      log.className = 'btn secondary btn-sm';
+      log.className = 'btn secondary icon-btn';
       log.href = '/ui/clients/' + encodeURIComponent(c.ID || '') + '/log';
-      log.textContent = 'Log';
+      log.title = 'Delivery log';
+      log.setAttribute('aria-label', 'Delivery log');
+      log.innerHTML = logSVG;
       row.appendChild(log);
+
+      var deleteForm = document.createElement('form');
+      deleteForm.method = 'post';
+      deleteForm.action = c.Kind === 'hermes'
+        ? '/ui/hermes/' + encodeURIComponent(c.ID || '') + '/delete'
+        : '/ui/webhooks/' + encodeURIComponent(c.ID || '') + '/delete';
+      deleteForm.style.margin = '0';
+
+      var csrf = document.createElement('input');
+      csrf.type = 'hidden';
+      csrf.name = '_csrf';
+      csrf.value = csrfValue;
+      deleteForm.appendChild(csrf);
+
+      var inbox = document.createElement('input');
+      inbox.type = 'hidden';
+      inbox.name = 'inbox';
+      inbox.value = editInboxID;
+      deleteForm.appendChild(inbox);
+
+      var remove = iconButton('Delete', deleteSVG, 'danger');
+      remove.type = 'submit';
+      deleteForm.appendChild(remove);
+      deleteForm.addEventListener('submit', function (e) {
+        if (!window.confirm('Remove this connector?')) {
+          e.preventDefault();
+        }
+      });
+      row.appendChild(deleteForm);
+
       connectorList.appendChild(row);
       if (selectedID && c.ID === selectedID) {
         renderConnectorEditor(c);
@@ -2013,8 +2090,11 @@ function aliasNameByAddress(list) {
       });
       // The Aliases tab needs room for the alias rows and action buttons;
       // other tabs stay narrow for a tidier form layout.
-      if (dlg.id === 'inbox-dialog' || dlg.id === 'inbox-edit-dialog') {
+      if (dlg.id === 'inbox-dialog') {
         dlg.classList.toggle('inbox-dialog--wide', name === 'aliases' || name === 'connectors');
+      }
+      if (dlg.id === 'inbox-edit-dialog') {
+        dlg.classList.add('inbox-dialog--wide');
         var inboxSave = dlg.querySelector('#inbox-edit-save');
         if (inboxSave) {
           inboxSave.hidden = name === 'connectors';
