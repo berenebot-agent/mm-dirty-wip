@@ -186,6 +186,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/keys/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteKey)))
 	m.HandleFunc("POST /ui/hermes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
 	m.HandleFunc("POST /ui/hermes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
+	m.HandleFunc("POST /ui/openclaw/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateHermes)))
+	m.HandleFunc("POST /ui/openclaw/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteHermes)))
 	m.HandleFunc("POST /ui/webhooks/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateWebhook)))
 	m.HandleFunc("POST /ui/webhooks/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateWebhook)))
 	m.HandleFunc("POST /ui/webhooks/{id}/toggle", s.withSession(s.withCSRF(s.uiToggleWebhook)))
@@ -361,6 +363,11 @@ var v1Routes = []apiRoute{
 	{"GET /v1/admin/hermes", (*Server).apiHermesList},
 	{"PUT /v1/admin/hermes/{id}", (*Server).apiHermesConnection},
 	{"DELETE /v1/admin/hermes/{id}", (*Server).apiHermesDelete},
+	{"POST /v1/admin/openclaw/enroll", (*Server).apiOpenClawEnroll},
+	{"POST /v1/admin/openclaw/setup-code", (*Server).apiOpenClawSetupCode},
+	{"GET /v1/admin/openclaw", (*Server).apiOpenClawList},
+	{"PUT /v1/admin/openclaw/{id}", (*Server).apiOpenClawConnection},
+	{"DELETE /v1/admin/openclaw/{id}", (*Server).apiOpenClawDelete},
 	{"GET /v1/admin/clients", (*Server).apiClients},
 	{"GET /v1/admin/clients/webhooks", (*Server).apiWebhookClients},
 	{"POST /v1/admin/clients/webhooks", (*Server).apiWebhookClients},

@@ -635,10 +635,23 @@ var schemas = map[string]any{
 		"connector_url": str("Relay connector URL."),
 		"env":           str("Ready-to-paste environment block."),
 	}),
+	"OpenClawEnrollment": obj(map[string]any{
+		"gateway_id":    str("Minted gateway id."),
+		"secret":        str("Relay secret, returned once."),
+		"delivery_key":  str("Delivery key, returned once."),
+		"connector_url": str("Relay connector URL."),
+		"kind":          str("Connector kind (openclaw)."),
+	}),
 	"HermesUpdateBody": obj(map[string]any{"role": str("owner or assistant.")}, "role"),
 	"HermesUpdateResult": obj(map[string]any{
 		"status": str("ok."),
 		"role":   str("Applied outbound role."),
+	}),
+	"OpenClawSetupCode": obj(map[string]any{
+		"code":       str("One-time setup code, returned once."),
+		"expires_in": integer("Seconds until the code expires."),
+		"setup_url":  str("Claim URL carrying the code in its fragment."),
+		"command":    str("Ready-to-paste openclaw channels add command."),
 	}),
 
 	"WebhookClient": obj(map[string]any{

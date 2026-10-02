@@ -495,7 +495,7 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 	if _, err = tx.ExecContext(ctx, `DELETE FROM drafts WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM clients WHERE id IN (SELECT p.client_id FROM client_push p JOIN clients c ON c.id=p.client_id WHERE p.inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?) AND c.type IN ('hermes','webhook'))`, accountID, domainID); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM clients WHERE id IN (SELECT p.client_id FROM client_push p JOIN clients c ON c.id=p.client_id WHERE p.inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?) AND c.type IN ('hermes','openclaw','webhook'))`, accountID, domainID); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM hermes_enroll_tokens WHERE inbox_id IN (SELECT id FROM inboxes WHERE account_id=? AND domain_id=?)`, accountID, domainID); err != nil {

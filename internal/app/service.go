@@ -1025,11 +1025,23 @@ func (s *Service) encryptConfig(values map[string]any) (string, error) {
 	return cryptox.Encrypt(s.EncryptionKey, b)
 }
 
-// CreateHermesRelay issues a relay connection's credentials directly and
-// returns the plaintext secret and delivery key exactly once. The gateway id is
-// generated here so the operator only has to paste the printed .env block.
+// CreateHermesRelay issues a Hermes relay connection's credentials directly
+// and returns the plaintext secret and delivery key exactly once. The gateway
+// id is generated here so the operator only has to paste the printed .env
+// block.
 func (s *Service) CreateHermesRelay(ctx context.Context, p model.Principal, inboxID, name string) (string, string, string, error) {
+	return s.CreateRelay(ctx, p, inboxID, name, store.KindHermes)
+}
+
+// CreateRelay issues a relay connection's credentials directly for the given
+// connector kind and returns the plaintext secret and delivery key exactly
+// once. Both Hermes and OpenClaw share the relay transport; the kind selects
+// the product connector stored on the client row.
+func (s *Service) CreateRelay(ctx context.Context, p model.Principal, inboxID, name string, kind store.RelayKind) (string, string, string, error) {
 	if !p.Admin {
+		return "", "", "", store.ErrForbidden
+	}
+	if kind != store.KindHermes && kind != store.KindOpenClaw {
 		return "", "", "", store.ErrForbidden
 	}
 	if _, err := s.Store.GetInboxInternal(ctx, p.AccountID, inboxID); err != nil {
@@ -1056,14 +1068,40 @@ func (s *Service) CreateHermesRelay(ctx context.Context, p model.Principal, inbo
 	if err != nil {
 		return "", "", "", err
 	}
-	rec := store.EnrollRecord{AccountID: p.AccountID, InboxID: inboxID, Name: strings.TrimSpace(name)}
+	rec := store.EnrollRecord{AccountID: p.AccountID, InboxID: inboxID, Name: strings.TrimSpace(name), Kind: kind}
 	if rec.Name == "" {
-		rec.Name = "Hermes"
+		if kind == store.KindOpenClaw {
+			rec.Name = "OpenClaw"
+		} else {
+			rec.Name = "Hermes"
+		}
 	}
 	if _, err = s.Store.CreateHermesConnection(ctx, rec, gatewayID, secEnc, delEnc); err != nil {
 		return "", "", "", err
 	}
 	return gatewayID, secret, deliveryKey, nil
+}
+
+// CreateRelayEnrollCode mints a one-time setup code that a connector host
+// redeems at POST /relay/enroll. The code carries the inbox, name and
+// connector kind; it is the authority, not an address, so the claiming host
+// supplies the MailMoose URL.
+func (s *Service) CreateRelayEnrollCode(ctx context.Context, p model.Principal, inboxID, name string, kind store.RelayKind, ttl time.Duration) (string, error) {
+	if !p.Admin {
+		return "", store.ErrForbidden
+	}
+	if kind != store.KindOpenClaw {
+		// Hermes keeps its direct env-block flow; the code path is for
+		// connectors whose setup wizard redeems it.
+		return "", store.ErrForbidden
+	}
+	if _, err := s.Store.GetInboxInternal(ctx, p.AccountID, inboxID); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "OpenClaw"
+	}
+	return s.Store.CreateRelayEnrollToken(ctx, p.AccountID, inboxID, name, kind, ttl)
 }
 
 type SendAttachment struct {

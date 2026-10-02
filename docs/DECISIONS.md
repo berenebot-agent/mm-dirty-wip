@@ -2081,6 +2081,53 @@ plus a per-account integer, a handful of store methods, a maintenance sweep that
 reuses the existing file-unlink path, and new API/UI routes. The `messages`
 table rebuild in migration 039 carries every row over unchanged.
 
+## D074 — OpenClaw is a second relay connector kind over the same transport
+
+**Decision:** OpenClaw is an inbox-level outbound relay connector, exactly like
+Hermes: the OpenClaw host dials an authenticated WebSocket out to MailMoose, no
+inbound port or webhook is required, MailMoose remains the durable source of
+truth, unacknowledged email is replayed after a reconnect, and replies return
+over the same socket through the normal send path. OpenClaw is nevertheless a
+distinct connector kind in the product model (`clients.type = 'openclaw'`), not
+a Hermes alias.
+
+- The wire contract, HMAC upgrade token, `hello`/`descriptor` handshake,
+  `inbound`+`bufferId`/`inbound_ack`, `outbound`/`outbound_result`, ping and the
+  delivery log are unchanged and shared. There is no second relay transport and
+  no `/openclaw-relay` route.
+- Relay persistence stays `clients` + `client_push`. Migration 042 widens the
+  `clients.type` CHECK to accept `openclaw` (table rebuild, `fkOff`, because four
+  tables reference `clients`) and adds `hermes_enroll_tokens.kind` so a one-time
+  setup code remembers which connector it creates. Existing rows default to
+  `hermes`.
+- One-time setup codes reuse `POST /relay/enroll`. The code is an authority, not
+  an address: the claimant supplies the MailMoose URL. The connector UI shows
+  `openclaw channels add --channel mailmoose --code <setup-url>`, where the URL
+  origin is the base URL and the `#fragment` carries the code; a manual
+  `channels.mailmoose` JSON5 block is the air-gapped fallback. The code expires
+  after 15 minutes, is stored hashed, and is single-use.
+- Admin surface is connector-specific and mirrors Hermes:
+  `GET/POST/PUT/DELETE /v1/admin/openclaw` plus
+  `POST /v1/admin/openclaw/setup-code`. OpenClaw connectors render beside
+  Hermes and Webhook in the inbox connector list with the same Settings, Log and
+  delete actions, and the same no-allow-list risk warning.
+- Outbound authority reuses the relay role semantics: `owner` sends directly,
+  `assistant` creates an approval-required draft. Sender provenance is
+  deliberately untrusted on the connector side: the OpenClaw plugin dispatches
+  email as external, unauthenticated input and the MailMoose inbox allow list is
+  the primary sender gate (the same accepted risk as D058).
+
+**Reason:** The existing relay already provides every mechanic OpenClaw needs.
+Making OpenClaw a connector kind rather than a second transport keeps the
+user-visible model honest (a distinct connector chip, log and revocation path)
+without duplicating authentication, replay or acknowledgement code, and it keeps
+the small-runtime constraint: one process, one container, one store.
+
+**Complexity:** One migration rebuild, a kind discriminator on the existing
+relay rows, connector-specific admin routes and UI parity, and a small external
+OpenClaw channel plugin. No new runtime service or dependency is added to
+MailMoose.
+
 ## Future extension register
 
 

@@ -58,6 +58,10 @@ type EnrollResponse struct {
 	DeliveryKey string `json:"deliveryKey"`
 	Tenant      string `json:"tenant"`
 	GatewayID   string `json:"gatewayId"`
+	// Kind echoes the connector kind the redeemed setup code created:
+	// "hermes" or "openclaw". Older claimants may ignore it.
+	Kind string `json:"kind,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 // Enroll implements the connector side of `hermes gateway enroll`.
@@ -115,8 +119,8 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	s.Log.Info("relay enrolled", "gateway_id", conn.GatewayID, "account_id", conn.AccountID, "inbox_id", conn.InboxID)
-	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: conn.AccountID, GatewayID: req.GatewayID})
+	s.Log.Info("relay enrolled", "gateway_id", conn.GatewayID, "account_id", conn.AccountID, "inbox_id", conn.InboxID, "kind", conn.Kind)
+	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: conn.AccountID, GatewayID: req.GatewayID, Kind: conn.Kind, Name: conn.Name})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

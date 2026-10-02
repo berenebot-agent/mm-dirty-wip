@@ -27,6 +27,10 @@
   var hermesWarning = document.getElementById('key-hermes-warning');
   var hermesAckRow = document.getElementById('key-hermes-ack-row');
   var hermesAck = document.getElementById('key-hermes-ack');
+  var openclawInbox = form.querySelector('.key-fields[data-type=openclaw] select[name=inbox]');
+  var openclawWarning = document.getElementById('key-openclaw-warning');
+  var openclawAckRow = document.getElementById('key-openclaw-ack-row');
+  var openclawAck = document.getElementById('key-openclaw-ack');
   var adminSnapshot = null;
   var currentKind = 'api';
   var webhookFields = form.querySelector('.key-fields[data-type=webhook]');
@@ -37,6 +41,12 @@
   webhookFields.appendChild(bearerFields);
   var bearerInput = bearerFields.querySelector('input');
   var generateBtn = bearerFields.querySelector('button');
+
+  // Relay connectors share the same outbound relay transport and the same
+  // no-allow-list risk gate: Hermes and OpenClaw.
+  function isRelayKind(kind) {
+    return kind === 'hermes' || kind === 'openclaw';
+  }
 
   function syncBearer() {
     var active = sel.value === 'webhook' && webhookAuth.value === 'bearer';
@@ -199,34 +209,49 @@
     syncScopeButtons();
   }
 
-  function inboxNeedsRiskAck() {
-    if (!hermesInbox) {
-      return false;
-    }
-    var opt = hermesInbox.options[hermesInbox.selectedIndex];
-    return !opt || opt.getAttribute('data-allowlist') !== '1';
-  }
-
-  // Gate creating a Hermes relay connection for an inbox with no allowed
-  // senders: show the red warning and keep Create disabled until the operator
-  // acknowledges that the agent will reply to anyone. Skipped when editing an
-  // existing connection (the inbox is fixed and already accepted).
+  // Gate creating a relay connection (Hermes or OpenClaw) for an inbox with no
+  // allowed senders: show the red warning and keep Create disabled until the
+  // operator acknowledges that the agent will reply to anyone. Skipped when
+  // editing an existing connection (the inbox is fixed and already accepted).
   function syncHermesRisk() {
-    if (!hermesWarning || !hermesAckRow || !hermesAck || !submitBtn) {
-      return;
-    }
     var editing = form.getAttribute('action') !== '/ui/keys';
-    var warn = sel.value === 'hermes' && !editing && inboxNeedsRiskAck();
-    hermesWarning.hidden = !warn;
-    // The row carries an inline display:flex, which wins over [hidden]; toggle
-    // display directly so it actually disappears when an allow list is set.
-    hermesAckRow.style.display = warn ? 'flex' : 'none';
-    if (!warn) {
-      hermesAck.checked = false;
+    if (sel.value === 'hermes' || sel.value === 'openclaw') {
+      var openclaw = sel.value === 'openclaw';
+      var inboxSel = openclaw ? openclawInbox : hermesInbox;
+      var warning = openclaw ? openclawWarning : hermesWarning;
+      var ackRow = openclaw ? openclawAckRow : hermesAckRow;
+      var ack = openclaw ? openclawAck : hermesAck;
+      var opt = inboxSel ? inboxSel.options[inboxSel.selectedIndex] : null;
+      var warn = !editing && (!opt || opt.getAttribute('data-allowlist') !== '1');
+      if (warning) {
+        warning.hidden = !warn;
+      }
+      // The row carries an inline display:flex, which wins over [hidden];
+      // toggle display directly so it actually disappears when a list is set.
+      if (ackRow) {
+        ackRow.style.display = warn ? 'flex' : 'none';
+      }
+      if (!warn) {
+        if (ack) {
+          ack.checked = false;
+        }
+        if (submitBtn) {
+          submitBtn.disabled = false;
+        }
+        return;
+      }
+      if (ack && submitBtn) {
+        submitBtn.disabled = !ack.checked;
+      }
+    } else if (hermesWarning && hermesAckRow && hermesAck && submitBtn) {
+      hermesWarning.hidden = true;
+      hermesAckRow.style.display = 'none';
+      if (openclawWarning && openclawAckRow && openclawAck) {
+        openclawWarning.hidden = true;
+        openclawAckRow.style.display = 'none';
+      }
       submitBtn.disabled = false;
-      return;
     }
-    submitBtn.disabled = !hermesAck.checked;
   }
 
   function showForm() {
@@ -335,9 +360,9 @@
     fixedInboxID = '';
     returnInboxID = '';
     setAPIOptionVisible(true);
-    var kind = btn.dataset.kind === 'hermes' ? 'hermes' : (btn.dataset.kind === 'webhook' ? 'webhook' : 'api');
+    var kind = isRelayKind(btn.dataset.kind) || btn.dataset.kind === 'webhook' ? btn.dataset.kind : 'api';
     currentKind = kind;
-    var segment = kind === 'hermes' ? 'hermes' : (kind === 'webhook' ? 'webhooks' : 'keys');
+    var segment = isRelayKind(kind) ? kind : (kind === 'webhook' ? 'webhooks' : 'keys');
     form.action = '/ui/' + segment + '/' + btn.dataset.id + '/edit';
     idInput.value = btn.dataset.id;
     sel.value = kind;
@@ -346,7 +371,7 @@
       submitBtn.textContent = 'Save';
     }
     if (rotateBtn) {
-      rotateBtn.hidden = kind === 'hermes';
+      rotateBtn.hidden = isRelayKind(kind);
       rotateBtn.textContent = 'Rotate Key';
     }
     nameInput.value = btn.dataset.name || '';
@@ -373,21 +398,25 @@
       wf.querySelector('select[name=mode]').value = btn.dataset.mode || 'notify';
       wf.querySelector('select[name=auth]').value = btn.dataset.auth || 'signature';
     } else {
-      var inbox = form.querySelector('.key-fields[data-type=hermes] select[name=inbox]');
+      var inbox = form.querySelector('.key-fields[data-type=' + kind + '] select[name=inbox]');
       if (inbox && btn.dataset.inbox) {
         inbox.value = btn.dataset.inbox;
       }
-      var roleSel = form.querySelector('.key-fields[data-type=hermes] select[name=role]');
+      var roleSel = form.querySelector('.key-fields[data-type=' + kind + '] select[name=role]');
       if (roleSel) {
         roleSel.value = btn.dataset.role || 'owner';
       }
     }
     sync();
     syncAdmin();
-    if (kind === 'hermes' || kind === 'webhook') {
+    if (isRelayKind(kind) || kind === 'webhook') {
       var inbox2 = form.querySelector('.key-fields[data-type=' + kind + '] select[name=inbox]');
       if (inbox2) {
         inbox2.disabled = true;
+      }
+      var setupSel = form.querySelector('.key-fields[data-type=' + kind + '] select[name=setup]');
+      if (setupSel) {
+        setupSel.disabled = true;
       }
     }
     showForm();
@@ -1636,7 +1665,13 @@ function aliasNameByAddress(list) {
   }
 
   function connectorLabel(c) {
-    return c.Kind === 'hermes' ? 'Hermes Relay' : 'Webhook';
+    if (c.Kind === 'hermes') {
+      return 'Hermes Relay';
+    }
+    if (c.Kind === 'openclaw') {
+      return 'OpenClaw';
+    }
+    return 'Webhook';
   }
 
   function setConnectorEditorMode(editing) {
@@ -1663,10 +1698,12 @@ function aliasNameByAddress(list) {
     var common = '<input type="hidden" name="_csrf" value="' + escapeConnector(csrfValue) + '"><input type="hidden" name="inbox" value="' + inbox + '">';
     var fields = '<label>Name</label><input name="name" maxlength="128" required value="' + escapeConnector(c.Name) + '">';
     var actions = '';
-    if (c.Kind === 'hermes') {
-      fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — relay sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — relay drafts and requests approval</option></select>';
+    if (c.Kind === 'hermes' || c.Kind === 'openclaw') {
+      var isOpenClaw = c.Kind === 'openclaw';
+      var label = isOpenClaw ? 'OpenClaw' : 'Hermes Relay';
+      fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — ' + (isOpenClaw ? 'agent' : 'relay') + ' sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — ' + (isOpenClaw ? 'agent' : 'relay') + ' drafts and requests approval</option></select>';
       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a><button type="submit">Save</button>';
-      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Hermes Relay') + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/hermes/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/hermes/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
+      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
     } else {
       fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label>Bearer secret <span class="muted small">(leave blank to keep current)</span></label><input name="bearer_secret" type="password" autocomplete="new-password"></div>';
       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '') + '<button type="submit">Save</button>';
@@ -1738,6 +1775,7 @@ function aliasNameByAddress(list) {
 
     var settingsSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06-.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09A1.65 1.65 0 0 0 19.4 15z"/></svg>';
     var hermesSVG = '<img class="connector-brand-image" alt="" aria-hidden="true" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAE5UlEQVR42rVXvYrbWBT+NExnge6AS4PkBwhSuYXNlUgdZD+BXWyRVFK67DZytVtKU00TkOYJ7CFNmmAF0qSShiGQIuDrJ5BMPJXDni0yusi25BnYzQEhoft3fr5zzneBYxkBCLvdbgaA/o/nYa/wYe89UWrfTFXVv7bb7avBYPDj+fPn55ZlgTGG/yJlWSLPc3z48OHHp0+fzlVVvdput38CKOvzWKfT+drr9XbL5ZJ+lSyXS+r1ertOp/MVAJMeUFX1ijH2+93d3fljFpdlKa26vr5GWZawLAuWZYFzDsMwHl3/7NmzH2VZvt1ut6+qmNNjli+XS/J9n3zfp9lsRlmWUVEUFATBXryn0ymtVqtH93qYPwKAaDAY7NomZ1lGtm03gsv3fSIiiuN47z9jjOI4PqnEYDDYAYjQ7XazIAgaJ0VRdBLdmqbRZDIhIqIwDPfGdF2noihaFQiCoMoO0Hw+b5xQ3+zwcM45ZVlGcRzL9bquk67rZBgGLZdLiuO4VYn5fE4A6BzAUaoJIQAArutK4Ni2DcMwkKYpLMvCbDZDFEVYLBZwHAej0QhRFEEIgfV6DQBIkgQAMJ1Oj8BYnak8ABC2bcvBJEkwnU6RpinyPAdjDIqiIE1TMMbAOQdjDOPxGGX5M52zLINhGOj3+9A0DZvNBpqmSaUPJU1TOI4DHGbAfD4n0zSJMSYBVY95Gx48zyPXdck0TRkyy7KoLcOqTDg71CzPc6zXa2lZ9QZwMsfTNMXt7S3KssR6vYau68jzXI61yVlboalE0zT5fXFxAV3XGze6vb3di38dV6cUOG8Dh2wWigLP85CmKYgIvu9jsVjIuTc3N4/2g48fP54c34tRFRtN04hzLlOsKApyXZcsy6LZbNaarvWUrX9nWfY0DNi2jTiOMZ1OIYRAkiQyE5IkARFB0zQZ37pcXFyg3+83Wtk0v9EDdeGck+d5R5rXaz3nvDUz6h6oKuahB85PxYYxBt/3jzxUl81m07q+qgWbzaYVB2dPJRVtcsq19XVCCFlhn6zAzc0NhBDI87xRiVOHN2VVUzq2KlBpWy1qOqz+r+obTV6oakmVvo8WoroC19fXsG37KPb1Obquw7KsvbHqUEVRJE6acLCnQJIk0mWVdUIIRFF00kv9fl92vkNwVgaZpimpXKsCQgjp8nqFe/36NRzHgeM46Pf7GI/He5vrun6kQFOpriu9V4rrjWc8HsMwDOR5Ds65dFsdQEIIzGYzKIoirb28vHwSTc/zHKPRSJ551u1288ottm3DdV1omoYwDLHZbFqbTxRFmEwm0DQNi8WiEWCnekye5+h2uzkARMPhcFfVe8452bYtecBkMjmqcK7rytqeZVkjZWt7Kv45HA53ACLlgRrP66xosVggSRKMRiNcXl4eAccwDKxWq71wVHGuMqJiQkKIPfRnWYayLCs29JMSqap61ev1dnUCWXU5zjm5rttIyT3PoyAIqCgK8jyvkYrP53O5nnNORVFQr9fbqap69aSrWVEUR4ebpklBENBqtZLMOAzDVgoehiGZpknv3r07uppVzai8v7//TVGUvx3HeTkcDuXltA6uTqcDVVUBAI7j4MuXL3j//j2+ffuGN2/eNBaasizx+fNnfP/+/Z8XL16cqar69v7+/o/Dy+nh9Tz6BdfzCMBROf0XLeU9t0kqV6gAAAAASUVORK5CYII=">';
+    var openclawSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4.5v-2M15 4.5v-2M6.5 8.5h11v6a5.5 5.5 0 0 1-11 0z"/><circle cx="9.5" cy="11.5" r="1"/><circle cx="14.5" cy="11.5" r="1"/><path d="M12 14.5v1M4 11.5H6.5M17.5 11.5H20M6.5 17.5 4 20M17.5 17.5 20 20"/></svg>';
     var webhookSVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2"/><path d="m6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06"/><path d="m12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8"/></svg>';
     var logSVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h8v11H4z"/><path d="M6 5h4M6 8h4M6 11h3"/></svg>';
     var deleteSVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg>';
@@ -1768,7 +1806,7 @@ function aliasNameByAddress(list) {
       kindIcon.className = 'connector-type-icon';
       kindIcon.title = connectorLabel(c);
       kindIcon.setAttribute('aria-hidden', 'true');
-      kindIcon.innerHTML = c.Kind === 'hermes' ? hermesSVG : webhookSVG;
+      kindIcon.innerHTML = c.Kind === 'hermes' ? hermesSVG : (c.Kind === 'openclaw' ? openclawSVG : webhookSVG);
       row.appendChild(kindIcon);
 
       var text = document.createElement('div');
@@ -1795,7 +1833,9 @@ function aliasNameByAddress(list) {
       deleteForm.method = 'post';
       deleteForm.action = c.Kind === 'hermes'
         ? '/ui/hermes/' + encodeURIComponent(c.ID || '') + '/delete'
-        : '/ui/webhooks/' + encodeURIComponent(c.ID || '') + '/delete';
+        : (c.Kind === 'openclaw'
+          ? '/ui/openclaw/' + encodeURIComponent(c.ID || '') + '/delete'
+          : '/ui/webhooks/' + encodeURIComponent(c.ID || '') + '/delete');
       deleteForm.style.margin = '0';
 
       var csrf = document.createElement('input');

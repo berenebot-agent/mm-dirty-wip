@@ -118,7 +118,7 @@ flowchart LR
 
     subgraph Consumers["Realtime + agents"]
         SSE["SSE / long-poll / REST"]
-        RELAY["Hermes Relay"]
+        RELAY["Relay connectors\nHermes · OpenClaw"]
         AG["🤖 Your agents"]
         UI["👤 Web UI"]
     end
@@ -168,6 +168,16 @@ Permissions are assigned **per inbox**, so one key can hold different roles on d
 ## Hermes Relay
 
 For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain. A one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) is available for provisioning a gateway.
+
+## OpenClaw Connector
+
+For [OpenClaw](https://github.com/openclaw/openclaw) agents, add an **OpenClaw agent connector** to an inbox and run the generated setup command on the OpenClaw host:
+
+```bash
+openclaw channels add --channel mailmoose --code https://mail.example.com/#<one-time-code>
+```
+
+The code is single-use and expires in 15 minutes; the URL carries the MailMoose address and the fragment carries the code. OpenClaw then dials out to `/relay`, receives new mail over the authenticated socket, and replies on the original email thread. No inbound port is required on the OpenClaw host. For air-gapped installs, choose **Manual config block** instead and paste the generated `channels.mailmoose` block. The connector shares the relay transport with Hermes but appears and is managed as its own kind.
 
 ## Contributing
 

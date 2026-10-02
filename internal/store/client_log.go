@@ -77,7 +77,7 @@ func scanClientLog(row interface{ Scan(...any) error }) (ClientDeliveryEntry, er
 // event id as the stable, monotonic proxy for recency.
 func (s *Store) ClientDeliveryLog(ctx context.Context, accountID, clientID string, limit int, beforeID int64) ([]ClientDeliveryEntry, error) {
 	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM clients WHERE id=? AND account_id=? AND type IN ('webhook','hermes') AND revoked_at IS NULL`, clientID, accountID).Scan(&n); err != nil {
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM clients WHERE id=? AND account_id=? AND type IN ('webhook','hermes','openclaw') AND revoked_at IS NULL`, clientID, accountID).Scan(&n); err != nil {
 		return nil, err
 	}
 	if n != 1 {
