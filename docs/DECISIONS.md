@@ -160,9 +160,11 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 ## D018 — Direct relay credential issuance
 
-**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block. The one-time enrollment-token flow (`POST /relay/enroll` plus `hermes gateway enroll`) remains for CLI provisioning.
+**Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block.
 
 **Reason:** A self-hosted operator should be able to create a relay connection and paste the resulting environment variables without a separate token-exchange step or a hosted identity token.
+
+**Status note:** the "remains for CLI provisioning" half of this decision was never implemented for Hermes. `POST /relay/enroll` works, but only the OpenClaw kind can mint a code for it (`CreateRelayEnrollCode` rejects every other kind), so a Hermes `hermes gateway enroll` cannot complete. The store-level `CreateHermesEnrollToken` is reachable from tests only. Either wire a Hermes mint path or treat the token flow as OpenClaw-only; until then, the direct block is the only Hermes path. See `docs/CONNECTORS.md` §3.
 
 ## D019 — Dedicated inbound webhook listener
 
