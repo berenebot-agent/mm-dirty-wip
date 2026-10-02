@@ -1,6 +1,0 @@
-# A plugin's local test rig holds live credentials (.env) and generated runtime
-# state (sqlite WAL/journal files, plugin build captures, nested git checkouts).
-# The rig's own tracked files live in the plugin directory; only the ignored
-# runtime artefacts are excluded here. Scoped to this directory so a plugin
-# directory called local-test/ still has its own tracked files seen.
-/local-test/
