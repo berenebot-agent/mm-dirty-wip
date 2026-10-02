@@ -89,9 +89,9 @@ func TestWebhookClientAPI(t *testing.T) {
 	}
 }
 
-// TestClientDeliveryLogPage proves the Clients "Log" button links to a
-// per-client delivery log that renders the outcome, and that a webhook and a
-// Hermes relay both expose it while an API key does not.
+// TestClientDeliveryLogPage proves an inbox connector is surfaced on the
+// dashboard and its delivery-log route renders the outcome. Webhook and Hermes
+// connectors expose logs while API-key clients do not.
 func TestClientDeliveryLogPage(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
@@ -113,8 +113,8 @@ func TestClientDeliveryLogPage(t *testing.T) {
 	dash.AddCookie(cookie)
 	dr := httptest.NewRecorder()
 	h.ServeHTTP(dr, dash)
-	if dr.Code != http.StatusOK || !strings.Contains(dr.Body.String(), "/ui/clients/"+cl.ID+"/log") {
-		t.Fatalf("dashboard missing log link: %d", dr.Code)
+	if dr.Code != http.StatusOK || !strings.Contains(dr.Body.String(), `data-connector="`+cl.ID+`"`) {
+		t.Fatalf("dashboard missing connector: %d", dr.Code)
 	}
 
 	req := httptest.NewRequest("GET", "/ui/clients/"+cl.ID+"/log", nil)
@@ -182,8 +182,15 @@ func TestWebhookCreateViaDashboard(t *testing.T) {
 		t.Fatalf("dashboard %d", dr.Code)
 	}
 	body := dr.Body.String()
-	if !strings.Contains(body, "Webhook delivery") || !strings.Contains(body, "Hooks") {
-		t.Fatal("dashboard does not render the webhook client")
+	clients, err := svc.Store.ListWebhookClients(context.Background(), u.AccountID)
+	if err != nil || len(clients) != 1 {
+		t.Fatalf("webhook clients: %+v %v", clients, err)
+	}
+	if !strings.Contains(body, `data-connector="`+clients[0].ID+`"`) || !strings.Contains(body, "Hooks") {
+		t.Fatal("dashboard does not render the webhook connector on its inbox")
+	}
+	if strings.Contains(body, `data-kind="webhook" data-name="Hooks"`) {
+		t.Fatal("webhook connector should not render as a row in Clients")
 	}
 }
 
