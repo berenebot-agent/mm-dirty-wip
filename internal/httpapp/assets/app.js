@@ -1558,7 +1558,6 @@ function aliasNameByAddress(list) {
   var connectorEditor = document.getElementById('inbox-connector-editor');
   var connectorAdd = document.getElementById('inbox-connector-add');
   var connectorHeader = connectorAdd ? connectorAdd.closest('.card-head') : null;
-  var connectorFocusID = '';
   var editConnectors = [];
   var csrfValue = (form.querySelector('[name=_csrf]') || {}).value || '';
   var editor = initSenderEditor({
@@ -1729,7 +1728,7 @@ function aliasNameByAddress(list) {
     }
   }
 
-  function renderConnectors(connectors, selectedID) {
+  function renderConnectors(connectors) {
     editConnectors = Array.isArray(connectors) ? connectors : [];
     if (!connectorList || !connectorEditor) {
       return;
@@ -1822,9 +1821,6 @@ function aliasNameByAddress(list) {
       row.appendChild(deleteForm);
 
       connectorList.appendChild(row);
-      if (selectedID && c.ID === selectedID) {
-        renderConnectorEditor(c);
-      }
     });
   }
 
@@ -1863,8 +1859,7 @@ function aliasNameByAddress(list) {
       if (connectorAdd) {
         connectorAdd.setAttribute('data-inbox', editInboxID);
       }
-      renderConnectors(editConnectors, connectorFocusID);
-      connectorFocusID = '';
+      renderConnectors(editConnectors);
       var opts = editSenderOptions();
       buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, opts.names, opts.addresses, editDesired);
       editDesired = '';
@@ -1884,7 +1879,6 @@ function aliasNameByAddress(list) {
 
   document.querySelectorAll('.open-inbox-connector').forEach(function (connectorBtn) {
     connectorBtn.addEventListener('click', function () {
-      connectorFocusID = connectorBtn.getAttribute('data-connector') || '';
       var inboxID = connectorBtn.getAttribute('data-inbox') || '';
       var target = null;
       document.querySelectorAll('.edit-inbox').forEach(function (btn) {
@@ -2043,7 +2037,6 @@ function aliasNameByAddress(list) {
   var openCard = document.querySelector('[data-open-inbox]');
   var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
   var openInboxTab = openCard ? (openCard.getAttribute('data-open-inbox-tab') || 'aliases') : 'aliases';
-  var openConnector = openCard ? (openCard.getAttribute('data-open-connector') || '') : '';
   if (openInbox) {
     setTimeout(function () {
       var target = null;
@@ -2053,7 +2046,6 @@ function aliasNameByAddress(list) {
         }
       });
       if (target) {
-        connectorFocusID = openConnector;
         target.click();
         var tab = dlg.querySelector('[data-inbox-tab=' + openInboxTab + ']');
         if (tab) {
