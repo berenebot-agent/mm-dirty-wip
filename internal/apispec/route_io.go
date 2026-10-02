@@ -156,6 +156,13 @@ var routeIOByKey = map[string]routeIO{
 	"PUT /v1/admin/hermes/{id}":    {Request: "HermesUpdateBody", Response: "HermesUpdateResult"},
 	"DELETE /v1/admin/hermes/{id}": {},
 
+	// Admin: OpenClaw.
+	"GET /v1/admin/openclaw":             {Response: "HermesConnectionList"},
+	"POST /v1/admin/openclaw/enroll":     {Request: "HermesEnrollBody", Response: "OpenClawEnrollment"},
+	"POST /v1/admin/openclaw/setup-code": {Request: "HermesEnrollBody", Response: "OpenClawSetupCode"},
+	"PUT /v1/admin/openclaw/{id}":        {Request: "HermesUpdateBody", Response: "HermesUpdateResult"},
+	"DELETE /v1/admin/openclaw/{id}":     {},
+
 	// Admin: MX.
 	"GET /v1/admin/mx":    {Response: "MXSettings"},
 	"PUT /v1/admin/mx":    {Request: "MXSettingsPut", Response: "MXSettings"},

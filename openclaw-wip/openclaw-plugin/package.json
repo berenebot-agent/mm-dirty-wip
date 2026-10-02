@@ -1,35 +1,109 @@
 {
   "name": "@mailmoose/openclaw",
-  "version": "0.0.1-wip",
-  "private": true,
+  "version": "0.1.0",
+  "description": "MailMoose email connector for OpenClaw",
   "type": "module",
-  "description": "MailMoose outbound relay channel for OpenClaw",
-  "main": "./index.ts",
-  "peerDependencies": {
-    "openclaw": ">=2026.9.6"
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./setup-entry.js": "./dist/setup-entry.js"
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "8.21.3"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "@types/ws": "^8.18.1",
+    "openclaw": "2026.9.7",
     "typescript": "^5.9.2"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.9.7"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
   "openclaw": {
-    "extensions": ["./index.ts"],
-    "setupEntry": "./setup-entry.ts",
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "setupEntry": "./dist/setup-entry.js",
     "compat": {
-      "pluginApi": ">=2026.9.6",
-      "minGatewayVersion": "2026.9.6"
+      "pluginApi": ">=2026.9.7",
+      "minGatewayVersion": "2026.9.7"
     },
     "build": {
-      "openclawVersion": "2026.9.6",
-      "pluginSdkVersion": "2026.9.6"
+      "openclawVersion": "2026.9.7",
+      "pluginSdkVersion": "2026.9.7"
     },
     "channel": {
       "id": "mailmoose",
       "label": "MailMoose",
-      "blurb": "Receive and reply to email through a MailMoose inbox."
+      "selectionLabel": "MailMoose (email)",
+      "detailLabel": "MailMoose inbox",
+      "docsPath": "/channels/mailmoose",
+      "blurb": "Give your agent its own email inbox through MailMoose.",
+      "markdownCapable": false,
+      "order": 60,
+      "setup": {
+        "fields": [
+          {
+            "key": "code",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--code <url-or-code>",
+              "description": "MailMoose one-time setup URL or code"
+            }
+          },
+          {
+            "key": "baseUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--base-url <url>",
+              "description": "MailMoose base URL"
+            }
+          },
+          {
+            "key": "gatewayId",
+            "kind": "string",
+            "cli": {
+              "flags": "--gateway-id <id>",
+              "description": "MailMoose connector gateway id (manual setup)"
+            }
+          },
+          {
+            "key": "secret",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--secret <secret>",
+              "description": "MailMoose relay secret (manual setup)"
+            }
+          },
+          {
+            "key": "deliveryKey",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--delivery-key <key>",
+              "description": "MailMoose delivery key (retained for parity; optional)"
+            }
+          }
+        ]
+      }
     }
   }
 }

@@ -167,6 +167,16 @@ Generated from `internal/apispec`; do not edit by hand.
 | PUT | /v1/admin/hermes/{id} | Update a Hermes connection outbound role (Admin) | admin |
 | DELETE | /v1/admin/hermes/{id} | Delete a Hermes connection (Admin) | admin |
 
+## Admin: OpenClaw
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/openclaw | List OpenClaw connections (Admin) | admin |
+| POST | /v1/admin/openclaw/enroll | Create an OpenClaw relay connection (Admin) | admin |
+| POST | /v1/admin/openclaw/setup-code | Mint an OpenClaw one-time setup code (Admin) | admin |
+| PUT | /v1/admin/openclaw/{id} | Update an OpenClaw connection outbound role (Admin) | admin |
+| DELETE | /v1/admin/openclaw/{id} | Delete an OpenClaw connection (Admin) | admin |
+
 ## Admin: MX
 
 | Method | Path | Summary | Role |

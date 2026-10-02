@@ -182,6 +182,11 @@ var routes = []Route{
 	{Method: "POST", Path: "/v1/admin/hermes/enroll", Summary: "Enroll a Hermes Relay connection (Admin)", Description: "Body: inbox_id and name. Mints a gateway id, secret and delivery key, returned once with the connector URL and an env block.", Role: "admin", Group: "Admin: Hermes", Success: 201},
 	{Method: "PUT", Path: "/v1/admin/hermes/{id}", Summary: "Update a Hermes connection outbound role (Admin)", Description: "Body: role. owner lets the relay send directly; assistant makes it draft and request approval instead.", Role: "admin", Group: "Admin: Hermes"},
 	{Method: "DELETE", Path: "/v1/admin/hermes/{id}", Summary: "Delete a Hermes connection (Admin)", Role: "admin", Group: "Admin: Hermes", Success: 204},
+	{Method: "GET", Path: "/v1/admin/openclaw", Summary: "List OpenClaw connections (Admin)", Description: "Returns OpenClaw connector metadata (id, inbox, name, gateway id, outbound role, last acknowledged event and connectivity); never secrets.", Role: "admin", Group: "Admin: OpenClaw"},
+	{Method: "POST", Path: "/v1/admin/openclaw/enroll", Summary: "Create an OpenClaw relay connection (Admin)", Description: "Body: inbox_id and name. Mints a gateway id, secret and delivery key, returned once with the connector URL. OpenClaw shares the authenticated replayable relay transport with Hermes.", Role: "admin", Group: "Admin: OpenClaw", Success: 201},
+	{Method: "POST", Path: "/v1/admin/openclaw/setup-code", Summary: "Mint an OpenClaw one-time setup code (Admin)", Description: "Body: inbox_id and name. Returns a single-use code, its claim URL and a ready-to-paste openclaw channels add command. The code expires in 15 minutes.", Role: "admin", Group: "Admin: OpenClaw", Success: 201},
+	{Method: "PUT", Path: "/v1/admin/openclaw/{id}", Summary: "Update an OpenClaw connection outbound role (Admin)", Description: "Body: role. owner lets the relay send directly; assistant makes it draft and request approval instead.", Role: "admin", Group: "Admin: OpenClaw"},
+	{Method: "DELETE", Path: "/v1/admin/openclaw/{id}", Summary: "Delete an OpenClaw connection (Admin)", Role: "admin", Group: "Admin: OpenClaw", Success: 204},
 
 	// Admin: MX. These installation-management routes authenticate with the
 	// system administrator's cookie session, not a bearer API key: one receiver

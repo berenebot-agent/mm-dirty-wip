@@ -1296,3 +1296,28 @@ INSERT INTO accounts_new(id,name,storage_quota_bytes,storage_used_bytes,created_
 DROP TABLE accounts;
 ALTER TABLE accounts_new RENAME TO accounts;
 `
+
+// migration042 adds OpenClaw as a second relay connector kind alongside Hermes.
+// A relay connection is still a row in clients/client_push; the client type
+// discriminates the product connector. SQLite cannot widen a CHECK constraint
+// in place, so clients is rebuilt (fkOff, because four tables reference it) and
+// every existing row keeps its type. hermes_enroll_tokens gains a kind so a
+// one-time setup code remembers which connector it will create; existing
+// tokens default to hermes.
+const migration042 = `
+ALTER TABLE hermes_enroll_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'hermes' CHECK (kind IN ('hermes','openclaw'));
+
+CREATE TABLE clients_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK(type IN ('api_key','hermes','webhook','openclaw')),
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT
+);
+INSERT INTO clients_new(id,account_id,type,name,created_at,revoked_at)
+  SELECT id,account_id,type,name,created_at,revoked_at FROM clients;
+DROP TABLE clients;
+ALTER TABLE clients_new RENAME TO clients;
+CREATE INDEX idx_clients_account ON clients(account_id, created_at DESC);
+`

@@ -1,7 +1,7 @@
 {
   "id": "mailmoose",
   "name": "MailMoose",
-  "description": "Outbound-only MailMoose email relay for OpenClaw",
+  "description": "Email inbox connector for OpenClaw through a MailMoose relay.",
   "channels": ["mailmoose"],
   "configSchema": {
     "type": "object",
@@ -19,6 +19,9 @@
             "type": "boolean",
             "default": true
           },
+          "name": {
+            "type": "string"
+          },
           "baseUrl": {
             "type": "string",
             "description": "MailMoose base URL"
@@ -33,7 +36,23 @@
           },
           "deliveryKey": {
             "type": "string",
-            "description": "Reserved for relay delivery verification parity"
+            "description": "Retained for relay delivery parity; optional"
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional OpenClaw-side sender allowlist. MailMoose inbox allowlists are the primary gate."
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["allowlist", "open", "pairing"],
+            "default": "allowlist"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Optional agent id to route this inbox to"
           }
         }
       },

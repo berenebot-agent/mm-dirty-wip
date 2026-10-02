@@ -2021,6 +2021,116 @@ func (s *Server) apiHermesDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// apiOpenClawEnroll creates an OpenClaw relay connector directly and returns
+// its one-time credentials, mirroring the Hermes enroll endpoint. OpenClaw
+// shares the relay transport; only the stored connector kind differs.
+func (s *Server) apiOpenClawEnroll(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		InboxID string `json:"inbox_id"`
+		Name    string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	gatewayID, secret, deliveryKey, err := s.Service.CreateRelay(r.Context(), p, in.InboxID, in.Name, store.KindOpenClaw)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "delivery_key": deliveryKey, "connector_url": s.Service.Config.BaseURL, "kind": "openclaw"})
+}
+
+// apiOpenClawList lists the account's OpenClaw relay connectors, never secrets.
+func (s *Server) apiOpenClawList(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	v, err := s.Service.Store.ListRelayConnections(r.Context(), p.AccountID, store.KindOpenClaw)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	type item struct {
+		ID, InboxID, Name, GatewayID, OutboundRole string
+		LastAckEventID                             int64
+		CreatedAt                                  time.Time
+		LastConnectedAt                            *time.Time
+	}
+	out := []item{}
+	for _, h := range v {
+		out = append(out, item{h.ID, h.InboxID, h.Name, h.GatewayID, h.OutboundRole, h.LastAckEventID, h.CreatedAt, h.LastConnectedAt})
+	}
+	writeJSON(w, 200, out)
+}
+
+// apiOpenClawConnection updates an OpenClaw connector's outbound role.
+func (s *Server) apiOpenClawConnection(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		Role string `json:"role"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := s.Service.Store.SetHermesOutboundRole(r.Context(), p.AccountID, r.PathValue("id"), in.Role); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"status": "ok", "role": strings.ToLower(strings.TrimSpace(in.Role))})
+}
+
+// apiOpenClawDelete removes an OpenClaw connector and immediately closes its
+// live relay socket.
+func (s *Server) apiOpenClawDelete(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	if err := s.Service.Store.DeleteHermesConnection(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	s.Service.Hub.CancelScope("hrm:" + r.PathValue("id"))
+	w.WriteHeader(204)
+}
+
+// apiOpenClawSetupCode mints a one-time setup code for the OpenClaw plugin's
+// setup wizard, plus the exact claim URL and a ready-to-paste CLI command.
+// The code is returned once; only its hash is stored.
+func (s *Server) apiOpenClawSetupCode(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		InboxID string `json:"inbox_id"`
+		Name    string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	code, err := s.Service.CreateRelayEnrollCode(r.Context(), p, in.InboxID, in.Name, store.KindOpenClaw, 15*time.Minute)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	base := strings.TrimRight(s.Service.Config.BaseURL, "/")
+	writeJSON(w, 201, map[string]any{
+		"code":       code,
+		"expires_in": 900,
+		"setup_url":  base + "/#" + code,
+		"command":    "openclaw channels add --channel mailmoose --code " + base + "/#" + code,
+	})
+}
+
 func (s *Server) mailgunIngest(w http.ResponseWriter, r *http.Request) {
 	s.ingestProvider(w, r, "mailgun")
 }

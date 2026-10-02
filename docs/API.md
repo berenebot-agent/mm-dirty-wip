@@ -881,7 +881,29 @@ connection's outbound role: `owner` lets the relay send directly, while
 
 Relay protocol implementation should follow the Hermes connector contract while isolating its versioning from the canonical API.
 
-## 14. openagent.email compatibility
+## 14. OpenClaw Connector
+
+OpenClaw connects over the same relay transport as Hermes (`wss://<host>/relay`)
+and is a distinct connector kind, so it has its own management routes:
+
+```http
+GET    /v1/admin/openclaw
+POST   /v1/admin/openclaw/enroll
+POST   /v1/admin/openclaw/setup-code
+PUT    /v1/admin/openclaw/{id}
+DELETE /v1/admin/openclaw/{id}
+```
+
+`POST /v1/admin/openclaw/enroll` takes `{"inbox_id","name"}` and returns the
+minted `gateway_id`, `secret`, `delivery_key`, `connector_url` and `kind` once.
+`POST /v1/admin/openclaw/setup-code` takes the same body and returns a
+single-use `code`, `expires_in`, the `setup_url` and a ready-to-paste
+`command`; the OpenClaw host redeems the code at `POST /relay/enroll`, which
+returns the connector credentials plus its `kind` and `name`. `GET` lists
+OpenClaw connectors, `PUT` sets the outbound role (`owner` or `assistant`), and
+`DELETE` removes the connector, closes its live socket and returns `204`.
+
+## 15. openagent.email compatibility
 
 Where semantics align naturally, support familiar compatibility operations such as:
 

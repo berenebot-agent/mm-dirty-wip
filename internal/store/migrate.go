@@ -138,6 +138,10 @@ func migrations(dataDir string) []migration {
 		{version: "041", sql: migration041, fkOff: true, detect: stateOf(
 			tableSQLContains("accounts", "trash_retention_days INTEGER NOT NULL DEFAULT 0"),
 		)},
+		{version: "042", sql: migration042, fkOff: true, detect: allOf(
+			columnAdded("hermes_enroll_tokens", "kind"),
+			tableSQLContains("clients", "'openclaw'"),
+		)},
 	}
 }
 
