@@ -168,7 +168,7 @@ Permissions are assigned **per inbox**, so one key can hold different roles on d
 
 ## Hermes Relay
 
-For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain. A one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) is available for provisioning a gateway.
+For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain.
 
 Full setup is in [docs/CONNECTORS.md](docs/CONNECTORS.md).
 

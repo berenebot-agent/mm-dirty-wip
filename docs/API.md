@@ -861,7 +861,7 @@ Enrollment:
 POST /relay/enroll
 ```
 
-The UI issues single-use enrollment tokens and displays the corresponding Hermes CLI command. The same management operations are available programmatically to an Admin principal:
+The UI issues connector credentials directly and displays the corresponding `.env` block. The same management operations are available programmatically to an Admin principal:
 
 ```http
 GET    /v1/admin/hermes
@@ -870,10 +870,11 @@ PUT    /v1/admin/hermes/{id}
 DELETE /v1/admin/hermes/{id}
 ```
 
-`POST /v1/admin/hermes/enroll` takes `{"inbox_id","name"}`, issues a new
-single-use enrollment token, returns `201` with the `gateway_id`, `secret`,
+`POST /v1/admin/hermes/enroll` takes `{"inbox_id","name"}`, issues the relay
+credentials directly, returns `201` with the `gateway_id`, `secret`,
 `delivery_key`, `connector_url` and a ready-to-paste `env` block, and is the API
-equivalent of the `/relay/enroll` UI. `GET` lists the account's relay
+equivalent of the Create key dialog. There is no enrollment-token step: a
+one-time code can only be minted for the OpenClaw kind (see §14). `GET` lists the account's relay
 connections. `PUT /v1/admin/hermes/{id}` takes `{"role"}` and sets the
 connection's outbound role: `owner` lets the relay send directly, while
 `assistant` makes it draft and request approval instead. `DELETE

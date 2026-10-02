@@ -129,16 +129,27 @@ advances the durable cursor. Replies go back over the same socket.
 Because the cursor is durable and the ack is the receipt, a crash mid-turn
 replays the message rather than losing it.
 
-### One-time enrollment tokens
+### One-time enrollment tokens (OpenClaw only)
 
-`POST /relay/enroll` redeems a single-use enrollment token (the same flow the
-OpenClaw connector uses, §4), and `POST /v1/admin/hermes/enroll` issues the
-credentials directly. The token path is for provisioning a gateway without
-handing over a long-lived secret.
+`POST /relay/enroll` redeems a single-use enrollment token. **Only the OpenClaw
+connector can mint one** — `CreateRelayEnrollCode` rejects every other kind, so
+there is no way to obtain a Hermes enrollment token and `hermes gateway enroll`
+cannot complete against this installation.
+
+The Hermes path is the **direct `.env` block** above:
+`POST /v1/admin/hermes/enroll` (or the Create key dialog) mints the credentials
+outright and returns them once. There is no token-exchange step.
+
+> An earlier revision of this document — and `D018`, `docs/API.md`,
+> `docs/ACCEPTANCE_TESTS.md` and the README — described a Hermes
+> enrollment-token flow via `hermes gateway enroll`. That flow is not wired up
+> in this codebase: `hermes_enroll_tokens` exists and is kind-aware, and the
+> store-level `CreateHermesEnrollToken` is exercised by tests, but nothing above
+> the store issues a Hermes token. Use the direct block.
 
 Relay is **reply-only**: it resolves a target to the latest inbound message in a
 thread, so it cannot initiate a brand-new outbound email. To send fresh mail,
-use `/v1/send` with an API key, or the connector must be replying to a thread.
+use `/v1/send` with an API key, or have the connector reply to a thread.
 
 ---
 

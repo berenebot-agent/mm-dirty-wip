@@ -121,8 +121,8 @@
 
 ## K. Hermes Relay
 
-1. Generate one-time enrollment token.
-2. Run `hermes gateway enroll` on a Hermes host with outbound internet only.
+1. In the inbox's Connectors tab, add a **Hermes relay connection** (or `POST /v1/admin/hermes/enroll`) and copy the returned `.env` block.
+2. Paste it into a Hermes host with outbound internet only.
 3. Establish Relay connection.
 4. Send external email to its assigned inbox.
 5. Verify Hermes receives the message immediately through Relay.

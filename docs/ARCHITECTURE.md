@@ -318,7 +318,7 @@ Hermes Relay is an integration adapter over the internal event/message model.
 
 Responsibilities:
 
-- enrollment token issuance/redemption
+- enrollment token redemption (`POST /relay/enroll`; codes are minted for the OpenClaw kind only)
 - gateway authentication
 - WebSocket lifecycle
 - capability handshake
