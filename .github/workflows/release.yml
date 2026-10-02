@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  gate:
+    name: Release test gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install SQLite development library
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l cmd internal tests dialmx)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/...
+      - name: Test
+        run: go test -race -count=1 -timeout=60s ./...
+
+  image:
+    name: Publish multi-architecture images
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$ ]]; then
+            echo "Refusing non-alpha/beta/rc or malformed release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_NAME" =~ -alpha\. ]]; then
+            echo "channel=alpha" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute core image tags
+        id: core_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=raw,value=${{ steps.release.outputs.channel }}
+            type=raw,value=latest
+
+      - name: Build and push core image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.core_meta.outputs.tags }}
+          labels: ${{ steps.core_meta.outputs.labels }}
+
+      - name: Compute MX image tags
+        id: mx_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}-mx
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=raw,value=${{ steps.release.outputs.channel }}
+            type=raw,value=latest
+
+      - name: Build and push MX image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mx
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.mx_meta.outputs.tags }}
+          labels: ${{ steps.mx_meta.outputs.labels }}
+
+      - name: Compute DialMX image tags
+        id: dialmx_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}-dialmx
+          tags: |
+            type=raw,value=${{ github.ref_name }}
+            type=raw,value=${{ steps.release.outputs.version }}
+            type=raw,value=${{ steps.release.outputs.channel }}
+            type=raw,value=latest
+
+      - name: Build and push DialMX image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dialmx/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.dialmx_meta.outputs.tags }}
+          labels: ${{ steps.dialmx_meta.outputs.labels }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "MailMoose $GITHUB_REF_NAME" --generate-notes
