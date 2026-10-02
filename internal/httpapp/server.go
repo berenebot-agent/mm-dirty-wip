@@ -40,6 +40,12 @@ var cloudflareWorkerTemplate []byte
 //go:embed assets/logo-horizontal.png
 var logoHorizontalPNG []byte
 
+//go:embed assets/hermes-connector.png
+var hermesConnectorPNG []byte
+
+//go:embed assets/openclaw-connector.png
+var openClawConnectorPNG []byte
+
 //go:embed assets/favicon.ico
 var faviconICO []byte
 
@@ -88,7 +94,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		log = slog.Default()
 	}
 	h := sha256.New()
-	for _, b := range [][]byte{appJS, logoHorizontalPNG, faviconICO, faviconSVG, appleTouchIconPNG} {
+	for _, b := range [][]byte{appJS, logoHorizontalPNG, hermesConnectorPNG, openClawConnectorPNG, faviconICO, faviconSVG, appleTouchIconPNG} {
 		_, _ = h.Write(b)
 	}
 	sum := h.Sum(nil)
@@ -120,6 +126,8 @@ func (s *Server) Handler() http.Handler {
 	s.registerInbound(m)
 	m.HandleFunc("GET /assets/app.js", s.asset)
 	m.HandleFunc("GET /assets/logo-horizontal.png", s.showLogo)
+	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
+	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
 	m.HandleFunc("GET /favicon.svg", s.showFaviconSVG)
 	m.HandleFunc("GET /apple-touch-icon.png", s.showAppleTouchIcon)
@@ -492,6 +500,12 @@ func (s *Server) removeDataFile(rel string) {
 
 func (s *Server) showLogo(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/png", "public, max-age=31536000, immutable", logoHorizontalPNG)
+}
+func (s *Server) showHermesConnectorIcon(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=86400", hermesConnectorPNG)
+}
+func (s *Server) showOpenClawConnectorIcon(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=86400", openClawConnectorPNG)
 }
 func (s *Server) showFaviconICO(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/x-icon", "public, max-age=86400", faviconICO)
