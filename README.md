@@ -82,6 +82,7 @@ docker compose up -d
 Open `BASE_URL`, sign in with the system administrator credentials, and add your domain. From the **Admin** page you can invite other people, each as their own separate account. Then:
 
 - Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
+- Connect an **agent or service to an inbox** (Hermes Relay, OpenClaw, webhook, API key) → [docs/CONNECTORS.md](docs/CONNECTORS.md)
 - Direct-SMTP (MX) on port 25 — choose the receiver under **Admin → MX receiver** (Included or Remote) — hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
 
@@ -169,15 +170,27 @@ Permissions are assigned **per inbox**, so one key can hold different roles on d
 
 For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain. A one-time enrollment-token flow (`hermes gateway enroll` against `POST /relay/enroll`) is available for provisioning a gateway.
 
+Full setup is in [docs/CONNECTORS.md](docs/CONNECTORS.md).
+
 ## OpenClaw Connector
 
-For [OpenClaw](https://github.com/openclaw/openclaw) agents, add an **OpenClaw agent connector** to an inbox and run the generated setup command on the OpenClaw host:
+For [OpenClaw](https://github.com/openclaw/openclaw) agents, install the MailMoose channel plugin on the OpenClaw host first — it ships in this repository at [`plugins/openclaw/openclaw-plugin`](plugins/openclaw/openclaw-plugin) and is not yet published to npm or ClawHub:
+
+```bash
+cd plugins/openclaw/openclaw-plugin
+npm ci && npm run build
+openclaw plugins install -l . --accept-capabilities --force
+```
+
+Then add an **OpenClaw agent connector** to an inbox and run the generated setup command:
 
 ```bash
 openclaw channels add --channel mailmoose --code https://mail.example.com/#<one-time-code>
 ```
 
-The code is single-use and expires in 15 minutes; the URL carries the MailMoose address and the fragment carries the code. OpenClaw then dials out to `/relay`, receives new mail over the authenticated socket, and replies on the original email thread. No inbound port is required on the OpenClaw host. For air-gapped installs, choose **Manual config block** instead and paste the generated `channels.mailmoose` block. The connector shares the relay transport with Hermes but appears and is managed as its own kind.
+The plugin must be installed before that command will resolve the `mailmoose` channel. The code is single-use and expires in 15 minutes; the URL carries the MailMoose address and the fragment carries the code. OpenClaw then dials out to `/relay`, receives new mail over the authenticated socket, and replies on the original email thread. No inbound port is required on the OpenClaw host. For air-gapped installs, choose **Manual config block** instead and paste the generated `channels.mailmoose` block. The connector shares the relay transport with Hermes but appears and is managed as its own kind.
+
+Full setup for every connector kind — including webhooks and API keys — is in [docs/CONNECTORS.md](docs/CONNECTORS.md).
 
 ## Contributing
 
@@ -196,6 +209,7 @@ fastest way to shape it is to use it and tell us what's missing.
 | Doc | Contents |
 |---|---|
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Inbound (Mailgun, Cloudflare, Resend, MX) and outbound (Mailgun, Brevo, Resend, SMTP) setup |
+| [docs/CONNECTORS.md](docs/CONNECTORS.md) | Inbox-level connectors: Hermes Relay, OpenClaw, webhooks and API keys |
 | [docs/SELFHOSTING.md](docs/SELFHOSTING.md) | First-run admin, reverse proxy, MX modes and tuning, hardening, backup, upgrades |
 | [docs/MX.md](docs/MX.md) | Direct-SMTP edge: wire contract, auth policy, spam and retry semantics |
 | [docs/API-REFERENCE.md](docs/API-REFERENCE.md) | Generated REST API reference |
