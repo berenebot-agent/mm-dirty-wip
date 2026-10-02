@@ -124,7 +124,7 @@ func TestAPIAccountSettingsTrashRetention(t *testing.T) {
 		return rr
 	}
 	rr := do("GET", "")
-	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"trash_retention_days":30`) {
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"trash_retention_days":0`) {
 		t.Fatalf("get settings %d %s", rr.Code, rr.Body.String())
 	}
 	if rr = do("PATCH", `{"trash_retention_days":7}`); rr.Code != 200 {

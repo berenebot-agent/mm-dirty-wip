@@ -127,11 +127,11 @@ func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
 		t.Fatalf("inbox view %d: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Drafts (2)") {
-		t.Fatalf("inbox view missing drafts badge: %s", body)
+	if !regexp.MustCompile(`Drafts\s*<span class="count">2</span>`).MatchString(body) {
+		t.Fatalf("inbox view missing drafts count: %s", body)
 	}
-	if !strings.Contains(body, "Outbox (1)") {
-		t.Fatalf("inbox view missing outbox badge: %s", body)
+	if !regexp.MustCompile(`Outbox\s*<span class="count">1</span>`).MatchString(body) {
+		t.Fatalf("inbox view missing outbox count: %s", body)
 	}
 	if !regexp.MustCompile(`\d{2}:\d{2} \d{1,2}-[A-Z][a-z]{2}-\d{2}`).MatchString(body) {
 		t.Fatalf("inbox view missing new date format: %s", body)
@@ -145,8 +145,8 @@ func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("drafts view %d: %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "Drafts (2)") {
-		t.Fatalf("drafts view missing drafts badge: %s", rr.Body.String())
+	if !regexp.MustCompile(`Drafts\s*<span class="count">2</span>`).MatchString(rr.Body.String()) {
+		t.Fatalf("drafts view missing drafts count: %s", rr.Body.String())
 	}
 
 	// Outbox view shows the outbox badge.
@@ -157,8 +157,8 @@ func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("outbox view %d: %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "Outbox (1)") {
-		t.Fatalf("outbox view missing outbox badge: %s", rr.Body.String())
+	if !regexp.MustCompile(`Outbox\s*<span class="count">1</span>`).MatchString(rr.Body.String()) {
+		t.Fatalf("outbox view missing outbox count: %s", rr.Body.String())
 	}
 }
 
@@ -174,8 +174,8 @@ func TestUIDraftsOutboxCountsEmpty(t *testing.T) {
 		t.Fatalf("inbox view %d: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if strings.Contains(body, "Drafts (") || strings.Contains(body, "Outbox (") {
-		t.Fatalf("empty inbox should not show count badges: %s", body)
+	if regexp.MustCompile(`Drafts\s*<span class="count">`).MatchString(body) || regexp.MustCompile(`Outbox\s*<span class="count">`).MatchString(body) {
+		t.Fatalf("empty inbox should not show draft/outbox counts: %s", body)
 	}
 }
 

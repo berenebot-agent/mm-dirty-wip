@@ -225,7 +225,7 @@ func TestTrashRetentionSetting(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
-	if days, err := s.GetTrashRetention(ctx, p); err != nil || days != 30 {
+	if days, err := s.GetTrashRetention(ctx, p); err != nil || days != 0 {
 		t.Fatalf("default retention %d err=%v", days, err)
 	}
 	if err := s.SetTrashRetention(ctx, p, 7); err != nil {
