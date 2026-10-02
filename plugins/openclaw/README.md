@@ -11,8 +11,11 @@ so this directory is currently the only source for it.
 plugins/openclaw/
   README.md            — this file
   openclaw-plugin/     — the channel plugin (TypeScript, @mailmoose/openclaw)
-  local-test/          — compose rig for running it against a live MailMoose
 ```
+
+A local compose rig for running the plugin against a live MailMoose lives
+**outside this repo**, at `test/openclaw/` in the project folder — it holds a
+`.env` with a live provider key and is not a shipped artifact.
 
 ## What shipped
 
