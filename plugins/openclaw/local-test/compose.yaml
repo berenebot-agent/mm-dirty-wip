@@ -1,0 +1,34 @@
+# Local OpenClaw connector smoke-test (not for production use).
+#
+# Runs the stock OpenClaw Gateway image with this repo's MailMoose plugin linked
+# in, pointed at a MailMoose instance. Everything runtime-generated lives beside
+# this file and is gitignored (see .gitignore in this directory).
+#
+# Bring up:
+#   cd plugins/openclaw/local-test
+#   cp .env.example .env      # then fill in the values
+#   docker compose up -d
+#   docker compose logs -f
+#
+# network_mode: host is deliberate. The Gateway needs to reach the MailMoose
+# main listener and (in this repo's default setup) the tiller-router LLM gateway
+# on the host loopback, and host networking avoids publishing ports or a second
+# bridge. Consequence: anything the Gateway binds is on the host's interfaces.
+services:
+  openclaw:
+    image: openclaw/openclaw:2026.9.7-slim
+    container_name: openclaw-mailmoose-test
+    network_mode: host
+    restart: unless-stopped
+    # The image's entrypoint repairs a retained state volume on activation; run
+    # the CLI directly so behaviour is explicit and inspectable.
+    entrypoint: ["node", "openclaw.mjs", "gateway"]
+    working_dir: /app
+    env_file: .env
+    environment:
+      OPENCLAW_STATE_DIR: /state
+      OPENCLAW_CONFIG_PATH: /state/openclaw.json
+    volumes:
+      # The plugin under test, read-only. Built with `npm run build` first.
+      - ../openclaw-plugin:/plugin:ro
+      - ./state:/state
