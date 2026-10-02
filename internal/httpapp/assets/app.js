@@ -5,6 +5,10 @@
   }
   var sel = document.getElementById('key-type');
   var form = document.getElementById('key-form');
+  var title = document.getElementById('key-dialog-title');
+  var createSource = 'client';
+  var fixedInboxID = '';
+  var returnInboxID = '';
   var idInput = form.querySelector('[name=id]');
   var nameInput = form.querySelector('[name=name]');
   var adminInput = form.querySelector('[name=admin]');
@@ -74,7 +78,25 @@
         el.disabled = !active;
       });
     });
-    dlg.classList.toggle('key-dialog--wide', sel.value === 'api');
+    dlg.classList.add('key-dialog--wide');
+    var connectorCreate = form.getAttribute('action') === '/ui/keys' && sel.value !== 'api';
+    if (title) {
+      title.textContent = connectorCreate ? 'Add connector' : (form.getAttribute('action') === '/ui/keys' ? 'Add client' : (sel.value === 'api' ? 'Edit client' : 'Edit connector'));
+    }
+    if (submitBtn && form.getAttribute('action') === '/ui/keys') {
+      submitBtn.textContent = connectorCreate ? 'Add Connector' : 'Add Client';
+    }
+    form.querySelectorAll('.connector-inbox-select').forEach(function (inboxSel) {
+      var label = inboxSel.previousElementSibling;
+      var hide = connectorCreate && createSource === 'connector' && !!fixedInboxID;
+      inboxSel.hidden = hide;
+      if (label && label.classList.contains('connector-inbox-label')) {
+        label.hidden = hide;
+      }
+      if (fixedInboxID && connectorCreate) {
+        inboxSel.value = fixedInboxID;
+      }
+    });
     syncHermesRisk();
     syncBearer();
   }
@@ -248,6 +270,14 @@
     selection.addRange(range);
   }
 
+  function setAPIOptionVisible(visible) {
+    var opt = sel.querySelector('option[value=api]');
+    if (opt) {
+      opt.hidden = !visible;
+      opt.disabled = !visible;
+    }
+  }
+
   function openCreate() {
     form.reset();
     bearerInput.type = 'password';
@@ -255,6 +285,11 @@
     idInput.value = '';
     adminSnapshot = null;
     currentKind = 'api';
+    createSource = 'client';
+    fixedInboxID = '';
+    returnInboxID = '';
+    setAPIOptionVisible(true);
+    sel.value = 'api';
     sel.disabled = false;
     if (submitBtn) {
       submitBtn.textContent = 'Add Client';
@@ -269,10 +304,37 @@
     dlg.showModal();
   }
 
+  function openCreateConnector(inboxID) {
+    form.reset();
+    bearerInput.type = 'password';
+    form.action = '/ui/keys';
+    idInput.value = '';
+    adminSnapshot = null;
+    currentKind = 'hermes';
+    createSource = 'connector';
+    fixedInboxID = inboxID || '';
+    returnInboxID = fixedInboxID;
+    setAPIOptionVisible(false);
+    sel.value = 'hermes';
+    sel.disabled = false;
+    if (rotateBtn) {
+      rotateBtn.hidden = true;
+      rotateBtn.textContent = 'Rotate Key';
+    }
+    showForm();
+    sync();
+    syncAdmin();
+    dlg.showModal();
+  }
+
   function openEdit(btn) {
     form.reset();
     bearerInput.type = 'password';
     adminSnapshot = null;
+    createSource = 'edit';
+    fixedInboxID = '';
+    returnInboxID = '';
+    setAPIOptionVisible(true);
     var kind = btn.dataset.kind === 'hermes' ? 'hermes' : (btn.dataset.kind === 'webhook' ? 'webhook' : 'api');
     currentKind = kind;
     var segment = kind === 'hermes' ? 'hermes' : (kind === 'webhook' ? 'webhooks' : 'keys');
@@ -359,9 +421,17 @@
       }
       return res.json();
     }).then(function (data) {
+      if (sel.value !== 'api') {
+        var activeInbox = form.querySelector('.key-fields[data-type=' + sel.value + '] select[name=inbox]');
+        returnInboxID = activeInbox ? activeInbox.value : returnInboxID;
+      }
       if (sel.value === 'webhook' && webhookAuth.value === 'bearer') {
         dlg.close();
-        window.location.reload();
+        if (returnInboxID) {
+          window.location.href = '/?inbox=' + encodeURIComponent(returnInboxID) + '&inbox_tab=connectors';
+        } else {
+          window.location.reload();
+        }
         return;
       }
       showResult(data);
@@ -398,7 +468,11 @@
   if (doneBtn) {
     doneBtn.addEventListener('click', function () {
       dlg.close();
-      window.location.reload();
+      if (returnInboxID) {
+        window.location.href = '/?inbox=' + encodeURIComponent(returnInboxID) + '&inbox_tab=connectors';
+      } else {
+        window.location.reload();
+      }
     });
   }
 
@@ -476,6 +550,11 @@
   if (add) {
     add.addEventListener('click', openCreate);
   }
+  document.querySelectorAll('.add-connector').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      openCreateConnector(btn.getAttribute('data-inbox') || '');
+    });
+  });
   var cancel = document.getElementById('key-cancel');
   if (cancel) {
     cancel.addEventListener('click', function () {
@@ -1475,6 +1554,12 @@ function aliasNameByAddress(list) {
   var address = document.getElementById('inbox-edit-address');
   var display = form.querySelector('[name=display]');
   var usage = document.getElementById('inbox-edit-usage');
+  var connectorList = document.getElementById('inbox-connectors-list');
+  var connectorEditor = document.getElementById('inbox-connector-editor');
+  var connectorAdd = document.getElementById('inbox-connector-add');
+  var connectorFocusID = '';
+  var editConnectors = [];
+  var csrfValue = (form.querySelector('[name=_csrf]') || {}).value || '';
   var editor = initSenderEditor({
     list: document.getElementById('inbox-sender-list'),
     input: document.getElementById('inbox-sender-input'),
@@ -1544,6 +1629,128 @@ function aliasNameByAddress(list) {
     onChange: refreshEditSender
   });
 
+  function escapeConnector(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+    });
+  }
+
+  function connectorLabel(c) {
+    return c.Kind === 'hermes' ? 'Hermes Relay' : 'Webhook';
+  }
+
+  function renderConnectorEditor(c) {
+    if (!connectorEditor || !c) {
+      return;
+    }
+    var id = encodeURIComponent(c.ID || '');
+    var inbox = escapeConnector(editInboxID);
+    var common = '<input type="hidden" name="_csrf" value="' + escapeConnector(csrfValue) + '"><input type="hidden" name="inbox" value="' + inbox + '">';
+    var fields = '<label>Name</label><input name="name" maxlength="128" required value="' + escapeConnector(c.Name) + '">';
+    var actions = '';
+    if (c.Kind === 'hermes') {
+      fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — relay sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — relay drafts and requests approval</option></select>';
+      actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a><button type="submit">Save</button>';
+      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Hermes Relay') + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/hermes/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/hermes/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
+    } else {
+      fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label>Bearer secret <span class="muted small">(leave blank to keep current)</span></label><input name="bearer_secret" type="password" autocomplete="new-password"></div>';
+      actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '') + '<button type="submit">Save</button>';
+      var toggleText = c.Enabled ? 'Pause webhook' : 'Enable webhook';
+      var nextEnabled = c.Enabled ? '0' : '1';
+      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><form method="post" action="/ui/webhooks/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form></div>';
+    }
+    connectorEditor.hidden = false;
+    var close = connectorEditor.querySelector('[data-connector-close]');
+    if (close) {
+      close.addEventListener('click', function () {
+        connectorEditor.hidden = true;
+        connectorEditor.textContent = '';
+      });
+    }
+    connectorEditor.querySelectorAll('[data-inline-connector-delete]').forEach(function (deleteForm) {
+      deleteForm.addEventListener('submit', function (e) {
+        if (!window.confirm('Remove this connector?')) {
+          e.preventDefault();
+        }
+      });
+    });
+    var auth = connectorEditor.querySelector('[data-inline-webhook-auth]');
+    if (auth) {
+      auth.addEventListener('change', function () {
+        var bearer = connectorEditor.querySelector('[data-inline-bearer]');
+        if (bearer) {
+          bearer.hidden = auth.value !== 'bearer';
+          var input = bearer.querySelector('input');
+          if (input) {
+            input.disabled = auth.value !== 'bearer';
+          }
+        }
+      });
+    }
+    var rotate = connectorEditor.querySelector('[data-rotate-webhook]');
+    if (rotate) {
+      rotate.addEventListener('click', function () {
+        if (!window.confirm('Rotate this webhook signing secret? The current secret stops working immediately.')) {
+          return;
+        }
+        var body = new URLSearchParams();
+        body.append('_csrf', csrfValue);
+        fetch('/ui/webhooks/' + encodeURIComponent(rotate.getAttribute('data-rotate-webhook')) + '/rotate', {
+          method: 'POST',
+          headers: {Accept: 'application/json','Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+          body: body.toString(),
+          credentials: 'same-origin'
+        }).then(function (res) {
+          if (!res.ok) {
+            return res.text().then(function (t) { throw new Error(t || 'Could not rotate secret'); });
+          }
+          return res.json();
+        }).then(function (data) {
+          window.alert((data.label || 'New signing secret') + '\n\n' + (data.secret || ''));
+        }).catch(function (err) {
+          window.alert(err.message || 'Could not rotate secret');
+        });
+      });
+    }
+  }
+
+  function renderConnectors(connectors, selectedID) {
+    editConnectors = Array.isArray(connectors) ? connectors : [];
+    if (!connectorList || !connectorEditor) {
+      return;
+    }
+    connectorList.textContent = '';
+    connectorEditor.hidden = true;
+    connectorEditor.textContent = '';
+    if (!editConnectors.length) {
+      var empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = 'No connectors configured for this inbox.';
+      connectorList.appendChild(empty);
+      return;
+    }
+    editConnectors.forEach(function (c) {
+      var row = document.createElement('div');
+      row.className = 'connector-row';
+      var main = document.createElement('button');
+      main.type = 'button';
+      main.className = 'secondary connector-row-main';
+      var status = c.Kind === 'webhook' ? (c.Enabled ? 'Active' : 'Paused') : (c.Scope || 'Configured');
+      main.innerHTML = '<div class="connector-row-name">' + escapeConnector(c.Name || connectorLabel(c)) + '</div><div class="connector-row-meta">' + connectorLabel(c) + ' · ' + escapeConnector(status) + '</div>';
+      main.addEventListener('click', function () { renderConnectorEditor(c); });
+      row.appendChild(main);
+      var log = document.createElement('a');
+      log.className = 'btn secondary btn-sm';
+      log.href = '/ui/clients/' + encodeURIComponent(c.ID || '') + '/log';
+      log.textContent = 'Log';
+      row.appendChild(log);
+      connectorList.appendChild(row);
+      if (selectedID && c.ID === selectedID) {
+        renderConnectorEditor(c);
+      }
+    });
+  }
+
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = encodeURIComponent(btn.dataset.id || '');
@@ -1571,6 +1778,16 @@ function aliasNameByAddress(list) {
         editExternal = [];
       }
       renderExternalAliases(editExternalList, btn.dataset.id || '', btn.dataset.externalAliases || '[]');
+      try {
+        editConnectors = JSON.parse(btn.dataset.connectors || '[]') || [];
+      } catch (e) {
+        editConnectors = [];
+      }
+      if (connectorAdd) {
+        connectorAdd.setAttribute('data-inbox', editInboxID);
+      }
+      renderConnectors(editConnectors, connectorFocusID);
+      connectorFocusID = '';
       var opts = editSenderOptions();
       buildDefaultSenderSelect(editDefault, editPrimaryName, editPrimary, opts.names, opts.addresses, editDesired);
       editDesired = '';
@@ -1585,6 +1802,26 @@ function aliasNameByAddress(list) {
         dlg._resetTabs();
       }
       dlg.showModal();
+    });
+  });
+
+  document.querySelectorAll('.open-inbox-connector').forEach(function (connectorBtn) {
+    connectorBtn.addEventListener('click', function () {
+      connectorFocusID = connectorBtn.getAttribute('data-connector') || '';
+      var inboxID = connectorBtn.getAttribute('data-inbox') || '';
+      var target = null;
+      document.querySelectorAll('.edit-inbox').forEach(function (btn) {
+        if (btn.dataset.id === inboxID) {
+          target = btn;
+        }
+      });
+      if (target) {
+        target.click();
+        var tab = dlg.querySelector('[data-inbox-tab=connectors]');
+        if (tab) {
+          tab.click();
+        }
+      }
     });
   });
 
@@ -1728,6 +1965,8 @@ function aliasNameByAddress(list) {
   // are attached by a later IIFE, so defer past script execution.
   var openCard = document.querySelector('[data-open-inbox]');
   var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
+  var openInboxTab = openCard ? (openCard.getAttribute('data-open-inbox-tab') || 'aliases') : 'aliases';
+  var openConnector = openCard ? (openCard.getAttribute('data-open-connector') || '') : '';
   if (openInbox) {
     setTimeout(function () {
       var target = null;
@@ -1737,8 +1976,9 @@ function aliasNameByAddress(list) {
         }
       });
       if (target) {
+        connectorFocusID = openConnector;
         target.click();
-        var tab = dlg.querySelector('[data-inbox-tab=aliases]');
+        var tab = dlg.querySelector('[data-inbox-tab=' + openInboxTab + ']');
         if (tab) {
           tab.click();
         }
@@ -1774,7 +2014,11 @@ function aliasNameByAddress(list) {
       // The Aliases tab needs room for the alias rows and action buttons;
       // other tabs stay narrow for a tidier form layout.
       if (dlg.id === 'inbox-dialog' || dlg.id === 'inbox-edit-dialog') {
-        dlg.classList.toggle('inbox-dialog--wide', name === 'aliases');
+        dlg.classList.toggle('inbox-dialog--wide', name === 'aliases' || name === 'connectors');
+        var inboxSave = dlg.querySelector('#inbox-edit-save');
+        if (inboxSave) {
+          inboxSave.hidden = name === 'connectors';
+        }
       }
     }
 

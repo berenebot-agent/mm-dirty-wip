@@ -55,12 +55,12 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client"} {
+	for _, want := range []string{"Clients", `id="key-dialog"`, `id="key-form"`, `id="key-result"`, `id="key-copy"`, `data-type="hermes"`, "Hermes relay", "Add Client", `data-inbox-tab="connectors"`, `id="inbox-connectors-list"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
 	}
-	if strings.Contains(body, "Hermes Relay") {
+	if strings.Contains(body, "<h2>Hermes Relay</h2>") {
 		t.Fatal("standalone Hermes Relay card should be removed")
 	}
 	if strings.Contains(body, "onclick=") {
