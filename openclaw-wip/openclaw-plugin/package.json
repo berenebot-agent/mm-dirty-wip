@@ -1,0 +1,35 @@
+{
+  "name": "@mailmoose/openclaw",
+  "version": "0.0.1-wip",
+  "private": true,
+  "type": "module",
+  "description": "MailMoose outbound relay channel for OpenClaw",
+  "main": "./index.ts",
+  "peerDependencies": {
+    "openclaw": ">=2026.9.6"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.2"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "compat": {
+      "pluginApi": ">=2026.9.6",
+      "minGatewayVersion": "2026.9.6"
+    },
+    "build": {
+      "openclawVersion": "2026.9.6",
+      "pluginSdkVersion": "2026.9.6"
+    },
+    "channel": {
+      "id": "mailmoose",
+      "label": "MailMoose",
+      "blurb": "Receive and reply to email through a MailMoose inbox."
+    }
+  }
+}

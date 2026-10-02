@@ -1,0 +1,58 @@
+{
+  "id": "mailmoose",
+  "name": "MailMoose",
+  "description": "Outbound-only MailMoose email relay for OpenClaw",
+  "channels": ["mailmoose"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "mailmoose": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["baseUrl", "gatewayId", "secret"],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "baseUrl": {
+            "type": "string",
+            "description": "MailMoose base URL"
+          },
+          "gatewayId": {
+            "type": "string",
+            "description": "Connector gateway id"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Relay authentication secret"
+          },
+          "deliveryKey": {
+            "type": "string",
+            "description": "Reserved for relay delivery verification parity"
+          }
+        }
+      },
+      "uiHints": {
+        "baseUrl": {
+          "label": "MailMoose URL"
+        },
+        "gatewayId": {
+          "label": "Gateway ID"
+        },
+        "secret": {
+          "label": "Relay secret",
+          "sensitive": true
+        },
+        "deliveryKey": {
+          "label": "Delivery key",
+          "sensitive": true
+        }
+      }
+    }
+  }
+}
