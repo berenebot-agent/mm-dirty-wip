@@ -2715,8 +2715,9 @@ function aliasNameByAddress(list) {
    data-finish endpoint paths; the server owns all policy and only the browser
    glue lives here. */
 (function () {
-  if (!window.PublicKeyCredential || !navigator.credentials) {
-    return;
+  function csrfToken() {
+    var el = document.querySelector('[name=_csrf]');
+    return el ? el.value : '';
   }
 
   function b64urlToBuf(value) {
@@ -2782,6 +2783,7 @@ function aliasNameByAddress(list) {
       credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken(),
         'X-WebAuthn-Challenge': token || ''
       },
       body: JSON.stringify(body)
@@ -2810,10 +2812,16 @@ function aliasNameByAddress(list) {
       // currently enabled; a passkey-only account has nothing to disable.
       var makeOnly = isRegister && button.getAttribute('data-password-enabled') === '1' &&
         window.confirm('Use this passkey as your only sign-in method? Your password will be disabled.');
+      // The register endpoints are CSRF-protected; the sign-in endpoints are
+      // pre-authentication and rely on the ceremony's own origin check.
+      var beginHeaders = { 'Content-Type': 'application/json' };
+      if (isRegister) {
+        beginHeaders['X-CSRF-Token'] = csrfToken();
+      }
       fetch(button.getAttribute('data-begin'), {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' }
+        headers: beginHeaders
       }).then(function (res) {
         return res.json().then(function (data) {
           if (!res.ok) { throw new Error(data.error || 'could not start'); }
@@ -2850,10 +2858,22 @@ function aliasNameByAddress(list) {
 
   var signin = document.getElementById('passkey-signin');
   if (signin) {
-    wire(signin, document.getElementById('passkey-status'), false);
+    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
+      signin.disabled = true;
+      signin.title = 'Passkeys require HTTPS and a supported browser';
+      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
+    } else {
+      wire(signin, document.getElementById('passkey-status'), false);
+    }
   }
   var add = document.getElementById('passkey-add');
   if (add) {
-    wire(add, document.getElementById('passkey-status'), true);
+    if (!window.PublicKeyCredential || !navigator.credentials || !window.isSecureContext) {
+      add.disabled = true;
+      add.title = 'Passkeys require HTTPS and a supported browser';
+      setStatus(document.getElementById('passkey-status'), 'Passkeys require a secure (HTTPS) connection and a supported browser.', true);
+    } else {
+      wire(add, document.getElementById('passkey-status'), true);
+    }
   }
 })();

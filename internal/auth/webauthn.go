@@ -140,6 +140,12 @@ func NewWebAuthnService(cfg WebAuthnConfig) (*WebAuthnService, error) {
 		RPDisplayName: cfg.RPDisplayName,
 		RPID:          cfg.RPID,
 		RPOrigins:     cfg.RPOrigins,
+		// Prefer user verification (biometric/PIN) where the authenticator
+		// supports it, without rejecting security keys that only assert user
+		// presence. This drives both registration and login defaults.
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			UserVerification: protocol.VerificationPreferred,
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("webauthn: %w", err)
@@ -217,7 +223,9 @@ type LoginOptions struct {
 // of the resident passkeys and the finish step resolves the user from the
 // credential id, so no email is required up front.
 func (s *WebAuthnService) BeginDiscoverableLogin() (LoginOptions, error) {
-	assertion, session, err := s.wa.BeginDiscoverableLogin()
+	assertion, session, err := s.wa.BeginDiscoverableLogin(
+		webauthn.WithUserVerification(protocol.VerificationPreferred),
+	)
 	if err != nil {
 		return LoginOptions{}, err
 	}

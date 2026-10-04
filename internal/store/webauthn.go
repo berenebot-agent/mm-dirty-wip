@@ -19,7 +19,7 @@ var ErrLastAuthMethod = errors.New("cannot remove the only sign-in method")
 // first, for display on the account page. No secret material beyond the public
 // key is included, and the public key is not marshalled to JSON.
 func (s *Store) WebAuthnCredentialsForUser(ctx context.Context, userID string) ([]model.WebAuthnCredential, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,user_id,credential_id,public_key,sign_count,transports,name,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at DESC, id`, userID)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,user_id,credential_id,public_key,sign_count,transports,name,attestation_type,aaguid,backup_eligible,backup_state,created_at,last_used_at FROM webauthn_credentials WHERE user_id=? ORDER BY created_at DESC, id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -28,11 +28,14 @@ func (s *Store) WebAuthnCredentialsForUser(ctx context.Context, userID string) (
 	for rows.Next() {
 		var c model.WebAuthnCredential
 		var transports, created string
+		var backupEligible, backupState int
 		var lastUsed sql.NullString
-		if err := rows.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &transports, &c.Name, &created, &lastUsed); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &transports, &c.Name, &c.AttestationType, &c.AAGUID, &backupEligible, &backupState, &created, &lastUsed); err != nil {
 			return nil, err
 		}
 		c.Transports = splitTransports(transports)
+		c.BackupEligible = backupEligible != 0
+		c.BackupState = backupState != 0
 		c.CreatedAt = parseTime(created)
 		if lastUsed.Valid && lastUsed.String != "" {
 			c.LastUsedAt = parseTime(lastUsed.String)
@@ -48,9 +51,10 @@ func (s *Store) WebAuthnCredentialsForUser(ctx context.Context, userID string) (
 func (s *Store) WebAuthnCredentialByCredentialID(ctx context.Context, credentialID []byte) (model.WebAuthnCredential, error) {
 	var c model.WebAuthnCredential
 	var transports, created string
+	var backupEligible, backupState int
 	var lastUsed sql.NullString
-	err := s.read.QueryRowContext(ctx, `SELECT id,user_id,credential_id,public_key,sign_count,transports,name,created_at,last_used_at FROM webauthn_credentials WHERE credential_id=?`, credentialID).
-		Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &transports, &c.Name, &created, &lastUsed)
+	err := s.read.QueryRowContext(ctx, `SELECT id,user_id,credential_id,public_key,sign_count,transports,name,attestation_type,aaguid,backup_eligible,backup_state,created_at,last_used_at FROM webauthn_credentials WHERE credential_id=?`, credentialID).
+		Scan(&c.ID, &c.UserID, &c.CredentialID, &c.PublicKey, &c.SignCount, &transports, &c.Name, &c.AttestationType, &c.AAGUID, &backupEligible, &backupState, &created, &lastUsed)
 	if err == sql.ErrNoRows {
 		return model.WebAuthnCredential{}, ErrNotFound
 	}
@@ -58,6 +62,8 @@ func (s *Store) WebAuthnCredentialByCredentialID(ctx context.Context, credential
 		return model.WebAuthnCredential{}, err
 	}
 	c.Transports = splitTransports(transports)
+	c.BackupEligible = backupEligible != 0
+	c.BackupState = backupState != 0
 	c.CreatedAt = parseTime(created)
 	if lastUsed.Valid && lastUsed.String != "" {
 		c.LastUsedAt = parseTime(lastUsed.String)
@@ -94,19 +100,27 @@ func (s *Store) AddWebAuthnCredential(ctx context.Context, userID string, c mode
 // counter and backup state, plus the last-used time. A counter that did not
 // advance (or regressed) is a possible cloned-authenticator signal; callers may
 // use the returned bool to warn, but the update is still persisted so a
-// legitimate backup-synced passkey keeps working.
+// legitimate backup-synced passkey keeps working. The read and write share one
+// immediate transaction so concurrent assertions cannot interleave.
 func (s *Store) UpdateWebAuthnCredentialUse(ctx context.Context, credentialID []byte, signCount uint32, backupState bool) (cloneWarning bool, err error) {
+	tx, err := s.write.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
 	var current uint32
-	if err := s.read.QueryRowContext(ctx, `SELECT sign_count FROM webauthn_credentials WHERE credential_id=?`, credentialID).Scan(&current); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT sign_count FROM webauthn_credentials WHERE credential_id=?`, credentialID).Scan(&current); err != nil {
 		if err == sql.ErrNoRows {
 			return false, ErrNotFound
 		}
 		return false, err
 	}
 	cloneWarning = signCount != 0 && current != 0 && signCount <= current
-	_, err = s.write.ExecContext(ctx, `UPDATE webauthn_credentials SET sign_count=?,backup_state=?,last_used_at=? WHERE credential_id=?`,
-		signCount, boolInt(backupState), nowText(), credentialID)
-	return cloneWarning, err
+	if _, err = tx.ExecContext(ctx, `UPDATE webauthn_credentials SET sign_count=?,backup_state=?,last_used_at=? WHERE credential_id=?`,
+		signCount, boolInt(backupState), nowText(), credentialID); err != nil {
+		return cloneWarning, err
+	}
+	return cloneWarning, tx.Commit()
 }
 
 // RenameWebAuthnCredential changes the human-readable label shown on the
@@ -162,30 +176,6 @@ func (s *Store) DeleteWebAuthnCredential(ctx context.Context, userID, credential
 	return tx.Commit()
 }
 
-// UserLoginMethods describes how a user can sign in, used by the account page
-// and by recovery logic that needs to know whether a password exists.
-type UserLoginMethods struct {
-	PasswordEnabled bool
-	PasskeyCount    int
-}
-
-// LoginMethods reports the user's available sign-in methods.
-func (s *Store) LoginMethods(ctx context.Context, userID string) (UserLoginMethods, error) {
-	var m UserLoginMethods
-	var pwEnabled int
-	if err := s.read.QueryRowContext(ctx, `SELECT password_auth_enabled FROM users WHERE id=?`, userID).Scan(&pwEnabled); err != nil {
-		if err == sql.ErrNoRows {
-			return m, ErrNotFound
-		}
-		return m, err
-	}
-	m.PasswordEnabled = pwEnabled != 0
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM webauthn_credentials WHERE user_id=?`, userID).Scan(&m.PasskeyCount); err != nil {
-		return m, err
-	}
-	return m, nil
-}
-
 func splitTransports(s string) []string {
 	if s == "" {
 		return nil
@@ -196,24 +186,40 @@ func splitTransports(s string) []string {
 // SetPasswordAuth enables or disables password authentication for a user,
 // scoped to the owning account. Disabling it makes the account passkey-only; it
 // refuses when the user has no passkey, so an account can never be left with no
-// way to sign in. It is the store primitive behind the "make this my only
-// sign-in method" flow.
+// way to sign in. The system administrator may never disable password sign-in:
+// the config-owned password is the break-glass recovery path and must stay
+// usable. It is the store primitive behind the "make this my only sign-in
+// method" flow.
 func (s *Store) SetPasswordAuth(ctx context.Context, userID, accountID string, enabled bool) error {
+	// BEGIN IMMEDIATE takes the write lock up front so the passkey count and the
+	// flag update cannot interleave with a concurrent passkey delete, which
+	// would otherwise leave the account with neither sign-in method.
+	tx, err := s.write.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sysadmin int
+	if err := tx.QueryRowContext(ctx, `SELECT is_system_admin FROM users WHERE id=? AND account_id=?`, userID, accountID).Scan(&sysadmin); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if sysadmin != 0 && !enabled {
+		return ErrLastAuthMethod
+	}
 	if !enabled {
 		var passkeys int
-		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM webauthn_credentials WHERE user_id=?`, userID).Scan(&passkeys); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM webauthn_credentials WHERE user_id=?`, userID).Scan(&passkeys); err != nil {
 			return err
 		}
 		if passkeys == 0 {
 			return ErrLastAuthMethod
 		}
 	}
-	res, err := s.write.ExecContext(ctx, `UPDATE users SET password_auth_enabled=? WHERE id=? AND account_id=?`, boolInt(enabled), userID, accountID)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET password_auth_enabled=? WHERE id=? AND account_id=?`, boolInt(enabled), userID, accountID); err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return tx.Commit()
 }

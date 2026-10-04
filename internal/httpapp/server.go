@@ -162,9 +162,10 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)
 	m.HandleFunc("POST /login", s.withPreAuthCSRF(s.loginPost))
-	// Passkey login is a two-step ceremony; the challenge token is carried in
-	// the request body, so no pre-auth CSRF cookie is needed beyond the origin
-	// check the WebAuthn library performs on the assertion itself.
+	// Passkey login is a two-step ceremony. The one-use ceremony token travels
+	// in the X-WebAuthn-Challenge header between begin and finish, so the body
+	// stays reserved for the raw credential JSON. No pre-auth CSRF cookie is
+	// needed: the ceremony's own origin/RP check authenticates the assertion.
 	m.HandleFunc("POST /login/webauthn/begin", s.webauthnLoginBegin)
 	m.HandleFunc("POST /login/webauthn/finish", s.webauthnLoginFinish)
 	m.HandleFunc("POST /logout", s.withSession(s.withCSRF(s.logoutPost)))
@@ -176,6 +177,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/account/passkeys/finish", s.withSession(s.withCSRF(s.uiPasskeyRegisterFinish)))
 	m.HandleFunc("POST /ui/account/passkeys/rename", s.withSession(s.withCSRF(s.uiPasskeyRename)))
 	m.HandleFunc("POST /ui/account/passkeys/delete", s.withSession(s.withCSRF(s.uiPasskeyDelete)))
+	m.HandleFunc("POST /ui/account/passkeys/password", s.withSession(s.withCSRF(s.uiPasskeyEnablePassword)))
 	m.HandleFunc("POST /ui/account/trash-retention", s.withSession(s.withCSRF(s.uiSettingsTrashRetention)))
 	m.HandleFunc("POST /ui/account/timezone", s.withSession(s.withCSRF(s.uiSettingsAccountTimezone)))
 	m.HandleFunc("POST /ui/account/timezone/me", s.withSession(s.withCSRF(s.uiSettingsUserTimezone)))
