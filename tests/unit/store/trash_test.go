@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
@@ -236,5 +237,150 @@ func TestTrashRetentionSetting(t *testing.T) {
 	}
 	if err := s.SetTrashRetention(ctx, p, -1); err == nil {
 		t.Fatal("negative retention accepted")
+	}
+}
+
+// TestInboxTrashRetentionOverride covers the per-inbox override: an unset
+// override reads back as nil (inherit), a set value round-trips, a value of 0
+// is distinct from unset, and clearing returns to inherit.
+func TestInboxTrashRetentionOverride(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, boxes := testStore(t)
+	box := boxes[0]
+
+	// New inboxes inherit: the override is absent.
+	got, err := s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrashRetentionDays != nil {
+		t.Fatalf("new inbox override = %v, want nil", *got.TrashRetentionDays)
+	}
+
+	// Set 0: a present pointer to zero, distinct from inherit.
+	zero := 0
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, &zero); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if got.TrashRetentionDays == nil || *got.TrashRetentionDays != 0 {
+		t.Fatalf("override after set 0 = %v", got.TrashRetentionDays)
+	}
+
+	// Set a positive value.
+	days := 14
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, &days); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if got.TrashRetentionDays == nil || *got.TrashRetentionDays != 14 {
+		t.Fatalf("override after set 14 = %v", got.TrashRetentionDays)
+	}
+
+	// Clear back to inherit.
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if got.TrashRetentionDays != nil {
+		t.Fatalf("override after clear = %v", *got.TrashRetentionDays)
+	}
+
+	// Negative is rejected, and an unknown inbox is not found.
+	neg := -1
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, &neg); err == nil {
+		t.Fatal("negative override accepted")
+	}
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, "inbox_missing", nil); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown inbox err = %v", err)
+	}
+}
+
+// TestPurgeExpiredTrashInboxOverride verifies the sweep uses the per-inbox
+// override when set: it can both shorten (purge sooner) and lengthen (keep
+// longer) the effective window, and an inbox override of 0 keeps its trash even
+// when the account auto-purges.
+func TestPurgeExpiredTrashInboxOverride(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, boxes := testStore(t)
+	box, other := boxes[0], boxes[1]
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+
+	// Account default 30 days; two messages trashed and backdated 10 days.
+	if err := s.SetTrashRetention(ctx, p, 30); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(box model.Inbox, id string) model.Message {
+		m, _, _, err := s.CommitInbound(ctx, inbound(box, id, "<"+id+"@test>", "", nil, "s", "b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.TrashMessage(ctx, p, m.ID); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	a := mk(box, "ovr-a")
+	b := mk(other, "ovr-b")
+	// Backdate ~100 days: inside the account's 30-day window, but well inside a
+	// 3650-day inbox override.
+	backdate := time.Now().UTC().AddDate(0, 0, -100).Format("2006-01-02T15:04:05Z")
+	db := rawDB(t, s.Path())
+	if _, err := db.ExecContext(ctx, `UPDATE messages SET deleted_at=? WHERE id IN (?,?)`, backdate, a.ID, b.ID); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// No override yet: both are far past the 30-day window and purge.
+	if paths, err := s.PurgeExpiredTrash(ctx); err != nil || len(paths) != 2 {
+		t.Fatalf("baseline purge paths=%v err=%v", paths, err)
+	}
+
+	// A longer per-inbox override keeps that inbox's old trash.
+	c := mk(box, "ovr-c")
+	d := mk(other, "ovr-d")
+	db = rawDB(t, s.Path())
+	if _, err := db.ExecContext(ctx, `UPDATE messages SET deleted_at=? WHERE id IN (?,?)`, backdate, c.ID, d.ID); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	keep := 3650
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, &keep); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := s.PurgeExpiredTrash(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("override purge paths=%v, want only the non-overridden inbox", paths)
+	}
+	if _, err := s.GetMessageByID(ctx, u.AccountID, c.ID); err != nil {
+		t.Fatalf("overridden inbox trash purged: %v", err)
+	}
+	if _, err := s.GetMessageByID(ctx, u.AccountID, d.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("non-overridden inbox trash retained: %v", err)
+	}
+
+	// An override of 0 keeps this inbox's trash even though the account
+	// auto-purges.
+	e := mk(box, "ovr-e")
+	db = rawDB(t, s.Path())
+	if _, err := db.ExecContext(ctx, `UPDATE messages SET deleted_at=? WHERE id=?`, backdate, e.ID); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	zero := 0
+	if err := s.SetInboxTrashRetention(ctx, u.AccountID, box.ID, &zero); err != nil {
+		t.Fatal(err)
+	}
+	if paths, err := s.PurgeExpiredTrash(ctx); err != nil || len(paths) != 0 {
+		t.Fatalf("zero override purge paths=%v err=%v", paths, err)
+	}
+	if _, err := s.GetMessageByID(ctx, u.AccountID, e.ID); err != nil {
+		t.Fatalf("zero override purged trash: %v", err)
 	}
 }

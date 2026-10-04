@@ -1348,3 +1348,12 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_cred_id ON webauthn_credentials(credential_id);
 CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
 `
+
+// migration044 adds an optional per-inbox Trash retention override. The column
+// is nullable: NULL means the inbox inherits its account's trash_retention_days,
+// while a value of 0 means "keep this inbox's trashed mail until purged by
+// hand" even when the account auto-purges. The account column stays the default
+// so the override is opt-in per inbox.
+const migration044 = `
+ALTER TABLE inboxes ADD COLUMN trash_retention_days INTEGER;
+`

@@ -550,7 +550,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -573,7 +573,8 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		var i model.Inbox
 		var domain, allowed, created string
 		var enabled, restricted, requireAuth int
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &created); err != nil {
+		var trashRetention sql.NullInt64
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &created); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
@@ -581,6 +582,10 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		i.AllowedSenders = decodeStrings(allowed)
 		i.SenderRestricted = restricted != 0
 		i.RequireAuthenticated = requireAuth != 0
+		if trashRetention.Valid {
+			days := int(trashRetention.Int64)
+			i.TrashRetentionDays = &days
+		}
 		i.CreatedAt = parseTime(created)
 		out = append(out, i)
 	}
@@ -640,7 +645,8 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	var i model.Inbox
 	var domain, allowed, created string
 	var enabled, restricted, requireAuth int
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &created)
+	var trashRetention sql.NullInt64
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &created)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -652,6 +658,10 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	i.AllowedSenders = decodeStrings(allowed)
 	i.SenderRestricted = restricted != 0
 	i.RequireAuthenticated = requireAuth != 0
+	if trashRetention.Valid {
+		days := int(trashRetention.Int64)
+		i.TrashRetentionDays = &days
+	}
 	i.CreatedAt = parseTime(created)
 	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name,a.display_name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
 	if err != nil {
@@ -711,6 +721,29 @@ func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display 
 // SetInboxDisplayName sets an inbox's display name, including clearing it.
 func (s *Store) SetInboxDisplayName(ctx context.Context, accountID, id, display string) error {
 	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE id=? AND account_id=?`, strings.TrimSpace(display), id, accountID)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetInboxTrashRetention sets an inbox's Trash auto-purge override. A nil days
+// clears the override so the inbox inherits its account's trash_retention_days;
+// 0 keeps this inbox's trashed mail until purged by hand; a positive value
+// purges after that many days.
+func (s *Store) SetInboxTrashRetention(ctx context.Context, accountID, inboxID string, days *int) error {
+	if days != nil && *days < 0 {
+		return fmt.Errorf("trash retention must be zero or positive")
+	}
+	var value any
+	if days != nil {
+		value = *days
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET trash_retention_days=? WHERE id=? AND account_id=?`, value, inboxID, accountID)
 	if err != nil {
 		return err
 	}
