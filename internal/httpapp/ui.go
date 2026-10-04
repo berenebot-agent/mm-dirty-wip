@@ -182,15 +182,13 @@ type pageData struct {
 	// the dashboard and the alias activity page. It is empty where not needed.
 	ExternalAliasDialogs []externalAliasDialogView
 	// InboxOpenID, when set, is the inbox whose edit dialog the dashboard should
-	// reopen on load. InboxOpenTab selects the tab and InboxOpenConnectorID can
-	// focus one connector after a connector settings action.
-	InboxOpenID          string
-	InboxOpenTab         string
-	InboxOpenConnectorID string
-	Inboxes              []model.Inbox
-	Messages             []model.Message
-	Credentials          []credentialView
-	InboxConnectors      map[string][]credentialView
+	// reopen on load. InboxOpenTab selects the tab.
+	InboxOpenID     string
+	InboxOpenTab    string
+	Inboxes         []model.Inbox
+	Messages        []model.Message
+	Credentials     []credentialView
+	InboxConnectors map[string][]credentialView
 	// Passkeys lists the signed-in user's registered passkeys, and
 	// PasskeyEnabled reports whether the deployment has WebAuthn configured.
 	Passkeys       []model.WebAuthnCredential
@@ -800,7 +798,7 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
  {{if .DomainWorkerCode}}<dialog id="cf-setup-dialog" class="cf-setup-dialog" data-open="1"><div id="cf-worker-step"><h2>Cloudflare setup code</h2><p class="muted">Paste this into Cloudflare. It contains the generated shared secret and is shown only once.</p><ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Start with Hello World</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li></ol><pre class="cf-code" id="cf-code">{{.DomainWorkerCode}}</pre><p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><button type="button" class="btn" id="cf-next">Next</button></div></div><div id="cf-routing-step" hidden><h2>Email Routing</h2><p class="muted">Now point this domain's mail at the Worker.</p><ol class="steps"><li>In Cloudflare, open <b>Email Routing</b> for this domain and onboard it, adding the <b>DNS records</b> Cloudflare lists.</li><li>In <b>Email Routing</b>, edit the <b>catch-all</b> rule, choose <b>Send to a Worker</b>, and select this Worker.</li><li><b>Enable</b> the catch-all rule.</li></ol><div class="dialog-actions"><button type="button" class="btn" id="cf-done">Done</button></div></div></dialog>{{end}}
 <div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>
-<div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}" data-open-inbox-tab="{{.InboxOpenTab}}" data-open-connector="{{.InboxOpenConnectorID}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
+<div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}" data-open-inbox-tab="{{.InboxOpenTab}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Clients</h2><button type="button" id="add-key">Add Client</button></div>{{if .Credentials}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Type</th><th></th></tr></thead><tbody>{{range .Credentials}}<tr><td>{{.Name}}</td><td>{{.Type}}</td><td class="actions">{{if or (eq .Kind "webhook") (eq .Kind "hermes") (eq .Kind "openclaw")}}<a class="btn secondary icon-btn" href="/ui/clients/{{.ID}}/log" title="Delivery log" aria-label="Delivery log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5h9M3.5 6.5h9M3.5 9.5h6"/><path d="M11.5 12.5h1M3.5 12.5h5"/></svg></a>{{end}}<button type="button" class="secondary icon-btn edit-credential" data-id="{{.ID}}" data-kind="{{.Kind}}" data-name="{{.Name}}" data-admin="{{if .Admin}}1{{end}}" data-roles="{{.RolesJSON}}" data-inbox="{{.InboxID}}" data-role="{{.Role}}" data-url="{{.URL}}" data-mode="{{.Mode}}" data-auth="{{.AuthMode}}" title="Client settings" aria-label="Client settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button><button type="button" class="secondary icon-btn danger open-delete-client" data-kind="{{if eq .Kind "hermes"}}hermes{{else if eq .Kind "openclaw"}}openclaw{{else if eq .Kind "webhook"}}webhooks{{else}}keys{{end}}" data-id="{{.ID}}" data-name="{{.Name}}" data-type="{{.Type}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No clients yet.</p>{{end}}</section>
 <section class="card"><div class="card-head"><h2>Domains</h2><button type="button" id="add-domain">Add Domain</button></div>{{if .Domains}}<div class="table-wrap"><table class="domains-table"><thead><tr><th>Domain</th><th>Catch-all</th><th>Sending</th><th>Receiving</th><th></th></tr></thead><tbody>{{range .Domains}}{{$d := .}}<tr><td><b>{{.Name}}</b>{{if .ParentDomainID}} <span class="subdomain-tag" title="Subdomain of {{.ParentDomain}}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 4.6 7h1.8L4 10.6h8L9.6 7h1.8L8 2.2Z"/><path d="M8 10.6V14"/><path d="M5.8 14h4.4"/></svg></span>{{end}}</td><td>{{if .CatchAllInboxID}}<button type="button" class="cell-link domain-catchall-link open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall" title="{{index $.InboxAddr .CatchAllInboxID}}">{{index $.InboxAddr .CatchAllInboxID}}</button>{{else}}<button type="button" class="secondary btn-sm cell-edit domain-catchall-add open-domain-dialog" data-domain="{{.ID}}" data-kind="catchall">Add</button>{{end}}</td><td><button type="button" class="{{if .SendingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="sending">{{if .SendingProvider}}{{if .SendingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainSendingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><button type="button" class="{{if .ReceivingProvider}}secondary{{else}}amber{{end}} btn-sm cell-edit domain-provider-edit open-domain-dialog" data-domain="{{.ID}}" data-kind="receiving">{{if .ReceivingProvider}}{{if .ReceivingInheritedFrom}}<span class="inherited">(inherited)</span>{{else}}{{index $.DomainReceivingLabel .ID}}{{end}}{{else}}Add{{end}}</button></td><td><span class="domain-actions"><a class="btn secondary icon-btn" href="/ui/domains/{{.ID}}/sending/deliveries" title="Activity log" aria-label="Activity log"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="2.5" width="9" height="11" rx="1.5"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg></a><button type="button" class="secondary icon-btn danger open-delete-domain" data-domain="{{.ID}}" data-name="{{.Name}}" title="Delete" aria-label="Delete"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></span></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">Add your first domain.</p>{{end}}</section></div>
 <section class="card"><h2>Recent messages</h2><form method="get" action="/" class="search-form"><input name="q" value="" placeholder="Search mail"><button>Search</button></form>{{if .Messages}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Direction</th><th>From</th><th>To</th><th>Subject</th><th>Client</th><th></th></tr></thead><tbody>{{range .Messages}}<tr><td style="white-space:nowrap">{{localDateTime .CreatedAt}}</td><td>{{if .Blocked}}<span class="pill amber">Blocked</span>{{else if eq .Direction "outbound"}}<span class="pill">Sent</span>{{else}}<span class="pill">Received</span>{{end}}</td><td>{{if .From.Address}}{{.From.Address}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .To}}{{join .To ", "}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Subject}}{{.Subject}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if eq .Client "Control"}}<span class="pill">Control</span>{{else if .Client}}{{.Client}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if or .Blocked .Approval (not .ID)}}<span class="muted">—</span>{{else}}<a href="/ui/messages/{{.ID}}">Open</a>{{end}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No messages yet.</p>{{end}}</section>
@@ -958,7 +956,6 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	// Aliases; connector actions explicitly return to Connectors.
 	inboxOpenID := strings.TrimSpace(r.URL.Query().Get("inbox"))
 	inboxOpenTab := strings.TrimSpace(r.URL.Query().Get("inbox_tab"))
-	inboxOpenConnectorID := strings.TrimSpace(r.URL.Query().Get("connector"))
 	if inboxOpenTab == "" {
 		inboxOpenTab = "aliases"
 	}
@@ -967,22 +964,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if inboxOpenID != "" {
 		if _, err := s.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxOpenID); err != nil {
-			inboxOpenID, inboxOpenTab, inboxOpenConnectorID = "", "", ""
+			inboxOpenID, inboxOpenTab = "", ""
 		}
-	}
-	if inboxOpenID != "" && inboxOpenTab == "connectors" && inboxOpenConnectorID != "" {
-		found := false
-		for _, connector := range inboxConnectors[inboxOpenID] {
-			if connector.ID == inboxOpenConnectorID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			inboxOpenConnectorID = ""
-		}
-	} else if inboxOpenTab != "connectors" {
-		inboxOpenConnectorID = ""
 	}
 
 	sendingEditors := make(map[string][]*domainEditorView, len(domains))
@@ -1117,7 +1100,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenConnectorID: inboxOpenConnectorID, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -1633,15 +1616,10 @@ func (s *Server) uiDeleteKey(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?notice=Key+deleted", 303)
 }
 
-func connectorSettingsRedirect(w http.ResponseWriter, r *http.Request, notice string, keepConnector bool) {
+func connectorSettingsRedirect(w http.ResponseWriter, r *http.Request, notice string) {
 	dest := "/?notice=" + url.QueryEscape(notice)
 	if inboxID := strings.TrimSpace(r.Form.Get("inbox")); inboxID != "" {
 		dest += "&inbox=" + url.QueryEscape(inboxID) + "&inbox_tab=connectors"
-		if keepConnector {
-			if connectorID := strings.TrimSpace(r.PathValue("id")); connectorID != "" {
-				dest += "&connector=" + url.QueryEscape(connectorID)
-			}
-		}
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
@@ -1677,7 +1655,7 @@ func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	connectorSettingsRedirect(w, r, "Webhook updated", true)
+	connectorSettingsRedirect(w, r, "Webhook updated")
 }
 
 func (s *Server) uiRotateWebhook(w http.ResponseWriter, r *http.Request) {
@@ -1779,7 +1757,7 @@ func (s *Server) uiToggleWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	connectorSettingsRedirect(w, r, "Webhook updated", true)
+	connectorSettingsRedirect(w, r, "Webhook updated")
 }
 
 func (s *Server) uiDeleteWebhook(w http.ResponseWriter, r *http.Request) {
@@ -1792,7 +1770,7 @@ func (s *Server) uiDeleteWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	connectorSettingsRedirect(w, r, "Webhook deleted", false)
+	connectorSettingsRedirect(w, r, "Webhook deleted")
 }
 
 func (s *Server) uiUpdateHermes(w http.ResponseWriter, r *http.Request) {
@@ -1811,7 +1789,7 @@ func (s *Server) uiUpdateHermes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	connectorSettingsRedirect(w, r, "Connection updated", true)
+	connectorSettingsRedirect(w, r, "Connection updated")
 }
 
 func (s *Server) uiDeleteHermes(w http.ResponseWriter, r *http.Request) {
@@ -1825,7 +1803,7 @@ func (s *Server) uiDeleteHermes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("hrm:" + r.PathValue("id"))
-	connectorSettingsRedirect(w, r, "Connection deleted", false)
+	connectorSettingsRedirect(w, r, "Connection deleted")
 }
 
 // cloudflareWorkerCode renders the embedded Worker template with the given
