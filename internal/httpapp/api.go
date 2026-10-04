@@ -201,6 +201,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			Aliases              *[]string          `json:"aliases"`
 			AliasNames           *map[string]string `json:"alias_names"`
 			DefaultSender        *string            `json:"default_sender"`
+			TrashRetentionDays   json.RawMessage    `json:"trash_retention_days"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -308,6 +309,24 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 		if in.DefaultSender != nil {
 			// Apply after aliases so a sender may reference a just-set alias.
 			if err := s.Service.Store.SetInboxDefaultSender(r.Context(), p.AccountID, id, *in.DefaultSender); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		// trash_retention_days: absent leaves the override unchanged; an
+		// explicit null clears it so the inbox inherits the account default; a
+		// number sets the inbox override (0 keeps trash until purged by hand).
+		if len(in.TrashRetentionDays) > 0 {
+			var days *int
+			if string(in.TrashRetentionDays) != "null" {
+				var n int
+				if err := json.Unmarshal(in.TrashRetentionDays, &n); err != nil {
+					writeError(w, 400, "trash_retention_days must be an integer or null")
+					return
+				}
+				days = &n
+			}
+			if err := s.Service.Store.SetInboxTrashRetention(r.Context(), p.AccountID, id, days); err != nil {
 				mapStoreError(w, err)
 				return
 			}

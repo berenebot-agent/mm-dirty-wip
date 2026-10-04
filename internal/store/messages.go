@@ -884,16 +884,18 @@ func (s *Store) EmptyTrash(ctx context.Context, p model.Principal, inboxID strin
 }
 
 // PurgeExpiredTrash permanently purges trashed messages whose deleted_at is
-// older than the owning account's trash_retention_days. Accounts with a
-// retention of 0 are skipped (trash is retained until purged explicitly). It
-// returns the raw MIME paths to unlink; events are emitted per purged message.
+// older than the owning mailbox's effective trash retention. The effective
+// window is the inbox's trash_retention_days override when set, otherwise the
+// account's trash_retention_days. A value of 0 (or NULL) keeps trashed mail
+// until purged explicitly. It returns the raw MIME paths to unlink; events are
+// emitted per purged message.
 func (s *Store) PurgeExpiredTrash(ctx context.Context) ([]string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m JOIN accounts a ON a.id=m.account_id WHERE m.deleted_at IS NOT NULL AND a.trash_retention_days > 0 AND m.deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || a.trash_retention_days || ' days')`)
+	rows, err := tx.QueryContext(ctx, messageSelect+` FROM messages m JOIN accounts a ON a.id=m.account_id JOIN inboxes i ON i.id=m.inbox_id WHERE m.deleted_at IS NOT NULL AND COALESCE(i.trash_retention_days, a.trash_retention_days) > 0 AND m.deleted_at < strftime('%Y-%m-%dT%H:%M:%S', 'now', '-' || COALESCE(i.trash_retention_days, a.trash_retention_days) || ' days')`)
 	if err != nil {
 		return nil, err
 	}

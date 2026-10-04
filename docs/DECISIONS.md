@@ -2160,6 +2160,43 @@ race in the lockout guard.
 columns that already existed. The sysadmin guard adds one conditional in the
 store, and the transaction change is local to two store methods.
 
+## D076 — Account-admin settings separation and per-inbox Trash retention
+
+**Decision:** The Account page is organised into three labelled sections so
+personal preferences, account-wide settings and account administration are
+visually distinct:
+
+- **Your settings** — a user's own display time zone override, passkeys, and
+  email/password. Available to every signed-in user.
+- **Account settings** — account name, account default display time zone, and
+  the account Trash auto-purge window. Account-Admin only, enforced on the
+  server (`uiSettingsAccount`, `uiSettingsAccountTimezone`, and the existing
+  operator routes require `users.is_admin`).
+- **Account administration** — the account mailer, mailbox operators and
+  invitations. Account-Admin only.
+
+The account default Trash retention may be overridden per inbox from the inbox
+Quota tab (`inboxes.trash_retention_days`, nullable). `NULL` inherits the
+account's `accounts.trash_retention_days`; `0` keeps that inbox's trashed mail
+until purged by hand; a positive value purges after that many days. The
+maintenance sweep computes the effective window as
+`COALESCE(inbox, account)`. The override is exposed on
+`PATCH /v1/inboxes/{id}` as `trash_retention_days` (integer to set, `null` to
+inherit, absent to leave unchanged). Per the Account page's one-route grouping
+decision, no new page or route is introduced.
+
+**Reason:** Account-level controls (rename, account-wide retention and time
+zone, operator management) were interleaved with personal settings on one
+unlabelled page, and the account name could be changed by any signed-in user.
+Grouping plus server-side Admin enforcement makes the blast radius of each
+control explicit. Retention was account-wide only; a single mailbox with
+different legal or operational retention needs had no way to express it. A
+nullable per-inbox override adds that without disturbing the account default.
+
+**Complexity:** One nullable column (`migration044`), a `COALESCE` join in the
+retention sweep, one store setter, an optional API field, and template/JS
+grouping. No new dependency, service or route.
+
 ## Future extension register
 
 Potential future additions include:
