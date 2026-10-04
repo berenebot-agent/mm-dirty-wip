@@ -273,7 +273,19 @@ type pageData struct {
 	UserTimezone    string
 	TimezoneOptions []string
 
+	// Key-session Account page: the API key's name/prefix and the mailboxes it
+	// can reach, so the page states exactly what the session is.
+	KeyName      string
+	KeyPrefix    string
+	KeyMailboxes []keyMailboxView
+
 	Email string
+}
+
+// keyMailboxView is one row of the key-session Account page's mailbox table.
+type keyMailboxView struct {
+	Address string
+	Role    string
 }
 
 // externalAliasDataView is the secret-free shape embedded in the inbox edit
@@ -454,7 +466,7 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form>{{if .PasskeyEnabled}}<div style="margin-top:12px"><button type="button" class="secondary" id="passkey-signin" data-begin="/login/webauthn/begin" data-finish="/login/webauthn/finish" style="width:100%">Sign in with a passkey</button><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></div>{{end}}<div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form>{{if .PasskeyEnabled}}<div style="margin-top:12px"><button type="button" class="secondary" id="passkey-signin" data-begin="/login/webauthn/begin" data-finish="/login/webauthn/finish" style="width:100%">Sign in with a passkey</button><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></div>{{end}}<div style="margin-top:12px"><button type="button" class="secondary" id="api-key-signin" style="width:100%">Sign in with an API key</button><form method="post" action="/login/key" id="api-key-form" hidden style="margin-top:8px"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>API key</label><input type="password" name="api_key" autocomplete="off" spellcheck="false" placeholder="mmm_…" required><button style="width:100%">Sign in</button></form></div><div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
 
 // unconfiguredBody is shown when the database has no system administrator and
 // no ADMIN_EMAIL / ADMIN_PASSWORD credentials were supplied. It is deliberately
@@ -558,6 +570,41 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	s.setSessionCookie(w, r, tok)
 	http.Redirect(w, r, "/", 303)
 }
+
+// keyLoginPost signs in a browser session from a non-admin mailbox API key.
+// Only keys that carry at least one mailbox binding are accepted; the session
+// that results mirrors the key's own scope and never carries the account Admin
+// or system administrator role. An admin key (which has no mailbox bindings) is
+// rejected: this path maps mailbox access, not admin mode. A revoked key is
+// refused by the principal lookup.
+func (s *Server) keyLoginPost(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r, s.Service.Config)
+	if s.keyLoginLimiter == nil || !s.keyLoginLimiter.Allow(ip) {
+		http.Error(w, "too many login attempts", 429)
+		return
+	}
+	_ = r.ParseForm()
+	key := strings.TrimSpace(r.Form.Get("api_key"))
+	if key == "" {
+		s.flashAuth(w, r, "/login", "Log In", "Enter an API key", "")
+		return
+	}
+	p, err := s.Service.Store.APIKeyPrincipal(r.Context(), key)
+	if err != nil || p.Admin || len(p.MailboxRoles) == 0 {
+		// One generic message for unknown, revoked, admin and binding-less keys,
+		// so the form never reveals which class a supplied key belongs to.
+		s.flashAuth(w, r, "/login", "Log In", "That API key cannot be used to sign in", "")
+		return
+	}
+	tok, _, err := s.Service.Store.CreateKeySession(r.Context(), p.APIKeyID, s.keySessionTTL())
+	if err != nil {
+		http.Error(w, "session error", 500)
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "key.login", p.APIKeyID)
+	s.setKeySessionCookie(w, r, tok)
+	http.Redirect(w, r, "/", 303)
+}
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("mmm_session"); err == nil {
 		s.Service.Store.DeleteSession(r.Context(), c.Value)
@@ -608,6 +655,10 @@ func (s *Server) settingsRedirect(w http.ResponseWriter, r *http.Request, notice
 
 func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	if p.APIKeyID != "" && p.UserID == "" {
+		s.keySessionSettings(w, r, p)
+		return
+	}
 	acc, err := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	if err != nil {
 		http.Error(w, "account not found", 404)
@@ -675,6 +726,44 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, settingsBody, data)
+}
+
+// keySessionBody is the Account page shown to a browser session derived from an
+// API key. It is deliberately small: a key is not a person, so there are no
+// email, password, passkey or personal time-zone controls, and no account
+// administration. It states only what the session is and what it can reach.
+const keySessionBody = `<h1>Signed in with an API key</h1>
+<p class="muted">This browser session uses the API key <b>{{.KeyName}}</b> ({{.KeyPrefix}}…). It has exactly the mailbox access of that key and nothing more. Closing the session ends it; the key itself is unaffected.</p>
+<div class="grid">
+<section class="card"><h2>Mailbox access</h2>{{if .KeyMailboxes}}<div class="table-wrap"><table class="dense"><thead><tr><th>Mailbox</th><th>Role</th></tr></thead><tbody>{{range .KeyMailboxes}}<tr><td>{{.Address}}</td><td>{{.Role}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">This key has no mailbox access.</p>{{end}}</section>
+<section class="card"><h2>End session</h2><p class="muted">Sign out of this browser session. Your API key continues to work for API clients.</p><form method="post" action="/logout"><input type="hidden" name="_csrf" value="{{.CSRF}}"><button>Sign out</button></form></section>
+</div>`
+
+// keySessionSettings renders the slim Account page for a key-derived session.
+func (s *Server) keySessionSettings(w http.ResponseWriter, r *http.Request, p model.Principal) {
+	acc, err := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	if err != nil {
+		http.Error(w, "account not found", 404)
+		return
+	}
+	boxes, _ := s.Service.Store.ListInboxes(r.Context(), p)
+	addresses := make(map[string]string, len(boxes))
+	for _, b := range boxes {
+		addresses[b.ID] = b.Address
+	}
+	rows := make([]keyMailboxView, 0, len(p.MailboxRoles))
+	for inboxID, role := range p.MailboxRoles {
+		addr := addresses[inboxID]
+		if addr == "" {
+			continue
+		}
+		rows = append(rows, keyMailboxView{Address: addr, Role: role})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Address < rows[j].Address })
+	name, prefix, _ := s.Service.Store.APIKeyNamePrefix(r.Context(), p.APIKeyID)
+	data := pageData{Title: "Account", Tab: "account", Principal: p, CSRF: csrf(r), Account: acc,
+		KeyName: name, KeyPrefix: prefix, KeyMailboxes: rows}
+	s.render(w, r, keySessionBody, data)
 }
 
 func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
@@ -1608,6 +1697,7 @@ func (s *Server) uiUpdateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), r.PathValue("id"))
 	http.Redirect(w, r, "/?notice=Key+updated", 303)
 }
 
@@ -1623,6 +1713,7 @@ func (s *Server) uiRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), r.PathValue("id"))
 	if wantsJSON(r) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]string{"notice": "API key rotated", "label": "Copy this API key now — you will only be able to see this key now, it will not be shown again.", "secret": plain})
@@ -1642,6 +1733,7 @@ func (s *Server) uiDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), r.PathValue("id"))
 	http.Redirect(w, r, "/?notice=Key+deleted", 303)
 }
 

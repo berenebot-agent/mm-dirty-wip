@@ -72,6 +72,7 @@ type Server struct {
 	Relay           *hermesrelay.Server
 	Log             *slog.Logger
 	loginLimiter    *limiter
+	keyLoginLimiter *limiter
 	sendLimiter     *limiter
 	unroutedLim     *limiter
 	passwordLimiter *limiter
@@ -111,6 +112,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	}
 	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		keyLoginLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		sendLimiter:          newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
 		unroutedLim:          newLimiter(1, time.Minute),
 		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
@@ -162,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)
 	m.HandleFunc("POST /login", s.withPreAuthCSRF(s.loginPost))
+	m.HandleFunc("POST /login/key", s.withPreAuthCSRF(s.keyLoginPost))
 	// Passkey login is a two-step ceremony. The one-use ceremony token travels
 	// in the X-WebAuthn-Challenge header between begin and finish, so the body
 	// stays reserved for the raw credential JSON. No pre-auth CSRF cookie is
@@ -655,6 +658,20 @@ func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.Service.Config.SessionTTL.Seconds())})
+}
+
+// keySessionTTL bounds a browser session derived from an API key. It is never
+// longer than the ordinary session TTL but is capped at 24h, because a machine
+// credential is more likely to be shared or pasted than a password.
+func (s *Server) keySessionTTL() time.Duration {
+	if ttl := s.Service.Config.SessionTTL; ttl > 0 && ttl < 24*time.Hour {
+		return ttl
+	}
+	return 24 * time.Hour
+}
+
+func (s *Server) setKeySessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Value: token, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.keySessionTTL().Seconds())})
 }
 func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})

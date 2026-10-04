@@ -1753,6 +1753,7 @@ func (s *Server) apiKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), r.PathValue("id"))
 	w.WriteHeader(204)
 }
 
