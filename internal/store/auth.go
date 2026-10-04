@@ -222,8 +222,8 @@ func ensureEmailUnused(ctx context.Context, tx *sql.Tx, email, excludeID string)
 func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (model.User, error) {
 	var u model.User
 	var ph, created string
-	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,is_system_admin,created_at,timezone FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &sysadmin, &created, &u.Timezone)
+	var admin, sysadmin, pwEnabled int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,password_hash,is_admin,is_system_admin,created_at,timezone,password_auth_enabled FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &ph, &admin, &sysadmin, &created, &u.Timezone, &pwEnabled)
 	if err == sql.ErrNoRows {
 		// Equalize the work done for an unknown account so login timing cannot
 		// be used to enumerate accounts.
@@ -233,8 +233,24 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	if err != nil {
 		return model.User{}, err
 	}
+	u.PasswordEnabled = pwEnabled != 0
+	if !u.PasswordEnabled {
+		// A passkey-only user has no password. Equalize timing and fail the
+		// password path; the passkey ceremony is their login method.
+		auth.DummyPasswordCheck(password)
+		return model.User{}, ErrNotFound
+	}
 	if !auth.CheckPassword(ph, password) {
 		return model.User{}, ErrNotFound
+	}
+	// Lazy migration: a successful verify of a legacy pbkdf2-sha256 hash (or an
+	// Argon2id hash below the current cost) upgrades the stored hash to the
+	// current algorithm. Best-effort; a failure only means the row is upgraded
+	// on a later login.
+	if auth.NeedsRehash(ph) {
+		if upgraded, herr := auth.HashPassword(password); herr == nil {
+			_, _ = s.write.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=? AND password_hash=?`, upgraded, u.ID, ph)
+		}
 	}
 	u.IsAdmin = admin != 0
 	u.SystemAdmin = sysadmin != 0
@@ -245,8 +261,8 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) {
 	var u model.User
 	var created string
-	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone)
+	var admin, sysadmin, pwEnabled int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone,password_auth_enabled FROM users WHERE id=?`, userID).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone, &pwEnabled)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -255,6 +271,7 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 	}
 	u.IsAdmin = admin != 0
 	u.SystemAdmin = sysadmin != 0
+	u.PasswordEnabled = pwEnabled != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
 }
@@ -264,8 +281,8 @@ func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, error) {
 	var u model.User
 	var created string
-	var admin, sysadmin int
-	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone)
+	var admin, sysadmin, pwEnabled int
+	err := s.read.QueryRowContext(ctx, `SELECT id,account_id,email,is_admin,is_system_admin,created_at,timezone,password_auth_enabled FROM users WHERE email=?`, normalizeAddress(email)).Scan(&u.ID, &u.AccountID, &u.Email, &admin, &sysadmin, &created, &u.Timezone, &pwEnabled)
 	if err == sql.ErrNoRows {
 		return model.User{}, ErrNotFound
 	}
@@ -274,6 +291,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (model.User, e
 	}
 	u.IsAdmin = admin != 0
 	u.SystemAdmin = sysadmin != 0
+	u.PasswordEnabled = pwEnabled != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
 }
@@ -360,7 +378,7 @@ func (s *Store) UpdateUserPassword(ctx context.Context, userID, currentPassword,
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, newHash, userID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=?,password_auth_enabled=1 WHERE id=?`, newHash, userID); err != nil {
 		return err
 	}
 	if keepSession != "" {
@@ -403,7 +421,7 @@ func (s *Store) AdminResetPassword(ctx context.Context, userID, newPassword stri
 	if sysadmin != 0 {
 		return ErrSystemAdmin
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, newHash, userID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE users SET password_hash=?,password_auth_enabled=1 WHERE id=?`, newHash, userID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID); err != nil {

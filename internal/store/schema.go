@@ -1321,3 +1321,30 @@ DROP TABLE clients;
 ALTER TABLE clients_new RENAME TO clients;
 CREATE INDEX idx_clients_account ON clients(account_id, created_at DESC);
 `
+
+// migration043 adds WebAuthn passkeys. users gains password_auth_enabled so a
+// passkey-only account can exist with no password (the column defaults to 1, so
+// every existing account is unchanged). webauthn_credentials stores one row per
+// registered passkey; a user may have many, and credential_id is the browser's
+// opaque handle and must be unique across the installation.
+const migration043 = `
+ALTER TABLE users ADD COLUMN password_auth_enabled INTEGER NOT NULL DEFAULT 1 CHECK (password_auth_enabled IN (0,1));
+
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  credential_id BLOB NOT NULL,
+  public_key BLOB NOT NULL,
+  attestation_type TEXT NOT NULL DEFAULT '',
+  aaguid TEXT NOT NULL DEFAULT '',
+  sign_count INTEGER NOT NULL DEFAULT 0,
+  transports TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  backup_eligible INTEGER NOT NULL DEFAULT 0,
+  backup_state INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_cred_id ON webauthn_credentials(credential_id);
+CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
+`

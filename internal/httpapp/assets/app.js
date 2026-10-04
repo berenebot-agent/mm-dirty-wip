@@ -2709,3 +2709,151 @@ function aliasNameByAddress(list) {
     });
   });
 })();
+
+/* Passkey (WebAuthn) ceremonies. Two buttons share this module: sign-in on the
+   login page and add-passkey on the account page. Each carries data-begin and
+   data-finish endpoint paths; the server owns all policy and only the browser
+   glue lives here. */
+(function () {
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    return;
+  }
+
+  function b64urlToBuf(value) {
+    var pad = value.length % 4 === 0 ? '' : '='.repeat(4 - (value.length % 4));
+    var base64 = (value + pad).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(base64);
+    var buf = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) {
+      buf[i] = raw.charCodeAt(i);
+    }
+    return buf.buffer;
+  }
+
+  function bufToB64url(buf) {
+    var bytes = new Uint8Array(buf);
+    var str = '';
+    for (var i = 0; i < bytes.length; i++) {
+      str += String.fromCharCode(bytes[i]);
+    }
+    return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function prepareCreationOptions(options) {
+    options.challenge = b64urlToBuf(options.challenge);
+    options.user.id = b64urlToBuf(options.user.id);
+    if (options.excludeCredentials) {
+      options.excludeCredentials.forEach(function (c) { c.id = b64urlToBuf(c.id); });
+    }
+    return options;
+  }
+
+  function prepareRequestOptions(options) {
+    options.challenge = b64urlToBuf(options.challenge);
+    if (options.allowCredentials) {
+      options.allowCredentials.forEach(function (c) { c.id = b64urlToBuf(c.id); });
+    }
+    return options;
+  }
+
+  function credentialToJSON(cred) {
+    var response = cred.response;
+    var out = { id: cred.id, rawId: bufToB64url(cred.rawId), type: cred.type, response: {}, clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {} };
+    var r = response;
+    out.response.clientDataJSON = bufToB64url(r.clientDataJSON);
+    if (r.attestationObject !== undefined) {
+      out.response.attestationObject = bufToB64url(r.attestationObject);
+    }
+    if (r.authenticatorData !== undefined) {
+      out.response.authenticatorData = bufToB64url(r.authenticatorData);
+    }
+    if (r.signature !== undefined) {
+      out.response.signature = bufToB64url(r.signature);
+    }
+    if (r.userHandle !== undefined && r.userHandle !== null) {
+      out.response.userHandle = bufToB64url(r.userHandle);
+    }
+    return out;
+  }
+
+  function postJSON(url, body, token) {
+    return fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-WebAuthn-Challenge': token || ''
+      },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          throw new Error(data.error || 'request failed');
+        }
+        return data;
+      });
+    });
+  }
+
+  function setStatus(el, msg, isError) {
+    if (!el) { return; }
+    el.textContent = msg || '';
+    el.classList.toggle('error', !!isError);
+  }
+
+  function wire(button, statusEl, isRegister) {
+    button.addEventListener('click', function () {
+      setStatus(statusEl, 'Waiting for your device…', false);
+      button.disabled = true;
+      var name = isRegister ? (window.prompt('Name this passkey', 'Passkey') || 'Passkey') : '';
+      // Offer to make this the only sign-in method only when a password is
+      // currently enabled; a passkey-only account has nothing to disable.
+      var makeOnly = isRegister && button.getAttribute('data-password-enabled') === '1' &&
+        window.confirm('Use this passkey as your only sign-in method? Your password will be disabled.');
+      fetch(button.getAttribute('data-begin'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }
+      }).then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) { throw new Error(data.error || 'could not start'); }
+          return data;
+        });
+      }).then(function (data) {
+        var publicKey;
+        if (isRegister) {
+          publicKey = prepareCreationOptions(data.options.publicKey || data.options);
+          return navigator.credentials.create({ publicKey: publicKey }).then(function (cred) {
+            if (!cred) { throw new Error('no credential returned'); }
+            var url = button.getAttribute('data-finish') + '?name=' + encodeURIComponent(name) + (makeOnly ? '&only=1' : '');
+            return postJSON(url, credentialToJSON(cred), data.challenge_token);
+          });
+        }
+        publicKey = prepareRequestOptions(data.options.publicKey || data.options);
+        return navigator.credentials.get({ publicKey: publicKey }).then(function (cred) {
+          if (!cred) { throw new Error('no credential returned'); }
+          return postJSON(button.getAttribute('data-finish'), credentialToJSON(cred), data.challenge_token);
+        });
+      }).then(function (result) {
+        if (isRegister) {
+          setStatus(statusEl, (result && result.password_only) ? 'Passkey added; password sign-in disabled. Reloading…' : 'Passkey added. Reloading…', false);
+          window.location.reload();
+        } else {
+          window.location.href = (result && result.redirect) || '/';
+        }
+      }).catch(function (err) {
+        setStatus(statusEl, err.message || 'Passkey failed', true);
+        button.disabled = false;
+      });
+    });
+  }
+
+  var signin = document.getElementById('passkey-signin');
+  if (signin) {
+    wire(signin, document.getElementById('passkey-status'), false);
+  }
+  var add = document.getElementById('passkey-add');
+  if (add) {
+    wire(add, document.getElementById('passkey-status'), true);
+  }
+})();
