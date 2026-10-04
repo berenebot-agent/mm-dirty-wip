@@ -142,6 +142,10 @@ func migrations(dataDir string) []migration {
 			columnAdded("hermes_enroll_tokens", "kind"),
 			tableSQLContains("clients", "'openclaw'"),
 		)},
+		{version: "043", sql: migration043, detect: allOf(
+			columnAdded("users", "password_auth_enabled"),
+			tableExists("webauthn_credentials"),
+		)},
 	}
 }
 

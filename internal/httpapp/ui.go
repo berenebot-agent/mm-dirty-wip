@@ -191,9 +191,13 @@ type pageData struct {
 	Messages             []model.Message
 	Credentials          []credentialView
 	InboxConnectors      map[string][]credentialView
-	LogEntries           []store.DomainLogEntry
-	LogHasMore           bool
-	LogBefore            string
+	// Passkeys lists the signed-in user's registered passkeys, and
+	// PasskeyEnabled reports whether the deployment has WebAuthn configured.
+	Passkeys       []model.WebAuthnCredential
+	PasskeyEnabled bool
+	LogEntries     []store.DomainLogEntry
+	LogHasMore     bool
+	LogBefore      string
 	// Client delivery log (Webhook / Hermes relay): the client being viewed, its
 	// newest entries, and the keyset cursor for the next page.
 	ClientLogClient             *credentialView
@@ -452,7 +456,7 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form><div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
+const authBody = `<div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button>{{.Title}}</button></form>{{if .PasskeyEnabled}}<div style="margin-top:12px"><button type="button" class="secondary" id="passkey-signin" data-begin="/login/webauthn/begin" data-finish="/login/webauthn/finish" style="width:100%">Sign in with a passkey</button><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></div>{{end}}<div style="margin-top:16px;padding-top:12px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
 
 // unconfiguredBody is shown when the database has no system administrator and
 // no ADMIN_EMAIL / ADMIN_PASSWORD credentials were supplied. It is deliberately
@@ -467,7 +471,7 @@ type authFlash struct {
 // renderAuth shows an auth page, restoring any error and email left by a
 // redirect from a failed POST (Post/Redirect/Get).
 func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string) {
-	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r)}
+	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r), PasskeyEnabled: s.webauthn != nil}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
@@ -576,11 +580,12 @@ type settingsFlash struct {
 const settingsBody = `<h1>Account</h1>{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 <div class="grid">
 <section class="card"><h2>Change account name</h2><p class="muted">Shown in the header. This is a display name, not your email address.</p><form method="post" action="/ui/account/account"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account name</label><input name="name" value="{{.Account.Name}}" maxlength="80" required><div class="dialog-actions"><button>Save</button></div></form></section>
-{{if .User.SystemAdmin}}<section class="card"><h2>Login credentials</h2><p class="muted">Your login is managed by the deployment configuration. Update <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> (or their <code>_FILE</code> secrets) and restart MailMoose; the new credentials take effect and other sessions are signed out.</p></section>{{else}}<section class="card"><h2>Change email address</h2><p class="muted">Used to log in. Current: {{.User.Email}}</p><form method="post" action="/ui/account/email"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>New email</label><input type="email" name="email" required><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><div class="dialog-actions"><button>Update email</button></div></form></section>
+{{if .User.SystemAdmin}}<section class="card"><h2>Login credentials</h2><p class="muted">Your password is managed by the deployment configuration. Update <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> (or their <code>_FILE</code> secrets) and restart MailMoose; the new password takes effect and other sessions are signed out. This password always works as a recovery method. You may also add passkeys below as an additional, independent way to sign in.</p></section>{{else}}<section class="card"><h2>Change email address</h2><p class="muted">Used to log in. Current: {{.User.Email}}</p><form method="post" action="/ui/account/email"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>New email</label><input type="email" name="email" required><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><div class="dialog-actions"><button>Update email</button></div></form></section>
 <section class="card"><h2>Change password</h2><form method="post" action="/ui/account/password"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Current password</label><input type="password" name="current_password" autocomplete="current-password" required><label>New password</label><input type="password" name="new_password" minlength="10" autocomplete="new-password" required><label>Confirm new password</label><input type="password" name="confirm_password" minlength="10" autocomplete="new-password" required><div class="dialog-actions"><button>Change password</button></div></form></section>{{end}}
 {{if or .Principal.Admin .Principal.OwnsAccount}}<section class="card"><h2>Trash</h2><p class="muted">Deleted messages are moved to Trash and kept until purged. Trashed messages count toward storage until permanently deleted.</p><form method="post" action="/ui/account/trash-retention"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Auto-purge trashed messages after (days)</label><input type="number" name="days" value="{{.TrashRetentionDays}}" min="0" max="3650" required><p class="muted small">Set to 0 to keep trashed messages until you empty the trash manually.</p><div class="dialog-actions"><button>Save</button></div></form></section>{{end}}
 <section class="card"><h2>Your time zone</h2><p class="muted">Times are stored and served in UTC. This only changes how they are shown to you in this web interface.</p><form method="post" action="/ui/account/timezone/me"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Time zone</label><input name="timezone" list="tz-options" value="{{.UserTimezone}}" placeholder="Leave blank to use the account default" autocomplete="off"><p class="muted small">Leave blank to follow the account default.</p><div class="dialog-actions"><button>Save</button></div></form></section>
 {{if or .Principal.Admin .Principal.OwnsAccount}}<section class="card"><h2>Account time zone</h2><p class="muted">The default display time zone for operators who have not set their own. Times remain stored and served in UTC.</p><form method="post" action="/ui/account/timezone"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Default time zone</label><input name="timezone" list="tz-options" value="{{.AccountTimezone}}" placeholder="UTC" autocomplete="off"><p class="muted small">Leave blank for UTC.</p><div class="dialog-actions"><button>Save</button></div></form></section>{{end}}
+{{if .PasskeyEnabled}}<section class="card"><h2>Passkeys</h2><p class="muted">Sign in without a password using a passkey (Touch ID, Windows Hello, or a security key). Add one per device. When you add a passkey you can choose to make it your only sign-in method.{{if not .User.PasswordEnabled}} <b>Password sign-in is currently disabled.</b>{{end}}</p>{{if .Passkeys}}<div class="table-wrap"><table class="dense"><thead><tr><th>Name</th><th>Added</th><th></th></tr></thead><tbody>{{range .Passkeys}}<tr><td>{{.Name}}</td><td class="muted">{{mailDate .CreatedAt}}</td><td class="actions"><form method="post" action="/ui/account/passkeys/rename"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input name="name" value="{{.Name}}" maxlength="80" required><button class="secondary btn-sm">Rename</button></form><form method="post" action="/ui/account/passkeys/delete" data-confirm="Remove this passkey?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button class="secondary btn-sm danger">Remove</button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No passkeys yet.</p>{{end}}<div class="dialog-actions"><button type="button" class="secondary" id="passkey-add" data-begin="/ui/account/passkeys/begin" data-finish="/ui/account/passkeys/finish" data-password-enabled="{{if .User.PasswordEnabled}}1{{else}}0{{end}}">Add a passkey</button></div><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></section>{{end}}
 <datalist id="tz-options">{{range .TimezoneOptions}}<option value="{{.}}"></option>{{end}}</datalist>
 </div>` + accountOperatorsSection
 
@@ -608,6 +613,10 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	}
 	data := pageData{Title: "Account", Tab: "account", Principal: p, CSRF: csrf(r), Account: acc, User: user,
 		AccountTimezone: acc.Timezone, UserTimezone: user.Timezone, TimezoneOptions: timezone.Options()}
+	data.PasskeyEnabled = s.webauthn != nil
+	if creds, cerr := s.Service.Store.WebAuthnCredentialsForUser(r.Context(), p.UserID); cerr == nil {
+		data.Passkeys = creds
+	}
 	if p.OwnsAccount() {
 		if days, derr := s.Service.Store.GetTrashRetention(r.Context(), p); derr == nil {
 			data.TrashRetentionDays = days

@@ -16,7 +16,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	auth.SetIterationsForTest(1000)
+	auth.SetArgonParamsForTest(8, 1)
 	os.Exit(m.Run())
 }
 

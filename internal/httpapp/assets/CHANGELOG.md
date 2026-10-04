@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Passkeys (WebAuthn): sign in without a password using Touch ID, Windows
+  Hello, or a security key. Register one or more passkeys from the Account
+  page; the login page gains a "Sign in with a passkey" button using a
+  usernameless (discoverable credential) flow. The system administrator may add
+  passkeys alongside the deployment-managed `ADMIN_EMAIL`/`ADMIN_PASSWORD`
+  break-glass login. A user cannot remove their last remaining sign-in method.
+  Passkeys use the `go-webauthn/webauthn` library with no attestation
+  requested.
 - Trash: deleting a message moves it to Trash instead of erasing it. Trashed
   messages are hidden from lists, search, threads and unread counts but keep
   their raw MIME, attachments and storage accounting. `POST
