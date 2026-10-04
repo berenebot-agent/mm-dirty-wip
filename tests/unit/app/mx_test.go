@@ -14,18 +14,14 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // mxService builds a service with MX receiving enabled and the domain's receive
 // provider set to "mx", returning the raw-MIME staging helper.
 func mxService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbox) {
 	t.Helper()
-	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { st.Close() })
+	st, dir := testdb.OpenDir(t)
 	cfg := config.Config{
 		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted",
 		AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901",

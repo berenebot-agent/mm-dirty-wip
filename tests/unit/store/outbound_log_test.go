@@ -10,9 +10,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 )
 
-// testDeliveryLogCap mirrors internal/store's unexported maxDeliveryLogPerAccount.
-const testDeliveryLogCap = 5000
-
 func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
@@ -67,6 +64,13 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 }
 
 func TestDeliveryLogPruneKeepsNewestAndRecent(t *testing.T) {
+	// Lower the cap so the prune path is exercised in O(cap) inserts rather than
+	// O(5000); every insert triggers a full-scan prune, so the default cap makes
+	// this test quadratic and needlessly slow.
+	const cap = 50
+	store.SetDeliveryLogCapForTest(cap)
+	defer store.SetDeliveryLogCapForTest(0)
+
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -76,21 +80,21 @@ func TestDeliveryLogPruneKeepsNewestAndRecent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Insert more than the cap so the oldest rows are pruned.
-	for i := 0; i < testDeliveryLogCap+10; i++ {
+	for i := 0; i < cap+10; i++ {
 		if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if n := deliveryLogCount(t, s, u.AccountID); n != testDeliveryLogCap {
-		t.Fatalf("after prune count %d, want %d", n, testDeliveryLogCap)
+	if n := deliveryLogCount(t, s, u.AccountID); n != cap {
+		t.Fatalf("after prune count %d, want %d", n, cap)
 	}
 	// A further insert still keeps the count at the cap (the oldest row is
 	// pruned even though it is recent, because the count bound applies).
 	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo"); err != nil {
 		t.Fatal(err)
 	}
-	if n := deliveryLogCount(t, s, u.AccountID); n != testDeliveryLogCap {
-		t.Fatalf("after recent insert count %d, want %d", n, testDeliveryLogCap)
+	if n := deliveryLogCount(t, s, u.AccountID); n != cap {
+		t.Fatalf("after recent insert count %d, want %d", n, cap)
 	}
 }
 

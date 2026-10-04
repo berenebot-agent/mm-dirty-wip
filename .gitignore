@@ -10,4 +10,6 @@
 *.prof
 .DS_Store
 tests/logs/
+# Built on demand by `make mx-fixture` (used by the launcher RSS test).
+tests/fixtures/mailmoose-mx
 repo.zip

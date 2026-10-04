@@ -3,22 +3,34 @@
 #
 # The containerised test runners emit per-run artifacts under tests/logs/:
 # the Go wrapper leaves a dated .log per invocation, and the unified runner
-# leaves a dated run dir per invocation. Successful runs are kept (they are
-# small), but killed/interrupted runs pile up and there is no bound.
+# leaves a dated run dir per invocation. Runs are RETAINED IN FULL by default
+# (tests/run.sh no longer prunes automatically) so an agent can always dig
+# into an earlier run; this script reclaims space only when invoked explicitly.
 #
-# Run the prune BEFORE a run starts: keep the N most recently modified
-# entries per glob, remove the rest. It is deliberately mtime-based (LRU),
-# not count-based on any per-test logic, so a preserved failed-run artifact is
-# kept if recent and only evicted once it becomes the oldest.
+# It is deliberately mtime-based (LRU), not count-based on any per-test logic,
+# so a preserved failed-run artifact is kept if recent and only evicted once it
+# becomes the oldest.
 #
-# Source (`.`) this from a runner; or invoke it directly as a script. In the
-# direct form, pass an optional cap as $1, defaulting to KEEP_GO.
+# Source (`.`) this from a runner with KEEP_GO / KEEP_RUNS set; or invoke it
+# directly as a script. In the direct form, pass an optional cap as $1.
+#
+# Never touches:
+#   - tests/logs/history.tsv   (append-only ledger)
+#   - tests/logs/mailmoose-mx  (test fixture binary, used by the launcher RSS test)
+#   - tests/logs/latest        (symlink pointer)
 
 set -eu
 
 # Defaults: how many of the most recent entries per glob to keep.
 KEEP_GO=${KEEP_GO:-10}
 KEEP_RUNS=${KEEP_RUNS:-10}
+
+# Direct-invocation form: an optional numeric $1 overrides both caps. When the
+# script is sourced (`.`), "$@" belongs to the caller, so skip this entirely.
+if [ "${BASH_SOURCE[0]}" = "${0}" ] && [ "$#" -ge 1 ] && [ -n "${1:-}" ]; then
+    KEEP_GO="$1"
+    KEEP_RUNS="$1"
+fi
 
 logs_dir="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)/tests/logs"
 
@@ -40,6 +52,7 @@ collect_evictions() {
 }
 
 collect_evictions 'mailmoose-go/*.log' "$KEEP_GO"
+collect_evictions 'gatehouse-go/*.log' "$KEEP_GO"
 collect_evictions 'runs/*' "$KEEP_RUNS"
 
 if [ "${#evict[@]}" -eq 0 ]; then

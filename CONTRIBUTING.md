@@ -13,8 +13,8 @@ commands run in a container through `./mailmoose-go.sh`.
 ## Development commands
 
 ```bash
-./mailmoose-go.sh test -race -count=1 ./...   # tests
-./mailmoose-go.sh vet ./...                   # static analysis
+./tests/run.sh --unit                         # tests (captured; see docs/TESTING.md)
+make test                                     # same, via the runner
 ./mailmoose-go.sh build ./cmd/...             # build server and mx
 ./mailmoose-go.sh gofmt -w cmd internal       # format
 ```
@@ -26,7 +26,13 @@ For tiered runs with log capture and CI parity, use the unified runner:
 ./tests/run.sh --list       # list available tiers
 ```
 
+Full output from every run is captured under `tests/logs/runs/<run-id>/`; read
+it instead of re-running (see `docs/TESTING.md`).
+
 ## Tests
+
+See `docs/TESTING.md` for the runner, tiers, log layout, retention and the
+`smoke` tier. In brief:
 
 - Go test source lives under `tests/unit/<package>/` as external
   `<package>_test` packages (black-box, public API only).
@@ -42,7 +48,9 @@ For tiered runs with log capture and CI parity, use the unified runner:
 CI fails on unformatted Go files. Before pushing, confirm the gate is clean:
 
 ```bash
-./mailmoose-go.sh gofmt -l cmd internal tests
+./tests/run.sh --fmt          # same gate CI runs
+# or directly:
+./mailmoose-go.sh gofmt -l cmd internal tests dialmx
 ```
 
 Write Go with tabs, never spaces, and never collapse a block onto one line.

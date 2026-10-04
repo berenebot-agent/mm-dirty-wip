@@ -68,6 +68,13 @@ if [ -n "${BILLBOT_CONTRACT_FIXTURE:-}" ]; then
     FIXTURE_FLAGS="-e BILLBOT_CONTRACT_FIXTURE=$BILLBOT_CONTRACT_FIXTURE -v $fixture_dir:$fixture_dir"
 fi
 
+# Optional smoke-tier passthrough: when MAILMOOSE_SMOKE is set (tests/run.sh
+# --smoke), forward it so the gated slow tests run instead of skipping.
+SMOKE_FLAGS=""
+if [ -n "${MAILMOOSE_SMOKE:-}" ]; then
+    SMOKE_FLAGS="-e MAILMOOSE_SMOKE=$MAILMOOSE_SMOKE"
+fi
+
 # Log capture: always write full output to a repo-local log file under
 # tests/logs/ (gitignored, persistent across runs). The summary printed at
 # the end shows the path; on failure the first FAIL line is also inlined.
@@ -98,6 +105,7 @@ if [ "${1:-}" = "gofmt" ]; then
         --memory-swap="$MEM_LIMIT" \
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
+        $SMOKE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \
@@ -110,6 +118,7 @@ else
         --memory-swap="$MEM_LIMIT" \
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
+        $SMOKE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \

@@ -35,8 +35,21 @@ type DeliveryAttempt struct {
 
 // maxDeliveryLogPerAccount is the retention cap for the delivery log: the
 // newest 5000 rows per account are always kept, and anything younger than
-// deliveryLogMaxAge is kept regardless of count.
-const maxDeliveryLogPerAccount = 5000
+// deliveryLogMaxAge is kept regardless of count. It is a var (not a const) so
+// tests can lower it via SetDeliveryLogCapForTest without inserting 5000 rows
+// per assertion; the production value never changes.
+var maxDeliveryLogPerAccount = 5000
+
+// SetDeliveryLogCapForTest lowers the per-account delivery-log retention cap.
+// It exists so a unit test can exercise the prune path in O(cap) rather than
+// O(5000) inserts, each of which triggers a full-scan prune. Pass 0 to restore
+// the production default. Not safe to call concurrently with store operations.
+func SetDeliveryLogCapForTest(n int) {
+	if n <= 0 {
+		n = 5000
+	}
+	maxDeliveryLogPerAccount = n
+}
 
 // deliveryLogMaxAge is the time-based retention floor for the delivery log.
 const deliveryLogMaxAge = 30 * 24 * time.Hour
