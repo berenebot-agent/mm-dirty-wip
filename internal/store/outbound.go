@@ -55,7 +55,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		if _, err = tx.ExecContext(ctx, `DELETE FROM drafts WHERE id=? AND account_id=?`, r.DraftID, r.Inbox.AccountID); err != nil {
 			return model.Message{}, model.Event{}, err
 		}
-		if err = adjustStorageTx(ctx, tx, r.Inbox.AccountID, -(draftBodyBytes(d) + attTotal)); err != nil {
+		if err = adjustStorageTx(ctx, tx, r.Inbox.AccountID, d.InboxID, -(draftBodyBytes(d) + attTotal)); err != nil {
 			return model.Message{}, model.Event{}, err
 		}
 	}
@@ -64,6 +64,19 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		return model.Message{}, model.Event{}, err
 	}
 	if quota > 0 && used+r.SizeBytes > quota {
+		return model.Message{}, model.Event{}, ErrQuota
+	}
+	// Per-inbox cap, layered on the account cap. inboxUsedTx initializes a
+	// NULL counter from a one-time SUM before comparing.
+	inboxUsed, err := inboxUsedTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID)
+	if err != nil {
+		return model.Message{}, model.Event{}, err
+	}
+	var inboxQuota sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes FROM inboxes WHERE id=? AND account_id=?`, r.Inbox.ID, r.Inbox.AccountID).Scan(&inboxQuota); err != nil {
+		return model.Message{}, model.Event{}, err
+	}
+	if inboxQuota.Valid && inboxQuota.Int64 > 0 && inboxUsed+r.SizeBytes > inboxQuota.Int64 {
 		return model.Message{}, model.Event{}, ErrQuota
 	}
 	draftEvent := model.Event{}
@@ -107,7 +120,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if _, err = tx.ExecContext(ctx, `INSERT INTO message_fts(message_id,account_id,inbox_id,subject,from_address,recipients,body,attachment_names) VALUES(?,?,?,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, r.Subject, r.From.Address, strings.Join(append(append([]string{}, r.To...), r.CC...), " "), r.Text+" "+stripHTMLText(r.HTML), strings.Join(attachmentNames, " ")); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.AccountID); err != nil {
+	if err = adjustStorageTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, r.SizeBytes); err != nil {
 		return model.Message{}, model.Event{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {

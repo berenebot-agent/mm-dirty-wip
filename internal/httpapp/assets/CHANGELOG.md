@@ -28,6 +28,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Per-inbox storage quotas: an inbox can carry an optional storage cap on top
+  of the account quota (`storage_quota_bytes` on `PATCH /v1/inboxes/{id}`, Admin
+  only). A positive value caps the inbox's stored bytes, `0` means explicitly
+  unlimited, and clearing the field removes the cap so only the account quota
+  applies. The cap counts messages in any direction or state (including Spam and
+  Trash) plus drafts and draft attachments, is enforced in the same transaction
+  that stores mail, and rejects new inbound/outbound mail with the existing
+  storage-quota response once reached. Lowering the cap below current usage is
+  allowed and only refuses new mail until space is freed. The inbox Quota tab
+  (Add and Edit dialogs) sets it and shows usage, and the dashboard Size cell
+  turns amber at 90% and red at the cap.
 - Sign in to the web UI with a **non-admin mailbox API key**: the login page
   offers *Sign in with an API key* next to password and passkey. The browser
   session maps exactly that key's mailbox bindings (the operator view) and

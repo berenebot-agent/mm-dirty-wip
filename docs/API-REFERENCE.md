@@ -18,7 +18,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes | List inboxes | read |
 | POST | /v1/inboxes | Create an inbox (Admin) | admin |
 | GET | /v1/inboxes/{id} | Get an inbox | read |
-| PATCH | /v1/inboxes/{id} | Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender, trash_retention_days, auto_mark_read_on_delivery, auto_trash_after_delivery_hours, delivery_trigger) | owner |
+| PATCH | /v1/inboxes/{id} | Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender, trash_retention_days, storage_quota_bytes, auto_mark_read_on_delivery, auto_trash_after_delivery_hours, delivery_trigger) | owner |
 | DELETE | /v1/inboxes/{id} | Delete an inbox (Admin) | admin |
 | POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Owner) | owner |
 

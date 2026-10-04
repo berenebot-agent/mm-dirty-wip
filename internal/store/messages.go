@@ -116,6 +116,19 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if quota > 0 && used+r.SizeBytes > quota {
 		return model.Message{}, model.Event{}, false, ErrQuota
 	}
+	// Per-inbox cap, layered on the account cap. inboxUsedTx initializes a
+	// NULL counter from a one-time SUM before comparing.
+	inboxUsed, err := inboxUsedTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID)
+	if err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	var inboxQuota sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes FROM inboxes WHERE id=? AND account_id=?`, r.Inbox.ID, r.Inbox.AccountID).Scan(&inboxQuota); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if inboxQuota.Valid && inboxQuota.Int64 > 0 && inboxUsed+r.SizeBytes > inboxQuota.Int64 {
+		return model.Message{}, model.Event{}, false, ErrQuota
+	}
 	threadID, err := findThreadTx(ctx, tx, r.Inbox.AccountID, r.Inbox.ID, r.InReplyTo, r.References)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
@@ -144,6 +157,9 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		return model.Message{}, model.Event{}, false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.AccountID); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=storage_used_bytes+? WHERE id=?`, r.SizeBytes, r.Inbox.ID); err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
@@ -840,6 +856,12 @@ func (s *Store) PurgeMessage(ctx context.Context, p model.Principal, id string) 
 // purgeMessageTx removes a message row, its FTS entry and its stored bytes
 // within the caller's transaction. It assumes authorization already happened.
 func purgeMessageTx(ctx context.Context, tx *sql.Tx, accountID string, m model.Message) error {
+	// Initialize the inbox counter before the row is deleted, so the
+	// post-delete decrement is applied to a correctly-summed baseline and a
+	// NULL counter is never clobbered to zero.
+	if _, err := inboxUsedTx(ctx, tx, accountID, m.InboxID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM message_fts WHERE message_id=?`, m.ID); err != nil {
 		return err
 	}
@@ -850,10 +872,8 @@ func purgeMessageTx(ctx context.Context, tx *sql.Tx, accountID string, m model.M
 	if n, _ := res.RowsAffected(); n != 1 {
 		return ErrNotFound
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, m.SizeBytes, accountID); err != nil {
-		return err
-	}
-	return nil
+	// Refund both counters through the shared helper.
+	return adjustStorageTx(ctx, tx, accountID, m.InboxID, -m.SizeBytes)
 }
 
 // EmptyTrash permanently purges every trashed message in an inbox and returns
