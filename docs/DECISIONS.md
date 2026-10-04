@@ -2254,8 +2254,15 @@ human accounts never trigger it, because a poll is not a delivery.
 - Three inbox columns carry the policy: `auto_mark_read_on_delivery`
   (default 0), `auto_trash_after_delivery_hours` (nullable; NULL disables the
   sweep), and `delivery_trigger` (`any` or `all`, default `any`). They are
-  read/written through `PATCH /v1/inboxes/{id}` and the inbox Connectors tab, and
-  may also be seeded from the connector-create dialog.
+  read/written through `PATCH /v1/inboxes/{id}`, the inbox Connectors tab (its
+  own form and save control, posting to `POST /ui/inboxes/{id}/auto-actions`),
+  and may also be seeded from the connector-create dialog.
+- The Connectors tab is a **separate form** from the rest of the inbox edit
+  dialog, because its fields are absent from every other tab's save. An inbox
+  save that does not carry the auto-action controls leaves the policy untouched
+  rather than reading the missing fields as "off" — treating absence as a clear
+  silently wiped the policy on any unrelated edit. The submitter therefore
+  applies the auto-actions only when the form actually carried them.
 - A delivery is recorded per connector: `message_deliveries(message_id,
   client_id, delivered_at)` gets one idempotent row per successful delivery. The
   relay ack paths (`AckHermesEventLogged`, `RecordHermesDeliveryAcknowledged`) and
@@ -2288,8 +2295,9 @@ one without a second policy object.
 **Complexity:** One migration (three inbox columns, `message_deliveries`,
 `messages.delivery_action_due_at` and its partial index), four store methods, one
 maintenance step reusing the existing event path and file-unlink flow, optional
-`PATCH` fields, and wizard/tab controls. No new dependency, service or route
-beyond a small UI-only auto-actions save endpoint.
+`PATCH` fields, and a dedicated auto-actions form on the inbox Connectors tab
+(its own save control, posting to the existing `POST /ui/inboxes/{id}/auto-actions`
+endpoint). No new dependency or service.
 
 ## D079 — Per-inbox storage quotas
 
