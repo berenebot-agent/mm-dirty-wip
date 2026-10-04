@@ -28,6 +28,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Sign in to the web UI with a **non-admin mailbox API key**: the login page
+  offers *Sign in with an API key* next to password and passkey. The browser
+  session maps exactly that key's mailbox bindings (the operator view) and
+  nothing more — no account Admin dashboard, no Admin plane, no installation
+  management. Admin keys are rejected. The session is stored hashed in a new
+  `key_sessions` table, capped at 24 hours, CSRF-protected, and refused on key
+  revoke or rotate.
 - Account page: the settings are now grouped into three labelled sections —
   "Your settings" (personal time zone, passkeys, email and password), "Account
   settings" (account name, default time zone, Trash retention) and "Account

@@ -2197,6 +2197,51 @@ nullable per-inbox override adds that without disturbing the account default.
 retention sweep, one store setter, an optional API field, and template/JS
 grouping. No new dependency, service or route.
 
+## D077 — Sign in to the web UI with a non-admin mailbox API key
+
+**Decision:** The login page gains a *Sign in with an API key* path
+(`POST /login/key`) beside password and passkey. A **non-admin API key that
+carries at least one mailbox binding** can be exchanged for a browser session:
+
+- The session resolves to the key's own per-inbox roles from
+  `client_inbox_bindings` and lands on the existing operator view. It grants
+  nothing the bearer API did not already grant — no account Admin dashboard, no
+  `/admin` plane, no installation-management API, no Account administration.
+- **Admin keys are rejected.** An admin key carries no mailbox bindings, and
+  this path deliberately maps mailbox access, not admin mode.
+- The session lives in a new `key_sessions` table (`migration045`), because a
+  key is not a `users` row and the `sessions` table's `user_id` is `NOT NULL`
+  and FK-bound to `users`. Only the hashed session token and a CSRF token are
+  stored; the key's live state (existence, `revoked_at`, bindings) is resolved
+  on every request, so **revoking or rotating the key invalidates the browser
+  session immediately**. Revoke/rotate/edit also delete the key's
+  `key_sessions` rows outright.
+- The session TTL is `min(SESSION_TTL_HOURS, 24h)`: never longer than an
+  ordinary session, never more than a day, because a machine credential is more
+  likely to be shared or pasted than a password.
+- A key session's Account page is a slim variant that states the key and its
+  mailbox access; it renders none of the human email/password/passkey/time-zone
+  controls. Key-authenticated sends and approvals keep recording the key's
+  actor identity, not "UI".
+
+**Reason:** A human who holds only a scoped key (for example to try a key's
+access visually, or an agent-first user whose sole credential is a key) had no
+way into the web UI short of an invitation, which is a separate credential and
+a separate person. Exchanging the key for a disposable session lets them use
+the UI without inventing new permissions and without placing the long-lived
+machine credential in a browser cookie. Restricting the path to non-admin,
+mailbox-scoped keys keeps the rule simple and the surface small: the session is
+exactly the operator view, and the admin plane stays unreachable because key
+principals never carry `Admin` or `SystemAdmin`.
+
+**Complexity:** One additive table (`migration045`), three store methods
+(`CreateKeySession`, the key-session fallback in `SessionPrincipal`, and
+`DeleteKeySessionsForClient`), one login handler and limiter, one login-page
+form, one slim Account template, and four `DeleteKeySessionsForClient` calls on
+the existing revoke/rotate paths. No new dependency, service or route beyond
+`POST /login/key`. Tests cover resolution/scope, revoke, rotation teardown,
+admin-key rejection, session death on revoke, and read-only write refusal.
+
 ## Future extension register
 
 Potential future additions include:
