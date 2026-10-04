@@ -1357,3 +1357,19 @@ CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
 const migration044 = `
 ALTER TABLE inboxes ADD COLUMN trash_retention_days INTEGER;
 `
+
+// migration045 adds key_sessions: browser sessions derived from a non-admin API
+// key. A key is not a users row, so its web session cannot live in the sessions
+// table (user_id is NOT NULL and FK-bound to users). Only the hashed session
+// token is stored; the key's live state (existence, revocation and mailbox
+// bindings) is resolved from clients/client_inbox_bindings on every request.
+const migration045 = `
+CREATE TABLE IF NOT EXISTS key_sessions (
+  id_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  csrf_token TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_key_sessions_client ON key_sessions(client_id);
+`

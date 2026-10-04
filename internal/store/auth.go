@@ -461,8 +461,45 @@ func (s *Store) CreateSession(ctx context.Context, userID string, ttl time.Durat
 	_, err = s.write.ExecContext(ctx, `INSERT INTO sessions(id_hash,user_id,csrf_token,expires_at,created_at) VALUES(?,?,?,?,?)`, auth.HashToken(token), userID, csrf, timeText(time.Now().UTC().Add(ttl)), nowText())
 	return
 }
+
+// CreateKeySession issues a browser session for a non-admin API key. The
+// principal it resolves to is always non-admin and limited to the key's own
+// mailbox bindings, so its reach mirrors the bearer API scope exactly.
+func (s *Store) CreateKeySession(ctx context.Context, clientID string, ttl time.Duration) (token, csrf string, err error) {
+	token, err = auth.RandomToken(32)
+	if err != nil {
+		return
+	}
+	csrf, err = auth.RandomToken(24)
+	if err != nil {
+		return
+	}
+	_, err = s.write.ExecContext(ctx, `INSERT INTO key_sessions(id_hash,client_id,csrf_token,expires_at,created_at) VALUES(?,?,?,?,?)`, auth.HashToken(token), clientID, csrf, timeText(time.Now().UTC().Add(ttl)), nowText())
+	return
+}
+
+// DeleteKeySessionsForClient removes every browser session derived from an API
+// key. It backs revoke, rotate and permission-change so a live browser session
+// cannot outlive the credential it was minted from.
+func (s *Store) DeleteKeySessionsForClient(ctx context.Context, clientID string) {
+	_, _ = s.write.ExecContext(ctx, `DELETE FROM key_sessions WHERE client_id=?`, clientID)
+}
+
+// APIKeyNamePrefix returns an API key's display name and key prefix, for the
+// key-session Account page. It is not secret material: the prefix is already
+// shown in the client list.
+func (s *Store) APIKeyNamePrefix(ctx context.Context, clientID string) (name, prefix string, err error) {
+	err = s.read.QueryRowContext(ctx, `SELECT c.name,k.key_prefix FROM clients c JOIN client_api_keys k ON k.client_id=c.id WHERE c.id=? AND c.type='api_key'`, clientID).Scan(&name, &prefix)
+	if err == sql.ErrNoRows {
+		return "", "", ErrNotFound
+	}
+	return name, prefix, err
+}
+
 func (s *Store) DeleteSession(ctx context.Context, token string) {
-	_, _ = s.write.ExecContext(ctx, `DELETE FROM sessions WHERE id_hash=?`, auth.HashToken(token))
+	hash := auth.HashToken(token)
+	_, _ = s.write.ExecContext(ctx, `DELETE FROM sessions WHERE id_hash=?`, hash)
+	_, _ = s.write.ExecContext(ctx, `DELETE FROM key_sessions WHERE id_hash=?`, hash)
 }
 func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
 	var p model.Principal
@@ -470,7 +507,7 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 	var admin, sysadmin int
 	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,u.is_system_admin,s.csrf_token,s.expires_at,u.timezone,a.timezone FROM sessions s JOIN users u ON u.id=s.user_id JOIN accounts a ON a.id=u.account_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &sysadmin, &csrf, &exp, &userTZ, &acctTZ)
 	if err == sql.ErrNoRows {
-		return p, "", ErrNotFound
+		return s.keySessionPrincipal(ctx, token)
 	}
 	if err != nil {
 		return p, "", err
@@ -493,6 +530,65 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 		p.MailboxRoles = roles
 	}
 	return p, csrf, nil
+}
+
+// keySessionPrincipal resolves a browser session derived from an API key. The
+// session grants nothing beyond the key: it is refused once the key is revoked
+// (clients.revoked_at set) or loses its mailbox bindings, and it never carries
+// the account Admin or system administrator role. The key's last_used_at is not
+// touched here — this runs on every request, and the bearer path already records
+// use; resolving a session is a read-only operation.
+func (s *Store) keySessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
+	var p model.Principal
+	var csrf, exp string
+	var revoked sql.NullString
+	err := s.read.QueryRowContext(ctx, `SELECT ks.client_id,c.account_id,c.revoked_at,ks.csrf_token,ks.expires_at FROM key_sessions ks JOIN clients c ON c.id=ks.client_id WHERE ks.id_hash=? AND c.type='api_key'`, auth.HashToken(token)).Scan(&p.APIKeyID, &p.AccountID, &revoked, &csrf, &exp)
+	if err == sql.ErrNoRows {
+		return p, "", ErrNotFound
+	}
+	if err != nil {
+		return p, "", err
+	}
+	if revoked.Valid {
+		return p, "", ErrNotFound
+	}
+	if parseTime(exp).Before(time.Now().UTC()) {
+		s.DeleteSession(ctx, token)
+		return p, "", ErrNotFound
+	}
+	roles, err := s.clientMailboxRoles(ctx, p.APIKeyID)
+	if err != nil {
+		return p, "", err
+	}
+	// A key with no mailbox bindings grants nothing, so the session is refused.
+	// Admin keys are refused too: they carry no bindings, and the HTML UI here
+	// maps only mailbox access, not admin mode.
+	if len(roles) == 0 {
+		return p, "", ErrNotFound
+	}
+	p.MailboxRoles = roles
+	p.ViaSession = true
+	p.SessionHash = auth.HashToken(token)
+	return p, csrf, nil
+}
+
+// clientMailboxRoles returns a key's per-inbox roles from the unified client
+// bindings table.
+func (s *Store) clientMailboxRoles(ctx context.Context, clientID string) (map[string]string, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM client_inbox_bindings WHERE client_id=?`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var inboxID, role string
+		if err = rows.Scan(&inboxID, &role); err != nil {
+			return nil, err
+		}
+		out[inboxID] = role
+	}
+	return out, rows.Err()
 }
 
 // userMailboxRoles returns a non-admin user's per-inbox roles. A user with no

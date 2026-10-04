@@ -147,6 +147,7 @@ func migrations(dataDir string) []migration {
 			tableExists("webauthn_credentials"),
 		)},
 		{version: "044", sql: migration044, detect: stateOf(columnAdded("inboxes", "trash_retention_days"))},
+		{version: "045", sql: migration045, detect: stateOf(tableExists("key_sessions"))},
 	}
 }
 
