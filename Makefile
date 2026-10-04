@@ -1,17 +1,34 @@
-.PHONY: build test run fmt vet dist docs changelog dialmx
+.PHONY: build test test-all smoke vet fmt-tests run fmt dist docs changelog dialmx mx-fixture
 build:
 	./mailmoose-go.sh build ./cmd/server
 # dialmx builds the standalone Dial MX receiver (see docs/DIALMX.md).
 dialmx:
 	./mailmoose-go.sh build -buildvcs=false ./dialmx/cmd/receiver
+# mx-fixture builds the receiver binary the launcher RSS test measures. The
+# test skips when it is absent, so this is opt-in (Docker root build output
+# lands owned by root; harmless, it is gitignored).
+mx-fixture:
+	./mailmoose-go.sh build -buildvcs=false -o tests/fixtures/mailmoose-mx ./dialmx/cmd/receiver
+# Standard commands go through tests/run.sh so every run is captured under
+# tests/logs/runs/<run-id>/ (full logs, timings, metadata) and never needs a
+# re-run to dig deeper. See docs/TESTING.md.
 test:
-	timeout 90s ./mailmoose-go.sh test -race -count=1 -timeout=45s ./...
+	./tests/run.sh --unit
+# test-all adds the slow gated (smoke) tests.
+test-all:
+	./tests/run.sh --unit --smoke
+smoke:
+	./tests/run.sh --smoke
+vet:
+	./tests/run.sh --vet
+# fmt-tests is the CI formatting gate (gofmt -l; fails on output). `fmt` below
+# rewrites files instead, so they stay separate.
+fmt-tests:
+	./tests/run.sh --fmt
 run:
 	./mailmoose-go.sh run ./cmd/server
 fmt:
-	./mailmoose-go.sh gofmt -w cmd internal dialmx
-vet:
-	./mailmoose-go.sh vet ./...
+	./mailmoose-go.sh gofmt -w cmd internal dialmx tests
 # docs regenerates the checked-in API reference. The Go command runs in a root
 # container, so it writes to stdout and the shell redirect keeps the file owned
 # by the host user.

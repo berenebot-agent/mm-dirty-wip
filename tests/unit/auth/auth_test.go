@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/tests/support/smoke"
 )
 
 func TestLiveArgon2idRoundTrip(t *testing.T) {
@@ -52,6 +53,7 @@ func TestFastArgon2RoundTrip(t *testing.T) {
 const legacyPBKDF2Hash = "pbkdf2-sha256$310000$MDEyMzQ1Njc4OWFiY2RlZg$G33eWH4HzmUuCbDixK08x1/nRbrOAEEKU7d108gnqpg"
 
 func TestLegacyPBKDF2StillVerifies(t *testing.T) {
+	smoke.Require(t)
 	if !auth.CheckPassword(legacyPBKDF2Hash, "correct horse battery staple") {
 		t.Fatal("legacy pbkdf2 hash did not verify")
 	}

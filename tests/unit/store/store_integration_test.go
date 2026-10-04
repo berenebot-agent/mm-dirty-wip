@@ -10,15 +10,12 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 func testStore(t *testing.T) (*store.Store, model.User, model.Domain, []model.Inbox) {
 	t.Helper()
-	s, err := store.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
+	s := testdb.Open(t)
 	u, err := s.CreateAccountAndAdmin(context.Background(), "Test", "admin@example.com", "correct horse battery staple", 100<<20)
 	if err != nil {
 		t.Fatal(err)

@@ -50,6 +50,22 @@ func Open(dataDir string) (*Store, error) {
 }
 func (s *Store) Close() error { _ = s.read.Close(); return s.write.Close() }
 func (s *Store) Path() string { return s.path }
+
+// Checkpoint folds the write-ahead log back into the main database file. It is
+// used when a database file must be copied (test fixtures, backup helpers)
+// without the -wal and -shm side files.
+func (s *Store) Checkpoint() error {
+	_, err := s.write.ExecContext(context.Background(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+	return err
+}
+
+// VacuumInto writes a consistent snapshot of the database to dest, producing a
+// single self-contained file with no -wal or -shm companion. dest must not
+// already exist.
+func (s *Store) VacuumInto(dest string) error {
+	_, err := s.write.ExecContext(context.Background(), `VACUUM INTO ?`, dest)
+	return err
+}
 func (s *Store) migrate(ctx context.Context) error {
 	// Pin the single writer connection so the foreign_keys pragma and the
 	// migration transaction run on the same connection.

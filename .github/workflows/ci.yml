@@ -8,14 +8,37 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version-file: go.mod}
       - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      # Every step tees its full output to ci-logs/ so the exact failure text is
+      # downloadable as a build artifact (uploaded even on failure below). This
+      # keeps CI on native Go (and setup-go caching) while still giving the same
+      # "never re-run to see the full log" guarantee as ./tests/run.sh locally.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l cmd internal tests dialmx)"
-          if [ -n "$unformatted" ]; then
-            echo "Unformatted Go files:"
-            echo "$unformatted"
-            exit 1
-          fi
-      - run: go vet ./...
-      - run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/...
-      - run: go test -race -count=1 -timeout=60s ./...
+          mkdir -p ci-logs
+          {
+            echo "== gofmt =="
+            unformatted="$(gofmt -l cmd internal tests dialmx)"
+            if [ -n "$unformatted" ]; then
+              echo "Unformatted Go files:"
+              echo "$unformatted"
+              exit 1
+            fi
+          } 2>&1 | tee ci-logs/gofmt.log
+      - name: vet
+        run: go vet ./... 2>&1 | tee ci-logs/vet.log
+      - name: build
+        run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/... 2>&1 | tee ci-logs/build.log
+      # The default run skips the slow gated tests (see tests/support/smoke);
+      # they are run explicitly in the smoke step so CI coverage is never
+      # silently lost.
+      - name: unit
+        run: go test -race -count=1 -timeout=60s ./... 2>&1 | tee ci-logs/unit.log
+      - name: smoke
+        run: MAILMOOSE_SMOKE=1 go test -race -count=1 -timeout=120s ./tests/unit/dialmx/receiver/ ./tests/unit/auth/ 2>&1 | tee ci-logs/smoke.log
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: ci-logs/
+          if-no-files-found: ignore

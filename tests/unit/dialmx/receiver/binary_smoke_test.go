@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/emersion/go-smtp"
+
+	"github.com/dellarb/mailmoose/tests/support/smoke"
 )
 
 // buildReceiverBinary compiles the real dialmx/cmd/receiver binary once. It is
@@ -125,6 +127,7 @@ func freePort(t *testing.T) string {
 // temporary failure for an unregistered domain, then SIGTERMs the process and
 // requires it to exit within the bounded shutdown window.
 func TestBinaryHTTP2AndSMTP(t *testing.T) {
+	smoke.Require(t)
 	bin := buildReceiverBinary(t)
 	certFile, keyFile, pool := selfSignedCA(t)
 	sessionAddr := freePort(t)
