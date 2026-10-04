@@ -1659,6 +1659,14 @@ function clearUrlParams(names) {
       autoTrashSection.hidden = !autoTrash.checked;
     });
   }
+  // The auto-action controls live in their own form on the Connectors tab, so
+  // its action is the inbox edit endpoint's sibling and needs the open inbox id.
+  var connectorsForm = document.getElementById('inbox-connectors-form');
+  function setConnectorsFormAction(id) {
+    if (connectorsForm) {
+      connectorsForm.action = '/ui/inboxes/' + encodeURIComponent(id) + '/auto-actions';
+    }
+  }
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
   var connectorAdd = document.getElementById('inbox-connector-add');
@@ -1702,6 +1710,14 @@ function clearUrlParams(names) {
   form.addEventListener('submit', function () {
     inboxSubmitting = true;
   });
+  // The Connectors tab posts its own form to the auto-actions endpoint. Flag it
+  // too, so a browser that fires `close` on the dialog as the page unloads does
+  // not strip the URL params the redirect needs to reopen the dialog.
+  if (connectorsForm) {
+    connectorsForm.addEventListener('submit', function () {
+      inboxSubmitting = true;
+    });
+  }
   function resumeInbox() {
     if (!suspendedFromInbox) {
       return;
@@ -1959,6 +1975,7 @@ function clearUrlParams(names) {
       var id = encodeURIComponent(btn.dataset.id || '');
       editInboxID = btn.dataset.id || '';
       form.action = '/ui/inboxes/' + id + '/edit';
+      setConnectorsFormAction(btn.dataset.id || '');
       if (deleteBtn) {
         deleteBtn.dataset.id = btn.dataset.id || '';
         deleteBtn.dataset.address = btn.dataset.address || '';
@@ -2274,6 +2291,11 @@ function clearUrlParams(names) {
       }
       if (dlg.id === 'inbox-edit-dialog') {
         dlg.classList.add('inbox-dialog--wide');
+        // The inbox save button belongs to the main edit form; the Connectors
+        // tab carries its own form and save control, so hide the main one there
+        // (its fields are not that form's, and a cross-form submit would post
+        // empty auto-action fields). The connectors form's own button is shown
+        // by its presence.
         var inboxSave = dlg.querySelector('#inbox-edit-save');
         if (inboxSave) {
           inboxSave.hidden = name === 'connectors';
