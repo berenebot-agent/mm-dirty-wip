@@ -57,6 +57,17 @@ type WebAuthnCredential struct {
 	Name         string    `json:"name"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
+	// BackupEligible reports whether the credential can be synced between
+	// devices. It is fixed at registration and must be reconstructed on the
+	// credential before the library verifies an assertion, which hard-fails on
+	// a mismatch against the authenticator's flag.
+	BackupEligible bool `json:"-"`
+	// BackupState reports whether the credential is currently backed up. It
+	// can change between ceremonies.
+	BackupState bool `json:"-"`
+	// AAGUID and AttestationType are stored for diagnostics/display only.
+	AAGUID          string `json:"-"`
+	AttestationType string `json:"-"`
 }
 
 // Invite kinds. An account_admin invite provisions a new, separate account

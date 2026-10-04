@@ -163,7 +163,7 @@ func (s *Store) SyncSystemAdmin(ctx context.Context, accountName, email, passwor
 	// A pre-existing system administrator other than the target loses the role.
 	demote := sysErr == nil && sysUID != targetUID
 
-	set := []string{"is_admin=1", "is_system_admin=1"}
+	set := []string{"is_admin=1", "is_system_admin=1", "password_auth_enabled=1"}
 	if emailChanged {
 		set = append(set, "email=?")
 	}

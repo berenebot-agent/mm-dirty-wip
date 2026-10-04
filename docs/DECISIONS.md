@@ -2130,8 +2130,37 @@ relay rows, connector-specific admin routes and UI parity, and a small external
 OpenClaw channel plugin. No new runtime service or dependency is added to
 MailMoose.
 
-## Future extension register
+## D075 — Passkey backup flags, sysadmin break-glass, and atomic auth-method changes
 
+**Decision:** Passkeys are an additive sign-in method with three supporting
+invariants made explicit:
+
+- The backup-eligible and backup-state flags observed at registration are
+  persisted and reconstructed on the credential before assertion verification.
+  The `go-webauthn` library rejects an assertion whose authenticator data
+  disagrees with the stored backup-eligible flag, so a synced passkey
+  (iCloud Keychain, Google Password Manager) cannot log in if the flag is
+  dropped.
+- The system administrator can never disable password sign-in. The
+  "make this my only sign-in method" flow is hidden and refused for that
+  account, and `SyncSystemAdmin` always writes `password_auth_enabled=1` when it
+  reconciles the config-owned credential. The config password remains the
+  break-glass recovery path documented in SECURITY.md.
+- `SetPasswordAuth` and `UpdateWebAuthnCredentialUse` perform their read and
+  write in a single `BEGIN IMMEDIATE` transaction, so a concurrent passkey
+  delete cannot interleave with disabling password auth and leave an account
+  with no usable method.
+
+**Reason:** These are correctness and safety requirements, not preferences. The
+backup-flag omission broke every synced passkey; the sysadmin guard preserves
+the documented recovery invariant; the transaction removes a check-then-act
+race in the lockout guard.
+
+**Complexity:** No new dependency, service or schema change beyond reading
+columns that already existed. The sysadmin guard adds one conditional in the
+store, and the transaction change is local to two store methods.
+
+## Future extension register
 
 Potential future additions include:
 

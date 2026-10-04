@@ -156,7 +156,10 @@ The system administrator may additionally register passkeys (WebAuthn). These
 are **additive**: they are an independent sign-in method the configuration never
 creates, rotates, or deletes, and the configured password always remains
 available as a break-glass recovery path. Rotating `ADMIN_PASSWORD` revokes
-existing sessions but never removes registered passkeys.
+existing sessions but never removes registered passkeys. The system
+administrator cannot disable password sign-in — the "make this my only sign-in
+method" option is hidden and refused for that account, and a config-driven
+credential rotation always restores `password_auth_enabled`.
 
 ### Password hashing and passkeys
 
