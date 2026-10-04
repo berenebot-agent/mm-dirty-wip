@@ -37,6 +37,26 @@ type User struct {
 	// Timezone is the user's display time zone override (IANA name). Empty
 	// means "inherit the account default". UI-only; never exposed over the API.
 	Timezone string `json:"-"`
+	// PasswordEnabled reports whether password authentication is available for
+	// this user. It is false for passkey-only users; passkeys remain a valid
+	// login method regardless.
+	PasswordEnabled bool `json:"-"`
+}
+
+// WebAuthnCredential is one registered passkey. CredentialID and PublicKey are
+// the WebAuthn credential handle and public key exactly as produced by the
+// authenticator; the raw credential handle is the browser-side lookup key and
+// is unique across the installation.
+type WebAuthnCredential struct {
+	ID           string    `json:"id"`
+	UserID       string    `json:"-"`
+	CredentialID []byte    `json:"-"`
+	PublicKey    []byte    `json:"-"`
+	SignCount    uint32    `json:"-"`
+	Transports   []string  `json:"-"`
+	Name         string    `json:"name"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
 }
 
 // Invite kinds. An account_admin invite provisions a new, separate account

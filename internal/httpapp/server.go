@@ -81,6 +81,13 @@ type Server struct {
 	inboundSem      chan struct{}
 	streamLimiter   *concurrentLimiter
 	waitLimiter     *concurrentLimiter
+	// webauthn is the passkey ceremony service. It is nil when the deployment
+	// has no usable relying-party id (e.g. a struct-literal test config with no
+	// BASE_URL), in which case passkey routes report that they are unavailable.
+	webauthn *auth.WebAuthnService
+	// webauthnLoginLimiter bounds passkey login attempts per source address,
+	// separate from the password limiter so one cannot exhaust the other.
+	webauthnLoginLimiter *limiter
 }
 
 type ctxKey int
@@ -102,17 +109,31 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	if conc < 1 {
 		conc = 32
 	}
-	return &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
-		loginLimiter:    newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		sendLimiter:     newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
-		unroutedLim:     newLimiter(1, time.Minute),
-		passwordLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		registerLimiter: newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
-		flashes:         newFlashStore(64, 64<<20),
-		assetVersion:    fmt.Sprintf("%x", sum[:6]),
-		inboundSem:      make(chan struct{}, conc),
-		streamLimiter:   newConcurrentLimiter(maxConcurrentLongLived),
-		waitLimiter:     newConcurrentLimiter(maxConcurrentLongLived)}
+	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
+		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		sendLimiter:          newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
+		unroutedLim:          newLimiter(1, time.Minute),
+		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		registerLimiter:      newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
+		flashes:              newFlashStore(64, 64<<20),
+		assetVersion:         fmt.Sprintf("%x", sum[:6]),
+		inboundSem:           make(chan struct{}, conc),
+		streamLimiter:        newConcurrentLimiter(maxConcurrentLongLived),
+		waitLimiter:          newConcurrentLimiter(maxConcurrentLongLived),
+		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute)}
+	if rpID := svc.Config.WebAuthnRPID(); rpID != "" {
+		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
+			RPDisplayName: "MailMoose",
+			RPID:          rpID,
+			RPOrigins:     svc.Config.WebAuthnOrigins(),
+		})
+		if err == nil {
+			srv.webauthn = wa
+		} else if log != nil {
+			log.Warn("passkeys disabled: could not initialise WebAuthn", "error", err)
+		}
+	}
+	return srv
 }
 
 // assetURL returns a content-hashed asset path so a rebuilt binary always
@@ -141,11 +162,20 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)
 	m.HandleFunc("POST /login", s.withPreAuthCSRF(s.loginPost))
+	// Passkey login is a two-step ceremony; the challenge token is carried in
+	// the request body, so no pre-auth CSRF cookie is needed beyond the origin
+	// check the WebAuthn library performs on the assertion itself.
+	m.HandleFunc("POST /login/webauthn/begin", s.webauthnLoginBegin)
+	m.HandleFunc("POST /login/webauthn/finish", s.webauthnLoginFinish)
 	m.HandleFunc("POST /logout", s.withSession(s.withCSRF(s.logoutPost)))
 	m.HandleFunc("GET /account", s.withSession(s.settingsGet))
 	m.HandleFunc("POST /ui/account/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
+	m.HandleFunc("POST /ui/account/passkeys/begin", s.withSession(s.withCSRF(s.uiPasskeyRegisterBegin)))
+	m.HandleFunc("POST /ui/account/passkeys/finish", s.withSession(s.withCSRF(s.uiPasskeyRegisterFinish)))
+	m.HandleFunc("POST /ui/account/passkeys/rename", s.withSession(s.withCSRF(s.uiPasskeyRename)))
+	m.HandleFunc("POST /ui/account/passkeys/delete", s.withSession(s.withCSRF(s.uiPasskeyDelete)))
 	m.HandleFunc("POST /ui/account/trash-retention", s.withSession(s.withCSRF(s.uiSettingsTrashRetention)))
 	m.HandleFunc("POST /ui/account/timezone", s.withSession(s.withCSRF(s.uiSettingsAccountTimezone)))
 	m.HandleFunc("POST /ui/account/timezone/me", s.withSession(s.withCSRF(s.uiSettingsUserTimezone)))

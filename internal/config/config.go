@@ -463,6 +463,30 @@ func (c Config) BaseHost() string {
 	return ""
 }
 
+// WebAuthnRPID returns the relying-party id for passkeys: the canonical host
+// with any port removed. WebAuthn scopes a credential to a registrable domain,
+// so the port must not be included; a bare "localhost" stays "localhost" for
+// local development.
+func (c Config) WebAuthnRPID() string {
+	host := c.BaseHost()
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// WebAuthnOrigins returns the exact origin(s) permitted to complete a passkey
+// ceremony. It is the canonical BASE_URL; no other origin is accepted.
+func (c Config) WebAuthnOrigins() []string {
+	if c.BaseURL == "" {
+		return nil
+	}
+	return []string{c.BaseURL}
+}
+
 // parseTrustedProxies parses a comma-separated list of IP addresses or CIDR
 // networks into prefixes. A bare IP is treated as a /32 or /128.
 func parseTrustedProxies(raw string) ([]netip.Prefix, error) {

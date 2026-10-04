@@ -151,3 +151,24 @@ system administrator from changing its email or password and
 configuration instead. Resets for ordinary users revoke all their browser
 sessions and record an audit event without recording the password; API keys are
 revoked only on an explicit `mailmoose admin revoke-api-keys`.
+
+The system administrator may additionally register passkeys (WebAuthn). These
+are **additive**: they are an independent sign-in method the configuration never
+creates, rotates, or deletes, and the configured password always remains
+available as a break-glass recovery path. Rotating `ADMIN_PASSWORD` revokes
+existing sessions but never removes registered passkeys.
+
+### Password hashing and passkeys
+
+Human passwords are hashed with Argon2id (`m=65536`, `t=3`, `p=4`). Because
+Argon2id commits 64 MiB per derivation, a process-wide admission gate admits at
+most four concurrent hashes/verifications, bounding peak memory at 256 MiB. A
+legacy PBKDF2-SHA256 hash (from earlier releases) still verifies and is upgraded
+to Argon2id transparently on the next successful login. Machine tokens (API
+keys, session cookies) are 256-bit random values stored only as SHA-256 hashes.
+
+Passkeys use the `go-webauthn/webauthn` library with attestation explicitly not
+requested and no extensions, so the heavy attestation/TPM code paths are never
+exercised. A user cannot remove their last remaining sign-in method (the store
+refuses to delete the only passkey of a password-disabled account).
+
