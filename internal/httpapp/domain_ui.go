@@ -61,15 +61,15 @@ func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID,
 	if !ok {
 		return nil, false
 	}
-	e.Values, e.KeepSecrets = s.receivingEditorState(ctx, accountID, domainID, provider, e.Fields)
-	// MX receiving depends on the installation-wide receiver. When none is
-	// configured, lead the operator to the system-admin panel before the
-	// per-domain MX steps so the domain does not silently reject mail.
-	if provider == "mx" {
-		if configured, err := s.Service.MXReceiverConfigured(ctx); err == nil && !configured {
-			e.Steps = append([]string{"No installation MX receiver is configured yet. A system administrator must set one under Admin → MX receiver before this domain can receive by MX."}, e.Steps...)
-		}
+	// Direct MX is an admin-only receiving option: it binds the domain to the
+	// installation-wide receiver, which an account admin must explicitly opt
+	// into. Non-admin operators never see it.
+	if provider == "mx" && !principalFromContext(ctx).Admin {
+		return nil, false
 	}
+	e.Values, e.KeepSecrets = s.receivingEditorState(ctx, accountID, domainID, provider, e.Fields)
+	// The Direct MX status panel rendered with the dialog reports whether the
+	// installation receiver is configured, so the editor steps stay generic.
 	return e, true
 }
 
@@ -776,8 +776,7 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "mx":
 		return []string{
-			"First configure the installation MX receiver under Admin → MX receiver (Included or Remote). No per-key registration is needed here.",
-			"Point this domain's MX record at the receiver's advertised SMTP hostname.",
+			"Point this domain's MX record at the receiver's advertised SMTP hostname (shown below).",
 			"Publish an SPF record for the domain; DKIM and DMARC are computed at the receiver.",
 			"Choose an enforcement mode below (moderate is the default), then save.",
 		}
