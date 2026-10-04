@@ -1612,6 +1612,16 @@ function clearUrlParams(names) {
       trashSection.hidden = !trashOverride.checked;
     });
   }
+  var autoMarkRead = document.getElementById('inbox-auto-mark-read');
+  var autoTrash = document.getElementById('inbox-auto-trash');
+  var autoTrashSection = document.getElementById('inbox-auto-trash-section');
+  var autoTrashHours = document.getElementById('inbox-auto-trash-hours');
+  var deliveryTrigger = document.getElementById('inbox-delivery-trigger');
+  if (autoTrash && autoTrashSection) {
+    autoTrash.addEventListener('change', function () {
+      autoTrashSection.hidden = !autoTrash.checked;
+    });
+  }
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
   var connectorAdd = document.getElementById('inbox-connector-add');
@@ -1962,6 +1972,22 @@ function clearUrlParams(names) {
         if (trashDays) {
           trashDays.value = trashVal !== '' ? trashVal : '0';
         }
+      }
+      if (autoMarkRead) {
+        autoMarkRead.checked = btn.dataset.autoMarkRead === '1';
+      }
+      if (autoTrash) {
+        var autoHours = btn.dataset.autoTrashHours || '';
+        autoTrash.checked = autoHours !== '';
+        if (autoTrashSection) {
+          autoTrashSection.hidden = !autoTrash.checked;
+        }
+        if (autoTrashHours) {
+          autoTrashHours.value = autoHours !== '' ? autoHours : '24';
+        }
+      }
+      if (deliveryTrigger) {
+        deliveryTrigger.value = btn.dataset.deliveryTrigger === 'all' ? 'all' : 'any';
       }
       if (dlg._resetTabs) {
         dlg._resetTabs();

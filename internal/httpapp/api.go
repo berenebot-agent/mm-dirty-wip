@@ -192,16 +192,19 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
-			DisplayName          *string            `json:"display_name"`
-			Enabled              *bool              `json:"enabled"`
-			AllowedSenders       *[]string          `json:"allowed_senders"`
-			SenderRestricted     *bool              `json:"sender_restricted"`
-			RequireAuthenticated *bool              `json:"require_authenticated"`
-			ApproverEmail        *string            `json:"approver_email"`
-			Aliases              *[]string          `json:"aliases"`
-			AliasNames           *map[string]string `json:"alias_names"`
-			DefaultSender        *string            `json:"default_sender"`
-			TrashRetentionDays   json.RawMessage    `json:"trash_retention_days"`
+			DisplayName            *string            `json:"display_name"`
+			Enabled                *bool              `json:"enabled"`
+			AllowedSenders         *[]string          `json:"allowed_senders"`
+			SenderRestricted       *bool              `json:"sender_restricted"`
+			RequireAuthenticated   *bool              `json:"require_authenticated"`
+			ApproverEmail          *string            `json:"approver_email"`
+			Aliases                *[]string          `json:"aliases"`
+			AliasNames             *map[string]string `json:"alias_names"`
+			DefaultSender          *string            `json:"default_sender"`
+			TrashRetentionDays     json.RawMessage    `json:"trash_retention_days"`
+			AutoMarkReadOnDelivery *bool              `json:"auto_mark_read_on_delivery"`
+			AutoTrashHours         json.RawMessage    `json:"auto_trash_after_delivery_hours"`
+			DeliveryTrigger        *string            `json:"delivery_trigger"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
@@ -327,6 +330,33 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				days = &n
 			}
 			if err := s.Service.Store.SetInboxTrashRetention(r.Context(), p.AccountID, id, days); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		// auto_trash_after_delivery_hours: absent leaves it unchanged; an
+		// explicit null disables the auto-trash sweep; a positive integer sets
+		// the delay after connector delivery at which a message is trashed.
+		if len(in.AutoTrashHours) > 0 {
+			if string(in.AutoTrashHours) == "null" {
+				if err := s.Service.Store.ClearInboxAutoTrash(r.Context(), p.AccountID, id); err != nil {
+					mapStoreError(w, err)
+					return
+				}
+			} else {
+				var n int
+				if err := json.Unmarshal(in.AutoTrashHours, &n); err != nil {
+					writeError(w, 400, "auto_trash_after_delivery_hours must be a positive integer or null")
+					return
+				}
+				if err := s.Service.Store.SetInboxAutoActions(r.Context(), p.AccountID, id, nil, &n, nil); err != nil {
+					mapStoreError(w, err)
+					return
+				}
+			}
+		}
+		if in.AutoMarkReadOnDelivery != nil || in.DeliveryTrigger != nil {
+			if err := s.Service.Store.SetInboxAutoActions(r.Context(), p.AccountID, id, in.AutoMarkReadOnDelivery, nil, in.DeliveryTrigger); err != nil {
 				mapStoreError(w, err)
 				return
 			}

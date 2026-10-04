@@ -167,8 +167,20 @@ type Inbox struct {
 	// TrashRetentionDays overrides the account's Trash auto-purge window for
 	// this inbox. Nil (absent) inherits the account setting; 0 keeps this
 	// inbox's trashed mail until purged by hand even if the account auto-purges.
-	TrashRetentionDays *int      `json:"trash_retention_days,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
+	TrashRetentionDays *int `json:"trash_retention_days,omitempty"`
+	// AutoMarkReadOnDelivery, when set, marks a message read once a connector
+	// bound to this inbox has successfully delivered it. It is an agent/relay
+	// convenience and defaults off; API keys never trigger it.
+	AutoMarkReadOnDelivery bool `json:"auto_mark_read_on_delivery,omitempty"`
+	// AutoTrashAfterDeliveryHours, when non-nil, moves a delivered message to
+	// Trash that many hours after the delivery instant. Nil disables it. It
+	// applies only to agent/relay connector deliveries.
+	AutoTrashAfterDeliveryHours *int `json:"auto_trash_after_delivery_hours,omitempty"`
+	// DeliveryTrigger selects when the auto-actions fire: "any" (first
+	// connector to deliver) or "all" (every connector that existed when the
+	// message arrived has delivered).
+	DeliveryTrigger string    `json:"delivery_trigger,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // ExternalAlias is a send-only identity: it never participates in inbound
@@ -362,6 +374,16 @@ type Message struct {
 	// raw MIME, FTS entry, attachments and storage accounting until it is
 	// permanently purged (explicitly, or by the per-account retention sweep).
 	DeletedAt *time.Time `json:"deleted_at,omitempty"`
+	// DeliveryActionDueAt is set once a message's inbox delivery auto-actions
+	// have been satisfied: it is the instant at which the message becomes
+	// eligible for the auto-trash sweep (delivery instant plus the inbox's
+	// configured hours). It is nil when no auto-trash is configured or the
+	// trigger is not yet satisfied.
+	DeliveryActionDueAt *time.Time `json:"delivery_action_due_at,omitempty"`
+	// Deliveries lists the connectors that have successfully delivered this
+	// message, one entry per connector. It is populated on the message read
+	// surfaces and is empty when nothing has delivered the message yet.
+	Deliveries []MessageDelivery `json:"deliveries,omitempty"`
 	// Labels are free-text tags on the message. There is no account catalogue;
 	// matching ignores case (COLLATE NOCASE) and surrounding whitespace.
 	Labels         []string `json:"labels,omitempty"`
@@ -385,6 +407,14 @@ type Message struct {
 	// from a consumed approval control message. Control mail is never stored in
 	// the messages table; see ControlMessage.
 	Approval bool `json:"approval,omitempty"`
+}
+
+// MessageDelivery records that one connector (client) has successfully
+// delivered a message. It is the durable evidence behind the inbox
+// delivery-triggered auto-actions.
+type MessageDelivery struct {
+	ClientID    string    `json:"client_id"`
+	DeliveredAt time.Time `json:"delivered_at"`
 }
 
 // BlockedMessage is a metadata-only record of inbound mail rejected by an
