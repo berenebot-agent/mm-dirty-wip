@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Delivery auto-actions: saving the inbox edit dialog from any tab other than
+  Connectors no longer clears the inbox's auto-action policy. The controls live
+  on the Connectors tab, and a save that does not carry them now leaves the
+  policy untouched instead of reading the absent fields as "off".
+- Delivery auto-actions: the inbox Connectors tab now has its own **Save
+  auto-actions** control. Previously the control was unreachable — the tab hid
+  the dialog's save button and nothing else posted those fields, so the policy
+  could only be set by the API or the connector-create wizard.
 - Passkeys: registration from the Account page now sends the CSRF token, so
   "Add a passkey" no longer fails with a 403. The login/registration UI is
   disabled with an explanatory message on insecure (non-HTTPS) origins.
