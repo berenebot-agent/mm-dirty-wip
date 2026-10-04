@@ -28,6 +28,18 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Account page: the settings are now grouped into three labelled sections —
+  "Your settings" (personal time zone, passkeys, email and password), "Account
+  settings" (account name, default time zone, Trash retention) and "Account
+  administration" (mailer, mailbox operators and invitations). The account-level
+  settings and account administration are shown only to an account Admin, and
+  the account name and default time zone are now enforced as Admin-only on the
+  server.
+- Trash: an inbox can override its account's Trash auto-purge window from the
+  inbox Quota tab (`trash_retention_days` on `PATCH /v1/inboxes/{id}`). A
+  non-negative value sets the override (0 keeps that inbox's trashed mail until
+  purged by hand); clearing it inherits the account default. The retention sweep
+  uses the inbox override when set.
 - Passkeys (WebAuthn): sign in without a password using Touch ID, Windows
   Hello, or a security key. Register one or more passkeys from the Account
   page; the login page gains a "Sign in with a passkey" button using a

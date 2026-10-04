@@ -307,6 +307,8 @@ func (s *Server) uiAdminSetQuota(w http.ResponseWriter, r *http.Request) {
 // shown to an account Admin. It carries the mailer selector, the operator list
 // and pending invitations, and the create/edit dialog.
 const accountOperatorsSection = `{{if .Principal.Admin}}
+<h3 class="section-head">Account administration</h3>
+<p class="muted">Manage who can sign in to {{.Account.Name}} and how its invitations are sent.</p>
 {{if .InviteLink}}<section class="card"><h2>Setup link</h2><p class="muted">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><div class="secret"><pre>{{.InviteLink}}</pre></div></section>{{end}}
 <section class="card"><h2>Mailer</h2><p class="muted">The mailbox this account sends its invitations from. Only this account's mailboxes can be selected.</p><form method="post" action="/ui/account/mailer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Mailbox</label><select name="inbox"><option value="">None</option>{{range .Inboxes}}<option value="{{.ID}}"{{if eq .ID $.AccountMailerInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select><div class="dialog-actions"><button>Save</button></div></form></section>
 <section class="card"><div class="card-head"><h2>Mailbox operators</h2><button type="button" id="add-operator">Create invitation</button></div><p class="muted">Operators sign in with their own login and are Owner of the mailboxes you select. They cannot manage domains, clients or account settings.</p>

@@ -1604,6 +1604,14 @@ function clearUrlParams(names) {
   var address = document.getElementById('inbox-edit-address');
   var display = form.querySelector('[name=display]');
   var usage = document.getElementById('inbox-edit-usage');
+  var trashOverride = document.getElementById('inbox-trash-retention-override');
+  var trashSection = document.getElementById('inbox-trash-retention-section');
+  var trashDays = document.getElementById('inbox-trash-retention-days');
+  if (trashOverride && trashSection) {
+    trashOverride.addEventListener('change', function () {
+      trashSection.hidden = !trashOverride.checked;
+    });
+  }
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
   var connectorAdd = document.getElementById('inbox-connector-add');
@@ -1944,6 +1952,16 @@ function clearUrlParams(names) {
       }
       if (usage) {
         usage.textContent = btn.dataset.usage || '—';
+      }
+      if (trashOverride) {
+        var trashVal = btn.dataset.trashRetention || '';
+        trashOverride.checked = trashVal !== '';
+        if (trashSection) {
+          trashSection.hidden = !trashOverride.checked;
+        }
+        if (trashDays) {
+          trashDays.value = trashVal !== '' ? trashVal : '0';
+        }
       }
       if (dlg._resetTabs) {
         dlg._resetTabs();

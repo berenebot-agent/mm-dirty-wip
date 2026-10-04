@@ -163,8 +163,12 @@ type Inbox struct {
 	AliasNames map[string]string `json:"alias_names,omitempty"`
 	// DefaultSender is the full address compose/reply preselects as From. It is
 	// the primary Address or one of Aliases; empty means the primary.
-	DefaultSender string    `json:"default_sender,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
+	DefaultSender string `json:"default_sender,omitempty"`
+	// TrashRetentionDays overrides the account's Trash auto-purge window for
+	// this inbox. Nil (absent) inherits the account setting; 0 keeps this
+	// inbox's trashed mail until purged by hand even if the account auto-purges.
+	TrashRetentionDays *int      `json:"trash_retention_days,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 // ExternalAlias is a send-only identity: it never participates in inbound
