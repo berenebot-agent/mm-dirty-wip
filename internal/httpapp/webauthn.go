@@ -34,7 +34,10 @@ func (s *Server) webAuthnUser(r *http.Request, u model.User) (*auth.WebAuthnUser
 }
 
 // toWebAuthnCredentials converts stored rows into the library's credential
-// representation used for exclusion lists and login verification.
+// representation used for exclusion lists and login verification. Backup
+// eligibility and state must be reconstructed: the library hard-fails an
+// assertion when the stored BackupEligible does not match the authenticator's
+// flag, which is fixed at registration and set for synced passkeys.
 func toWebAuthnCredentials(creds []model.WebAuthnCredential) []webauthn.Credential {
 	out := make([]webauthn.Credential, 0, len(creds))
 	for _, c := range creds {
@@ -46,6 +49,10 @@ func toWebAuthnCredentials(creds []model.WebAuthnCredential) []webauthn.Credenti
 			ID:        c.CredentialID,
 			PublicKey: c.PublicKey,
 			Transport: transports,
+			Flags: webauthn.CredentialFlags{
+				BackupEligible: c.BackupEligible,
+				BackupState:    c.BackupState,
+			},
 			Authenticator: webauthn.Authenticator{
 				SignCount: c.SignCount,
 			},
@@ -134,16 +141,36 @@ func (s *Server) uiPasskeyRegisterFinish(w http.ResponseWriter, r *http.Request)
 	}
 	// When the user chose to make this passkey their only sign-in method, disable
 	// password authentication now that a passkey exists. The add above already
-	// succeeded, so the account always has at least one working method.
+	// succeeded, so the account always has at least one working method. The
+	// system administrator keeps password sign-in as a break-glass recovery
+	// path, so the request is ignored for them.
 	passwordOnly := false
-	if r.URL.Query().Get("only") == "1" {
+	if r.URL.Query().Get("only") == "1" && !u.SystemAdmin {
 		if err := s.Service.Store.SetPasswordAuth(r.Context(), p.UserID, p.AccountID, false); err != nil {
 			writeError(w, http.StatusInternalServerError, "passkey saved, but could not disable password sign-in")
 			return
 		}
 		passwordOnly = true
 	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "user.passkey_add", name)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "password_only": passwordOnly})
+}
+
+// uiPasskeyEnablePassword re-enables password sign-in for a passkey-only user
+// who wants to remove the "only sign-in method" state. It refuses for the
+// system administrator, whose password is config-owned.
+func (s *Server) uiPasskeyEnablePassword(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if p.SystemAdmin {
+		s.settingsRedirect(w, r, "", "The system administrator's password is managed by the deployment configuration.")
+		return
+	}
+	if err := s.Service.Store.SetPasswordAuth(r.Context(), p.UserID, p.AccountID, true); err != nil {
+		s.settingsRedirect(w, r, "", "Could not re-enable password sign-in.")
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "user.password_enabled", "")
+	s.settingsRedirect(w, r, "Password sign-in re-enabled. Set a new password below.", "")
 }
 
 // uiPasskeyRename changes a passkey's label.
@@ -154,6 +181,7 @@ func (s *Server) uiPasskeyRename(w http.ResponseWriter, r *http.Request) {
 		s.settingsRedirect(w, r, "", "Could not rename passkey.")
 		return
 	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "user.passkey_rename", "")
 	s.settingsRedirect(w, r, "Passkey renamed.", "")
 }
 
@@ -169,12 +197,15 @@ func (s *Server) uiPasskeyDelete(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.settingsRedirect(w, r, "", "Could not remove passkey.")
 	default:
+		s.Service.Store.Audit(r.Context(), p.AccountID, "user.passkey_remove", "")
 		s.settingsRedirect(w, r, "Passkey removed.", "")
 	}
 }
 
 // webauthnLoginBegin starts a usernameless passkey login. It is rate-limited by
 // source address; the ceremony itself proves the user, so no email is required.
+// The one-use ceremony token is returned in the JSON body and echoed back by the
+// client in the X-WebAuthn-Challenge header on the finish step.
 func (s *Server) webauthnLoginBegin(w http.ResponseWriter, r *http.Request) {
 	if s.webauthnUnavailable(w) {
 		return

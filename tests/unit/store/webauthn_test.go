@@ -70,7 +70,7 @@ func TestWebAuthnCredentialLookupByCredentialID(t *testing.T) {
 func TestDeleteWebAuthnCredentialLastMethodGuard(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestDeleteWebAuthnCredentialLastMethodGuard(t *testing.T) {
 func TestPasswordlessLoginFailsPasswordPath(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestSyncSystemAdminPreservesPasskeys(t *testing.T) {
 func TestSetPasswordAuthRefusesWithoutPasskey(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
+	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,5 +180,77 @@ func TestSetPasswordAuthRefusesWithoutPasskey(t *testing.T) {
 	// Re-enabling is always allowed.
 	if err := s.SetPasswordAuth(ctx, u.ID, u.AccountID, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestWebAuthnBackupFlagsRoundTrip guards the login path: the stored
+// backup_eligible/backup_state must be read back intact, because the WebAuthn
+// library hard-fails an assertion when the reconstructed BackupEligible does not
+// match the authenticator's flag. Synced passkeys set it.
+func TestWebAuthnBackupFlagsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cred("Synced", 3)
+	c.AttestationType = "none"
+	c.AAGUID = "00000000-0000-0000-0000-000000000000"
+	if err := s.AddWebAuthnCredential(ctx, u.ID, c, "none", c.AAGUID, true, true); err != nil {
+		t.Fatal(err)
+	}
+	byUser, err := s.WebAuthnCredentialsForUser(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byUser) != 1 || !byUser[0].BackupEligible || !byUser[0].BackupState {
+		t.Fatalf("list backup flags = %#v, want eligible+state true", byUser)
+	}
+	byID, err := s.WebAuthnCredentialByCredentialID(ctx, c.CredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !byID.BackupEligible || !byID.BackupState {
+		t.Fatalf("lookup backup flags = %#v, want eligible+state true", byID)
+	}
+	// A successful assertion that flips backup state must persist it.
+	if _, err := s.UpdateWebAuthnCredentialUse(ctx, c.CredentialID, 5, false); err != nil {
+		t.Fatal(err)
+	}
+	byID, err = s.WebAuthnCredentialByCredentialID(ctx, c.CredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byID.BackupEligible != true || byID.BackupState != false {
+		t.Fatalf("after use, flags = eligible:%v state:%v, want true/false", byID.BackupEligible, byID.BackupState)
+	}
+	if byID.SignCount != 5 {
+		t.Fatalf("sign count = %d, want 5", byID.SignCount)
+	}
+}
+
+// TestSetPasswordAuthRefusesForSystemAdmin guards the break-glass invariant:
+// the config-owned sysadmin password must never be disabled by the passkey
+// "only sign-in method" flow.
+func TestSetPasswordAuthRefusesForSystemAdmin(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddWebAuthnCredential(ctx, u.ID, cred("Laptop", 1), "none", "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPasswordAuth(ctx, u.ID, u.AccountID, false); !errors.Is(err, store.ErrLastAuthMethod) {
+		t.Fatalf("disable sysadmin password err = %v, want ErrLastAuthMethod", err)
+	}
+	// Even a config rotation must leave the password usable.
+	if _, changed, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "another correct horse battery staple", 50<<20); err != nil || !changed {
+		t.Fatalf("rotate changed=%v err=%v", changed, err)
+	}
+	if _, err := s.AuthenticateUser(ctx, "admin@example.com", "another correct horse battery staple"); err != nil {
+		t.Fatalf("sysadmin password login after rotation: %v", err)
 	}
 }

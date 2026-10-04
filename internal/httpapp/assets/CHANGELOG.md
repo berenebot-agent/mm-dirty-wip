@@ -6,6 +6,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Passkeys: registration from the Account page now sends the CSRF token, so
+  "Add a passkey" no longer fails with a 403. The login/registration UI is
+  disabled with an explanatory message on insecure (non-HTTPS) origins.
+- Passkeys: synced/backup-eligible credentials (iCloud Keychain, Google
+  Password Manager) now sign in correctly. The stored backup-eligible and
+  backup-state flags are restored on the credential before assertion
+  verification, which previously failed every login with "Backup Eligible flag
+  inconsistency".
+- Passkeys: the system administrator can no longer disable password sign-in via
+  the "only sign-in method" flow, and a config-driven credential rotation always
+  leaves the break-glass password usable.
+- Passkey store operations (`SetPasswordAuth`, `UpdateWebAuthnCredentialUse`)
+  now run their read and write in one immediate transaction, closing a
+  check-then-act race that could leave an account with no usable sign-in method.
+- Passkeys now record audit events for add, rename and remove, and the account
+  page shows last-used time and synced/device-only state plus a control to
+  re-enable password sign-in.
+
 ### Added
 
 - Passkeys (WebAuthn): sign in without a password using Touch ID, Windows
@@ -15,7 +35,8 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   passkeys alongside the deployment-managed `ADMIN_EMAIL`/`ADMIN_PASSWORD`
   break-glass login. A user cannot remove their last remaining sign-in method.
   Passkeys use the `go-webauthn/webauthn` library with no attestation
-  requested.
+  requested, and preference for user verification where the authenticator
+  supports it.
 - Trash: deleting a message moves it to Trash instead of erasing it. Trashed
   messages are hidden from lists, search, threads and unread counts but keep
   their raw MIME, attachments and storage accounting. `POST
