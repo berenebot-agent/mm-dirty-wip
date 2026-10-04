@@ -1373,3 +1373,29 @@ CREATE TABLE IF NOT EXISTS key_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_key_sessions_client ON key_sessions(client_id);
 `
+
+// migration046 adds delivery-driven inbox auto-actions for agent/relay
+// connectors. Three inbox columns carry the per-inbox policy: whether a
+// successful connector delivery marks the message read, an optional number of
+// hours after delivery at which the message is moved to Trash (NULL disables
+// it), and whether the action fires when ANY bound connector has delivered or
+// only once ALL connectors that existed when the message arrived have
+// delivered. message_deliveries records one row per (message, client) so the
+// "all" trigger is evaluated durably without depending on the 30-day delivery
+// logs. messages.delivery_action_due_at is the computed instant at which a
+// delivered message becomes eligible for the Trash sweep, stamped when the
+// trigger is satisfied, so the sweep is a single indexed range query.
+const migration046 = `
+ALTER TABLE inboxes ADD COLUMN auto_mark_read_on_delivery INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inboxes ADD COLUMN auto_trash_after_delivery_hours INTEGER;
+ALTER TABLE inboxes ADD COLUMN delivery_trigger TEXT NOT NULL DEFAULT 'any' CHECK(delivery_trigger IN ('any','all'));
+ALTER TABLE messages ADD COLUMN delivery_action_due_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_messages_delivery_due ON messages(delivery_action_due_at) WHERE delivery_action_due_at IS NOT NULL;
+CREATE TABLE IF NOT EXISTS message_deliveries (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  delivered_at TEXT NOT NULL,
+  PRIMARY KEY(message_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_message_deliveries_message ON message_deliveries(message_id);
+`

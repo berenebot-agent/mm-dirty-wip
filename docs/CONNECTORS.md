@@ -71,6 +71,28 @@ If the message has no plain-text part, the relay event body is the placeholder
 MailMoose. A connector that needs the body should fetch it over the API rather
 than rely on the pushed text.
 
+### Delivery-triggered auto-actions
+
+An inbox may automatically act on mail once a connector has delivered it:
+
+- **Mark read on delivery** — the message leaves the unread count as soon as a
+  connector has received it.
+- **Move to Trash after delivery** — after a configurable number of hours from
+  the delivery instant, the message is moved to Trash, where the ordinary Trash
+  retention then applies.
+
+Both are off by default, are **per-inbox** (they apply to every connector on the
+inbox), and are offered in the connector-create dialog and on the inbox's
+Connectors tab. A **trigger** decides when they fire: `any` (the first connector
+to deliver) or `all` (every connector that existed when the message arrived has
+delivered — a connector added later never pins older mail).
+
+These actions apply to **agent and relay connectors only**. API keys and human
+accounts never trigger them: a poll is not a delivery. Mail that is Spam,
+internal workflow mail, or already trashed is never acted on. A message exposes
+its delivery history (which connector delivered it, and when it becomes eligible
+for auto-trash) on the ordinary read surfaces.
+
 ---
 
 ## 2. API keys

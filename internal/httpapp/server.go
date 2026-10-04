@@ -216,6 +216,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/domains/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteDomain)))
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
 	m.HandleFunc("POST /ui/inboxes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateInbox)))
+	m.HandleFunc("POST /ui/inboxes/{id}/auto-actions", s.withSession(s.withCSRF(s.uiInboxAutoActions)))
 	m.HandleFunc("POST /ui/inboxes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteInbox)))
 	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases", s.withSession(s.withCSRF(s.uiCreateExternalAlias)))
 	m.HandleFunc("GET /ui/inboxes/{id}/external-aliases/{aliasID}", s.withSession(s.uiExternalAlias))

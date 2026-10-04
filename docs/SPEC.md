@@ -205,6 +205,14 @@ by default), after which the delivery is marked failed and the cursor advances.
 A webhook can be paused without losing its place. Destinations must be public
 HTTPS, so a webhook cannot target a private or loopback address.
 
+An inbox may carry delivery-triggered auto-actions for its agent/relay
+connectors: mark a delivered message read, and optionally move it to Trash a
+configurable number of hours after delivery. They are off by default, are
+per-inbox, and apply only to agent/relay connectors (an API-key poll is not a
+delivery). A trigger selects whether they fire on the first connector delivery
+(`any`) or once every connector present when the message arrived has delivered
+(`all`). Spam, internal and already-trashed mail is never acted on.
+
 An additional **Admin** role applies at the account level.
 
 **Admin**

@@ -148,6 +148,13 @@ func migrations(dataDir string) []migration {
 		)},
 		{version: "044", sql: migration044, detect: stateOf(columnAdded("inboxes", "trash_retention_days"))},
 		{version: "045", sql: migration045, detect: stateOf(tableExists("key_sessions"))},
+		{version: "046", sql: migration046, detect: allOf(
+			columnAdded("inboxes", "auto_mark_read_on_delivery"),
+			columnAdded("inboxes", "auto_trash_after_delivery_hours"),
+			columnAdded("inboxes", "delivery_trigger"),
+			columnAdded("messages", "delivery_action_due_at"),
+			tableExists("message_deliveries"),
+		)},
 	}
 }
 

@@ -252,5 +252,10 @@ func (s *Store) RecordWebhookDelivery(ctx context.Context, clientID string, even
 	if err = recordDeliveryLog(ctx, tx, clientID, eventID, status, attempts, errText, next, now); err != nil {
 		return err
 	}
+	if success {
+		if err = recordEventDeliveryTx(ctx, tx, clientID, eventID, now); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
