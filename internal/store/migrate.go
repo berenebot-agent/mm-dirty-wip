@@ -155,6 +155,10 @@ func migrations(dataDir string) []migration {
 			columnAdded("messages", "delivery_action_due_at"),
 			tableExists("message_deliveries"),
 		)},
+		{version: "047", sql: migration047, detect: allOf(
+			columnAdded("inboxes", "storage_quota_bytes"),
+			columnAdded("inboxes", "storage_used_bytes"),
+		)},
 	}
 }
 

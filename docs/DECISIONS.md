@@ -2291,6 +2291,58 @@ maintenance step reusing the existing event path and file-unlink flow, optional
 `PATCH` fields, and wizard/tab controls. No new dependency, service or route
 beyond a small UI-only auto-actions save endpoint.
 
+## D079 — Per-inbox storage quotas
+
+**Decision:** An inbox carries an optional storage cap layered on top of the
+existing account-level quota. It bounds **stored bytes** for one inbox so a
+single agent mailbox cannot consume an account's whole allowance.
+
+- `inboxes.storage_quota_bytes` is nullable: `NULL` means the inbox has no cap
+  of its own (only the account quota applies), `0` means explicitly unlimited,
+  and a positive value is the cap in bytes. `inboxes.storage_used_bytes` is the
+  maintained counter and is nullable so a pre-migration inbox is distinguishable
+  from an empty one.
+- Accounting mirrors the account rule exactly: non-workflow messages in any
+  direction or state (inbound, outbound, Spam, trashed) plus the inbox's
+  editable drafts and draft attachments. Workflow mail remains excluded (D041).
+- Enforcement is transactional, in the same `BEGIN IMMEDIATE` write that
+  persists the message and adjusts the account counter, so the two layers cannot
+  drift and there is no check-then-act window. Inbound, outbound and draft writes
+  that exceed either cap return the existing `store.ErrQuota`, which every
+  transport already maps (webhook 507, MX 452 transient, API 507). The account
+  cap is checked first, then the inbox cap.
+- Counters are **lazily initialized**: an inbox whose `storage_used_bytes` is
+  NULL has it computed once from a SUM over its messages, drafts and draft
+  attachments at the first write that adjusts it (or the first read that needs a
+  number), after which it is authoritative. `CreateInbox` seeds new inboxes at 0.
+  A migration that scanned every inbox was avoided so the upgrade stays cheap.
+- Every path that frees bytes refunds the inbox counter in the same transaction
+  (`PurgeMessage`, `EmptyTrash`, `DeleteMessage`, `PurgeExpiredTrash`, draft and
+  draft-attachment deletion, and the SUM-based account refunds in
+  `PurgeInbox`/`PurgeDomain`), flooring at zero.
+- The cap is exposed on the inbox read model as `storage_quota_bytes` (settable;
+  Admin only) and `storage_used_bytes` (read-only) and on
+  `PATCH /v1/inboxes/{id}` using the same absent/null/integer convention as
+  `trash_retention_days`. Account Admins edit it from the inbox Quota tab
+  (Add and Edit dialogs); the dashboard Size cell turns amber at ≥90% and red at
+  the cap, with a usage tooltip.
+- Lowering the cap below current usage is allowed: existing mail is untouched,
+  the inbox shows as over-quota, and new inbound/outbound mail is refused with
+  `ErrQuota` until usage falls (for example by purging mail).
+
+**Reason:** The account quota is the only capacity control, so one runaway
+inbox could starve every other mailbox in the account with no way to bound it.
+An inbox already presented a Size column and a Quota tab, but the tab said
+"storage is limited at the account level" and did nothing. A nullable per-inbox
+cap adds real fairness without disturbing the account default, mirroring the
+per-inbox Trash-retention override (D076). Reusing `ErrQuota` and the existing
+transport mappings keeps every caller's behaviour unchanged.
+
+**Complexity:** One migration (two nullable inbox columns), a widened
+`adjustStorageTx` helper, inline checks in the two commit paths, one setter and
+one usage read, optional API/UI fields and a size-cell class. No new dependency,
+service or route.
+
 ## Future extension register
 
 Potential future additions include:
