@@ -41,6 +41,52 @@ type dialMXSetupView struct {
 	Statuses     []mxdial.Status
 }
 
+// mxSetupView is the per-domain Direct MX status panel: the installation
+// receiver's mode and live state, and the SMTP hostname the domain should point
+// its MX record at. It carries no secret and mirrors the system-admin receiver
+// configuration read-only, so an account admin choosing Direct MX can see
+// whether mail will actually be accepted without leaving this dialog.
+type mxSetupView struct {
+	Configured bool
+	Mode       string
+	State      string
+	SMTPAddr   string
+}
+
+// mxModeLabel renders the installation receiver mode for the Direct MX panel.
+func mxModeLabel(mode string) string {
+	switch mode {
+	case app.MXModeIncluded:
+		return "Included (receiver runs in this deployment)"
+	case app.MXModeRemote:
+		return "Remote (receiver runs separately)"
+	default:
+		return "Not configured"
+	}
+}
+
+// mxStateLabel renders the live receiver state for the Direct MX panel.
+func mxStateLabel(state string) string {
+	switch state {
+	case app.MXStateActive:
+		return "active"
+	case app.MXStateConnecting:
+		return "connecting"
+	case app.MXStateStandby:
+		return "standby"
+	case app.MXStateDraining:
+		return "draining"
+	case app.MXStateFailed:
+		return "failed"
+	case app.MXStateUnavailable:
+		return "unavailable"
+	case app.MXStateDisabled:
+		return "disabled"
+	default:
+		return "unknown"
+	}
+}
+
 // decodePublicKey decodes the canonical base64url public key stored for a Dial
 // MX credential. The stored form is unchanged; it is only decoded for the TXT
 // record.
@@ -130,6 +176,8 @@ func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
 		"dialmxReady":     dialMXReady,
 		"dialmxReason":    dialMXReason,
 		"dialmxExpiry":    dialMXExpiry,
+		"mxModeLabel":     mxModeLabel,
+		"mxStateLabel":    mxStateLabel,
 	}
 }
 
@@ -157,6 +205,9 @@ type pageData struct {
 	// DialMXSetup is keyed by domain id. The value is a pointer so a lookup for
 	// an unconfigured domain yields nil, which templates treat as absent.
 	DialMXSetup map[string]*dialMXSetupView
+	// MXSetup holds the installation Direct MX receiver status for the per-domain
+	// Direct MX dialog. It is shared by every mx-effective domain.
+	MXSetup *mxSetupView
 	// DomainParentCandidate maps a domain id to the name of the nearest existing
 	// ancestor domain, for a domain that was added before its parent and is not
 	// linked yet. It lets the sending/receiving provider menus offer "Inherited
@@ -934,6 +985,10 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 </div>
 {{end}}{{end}}
 </form>
+{{if and $.MXSetup (eq $sel "mx")}}{{$m := $.MXSetup}}<section class="mx-setup">
+<h3 class="section-head">Direct MX receiver</h3>
+{{if not $m.Configured}}<p class="muted small"><span class="pill amber">not configured</span> No installation MX receiver is configured yet. A system administrator must enable one before this domain can receive mail by Direct MX.</p>{{else}}<p class="muted small">Mode: <b>{{mxModeLabel $m.Mode}}</b> · State: <span class="pill{{if ne $m.State "active"}} amber{{end}}">{{mxStateLabel $m.State}}</span>{{if $m.SMTPAddr}} · point MX at <code>{{$m.SMTPAddr}}</code>{{end}}</p>{{if ne $m.State "active"}}<p class="muted small">The receiver is not active yet; mail will not be accepted until it reports active.</p>{{end}}{{end}}
+</section>{{end}}
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
 <h3 class="section-head">Dial MX key &amp; DNS</h3>
 {{if .ReceiverURLs}}<p class="muted small">Receiver URLs: <code>{{.ReceiverURLs}}</code></p>{{end}}
@@ -1118,7 +1173,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			if e.Provider == recvProvider {
 				e.Selected = true
 				if e.Provider == "mx" {
-					receivingLabel[d.ID] = "MX"
+					receivingLabel[d.ID] = "Direct MX"
 				} else {
 					receivingLabel[d.ID] = e.ProviderLabel
 				}
@@ -1129,6 +1184,31 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			receivingLabel[d.ID] = d.ReceivingProvider
 		}
 		receivingEditors[d.ID] = recvEditors
+	}
+	// Build the Direct MX status panel once when any domain's receiving editor
+	// set offers the admin-only mx provider (which encodes the admin gate). Every
+	// Direct MX dialog shows the same installation receiver state.
+	var mxSetup *mxSetupView
+	for _, editors := range receivingEditors {
+		hasMX := false
+		for _, e := range editors {
+			if e.Provider == "mx" {
+				hasMX = true
+				break
+			}
+		}
+		if !hasMX {
+			continue
+		}
+		if st, err := s.Service.MXReceiverStatus(ctx); err == nil {
+			mxSetup = &mxSetupView{
+				Configured: st.Configured,
+				Mode:       st.Mode,
+				State:      st.State,
+				SMTPAddr:   st.SMTPAddr,
+			}
+		}
+		break
 	}
 
 	notice, secretLabel, secret := r.URL.Query().Get("notice"), "", ""
@@ -1202,7 +1282,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {

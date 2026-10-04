@@ -77,12 +77,14 @@ https://your-host.example/internal/ingest/resend
 
 Resend also works as a sending provider (see below).
 
-## Inbound: Direct SMTP (MX)
+## Inbound: Direct MX
 
 Instead of a webhook provider you can receive mail straight on port 25 with the
-optional MX edge. One setting, `MX_ENABLE`, selects the mode. The server binary
-defaults to `false` when the variable is unset; the shipped `docker-compose.yml`
-sets it to `true`.
+optional MX edge. The installation receiver is configured by a system
+administrator under **Admin → MX receiver**; the legacy `MX_ENABLE` environment
+variable selects the mode only on first import. The server binary defaults to
+`false` when the variable is unset; the shipped `docker-compose.yml` sets it to
+`true`.
 
 - **`true`** (default `docker-compose.yml`) — receive on port 25 with the edge
   embedded in the app container as a separate, unprivileged uid. The edge
@@ -108,8 +110,11 @@ DNS-anchored Ed25519 challenge, and hands accepted mail to the core over
 verified HTTPS/2. Set `DIALMX_MODE=shared` on the receiver. No shared bearer key
 or private MX mode is needed.
 
-A domain's receiving provider is either **MX** (private bearer session) or **Dial MX**
-(core dials receiver), never both. Configure it per domain in the Admin UI under
+A domain's receiving provider is either **Direct MX** (private bearer session
+backed by the installation receiver) or **Dial MX** (core dials receiver), never
+both. **Direct MX** is offered per domain in the receiving dialog to account
+admins only, and shows the installation receiver's live status and advertised
+SMTP hostname; it has no per-domain key. Configure **Dial MX** per domain under
 **Receiving → Dial MX**: enter one or more HTTPS receiver base URLs and publish
 the shown `_mailmoose-mx.<domain>` TXT record and the domain's MX record. The
 signing key is generated per exact domain and stored encrypted. Subdomains can

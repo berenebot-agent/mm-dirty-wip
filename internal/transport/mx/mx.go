@@ -28,7 +28,7 @@ type Transport struct{}
 func init() { transport.RegisterInbound(Transport{}) }
 
 func (Transport) Name() string        { return Provider }
-func (Transport) Description() string { return "MX Direct SMTP to MailMoose on Port 25" }
+func (Transport) Description() string { return "Direct MX (SMTP to the MailMoose receiver)" }
 
 // ConfigFields exposes the per-domain auth enforcement mode. There is no
 // secret: MX is enabled by the operator edge configuration, and credentials are
