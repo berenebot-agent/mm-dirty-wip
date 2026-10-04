@@ -1573,6 +1573,27 @@ function aliasNameByAddress(list) {
   });
 })();
 
+// clearUrlParams strips dialog-opening query params from the address bar so a
+// refresh after cancelling a URL-driven dialog does not re-open it. Replace
+// is safe to call while the page is navigating (the browser ignores it), so
+// submit/redirect flows are unaffected.
+function clearUrlParams(names) {
+  if (!window.history || !window.history.replaceState || !window.URLSearchParams) {
+    return;
+  }
+  var url = new URL(window.location.href);
+  var changed = false;
+  names.forEach(function (name) {
+    if (url.searchParams.has(name)) {
+      url.searchParams.delete(name);
+      changed = true;
+    }
+  });
+  if (changed) {
+    window.history.replaceState(null, '', url.pathname + url.search + url.hash);
+  }
+}
+
 (function () {
   var dlg = document.getElementById('inbox-edit-dialog');
   if (!dlg) {
@@ -1612,6 +1633,20 @@ function aliasNameByAddress(list) {
       dlg.close();
     }
   }
+  // A genuine dismissal (Cancel, Esc, backdrop) drops the URL params that
+  // reopened this dialog. A suspension for a secondary popup, or a form submit
+  // that follows a server redirect, must not: those paths keep the params so
+  // the popup can resume this dialog or the redirect can reopen it.
+  var inboxSubmitting = false;
+  dlg.addEventListener('close', function () {
+    if (suspendedFromInbox || inboxSubmitting) {
+      return;
+    }
+    clearUrlParams(['inbox', 'inbox_tab']);
+  });
+  form.addEventListener('submit', function () {
+    inboxSubmitting = true;
+  });
   function resumeInbox() {
     if (!suspendedFromInbox) {
       return;
@@ -2025,7 +2060,15 @@ function aliasNameByAddress(list) {
     }
   }
   document.querySelectorAll('dialog[id^="external-alias-sending-dialog-"]').forEach(function (connDlg) {
-    connDlg.addEventListener('close', resumeInbox);
+    connDlg.addEventListener('close', function () {
+      var wasSuspended = suspendedFromInbox;
+      resumeInbox();
+      // If this popup resumed the inbox dialog, keep the params so the inbox
+      // dialog stays open. Only clear when it was a standalone URL-opened popup.
+      if (!wasSuspended) {
+        clearUrlParams(['alias', 'provider']);
+      }
+    });
     connDlg.querySelectorAll('form').forEach(function (f) {
       f.addEventListener('submit', function () {
         suspendedFromInbox = false;
@@ -2339,6 +2382,15 @@ function aliasNameByAddress(list) {
       if (dlg) {
         dlg.close();
       }
+    });
+  });
+  // A genuine dismissal of a URL-opened domain or Cloudflare dialog drops the
+  // params that reopened it, so a refresh does not bring it back. The
+  // external-alias sending dialogs are excluded here: their close handler lives
+  // in the inbox settings block, which also restores the suspended inbox.
+  document.querySelectorAll('.domain-dialog[id^="domain-"], .cf-setup-dialog').forEach(function (dlg) {
+    dlg.addEventListener('close', function () {
+      clearUrlParams(['domain', 'kind', 'provider']);
     });
   });
 })();
