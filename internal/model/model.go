@@ -168,6 +168,15 @@ type Inbox struct {
 	// this inbox. Nil (absent) inherits the account setting; 0 keeps this
 	// inbox's trashed mail until purged by hand even if the account auto-purges.
 	TrashRetentionDays *int `json:"trash_retention_days,omitempty"`
+	// StorageQuotaBytes caps this inbox's stored bytes, layered on the
+	// account quota. Nil (absent) means the inbox has no cap of its own (the
+	// account cap still applies); 0 means explicitly unlimited; a positive
+	// value is the cap in bytes.
+	StorageQuotaBytes *int64 `json:"storage_quota_bytes,omitempty"`
+	// StorageUsedBytes is this inbox's maintained storage usage in bytes. It
+	// is 0 for a new inbox and, for a pre-migration inbox, is computed on the
+	// first read or write that needs it.
+	StorageUsedBytes int64 `json:"storage_used_bytes"`
 	// AutoMarkReadOnDelivery, when set, marks a message read once a connector
 	// bound to this inbox has successfully delivered it. It is an agent/relay
 	// convenience and defaults off; API keys never trigger it.

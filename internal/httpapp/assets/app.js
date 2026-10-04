@@ -1306,6 +1306,19 @@ function aliasNameByAddress(list) {
     return;
   }
   var form = dlg.querySelector('form');
+  var addQuotaValue = document.getElementById('inbox-add-quota-value');
+  var addQuotaUnit = document.getElementById('inbox-add-quota-unit');
+  var addQuotaUnlimited = document.getElementById('inbox-add-quota-unlimited');
+  if (addQuotaUnlimited) {
+    addQuotaUnlimited.addEventListener('change', function () {
+      if (addQuotaValue) {
+        addQuotaValue.disabled = addQuotaUnlimited.checked;
+      }
+      if (addQuotaUnit) {
+        addQuotaUnit.disabled = addQuotaUnlimited.checked;
+      }
+    });
+  }
   var editor = initSenderEditor({
     list: document.getElementById('inbox-add-sender-list'),
     input: document.getElementById('inbox-add-sender-input'),
@@ -1599,6 +1612,17 @@ function clearUrlParams(names) {
   if (!dlg) {
     return;
   }
+  // splitBytes picks the largest binary unit that divides a byte count evenly,
+  // so a cap entered as "50 MB" round-trips as "50" + MB rather than 51200 KB.
+  function splitBytes(n) {
+    var units = [['tb', 1099511627776], ['gb', 1073741824], ['mb', 1048576], ['kb', 1024], ['b', 1]];
+    for (var i = 0; i < units.length; i++) {
+      if (n % units[i][1] === 0) {
+        return { value: n / units[i][1], unit: units[i][0] };
+      }
+    }
+    return { value: n, unit: 'b' };
+  }
   var form = document.getElementById('inbox-edit-form');
   var deleteBtn = document.getElementById('inbox-edit-delete');
   var address = document.getElementById('inbox-edit-address');
@@ -1607,6 +1631,19 @@ function clearUrlParams(names) {
   var trashOverride = document.getElementById('inbox-trash-retention-override');
   var trashSection = document.getElementById('inbox-trash-retention-section');
   var trashDays = document.getElementById('inbox-trash-retention-days');
+  var quotaValue = document.getElementById('inbox-edit-quota-value');
+  var quotaUnit = document.getElementById('inbox-edit-quota-unit');
+  var quotaUnlimited = document.getElementById('inbox-edit-quota-unlimited');
+  if (quotaUnlimited) {
+    quotaUnlimited.addEventListener('change', function () {
+      if (quotaValue) {
+        quotaValue.disabled = quotaUnlimited.checked;
+      }
+      if (quotaUnit) {
+        quotaUnit.disabled = quotaUnlimited.checked;
+      }
+    });
+  }
   if (trashOverride && trashSection) {
     trashOverride.addEventListener('change', function () {
       trashSection.hidden = !trashOverride.checked;
@@ -1971,6 +2008,29 @@ function clearUrlParams(names) {
         }
         if (trashDays) {
           trashDays.value = trashVal !== '' ? trashVal : '0';
+        }
+      }
+      if (quotaValue) {
+        var quotaBytes = parseInt(btn.dataset.storageQuota || '', 10);
+        var hasQuota = btn.dataset.storageQuota !== '' && !isNaN(quotaBytes) && quotaBytes > 0;
+        if (quotaUnlimited) {
+          quotaUnlimited.checked = !hasQuota;
+          quotaValue.disabled = !hasQuota;
+          if (quotaUnit) {
+            quotaUnit.disabled = !hasQuota;
+          }
+        }
+        if (hasQuota) {
+          var q = splitBytes(quotaBytes);
+          quotaValue.value = q.value;
+          if (quotaUnit) {
+            quotaUnit.value = q.unit;
+          }
+        } else {
+          quotaValue.value = '';
+          if (quotaUnit) {
+            quotaUnit.value = 'mb';
+          }
         }
       }
       if (autoMarkRead) {

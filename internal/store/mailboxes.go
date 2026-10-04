@@ -543,14 +543,14 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	}
 	id := idgen.New("in")
 	now := nowText()
-	_, err := s.write.ExecContext(ctx, `INSERT INTO inboxes(id,account_id,domain_id,local_part,display_name,created_at) VALUES(?,?,?,?,?,?)`, id, accountID, domainID, localPart, strings.TrimSpace(display), now)
+	_, err := s.write.ExecContext(ctx, `INSERT INTO inboxes(id,account_id,domain_id,local_part,display_name,storage_used_bytes,created_at) VALUES(?,?,?,?,?,0,?)`, id, accountID, domainID, localPart, strings.TrimSpace(display), now)
 	if err != nil {
 		return model.Inbox{}, err
 	}
 	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -569,12 +569,13 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	}
 	defer rows.Close()
 	out := []model.Inbox{}
+	inboxInitialized := map[string]bool{}
 	for rows.Next() {
 		var i model.Inbox
 		var domain, allowed, created string
 		var enabled, restricted, requireAuth, autoMarkRead int
-		var trashRetention, autoTrashHours sql.NullInt64
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created); err != nil {
+		var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
+		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed); err != nil {
 			return nil, err
 		}
 		i.Address = i.LocalPart + "@" + domain
@@ -587,6 +588,14 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 			days := int(trashRetention.Int64)
 			i.TrashRetentionDays = &days
 		}
+		if storageQuota.Valid {
+			quota := storageQuota.Int64
+			i.StorageQuotaBytes = &quota
+		}
+		if storageUsed.Valid {
+			i.StorageUsedBytes = storageUsed.Int64
+			inboxInitialized[i.ID] = true
+		}
 		if autoTrashHours.Valid {
 			hours := int(autoTrashHours.Int64)
 			i.AutoTrashAfterDeliveryHours = &hours
@@ -598,6 +607,18 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		return nil, err
 	}
 	rows.Close()
+	for i := range out {
+		// A NULL counter means the inbox predates migration 047 and has not been
+		// written since. Compute its live usage for display without persisting,
+		// so the advertised number already equals what enforcement would use.
+		if !inboxInitialized[out[i].ID] {
+			used, uerr := s.recomputeInboxStorage(ctx, p.AccountID, out[i].ID)
+			if uerr != nil {
+				return nil, uerr
+			}
+			out[i].StorageUsedBytes = used
+		}
+	}
 	if len(out) > 0 {
 		aliases, aerr := s.ListInboxAliases(ctx, p.AccountID)
 		if aerr != nil {
@@ -650,8 +671,8 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	var i model.Inbox
 	var domain, allowed, created string
 	var enabled, restricted, requireAuth, autoMarkRead int
-	var trashRetention, autoTrashHours sql.NullInt64
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created)
+	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
+	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed)
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
@@ -667,6 +688,20 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 	if trashRetention.Valid {
 		days := int(trashRetention.Int64)
 		i.TrashRetentionDays = &days
+	}
+	if storageQuota.Valid {
+		quota := storageQuota.Int64
+		i.StorageQuotaBytes = &quota
+	}
+	if storageUsed.Valid {
+		i.StorageUsedBytes = storageUsed.Int64
+	} else {
+		// A pre-migration inbox: show live usage without persisting.
+		used, uerr := s.recomputeInboxStorage(ctx, accountID, id)
+		if uerr != nil {
+			return i, uerr
+		}
+		i.StorageUsedBytes = used
 	}
 	if autoTrashHours.Valid {
 		hours := int(autoTrashHours.Int64)
@@ -762,6 +797,66 @@ func (s *Store) SetInboxTrashRetention(ctx context.Context, accountID, inboxID s
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetInboxStorageQuota sets an inbox's storage cap. A nil quota clears the cap
+// so only the account quota applies; 0 means explicitly unlimited for this
+// inbox; a positive value is the cap in bytes. A negative value is rejected.
+// The cap may be set below current usage: existing mail is untouched and new
+// writes are refused with ErrQuota until usage falls.
+func (s *Store) SetInboxStorageQuota(ctx context.Context, accountID, inboxID string, quota *int64) error {
+	if quota != nil && *quota < 0 {
+		return fmt.Errorf("storage quota cannot be negative")
+	}
+	var value any
+	if quota != nil {
+		value = *quota
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET storage_quota_bytes=? WHERE id=? AND account_id=?`, value, inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// InboxStorageUsed returns an inbox's current storage usage in bytes. It reads
+// the maintained counter, falling back to a live SUM (messages, drafts and
+// draft attachments) for an inbox whose counter has not yet been initialized by
+// a write, so the display is correct for pre-migration data.
+func (s *Store) InboxStorageUsed(ctx context.Context, accountID, inboxID string) (int64, error) {
+	var used sql.NullInt64
+	if err := s.read.QueryRowContext(ctx, `SELECT storage_used_bytes FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&used); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	if used.Valid {
+		return used.Int64, nil
+	}
+	return s.recomputeInboxStorage(ctx, accountID, inboxID)
+}
+
+// recomputeInboxStorage sums every byte attributable to an inbox: its message
+// rows (all directions and states), its draft bodies and its draft attachment
+// files. It is the read-side equivalent of recomputeInboxStorageTx.
+func (s *Store) recomputeInboxStorage(ctx context.Context, accountID, inboxID string) (int64, error) {
+	var total int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM messages WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&total); err != nil {
+		return 0, err
+	}
+	var draftBodies int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(LENGTH(CAST(text_body AS BLOB))+LENGTH(CAST(html_body AS BLOB))),0) FROM drafts WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&draftBodies); err != nil {
+		return 0, err
+	}
+	var draftAtts int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(da.size_bytes),0) FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id WHERE d.account_id=? AND d.inbox_id=?`, accountID, inboxID).Scan(&draftAtts); err != nil {
+		return 0, err
+	}
+	return total + draftBodies + draftAtts, nil
 }
 
 // SetInboxAllowedSenders replaces an inbox's allowed-senders allowlist. An

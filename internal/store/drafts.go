@@ -19,7 +19,7 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 		return model.Draft{}, err
 	}
 	defer tx.Rollback()
-	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)); err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, draftBodyBytes(d)); err != nil {
 		return model.Draft{}, err
 	}
 	from, target, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
@@ -224,8 +224,23 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 		return model.Draft{}, err
 	}
 	status := model.DraftStatusDraft
-	if err := adjustStorageTx(ctx, tx, p.AccountID, draftBodyBytes(d)-draftBodyBytes(old)); err != nil {
-		return model.Draft{}, err
+	// Body bytes are the only draft storage that moves with an edit. When the
+	// inbox is unchanged, adjust once so the account counter sees a single
+	// signed delta (matching its historical behaviour); when the draft moves,
+	// refund the old inbox and charge the new one so the counters never cross.
+	oldBytes := draftBodyBytes(old)
+	newBytes := draftBodyBytes(d)
+	if d.InboxID == old.InboxID {
+		if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, newBytes-oldBytes); err != nil {
+			return model.Draft{}, err
+		}
+	} else {
+		if err := adjustStorageTx(ctx, tx, p.AccountID, old.InboxID, -oldBytes); err != nil {
+			return model.Draft{}, err
+		}
+		if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, newBytes); err != nil {
+			return model.Draft{}, err
+		}
 	}
 	now := nowText()
 	if _, err := tx.ExecContext(ctx, `UPDATE drafts SET inbox_id=?,reply_to_message_id=?,from_address=?,from_name=?,from_external_alias_id=?,to_json=?,cc_json=?,bcc_json=?,subject=?,text_body=?,html_body=?,status=?,updated_at=? WHERE id=? AND account_id=?`, d.InboxID, d.ReplyToMessageID, from.Address, from.Name, target.ExternalAliasID, jsonString(d.To), jsonString(d.CC), jsonString(d.BCC), d.Subject, d.Text, d.HTML, status, now, d.ID, p.AccountID); err != nil {
@@ -270,7 +285,7 @@ func (s *Store) DeleteDraftCascade(ctx context.Context, p model.Principal, id st
 	if _, err := tx.ExecContext(ctx, `DELETE FROM drafts WHERE id=? AND account_id=?`, id, p.AccountID); err != nil {
 		return nil, err
 	}
-	if err := adjustStorageTx(ctx, tx, p.AccountID, -(draftBodyBytes(d) + attTotal)); err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, -(draftBodyBytes(d) + attTotal)); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

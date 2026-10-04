@@ -94,6 +94,15 @@ one HTTP port
 
 An account owns domains, inboxes, messages, API keys, storage allocation, and Hermes connections. Each domain owns at most one optional sending and one optional receiving provider configuration.
 
+Account storage is the outer capacity control. An inbox may additionally carry
+an optional per-inbox storage cap, enforced in the same write that persists a
+message, so one mailbox cannot consume the whole account allowance. A cap of
+`NULL` means the inbox has no cap of its own; `0` means explicitly unlimited;
+a positive value is the byte limit. The cap counts messages in any direction or
+state (including Spam and Trash) plus the inbox's drafts and draft attachments;
+workflow mail is excluded. Lowering a cap below current usage is allowed and
+only refuses new mail until usage falls.
+
 Domains support custom-domain operation.
 
 ### Logical inboxes

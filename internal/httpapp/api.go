@@ -202,6 +202,7 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 			AliasNames             *map[string]string `json:"alias_names"`
 			DefaultSender          *string            `json:"default_sender"`
 			TrashRetentionDays     json.RawMessage    `json:"trash_retention_days"`
+			StorageQuotaBytes      json.RawMessage    `json:"storage_quota_bytes"`
 			AutoMarkReadOnDelivery *bool              `json:"auto_mark_read_on_delivery"`
 			AutoTrashHours         json.RawMessage    `json:"auto_trash_after_delivery_hours"`
 			DeliveryTrigger        *string            `json:"delivery_trigger"`
@@ -330,6 +331,28 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				days = &n
 			}
 			if err := s.Service.Store.SetInboxTrashRetention(r.Context(), p.AccountID, id, days); err != nil {
+				mapStoreError(w, err)
+				return
+			}
+		}
+		// storage_quota_bytes: absent leaves the cap unchanged; an explicit
+		// null clears the inbox cap (only the account quota applies); 0 means
+		// explicitly unlimited for this inbox; a positive value is the cap.
+		if len(in.StorageQuotaBytes) > 0 {
+			if !p.Admin {
+				writeError(w, 403, "admin required")
+				return
+			}
+			var quota *int64
+			if string(in.StorageQuotaBytes) != "null" {
+				var n int64
+				if err := json.Unmarshal(in.StorageQuotaBytes, &n); err != nil {
+					writeError(w, 400, "storage_quota_bytes must be an integer or null")
+					return
+				}
+				quota = &n
+			}
+			if err := s.Service.Store.SetInboxStorageQuota(r.Context(), p.AccountID, id, quota); err != nil {
 				mapStoreError(w, err)
 				return
 			}

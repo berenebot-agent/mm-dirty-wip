@@ -27,7 +27,7 @@ func (s *Store) AddDraftAttachment(ctx context.Context, p model.Principal, draft
 	if d.Status == model.DraftStatusPendingApproval {
 		return model.DraftAttachment{}, ErrConflict
 	}
-	if err := adjustStorageTx(ctx, tx, p.AccountID, a.Size); err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, a.Size); err != nil {
 		return model.DraftAttachment{}, err
 	}
 	a.ID = idgen.New("dat")
@@ -176,7 +176,7 @@ func (s *Store) DeleteDraftAttachment(ctx context.Context, p model.Principal, dr
 	if _, err := tx.ExecContext(ctx, `DELETE FROM draft_attachments WHERE id=? AND draft_id=?`, id, draftID); err != nil {
 		return "", err
 	}
-	if err := adjustStorageTx(ctx, tx, p.AccountID, -size); err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, -size); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(); err != nil {
@@ -210,7 +210,7 @@ func (s *Store) DeleteDraftAttachments(ctx context.Context, p model.Principal, d
 	if _, err := tx.ExecContext(ctx, `DELETE FROM draft_attachments WHERE draft_id=?`, draftID); err != nil {
 		return nil, err
 	}
-	if err := adjustStorageTx(ctx, tx, p.AccountID, -total); err != nil {
+	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, -total); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

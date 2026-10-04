@@ -1399,3 +1399,17 @@ CREATE TABLE IF NOT EXISTS message_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_message_deliveries_message ON message_deliveries(message_id);
 `
+
+// migration047 adds an optional per-inbox storage quota layered on top of the
+// account quota. storage_quota_bytes is nullable: NULL means the inbox has no
+// cap of its own (the account cap still applies), 0 means explicitly unlimited,
+// and a positive value caps the inbox. storage_used_bytes is nullable: NULL
+// means "not yet computed" for an inbox that predates this migration, so the
+// first write that adjusts the inbox (or a read that needs a number)
+// initializes it from a one-time SUM over the inbox's messages, drafts and
+// draft attachments, after which the counter is authoritative. New inboxes are
+// inserted with storage_used_bytes=0.
+const migration047 = `
+ALTER TABLE inboxes ADD COLUMN storage_quota_bytes INTEGER;
+ALTER TABLE inboxes ADD COLUMN storage_used_bytes INTEGER;
+`
