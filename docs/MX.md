@@ -34,16 +34,18 @@ legacy `MX_*` SMTP settings including `MX_TLS_CERT`/`MX_TLS_KEY`, are imported
 **once** on first start when no setting exists, and ignored thereafter. `auto` is
 not implemented yet; it is a deferred placeholder.
 
-After a domain is set to **Receiving → MX**, an operator points the domain's MX
-record at the receiver's advertised SMTP hostname and publishes SPF; DKIM and
-DMARC are computed at the receiver. No per-domain key id or secret is registered
-with the core for a private receiver — the core's receiving configuration is
-authoritative.
+After a domain is set to **Receiving → Direct MX**, an account admin points the
+domain's MX record at the receiver's advertised SMTP hostname and publishes SPF;
+DKIM and DMARC are computed at the receiver. **Direct MX** is offered in the
+per-domain receiving dialog to account admins only, and shows the installation
+receiver's mode, live state and advertised SMTP hostname inline. No per-domain key
+id or secret is registered with the core for a private receiver — the core's
+receiving configuration is authoritative.
 
 ## Built-in (Included) receiver
 
-Select **Included** under Admin → MX receiver and select **Receiving → MX** for
-the domain. The core starts a separate-uid receiver child, generates a bearer
+Select **Included** under Admin → MX receiver and select **Receiving → Direct MX**
+for the domain. The core starts a separate-uid receiver child, generates a bearer
 key when one is not configured, and connects over cleartext HTTP/2 on
 `127.0.0.1:8443`. No certificates or domain authentication TXT records are
 needed. The child receives neither `/data` access nor `APP_ENCRYPTION_KEY`.

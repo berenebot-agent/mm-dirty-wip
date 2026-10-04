@@ -557,6 +557,13 @@ func principal(r *http.Request) model.Principal {
 	v, _ := r.Context().Value(principalKey).(model.Principal)
 	return v
 }
+
+// principalFromContext is the context-only counterpart of principal, for helper
+// functions that receive a context rather than a request.
+func principalFromContext(ctx context.Context) model.Principal {
+	v, _ := ctx.Value(principalKey).(model.Principal)
+	return v
+}
 func csrf(r *http.Request) string { v, _ := r.Context().Value(csrfKey).(string); return v }
 
 // requestTZ returns the effective display time zone for a request, defaulting

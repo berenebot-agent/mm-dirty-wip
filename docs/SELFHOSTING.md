@@ -110,7 +110,8 @@ docker compose -f docker-compose.advanced.yml up -d
 docker compose up -d --build
 ```
 
-Then, in the Admin UI, open the domain and set **Receiving → MX**. Point the
+Then, as an account admin, open the domain and set **Receiving → Direct MX**.
+Point the
 domain's MX record at `MX_HOSTNAME` and publish SPF. The domain is only an MX
 receiver once you set this in the UI; a domain left on a webhook provider is
 unaffected.
