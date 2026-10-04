@@ -252,6 +252,9 @@ func (s *Store) AckHermesEventLogged(ctx context.Context, id string, eventID int
 	if err = recordDeliveryLog(ctx, tx, id, eventID, "acknowledged", attempts, "", "", now); err != nil {
 		return err
 	}
+	if err = recordEventDeliveryTx(ctx, tx, id, eventID, now); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -290,6 +293,9 @@ func (s *Store) RecordHermesDeliveryAcknowledged(ctx context.Context, clientID s
 		return err
 	}
 	if err = recordDeliveryLog(ctx, tx, clientID, eventID, "acknowledged", attempts, "", "", now); err != nil {
+		return err
+	}
+	if err = recordEventDeliveryTx(ctx, tx, clientID, eventID, now); err != nil {
 		return err
 	}
 	return tx.Commit()

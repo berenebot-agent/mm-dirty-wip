@@ -135,6 +135,7 @@ func (w *OutboxWorker) maintain() {
 		{"sweepWorkflows", w.sweepWorkflows},
 		{"sweepMXReceipts", w.sweepMXReceipts},
 		{"sweepClientDeliveryLog", w.sweepClientDeliveryLog},
+		{"trashDeliveredMail", w.trashDeliveredMail},
 		{"purgeExpiredTrash", w.purgeExpiredTrash},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
@@ -197,6 +198,26 @@ func (w *OutboxWorker) sweepMXReceipts() {
 	}
 	if n > 0 {
 		w.log.Info("swept expired mx receipts", "count", n)
+	}
+}
+
+// trashDeliveredMail moves messages whose delivery auto-trash window has
+// elapsed to Trash. It is the second half of the per-inbox delivery auto-action:
+// RecordDelivery stamps messages.delivery_action_due_at when the inbox trigger
+// is satisfied, and this sweep trashes those whose due instant has passed. A
+// trashed message is still retained by the Trash model until the ordinary
+// retention sweep purges it.
+func (w *OutboxWorker) trashDeliveredMail() {
+	events, err := w.svc.Store.TrashDeliveredDue(context.Background(), time.Now().UTC())
+	if err != nil {
+		w.log.Error("delivered-mail trash sweep", "error", err)
+		return
+	}
+	for _, ev := range events {
+		w.svc.Hub.Publish(ev)
+	}
+	if len(events) > 0 {
+		w.log.Info("trashed delivered mail", "count", len(events))
 	}
 }
 

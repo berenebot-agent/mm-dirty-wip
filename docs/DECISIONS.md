@@ -2242,6 +2242,55 @@ the existing revoke/rotate paths. No new dependency, service or route beyond
 `POST /login/key`. Tests cover resolution/scope, revoke, rotation teardown,
 admin-key rejection, session death on revoke, and read-only write refusal.
 
+## D078 — Delivery-triggered per-inbox auto-actions for agent connectors
+
+**Decision:** An inbox may carry a delivery-triggered auto-action policy for its
+agent/relay connectors: mark a message read once a connector has delivered it,
+and optionally move it to Trash a configurable number of hours after delivery.
+The policy is per-inbox (it applies to every connector bound to that inbox) and
+is off by default. It applies only to agent and relay connectors; API keys and
+human accounts never trigger it, because a poll is not a delivery.
+
+- Three inbox columns carry the policy: `auto_mark_read_on_delivery`
+  (default 0), `auto_trash_after_delivery_hours` (nullable; NULL disables the
+  sweep), and `delivery_trigger` (`any` or `all`, default `any`). They are
+  read/written through `PATCH /v1/inboxes/{id}` and the inbox Connectors tab, and
+  may also be seeded from the connector-create dialog.
+- A delivery is recorded per connector: `message_deliveries(message_id,
+  client_id, delivered_at)` gets one idempotent row per successful delivery. The
+  relay ack paths (`AckHermesEventLogged`, `RecordHermesDeliveryAcknowledged`) and
+  the webhook success path (`RecordWebhookDelivery`) record it inside their own
+  transactions, so the cursor advance and the delivery row commit together.
+- The `any` trigger fires the actions the moment the first connector delivers.
+  The `all` trigger waits until **every connector that existed when the message
+  arrived** has delivered; a connector added later is not required, so old mail
+  is never pinned by a new connector. When satisfied, `messages.delivery_action_due_at`
+  is stamped once (delivery instant plus the configured hours); a later connector
+  ack cannot extend an already-set window.
+- A maintenance sweep (`trashDeliveredMail`) moves live messages whose
+  `delivery_action_due_at` has passed to Trash, emitting the ordinary
+  `message.trashed` event. The Trash model then applies its own retention
+  unchanged. The actions skip Spam, internal (workflow) and already-trashed mail.
+- Messages expose their per-connector delivery history (`deliveries`, each a
+  `client_id` and `delivered_at`) and `delivery_action_due_at` on the read
+  surfaces, so a caller can see which connector has handled a message and when
+  it becomes eligible for auto-trash.
+
+**Reason:** An agent-fronted inbox accumulates mail the agent has already
+handled, and there was no way to express "once my agent has seen this, mark it
+read and clear it out" without a human or a bespoke script. The Trash retention
+control only ran from the moment a message was trashed, never from delivery, so
+an unattended relay inbox could not self-maintain. Per-inbox ownership matches
+the existing Trash-retention model (D073/D076) and avoids a per-connector
+surface; the `any`/`all` choice covers both a single-agent inbox and a shared
+one without a second policy object.
+
+**Complexity:** One migration (three inbox columns, `message_deliveries`,
+`messages.delivery_action_due_at` and its partial index), four store methods, one
+maintenance step reusing the existing event path and file-unlink flow, optional
+`PATCH` fields, and wizard/tab controls. No new dependency, service or route
+beyond a small UI-only auto-actions save endpoint.
+
 ## Future extension register
 
 Potential future additions include:

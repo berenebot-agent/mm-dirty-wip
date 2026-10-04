@@ -297,11 +297,11 @@ func stripHTMLText(v string) string {
 func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var m model.Message
 	var refs, to, cc, bcc, env, labels, created string
-	var received, sent, deleted sql.NullString
+	var received, sent, deleted, deliverDue sql.NullString
 	var read int
 	var has, internal, spam int
-	var authResults, envelopeFrom, envelopeRecipient string
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient)
+	var authResults, envelopeFrom, envelopeRecipient, deliveriesJSON string
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON)
 	if err != nil {
 		return m, err
 	}
@@ -319,18 +319,42 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	m.EnvelopeTo = decodeStrings(env)
 	m.Read = read != 0
 	m.DeletedAt = nullableTime(deleted)
+	m.DeliveryActionDueAt = nullableTime(deliverDue)
 	m.ReceivedAt = nullableTime(received)
 	m.SentAt = nullableTime(sent)
 	m.CreatedAt = parseTime(created)
 	m.HasAttachments = has != 0
 	m.Labels = decodeStrings(labels)
+	m.Deliveries = decodeMessageDeliveries(deliveriesJSON)
 	sort.Slice(m.Labels, func(i, j int) bool {
 		return strings.ToLower(m.Labels[i]) < strings.ToLower(m.Labels[j])
 	})
 	return m, nil
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient`
+// decodeMessageDeliveries parses the per-connector delivery history embedded in
+// a message row. A malformed or empty value yields no deliveries rather than an
+// error: delivery history is supplementary to the message.
+func decodeMessageDeliveries(raw string) []model.MessageDelivery {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var rows []struct {
+		ClientID    string `json:"client_id"`
+		DeliveredAt string `json:"delivered_at"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil
+	}
+	out := make([]model.MessageDelivery, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, model.MessageDelivery{ClientID: r.ClientID, DeliveredAt: parseTime(r.DeliveredAt)})
+	}
+	return out
+}
+
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]')`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
