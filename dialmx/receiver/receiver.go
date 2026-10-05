@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -98,12 +99,27 @@ type Config struct {
 	// not expired early. Tests may set it below one second.
 	RevalidateInterval time.Duration
 
+	// MaxConnsPerIP bounds concurrent sessions from one source IP. Zero selects
+	// perIPConnLimit.
+	MaxConnsPerIP int
+	// ConnWindowMax bounds how many sessions one source IP may open per minute.
+	// Zero selects perIPConnWindowMax.
+	ConnWindowMax int
+
 	// MaxAuthConcurrent bounds authentication jobs running concurrently for one
 	// source IP. Zero selects perIPAuthConcurrent.
 	MaxAuthConcurrent int
 	// AuthWindowMax bounds how many authentication jobs one source IP may start
 	// per minute. Zero selects perIPAuthWindowMax.
 	AuthWindowMax int
+
+	// TrustedProxies lists the peers allowed to open a cleartext (non-TLS)
+	// session in shared mode. A cleartext session is admitted only from
+	// loopback or one of these prefixes; an empty list means every shared
+	// session must be TLS. It lets a TLS-terminating reverse proxy front the
+	// session listener without the receiver holding a certificate. In single
+	// mode the bearer key is the control and cleartext is not peer-gated.
+	TrustedProxies []netip.Prefix
 	// MaxRenewalsInFlight bounds receiver-driven renewal challenges outstanding
 	// on one session at once. Zero selects the effective auth-concurrency limit.
 	// Raising it lets tests observe paced renewals without changing production
@@ -121,6 +137,20 @@ func (c *Config) maxAuthConcurrent() int {
 		return c.MaxAuthConcurrent
 	}
 	return perIPAuthConcurrent
+}
+
+func (c *Config) maxConnsPerIP() int {
+	if c.MaxConnsPerIP > 0 {
+		return c.MaxConnsPerIP
+	}
+	return perIPConnLimit
+}
+
+func (c *Config) connWindowMax() int {
+	if c.ConnWindowMax > 0 {
+		return c.ConnWindowMax
+	}
+	return perIPConnWindowMax
 }
 
 func (c *Config) authWindowMax() int {
@@ -425,10 +455,19 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		http.Error(w, "HTTP/2 required", 426)
 		return
 	}
-	if r.cfg.Mode == "shared" && q.TLS == nil {
-		r.logRejected(peer, "not_tls_h2")
-		http.Error(w, "TLS HTTP/2 required", 426)
-		return
+	// Shared mode requires TLS unless the immediate peer is a trusted local
+	// proxy (or loopback): the receiver then holds no certificate and a
+	// TLS-terminating proxy fronts the listener. The bearer key stays the
+	// control in single mode, where cleartext is accepted for loopback.
+	cleartext := q.TLS == nil
+	cleartextTrusted := false
+	if cleartext && r.cfg.Mode == "shared" {
+		if !r.cleartextPeerAllowed(ip) {
+			r.logRejected(peer, "cleartext_not_trusted")
+			http.Error(w, "TLS HTTP/2 required", 426)
+			return
+		}
+		cleartextTrusted = true
 	}
 	if r.cfg.Mode == "single" && !r.authenticateCore(q) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -466,7 +505,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		st.connWindow = now
 		st.connCount = 0
 	}
-	if st.conns >= perIPConnLimit || st.connCount >= perIPConnWindowMax {
+	if st.conns >= r.cfg.maxConnsPerIP() || st.connCount >= r.cfg.connWindowMax() {
 		r.mu.Unlock()
 		r.logRejected(peer, "ip_limit")
 		http.Error(w, "limited", 429)
@@ -529,7 +568,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	if q.TLS != nil {
 		tlsVersion, tlsCipher = q.TLS.Version, q.TLS.CipherSuite
 	}
-	r.logSession(c, "opened", "active_connections", r.active.Load(), "tls_version", tlsVersion, "tls_cipher", tlsCipher, "protocol", q.Proto, "peer_address", q.RemoteAddr)
+	r.logSession(c, "opened", "active_connections", r.active.Load(), "cleartext", cleartext, "cleartext_trusted", cleartextTrusted, "tls_version", tlsVersion, "tls_cipher", tlsCipher, "protocol", q.Proto, "peer_address", q.RemoteAddr)
 	var closeReason string
 	defer func() {
 		cancel()
@@ -806,6 +845,26 @@ func (r *Receiver) authenticateCore(q *http.Request) bool {
 	want := sha256.Sum256([]byte("Bearer " + r.cfg.CoreKey))
 	got := sha256.Sum256([]byte(q.Header.Get("Authorization")))
 	return subtle.ConstantTimeCompare(want[:], got[:]) == 1
+}
+
+// cleartextPeerAllowed reports whether a non-TLS session may be admitted from
+// the given peer IP. Loopback is always allowed (the included receiver dials
+// 127.0.0.1); other peers must be in the configured trusted-proxy allowlist.
+// With no allowlist the result is false, so shared mode keeps requiring TLS.
+func (r *Receiver) cleartextPeerAllowed(ip string) bool {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return false
+	}
+	if addr.IsLoopback() {
+		return true
+	}
+	for _, p := range r.cfg.TrustedProxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // auth starts an initial authentication. The DNS check runs asynchronously, so

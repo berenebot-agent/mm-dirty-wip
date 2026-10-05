@@ -24,9 +24,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -138,11 +140,14 @@ func runStandalone(log *slog.Logger) {
 		return r.NewDelivery()
 	})
 
-	// The session listener serves the HTTP/2 dialer protocol over TLS. Only the
-	// header read is bounded globally; the session itself relies on per-read
-	// deadlines and context cancellation so a long-lived dialer is not killed
-	// by a blanket server read timeout. ServeTLS is retained: it configures
-	// HTTP/2 and its ConnState callback already observes the *tls.Conn, so the
+	// The session listener serves the HTTP/2 dialer protocol. A certificate
+	// pair selects TLS; without one the listener serves cleartext HTTP/2
+	// (prior knowledge), which the receiver admits from loopback and, in shared
+	// mode, only from the DIALMX_TRUSTED_PROXIES allowlist. Only the header
+	// read is bounded globally; the session itself relies on per-read deadlines
+	// and context cancellation so a long-lived dialer is not killed by a
+	// blanket server read timeout. ServeTLS is retained: it configures HTTP/2
+	// and its ConnState callback already observes the *tls.Conn, so the
 	// transport tracker can classify a handshake that fails before any session.
 	tracker := receiver.NewTransportTracker(log)
 	srv := &http.Server{
@@ -155,7 +160,7 @@ func runStandalone(log *slog.Logger) {
 	}
 	srv.Protocols = new(http.Protocols)
 	srv.Protocols.SetHTTP2(true)
-	if cfg.Receiver.Mode == "single" && cfg.TLSCertFile == "" {
+	if cfg.TLSCertFile == "" {
 		srv.Protocols.SetUnencryptedHTTP2(true)
 	}
 
@@ -234,7 +239,7 @@ func mxwireProtocol() string { return "mx-v2" }
 // verification toggles, the DNS resolver and the receiver's own bounds. It
 // carries no secrets: certificate paths and key material are never logged.
 func logSettings(log *slog.Logger, cfg dialmx.Config) {
-	log.Info("dialmx mode", "mode", cfg.Receiver.Mode, "session_tls", cfg.TLSCertFile != "")
+	log.Info("dialmx mode", "mode", cfg.Receiver.Mode, "session_tls", cfg.TLSCertFile != "", "trusted_proxies", prefixesString(cfg.Receiver.TrustedProxies))
 	log.Info(receiver.EventSettings,
 		"version", buildVersion,
 		"go", runtime.Version(),
@@ -255,9 +260,26 @@ func logSettings(log *slog.Logger, cfg dialmx.Config) {
 		"max_transactions", cfg.Receiver.MaxTransactions,
 		"max_transactions_per_connection", cfg.Receiver.MaxTransactionsPerConnection,
 		"max_transactions_per_domain", cfg.Receiver.MaxTransactionsPerDomain,
+		"per_ip_conn_limit", cfg.Receiver.MaxConnsPerIP,
+		"per_ip_conn_window_max", cfg.Receiver.ConnWindowMax,
+		"per_ip_auth_concurrent", cfg.Receiver.MaxAuthConcurrent,
+		"per_ip_auth_window_max", cfg.Receiver.AuthWindowMax,
 		"auth_timeout", cfg.Receiver.AuthTimeout.String(),
 		"resolve_timeout", cfg.Receiver.ResolveTimeout.String(),
 		"ingest_timeout", cfg.Receiver.IngestTimeout.String(),
 		"revalidate_interval", cfg.Receiver.RevalidateInterval.String(),
 	)
+}
+
+// prefixesString renders a prefix allowlist for the settings log. It is public
+// configuration, never a secret.
+func prefixesString(prefixes []netip.Prefix) string {
+	if len(prefixes) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		parts = append(parts, p.String())
+	}
+	return strings.Join(parts, ",")
 }
