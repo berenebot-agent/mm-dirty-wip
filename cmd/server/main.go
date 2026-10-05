@@ -128,7 +128,10 @@ func main() {
 		name string
 		srv  *http.Server
 	}
-	start := func(name, addr string, handler http.Handler, tlsCert, tlsKey string) (*listener, error) {
+	// origin is the public URL the listener is reached through, so the startup
+	// log names the URL that actually serves this listener rather than a single
+	// shared base_url that may not match a reverse proxy or receiver hostname.
+	start := func(name, addr, origin string, handler http.Handler, tlsCert, tlsKey string) (*listener, error) {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, fmt.Errorf("%s listener: %w", name, err)
@@ -143,7 +146,7 @@ func main() {
 		}
 		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.BodyReadTimeout, IdleTimeout: 90 * time.Second}
 		go func() {
-			log.Info("MailMoose listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "base_url", cfg.BaseURL)
+			log.Info("MailMoose listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "origin", origin, "tls", tlsCert != "" && tlsKey != "")
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error("HTTP server failed", "listener", name, "error", err)
 				os.Exit(1)
@@ -152,7 +155,7 @@ func main() {
 		return &listener{name: name, srv: srv}, nil
 	}
 
-	mainListener, err := start("main", cfg.ListenAddr, h.Handler(), "", "")
+	mainListener, err := start("main", cfg.ListenAddr, cfg.BaseURL, h.Handler(), "", "")
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)
@@ -161,7 +164,7 @@ func main() {
 	// it over verified TLS.
 	listeners := []*listener{mainListener}
 	if cfg.DedicatedReceiverEnable {
-		inboundListener, err := start("inbound", fmt.Sprintf(":%d", cfg.DedicatedReceiverPort), h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
+		inboundListener, err := start("inbound", fmt.Sprintf(":%d", cfg.DedicatedReceiverPort), cfg.ReceiverURL(), h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
 		if err != nil {
 			log.Error("startup failed", "error", err)
 			os.Exit(1)
