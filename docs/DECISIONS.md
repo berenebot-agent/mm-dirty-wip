@@ -2253,7 +2253,8 @@ human accounts never trigger it, because a poll is not a delivery.
 
 - Three inbox columns carry the policy: `auto_mark_read_on_delivery`
   (default 0), `auto_trash_after_delivery_hours` (nullable; NULL disables the
-  sweep), and `delivery_trigger` (`any` or `all`, default `any`). They are
+  sweep), and `delivery_trigger` (`any` or `all`, default `all` — see D081, which
+  supersedes the original `default any`). They are
   read/written through `PATCH /v1/inboxes/{id}`, the inbox Connectors tab (its
   own form and save control, posting to `POST /ui/inboxes/{id}/auto-actions`),
   and may also be seeded from the connector-create dialog.
@@ -2375,6 +2376,38 @@ supports that topology without changing passkey trust policy.
 existing listener, and one effective receiver-origin accessor. No new process,
 service, dependency, or authentication policy. The passkey UI translates the
 browser's RP-domain rejection into an actionable configuration error.
+
+## D081 — Delivery auto-actions default to the `all` trigger
+
+**Decision:** An inbox created without an explicit trigger carries
+`delivery_trigger = 'all'`, and a submitted auto-action form that omits the
+field resolves to `all` as well. This supersedes D078's `default any`. `any`
+remains available per inbox, and the auto-actions themselves are still off until
+enabled.
+
+**Reason:** "The agent has handled this" is a statement about the whole inbox,
+not about whichever connector happened to poll first. With `any`, a relay that
+delivers before a webhook — or before a second relay — marks a message read and
+starts its Trash clock while another connector on the same inbox has not seen it
+at all, and a human checking the inbox through the other connector finds the
+mail already gone. `all` costs nothing on a single-connector inbox, which is the
+common case, and it is the safe reading when one is added.
+
+**Scope:** Defaults only, for new and unset values. An inbox that already
+carries a concrete `any` keeps it: the column is `NOT NULL DEFAULT`, so an
+explicit `any` and an untouched default are indistinguishable, and a blanket
+rewrite would silently override a deliberate choice. Existing inboxes move when
+their owner saves the Connectors tab.
+
+Because SQLite cannot alter a column default, migration046's DDL now reads
+`DEFAULT 'all'` for fresh databases while a database that already applied it
+keeps `DEFAULT 'any'`; `CreateInbox` writes the default explicitly, so no code
+path reads the DDL default and the two diverge harmlessly. No table rebuild and
+no new migration.
+
+**Complexity:** One constant, one explicit column write in `CreateInbox` (which
+also fixes its returned `model.Inbox` reporting no trigger at all), two blank-form
+defaults, four preselected options, one JavaScript fallback, and doc/spec text.
 
 ## Future extension register
 

@@ -220,7 +220,7 @@ configurable number of hours after delivery. They are off by default, are
 per-inbox, and apply only to agent/relay connectors (an API-key poll is not a
 delivery). A trigger selects whether they fire on the first connector delivery
 (`any`) or once every connector present when the message arrived has delivered
-(`all`). Spam, internal and already-trashed mail is never acted on.
+(`all`, the default). Spam, internal and already-trashed mail is never acted on.
 
 An additional **Admin** role applies at the account level.
 
