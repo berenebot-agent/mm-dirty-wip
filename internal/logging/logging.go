@@ -121,9 +121,25 @@ func (h *textHandler) appendAttr(b *strings.Builder, prefix string, a slog.Attr)
 	b.WriteString(formatValue(a.Value))
 }
 
+// literal marks a value that is already formatted for a human reader, so
+// formatValue writes it verbatim instead of quoting it as a string.
+type literal string
+
+// Literal returns an attribute written verbatim. formatValue quotes string
+// values containing spaces, so a short human-facing note would otherwise come
+// out quoted; use it only for text that is already final for the log reader.
+func Literal(key, value string) slog.Attr {
+	return slog.Any(key, literal(value))
+}
+
 // formatValue renders an attribute value, quoting strings only when a bare
 // token would be ambiguous (empty, whitespace, '=' or a quote).
 func formatValue(v slog.Value) string {
+	if v.Kind() == slog.KindAny {
+		if lit, ok := v.Any().(literal); ok {
+			return string(lit)
+		}
+	}
 	switch v.Kind() {
 	case slog.KindString:
 		return quoteIfNeeded(v.String())
