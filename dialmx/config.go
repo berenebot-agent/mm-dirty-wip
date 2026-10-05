@@ -2,6 +2,7 @@ package dialmx
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -31,6 +32,11 @@ func Load() (Config, error) {
 	c.Receiver.Mode = env("DIALMX_MODE", "single")
 	c.Receiver.CoreKey = strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY"))
 	c.Receiver.BrowserRedirectURL = strings.TrimSpace(os.Getenv("DIALMX_BROWSER_REDIRECT_URL"))
+	trusted, err := parseTrustedProxies(os.Getenv("DIALMX_TRUSTED_PROXIES"))
+	if err != nil {
+		return Config{}, err
+	}
+	c.Receiver.TrustedProxies = trusted
 	// The SMTP edge keeps the documented MX_* environment.
 	c.SMTP = mxagent.Config{
 		Hostname:        env("MX_HOSTNAME", "localhost"),
@@ -58,6 +64,10 @@ func Load() (Config, error) {
 	r.MaxTransactionsPerConnection = envInt("MX_MAX_TRANSACTIONS_PER_CONNECTION", 16)
 	r.MaxTransactions = envInt("MX_MAX_TRANSACTIONS", 128)
 	r.MaxTransactionsPerDomain = envInt("MX_MAX_TRANSACTIONS_PER_DOMAIN", 8)
+	r.MaxConnsPerIP = envInt("MX_PER_IP_CONN_LIMIT", 16)
+	r.ConnWindowMax = envInt("MX_PER_IP_CONN_WINDOW_MAX", 128)
+	r.MaxAuthConcurrent = envInt("MX_PER_IP_AUTH_CONCURRENT", 16)
+	r.AuthWindowMax = envInt("MX_PER_IP_AUTH_WINDOW_MAX", 256)
 	r.AuthTimeout = time.Duration(envInt("MX_AUTH_TIMEOUT_SECONDS", 10)) * time.Second
 	r.ResolveTimeout = time.Duration(envInt("MX_RESOLVE_TIMEOUT_SECONDS", 10)) * time.Second
 	r.IngestTimeout = time.Duration(envInt("MX_INGEST_TIMEOUT_SECONDS", 180)) * time.Second
@@ -83,8 +93,11 @@ func (c *Config) validate() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		return fmt.Errorf("DIALMX_TLS_CERT and DIALMX_TLS_KEY must be set together")
 	}
-	if c.Receiver.Mode == "shared" && c.TLSCertFile == "" {
-		return fmt.Errorf("shared mode requires DIALMX_TLS_CERT and DIALMX_TLS_KEY")
+	// Shared mode may serve cleartext only from a trusted local proxy (the
+	// proxy terminates TLS). Without an allowlist it keeps the strict
+	// requirement, so a misconfiguration cannot silently expose the listener.
+	if c.Receiver.Mode == "shared" && c.TLSCertFile == "" && len(c.Receiver.TrustedProxies) == 0 {
+		return fmt.Errorf("shared mode requires DIALMX_TLS_CERT and DIALMX_TLS_KEY, or DIALMX_TRUSTED_PROXIES for a TLS-terminating proxy")
 	}
 	if c.Receiver.BrowserRedirectURL != "" && !validRedirectURL(c.Receiver.BrowserRedirectURL) {
 		return fmt.Errorf("DIALMX_BROWSER_REDIRECT_URL must be an https URL")
@@ -111,6 +124,9 @@ func (c *Config) validate() error {
 	r := c.Receiver
 	if r.MaxDomainsPerConnection < 1 || r.MaxTransactions < 1 || r.MaxTransactionsPerConnection < 1 || r.MaxTransactionsPerDomain < 1 {
 		return fmt.Errorf("MX domain and transaction limits must be at least 1")
+	}
+	if r.MaxConnsPerIP < 1 || r.ConnWindowMax < 1 || r.MaxAuthConcurrent < 1 || r.AuthWindowMax < 1 {
+		return fmt.Errorf("MX per-source connection and auth limits must be at least 1")
 	}
 	if r.MaxTransactionsPerConnection > s.MaxConnections {
 		return fmt.Errorf("MX_MAX_TRANSACTIONS_PER_CONNECTION exceeds MX_MAX_CONNECTIONS")
@@ -171,4 +187,37 @@ func envInt64(k string, d int64) int64 {
 		return -1
 	}
 	return n
+}
+
+// minTrustedProxyBits is the narrowest prefix accepted for
+// DIALMX_TRUSTED_PROXIES. Anything wider is not a proxy address in any real
+// topology and would trust ordinary clients with a cleartext session. The same
+// floor is enforced for the core's TRUSTED_PROXIES.
+const minTrustedProxyBits = 8
+
+// parseTrustedProxies parses a comma-separated list of IPs or CIDR networks
+// into prefixes. A bare IP is a /32 or /128. An entry wider than
+// minTrustedProxyBits is refused, so a typo cannot trust an entire address
+// family.
+func parseTrustedProxies(raw string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(part)
+			if aerr != nil {
+				return nil, fmt.Errorf("invalid DIALMX_TRUSTED_PROXIES entry %q: %w", part, err)
+			}
+			p = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		if p.Bits() < minTrustedProxyBits {
+			return nil, fmt.Errorf("DIALMX_TRUSTED_PROXIES entry %q is wider than /%d and would trust ordinary clients", part, minTrustedProxyBits)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }

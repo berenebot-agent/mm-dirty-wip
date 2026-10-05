@@ -125,12 +125,25 @@ and there is no insecure mode. (`DIALMX_CA_FILE` is a separate core environment
 setting used only by the legacy per-domain Dial MX dialer.) Cleartext sessions
 carry both the bearer credential and email content without encryption.
 
+Shared mode normally requires a session certificate. To front it with a
+TLS-terminating reverse proxy, set `DIALMX_TRUSTED_PROXIES` to the proxy address
+and omit the pair: the proxy terminates TLS, forwards cleartext HTTP/2 to the
+session listener, and the receiver admits cleartext only from that allowlist
+(or loopback). Nothing else changes — the core still dials the proxy's `https`
+origin with hostname verification, and the per-domain DNS proof is still the
+authority. The proxy must support cleartext HTTP/2 to the upstream; nginx
+`proxy_pass` does not, but Nginx Proxy Manager **Streams** with SSL, Caddy
+(`transport http { versions h2c }`) and HAProxy do. Leave SMTP direct: a proxy
+on `:25` would hide the sender's IP from SPF.
+
 SMTP STARTTLS is independent: use `MX_TLS_CERT` / `MX_TLS_KEY`, optionally
 `MX_REQUIRE_TLS=true`. Session certificates do not automatically enable SMTP TLS.
 
 Trusted proxies are not required. Forwarded IP headers are ignored; connection
-limits use the socket peer. A proxy must support bidirectional streaming and
-HTTP/2 to the receiver, including cleartext HTTP/2 if it terminates TLS itself.
+limits use the socket peer, so a session proxy collapses every core onto one
+per-source bucket (`MX_PER_IP_*`). A proxy must support bidirectional streaming
+and HTTP/2 to the receiver, including cleartext HTTP/2 if it terminates TLS
+itself.
 
 ## Bounds and policy
 

@@ -106,8 +106,9 @@ session listener and certificate settings:
 | `DIALMX_BROWSER_REDIRECT_URL` | unset | Optional https landing page; a browser `GET /` is 302-redirected there. |
 | `MX_HOSTNAME` | `localhost` | SMTP greeting hostname; independent of the session listener address. |
 | `DIALMX_LISTEN_ADDR` | `:8443` | HTTPS/2 session listener. |
-| `DIALMX_TLS_CERT` | — | Session certificate; optional in single mode, required in shared mode. |
+| `DIALMX_TLS_CERT` | — | Session certificate; optional in single mode, required in shared mode unless `DIALMX_TRUSTED_PROXIES` is set. |
 | `DIALMX_TLS_KEY` | — | Session private key; set together with certificate. |
+| `DIALMX_TRUSTED_PROXIES` | unset | Comma-separated IPs/CIDRs allowed to open a cleartext shared-mode session (the TLS-terminating proxy). Empty keeps shared mode TLS-only. |
 | `MX_TLS_CERT` / `MX_TLS_KEY` | unset | Optional SMTP STARTTLS pair; set together. |
 | `MX_REQUIRE_TLS` | `false` | Refuse plaintext SMTP. |
 | `MX_VERIFY_SPF` / `MX_VERIFY_DKIM` / `MX_VERIFY_DMARC` | `true` | Which evidence classes the edge computes. |
@@ -120,6 +121,10 @@ session listener and certificate settings:
 | `MX_MAX_DOMAINS_PER_CONNECTION` | `128` | Distinct domains per session. |
 | `MX_MAX_TRANSACTIONS_PER_CONNECTION` | `16` | Concurrent groups per session. |
 | `MX_MAX_TRANSACTIONS_PER_DOMAIN` | `8` | Concurrent transactions per domain. |
+| `MX_PER_IP_CONN_LIMIT` | `16` | Concurrent sessions per source IP; shared per proxy behind one. |
+| `MX_PER_IP_CONN_WINDOW_MAX` | `128` | Sessions one source IP may open per minute. |
+| `MX_PER_IP_AUTH_CONCURRENT` | `16` | Concurrent authentication jobs per source IP. |
+| `MX_PER_IP_AUTH_WINDOW_MAX` | `256` | Authentication jobs one source IP may start per minute. |
 | `MX_AUTH_TIMEOUT_SECONDS` | `10` | Bounds one DNS proof. |
 | `MX_RESOLVE_TIMEOUT_SECONDS` | `10` | Bounds one recipient resolve. |
 | `MX_INGEST_TIMEOUT_SECONDS` | `180` | Bounds one staged message handoff. |
@@ -129,6 +134,20 @@ Select `DIALMX_MODE=shared` and set the session certificate paths explicitly
 when following this shared-mode guide. SMTP STARTTLS is configured separately.
 The non-root receiver uid must be able to read both certificate files. Mount
 renewed certificates and restart the receiver to reload them.
+
+To run shared mode behind a TLS-terminating reverse proxy instead, set
+`DIALMX_TRUSTED_PROXIES` to the proxy's address (or range) and omit the session
+certificate pair: the listener then serves cleartext HTTP/2 (prior knowledge)
+and admits a session only from loopback or an allowlisted peer, rejecting any
+other cleartext session with `426`. The core still dials the proxy over verified
+`https`, so its TLS and the DNS-anchored domain proof are unchanged. The proxy
+must forward **cleartext HTTP/2 to the upstream** (nginx `proxy_pass` cannot —
+use Nginx Proxy Manager **Streams** with SSL, Caddy `transport http { versions
+h2c }`, HAProxy `proto h2c`, or a similar L4 front). Keep the SMTP edge direct:
+if the proxy also fronted `:25` the receiver would see the proxy's IP, breaking
+SPF alignment and per-source limits. Behind a proxy every core arrives from the
+proxy's IP, so the per-source caps (`MX_PER_IP_*`) are shared; raise them if one
+proxy fronts many cores.
 
 These are the **receiver container's** settings. When the core runs the receiver
 itself (**Included** under Admin → MX receiver), the same SMTP surface is instead
@@ -331,7 +350,10 @@ cross-node deduplication.
 
 The session is a single `POST /mx/v2/session` request over TLS with
 `NextProtos: h2`. HTTP/1.1 fallback is refused, TLS 1.2 is the minimum, and the
-core verifies the receiver's certificate and hostname. Unknown
+core verifies the receiver's certificate and hostname. In a proxied shared
+deployment the TLS terminates at the proxy and the receiver serves the same
+request over cleartext HTTP/2 from the allowlisted proxy; the core still verifies
+the proxy's certificate. Unknown
 frame types or flags are fatal: neither peer guesses transaction semantics.
 
 ### Frame header
@@ -439,10 +461,12 @@ successes, and every such result must carry a valid disposition
   the core's bearer key.
 - **No mTLS.** The receiver authenticates the core by the DNS-anchored challenge
   in §4 (or, in single mode, by the shared bearer key), not by client
-  certificates. Session traffic is TLS-encrypted but the peer is identified by
-  the signed challenge or bearer key, and DNS freshness is the shared-mode
-  revocation mechanism. There is no per-core identity or certificate claim
-  beyond that.
+  certificates. Session traffic is TLS-encrypted unless a trusted reverse proxy
+  terminates TLS and the receiver serves cleartext from that allowlisted peer
+  (`DIALMX_TRUSTED_PROXIES`, §2); the peer is
+  identified by the signed challenge or bearer key, and DNS freshness is the
+  shared-mode revocation mechanism. There is no per-core identity or certificate
+  claim beyond that.
 - **Local DNS cache TTL** delays observed revocation; see §4.
 - **Operator-managed CA trust.** The core uses system roots for the legacy
   per-domain Dial MX dialer, optionally extended by a `DIALMX_CA_FILE` PEM bundle
