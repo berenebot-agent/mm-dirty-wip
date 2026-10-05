@@ -671,6 +671,13 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		return store.DomainReceivingConfig{}, nil, err
 	}
 	if service == mxdial.ServiceAntler {
+		// The Antler MX receiver set is resolved from the live manifest, never
+		// supplied by the caller. Reject an explicit receiver_urls rather than
+		// silently discarding it, so a client cannot believe it pointed the
+		// domain at a chosen receiver.
+		if raw, ok := merged["receiver_urls"].(string); ok && strings.TrimSpace(raw) != "" {
+			return store.DomainReceivingConfig{}, nil, invalidConfig("receiver URLs cannot be supplied for the Antler MX service")
+		}
 		if err := s.fillAntlerReceivingConfig(ctx, merged, old); err != nil {
 			return store.DomainReceivingConfig{}, nil, err
 		}

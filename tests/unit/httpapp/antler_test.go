@@ -158,6 +158,81 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 }
 
+// TestDialMXAntlerDialogHidesReceiverURLs pins that the editable Receiver URLs
+// field is not present in the Antler MX dialog (it lives only in an inert
+// template), but is present and editable for the custom service.
+func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	cookie, _ := uiSession(t, svc, u.ID)
+	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	settings := providerGroupHTML(t, body, "dialmx")
+
+	if strings.Contains(stripDialMXReceiverTemplate(settings), `name="cfg_dialmx_receiver_urls"`) {
+		t.Fatalf("Antler dialog renders an editable receiver_urls input:\n%s", settings)
+	}
+	if !strings.Contains(settings, `<template class="dialmx-receiver-urls-field">`) {
+		t.Fatalf("Antler dialog is missing the inert receiver_urls template:\n%s", settings)
+	}
+
+	// A custom setup keeps the editable input.
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceCustom, "receiver_urls": "https://receiver.example",
+	}, false); err != nil {
+		t.Fatalf("custom save: %v", err)
+	}
+	body = dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	settings = providerGroupHTML(t, body, "dialmx")
+	if !strings.Contains(settings, `name="cfg_dialmx_receiver_urls"`) {
+		t.Fatalf("custom dialog must render the editable receiver_urls input:\n%s", settings)
+	}
+	if strings.Contains(settings, `<template class="dialmx-receiver-urls-field">`) {
+		t.Fatalf("custom dialog must not wrap the field in a template:\n%s", settings)
+	}
+}
+
+// TestDialMXAntlerAPIRejectsReceiverURLs proves the receiving API refuses a
+// client-supplied receiver_urls for the Antler service, so a crafted request
+// cannot point the domain at an arbitrary receiver.
+func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"antler","contact_email":"ops@example.test","receiver_urls":"https://evil.example.test"}}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Antler MX") {
+		t.Fatalf("injected receiver_urls for antler: %d %s", rr.Code, rr.Body.String())
+	}
+	// The rejected save must not have replaced the fixture's existing provider
+	// nor stored the injected URL.
+	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, domain.ID)
+	if err != nil || cfg.Provider != "mailgun" {
+		t.Fatalf("rejected save changed the provider: %+v %v", cfg, err)
+	}
+}
+
 // TestDialMXCustomReceivingAPIHasNoAntlerInstructions pins that a custom setup
 // keeps its manual receiver URLs and does not advertise Antler MX records.
 func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
@@ -204,4 +279,20 @@ func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
 	if !strings.Contains(settings, `<option value="custom" selected>`) {
 		t.Fatalf("legacy custom config not prefilled as custom:\n%s", settings)
 	}
+}
+
+// stripDialMXReceiverTemplate removes the inert <template> that carries the
+// Receiver URLs field for an Antler MX setup, so an assertion can check that no
+// editable input is rendered without tripping on the template's own input.
+func stripDialMXReceiverTemplate(settings string) string {
+	const open = `<template class="dialmx-receiver-urls-field">`
+	start := strings.Index(settings, open)
+	if start < 0 {
+		return settings
+	}
+	rest := settings[start:]
+	if end := strings.Index(rest, "</template>"); end >= 0 {
+		return settings[:start] + rest[end+len("</template>"):]
+	}
+	return settings[:start]
 }
