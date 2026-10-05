@@ -188,7 +188,7 @@ var schemas = map[string]any{
 		"default_sender":                  str("Preselected From address."),
 		"auto_mark_read_on_delivery":      boolean("Whether a connector delivery marks the message read."),
 		"auto_trash_after_delivery_hours": integer("Hours after connector delivery at which a message is trashed; absent when disabled."),
-		"delivery_trigger":                str("Delivery trigger for the auto-actions: any or all."),
+		"delivery_trigger":                str("Delivery trigger for the auto-actions: any or all. Defaults to all."),
 		"external_aliases":                arrayOf("ExternalAlias", "Send-only external aliases (Admin readers only)."),
 		"created_at":                      ts("Creation time."),
 	}),
@@ -211,7 +211,7 @@ var schemas = map[string]any{
 		"default_sender":                  str("Preselected From address; empty clears to the primary."),
 		"auto_mark_read_on_delivery":      boolean("Mark a message read once a connector delivers it."),
 		"auto_trash_after_delivery_hours": integer("Hours after connector delivery to move a message to Trash; null disables, absent leaves unchanged."),
-		"delivery_trigger":                str("When auto-actions fire: any (first delivery) or all (every connector present at receipt)."),
+		"delivery_trigger":                str("When auto-actions fire: any (first delivery) or all (every connector present at receipt, the default)."),
 	}),
 	"MailboxPermissions": obj(map[string]any{
 		"role":        str("Effective role for this inbox: read, assistant, owner or admin."),

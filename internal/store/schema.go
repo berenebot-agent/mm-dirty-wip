@@ -1385,10 +1385,14 @@ CREATE INDEX IF NOT EXISTS idx_key_sessions_client ON key_sessions(client_id);
 // logs. messages.delivery_action_due_at is the computed instant at which a
 // delivered message becomes eligible for the Trash sweep, stamped when the
 // trigger is satisfied, so the sweep is a single indexed range query.
+//
+// delivery_trigger defaults to 'all'. A database that applied this migration
+// before the default changed keeps the earlier 'any' DDL default, which no code
+// path reads: CreateInbox writes DeliveryTriggerDefault explicitly.
 const migration046 = `
 ALTER TABLE inboxes ADD COLUMN auto_mark_read_on_delivery INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE inboxes ADD COLUMN auto_trash_after_delivery_hours INTEGER;
-ALTER TABLE inboxes ADD COLUMN delivery_trigger TEXT NOT NULL DEFAULT 'any' CHECK(delivery_trigger IN ('any','all'));
+ALTER TABLE inboxes ADD COLUMN delivery_trigger TEXT NOT NULL DEFAULT 'all' CHECK(delivery_trigger IN ('any','all'));
 ALTER TABLE messages ADD COLUMN delivery_action_due_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_messages_delivery_due ON messages(delivery_action_due_at) WHERE delivery_action_due_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS message_deliveries (

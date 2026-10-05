@@ -101,6 +101,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Delivery auto-actions now default to the **all connectors** trigger instead of
+  **any connector**: a new inbox, an auto-action form that omits the field, and
+  the connector-create wizard and Connectors tab controls all start on `all`, so
+  mail is not marked read or moved to Trash until every connector on the inbox
+  has delivered it. An inbox that already carries `any` keeps it — save the
+  Connectors tab to switch.
 - Mailbox views now use a left-hand sidebar: Compose stays at the top and the
   folders (Inbox, Drafts, Sent, Outbox, Trash, Spam) run down the side with
   their counts. The sidebar stacks above the content on narrow screens.

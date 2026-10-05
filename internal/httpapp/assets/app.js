@@ -2064,7 +2064,9 @@ function clearUrlParams(names) {
         }
       }
       if (deliveryTrigger) {
-        deliveryTrigger.value = btn.dataset.deliveryTrigger === 'all' ? 'all' : 'any';
+        // Anything but a stored "any" (including an absent value) opens on the
+        // default trigger.
+        deliveryTrigger.value = btn.dataset.deliveryTrigger === 'any' ? 'any' : 'all';
       }
       if (dlg._resetTabs) {
         dlg._resetTabs();

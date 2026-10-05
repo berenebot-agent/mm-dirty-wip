@@ -543,11 +543,11 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	}
 	id := idgen.New("in")
 	now := nowText()
-	_, err := s.write.ExecContext(ctx, `INSERT INTO inboxes(id,account_id,domain_id,local_part,display_name,storage_used_bytes,created_at) VALUES(?,?,?,?,?,0,?)`, id, accountID, domainID, localPart, strings.TrimSpace(display), now)
+	_, err := s.write.ExecContext(ctx, `INSERT INTO inboxes(id,account_id,domain_id,local_part,display_name,delivery_trigger,storage_used_bytes,created_at) VALUES(?,?,?,?,?,?,0,?)`, id, accountID, domainID, localPart, strings.TrimSpace(display), DeliveryTriggerDefault, now)
 	if err != nil {
 		return model.Inbox{}, err
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, CreatedAt: parseTime(now)}, nil
+	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, DeliveryTrigger: DeliveryTriggerDefault, CreatedAt: parseTime(now)}, nil
 }
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
 	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`

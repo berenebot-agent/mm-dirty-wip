@@ -347,3 +347,38 @@ func TestDeliveryWebhookSuccessRecords(t *testing.T) {
 		t.Fatalf("webhook delivery not recorded: %#v", got.Deliveries)
 	}
 }
+
+// TestNewInboxDefaultsToAllDeliveryTrigger pins the trigger a new inbox carries:
+// "all", so the delivery auto-actions wait for every connector on the inbox
+// instead of firing on whichever one polls first. Both the value CreateInbox
+// returns and the stored row are asserted, because CreateInbox builds its own
+// model.Inbox and previously reported no trigger at all.
+func TestNewInboxDefaultsToAllDeliveryTrigger(t *testing.T) {
+	ctx := context.Background()
+	s, u, d, boxes := testStore(t)
+
+	if store.DeliveryTriggerDefault != store.DeliveryTriggerAll {
+		t.Fatalf("DeliveryTriggerDefault = %q, want %q", store.DeliveryTriggerDefault, store.DeliveryTriggerAll)
+	}
+	if boxes[0].DeliveryTrigger != store.DeliveryTriggerAll {
+		t.Fatalf("CreateInbox returned trigger %q, want %q", boxes[0].DeliveryTrigger, store.DeliveryTriggerAll)
+	}
+	got, err := s.GetInboxInternal(ctx, u.AccountID, boxes[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DeliveryTrigger != store.DeliveryTriggerAll {
+		t.Fatalf("stored trigger = %q, want %q", got.DeliveryTrigger, store.DeliveryTriggerAll)
+	}
+	fresh, err := s.CreateInbox(ctx, u.AccountID, d.ID, "later", "Later")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetInboxInternal(ctx, u.AccountID, fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DeliveryTrigger != store.DeliveryTriggerAll {
+		t.Fatalf("inbox created after the first = %q, want %q", stored.DeliveryTrigger, store.DeliveryTriggerAll)
+	}
+}

@@ -11,10 +11,16 @@ import (
 // DeliveryTriggerAny and DeliveryTriggerAll are the accepted values for an
 // inbox's delivery trigger. "any" fires the auto-actions on the first
 // connector delivery; "all" waits until every connector that existed when the
-// message arrived has delivered.
+// message arrived has delivered. DeliveryTriggerDefault is what a new inbox
+// carries, and what a blank submitted value resolves to: waiting for every
+// connector is the safer reading of "the agent has handled this", because a
+// single agent that delivers first cannot mark mail read and trash it while a
+// second connector on the inbox has not seen it.
 const (
 	DeliveryTriggerAny = "any"
 	DeliveryTriggerAll = "all"
+
+	DeliveryTriggerDefault = DeliveryTriggerAll
 )
 
 // inboxAutoActions is the delivery-driven policy an inbox carries.
