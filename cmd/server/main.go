@@ -38,6 +38,7 @@ func main() {
 		log.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
+	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir)
 
 	runUID, runGID, err := privdrop.ResolvedIdentity()
 	if err != nil {
@@ -131,7 +132,9 @@ func main() {
 	// origin is the public URL the listener is reached through, so the startup
 	// log names the URL that actually serves this listener rather than a single
 	// shared base_url that may not match a reverse proxy or receiver hostname.
-	start := func(name, addr, origin string, handler http.Handler, tlsCert, tlsKey string) (*listener, error) {
+	// note is a short human-facing clarifier appended to the startup line when a
+	// listener's purpose is not obvious from its label alone.
+	start := func(name, note, addr, origin string, handler http.Handler, tlsCert, tlsKey string) (*listener, error) {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, fmt.Errorf("%s listener: %w", name, err)
@@ -146,7 +149,16 @@ func main() {
 		}
 		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.BodyReadTimeout, IdleTimeout: 90 * time.Second}
 		go func() {
-			log.Info("MailMoose listening", "listener", name, "addr", ln.Addr().String(), "mode", cfg.Mode, "origin", origin, "tls", tlsCert != "" && tlsKey != "")
+			attrs := []any{"listener", name, "addr", ln.Addr().String(), "origin", origin}
+			// The main listener never terminates TLS, so only the receiver
+			// reports it (and only when actually configured).
+			if tlsCert != "" && tlsKey != "" {
+				attrs = append(attrs, "tls", true)
+			}
+			if note != "" {
+				attrs = append(attrs, logging.Literal("note", note))
+			}
+			log.Info("listening", attrs...)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				log.Error("HTTP server failed", "listener", name, "error", err)
 				os.Exit(1)
@@ -155,7 +167,7 @@ func main() {
 		return &listener{name: name, srv: srv}, nil
 	}
 
-	mainListener, err := start("main", cfg.ListenAddr, cfg.BaseURL, h.Handler(), "", "")
+	mainListener, err := start("ui+api", "", cfg.ListenAddr, cfg.BaseURL, h.Handler(), "", "")
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)
@@ -164,7 +176,7 @@ func main() {
 	// it over verified TLS.
 	listeners := []*listener{mainListener}
 	if cfg.DedicatedReceiverEnable {
-		inboundListener, err := start("inbound", fmt.Sprintf(":%d", cfg.DedicatedReceiverPort), cfg.ReceiverURL(), h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
+		inboundListener, err := start("receiver-only", "(Incoming mail webhooks only)", fmt.Sprintf(":%d", cfg.DedicatedReceiverPort), cfg.ReceiverURL(), h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
 		if err != nil {
 			log.Error("startup failed", "error", err)
 			os.Exit(1)
