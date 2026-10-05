@@ -2351,6 +2351,31 @@ transport mappings keeps every caller's behaviour unchanged.
 one usage read, optional API/UI fields and a size-cell class. No new dependency,
 service or route.
 
+## D080 — Configurable HTTP receiver listener and public origin
+
+**Decision:** The HTTP webhook listener defaults to enabled on port 8082,
+but `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT` make it optional
+and configurable. This revises the fixed, always-on listener in D019.
+Webhook routes remain on both listeners for compatibility. The dedicated
+listener continues to expose only inbound ingestion and health checks.
+
+`DEDICATED_RECEIVER_URL` optionally supplies the public origin for provider
+webhook registrations, receiving instructions, and Cloudflare Worker code.
+Omitted or blank falls back to `BASE_URL`, even when the listener is enabled.
+The public origin and listener enable flag are independent; a reverse proxy
+can route the receiver origin to either available listener. `BASE_URL` remains
+the canonical UI/API origin for passkeys, invitations, and agent connectors.
+
+**Reason:** Some deployments expose public receiving through a different
+hostname from the UI. Using the receiver hostname as `BASE_URL` makes browser
+passkey registration fail its RP-domain check. A distinct receiver origin
+supports that topology without changing passkey trust policy.
+
+**Complexity:** Three environment options, startup validation, a conditional
+existing listener, and one effective receiver-origin accessor. No new process,
+service, dependency, or authentication policy. The passkey UI translates the
+browser's RP-domain rejection into an actionable configuration error.
+
 ## Future extension register
 
 Potential future additions include:

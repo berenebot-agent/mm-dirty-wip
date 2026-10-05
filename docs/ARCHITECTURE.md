@@ -51,13 +51,16 @@ Production runtime:
 1 container
 1 SQLite DB
 1 filesystem data root
-2 HTTP listeners (main + dedicated inbound webhook listener)
+1 main HTTP listener + optional dedicated inbound webhook listener
 ```
 
-The second listener always runs on `:8082`. It serves only the authenticated
+The second listener defaults to `:8082`; `DEDICATED_RECEIVER_ENABLE=false`
+disables it and `DEDICATED_RECEIVER_PORT` changes its port. It serves only the authenticated
 inbound webhook routes and `/healthz`, so an operator can expose a dedicated
 port to mail providers while keeping the main API/UI listener private. Both
-listeners run in the same process and share the same store.
+listeners run in the same process and share the same store. Webhook routes remain
+available on the main listener. `DEDICATED_RECEIVER_URL` controls generated
+receiver URLs and falls back to `BASE_URL`; the latter remains the UI/API origin.
 
 ## 2. Suggested Go packages
 
@@ -483,4 +486,4 @@ Use small in-process rate limiters for login and outbound-send endpoints. Accoun
 
 The application listens on plain HTTP inside its deployment network. A reverse proxy such as Nginx Proxy Manager, Caddy, or Traefik terminates public TLS and forwards the original scheme/host using trusted proxy headers.
 
-A second plain-HTTP listener always runs on `:8082` and serves only the inbound webhook connector and `/healthz`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The application never terminates TLS itself.
+A second HTTP listener defaults to `:8082` and serves only the inbound webhook connector and health checks. It can be disabled or assigned another port using `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The receiver can also terminate TLS using `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.

@@ -87,7 +87,8 @@ provider uses; Dial MX is not a fourth global choice. The installation setting
 also replaces the old core MX environment variables, which are now imported once
 and then ignored.
 
-The core always runs its dedicated inbound webhook listener on `:8082`; that
+The core defaults to a dedicated inbound webhook listener on `:8082` (configurable
+with `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`); that
 listener continues to accept the webhook connectors, so do not expose it to the
 internet unless you also use those — Dial MX itself opens no inbound port on the
 core. (The `auto` receiver choice is deferred: it is shown disabled in the UI and
