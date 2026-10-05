@@ -195,6 +195,13 @@ type Ready struct {
 type DomainAuth struct {
 	Domain string `json:"domain"`
 	KeyID  string `json:"key_id"`
+	// ContactEmail and SetupID are optional registration metadata carried by a
+	// core that enrolled through a named shared service (Antler MX). They are
+	// operational metadata, not credentials: domain authority remains the
+	// DNS-anchored Ed25519 proof. Older cores omit both; older receivers that
+	// reject unknown fields require a coordinated upgrade.
+	ContactEmail string `json:"contact_email,omitempty"`
+	SetupID      string `json:"setup_id,omitempty"`
 }
 
 type Challenge struct {
@@ -265,6 +272,41 @@ func validKeyID(id string) bool {
 		return false
 	}
 	for _, ch := range []byte(id) {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidContactEmail applies a light format check to the optional registration
+// metadata a core sends for a named shared service. It bounds the value and
+// verifies one printable-ASCII local part at one DNS domain; deliverability is
+// deliberately not tested.
+func ValidContactEmail(s string) bool {
+	if s != strings.TrimSpace(s) || len(s) < 3 || len(s) > 254 {
+		return false
+	}
+	local, domain, ok := strings.Cut(s, "@")
+	if !ok || local == "" || len(local) > 64 || strings.Contains(domain, "@") {
+		return false
+	}
+	for _, ch := range []byte(local) {
+		if ch <= ' ' || ch >= 0x7f {
+			return false
+		}
+	}
+	_, err := CanonicalDomain(strings.ToLower(domain))
+	return err == nil
+}
+
+// ValidSetupID bounds the opaque setup identifier a core attaches to its
+// registration metadata. It is an identifier, never a credential.
+func ValidSetupID(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for _, ch := range []byte(s) {
 		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
 			return false
 		}

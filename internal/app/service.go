@@ -49,6 +49,10 @@ type Service struct {
 	Store  *store.Store
 	Hub    *events.Hub
 	DialMX *mxdial.Manager
+	// AntlerEndpoints resolves the Antler MX receiver manifest at setup-save
+	// time. cmd/server installs the live GitHub resolver; when nil (tests) the
+	// embedded manifest is used.
+	AntlerEndpoints AntlerEndpointResolver
 	// MXRuntime is the process-owned MX receiver controller. cmd/server sets it
 	// before serving; when nil (tests, and deployments that wire no receiver)
 	// settings persist and reconcile on the next start, and status reports the
@@ -61,6 +65,12 @@ type Service struct {
 	encryptionKeys  [][]byte
 	unroutedLim     *rateLimiter
 	dialMXIngestSem chan struct{}
+}
+
+// AntlerEndpointResolver resolves the current Antler MX receiver set. It is
+// satisfied by *mxdial.AntlerResolver and stubbed in tests.
+type AntlerEndpointResolver interface {
+	Receivers(ctx context.Context) ([]mxdial.AntlerReceiver, error)
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
@@ -647,16 +657,35 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 	if _, err := mxwire.CanonicalDomain(domain.Name); err != nil {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("Dial MX requires a DNS domain name (use punycode for international names)")
 	}
+	var old map[string]any
+	if exists && strings.EqualFold(existing.Provider, provider) {
+		if old, err = s.DecryptDomainReceivingConfig(existing); err != nil {
+			return store.DomainReceivingConfig{}, nil, err
+		}
+	}
+	// The service must be read before schema defaulting: a legacy save that
+	// supplies only receiver_urls is custom, never the Antler default.
+	service := dialMXService(cfg, old)
 	merged, err := validateConfig(mxdial.Transport{}.ConfigFields(), cfg, nil, false)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
-	urlsRaw, _ := merged["receiver_urls"].(string)
-	urls, err := validateDialMXReceiverURLs(urlsRaw)
-	if err != nil {
-		return store.DomainReceivingConfig{}, nil, invalidConfig("%s", err.Error())
+	if service == mxdial.ServiceAntler {
+		if err := s.fillAntlerReceivingConfig(ctx, merged, old); err != nil {
+			return store.DomainReceivingConfig{}, nil, err
+		}
+	} else {
+		urlsRaw, _ := merged["receiver_urls"].(string)
+		urls, err := validateDialMXReceiverURLs(urlsRaw)
+		if err != nil {
+			return store.DomainReceivingConfig{}, nil, invalidConfig("%s", err.Error())
+		}
+		merged["service"] = mxdial.ServiceCustom
+		merged["receiver_urls"] = strings.Join(urls, ",")
+		delete(merged, "contact_email")
+		delete(merged, "setup_id")
+		delete(merged, "antler_receivers")
 	}
-	merged["receiver_urls"] = strings.Join(urls, ",")
 	enc, err := s.encryptConfig(merged)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
@@ -676,6 +705,93 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		s.DialMX.Wake()
 	}
 	return saved, nil, nil
+}
+
+// dialMXService resolves the effective service for a Dial MX save. Precedence:
+// an explicit incoming service choice, then the stored choice, then incoming or
+// stored receiver URLs (a legacy client that knows only receiver_urls is
+// custom), and finally the Antler default. The explicit choice must win over
+// receiver URLs because an Antler form carries its receiver snapshot in the
+// same field the custom service uses.
+func dialMXService(incoming, old map[string]any) string {
+	if v, _ := incoming["service"].(string); v == mxdial.ServiceAntler || v == mxdial.ServiceCustom {
+		return v
+	}
+	if old != nil {
+		if v, _ := old["service"].(string); v == mxdial.ServiceAntler || v == mxdial.ServiceCustom {
+			return v
+		}
+	}
+	if v, _ := incoming["receiver_urls"].(string); strings.TrimSpace(v) != "" {
+		return mxdial.ServiceCustom
+	}
+	if old != nil {
+		if v, _ := old["receiver_urls"].(string); strings.TrimSpace(v) != "" {
+			return mxdial.ServiceCustom
+		}
+	}
+	return mxdial.ServiceAntler
+}
+
+// fillAntlerReceivingConfig validates the contact email, resolves the live
+// Antler MX receiver set and snapshots it into the configuration. The snapshot
+// is what the DNS instructions and MX-record checks read, so a later manifest
+// change never silently re-points an existing setup.
+func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map[string]any) error {
+	email, _ := merged["contact_email"].(string)
+	email = strings.TrimSpace(email)
+	if email == "" && old != nil {
+		email, _ = old["contact_email"].(string)
+	}
+	if !mxwire.ValidContactEmail(email) {
+		return invalidConfig("a contact email is required for Antler MX")
+	}
+	setupID, _ := old["setup_id"].(string)
+	if !mxwire.ValidSetupID(setupID) {
+		setupID = idgen.New("setup")
+	}
+	resolver := s.AntlerEndpoints
+	if resolver == nil {
+		resolver = mxdial.DefaultAntlerResolver()
+	}
+	receivers, err := resolver.Receivers(ctx)
+	if err != nil {
+		return invalidConfig("Antler MX endpoints are unavailable right now; try again shortly")
+	}
+	snapshot, err := json.Marshal(receivers)
+	if err != nil {
+		return err
+	}
+	urls := make([]string, 0, len(receivers))
+	for _, r := range receivers {
+		urls = append(urls, r.SessionURL)
+	}
+	merged["service"] = mxdial.ServiceAntler
+	merged["contact_email"] = email
+	merged["setup_id"] = setupID
+	merged["receiver_urls"] = strings.Join(urls, ",")
+	merged["antler_receivers"] = string(snapshot)
+	return nil
+}
+
+// AntlerReceiversFromConfig decodes the receiver snapshot stored on an Antler
+// MX domain configuration. A custom configuration returns nil.
+func AntlerReceiversFromConfig(values map[string]any) []mxdial.AntlerReceiver {
+	if v, _ := values["service"].(string); v != mxdial.ServiceAntler {
+		return nil
+	}
+	raw, _ := values["antler_receivers"].(string)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var receivers []mxdial.AntlerReceiver
+	if err := json.Unmarshal([]byte(raw), &receivers); err != nil {
+		return nil
+	}
+	if err := mxdial.ValidateAntlerReceivers(receivers); err != nil {
+		return nil
+	}
+	return receivers
 }
 
 func validateDialMXReceiverURLs(raw string) ([]string, error) {

@@ -48,7 +48,18 @@ func (b dialMXBackend) Domains(ctx context.Context) ([]mxdial.Domain, error) {
 			return nil, errors.New("invalid Dial MX credential")
 		}
 		urls, _ := values["receiver_urls"].(string)
-		out = append(out, mxdial.Domain{AccountID: d.AccountID, ID: d.ID, Name: d.Name, KeyID: credential.KeyID, PrivateKey: ed25519.NewKeyFromSeed(seed), ReceiverURLs: splitReceiverURLs(urls)})
+		contactEmail, _ := values["contact_email"].(string)
+		setupID, _ := values["setup_id"].(string)
+		out = append(out, mxdial.Domain{
+			AccountID:    d.AccountID,
+			ID:           d.ID,
+			Name:         d.Name,
+			KeyID:        credential.KeyID,
+			PrivateKey:   ed25519.NewKeyFromSeed(seed),
+			ReceiverURLs: splitReceiverURLs(urls),
+			ContactEmail: contactEmail,
+			SetupID:      setupID,
+		})
 	}
 	return out, nil
 }

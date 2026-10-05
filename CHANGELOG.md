@@ -36,6 +36,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Antler MX: a zero-config hosted shared relay for direct-SMTP receiving.
+  Select **Antler MX (Free SMTP Relay - no port forwards required)** as the
+  domain's receiving provider, enter a contact email, and publish the shown MX
+  and `_mailmoose-mx.<domain>` TXT records. No inbound port, receiver container
+  or receiver-side credential is needed: the core dials out, and the existing
+  DNS-anchored Ed25519 proof establishes domain authority. The hosted receiver
+  set is resolved from a versioned manifest (embedded and fetched live at
+  setup-save time, cached, with last-known-good and embedded fallbacks) and
+  snapshotted per domain, so new capacity reaches new setups without a core
+  upgrade while published MX records stay stable. The contact email and a
+  generated setup id are logged by the receiver with domain proof and
+  per-recipient message records for usage accounting; they are metadata, never
+  credentials. Dial MX **custom** service (manual receiver URLs) is unchanged.
+- Domain receiving API/UI: a Dial MX setup now reports live per-receiver
+  authentication `status`, cached published-record `dns` traffic lights (MX
+  hostnames and TXT key) and copy-ready `instructions`, and the setup dialog
+  renders the MX records, TXT record and lights.
+- Standalone receiver: `DIALMX_BROWSER_REDIRECT_URL` redirects a browser
+  visiting the receiver root to a landing page (302); API, health and readiness
+  routes are unchanged.
 - Per-inbox storage quotas: an inbox can carry an optional storage cap on top
   of the account quota (`storage_quota_bytes` on `PATCH /v1/inboxes/{id}`, Admin
   only). A positive value caps the inbox's stored bytes, `0` means explicitly

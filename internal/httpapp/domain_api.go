@@ -29,6 +29,56 @@ type domainConfigResponse struct {
 	KeyID      string            `json:"key_id,omitempty"`
 	PublicKey  string            `json:"public_key,omitempty"`
 	TXTRecord  string            `json:"txt_record,omitempty"`
+	// Status is the live per-receiver authentication state the core has learned
+	// over its outbound sessions (Dial MX only).
+	Status []mxdialStatusView `json:"status,omitempty"`
+	// DNS is the published-record check for the domain's receiving setup
+	// (Dial MX only). It is best-effort and cached; a lookup failure is reported
+	// as a check state, never an API failure.
+	DNS []domainDNSView `json:"dns,omitempty"`
+	// Instructions are the copy-ready DNS records for the setup (Dial MX only).
+	Instructions *dialMXDNSInstructions `json:"instructions,omitempty"`
+}
+
+// mxdialStatusView mirrors mxdial.Status for JSON without importing its shape
+// into the API contract verbatim.
+type mxdialStatusView struct {
+	ReceiverURL  string     `json:"receiver_url"`
+	State        string     `json:"state"`
+	Reason       string     `json:"reason,omitempty"`
+	SMTPHostname string     `json:"smtp_hostname,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+}
+
+// domainDNSView is one published-record check. State is "ok", "pending" or
+// "mismatch" and carries a short human reason.
+type domainDNSView struct {
+	Kind     string   `json:"kind"` // "mx" | "txt"
+	Name     string   `json:"name"`
+	Expected string   `json:"expected"`
+	Found    []string `json:"found,omitempty"`
+	State    string   `json:"state"`
+	Reason   string   `json:"reason,omitempty"`
+}
+
+// dialMXDNSInstructions is the copy-ready DNS set for a domain's Dial MX
+// setup. For an Antler MX setup it lists both the MX records to publish and the
+// TXT verification record; for a custom service it lists the TXT record and
+// leaves the MX hostnames to the operator.
+type dialMXDNSInstructions struct {
+	Service  string                `json:"service"` // "antler" | "custom"
+	Contact  string                `json:"contact_email,omitempty"`
+	TXTName  string                `json:"txt_name"`
+	TXTValue string                `json:"txt_value"`
+	MX       []dialMXMXInstruction `json:"mx,omitempty"`
+	Hostname string                `json:"smtp_hostname,omitempty"`
+	Receiver []mxdialStatusView    `json:"receivers,omitempty"`
+}
+
+// dialMXMXInstruction is one MX record the operator must publish.
+type dialMXMXInstruction struct {
+	Hostname string `json:"hostname"`
+	Priority int    `json:"priority"`
 }
 
 // apiDomainSending serves the domain-scoped sending provider config:
@@ -280,6 +330,13 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 		resp.KeyID, resp.PublicKey = credential.KeyID, credential.PublicKey
 		pub, _ := base64.RawURLEncoding.DecodeString(credential.PublicKey)
 		resp.TXTRecord = mxwire.DomainTXT(credential.KeyID, pub)
+		domain, derr := s.Service.Store.GetDomain(ctx, cfg.AccountID, domainID)
+		if derr == nil {
+			view := s.dialMXLiveView(domain.Name, credential.KeyID, pub, cfg)
+			resp.Status = view.Statuses
+			resp.DNS = view.DNS
+			resp.Instructions = view.instructionView()
+		}
 	}
 	return resp, nil
 }
