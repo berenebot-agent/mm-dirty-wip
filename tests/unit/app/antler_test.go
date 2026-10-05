@@ -79,6 +79,30 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 	}
 }
 
+// TestDialMXAntlerRejectsSuppliedReceiverURLs proves the Antler MX receiver set
+// is never caller-controlled: an explicit receiver_urls is a validation error
+// rather than a silent discard, and no config is written.
+func TestDialMXAntlerRejectsSuppliedReceiverURLs(t *testing.T) {
+	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
+	stub := &stubAntler{receivers: antlerReceivers()}
+	svc.AntlerEndpoints = stub
+	ctx := context.Background()
+
+	_, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+		"receiver_urls": "https://evil.example.test",
+	}, false)
+	if !errors.Is(err, app.ErrInvalidConfig) {
+		t.Fatalf("err=%v, want ErrInvalidConfig", err)
+	}
+	if stub.calls != 0 {
+		t.Fatalf("rejected save consulted the Antler manifest %d times", stub.calls)
+	}
+	if _, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID); err == nil {
+		t.Fatal("rejected Antler save persisted a config")
+	}
+}
+
 func TestDialMXAntlerRequiresValidContactEmail(t *testing.T) {
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	svc.AntlerEndpoints = &stubAntler{receivers: antlerReceivers()}

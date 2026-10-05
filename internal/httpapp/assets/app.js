@@ -2524,6 +2524,29 @@ function clearUrlParams(names) {
 })();
 
 (function () {
+  // syncDialMXService materialises or removes the editable Receiver URLs field
+  // for a Dial MX provider group. The field is only valid for the custom
+  // service, so for Antler MX it is kept out of the DOM; switching the service
+  // select to custom injects the field from its inert <template>. The server
+  // independently rejects a supplied receiver_urls for Antler.
+  function syncDialMXService(group) {
+    if (!group || group.getAttribute('data-provider') !== 'dialmx') {
+      return;
+    }
+    var service = group.querySelector('select[name="cfg_dialmx_service"]');
+    if (!service) {
+      return;
+    }
+    var tpl = group.querySelector('template.dialmx-receiver-urls-field');
+    var injected = group.querySelector('.dialmx-receiver-urls');
+    if (service.value === 'custom') {
+      if (!injected && tpl) {
+        group.insertBefore(tpl.content.cloneNode(true), tpl);
+      }
+    } else if (injected) {
+      injected.parentNode.removeChild(injected);
+    }
+  }
   function sync(dlg) {
     var sel = dlg.querySelector('.provider-select');
     if (!sel) {
@@ -2536,6 +2559,9 @@ function clearUrlParams(names) {
       group.querySelectorAll('input,select,textarea').forEach(function (el) {
         el.disabled = !active;
       });
+      if (active) {
+        syncDialMXService(group);
+      }
     });
     var save = dlg.querySelector('[data-save-provider]');
     if (save) {
@@ -2555,6 +2581,11 @@ function clearUrlParams(names) {
     }
     sel.addEventListener('change', function () {
       sync(dlg);
+    });
+    dlg.querySelectorAll('select[name="cfg_dialmx_service"]').forEach(function (service) {
+      service.addEventListener('change', function () {
+        syncDialMXService(service.closest('.provider-fields'));
+      });
     });
     sync(dlg);
   });

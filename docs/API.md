@@ -742,8 +742,9 @@ accepts `"regenerate_secret": true`. Provider schemas:
   `resend: {"api_key","webhook_secret","api_base?"}`;
   `dialmx: {"service?","contact_email?","receiver_urls?","enforcement?"}` —
   `service` is `antler` (the zero-config Antler MX shared relay, the default) or
-  `custom`. Antler requires a valid `contact_email`, resolves the hosted
-  receiver set, and ignores `receiver_urls`; custom requires one or more HTTPS
+  `custom`. Antler requires a valid `contact_email` and resolves the hosted
+  receiver set; supplying `receiver_urls` for Antler is a `400`, because the
+  receiver set is never caller-controlled. Custom requires one or more HTTPS
   `receiver_urls` and ignores `contact_email`. `enforcement` is `moderate`
   (default) or `hard`. A save that supplies only `receiver_urls` is treated as
   custom, so legacy configurations are never silently migrated.
