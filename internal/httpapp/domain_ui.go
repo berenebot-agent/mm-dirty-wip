@@ -24,10 +24,14 @@ type domainEditorView struct {
 	Kind          string // "sending" | "receiving"
 	Provider      string
 	ProviderLabel string
-	Fields        []transport.ConfigField
-	WebhookURL    string
-	Steps         []string
-	Generated     bool
+	// SelectLabel is the longer label shown in the provider <select>. It falls
+	// back to ProviderLabel when empty, so only providers that distinguish a
+	// short label from a descriptive choice set it (Antler MX).
+	SelectLabel string
+	Fields      []transport.ConfigField
+	WebhookURL  string
+	Steps       []string
+	Generated   bool
 	// KeepSecrets is true when the stored config already uses this provider, so
 	// a blank secret retains the stored value ("leave blank to keep"). It is
 	// false for a create or provider switch, where required secrets must be
@@ -658,6 +662,12 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 		return nil, false
 	}
 	e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: t.ConfigFields(), WebhookURL: domainIngestURL(baseURL, t), Steps: domainReceivingSteps(provider)}
+	// The Dial MX provider offers the zero-config Antler MX shared relay, so
+	// its selector entry states that plainly. The short label stays "Antler MX"
+	// in the domain row and provider box.
+	if provider == "dialmx" {
+		e.SelectLabel = "Antler MX (Free SMTP Relay - no port forwards required)"
+	}
 	for _, f := range e.Fields {
 		if f.Generated {
 			e.Generated = true
@@ -691,6 +701,15 @@ func (s *Server) receivingEditorState(ctx context.Context, accountID, domainID, 
 	}
 	if dec, err := s.Service.DecryptDomainReceivingConfig(cfg); err == nil {
 		overlayNonSecret(values, fields, dec)
+		// A pre-Antler Dial MX config has receiver URLs but no service choice.
+		// Prefill it as custom so saving the form cannot silently migrate it.
+		if provider == "dialmx" {
+			if _, ok := dec["service"]; !ok {
+				if urls, _ := dec["receiver_urls"].(string); strings.TrimSpace(urls) != "" {
+					values["service"] = "custom"
+				}
+			}
+		}
 	}
 	return values, true
 }
@@ -768,9 +787,10 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "dialmx":
 		return []string{
-			"Add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
-			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain>.",
-			"Publish MX records for this domain pointing at the Dial MX receiver service.",
+			"Choose Antler MX for the zero-config free relay, or Custom receiver URLs to point at your own receiver.",
+			"For Antler MX, enter a contact email and save; the MX and TXT records to publish are then shown in this dialog.",
+			"For a custom service, add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
+			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain> and the shown MX records.",
 			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
 			"Choose moderate or hard authentication enforcement, then save.",
 		}

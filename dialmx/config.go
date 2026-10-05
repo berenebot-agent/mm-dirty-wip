@@ -2,6 +2,7 @@ package dialmx
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ func Load() (Config, error) {
 	}
 	c.Receiver.Mode = env("DIALMX_MODE", "single")
 	c.Receiver.CoreKey = strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY"))
+	c.Receiver.BrowserRedirectURL = strings.TrimSpace(os.Getenv("DIALMX_BROWSER_REDIRECT_URL"))
 	// The SMTP edge keeps the documented MX_* environment.
 	c.SMTP = mxagent.Config{
 		Hostname:        env("MX_HOSTNAME", "localhost"),
@@ -84,6 +86,9 @@ func (c *Config) validate() error {
 	if c.Receiver.Mode == "shared" && c.TLSCertFile == "" {
 		return fmt.Errorf("shared mode requires DIALMX_TLS_CERT and DIALMX_TLS_KEY")
 	}
+	if c.Receiver.BrowserRedirectURL != "" && !validRedirectURL(c.Receiver.BrowserRedirectURL) {
+		return fmt.Errorf("DIALMX_BROWSER_REDIRECT_URL must be an https URL")
+	}
 	s := c.SMTP
 	if s.MaxMessageBytes < 1<<20 {
 		return fmt.Errorf("MX_MAX_MESSAGE_BYTES is too small")
@@ -121,6 +126,17 @@ func env(k, d string) string {
 		return s
 	}
 	return d
+}
+
+// validRedirectURL bounds the browser landing redirect: an absolute https URL
+// with no fragment, so a mistyped value cannot become a header injection or a
+// loop back to the receiver.
+func validRedirectURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Fragment != "" {
+		return false
+	}
+	return true
 }
 
 func envBool(k string, d bool) bool {

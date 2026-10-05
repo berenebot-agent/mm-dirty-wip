@@ -53,6 +53,14 @@ import (
 // curated whitelist. Session records add receiver_id and core_connection_id;
 // transaction records add the edge's smtp_connection_id/message_transaction_id
 // via mxagent.TransactionAttrs. Timestamps are always UTC.
+//
+// Registration metadata: a core enrolled through a named shared service (Antler
+// MX) supplies contact_email and setup_id on DomainAuth. Both are operational
+// metadata, never credentials — domain authority remains the DNS-anchored
+// Ed25519 proof. They are logged on the domain proof registration/renewal and
+// on resolve/handoff records so usage can be aggregated by operator contact;
+// they are omitted entirely for a custom receiver. A malformed value is dropped
+// and never rejects the proof.
 
 const (
 	// attrSchemaVersion versions the JSON record schema so a consumer can pin a
