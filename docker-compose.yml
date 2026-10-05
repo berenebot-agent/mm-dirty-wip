@@ -31,7 +31,8 @@ services:
     ports:
       # :8081 = API + web UI + webhook delivery connector.
       - "0.0.0.0:8081:8081"
-      # :8082 = dedicated inbound listener (webhook connectors).
-      - "0.0.0.0:8082:8082"
+      # Dedicated webhook listener. Remove this mapping if disabled in .env.
+      # Both sides follow DEDICATED_RECEIVER_PORT (default 8082).
+      - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
       # :25 = direct SMTP when using this as an Included MX receiver.
       - "0.0.0.0:25:2525"

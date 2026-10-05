@@ -2985,6 +2985,7 @@ function clearUrlParams(names) {
     button.addEventListener('click', function () {
       setStatus(statusEl, 'Waiting for your device…', false);
       button.disabled = true;
+      var rpID = '';
       var name = isRegister ? (window.prompt('Name this passkey', 'Passkey') || 'Passkey') : '';
       // Offer to make this the only sign-in method only when a password is
       // currently enabled; a passkey-only account has nothing to disable.
@@ -3009,6 +3010,7 @@ function clearUrlParams(names) {
         var publicKey;
         if (isRegister) {
           publicKey = prepareCreationOptions(data.options.publicKey || data.options);
+          rpID = publicKey.rp && publicKey.rp.id;
           return navigator.credentials.create({ publicKey: publicKey }).then(function (cred) {
             if (!cred) { throw new Error('no credential returned'); }
             var url = button.getAttribute('data-finish') + '?name=' + encodeURIComponent(name) + (makeOnly ? '&only=1' : '');
@@ -3016,6 +3018,7 @@ function clearUrlParams(names) {
           });
         }
         publicKey = prepareRequestOptions(data.options.publicKey || data.options);
+        rpID = publicKey.rpId;
         return navigator.credentials.get({ publicKey: publicKey }).then(function (cred) {
           if (!cred) { throw new Error('no credential returned'); }
           return postJSON(button.getAttribute('data-finish'), credentialToJSON(cred), data.challenge_token);
@@ -3028,7 +3031,16 @@ function clearUrlParams(names) {
           window.location.href = (result && result.redirect) || '/';
         }
       }).catch(function (err) {
-        setStatus(statusEl, err.message || 'Passkey failed', true);
+        var message = err.message || 'Passkey failed';
+        // Only translate the browser's RP-domain rejection; other security
+        // errors (and cancellation/device errors) retain their own explanation.
+        if (err.name === 'SecurityError' && rpID &&
+            /relying party|rp id|rpid|registrable domain/i.test(message)) {
+          message = 'Passkeys are configured for "' + rpID + '", but you are visiting "' + window.location.hostname +
+            '". Open MailMoose at its configured BASE_URL, or ask your administrator to correct BASE_URL to the UI URL and restart MailMoose. ' +
+            'Use DEDICATED_RECEIVER_URL for a separate inbound receiver URL.';
+        }
+        setStatus(statusEl, message, true);
         button.disabled = false;
       });
     });

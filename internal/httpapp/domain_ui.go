@@ -57,7 +57,7 @@ func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, p
 
 // domainReceivingEditor is the receiving counterpart of domainSendingEditor.
 func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID, provider string) (*domainEditorView, bool) {
-	e, ok := newDomainEditor("receiving", provider, s.Service.Config.BaseURL)
+	e, ok := newDomainEditor("receiving", provider, s.Service.Config.ReceiverURL())
 	if !ok {
 		return nil, false
 	}
@@ -576,7 +576,7 @@ func (s *Server) domainSaveError(w http.ResponseWriter, r *http.Request, domainI
 // generated secret and stores it as a bound one-time flash. Only the generated
 // Worker code is plaintext; no entered secret is ever flashed.
 func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p model.Principal, domainID string, cfg store.DomainReceivingConfig, secret string) {
-	base := s.Service.Config.BaseURL
+	base := s.Service.Config.ReceiverURL()
 	code := s.cloudflareWorkerCode(base, secret)
 	f := domainWorkerFlash{
 		AccountID:  p.AccountID,

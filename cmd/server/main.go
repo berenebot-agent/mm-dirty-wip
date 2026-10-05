@@ -155,12 +155,15 @@ func main() {
 	}
 	// The inbound connector can optionally serve TLS so a remote MX edge reaches
 	// it over verified TLS.
-	inboundListener, err := start("inbound", config.InboundAddr, h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
-	if err != nil {
-		log.Error("startup failed", "error", err)
-		os.Exit(1)
+	listeners := []*listener{mainListener}
+	if cfg.DedicatedReceiverEnable {
+		inboundListener, err := start("inbound", fmt.Sprintf(":%d", cfg.DedicatedReceiverPort), h.InboundHandler(), cfg.InboundTLSCertFile, cfg.InboundTLSKeyFile)
+		if err != nil {
+			log.Error("startup failed", "error", err)
+			os.Exit(1)
+		}
+		listeners = append(listeners, inboundListener)
 	}
-	listeners := []*listener{mainListener, inboundListener}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
