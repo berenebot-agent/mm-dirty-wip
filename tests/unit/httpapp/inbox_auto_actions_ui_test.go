@@ -127,3 +127,71 @@ func TestInboxConnectorsTabHasItsOwnForm(t *testing.T) {
 		t.Fatalf("auto-action controls are not inside the connectors form")
 	}
 }
+
+// TestInboxAutoActionsBlankTriggerDefaultsToAll pins the default a submitted
+// form falls back to when it omits the trigger: "all", not "any". A form that
+// reaches the endpoint without the field would otherwise silently narrow the
+// policy to the first delivery.
+func TestInboxAutoActionsBlankTriggerDefaultsToAll(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	body := url.Values{"_csrf": {csrf}, "auto_mark_read_on_delivery": {"1"}}.Encode()
+	if rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/auto-actions", body); rr.Code != 303 {
+		t.Fatalf("auto-actions save = %d %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.Store.GetInboxInternal(context.Background(), u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DeliveryTrigger != "all" {
+		t.Fatalf("blank trigger stored as %q, want all", got.DeliveryTrigger)
+	}
+}
+
+// assertDefaultDeliveryTrigger checks that every delivery-trigger select in the
+// markup opens on "all". The connector-create dialog carries one per connector
+// kind and the Connectors tab another; none of them is populated from the
+// stored value until its dialog is opened, so the option marked selected is the
+// default a user saves.
+func assertDefaultDeliveryTrigger(t *testing.T, markup string) {
+	t.Helper()
+	const open = `<select name="delivery_trigger"`
+	found := 0
+	for rest := markup; ; {
+		i := strings.Index(rest, open)
+		if i < 0 {
+			break
+		}
+		rest = rest[i:]
+		end := strings.Index(rest, "</select>")
+		if end < 0 {
+			t.Fatalf("delivery trigger select is not closed:\n%s", rest)
+		}
+		body := rest[len(open):end]
+		found++
+		if !strings.Contains(body, `<option value="all" selected>`) {
+			t.Fatalf("delivery trigger select does not open on all:\n%s", body)
+		}
+		if strings.Contains(body, `<option value="any" selected>`) {
+			t.Fatalf("delivery trigger select opens on any:\n%s", body)
+		}
+		rest = rest[end:]
+	}
+	if found == 0 {
+		t.Fatal("no delivery trigger select in the page")
+	}
+}
+
+// TestDeliveryTriggerControlsDefaultToAll pins the markup the default rides on:
+// the trigger select must present "all" as the preselected option, so a user who
+// never touches it saves the default rather than the old "any".
+func TestDeliveryTriggerControlsDefaultToAll(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := uiGet(t, h, cookie, "/?inbox="+box.ID+"&inbox_tab=connectors")
+	if page.Code != 200 {
+		t.Fatalf("dashboard = %d", page.Code)
+	}
+	assertDefaultDeliveryTrigger(t, page.Body.String())
+}

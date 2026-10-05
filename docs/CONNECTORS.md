@@ -87,7 +87,8 @@ Connectors tab, which carries its own **Save auto-actions** control (the rest of
 the inbox edit dialog saves on its other tabs and never touches this policy). A
 **trigger** decides when they fire: `any` (the first connector to deliver) or
 `all` (every connector that existed when the message arrived has delivered — a
-connector added later never pins older mail).
+connector added later never pins older mail). `all` is the default, so mail is
+neither marked read nor trashed until every connector on the inbox has seen it.
 
 These actions apply to **agent and relay connectors only**. API keys and human
 accounts never trigger them: a poll is not a delivery. Mail that is Spam,

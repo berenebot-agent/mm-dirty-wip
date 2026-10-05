@@ -187,7 +187,7 @@ type Inbox struct {
 	AutoTrashAfterDeliveryHours *int `json:"auto_trash_after_delivery_hours,omitempty"`
 	// DeliveryTrigger selects when the auto-actions fire: "any" (first
 	// connector to deliver) or "all" (every connector that existed when the
-	// message arrived has delivered).
+	// message arrived has delivered). A new inbox carries "all".
 	DeliveryTrigger string    `json:"delivery_trigger,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 }
