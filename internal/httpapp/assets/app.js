@@ -3069,16 +3069,4 @@ function clearUrlParams(names) {
     }
   }
 
-  // "Sign in with an API key" reveals a compact key field on demand so the
-  // login card stays uncluttered for the password and passkey paths.
-  var keySignin = document.getElementById('api-key-signin');
-  var keyForm = document.getElementById('api-key-form');
-  if (keySignin && keyForm) {
-    keySignin.addEventListener('click', function () {
-      keyForm.hidden = false;
-      keySignin.hidden = true;
-      var input = keyForm.querySelector('input[name="api_key"]');
-      if (input) { input.focus(); }
-    });
-  }
 })();
