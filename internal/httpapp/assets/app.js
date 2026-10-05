@@ -3069,4 +3069,21 @@ function clearUrlParams(names) {
     }
   }
 
+  /* Each passkey row is a name plus a gear button that opens that passkey's
+     settings dialog, where the details, rename and remove live. One dialog per
+     credential is rendered server-side, so the button only has to find it. */
+  document.querySelectorAll('.open-passkey-settings').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var dlg = document.getElementById('passkey-dialog-' + btn.getAttribute('data-passkey'));
+      if (dlg && typeof dlg.showModal === 'function') {
+        dlg.showModal();
+      }
+    });
+  });
+  document.querySelectorAll('.passkey-dialog [data-close-dialog]').forEach(function (b) {
+    var dlg = b.closest('dialog');
+    if (!dlg) { return; }
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+
 })();
