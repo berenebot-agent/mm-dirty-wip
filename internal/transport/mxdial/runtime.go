@@ -27,6 +27,10 @@ import (
 // The receiver proves control of the CORE signing key, not of the receiver
 // domain: the dialer signs a challenge with Domain.PrivateKey and the receiver
 // verifies it against the MM1 TXT record published for the core domain.
+//
+// ContactEmail and SetupID are optional Antler MX registration metadata. They
+// are operational metadata only, never a credential: domain authority remains
+// the DNS-anchored proof. Custom receivers leave both empty.
 type Domain struct {
 	AccountID    string
 	ID           string
@@ -34,6 +38,8 @@ type Domain struct {
 	KeyID        string
 	PrivateKey   ed25519.PrivateKey
 	ReceiverURLs []string
+	ContactEmail string
+	SetupID      string
 }
 
 // Status is the observable per-domain state for one receiver URL.
@@ -589,6 +595,12 @@ func keyFingerprint(d Domain) string {
 		h.Write([]byte(u))
 		h.Write([]byte{0})
 	}
+	// Registration metadata is part of the fingerprint so a contact or setup
+	// change forces a fresh DomainAuth carrying the new values.
+	h.Write([]byte(d.ContactEmail))
+	h.Write([]byte{0})
+	h.Write([]byte(d.SetupID))
+	h.Write([]byte{0})
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -1236,7 +1248,12 @@ func (s *session) authenticateAll() error {
 		pending = append(pending, ad)
 	}
 	for _, ad := range pending {
-		if err := s.writeJSON(mxwire.FrameDomainAuth, 0, ad.channel, mxwire.DomainAuth{Domain: ad.domain.Name, KeyID: ad.domain.KeyID}); err != nil {
+		if err := s.writeJSON(mxwire.FrameDomainAuth, 0, ad.channel, mxwire.DomainAuth{
+			Domain:       ad.domain.Name,
+			KeyID:        ad.domain.KeyID,
+			ContactEmail: ad.domain.ContactEmail,
+			SetupID:      ad.domain.SetupID,
+		}); err != nil {
 			return err
 		}
 	}

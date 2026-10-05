@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,6 +109,11 @@ type Config struct {
 	// Raising it lets tests observe paced renewals without changing production
 	// defaults.
 	MaxRenewalsInFlight int
+
+	// BrowserRedirectURL, when set, is where an ordinary browser visiting the
+	// receiver's root is redirected (302). API and health routes are unchanged;
+	// only GET / with an HTML Accept header is served a redirect.
+	BrowserRedirectURL string
 }
 
 func (c *Config) maxAuthConcurrent() int {
@@ -249,7 +255,9 @@ type ipState struct {
 }
 
 // binding is one connection's authority over a domain. registry membership is
-// not implied: only the active binding is in Receiver.domains.
+// not implied: only the active binding is in Receiver.domains. ContactEmail and
+// SetupID are the optional Antler MX registration metadata supplied on
+// DomainAuth; they are logged for usage accounting and are never credentials.
 type binding struct {
 	c             *connection
 	channel       uint64
@@ -260,7 +268,9 @@ type binding struct {
 	// renewAt is when maintenance should begin a renewal. It is derived from
 	// the grant so a binding that authenticated late is not renewed (or
 	// expired) on the connection's fixed tick.
-	renewAt time.Time
+	renewAt      time.Time
+	contactEmail string
+	setupID      string
 }
 
 // challenge is one in-flight challenge. binding is nil for an initial
@@ -271,6 +281,10 @@ type challenge struct {
 	keyID   string
 	domain  string
 	binding *binding
+	// contactEmail/setupID are the optional registration metadata echoed from
+	// the DomainAuth that started this challenge.
+	contactEmail string
+	setupID      string
 }
 
 type connection struct {
@@ -366,7 +380,36 @@ func (r *Receiver) Handler() http.Handler {
 		}
 		w.WriteHeader(200)
 	})
+	// A regular browser that visits the receiver's root is sent to the
+	// operator's landing page. Only an HTML navigation is redirected; a client
+	// that accepts anything (or has no Accept header) gets the plain 404 so
+	// health probes and tooling keep their expected behaviour.
+	m.HandleFunc("GET /{$}", r.browserRoot)
 	return m
+}
+
+// browserRoot serves GET / for browsers: a 302 to the configured landing page,
+// or 404 when no redirect is configured. The URL is validated at load time, so
+// it is never an open redirect target chosen by a request.
+func (r *Receiver) browserRoot(w http.ResponseWriter, req *http.Request) {
+	if r.cfg.BrowserRedirectURL == "" || !wantsBrowserHTML(req) {
+		http.NotFound(w, req)
+		return
+	}
+	http.Redirect(w, req, r.cfg.BrowserRedirectURL, http.StatusFound)
+}
+
+// wantsBrowserHTML reports whether the request is a browser navigation:
+// text/html is explicitly an acceptable type. It is a positive check, not a
+// user-agent guess, so API clients are unaffected.
+func wantsBrowserHTML(req *http.Request) bool {
+	for _, part := range strings.Split(req.Header.Get("Accept"), ",") {
+		media, _, _ := strings.Cut(part, ";")
+		if strings.EqualFold(strings.TrimSpace(media), "text/html") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
@@ -776,6 +819,17 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 	if e != nil || d != a.Domain || a.KeyID == "" {
 		return errors.New("invalid domain")
 	}
+	// Registration metadata is optional and validated when present. A malformed
+	// value is dropped rather than rejecting the proof: it is accounting
+	// metadata, not authority.
+	contactEmail, setupID := "", ""
+	if a.ContactEmail != "" || a.SetupID != "" {
+		if mxwire.ValidContactEmail(a.ContactEmail) && mxwire.ValidSetupID(a.SetupID) {
+			contactEmail, setupID = a.ContactEmail, a.SetupID
+		} else {
+			r.logProof(c, "registration_metadata", d, a.KeyID, "rejected", "invalid_metadata", 0)
+		}
+	}
 	now := time.Now()
 	r.mu.Lock()
 	if f.ChannelID <= c.lastChannel {
@@ -811,7 +865,7 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 			return r.authReply(c, f.ChannelID, d, a.KeyID, false, "replaced", time.Time{})
 		}
 	}
-	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(challengeTTL)}
+	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(challengeTTL), contactEmail: contactEmail, setupID: setupID}
 	r.mu.Unlock()
 	if !r.spawn(c, func() { r.initialAuth(c, f.ChannelID, d, a.KeyID) }) {
 		r.dropChallenge(c, f.ChannelID)
@@ -963,8 +1017,9 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		b.renewAt = now.Add(r.cfg.RevalidateInterval)
 		exp := b.expires
 		expiresIn := time.Until(exp)
+		email, setupID := b.contactEmail, b.setupID
 		r.mu.Unlock()
-		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds())
+		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
 		_ = r.authReply(c, ch, x.Domain, x.KeyID, true, "", exp)
 		return
 	}
@@ -989,11 +1044,11 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		old.state = bindReplaced
 		replaced = old
 	}
-	b := &binding{c: c, channel: ch, domain: x.Domain, keyID: x.KeyID, state: bindActive, expires: now.Add(authProofLifetime), renewAt: now.Add(r.cfg.RevalidateInterval), pub: pub}
+	b := &binding{c: c, channel: ch, domain: x.Domain, keyID: x.KeyID, state: bindActive, expires: now.Add(authProofLifetime), renewAt: now.Add(r.cfg.RevalidateInterval), pub: pub, contactEmail: issued.contactEmail, setupID: issued.setupID}
 	c.domains[ch] = b
 	r.domains[x.Domain] = b
 	r.mu.Unlock()
-	r.logProof(c, "registration", x.Domain, x.KeyID, "active", "", time.Since(started))
+	r.logProof(c, "registration", x.Domain, x.KeyID, "active", "", time.Since(started), "contact_email", b.contactEmail, "setup_id", b.setupID)
 	if replaced != nil && replaced.c != c {
 		sc := replaced.c
 		sdomain := replaced.domain

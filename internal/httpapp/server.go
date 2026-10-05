@@ -89,6 +89,9 @@ type Server struct {
 	// webauthnLoginLimiter bounds passkey login attempts per source address,
 	// separate from the password limiter so one cannot exhaust the other.
 	webauthnLoginLimiter *limiter
+	// dns performs the cached published-record checks behind the Dial MX setup
+	// traffic lights. It is never on a save path and never fails a request.
+	dns *dnsChecker
 }
 
 type ctxKey int
@@ -122,7 +125,8 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		inboundSem:           make(chan struct{}, conc),
 		streamLimiter:        newConcurrentLimiter(maxConcurrentLongLived),
 		waitLimiter:          newConcurrentLimiter(maxConcurrentLongLived),
-		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute)}
+		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		dns:                  newDNSChecker()}
 	if rpID := svc.Config.WebAuthnRPID(); rpID != "" {
 		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
 			RPDisplayName: "MailMoose",

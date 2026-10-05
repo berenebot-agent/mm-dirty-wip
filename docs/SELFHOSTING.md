@@ -116,6 +116,24 @@ domain's MX record at `MX_HOSTNAME` and publish SPF. The domain is only an MX
 receiver once you set this in the UI; a domain left on a webhook provider is
 unaffected.
 
+### Antler MX (zero-config hosted relay)
+
+Antler MX is the hosted shared relay: select **Receiving → Antler MX (Free SMTP
+Relay - no port forwards required)**, enter a **contact email**, and save. The
+core dials out to the hosted receivers; no inbound port, receiver container or
+DNS credential is needed on your side. The dialog shows the exact MX records and
+the `_mailmoose-mx.<domain>` TXT record to publish, plus live traffic lights for
+each published record and each receiver's authentication. The contact email is
+usage metadata for the service operator and is not tied to your account; it can
+be the same address for every domain. Antler MX can coexist with Direct MX and
+webhook domains.
+
+The hosted receiver set is resolved from a versioned manifest (embedded in the
+core and fetched live at setup-save time) and snapshotted per domain, so the
+service can add capacity for new setups without a core upgrade, and your
+published MX records never move underneath you. See
+[DIALMX.md](DIALMX.md#antler-mx-endpoints).
+
 `true` (embedded) requires the container to start as root (it must spawn the
 edge under a different uid before dropping). A strict compose `user:` or
 `cap_drop: [ALL]` disables that; startup then refuses with a clear error — use

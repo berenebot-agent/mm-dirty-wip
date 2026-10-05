@@ -103,6 +103,7 @@ session listener and certificate settings:
 |---|---|---|
 | `DIALMX_MODE` | `single` | `single` for one bearer-authenticated core; `shared` for DNS-authenticated domains. |
 | `DIALMX_CORE_KEY` | — | Required bearer key in single mode; unused in shared mode. |
+| `DIALMX_BROWSER_REDIRECT_URL` | unset | Optional https landing page; a browser `GET /` is 302-redirected there. |
 | `MX_HOSTNAME` | `localhost` | SMTP greeting hostname; independent of the session listener address. |
 | `DIALMX_LISTEN_ADDR` | `:8443` | HTTPS/2 session listener. |
 | `DIALMX_TLS_CERT` | — | Session certificate; optional in single mode, required in shared mode. |
@@ -148,12 +149,20 @@ See `dialmx/.env.example` for a commented template.
 
 ## 3. Domain onboarding
 
-1. In the core's Admin UI, open the domain and set **Receiving** to **Dial MX**.
-2. Enter the receiver's HTTPS base URL (`https://mx.example.com`). Up to eight
+1. In the core's Admin UI, open the domain and set **Receiving** to **Antler MX
+   (Free SMTP Relay - no port forwards required)**, or to the Dial MX provider
+   with a **custom** service.
+2. For **Antler MX**, enter a **contact email** and save. The core resolves the
+   hosted receiver set, generates the domain's exact key, and shows the MX
+   records and the `_mailmoose-mx.<domain>` TXT record to publish. The email is
+   operational metadata only: it is logged with the domain's usage so the
+   service can see who is using it, and it can be shared or reused across
+   domains. It is not authority and is not tied to an account.
+3. For a **custom** service, enter the receiver's HTTPS base URL(s). Up to eight
    comma-separated base URLs are accepted; each must be an HTTPS origin with no
    path, userinfo, query or fragment. One domain may be served by several
    receivers.
-3. The core generates a per-domain Ed25519 key pair and shows the matching
+4. The core generates a per-domain Ed25519 key pair and shows the matching
    public record. Publish it as a DNS TXT record:
 
    ```text
@@ -165,14 +174,60 @@ See `dialmx/.env.example` for a commented template.
    enforcement may inherit; credentials never do. Regenerating the key requires
    replacing that domain's TXT record. Existing authorization lasts no longer
    than its current five-minute grant and fails at the next unsuccessful renewal.
-4. Publish the domain's MX record pointing at the advertised SMTP hostname shown
-   by the receiver status; it may differ from the HTTPS endpoint hostname.
-5. Choose `moderate` or `hard` authentication enforcement. The evidence
+5. Publish the domain's MX record(s) pointing at the advertised SMTP hostname
+   shown by the receiver status; they may differ from the HTTPS endpoint
+   hostname. An Antler MX setup shows the exact MX records to publish.
+6. Choose `moderate` or `hard` authentication enforcement. The evidence
    semantics are identical to the MX edge (see [MX.md](MX.md)): auth failure is
    a durable **Spam** delivery, never an SMTP rejection.
 
 The credential private seed is stored encrypted with `APP_ENCRYPTION_KEY`. The
 public record is safe to publish and is shown in the UI.
+
+### Antler MX endpoints
+
+Antler MX is a predefined shared service. Its receiver set lives in a versioned
+JSON manifest, compiled into the core and also fetched live from the project
+repository at setup-save time:
+
+```json
+{
+  "schema_version": 1,
+  "receivers": [
+    { "id": "antler-1", "session_url": "https://antler1.hgolabs.com", "smtp_hostname": "antler1.hgolabs.com", "mx_priority": 10 },
+    { "id": "antler-2", "session_url": "https://antler2.hgolabs.com", "smtp_hostname": "antler2.hgolabs.com", "mx_priority": 20 }
+  ]
+}
+```
+
+The live copy is cached for ten minutes; a fetch failure or outage falls back to
+the last known good copy and then to the embedded copy, so setup never depends
+on the network. The decoder tolerates unknown fields so the hosted document can
+grow, and validates known fields strictly (canonical HTTPS origins, public-only
+destinations, DNS hostnames, bounded priority). The resolved set is
+**snapshotted** into each domain's configuration, so adding or re-pointing
+capacity only affects new setups; existing domains keep the receivers their MX
+records already point at. Adding a receiver is preferred over re-pointing one,
+and old receivers stay up.
+
+### Setup traffic lights
+
+The domain receiving API returns the live setup picture for a Dial MX domain:
+
+- `status[]` — per-receiver authentication state learned over the core's
+  outbound session (ready, rejected, connecting, …) with a bounded reason and
+  expiry.
+- `dns[]` — cached, best-effort published-record checks: the domain's MX
+  hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
+  against the domain's exact key. `state` is `ok`, `pending` (not published yet)
+  or `mismatch`.
+- `instructions` — the copy-ready MX and TXT records for an Antler MX setup.
+
+The checks are asynchronous and never block a save or a render. A green light
+means the record matches, or the receiver holds an active authenticated domain
+binding. Published MX records and receiver authentication are separate checks: a
+domain can authenticate while its MX still points elsewhere, and a green
+receiver session is not a public SMTP-port delivery test.
 
 ## 4. DNS authorisation flow
 
@@ -406,6 +461,16 @@ The standalone receiver writes JSON records to stderr. All records have `time`
 diagnostics. Message bodies, subjects, raw headers, TXT records, challenge
 payloads, signatures and credentials are not logged. Envelope addresses, IPs,
 domains and normalized authentication evidence are logged.
+
+A core enrolled through a named shared service (Antler MX) supplies
+`contact_email` and `setup_id` on `DomainAuth`. Both are operational metadata,
+never credentials: domain authority remains the DNS-anchored Ed25519 proof. A
+malformed value is dropped rather than failing the proof. The receiver logs both
+on the `dialmx domain proof` registration/renewal records and attaches them to
+the per-recipient `dialmx resolve` and `dialmx handoff result` records, so usage
+(contact, setup id, domains, messages) can be read or exported from the log
+stream. They are omitted entirely for a custom receiver. Retention remains the
+Docker log rotation described below; export before replacing a container.
 
 ### Correlation and events
 

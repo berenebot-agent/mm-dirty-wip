@@ -2409,6 +2409,91 @@ no new migration.
 also fixes its returned `model.Inbox` reporting no trigger at all), two blank-form
 defaults, four preselected options, one JavaScript fallback, and doc/spec text.
 
+## D082 — Antler MX: a named shared receiver service with live endpoint discovery
+
+**Requirement:** Give a self-hoster a zero-config direct-SMTP option that needs no
+public inbound port on the core and no receiver of their own: select a named
+service, enter a contact email, publish the shown records. The service operator
+must be able to add receiver capacity for new setups without a core release, and
+the core must retain enough metadata (contact email, setup id, domains,
+messages) to account for usage.
+**Decision:** Extend the per-domain Dial MX receiving provider (`dialmx`) with a
+`service` choice:
+
+- `antler` (default) — Antler MX, the hosted shared relay. The core resolves the
+  receiver set from a versioned JSON manifest, snapshots it into the domain's
+  encrypted receiving configuration, generates the domain's exact Ed25519 key,
+  and shows the MX and `_mailmoose-mx.<domain>` TXT records to publish.
+- `custom` — the pre-existing manual `receiver_urls` behaviour, unchanged. A
+  legacy save with only `receiver_urls` is never silently treated as Antler.
+
+The manifest is compiled in (`internal/transport/mxdial/antler-endpoints.json`)
+and fetched live from the project repository at setup-save time, with a
+ten-minute cache, a last-known-good fallback and the embedded copy as the final
+fallback, so a hosting outage never blocks setup. It carries both the HTTPS
+session origins and the SMTP MX hostnames/priorities. The manifest decoder
+tolerates unknown fields so the hosted document can grow without breaking older
+cores; known fields are validated strictly (canonical HTTPS origins, public-only
+destinations, DNS hostnames, bounded priority). Existing setups keep their
+snapshot, so adding or re-pointing capacity only affects new setups; the service
+leaves old receivers running.
+
+Registration metadata travels per domain: `DomainAuth` gains optional
+`contact_email` and `setup_id`. Both are operational metadata, never credentials
+— domain authority remains the existing DNS-anchored Ed25519 proof, and a
+malformed value is dropped rather than failing the proof. The receiver logs both
+on the domain proof registration/renewal and on the per-recipient resolve and
+handoff records, so usage (contact, setup, domains, messages) can be read or
+exported from the existing structured JSON logs. Antler MX does not introduce an
+account tie-in, an operator dashboard, a receiver database or a durable queue.
+
+The receiving API (`GET /v1/admin/domains/{id}/receiving`) returns the live
+setup picture for Dial MX: per-receiver authentication `status` learned over the
+outbound session, cached best-effort published-record `dns` checks (MX hostnames
+and the TXT key), and copy-ready `instructions`. The checks are asynchronous and
+never block a save or a render.
+
+The standalone receiver gains `DIALMX_BROWSER_REDIRECT_URL` (https, no
+fragment): a browser `GET /` with an HTML `Accept` header is 302-redirected to
+the landing page; health, readiness and the session endpoint are unchanged, and
+a client that does not accept HTML still gets 404.
+
+**Reason:** The named service makes the common self-host case genuinely
+zero-config while reusing every settled Dial MX invariant: core-dials-receiver,
+no inbound core port, policy-free stateless receiver, exact-domain DNS proof and
+durable-truth-before-`250`. A repository manifest lets capacity changes reach new
+setups immediately without shipping the receiver fleet and core in lockstep,
+while per-setup snapshots keep existing published MX records stable. Per-domain
+contact metadata preserves the multi-tenant model (one installation may serve
+several accounts with different contacts) without weakening authority to a
+self-asserted value.
+
+**Accepted risk:** the live manifest is fetched over TLS with no signature; an
+actor able to write the manifest path in the project repository could point new
+setups at different receiver origins. Existing setups are unaffected because
+they keep their snapshot. Manifest signing on top of the embedded copy is a
+later addition requiring no rework.
+
+**Consequences:**
+
+- The Dial MX provider selector reads **Antler MX (Free SMTP Relay - no port
+  forwards required)**; the short label stays **Antler MX**.
+- `DomainAuth` metadata is an optional field on the strict mx-v2 contract:
+  a receiver or core built before it rejects the frame as malformed when it
+  receives the fields, so **upgrade the shared receiver first, then cores** —
+  the same coordinated-release pattern as D072. Custom cores send no metadata
+  and are unaffected.
+- Antler MX endpoints are public-only regardless of a self-hosted operator's
+  outbound opt-out: the hosted service must never resolve to a private
+  destination.
+- No new dependency, service or runtime component is added to the core; the
+  receiver remains one stateless process outside the trust boundary.
+
+**Complexity:** One embedded manifest and resolver, per-domain config
+fields/snapshot, two optional wire fields and their logging, cached DNS checks
+plus a setup API/UI panel, and one receiver environment setting. Durable
+delivery, retry receipts and existing mx-v1/mx-v2 transport are unchanged.
+
 ## Future extension register
 
 Potential future additions include:

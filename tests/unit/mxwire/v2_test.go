@@ -39,6 +39,64 @@ func TestV2FrameFixtureAndStrictBounds(t *testing.T) {
 	}
 }
 
+// TestDomainAuthRegistrationMetadata pins the optional Antler MX registration
+// metadata wire shape: absent for custom cores, present (and decoded) for a
+// named-service core, and still strict about unknown fields.
+func TestDomainAuthRegistrationMetadata(t *testing.T) {
+	// A plain custom-core DomainAuth decodes with empty metadata and omits the
+	// fields when re-encoded, so custom receivers never see them.
+	plain, err := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{Domain: "example.com", KeyID: "key-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plain.Payload) != `{"domain":"example.com","key_id":"key-1"}` {
+		t.Fatalf("plain DomainAuth payload = %s", plain.Payload)
+	}
+	var decoded mxwire.DomainAuth
+	if err := mxwire.DecodeFrame(plain, &decoded); err != nil || decoded.ContactEmail != "" || decoded.SetupID != "" {
+		t.Fatalf("plain decode: %+v %v", decoded, err)
+	}
+
+	// An Antler core carries both fields.
+	full, err := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 1, mxwire.DomainAuth{
+		Domain: "example.com", KeyID: "key-1", ContactEmail: "ops@example.com", SetupID: "setup_ab12",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mxwire.DecodeFrame(full, &decoded); err != nil || decoded.ContactEmail != "ops@example.com" || decoded.SetupID != "setup_ab12" {
+		t.Fatalf("metadata decode: %+v %v", decoded, err)
+	}
+	// Unknown fields remain fatal; the metadata contract is not an excuse for
+	// loose decoding.
+	if err := mxwire.DecodeFrame(mxwire.Frame{Payload: []byte(`{"domain":"example.com","key_id":"k","surprise":1}`)}, &mxwire.DomainAuth{}); err == nil {
+		t.Fatal("accepted unknown JSON field alongside metadata")
+	}
+}
+
+func TestContactEmailValidator(t *testing.T) {
+	for _, ok := range []string{"ops@example.com", "a.b+tag@sub.example.co.uk", "x@example-domain.com"} {
+		if !mxwire.ValidContactEmail(ok) {
+			t.Fatalf("valid contact %q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "no-at", "@example.com", "a@", "a@b", "a@example.com ", " a@example.com", "a@example.com\n", "a b@example.com", "a@exa mple.com"} {
+		if mxwire.ValidContactEmail(bad) {
+			t.Fatalf("invalid contact %q accepted", bad)
+		}
+	}
+	for _, ok := range []string{"setup_ab12", "Antler-1", "abcd"} {
+		if !mxwire.ValidSetupID(ok) {
+			t.Fatalf("valid setup id %q rejected", ok)
+		}
+	}
+	for _, bad := range []string{"", "has space", "slash/", "tab\t"} {
+		if mxwire.ValidSetupID(bad) {
+			t.Fatalf("invalid setup id %q accepted", bad)
+		}
+	}
+}
+
 func TestV2ProofAndDNSSelection(t *testing.T) {
 	seed, _ := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
 	private := ed25519.NewKeyFromSeed(seed)

@@ -38,6 +38,8 @@ services:
     environment:
       DIALMX_MODE: "${DIALMX_MODE:-single}"
       DIALMX_CORE_KEY: "${DIALMX_CORE_KEY:-}"
+      # Optional browser landing redirect (https, no fragment).
+      DIALMX_BROWSER_REDIRECT_URL: "${DIALMX_BROWSER_REDIRECT_URL:-}"
       # SMTP greeting hostname. Independent of the session listener address.
       MX_HOSTNAME: "${MX_HOSTNAME:-mail.example.com}"
       # Optional in single mode; shared mode requires the session pair.

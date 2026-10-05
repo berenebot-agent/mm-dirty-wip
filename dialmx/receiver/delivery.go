@@ -107,6 +107,7 @@ func (t *transaction) resolveOne(ctx context.Context, address string, out *mxwir
 	}
 	rc.selected = "core"
 	rc.coreConnectionID, rc.keyID, rc.transportID = b.c.id, b.keyID, b.c.transportID
+	rc.contactEmail, rc.setupID = b.contactEmail, b.setupID
 	p, e := t.group(b)
 	if e != nil {
 		rc.selected, rc.reason = "core", "transaction_limit"
@@ -179,6 +180,7 @@ type resolveCompletion struct {
 	coreConnectionID, keyID   string
 	transportID               string
 	wireTxID, channel         uint64
+	contactEmail, setupID     string
 }
 
 func (rc *resolveCompletion) finish(t *transaction, ctx context.Context, started time.Time) {
@@ -211,6 +213,11 @@ func (rc *resolveCompletion) finish(t *transaction, ctx context.Context, started
 	if rc.reason != "" {
 		args = append(args, "reason", rc.reason)
 	}
+	// Antler MX registration metadata, when present, ties each routing decision
+	// to the operator contact that supplied it. It is metadata, not authority.
+	if rc.contactEmail != "" || rc.setupID != "" {
+		args = append(args, "contact_email", rc.contactEmail, "setup_id", rc.setupID)
+	}
 	log.Info(eventResolve, args...)
 }
 
@@ -222,6 +229,42 @@ func (t *transaction) acceptedBinding(c *connection, d string) *binding {
 		}
 	}
 	return nil
+}
+
+// groupContact returns the registration contact shared by the accepted
+// bindings for a connection's domain group, or "" when the group is a custom
+// receiver or has mixed contacts.
+func (t *transaction) groupContact(c *connection, domains []string) string {
+	value := ""
+	for _, d := range domains {
+		b := t.acceptedBinding(c, d)
+		if b == nil || b.contactEmail == "" {
+			return ""
+		}
+		if value == "" {
+			value = b.contactEmail
+		} else if value != b.contactEmail {
+			return ""
+		}
+	}
+	return value
+}
+
+// groupSetup is the setup_id counterpart of groupContact.
+func (t *transaction) groupSetup(c *connection, domains []string) string {
+	value := ""
+	for _, d := range domains {
+		b := t.acceptedBinding(c, d)
+		if b == nil || b.setupID == "" {
+			return ""
+		}
+		if value == "" {
+			value = b.setupID
+		} else if value != b.setupID {
+			return ""
+		}
+	}
+	return value
 }
 
 // live reports whether a pinned binding may still carry DATA. A replaced
@@ -271,18 +314,25 @@ func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, bo
 		recips := groups[c]
 		p := t.groups[c]
 		started := time.Now()
-		t.r.log.Info(eventHandoff, txnLog(ctx,
+		groupContact, groupSetup := t.groupContact(c, domains[c]), t.groupSetup(c, domains[c])
+		startArgs := txnLog(ctx,
 			"handoff_id", handoffID(c.id, p.tx), "core_connection_id", c.id,
 			"wire_transaction_id", p.tx, "phase", "start", "outcome", "pending",
-			"recipients", recips, "domains", domains[c], "size", size, "digest", digest)...)
+			"recipients", recips, "domains", domains[c], "size", size, "digest", digest)
+		if groupContact != "" || groupSetup != "" {
+			startArgs = append(startArgs, "contact_email", groupContact, "setup_id", groupSetup)
+		}
+		t.r.log.Info(eventHandoff, startArgs...)
 		// A deferred completion guarantees the terminal handoff record is
 		// emitted on every path, carrying the actual bytes streamed and the
 		// right outcome for the path taken.
 		hc := &handoffCompletion{
-			recipients: recips,
-			domains:    domains[c],
-			size:       size,
-			digest:     digest,
+			recipients:   recips,
+			domains:      domains[c],
+			size:         size,
+			digest:       digest,
+			contactEmail: groupContact,
+			setupID:      groupSetup,
 		}
 		hErr := func() error {
 			defer hc.finish(t, ctx, c, p, started)
@@ -398,6 +448,8 @@ type handoffCompletion struct {
 	phase               string
 	outcome, reason     string
 	acked               int
+	contactEmail        string
+	setupID             string
 }
 
 func (hc *handoffCompletion) finish(t *transaction, ctx context.Context, c *connection, p *pending, started time.Time) {
@@ -432,6 +484,9 @@ func (hc *handoffCompletion) finish(t *transaction, ctx context.Context, c *conn
 	if hc.reason != "" {
 		args = append(args, "reason", hc.reason)
 	}
+	if hc.contactEmail != "" || hc.setupID != "" {
+		args = append(args, "contact_email", hc.contactEmail, "setup_id", hc.setupID)
+	}
 	log.Info(eventHandoff, args...)
 }
 
@@ -461,6 +516,12 @@ func (t *transaction) logHandoffResult(ctx context.Context, c *connection, tx ui
 	}
 	if rr.Reason != "" {
 		args = append(args, "reason", boundedField(rr.Reason))
+	}
+	// The recipient's pinned binding ties the durable outcome to its Antler MX
+	// registration metadata, so a per-recipient export can be aggregated by
+	// contact without parsing the handoff group record.
+	if b := t.accepted[strings.ToLower(rr.Recipient)]; b != nil && (b.contactEmail != "" || b.setupID != "") {
+		args = append(args, "contact_email", b.contactEmail, "setup_id", b.setupID)
 	}
 	log.Info(eventHandoffResult, args...)
 }

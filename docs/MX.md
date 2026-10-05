@@ -155,20 +155,34 @@ every accepted recipient; quota/transient failures cause sender retries.
 `MX_RECEIPT_RETENTION_HOURS` defaults to 168 hours, preserving retry deduplication
 even after the original message is deleted. This is not exactly-once delivery.
 
-## Shared receivers (legacy per-domain Dial MX)
+## Shared receivers (per-domain Dial MX and Antler MX)
 
 Use `DIALMX_MODE=shared` for a public multi-tenant receiver. It retains TLS and
-per-domain DNS-backed Ed25519 authentication; the core selects **Dial MX** per
-domain. See [DIALMX.md](DIALMX.md).
+per-domain DNS-backed Ed25519 authentication; the core selects **Antler MX (Free
+SMTP Relay - no port forwards required)** for a zero-config hosted relay, or
+Dial MX with a **custom** service for operator-run receivers. See
+[DIALMX.md](DIALMX.md).
+
+An Antler MX setup stores a per-domain **contact email** and a generated
+**setup id** and sends them as optional registration metadata on `DomainAuth`.
+They are operational metadata for the service operator's usage accounting, never
+credentials: domain authority remains the DNS-anchored Ed25519 proof. The
+receiver logs them with domain proof and per-recipient message records. The
+hosted receiver set is resolved from a versioned manifest (embedded and fetched
+live at setup-save time) and snapshotted per domain, so capacity changes reach
+new setups without a core release and existing MX records stay stable.
 
 Per-domain **Dial MX** is retained as **legacy compatibility** and is *not* a
 fourth global choice in the installation receiver setting: it predates the
 unified receiver and is configured per domain (with its own per-domain key and
 TXT record), whereas Admin → MX receiver is a single installation-wide choice of
-Included or Remote. New deployments should use the installation receiver.
+Included or Remote. New deployments should use the installation receiver or
+Antler MX.
 
-**Auto** (pick the best receiver automatically) is **not implemented** and is
-shown disabled in the UI as a placeholder; the API rejects it.
+**Auto** (pick the best receiver automatically) in the installation receiver
+setting is **not implemented** and is shown disabled in the UI as a placeholder;
+the API rejects it. Antler MX is the implemented zero-config service, offered
+per domain rather than as an installation mode.
 
 ## Breaking change
 
