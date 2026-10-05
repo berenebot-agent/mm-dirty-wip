@@ -31,11 +31,13 @@ on the domain:
 4. Repeat for each domain you receive on. Each domain has its own configuration;
    a normal re-save keeps its existing secret.
 
-The generated Worker uses `BASE_URL`. That hostname must resolve to a
+The generated Worker uses `DEDICATED_RECEIVER_URL`, falling back to `BASE_URL`
+when omitted or blank (even when the dedicated listener is enabled). That hostname must resolve to a
 **public** IP: Cloudflare Workers cannot fetch private addresses (`10.x`,
 `192.168.x`, `172.16-31.x`, `127.x`) and fail with error `1002`. If the setup
-page shows a reachability warning, set `BASE_URL` (or fix the DNS record) to a
-public hostname and regenerate.
+page shows a reachability warning, set `DEDICATED_RECEIVER_URL` (or fix its DNS
+record) to a public hostname and regenerate. Keep `BASE_URL` set to the UI origin
+so passkeys use the correct domain.
 
 You can also use the REST API. Omitting the secret lets MailMoose generate one,
 returned once in `generated.webhook_secret`:

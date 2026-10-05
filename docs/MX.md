@@ -111,7 +111,8 @@ docker compose -f docker-compose.mx-sidecar.yml up -d --build
 
 The receiver needs inbound SMTP and the session listener; the core needs only
 outbound connectivity to it. No MX ingest HTTP endpoint exists on the core.
-Its separate `:8082` listener remains for webhook receiving providers.
+Its separate listener remains for webhook receiving providers (enabled by default
+on `:8082`, configurable with `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`).
 
 ## TLS and proxies
 

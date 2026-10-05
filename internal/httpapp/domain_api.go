@@ -337,7 +337,7 @@ func (s *Server) inboundWebhookURL(provider string) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimRight(s.Service.Config.BaseURL, "/") + paths.IngestPath()
+	return strings.TrimRight(s.Service.Config.ReceiverURL(), "/") + paths.IngestPath()
 }
 
 // writeDomainConfigJSON marks domain config responses as non-cacheable; the

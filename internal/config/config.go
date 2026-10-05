@@ -14,9 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/auth"
 )
 
-// InboundAddr is the fixed address of the dedicated inbound webhook listener.
-// It always runs alongside the main listener and serves only the authenticated
-// provider ingest routes plus /healthz.
+// InboundAddr is the default address of the dedicated inbound webhook listener.
 const InboundAddr = ":8082"
 
 // MXMode is the user-facing direct-SMTP (MX) switch.
@@ -153,8 +151,11 @@ const (
 )
 
 type Config struct {
-	ListenAddr string
-	BaseURL    string
+	ListenAddr              string
+	BaseURL                 string
+	DedicatedReceiverEnable bool
+	DedicatedReceiverPort   int
+	DedicatedReceiverURL    string
 	// baseHost is the canonical host (with explicit port) parsed from BaseURL.
 	// It is the only host the HTTPS redirect may target; request Host headers
 	// are attacker-controlled and never used for redirects.
@@ -242,6 +243,20 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	receiverEnabled, err := strconv.ParseBool(env("DEDICATED_RECEIVER_ENABLE", "true"))
+	if err != nil {
+		return Config{}, fmt.Errorf("DEDICATED_RECEIVER_ENABLE must be a boolean")
+	}
+	receiverPort, err := strconv.Atoi(env("DEDICATED_RECEIVER_PORT", "8082"))
+	if err != nil || receiverPort < 1 || receiverPort > 65535 {
+		return Config{}, fmt.Errorf("DEDICATED_RECEIVER_PORT must be an integer from 1 to 65535")
+	}
+	receiverURL := strings.TrimRight(strings.TrimSpace(os.Getenv("DEDICATED_RECEIVER_URL")), "/")
+	if receiverURL != "" {
+		if _, err := parseBaseHost(receiverURL); err != nil {
+			return Config{}, fmt.Errorf("DEDICATED_RECEIVER_URL: %w", err)
+		}
+	}
 	mxMode, err := parseMXMode(env("MX_ENABLE", "false"))
 	if err != nil {
 		return Config{}, err
@@ -256,45 +271,48 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		ListenAddr:             env("LISTEN_ADDR", ":8081"),
-		BaseURL:                baseURL,
-		baseHost:               baseHost,
-		DataDir:                env("DATA_DIR", "/data"),
-		Mode:                   strings.ToLower(env("MODE", "selfhosted")),
-		AllowRegistration:      envBool("ALLOW_REGISTRATION", false),
-		TrustProxyHeaders:      envBool("TRUST_PROXY_HEADERS", false),
-		ForceHTTPS:             envBool("FORCE_HTTPS", false),
-		AppEncryptionKey:       strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
-		AdminEmail:             admin.email,
-		AdminPassword:          admin.password,
-		AdminAccountName:       admin.accountName,
-		MaxMessageBytes:        envInt64("MAX_MESSAGE_BYTES", 30<<20),
-		DefaultQuotaBytes:      envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
-		SessionTTL:             time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
-		RelayRequireBearer:     envBool("RELAY_REQUIRE_CALLER_AUTH", false),
-		LoginLimitPerMinute:    envInt("LOGIN_LIMIT_PER_MINUTE", 10),
-		SendLimitPerMinute:     envInt("SEND_LIMIT_PER_MINUTE", 60),
-		RegisterLimitPerMinute: envInt("REGISTER_LIMIT_PER_MINUTE", 5),
-		AllowPrivateOutbound:   envBool("ALLOW_PRIVATE_OUTBOUND", false),
-		InboundConcurrency:     envInt("INBOUND_CONCURRENCY", 32),
-		MaxMultipartParts:      envInt("MAX_MULTIPART_PARTS", 64),
-		MaxMIMEDepth:           envInt("MAX_MIME_DEPTH", 8),
-		MaxMIMEParts:           envInt("MAX_MIME_PARTS", 256),
-		BodyReadTimeout:        time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
-		ApprovalExpiryHours:    envInt("APPROVAL_EXPIRY_HOURS", 48),
-		WebhookRetryWindow:     time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
-		MXMode:                 mxMode,
-		MXReceiveEnabled:       mxMode != MXOff,
-		MXEmbedded:             mxMode == MXLocal,
-		MXReceiverURL:          strings.TrimRight(env("MX_RECEIVER_URL", ""), "/"),
-		MXCoreKey:              strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")),
-		MXImport:               mxImport(mxMode),
-		MXReceiptRetention:     time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
-		MXUID:                  envInt("MX_UID", 65533),
-		MXGID:                  envInt("MX_GID", 65533),
-		InboundTLSCertFile:     strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
-		InboundTLSKeyFile:      strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
-		DialMXCAFile:           strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
+		ListenAddr:              env("LISTEN_ADDR", ":8081"),
+		BaseURL:                 baseURL,
+		DedicatedReceiverEnable: receiverEnabled,
+		DedicatedReceiverPort:   receiverPort,
+		DedicatedReceiverURL:    receiverURL,
+		baseHost:                baseHost,
+		DataDir:                 env("DATA_DIR", "/data"),
+		Mode:                    strings.ToLower(env("MODE", "selfhosted")),
+		AllowRegistration:       envBool("ALLOW_REGISTRATION", false),
+		TrustProxyHeaders:       envBool("TRUST_PROXY_HEADERS", false),
+		ForceHTTPS:              envBool("FORCE_HTTPS", false),
+		AppEncryptionKey:        strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
+		AdminEmail:              admin.email,
+		AdminPassword:           admin.password,
+		AdminAccountName:        admin.accountName,
+		MaxMessageBytes:         envInt64("MAX_MESSAGE_BYTES", 30<<20),
+		DefaultQuotaBytes:       envInt64("DEFAULT_STORAGE_QUOTA_BYTES", 100<<20),
+		SessionTTL:              time.Duration(envInt("SESSION_TTL_HOURS", 24*14)) * time.Hour,
+		RelayRequireBearer:      envBool("RELAY_REQUIRE_CALLER_AUTH", false),
+		LoginLimitPerMinute:     envInt("LOGIN_LIMIT_PER_MINUTE", 10),
+		SendLimitPerMinute:      envInt("SEND_LIMIT_PER_MINUTE", 60),
+		RegisterLimitPerMinute:  envInt("REGISTER_LIMIT_PER_MINUTE", 5),
+		AllowPrivateOutbound:    envBool("ALLOW_PRIVATE_OUTBOUND", false),
+		InboundConcurrency:      envInt("INBOUND_CONCURRENCY", 32),
+		MaxMultipartParts:       envInt("MAX_MULTIPART_PARTS", 64),
+		MaxMIMEDepth:            envInt("MAX_MIME_DEPTH", 8),
+		MaxMIMEParts:            envInt("MAX_MIME_PARTS", 256),
+		BodyReadTimeout:         time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
+		ApprovalExpiryHours:     envInt("APPROVAL_EXPIRY_HOURS", 48),
+		WebhookRetryWindow:      time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
+		MXMode:                  mxMode,
+		MXReceiveEnabled:        mxMode != MXOff,
+		MXEmbedded:              mxMode == MXLocal,
+		MXReceiverURL:           strings.TrimRight(env("MX_RECEIVER_URL", ""), "/"),
+		MXCoreKey:               strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY")),
+		MXImport:                mxImport(mxMode),
+		MXReceiptRetention:      time.Duration(envInt("MX_RECEIPT_RETENTION_HOURS", 7*24)) * time.Hour,
+		MXUID:                   envInt("MX_UID", 65533),
+		MXGID:                   envInt("MX_GID", 65533),
+		InboundTLSCertFile:      strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
+		InboundTLSKeyFile:       strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
+		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
@@ -302,8 +320,10 @@ func Load() (Config, error) {
 	if cfg.Mode != "selfhosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted")
 	}
-	if cfg.ListenAddr == InboundAddr {
-		return Config{}, fmt.Errorf("LISTEN_ADDR must differ from the inbound listener %s", InboundAddr)
+	if _, port, err := net.SplitHostPort(cfg.ListenAddr); err == nil && cfg.DedicatedReceiverEnable {
+		if n, err := strconv.Atoi(port); err == nil && n == cfg.DedicatedReceiverPort {
+			return Config{}, fmt.Errorf("LISTEN_ADDR must use a different port from DEDICATED_RECEIVER_PORT")
+		}
 	}
 	if cfg.MaxMessageBytes < 1<<20 {
 		return Config{}, fmt.Errorf("MAX_MESSAGE_BYTES is too small")
@@ -478,8 +498,16 @@ func (c Config) WebAuthnRPID() string {
 	return host
 }
 
-// WebAuthnOrigins returns the exact origin(s) permitted to complete a passkey
-// ceremony. It is the canonical BASE_URL; no other origin is accepted.
+// ReceiverURL is the public origin used for inbound provider setup. It is
+// independent of whether the dedicated listener is enabled.
+func (c Config) ReceiverURL() string {
+	if c.DedicatedReceiverURL != "" {
+		return c.DedicatedReceiverURL
+	}
+	return c.BaseURL
+}
+
+// WebAuthnOrigins returns the canonical UI origin permitted for passkeys.
 func (c Config) WebAuthnOrigins() []string {
 	if c.BaseURL == "" {
 		return nil

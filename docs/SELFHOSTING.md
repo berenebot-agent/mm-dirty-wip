@@ -146,13 +146,36 @@ enable TLS/resolver overrides.
 
 Core service (`mailmoose`):
 
+`BASE_URL` is the canonical UI/API origin, including passkeys and invitation links.
+For a separate public webhook hostname, configure:
+
+```dotenv
+BASE_URL=https://mail.example.com
+DEDICATED_RECEIVER_ENABLE=true
+DEDICATED_RECEIVER_PORT=8082
+DEDICATED_RECEIVER_URL=https://receive.example.com
+```
+
+The receiver URL is optional: omitted or blank uses `BASE_URL`, even when the
+dedicated listener is enabled. It controls generated provider webhook URLs,
+receiving instructions, and Cloudflare Worker code, independently of the enable
+flag. Proxy the receiver hostname to the configured port; publish that port in
+Docker (the source Compose file follows `DEDICATED_RECEIVER_PORT` from `.env`).
+The receiver exposes only webhook ingestion and health checks. Webhook routes
+remain available on the main UI/API listener. This is separate from SMTP/MX
+receiver configuration. After changing the public receiver URL, update provider
+webhook registrations and regenerate/redeploy Cloudflare Worker code.
+
 | Variable | Default | Meaning |
 |---|---|---|
+| `DEDICATED_RECEIVER_ENABLE` | `true` | Enable the separate HTTP webhook listener. |
+| `DEDICATED_RECEIVER_PORT` | `8082` | Listener port, from 1 to 65535; must differ from the main port when enabled. |
+| `DEDICATED_RECEIVER_URL` | `BASE_URL` | Optional bare HTTP(S) public receiver origin, without a path. |
 | `MX_UID` / `MX_GID` | `65533` | Uid/gid the embedded edge runs as (must differ from the app's). |
 | `MX_RECEIPT_RETENTION_HOURS` | `168` (7 days) | How long a delivery receipt deduplicates a sender retry, surviving message deletion. |
 | `MX_RECEIVER_URL` | built-in loopback | Receiver HTTP/HTTPS origin; required for `remote`. |
 | `DIALMX_CORE_KEY` | auto-generated (embedded) | Bearer key shared with the private receiver; required for `remote`. |
-| `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the core's `:8082`; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
+| `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the dedicated receiver port; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
 
 Edge service (`mailmoose-mx`):
 

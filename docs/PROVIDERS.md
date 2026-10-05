@@ -212,17 +212,19 @@ submitted for approval in one request.
 
 ## Dedicated inbound listener
 
-The server always listens on two ports:
+The server has a main listener and an optional dedicated webhook listener:
 
 - `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
-- `:8082` is a dedicated listener that serves **only** the inbound webhook and MX
-  routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`,
-  and, when `MX_ENABLE=true|remote`, `/internal/mx/resolve` and
-  `/internal/mx/ingest`) plus `/healthz`.
+- The dedicated listener defaults to `:8082` and serves **only** inbound webhook
+  routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`)
+  and health checks. Set `DEDICATED_RECEIVER_PORT` to change the port or
+  `DEDICATED_RECEIVER_ENABLE=false` to disable it. SMTP/MX is configured separately.
 
 To keep the API and UI off the public internet, expose only `:8082` to your
 reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
-the firewall. Point provider webhook URLs at the dedicated host/port:
+the firewall. Set `DEDICATED_RECEIVER_URL=https://inbound.example.com` to generate
+provider webhook URLs using that origin. Omitted or blank uses `BASE_URL`, even
+when enabled. Keep `BASE_URL` set to the UI origin for passkeys. Example URLs:
 
 ```text
 https://inbound.example.com/internal/ingest/mailgun/raw-mime
@@ -231,6 +233,5 @@ https://inbound.example.com/internal/ingest/resend
 ```
 
 The ingest routes remain available on the main listener for backward
-compatibility. The dedicated listener is plain HTTP like the main listener:
-terminate TLS at the reverse proxy and do not expose the port directly to the
-internet.
+compatibility. Usually terminate TLS at the reverse proxy; the dedicated listener
+can also serve TLS directly with `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.

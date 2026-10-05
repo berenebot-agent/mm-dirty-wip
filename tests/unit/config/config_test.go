@@ -8,6 +8,63 @@ import (
 
 const testKey = "01234567890123456789012345678901"
 
+func TestDedicatedReceiverConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, enabled, port, url, listen string
+		wantError                        bool
+	}{
+		{name: "defaults"},
+		{name: "custom", enabled: "true", port: "9090", url: "https://receive.example.com/"},
+		{name: "disabled same port", enabled: "false", port: "8081"},
+		{name: "blank url enabled", enabled: "true", url: " "},
+		{name: "url without listener", enabled: "false", url: "https://receive.example.com"},
+		{name: "bad flag", enabled: "maybe", wantError: true},
+		{name: "bad port", port: "abc", wantError: true},
+		{name: "zero port", port: "0", wantError: true},
+		{name: "large port", port: "65536", wantError: true},
+		{name: "path url", url: "https://receive.example.com/webhook", wantError: true},
+		{name: "relative url", url: "receive.example.com", wantError: true},
+		{name: "wrong scheme", url: "ftp://receive.example.com", wantError: true},
+		{name: "conflict", port: "8081", wantError: true},
+		{name: "explicit host conflict", port: "9090", listen: "127.0.0.1:9090", wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("APP_ENCRYPTION_KEY", testKey)
+			t.Setenv("BASE_URL", "https://mail.example.com")
+			t.Setenv("LISTEN_ADDR", tc.listen)
+			t.Setenv("DEDICATED_RECEIVER_ENABLE", tc.enabled)
+			t.Setenv("DEDICATED_RECEIVER_PORT", tc.port)
+			t.Setenv("DEDICATED_RECEIVER_URL", tc.url)
+			cfg, err := config.Load()
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected configuration error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DedicatedReceiverEnable != (tc.enabled != "false") {
+				t.Fatalf("unexpected enable flag: %v", cfg.DedicatedReceiverEnable)
+			}
+			if tc.port == "" && cfg.DedicatedReceiverPort != 8082 {
+				t.Fatalf("default port = %d", cfg.DedicatedReceiverPort)
+			}
+			wantURL := "https://mail.example.com"
+			if tc.url != "" && tc.url != " " {
+				wantURL = "https://receive.example.com"
+			}
+			if cfg.ReceiverURL() != wantURL {
+				t.Fatalf("ReceiverURL = %q, want %q", cfg.ReceiverURL(), wantURL)
+			}
+			if cfg.WebAuthnRPID() != "mail.example.com" || cfg.WebAuthnOrigins()[0] != cfg.BaseURL {
+				t.Fatal("receiver settings changed the passkey origin")
+			}
+		})
+	}
+}
+
 func TestDefaultListeners(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("LISTEN_ADDR", "")

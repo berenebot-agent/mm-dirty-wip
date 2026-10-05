@@ -28,7 +28,7 @@ parsed by the shared ingest core.
   cannot read received mail.
 - The **webhook URL** to register in Resend:
   `https://<your-host>/internal/ingest/resend`, where `<your-host>` is the
-  instance's `BASE_URL`. MailMoose shows this exact URL in the receiving dialog
+  instance's `DEDICATED_RECEIVER_URL` (or `BASE_URL` if omitted/blank). MailMoose shows this exact URL in the receiving dialog
   before you save.
 - The Resend **webhook signing secret** (`whsec_...`), created when you add the
   webhook. Resend generates this secret; you paste it into MailMoose.
@@ -108,7 +108,7 @@ Send an email to the configured address, then check it appears in the inbox via
 the UI or `GET /v1/messages`. If it does not arrive:
 
 - confirm the webhook is subscribed to `email.received` and the URL matches
-  `BASE_URL`;
+  `DEDICATED_RECEIVER_URL` (falling back to `BASE_URL`);
 - confirm the signing secret matches the domain's receiving configuration;
 - confirm the API key can read received emails;
 - confirm the domain's **Receiving** provider is configured and the inbox
