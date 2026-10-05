@@ -159,8 +159,21 @@ DEDICATED_RECEIVER_URL=https://receive.example.com
 The receiver URL is optional: omitted or blank uses `BASE_URL`, even when the
 dedicated listener is enabled. It controls generated provider webhook URLs,
 receiving instructions, and Cloudflare Worker code, independently of the enable
-flag. Proxy the receiver hostname to the configured port; publish that port in
-Docker (the source Compose file follows `DEDICATED_RECEIVER_PORT` from `.env`).
+flag. Proxy the receiver hostname to the configured port. The base source and
+hardened Compose files leave its port mapping commented out. To publish it,
+enable the listener and uncomment this line under `ports:` in the Compose file
+you use. Both sides follow `DEDICATED_RECEIVER_PORT` from `.env` (default `8082`):
+
+```yaml
+- "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
+```
+
+When setting `DEDICATED_RECEIVER_ENABLE=false`, comment the port mapping out
+again so Docker does not reserve its host port. Re-run your usual
+`docker compose up -d` command (with `-f docker-compose.advanced.yml` for the
+hardened deployment) to apply the change. Setting the environment flag alone
+does not remove an uncommented port mapping.
+
 The receiver exposes only webhook ingestion and health checks. Webhook routes
 remain available on the main UI/API listener. This is separate from SMTP/MX
 receiver configuration. After changing the public receiver URL, update provider
