@@ -109,8 +109,75 @@ func TestLoadRequiresListenerCertificates(t *testing.T) {
 	t.Setenv("DIALMX_MODE", "shared")
 	t.Setenv("DIALMX_TLS_CERT", "")
 	t.Setenv("DIALMX_TLS_KEY", "")
+	t.Setenv("DIALMX_TRUSTED_PROXIES", "")
 	if _, err := dialmx.Load(); err == nil {
 		t.Fatal("expected missing listener certificates to be rejected")
+	}
+}
+
+func TestSharedCleartextRequiresTrustedProxies(t *testing.T) {
+	// No cert pair and no allowlist: strict shared TLS is retained.
+	if _, err := loadWith(t, map[string]string{"DIALMX_TLS_CERT": "", "DIALMX_TLS_KEY": "", "DIALMX_TRUSTED_PROXIES": ""}); err == nil {
+		t.Fatal("expected shared cleartext without trusted proxies to be rejected")
+	}
+	// A non-empty allowlist admits a cleartext shared listener.
+	cfg, err := loadWith(t, map[string]string{"DIALMX_TLS_CERT": "", "DIALMX_TLS_KEY": "", "DIALMX_TRUSTED_PROXIES": "10.1.1.18"})
+	if err != nil {
+		t.Fatalf("shared cleartext with trusted proxies rejected: %v", err)
+	}
+	if len(cfg.Receiver.TrustedProxies) != 1 {
+		t.Fatalf("trusted proxies not propagated: %+v", cfg.Receiver.TrustedProxies)
+	}
+}
+
+func TestLoadRejectsBadTrustedProxies(t *testing.T) {
+	for name, value := range map[string]string{
+		"garbage":     "not-an-ip",
+		"too wide v4": "10.0.0.0/1",
+		"too wide v6": "2001:db8::/1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := loadWith(t, map[string]string{"DIALMX_TLS_CERT": "", "DIALMX_TLS_KEY": "", "DIALMX_TRUSTED_PROXIES": value})
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+func TestSharedCleartextPerSourceLimits(t *testing.T) {
+	base := map[string]string{"DIALMX_TLS_CERT": "", "DIALMX_TLS_KEY": "", "DIALMX_TRUSTED_PROXIES": "10.1.1.18"}
+	cfg, err := loadWith(t, base)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Receiver.MaxConnsPerIP != 16 || cfg.Receiver.ConnWindowMax != 128 || cfg.Receiver.MaxAuthConcurrent != 16 || cfg.Receiver.AuthWindowMax != 256 {
+		t.Fatalf("per-source defaults not applied: %+v", cfg.Receiver)
+	}
+	over := map[string]string{}
+	for k, v := range base {
+		over[k] = v
+	}
+	over["MX_PER_IP_CONN_LIMIT"] = "4"
+	over["MX_PER_IP_AUTH_CONCURRENT"] = "2"
+	cfg, err = loadWith(t, over)
+	if err != nil {
+		t.Fatalf("load override: %v", err)
+	}
+	if cfg.Receiver.MaxConnsPerIP != 4 || cfg.Receiver.MaxAuthConcurrent != 2 {
+		t.Fatalf("per-source overrides not applied: %+v", cfg.Receiver)
+	}
+	for _, key := range []string{"MX_PER_IP_CONN_LIMIT", "MX_PER_IP_CONN_WINDOW_MAX", "MX_PER_IP_AUTH_CONCURRENT", "MX_PER_IP_AUTH_WINDOW_MAX"} {
+		t.Run(key, func(t *testing.T) {
+			bad := map[string]string{}
+			for k, v := range base {
+				bad[k] = v
+			}
+			bad[key] = "0"
+			if _, err := loadWith(t, bad); err == nil {
+				t.Fatalf("expected %s=0 to be rejected", key)
+			}
+		})
 	}
 }
 

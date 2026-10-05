@@ -56,6 +56,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - Standalone receiver: `DIALMX_BROWSER_REDIRECT_URL` redirects a browser
   visiting the receiver root to a landing page (302); API, health and readiness
   routes are unchanged.
+- Standalone receiver: a shared-mode receiver can run behind a TLS-terminating
+  reverse proxy with `DIALMX_TRUSTED_PROXIES` set to the proxy address, so the
+  receiver holds no certificate. The session listener serves cleartext HTTP/2
+  and admits a session only from that allowlist (or loopback), rejecting any
+  other cleartext session with `426`; with no allowlist shared mode still
+  requires TLS. The core continues to dial the proxy over `https` with hostname
+  verification. SMTP stays direct so SPF and per-source limits see the real
+  sender IP. The per-source connection and authentication caps are now
+  operator-tunable (`MX_PER_IP_CONN_LIMIT`, `MX_PER_IP_CONN_WINDOW_MAX`,
+  `MX_PER_IP_AUTH_CONCURRENT`, `MX_PER_IP_AUTH_WINDOW_MAX`).
 - Per-inbox storage quotas: an inbox can carry an optional storage cap on top
   of the account quota (`storage_quota_bytes` on `PATCH /v1/inboxes/{id}`, Admin
   only). A positive value caps the inbox's stored bytes, `0` means explicitly

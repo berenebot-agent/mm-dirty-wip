@@ -2494,6 +2494,61 @@ fields/snapshot, two optional wire fields and their logging, cached DNS checks
 plus a setup API/UI panel, and one receiver environment setting. Durable
 delivery, retry receipts and existing mx-v1/mx-v2 transport are unchanged.
 
+## D083 — Cleartext shared-mode sessions from a trusted TLS-terminating proxy
+
+**Requirement:** Run a `DIALMX_MODE=shared` standalone receiver behind a
+TLS-terminating reverse proxy (for example Nginx Proxy Manager's Streams
+feature) so the receiver holds no certificate or private key, while a
+single-core deployment that dials loopback keeps working unchanged. Real
+inbound mail must continue to arrive directly on the receiver's SMTP port so
+the sender IP used for SPF and per-source limits is the real peer, not the
+proxy.
+
+**Decision:** Let a shared-mode session be served over cleartext HTTP/2 (h2c,
+prior knowledge) when — and only when — the immediate socket peer is loopback
+or matches `DIALMX_TRUSTED_PROXIES`, a comma-separated list of IPs/CIDRs parsed
+with the same floor as the core's `TRUSTED_PROXIES` (bare IP is a /32 or /128;
+anything wider than /8 is refused). The startup check that requires
+`DIALMX_TLS_CERT`/`DIALMX_TLS_KEY` in shared mode is relaxed only when that
+allowlist is non-empty; with no allowlist the strict requirement stands, so a
+misconfiguration cannot silently expose the listener. The admission gate
+(`dialmx/receiver`) rejects a cleartext session from any other peer with `426`
+and reason `cleartext_not_trusted`, and the `session opened` record carries
+`cleartext` and `cleartext_trusted` so an unencrypted session is visible in the
+metadata log. `dialmx/cmd/receiver` enables h2c whenever no certificate pair is
+configured, in either mode. The SMTP edge is not proxied: public `:25` reaches
+the receiver directly, so the observed sender IP — and therefore SPF and the
+per-source caps — is unchanged. No PROXY protocol is added for the session leg.
+The per-source connection and authentication caps become tunable
+(`MX_PER_IP_CONN_LIMIT`, `MX_PER_IP_CONN_WINDOW_MAX`, `MX_PER_IP_AUTH_CONCURRENT`,
+`MX_PER_IP_AUTH_WINDOW_MAX`) so an operator fronting many cores through one
+proxy can raise them; behind such a proxy the socket peer is the proxy for every
+core, so those caps are shared per proxy. Per-domain and subdomain fair-share
+remains deferred.
+
+**Reason:** A TLS-terminating proxy is a common deployment and nginx cannot
+proxy upstream over HTTP/2 (`proxy_http_version 2` only from nginx 1.29.4), so
+the session endpoint must be fronted at L4 with the proxy terminating TLS. The
+peer allowlist keeps the relaxation fail-closed and narrow: only a configured
+proxy address may present a cleartext session, the DNS-anchored Ed25519 proof
+(shared mode) and the bearer key (single mode) remain the authority, and
+core→proxy TLS with hostname verification is unchanged. Keeping SMTP direct
+avoids PROXY-protocol support and preserves an accurate sender IP for SPF and
+rate limiting.
+
+**Accepted risk:** the proxy→receiver hop carries the challenge transcript,
+recipient addresses and message content in cleartext. This is the same trust
+the single-mode loopback path already accepts, extended to a named proxy
+address; it is bounded by the narrow-prefix rule and the mandatory DNS proof.
+An attacker able to spoof the proxy's source IP on that confined hop could read
+or inject session traffic. Loopback remains implicitly trusted, so a host-local
+core is unaffected.
+
+**Complexity:** One receiver environment allowlist, one admission branch, one
+h2c-enable condition and four env-tunable caps, plus tests and documentation.
+No new dependency, service, database or core change; the wire contract, SPF,
+the envelope-sender accepted risk and `emersion/go-smtp` are untouched.
+
 ## Future extension register
 
 Potential future additions include:
