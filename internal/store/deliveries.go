@@ -209,15 +209,17 @@ func deliveryTriggerSatisfiedTx(ctx context.Context, tx *sql.Tx, inboxID, messag
 	if trigger != DeliveryTriggerAll {
 		return true, nil
 	}
-	var received string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(received_at,created_at) FROM messages WHERE id=?`, messageID).Scan(&received); err != nil {
+	// received_at reflects the sender-controlled Date header. Eligibility must
+	// use the server timestamp assigned when the message was persisted.
+	var created string
+	if err := tx.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=?`, messageID).Scan(&created); err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
 		return false, err
 	}
 	var outstanding int
-	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients c JOIN client_push p ON p.client_id=c.id WHERE p.inbox_id=? AND c.type IN (`+relayKindsSQL+`,'webhook') AND c.revoked_at IS NULL AND c.created_at<=? AND NOT EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id=? AND d.client_id=c.id)`, inboxID, received, messageID).Scan(&outstanding)
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clients c JOIN client_push p ON p.client_id=c.id WHERE p.inbox_id=? AND c.type IN (`+relayKindsSQL+`,'webhook') AND c.revoked_at IS NULL AND c.created_at<=? AND NOT EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id=? AND d.client_id=c.id)`, inboxID, created, messageID).Scan(&outstanding)
 	if err != nil {
 		return false, err
 	}
