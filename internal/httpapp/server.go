@@ -163,6 +163,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /register", s.registerGet)
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)
+	m.HandleFunc("GET /login/key", s.keyLoginGet)
 	m.HandleFunc("POST /login", s.withPreAuthCSRF(s.loginPost))
 	m.HandleFunc("POST /login/key", s.withPreAuthCSRF(s.keyLoginPost))
 	// Passkey login is a two-step ceremony. The one-use ceremony token travels
