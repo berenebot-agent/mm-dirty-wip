@@ -254,6 +254,58 @@ func TestDeliveryActionsSkipSpamAndInternal(t *testing.T) {
 
 func boolPtr(v bool) *bool { return &v }
 
+func TestDeliveryAllTriggerIgnoresSenderDate(t *testing.T) {
+	for _, offset := range []time.Duration{-365 * 24 * time.Hour, 365 * 24 * time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			ctx := context.Background()
+			s, u, _, boxes := testStore(t)
+			box := boxes[0]
+			trigger, hours := store.DeliveryTriggerAll, 6
+			if err := s.SetInboxAutoActions(ctx, u.AccountID, box.ID, boolPtr(true), &hours, &trigger); err != nil {
+				t.Fatal(err)
+			}
+			a, err := s.CreateHermesConnection(ctx, store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "a"}, "gw-date-a", "s", "d")
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := s.CreateWebhookClient(ctx, u.AccountID, box.ID, "b", "https://hooks.example.test/x", "notify", "signature", "enc")
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := inbound(box, "d-date", "<date@test>", "", nil, "Date", "body")
+			rec.ReceivedAt = time.Now().UTC().Add(offset)
+			m, ev, _, err := s.CommitInbound(ctx, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.CreateHermesConnection(ctx, store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "late"}, "gw-date-late", "s", "d"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AckHermesEventLogged(ctx, a.ID, ev.ID, 1); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.GetMessageByID(ctx, u.AccountID, m.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Read || got.DeliveryActionDueAt != nil {
+				t.Fatal("sender date allowed actions before every ingress-time connector delivered")
+			}
+			now := time.Now().UTC()
+			if err := s.RecordWebhookDelivery(ctx, b.ID, ev.ID, true, "", now, now.Add(7*24*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			got, err = s.GetMessageByID(ctx, u.AccountID, m.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Read || got.DeliveryActionDueAt == nil || got.DeliveryActionDueAt.Before(now.Add(time.Duration(hours)*time.Hour)) || got.DeliveryActionDueAt.After(time.Now().UTC().Add(time.Duration(hours)*time.Hour)) {
+				t.Fatalf("actions did not fire on last required delivery: read=%v due=%v", got.Read, got.DeliveryActionDueAt)
+			}
+		})
+	}
+}
+
 // TestDeliveryWebhookSuccessRecords proves a successful webhook delivery records
 // a per-connector delivery and fires the auto-actions, while a failed attempt
 // does not.

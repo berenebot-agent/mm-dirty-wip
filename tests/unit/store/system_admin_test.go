@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +258,99 @@ func TestAccountAdminInviteRedeemsSeparateAccount(t *testing.T) {
 	}
 	if _, err := s.RedeemInvite(ctx, token, "correct horse battery staple"); !errors.Is(err, store.ErrInviteExpired) {
 		t.Fatalf("second redeem error = %v, want ErrInviteExpired", err)
+	}
+}
+
+func TestCreateInviteRejectsEmailConflictsWithoutSideEffects(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, _ := testStore(t)
+	other, _, err := s.CreateInvite(ctx, store.InviteInput{Email: "other@example.com", Kind: model.InviteKindAccountAdmin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateInvite(ctx, store.InviteInput{AccountID: u.AccountID, Email: "pending@example.com", Kind: model.InviteKindOperator}); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := s.ListAccounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invites, err := s.ListInvites(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, email := range []string{u.Email, "pending@example.com", "other@example.com"} {
+		for _, kind := range []string{model.InviteKindAccountAdmin, model.InviteKindOperator} {
+			t.Run(email+"/"+kind, func(t *testing.T) {
+				inv, token, err := s.CreateInvite(ctx, store.InviteInput{AccountID: other.AccountID, Email: " " + strings.ToUpper(email) + " ", Kind: kind})
+				if !errors.Is(err, store.ErrConflict) || inv.ID != "" || token != "" {
+					t.Fatalf("conflicting invite = %#v, token=%q, err=%v", inv, token, err)
+				}
+			})
+		}
+	}
+	gotAccounts, err := s.ListAccounts(ctx)
+	if err != nil || len(gotAccounts) != len(accounts) {
+		t.Fatalf("accounts changed on rejection: count=%d err=%v", len(gotAccounts), err)
+	}
+	gotInvites, err := s.ListInvites(ctx, "")
+	if err != nil || len(gotInvites) != len(invites) {
+		t.Fatalf("invites changed on rejection: count=%d err=%v", len(gotInvites), err)
+	}
+}
+
+func TestCreateInviteAllowsExpiredOrRevokedEmail(t *testing.T) {
+	for _, state := range []string{"expired", "revoked"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			s, u, _, _ := testStore(t)
+			ttl := time.Hour
+			if state == "expired" {
+				ttl = time.Nanosecond
+			}
+			inv, _, err := s.CreateInvite(ctx, store.InviteInput{AccountID: u.AccountID, Email: "retry@example.com", Kind: model.InviteKindOperator, TTL: ttl})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "revoked" {
+				if err := s.RevokeInvite(ctx, u.AccountID, inv.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, _, err := s.CreateInvite(ctx, store.InviteInput{Email: "RETRY@example.com", Kind: model.InviteKindAccountAdmin}); err != nil {
+				t.Fatalf("replacement rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateInviteConcurrentEmailConflict(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			_, _, err := s.CreateInvite(ctx, store.InviteInput{Email: "race@example.com", Kind: model.InviteKindAccountAdmin})
+			results <- err
+		}()
+	}
+	close(start)
+	successes, conflicts := 0, 0
+	for i := 0; i < 2; i++ {
+		switch err := <-results; {
+		case err == nil:
+			successes++
+		case errors.Is(err, store.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected creation error: %v", err)
+		}
+	}
+	accounts, err := s.ListAccounts(ctx)
+	if err != nil || len(accounts) != 1 || successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d accounts=%d err=%v", successes, conflicts, len(accounts), err)
 	}
 }
 

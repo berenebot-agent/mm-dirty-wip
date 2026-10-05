@@ -16,7 +16,9 @@ services:
       - ./data:/data
     ports:
       - "0.0.0.0:8081:8081"
-      - "0.0.0.0:8082:8082"
+      # Optional dedicated webhook listener: uncomment to publish its port.
+      # Keep commented when DEDICATED_RECEIVER_ENABLE=false to free the host port.
+      # - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
       - "0.0.0.0:25:2525"
     # The image starts as root so the in-process privilege drop can chown a
     # fresh root-owned ./data and shed to the runtime user before the database

@@ -247,6 +247,7 @@ type InviteInput struct {
 
 // CreateInvite persists a pending invitation and returns it together with the
 // one-time plaintext setup token. Only the token's hash is stored.
+// Existing user emails and conflicting pending invitations return ErrConflict.
 func (s *Store) CreateInvite(ctx context.Context, in InviteInput) (model.Invite, string, error) {
 	email := normalizeAddress(in.Email)
 	if email == "" || !strings.Contains(email, "@") {
@@ -271,6 +272,16 @@ func (s *Store) CreateInvite(ctx context.Context, in InviteInput) (model.Invite,
 	now := time.Now().UTC()
 	inv.CreatedAt = now
 	inv.ExpiresAt = now.Add(in.TTL)
+	if err = ensureEmailUnused(ctx, tx, email, ""); err != nil {
+		return model.Invite{}, "", err
+	}
+	var pending int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM invites WHERE email=? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>?`, email, timeText(now)).Scan(&pending); err != nil {
+		return model.Invite{}, "", err
+	}
+	if pending != 0 {
+		return model.Invite{}, "", fmt.Errorf("%w: email %s already has a pending invitation", ErrConflict, email)
+	}
 	if in.Kind == model.InviteKindOperator {
 		if in.AccountID == "" {
 			return model.Invite{}, "", fmt.Errorf("operator invitations require an account")
