@@ -366,6 +366,9 @@ func (w *lockedWriter) write(f mxwire.Frame) error {
 		return io.ErrClosedPipe
 	}
 	_ = w.ctl.SetWriteDeadline(time.Now().Add(writeDeadline))
+	// Bound this frame's write/flush only. Leaving an HTTP/2 stream deadline
+	// armed also terminates an idle session after a successful write.
+	defer w.ctl.SetWriteDeadline(time.Time{})
 	if e := mxwire.WriteFrame(w.w, f); e != nil {
 		return e
 	}

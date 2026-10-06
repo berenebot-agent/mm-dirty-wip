@@ -263,47 +263,48 @@ func TestMXSettingsAPINonSystemAdminSessionForbidden(t *testing.T) {
 	}
 }
 
-// TestAdminMXUISaveAndClear exercises the /admin MX form: it renders the three
-// receiver choices (Auto disabled), saves a remote receiver without echoing the
-// bearer key, and clears it, all with CSRF.
+// TestAdminMXUISaveAndClear exercises the Included domain MX form and clear,
+// both guarded by CSRF.
 func TestAdminMXUISaveAndClear(t *testing.T) {
-	svc, h, u, _ := systemAdminFixture(t)
+	svc, h, u, box := systemAdminFixture(t)
+	path := "/ui/domains/" + box.DomainID + "/mx"
+	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	page := uiGet(t, h, cookie, "/admin")
+	page := uiGet(t, h, cookie, view)
 	body := page.Body.String()
-	for _, want := range []string{"MX receiver", `value="auto" disabled`, `value="included"`, `value="remote"`} {
+	for _, want := range []string{"Direct MX receiver", `value="included"`, "SMTP greeting hostname", "Shared receiver"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("admin MX section missing %q", want)
 		}
 	}
 
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", url.Values{"mode": {"remote"}}.Encode()); rr.Code != http.StatusForbidden {
+	if rr := uiPost(t, h, cookie, path, url.Values{"mode": {"remote"}}.Encode()); rr.Code != http.StatusForbidden {
 		t.Fatalf("save without CSRF = %d", rr.Code)
 	}
 
-	form := url.Values{"_csrf": {csrf}, "revision": {"0"}, "mode": {"remote"}, "url": {"https://r.example"}, "bearer_key": {"sekret"}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", form.Encode()); rr.Code != http.StatusSeeOther {
+	form := url.Values{"_csrf": {csrf}, "revision": {"0"}, "mode": {"included"}, "hostname": {"mx.example"}}
+	if rr := uiPost(t, h, cookie, path, form.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("remote save: %d %s", rr.Code, rr.Body.String())
 	}
 	settings, err := svc.GetMXReceiverSettings(ctx)
-	if err != nil || settings.Mode != "remote" || settings.URL != "https://r.example" || !settings.KeyConfigured {
+	if err != nil || settings.Mode != "included" || settings.Hostname != "mx.example" || !settings.KeyConfigured {
 		t.Fatalf("saved settings = %+v %v", settings, err)
 	}
-	page = uiGet(t, h, cookie, "/admin")
+	page = uiGet(t, h, cookie, view)
 	if strings.Contains(page.Body.String(), "sekret") {
 		t.Fatal("admin page echoed the bearer key")
 	}
 
 	// A validation error is surfaced on the redirect target.
-	bad := url.Values{"_csrf": {csrf}, "revision": {strconv.FormatInt(settings.Revision, 10)}, "mode": {"remote"}, "url": {""}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", bad.Encode()); rr.Code != http.StatusSeeOther {
+	bad := url.Values{"_csrf": {csrf}, "revision": {strconv.FormatInt(settings.Revision, 10)}, "mode": {"included"}, "max_recipients": {"-1"}}
+	if rr := uiPost(t, h, cookie, path, bad.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("invalid save = %d %s", rr.Code, rr.Body.String())
 	}
 
 	clear := url.Values{"_csrf": {csrf}, "revision": {strconv.FormatInt(settings.Revision, 10)}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx/clear", clear.Encode()); rr.Code != http.StatusSeeOther {
+	if rr := uiPost(t, h, cookie, path+"/clear", clear.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("clear: %d %s", rr.Code, rr.Body.String())
 	}
 	cleared, err := svc.GetMXReceiverSettings(ctx)
@@ -393,12 +394,13 @@ func TestMXSettingsAPIVerifyTogglesStrict(t *testing.T) {
 	}
 }
 
-// TestAdminMXUIVerifyCheckboxes pins that the /admin form renders the
+// TestAdminMXUIVerifyCheckboxes pins that the domain form renders the
 // verification boxes checked by default and saves an unchecked box as an
-// explicit off, and that switching to remote does not leak included-only fields
-// (which the strict API would reject).
+// explicit off, and that Remote submissions are rejected by the Direct MX UI.
 func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
-	svc, h, u, _ := systemAdminFixture(t)
+	svc, h, u, box := systemAdminFixture(t)
+	path := "/ui/domains/" + box.DomainID + "/mx"
+	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -406,10 +408,10 @@ func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
 	inc := url.Values{"_csrf": {csrf}, "revision": {"0"}, "mode": {"included"}, "hostname": {"mx.test"},
 		"max_message_bytes": {"2097152"}, "max_recipients": {"10"}, "max_connections": {"20"},
 		"verify_spf": {"true"}, "verify_dkim": {"true"}, "verify_dmarc": {"true"}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", inc.Encode()); rr.Code != http.StatusSeeOther {
+	if rr := uiPost(t, h, cookie, path, inc.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("included save: %d %s", rr.Code, rr.Body.String())
 	}
-	page := uiGet(t, h, cookie, "/admin")
+	page := uiGet(t, h, cookie, view)
 	// Each of the three boxes must be rendered checked on a fresh default.
 	if got := strings.Count(page.Body.String(), `name="verify_spf" value="true" checked`); got != 1 {
 		t.Fatalf("verify_spf box should be checked by default (found %d)", got)
@@ -423,7 +425,7 @@ func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
 	off := url.Values{"_csrf": {csrf}, "revision": {strconv.FormatInt(settings.Revision, 10)}, "mode": {"included"}, "hostname": {"mx.test"},
 		"max_message_bytes": {"2097152"}, "max_recipients": {"10"}, "max_connections": {"20"},
 		"verify_dkim": {"true"}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", off.Encode()); rr.Code != http.StatusSeeOther {
+	if rr := uiPost(t, h, cookie, path, off.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("off save: %d %s", rr.Code, rr.Body.String())
 	}
 	settings, _ = svc.GetMXReceiverSettings(ctx)
@@ -431,7 +433,7 @@ func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
 		t.Fatalf("unchecked boxes must persist off: spf=%v dkim=%v dmarc=%v", settings.VerifySPFEnabled(), settings.VerifyDKIMEnabled(), settings.VerifyDMARCEnabled())
 	}
 	// The page must now render SPF/DMARC unchecked and DKIM checked.
-	page = uiGet(t, h, cookie, "/admin")
+	page = uiGet(t, h, cookie, view)
 	if strings.Contains(page.Body.String(), `name="verify_spf" value="true" checked`) {
 		t.Fatal("verify_spf should now be unchecked")
 	}
@@ -439,18 +441,17 @@ func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
 		t.Fatal("verify_dkim should still be checked")
 	}
 
-	// Switching to remote must not send the stale included-only fields, which
-	// the API rejects.
+	// Remote configuration is not offered by the Direct MX UI.
 	toRemote := url.Values{"_csrf": {csrf}, "revision": {strconv.FormatInt(settings.Revision, 10)}, "mode": {"remote"},
 		"url": {"https://r.example"}, "bearer_key": {"k"},
 		// These are present in the browser form because both blocks render.
 		"hostname": {"mx.test"}, "max_recipients": {"10"}, "verify_spf": {"true"}}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", toRemote.Encode()); rr.Code != http.StatusSeeOther {
+	if rr := uiPost(t, h, cookie, path, toRemote.Encode()); rr.Code != http.StatusBadRequest {
 		t.Fatalf("remote switch: %d %s", rr.Code, rr.Body.String())
 	}
 	remote, _ := svc.GetMXReceiverSettings(ctx)
-	if remote.Mode != app.MXModeRemote || remote.Hostname != "" || remote.MaxRecipients != 0 {
-		t.Fatalf("remote switch leaked included-only fields: %+v", remote)
+	if remote.Mode != app.MXModeIncluded || remote.Hostname != "mx.test" || remote.MaxRecipients != 10 {
+		t.Fatalf("rejected remote switch changed Included settings: %+v", remote)
 	}
 }
 
@@ -611,7 +612,9 @@ func TestMXSettingsAPIMalformedTLSRejected(t *testing.T) {
 // echoed on the success page or on a validation-error re-render, and that the
 // form repopulates the submitted non-secret values after an error.
 func TestAdminMXUIFullFormAndTLSKeyNeverEchoed(t *testing.T) {
-	svc, h, u, _ := systemAdminFixture(t)
+	svc, h, u, box := systemAdminFixture(t)
+	path := "/ui/domains/" + box.DomainID + "/mx"
+	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
 	certPEM, keyPEM := testTLSPair(t)
@@ -625,7 +628,7 @@ func TestAdminMXUIFullFormAndTLSKeyNeverEchoed(t *testing.T) {
 		"read_timeout_seconds": {"60"}, "write_timeout_seconds": {"60"}, "data_timeout_seconds": {"300"},
 		"smtp_tls_cert": {certPEM}, "smtp_tls_key": {keyPEM},
 	}
-	if rr := uiPost(t, h, cookie, "/ui/admin/mx", form.Encode()); rr.Code != http.StatusSeeOther {
+	if rr := uiPost(t, h, cookie, path, form.Encode()); rr.Code != http.StatusSeeOther {
 		t.Fatalf("full form save: %d %s", rr.Code, rr.Body.String())
 	}
 	settings, err := svc.GetMXReceiverSettings(ctx)
@@ -636,7 +639,7 @@ func TestAdminMXUIFullFormAndTLSKeyNeverEchoed(t *testing.T) {
 		t.Fatalf("TLS pair not stored: %+v", settings)
 	}
 	// The success page must never contain the private key PEM.
-	page := uiGet(t, h, cookie, "/admin")
+	page := uiGet(t, h, cookie, view)
 	assertNoKeyEcho(t, page.Body.String(), keyPEM, certPEM)
 
 	// A validation error (staging below message) repopulates the non-secret
@@ -646,7 +649,7 @@ func TestAdminMXUIFullFormAndTLSKeyNeverEchoed(t *testing.T) {
 		"hostname": {"mx-renamed.test"}, "max_message_bytes": {"2097152"}, "max_staging_bytes": {"1048576"},
 		"smtp_tls_cert": {certPEM}, "smtp_tls_key": {keyPEM},
 	}
-	rr := uiPost(t, h, cookie, "/ui/admin/mx", bad.Encode())
+	rr := uiPost(t, h, cookie, path, bad.Encode())
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("bad save: %d %s", rr.Code, rr.Body.String())
 	}

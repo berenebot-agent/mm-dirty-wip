@@ -111,6 +111,9 @@ docker compose up -d --build
 ```
 
 Then, as an account admin, open the domain and set **Receiving → Direct MX**.
+System admins configure the shared Included receiver directly in that
+dialog. One **Save** action configures the shared receiver for all Direct MX
+domains and selects it for this domain.
 Point the
 domain's MX record at `MX_HOSTNAME` and publish SPF. The domain is only an MX
 receiver once you set this in the UI; a domain left on a webhook provider is

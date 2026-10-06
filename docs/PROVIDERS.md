@@ -81,7 +81,7 @@ Resend also works as a sending provider (see below).
 
 Instead of a webhook provider you can receive mail straight on port 25 with the
 optional MX edge. The installation receiver is configured by a system
-administrator under **Admin → MX receiver**; the legacy `MX_ENABLE` environment
+administrator under **Domain → Receiving → Direct MX**; the legacy `MX_ENABLE` environment
 variable selects the mode only on first import. The server binary defaults to
 `false` when the variable is unset; the shipped `docker-compose.yml` sets it to
 `true`.

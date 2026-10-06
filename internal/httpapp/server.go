@@ -196,8 +196,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/admin/invites/{id}/reissue", s.withSession(s.withCSRF(s.uiAdminReissueInvite)))
 	m.HandleFunc("POST /ui/admin/invites/{id}/revoke", s.withSession(s.withCSRF(s.uiAdminRevokeInvite)))
 	m.HandleFunc("POST /ui/admin/accounts/{id}/quota", s.withSession(s.withCSRF(s.uiAdminSetQuota)))
-	m.HandleFunc("POST /ui/admin/mx", s.withSession(s.withCSRF(s.uiAdminMXSave)))
-	m.HandleFunc("POST /ui/admin/mx/clear", s.withSession(s.withCSRF(s.uiAdminMXClear)))
+	m.HandleFunc("POST /ui/domains/{id}/mx", s.withSession(s.withCSRF(s.uiAdminMXSave)))
+	m.HandleFunc("POST /ui/domains/{id}/mx/clear", s.withSession(s.withCSRF(s.uiAdminMXClear)))
 	// Account page: mailer and mailbox-operator management.
 	m.HandleFunc("POST /ui/account/mailer", s.withSession(s.withCSRF(s.uiAccountMailer)))
 	m.HandleFunc("POST /ui/account/operators/invites", s.withSession(s.withCSRF(s.uiOperatorCreateInvite)))

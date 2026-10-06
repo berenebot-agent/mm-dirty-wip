@@ -91,6 +91,7 @@ type mxRuntime struct {
 	mu      sync.Mutex
 	applied int64 // last successfully applied persisted revision
 	mode    string
+	inUse   bool
 	state   string
 	detail  string
 	// pending is true when the latest read revision has not been applied yet
@@ -232,16 +233,29 @@ func (rt *mxRuntime) reconcile(ctx context.Context) {
 		rt.log.Error("mx receiver settings read failed", "error", err)
 		return
 	}
+	inUse := false
+	if settings.Mode == app.MXModeIncluded {
+		inUse, err = rt.svc.Store.HasDirectMXDomains(ctx)
+		if err != nil {
+			rt.setStatus(stateFailed, "cannot read Direct MX domain usage", "", "")
+			rt.log.Error("mx receiver domain usage read failed", "error", err)
+			return
+		}
+	}
+	effective := settings
+	if settings.Mode == app.MXModeIncluded && !inUse {
+		effective.Mode = app.MXModeNone
+	}
 	rt.mu.Lock()
-	unchanged := settings.Revision == rt.applied
+	unchanged := settings.Revision == rt.applied && inUse == rt.inUse
 	rt.mu.Unlock()
 	if unchanged {
 		// Already applied: only refresh the live view.
-		rt.refreshLive(ctx, settings.Mode)
+		rt.refreshLive(ctx, effective.Mode)
 		return
 	}
 	rt.markPending(true)
-	if err := rt.apply(ctx, settings); err != nil {
+	if err := rt.apply(ctx, effective); err != nil {
 		// Leave applied behind so the ticker retries; the pending flag is
 		// cleared so status reports the failure rather than a perpetual
 		// "connecting".
@@ -254,12 +268,13 @@ func (rt *mxRuntime) reconcile(ctx context.Context) {
 	}
 	rt.mu.Lock()
 	rt.applied = settings.Revision
+	rt.inUse = inUse
 	rt.pending = false
-	rt.mode = settings.Mode
+	rt.mode = effective.Mode
 	rt.mu.Unlock()
 	// Snapshot the live view immediately so a caller does not read the previous
 	// shape's state for up to a full reconcile interval.
-	rt.refreshLive(ctx, settings.Mode)
+	rt.refreshLive(ctx, effective.Mode)
 }
 
 // apply reconciles the live receiver to the desired settings. It is serialised

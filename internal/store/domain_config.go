@@ -44,6 +44,15 @@ type DialMXCredential struct {
 	UpdatedAt            time.Time
 }
 
+// HasDirectMXDomains checks installation-wide usage. Inherited receiving paths
+// ultimately resolve to an explicit configuration on an existing ancestor, so
+// that ancestor keeps the receiver in use too.
+func (s *Store) HasDirectMXDomains(ctx context.Context) (bool, error) {
+	var used bool
+	err := s.read.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM domain_receiving_configs c JOIN domains d ON d.id=c.domain_id AND d.account_id=c.account_id WHERE c.provider='mx')`).Scan(&used)
+	return used, err
+}
+
 func (s *Store) ListDialMXDomains(ctx context.Context) ([]model.Domain, error) {
 	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id FROM domains ORDER BY name`)
 	if err != nil {

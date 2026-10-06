@@ -2620,6 +2620,13 @@ function clearUrlParams(names) {
       return;
     }
     var value = sel.value;
+    var mxPanel = dlg.querySelector('[data-mx-panel]');
+    if (mxPanel) {
+      mxPanel.hidden = value !== 'mx';
+      mxPanel.querySelectorAll('input,select,textarea').forEach(function (input) {
+        input.disabled = value !== 'mx';
+      });
+    }
     dlg.querySelectorAll('.provider-fields').forEach(function (group) {
       var active = group.getAttribute('data-provider') === value;
       group.hidden = !active;
