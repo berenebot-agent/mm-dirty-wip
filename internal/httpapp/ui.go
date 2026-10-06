@@ -1830,7 +1830,7 @@ func (s *Server) uiInboxAutoActions(w http.ResponseWriter, r *http.Request) {
 // applyInboxAutoActionsForm applies the delivery auto-action controls from a
 // form to an inbox. The form is authoritative: an unchecked auto-trash box
 // clears the window. It is shared by the dedicated auto-actions route and the
-// connector-create flow, so a connector wizard can seed an inbox's policy.
+// inbox settings flow, keeping the policy independent of connector lifecycle.
 func (s *Server) applyInboxAutoActionsForm(r *http.Request, accountID, inboxID string) error {
 	markRead := r.Form.Get("auto_mark_read_on_delivery") == "1"
 	trigger := strings.TrimSpace(r.Form.Get("delivery_trigger"))
@@ -1858,18 +1858,6 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
 		return
-	}
-	// The connector wizard offers the optional delivery auto-actions; they may
-	// only be set when at least one of the controls was submitted, so an
-	// unrelated create never resets an inbox's existing policy.
-	autoActionsGiven := r.Form.Get("auto_mark_read_on_delivery") != "" ||
-		r.Form.Get("auto_trash_after_delivery") != "" ||
-		r.Form.Get("delivery_trigger") != ""
-	applyAutoActions := func(inboxID string) error {
-		if !autoActionsGiven {
-			return nil
-		}
-		return s.applyInboxAutoActionsForm(r, p.AccountID, inboxID)
 	}
 	notice, label, secret := "", "", ""
 	if r.Form.Get("type") == "webhook" {
@@ -1906,10 +1894,6 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := applyAutoActions(r.Form.Get("inbox")); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
 		notice, label, secret = "Webhook created", "Copy this signing secret now — you will only be able to see it now, it will not be shown again.", plain
 		if authMode == "bearer" {
 			label = "Copy this bearer secret now — it will not be shown again."
@@ -1925,10 +1909,6 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := applyAutoActions(inboxID); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
 		notice, label, secret = "Hermes relay connection created", "Paste these lines into the gateway .env", hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, gwSecret, deliveryKey)
 	} else if r.Form.Get("type") == "openclaw" {
 		inboxID := r.Form.Get("inbox")
@@ -1938,10 +1918,6 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 		notice, label, secret = s.createOpenClawConnector(w, r, p, inboxID)
 		if notice == "" {
-			return
-		}
-		if err := applyAutoActions(inboxID); err != nil {
-			http.Error(w, err.Error(), 400)
 			return
 		}
 	} else {
