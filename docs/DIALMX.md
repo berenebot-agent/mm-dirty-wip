@@ -81,7 +81,7 @@ operator-managed TLS certificates.
 The core only starts its dialer for domains that have a `dialmx` receiving
 configuration. Per-domain Dial MX is **legacy compatibility**, configured in the
 domain's receiving wizard with its own per-domain key and `_mailmoose-mx` TXT
-record. It is independent of the installation-wide **Admin → MX receiver**
+record. It is independent of the installation-wide **Direct MX receiver**
 setting (Included or Remote), which is the shared receiver the direct-SMTP **MX**
 provider uses; Dial MX is not a fourth global choice. The installation setting
 also replaces the old core MX environment variables, which are now imported once
@@ -150,7 +150,7 @@ proxy's IP, so the per-source caps (`MX_PER_IP_*`) are shared; raise them if one
 proxy fronts many cores.
 
 These are the **receiver container's** settings. When the core runs the receiver
-itself (**Included** under Admin → MX receiver), the same SMTP surface is instead
+itself (**Included** under Domain → Receiving → Direct MX), the same SMTP surface is instead
 configured in the core's database through that panel — the hostname, limits,
 verification, DNS resolver, timeouts and the STARTTLS certificate/private key —
 and the core never reads the receiver env for them.
@@ -161,7 +161,7 @@ Included configuration. If only one path is set, or a file cannot be read, the
 one-time import is abandoned: no Included settings are written, the core keeps
 running unconfigured, and the error is logged, so a deployment that intended to
 require STARTTLS can never come up offering plaintext. Fix the paths (or set the
-pair in Admin → MX receiver) and restart. Check `smtp_tls_key_configured` after a
+pair in the Direct MX receiver editor) and restart. Check `smtp_tls_key_configured` after a
 successful import; `RequireTLS` is rejected at save without a certificate.
 
 See `dialmx/.env.example` for a commented template.
@@ -472,7 +472,7 @@ successes, and every such result must carry a valid disposition
   per-domain Dial MX dialer, optionally extended by a `DIALMX_CA_FILE` PEM bundle
   mounted in the core; hostname verification remains mandatory and there is no
   insecure TLS mode. For the installation **Remote** receiver the private CA is
-  the non-secret setting in Admin → MX receiver (see [MX.md](MX.md)).
+  the non-secret `ca` setting in `/v1/admin/mx` (see [MX.md](MX.md)).
 - **Resource fairness is bounded, not scheduled.** See the source-IP fairness
   section in §5: the guarantee is bounded per-IP and per-session caps, not a
   global fair-share scheduler between domains.

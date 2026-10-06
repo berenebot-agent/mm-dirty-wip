@@ -5,11 +5,12 @@ transport. The receiver terminates SMTP and computes SPF/DKIM/DMARC evidence;
 the MailMoose core connects outward, resolves recipients, applies policy and
 durably stores mail. SMTP success is returned only after durable acknowledgement.
 
-## Receiver configuration (Admin → MX receiver)
+## Receiver configuration (Domain → Receiving → Direct MX)
 
 The receiver a core uses is an **installation setting**, not core environment
-configuration. A system administrator chooses it under **Admin → MX receiver**
-in the UI (or via `/v1/admin/mx`, a session-authenticated route; see
+configuration. A system administrator configures the **Included** receiver under
+**Domain → Receiving → Direct MX**. Remote receiver
+configuration remains available via `/v1/admin/mx`, a session-authenticated route (see
 [API.md](API.md#installation-mx-receiver-system-administrator-session-authenticated)):
 
 - **Included** — the core runs the receiver itself as a separate-uid child,
@@ -21,8 +22,8 @@ in the UI (or via `/v1/admin/mx`, a session-authenticated route; see
   certificate and private key.
 - **Remote** — the core connects outward to a receiver in its own container, on
   another host, or on the LAN, using the receiver's URL and a bearer key. This is
-  the option for a rootless deployment, where the Included child cannot be
-  launched.
+  the API option for a rootless deployment, where the Included child cannot be
+  launched. The Direct MX editor offers Included only.
 
 The keys are generated and retained by the core; the UI never echoes the bearer
 key or the STARTTLS private key (a blank field keeps the stored value). The
@@ -42,9 +43,23 @@ receiver's mode, live state and advertised SMTP hostname inline. No per-domain k
 id or secret is registered with the core for a private receiver — the core's
 receiving configuration is authoritative.
 
+System administrators see the Included receiver settings inline in that dialog,
+with advanced controls collapsed. Account admins see status only. One **Save**
+action configures the shared receiver and selects Direct MX for the current domain.
+The Included receiver runs only while at least one domain across the installation
+uses Direct MX. Removing the last receiving configuration, switching its provider,
+or deleting its domain drains the receiver and leaves it in quiet standby; saved
+settings are retained. Selecting Direct MX again restarts it automatically.
+The domain dialog shows built-in configuration and the MX destination, rather
+than an internal core-to-receiver connection badge. The installation API retains
+the live operational status for diagnostics.
+The SMTP greeting field is prefilled from the hostname of `DEDICATED_RECEIVER_URL`
+when supplied, otherwise `BASE_URL`, with scheme, port and path removed. A stored
+greeting takes precedence; the operator can edit the field before saving.
+
 ## Built-in (Included) receiver
 
-Select **Included** under Admin → MX receiver and select **Receiving → Direct MX**
+Select **Included** in the domain's Direct MX receiver settings and save **Receiving → Direct MX**
 for the domain. The core starts a separate-uid receiver child, generates a bearer
 key when one is not configured, and connects over cleartext HTTP/2 on
 `127.0.0.1:8443`. No certificates or domain authentication TXT records are
@@ -68,7 +83,7 @@ A partial or unreadable legacy pair **fails closed**: if only one of
 `MX_TLS_CERT` / `MX_TLS_KEY` is set, or a file cannot be read, the one-time
 import is abandoned entirely. No receiver settings are written, the core keeps
 running unconfigured, and the error is logged; the operator fixes the paths (or
-sets the pair in Admin → MX receiver) and restarts. A receiver is never
+sets the pair in the domain's Direct MX receiver settings) and restarts. A receiver is never
 persisted with its STARTTLS silently dropped. After a successful upgrade,
 `/v1/admin/mx` reports `smtp_tls_key_configured: true` when a pair is stored.
 `RequireTLS` cannot be enabled without a certificate, so it is rejected at save.
@@ -86,7 +101,7 @@ MX_HOSTNAME=mx.example.com
 MX_LISTEN_ADDR=:2525
 ```
 
-Then, under **Admin → MX receiver**, choose **Remote**, enter the receiver URL
+Then, via `/v1/admin/mx`, save mode `remote`, the receiver URL
 (e.g. `http://receiver:8443`) and the **same** `DIALMX_CORE_KEY` value as the
 bearer key, and save. The bundle `docker-compose.mx-sidecar.yml` wires this for
 you (receiver env only). Generate a key with `openssl rand -hex 32`.
@@ -118,9 +133,9 @@ on `:8082`, configurable with `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVE
 
 Single mode supports cleartext HTTP/2 (prior knowledge, no HTTP/1 upgrade) for
 loopback/LAN connections. Supplying both `DIALMX_TLS_CERT` and `DIALMX_TLS_KEY`
-enables verified HTTPS/HTTP2 instead; enter an `https://` URL under Admin → MX
-receiver (Remote). A private CA for that remote receiver is pasted into the
-**Private CA certificate** field there; hostname verification remains mandatory
+enables verified HTTPS/HTTP2 instead; save an `https://` URL via `/v1/admin/mx`
+(Remote). Supply a private CA certificate in the API's `ca` field when needed;
+hostname verification remains mandatory
 and there is no insecure mode. (`DIALMX_CA_FILE` is a separate core environment
 setting used only by the legacy per-domain Dial MX dialer.) Cleartext sessions
 carry both the bearer credential and email content without encryption.
@@ -147,8 +162,8 @@ itself.
 
 ## Bounds and policy
 
-The included receiver's SPF/DKIM/DMARC verification is controlled from Admin →
-MX receiver (Included) with three checkboxes that default **on**; an unchecked
+The included receiver's SPF/DKIM/DMARC verification is controlled from the domain's
+Direct MX receiver settings (Included → Verification) with three checkboxes that default **on**; an unchecked
 box is saved as an explicit off. The receiver container's own `MX_VERIFY_SPF`,
 `MX_VERIFY_DKIM`, `MX_VERIFY_DMARC`, DNS resolver, message-size, staging,
 recipient, connection, transaction and timeout settings remain available and are
@@ -188,12 +203,12 @@ new setups without a core release and existing MX records stay stable.
 Per-domain **Dial MX** is retained as **legacy compatibility** and is *not* a
 fourth global choice in the installation receiver setting: it predates the
 unified receiver and is configured per domain (with its own per-domain key and
-TXT record), whereas Admin → MX receiver is a single installation-wide choice of
+TXT record), whereas the Direct MX receiver editor is a single installation-wide choice of
 Included or Remote. New deployments should use the installation receiver or
 Antler MX.
 
 **Auto** (pick the best receiver automatically) in the installation receiver
-setting is **not implemented** and is shown disabled in the UI as a placeholder;
+setting is **not implemented** and is not offered in the UI;
 the API rejects it. Antler MX is the implemented zero-config service, offered
 per domain rather than as an installation mode.
 
@@ -202,6 +217,7 @@ per domain rather than as an installation mode.
 The old edge-to-core HTTP/HMAC transport, `/internal/mx/resolve` and
 `/internal/mx/ingest` routes, `MX_EDGE_KEYS`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`,
 `MX_EDGE_NAME`, `MAILMOOSE_INGEST_URL` and `MX_SIGNATURE_SKEW_SECONDS` are removed.
-A private deployment is now configured under Admin → MX receiver (Included or
-Remote), not with core environment variables; existing public Dial MX receivers
+A private deployment is now configured under Domain → Receiving → Direct MX
+(Included), or via `/v1/admin/mx` (Included or Remote), not with core environment
+variables; existing public Dial MX receivers
 must explicitly select `DIALMX_MODE=shared`.

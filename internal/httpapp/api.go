@@ -1704,6 +1704,9 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) apiDomain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && s.Service.MXRuntime != nil {
+		defer s.Service.MXRuntime.Wake()
+	}
 	p := principal(r)
 	if !adminOnly(w, p) {
 		return
