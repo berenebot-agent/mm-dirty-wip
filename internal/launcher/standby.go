@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/dellarb/mailmoose/dialmx"
 	"github.com/dellarb/mailmoose/dialmx/control"
 )
 
@@ -112,14 +113,21 @@ func (e *Edge) Status(ctx context.Context) (control.Status, error) {
 }
 
 // StandbyEnv is the minimal environment for a standby edge child. It carries
-// only PATH and the inherited control descriptor numbers; the SMTP settings and
-// bearer secret arrive over the control channel on activation.
+// PATH, the inherited control descriptor numbers, and the receiver log-level
+// knob when the operator set it; the SMTP settings and bearer secret arrive
+// over the control channel on activation. DIALMX_LOG_LEVEL is a non-secret
+// verbosity selector, so forwarding it lets an operator turn on the edge's
+// connect/session diagnostics without a rebuild.
 func StandbyEnv(cmdFD, replyFD int) []string {
-	return []string{
+	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
 		control.CmdFDEnv + "=" + strconv.Itoa(cmdFD),
 		control.ReplyFDEnv + "=" + strconv.Itoa(replyFD),
 	}
+	if lvl := strings.TrimSpace(os.Getenv(dialmx.EnvLogLevel)); lvl != "" {
+		env = append(env, dialmx.EnvLogLevel+"="+lvl)
+	}
+	return env
 }
 
 // forbiddenEdgeEnv are names that must never reach the edge child, whether from

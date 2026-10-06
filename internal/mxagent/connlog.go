@@ -133,7 +133,7 @@ func (w *connWrapper) logOpened() {
 	}
 	w.openedLogged = true
 	w.mu.Unlock()
-	w.srv.log.Info("mx connection opened",
+	w.srv.log.Debug("mx connection opened",
 		AttrConnectionID, w.id,
 		"peer", w.peer,
 		"local", w.local,
@@ -209,7 +209,7 @@ func (w *connWrapper) Write(p []byte) (int, error) {
 	if err != nil {
 		args = append(args, "error", writeErrorClass(err))
 	}
-	w.srv.log.Info("mx smtp reply transport write", args...)
+	w.srv.log.Debug("mx smtp reply transport write", args...)
 	return n, err
 }
 
@@ -255,7 +255,7 @@ func (w *connWrapper) Close() error {
 	if lastRead != "" {
 		args = append(args, "last_read_error", lastRead)
 	}
-	w.srv.log.Info("mx connection closed", args...)
+	w.srv.log.Debug("mx connection closed", args...)
 	return err
 }
 

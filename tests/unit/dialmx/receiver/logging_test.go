@@ -9,10 +9,13 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,8 +27,9 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// jsonSink is a concurrency-safe io.Writer that captures the receiver's JSON
-// log lines so a test can parse them into records.
+// jsonSink is a concurrency-safe io.Writer that captures the receiver's log
+// bytes so a test can parse them into records. It is a plain writer because the
+// production logger takes an io.Writer and emits compact [MX] text.
 type jsonSink struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -37,7 +41,9 @@ func (s *jsonSink) Write(p []byte) (int, error) {
 	return s.buf.Write(p)
 }
 
-// records parses every complete JSON line captured so far.
+// records parses every complete captured line into a map. Each record carries
+// "msg" and "level", plus one key per rendered attribute. Values are unquoted;
+// list and quoted-space values are not needed by these assertions.
 func (s *jsonSink) records(t *testing.T) []map[string]any {
 	t.Helper()
 	s.mu.Lock()
@@ -45,16 +51,48 @@ func (s *jsonSink) records(t *testing.T) []map[string]any {
 	var out []map[string]any
 	for _, line := range strings.Split(s.buf.String(), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "{") {
+		if line == "" || !strings.Contains(line, " [MX] ") {
 			continue
 		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-		out = append(out, rec)
+		out = append(out, parseLogLine(line))
 	}
 	return out
+}
+
+// parseLogLine splits one "<time> [MX] <LEVEL> <msg words> key=value ..." line.
+// The message is every word after the level up to the first key=value token;
+// message words never contain '=', attributes always do.
+func parseLogLine(line string) map[string]any {
+	fields := strings.Fields(line)
+	rec := map[string]any{}
+	if len(fields) < 4 {
+		return rec
+	}
+	rec["level"] = fields[2]
+	idx := 3
+	for idx < len(fields) && !strings.Contains(fields[idx], "=") {
+		idx++
+	}
+	rec["msg"] = strings.Join(fields[3:idx], " ")
+	for _, tok := range fields[idx:] {
+		k, v, ok := strings.Cut(tok, "=")
+		if !ok {
+			continue
+		}
+		rec[k] = unquoteLogValue(v)
+	}
+	return rec
+}
+
+// unquoteLogValue strips the strconv-style quoting the handler applies to
+// ambiguous values.
+func unquoteLogValue(v string) string {
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		if u, err := strconv.Unquote(v); err == nil {
+			return u
+		}
+	}
+	return v
 }
 
 // findRecord returns the most recent record whose msg equals want.
@@ -101,8 +139,6 @@ func waitForRecords(t *testing.T, sink *jsonSink, cond func([]map[string]any) bo
 	t.Fatal("condition on captured records never satisfied")
 }
 
-const testBootID = "boot-0123456789abcdef"
-
 // testSMTP is the shared SMTP-edge bound set for receiver-backed tests.
 func testSMTP() mxagent.Config {
 	return mxagent.Config{
@@ -116,9 +152,9 @@ func testSMTP() mxagent.Config {
 	}
 }
 
-// newLoggedServer builds a receiver writing JSON into sink, starts its HTTP/2
-// handler and registers it for the SMTP edge helper. It returns the receiver and
-// the httptest server.
+// newLoggedServer builds a receiver whose records are captured into sink, starts
+// its HTTP/2 handler and registers it for the SMTP edge helper. It returns the
+// receiver and the httptest server.
 func newLoggedServer(t *testing.T, sink *jsonSink, cfg receiver.Config) (*receiver.Receiver, *httptest.Server) {
 	t.Helper()
 	r, srv, _ := newLoggedServerLogger(t, sink, cfg)
@@ -126,11 +162,13 @@ func newLoggedServer(t *testing.T, sink *jsonSink, cfg receiver.Config) (*receiv
 }
 
 // newLoggedServerLogger is newLoggedServer plus the shared logger, so a test can
-// serve the SMTP edge through the same logger.
+// serve the SMTP edge through the same logger. The logger captures structured
+// records directly (rather than parsing the production [MX] text), at DEBUG so
+// the connect/session transport events are observable.
 func newLoggedServerLogger(t *testing.T, sink *jsonSink, cfg receiver.Config) (*receiver.Receiver, *httptest.Server, *slog.Logger) {
 	t.Helper()
 	cfg.SMTP = testSMTP()
-	log := receiver.NewLogger(slog.LevelInfo, testBootID, sink)
+	log := newCaptureLogger(sink)
 	cfg.Mode = "shared"
 	r := receiver.New(cfg, log)
 	srv := httptest.NewUnstartedServer(r.Handler())
@@ -141,10 +179,101 @@ func newLoggedServerLogger(t *testing.T, sink *jsonSink, cfg receiver.Config) (*
 	return r, srv, log
 }
 
-// TestEnvelopeOnEveryRecord asserts the envelope (schema_version, service,
-// boot_id, event) appears on every captured record, that event equals the
-// message (no whitelist), and that timestamps are UTC.
-func TestEnvelopeOnEveryRecord(t *testing.T) {
+// captureHandler renders records in the production compact text shape into the
+// sink, but always enables every level so a DEBUG logger's records are captured.
+// It keeps the sink populated for assertions that inspect raw bytes.
+type captureHandler struct {
+	mu     *sync.Mutex
+	w      io.Writer
+	attrs  []slog.Attr
+	groups []string
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	var b strings.Builder
+	b.WriteString(r.Time.Format("2006-01-02T15:04:05"))
+	b.WriteString(" [MX] ")
+	b.WriteString(r.Level.String())
+	b.WriteByte(' ')
+	b.WriteString(r.Message)
+	prefix := strings.Join(h.groups, ".")
+	writeAttr := func(a slog.Attr) {
+		a.Value = a.Value.Resolve()
+		if a.Equal(slog.Attr{}) {
+			return
+		}
+		key := a.Key
+		if prefix != "" {
+			key = prefix + "." + a.Key
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(fmt.Sprint(a.Value.Any()))
+	}
+	for _, a := range h.attrs {
+		writeAttr(a)
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		writeAttr(a)
+		return true
+	})
+	b.WriteByte('\n')
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, err := io.WriteString(h.w, b.String())
+	return err
+}
+
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	clone := *h
+	clone.attrs = append(append([]slog.Attr(nil), h.attrs...), attrs...)
+	return &clone
+}
+
+func (h *captureHandler) WithGroup(name string) slog.Handler {
+	clone := *h
+	clone.groups = append(append([]string(nil), h.groups...), name)
+	return &clone
+}
+
+// newCaptureLogger returns a DEBUG-level logger writing into sink through the
+// capture handler, so both structured and raw-byte assertions work.
+func newCaptureLogger(sink *jsonSink) *slog.Logger {
+	return slog.New(&captureHandler{mu: &sync.Mutex{}, w: sink})
+}
+
+// TestNewLoggerEmitsMatchedTextFormat asserts the production logger emits the
+// compact [MX]-tagged text the core uses: no JSON braces, an "[MX]" tag, and a
+// DEBUG level that is filtered at the default INFO level.
+func TestNewLoggerEmitsMatchedTextFormat(t *testing.T) {
+	var buf bytes.Buffer
+	log := receiver.NewLogger(slog.LevelInfo, &buf)
+	log.Debug("dialmx session opened", "stage", "opened")
+	log.Info("dialmx handoff result", "recipient", "alice@example.test", "code", "ok")
+	line := buf.String()
+	if strings.Contains(line, "{") {
+		t.Fatalf("log line is not compact text: %q", line)
+	}
+	if !strings.Contains(line, " [MX] ") {
+		t.Fatalf("log line missing [MX] tag: %q", line)
+	}
+	if strings.Contains(line, "dialmx session opened") {
+		t.Fatalf("DEBUG record emitted at INFO level: %q", line)
+	}
+	if !strings.Contains(line, "INFO dialmx handoff result recipient=alice@example.test code=ok") {
+		t.Fatalf("INFO line not in expected shape: %q", line)
+	}
+	if strings.Contains(line, "schema_version") || strings.Contains(line, "boot_id") || strings.Contains(line, "service=") {
+		t.Fatalf("legacy JSON envelope leaked into text line: %q", line)
+	}
+}
+
+// TestSessionTransportRecordsAreDebug asserts the connect/session transport
+// events are DEBUG (hidden by default) while mail receipt/transfer stay INFO.
+func TestSessionTransportRecordsAreDebug(t *testing.T) {
 	sink := &jsonSink{}
 	_, srv := newLoggedServer(t, sink, receiver.Config{})
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: rootTLS(t, srv), ForceAttemptHTTP2: true}}
@@ -156,39 +285,18 @@ func TestEnvelopeOnEveryRecord(t *testing.T) {
 		return ok
 	})
 	recs := sink.records(t)
-	if len(recs) == 0 {
-		t.Fatal("no records captured")
-	}
-	for _, rec := range recs {
-		if rec["schema_version"] != float64(1) {
-			t.Fatalf("record missing schema_version=1: %v", rec)
-		}
-		if rec["service"] != "dialmx" {
-			t.Fatalf("record missing service=dialmx: %v", rec)
-		}
-		if rec["boot_id"] != testBootID {
-			t.Fatalf("record missing boot_id=%s: %v", testBootID, rec)
-		}
-		if rec["event"] != rec["msg"] {
-			t.Fatalf("record event attr %v != msg %v (no whitelist)", rec["event"], rec["msg"])
-		}
-		if _, ok := rec["stable"]; ok {
-			t.Fatalf("record still carries legacy stable attr: %v", rec)
-		}
-		ts, _ := rec["time"].(string)
-		if !strings.HasSuffix(ts, "Z") {
-			t.Fatalf("record time %q is not UTC (want ...Z)", ts)
-		}
-	}
-	opened, ok := findRecord(recs, "dialmx session opened")
-	if !ok {
+	if opened, ok := findRecord(recs, "dialmx session opened"); !ok {
 		t.Fatal("missing session opened event")
-	}
-	if opened["core_connection_id"] == nil {
-		t.Fatalf("session opened missing core_connection_id: %v", opened)
-	}
-	if opened["stage"] != "opened" {
-		t.Fatalf("stage=%v want opened", opened["stage"])
+	} else {
+		if opened["level"] != "DEBUG" {
+			t.Fatalf("session opened level=%v want DEBUG", opened["level"])
+		}
+		if opened["core_connection_id"] == nil {
+			t.Fatalf("session opened missing core_connection_id: %v", opened)
+		}
+		if opened["stage"] != "opened" {
+			t.Fatalf("stage=%v want opened", opened["stage"])
+		}
 	}
 	if hello, ok := findRecord(recs, "dialmx session hello"); ok {
 		if hello["version"] != mxwire.V2Protocol {
@@ -200,15 +308,15 @@ func TestEnvelopeOnEveryRecord(t *testing.T) {
 	}
 	if closed, ok := findRecord(recs, "dialmx session closed"); ok {
 		if _, ok := closed["duration_ms"]; !ok {
-			t.Fatalf("session closed missing numeric duration_ms: %v", closed)
+			t.Fatalf("session closed missing duration_ms: %v", closed)
 		}
 	}
 }
 
-// TestSharedSMTPRecordsCarryEnvelope proves the envelope applies to the shared
-// mxagent SMTP edge records logged through the same logger, not just receiver
-// events.
-func TestSharedSMTPRecordsCarryEnvelope(t *testing.T) {
+// TestSharedSMTPRecordsUseSameLogger proves the shared mxagent SMTP edge emits
+// through the same [MX] logger as the receiver, so a shared edge record and a
+// receiver record interleave in one format.
+func TestSharedSMTPRecordsUseSameLogger(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -227,11 +335,8 @@ func TestSharedSMTPRecordsCarryEnvelope(t *testing.T) {
 		return ok
 	})
 	for _, rec := range allRecords(sink.records(t), "mx smtp transaction decision") {
-		if rec["event"] != "mx smtp transaction decision" {
-			t.Fatalf("shared edge record missing event attr: %v", rec)
-		}
-		if rec["service"] != "dialmx" || rec["boot_id"] != testBootID || rec["schema_version"] != float64(1) {
-			t.Fatalf("shared edge record missing envelope: %v", rec)
+		if rec["level"] != "INFO" {
+			t.Fatalf("shared edge decision level=%v want INFO: %v", rec["level"], rec)
 		}
 	}
 }
@@ -429,12 +534,10 @@ func TestHandoffOutcomeLogging(t *testing.T) {
 	if rec["handoff_id"] == nil || rec["core_connection_id"] == nil || rec["wire_transaction_id"] == nil {
 		t.Fatalf("handoff missing id fields: %v", rec)
 	}
-	recips, _ := rec["recipients"].([]any)
-	if len(recips) != 1 || recips[0] != "alice@example.test" {
+	if rec["recipients"] != "[alice@example.test]" {
 		t.Fatalf("handoff recipients=%v want [alice@example.test]", rec["recipients"])
 	}
-	domains, _ := rec["domains"].([]any)
-	if len(domains) != 1 || domains[0] != "example.test" {
+	if rec["domains"] != "[example.test]" {
 		t.Fatalf("handoff domains=%v want [example.test]", rec["domains"])
 	}
 	if _, ok := rec["bytes"]; !ok {
@@ -553,7 +656,7 @@ func TestHandoffPartialAndUnknownOutcomes(t *testing.T) {
 // a transport id, peer port and numeric duration.
 func TestTransportTrackerLifecycle(t *testing.T) {
 	sink := &jsonSink{}
-	log := receiver.NewLogger(slog.LevelInfo, testBootID, sink)
+	log := receiver.NewLogger(slog.LevelDebug, sink)
 	tracker := receiver.NewTransportTracker(log)
 
 	r := receiver.New(receiver.Config{Mode: "shared", SMTP: testSMTP()}, log)
@@ -623,7 +726,7 @@ func TestTransportTrackerLifecycle(t *testing.T) {
 // never omitting the close.
 func TestTransportTLSFailureLogsFailureAndClose(t *testing.T) {
 	sink := &jsonSink{}
-	log := receiver.NewLogger(slog.LevelInfo, testBootID, sink)
+	log := receiver.NewLogger(slog.LevelDebug, sink)
 	tracker := receiver.NewTransportTracker(log)
 
 	// A server connection whose peer never negotiates TLS: accept on a plain
@@ -665,8 +768,8 @@ func TestTransportTLSFailureLogsFailureAndClose(t *testing.T) {
 	if fail["reason"] != "tls_handshake_failed" {
 		t.Fatalf("tls failure reason=%v want tls_handshake_failed", fail["reason"])
 	}
-	if fail["event"] != "dialmx transport tls failure" {
-		t.Fatalf("tls failure event=%v want event name", fail["event"])
+	if fail["level"] != "DEBUG" {
+		t.Fatalf("tls failure level=%v want DEBUG", fail["level"])
 	}
 	closed, ok := findRecord(recs, "dialmx transport closed")
 	if !ok {

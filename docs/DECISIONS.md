@@ -2444,7 +2444,7 @@ Registration metadata travels per domain: `DomainAuth` gains optional
 malformed value is dropped rather than failing the proof. The receiver logs both
 on the domain proof registration/renewal and on the per-recipient resolve and
 handoff records, so usage (contact, setup, domains, messages) can be read or
-exported from the existing structured JSON logs. Antler MX does not introduce an
+exported from the receiver's structured logs. Antler MX does not introduce an
 account tie-in, an operator dashboard, a receiver database or a durable queue.
 
 The receiving API (`GET /v1/admin/domains/{id}/receiving`) returns the live

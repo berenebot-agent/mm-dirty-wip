@@ -10,16 +10,15 @@
 //     channel. It then serves the same SMTP edge and session endpoint against
 //     fixed endpoints and can be deactivated and reactivated without exiting.
 //
-// Every log line is a JSON record carrying schema_version, service and boot_id.
-// The boot id is generated once here and injected into the one logger shared by
-// the receiver and the SMTP edge, so all process events correlate.
+// Every log line is compact [MX]-tagged text (the same format the core uses) at
+// INFO, with the per-connection/session transport chatter at DEBUG, hidden
+// unless DIALMX_LOG_LEVEL=debug. One logger is shared by the receiver and the
+// SMTP edge, so all process events share a format.
 package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net"
@@ -44,8 +43,7 @@ import (
 var buildVersion = "dev"
 
 func main() {
-	bootID := newBootID()
-	log := receiver.NewLogger(slog.LevelInfo, bootID, os.Stderr)
+	log := receiver.NewLogger(dialmx.LevelFromEnv(), os.Stderr)
 	slog.SetDefault(log)
 
 	// The included receiver is spawned by the core in standby with an inherited
@@ -217,16 +215,6 @@ func runStandalone(log *slog.Logger) {
 		_ = srv.Close()
 	}
 	log.Info(receiver.EventReceiverStopped, "uptime", time.Since(started).Round(time.Millisecond).String())
-}
-
-// newBootID returns a random 128-bit hex id that is stable for one process boot.
-// It is not a credential and is not accepted as one.
-func newBootID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "unavailable"
-	}
-	return hex.EncodeToString(b[:])
 }
 
 // mxwireProtocol is the wire protocol the process speaks. It is referenced from
