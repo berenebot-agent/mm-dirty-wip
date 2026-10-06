@@ -131,6 +131,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Dial MX receiver and SMTP-edge logs now use the same compact, `[MX]`-tagged
+  plain-text format as the core's `[Core]` lines instead of per-line JSON, so the
+  included edge and the core interleave readably on one container stream. The
+  JSON envelope (`schema_version`, `service`, `boot_id`, `event`) is dropped. The
+  per-connection and per-session transport records (connection open/close,
+  session opened/hello/closed, STARTTLS, reply-write) are now DEBUG and hidden by
+  default; set `DIALMX_LOG_LEVEL=debug` to show them. Mail receipt, mail transfer,
+  domain proofs and failures stay INFO.
 - Delivery auto-actions now default to the **all connectors** trigger instead of
   **any connector**: a new inbox, an auto-action form that omits the field, and
   the connector-create wizard and Connectors tab controls all start on `all`, so

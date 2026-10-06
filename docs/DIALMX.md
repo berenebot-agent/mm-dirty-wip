@@ -479,12 +479,23 @@ successes, and every such result must carry a valid disposition
 
 ## Metadata logging
 
-The standalone receiver writes JSON records to stderr. All records have `time`
-(UTC), `level`, `msg`, `event`, `schema_version: 1`, `service: dialmx` and
-`boot_id`. Normal lifecycle events are INFO; failures also retain warning/error
-diagnostics. Message bodies, subjects, raw headers, TXT records, challenge
-payloads, signatures and credentials are not logged. Envelope addresses, IPs,
-domains and normalized authentication evidence are logged.
+The receiver writes compact plain-text records to stderr in the same
+`<time> [MX] <LEVEL> <message> key=value ...` format the core uses for its
+`[Core]` lines, so the included edge and the core interleave readably on one
+container stream. Normal lifecycle events are INFO; failures also retain
+warning/error diagnostics. Message bodies, subjects, raw headers, TXT records,
+challenge payloads, signatures and credentials are not logged. Envelope
+addresses, IPs, domains and normalized authentication evidence are logged.
+
+Verbosity is split by level. Process lifecycle, mail receipt, mail transfer and
+failures are INFO. The per-connection and per-session transport chatter —
+`dialmx transport accepted/closed`, `dialmx session opened/hello/closed`,
+`mx connection opened/closed`, `mx session started`, `mx starttls established`
+and the reply-write record — is DEBUG, hidden at the default level. For a
+managed one-core receiver this connect chatter is pure noise, so it stays off
+unless `DIALMX_LOG_LEVEL=debug` is set. In the embedded deployment the core
+forwards that variable to the included child; the standalone receiver reads it
+from its own environment.
 
 A core enrolled through a named shared service (Antler MX) supplies
 `contact_email` and `setup_id` on `DomainAuth`. Both are operational metadata,
@@ -547,8 +558,8 @@ Docker log rotation described below; export before replacing a container.
   fragment. Connection read outcomes classify timeout/EOF/error where observed.
 - **Process:** receiver starting/settings/listener bound/ready/stopping/stopped
   events report build/protocol, effective limits and verification settings.
-  Abrupt process termination cannot emit terminal events; unmatched starts
-  from an earlier `boot_id` remain interrupted/unknown.
+  Abrupt process termination cannot emit terminal events; an unmatched start
+  with no matching stop remains interrupted/unknown.
 
 A valid core response is `acknowledged`, including quota/transient responses;
 only individual `ok`/`duplicate` results with a valid durable disposition prove
