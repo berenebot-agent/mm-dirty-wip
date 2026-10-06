@@ -15,7 +15,7 @@ func TestInboxEditSaveKeepsAutoActions(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 
-	// Seed a policy as the connector wizard/API would.
+	// Seed a policy through the inbox-level auto-actions settings.
 	markRead := true
 	hours := 4
 	trigger := "all"
@@ -149,11 +149,8 @@ func TestInboxAutoActionsBlankTriggerDefaultsToAll(t *testing.T) {
 	}
 }
 
-// assertDefaultDeliveryTrigger checks that every delivery-trigger select in the
-// markup opens on "all". The connector-create dialog carries one per connector
-// kind and the Connectors tab another; none of them is populated from the
-// stored value until its dialog is opened, so the option marked selected is the
-// default a user saves.
+// assertDefaultDeliveryTrigger checks that the inbox-level delivery-trigger
+// select opens on "all". Connector setup does not carry a duplicate control.
 func assertDefaultDeliveryTrigger(t *testing.T, markup string) {
 	t.Helper()
 	const open = `<select name="delivery_trigger"`

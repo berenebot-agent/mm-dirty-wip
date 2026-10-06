@@ -156,6 +156,12 @@ func TestWebhookCreateViaDashboard(t *testing.T) {
 		"mode":  {"notify"},
 		"auth":  {"signature"},
 		"_csrf": {csrf},
+		// Inbox-wide delivery actions belong to inbox settings and must be
+		// ignored even if a stale client includes them during connector setup.
+		"auto_mark_read_on_delivery":      {"1"},
+		"auto_trash_after_delivery":       {"1"},
+		"auto_trash_after_delivery_hours": {"6"},
+		"delivery_trigger":                {"any"},
 	}
 	req := httptest.NewRequest("POST", "/ui/keys", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -185,6 +191,13 @@ func TestWebhookCreateViaDashboard(t *testing.T) {
 	clients, err := svc.Store.ListWebhookClients(context.Background(), u.AccountID)
 	if err != nil || len(clients) != 1 {
 		t.Fatalf("webhook clients: %+v %v", clients, err)
+	}
+	createdInbox, err := svc.Store.GetInboxInternal(context.Background(), u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if createdInbox.AutoMarkReadOnDelivery || createdInbox.AutoTrashAfterDeliveryHours != nil || createdInbox.DeliveryTrigger != "all" {
+		t.Fatalf("connector creation changed inbox-level delivery actions: %+v", createdInbox)
 	}
 	if !strings.Contains(body, `data-connector="`+clients[0].ID+`"`) || !strings.Contains(body, "Hooks") {
 		t.Fatal("dashboard does not render the webhook connector on its inbox")

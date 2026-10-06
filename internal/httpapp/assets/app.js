@@ -3,8 +3,18 @@
   if (!dlg) {
     return;
   }
+  var dialogStyle = document.createElement('style');
+  dialogStyle.textContent = '#key-dialog[open]{display:flex;flex-direction:column;max-height:calc(100dvh - 32px);overflow:hidden}#key-dialog h2{flex:0 0 auto}#key-form:not([hidden]){display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow:hidden}#key-form[hidden]{display:none}.key-form-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.key-fields{display:block;min-width:0;overflow:visible}.connector-config-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.connector-config-row>div{min-width:0}.connector-config-row label{display:block}.connector-config-row select{margin-bottom:6px}@media(max-width:520px){.connector-config-row{grid-template-columns:1fr}}#key-dialog #key-error{flex:0 0 auto}#key-dialog #key-form>.dialog-actions{position:static;flex:0 0 auto;padding:12px 0;margin-top:4px;background:#fff;border-top:1px solid #eee}';
+  document.head.appendChild(dialogStyle);
   var sel = document.getElementById('key-type');
   var form = document.getElementById('key-form');
+  var formScroll = document.createElement('div');
+  formScroll.className = 'key-form-scroll';
+  var formError = document.getElementById('key-error');
+  while (form.firstChild && form.firstChild !== formError) {
+    formScroll.appendChild(form.firstChild);
+  }
+  form.insertBefore(formScroll, formError);
   var title = document.getElementById('key-dialog-title');
   var createSource = 'client';
   var fixedInboxID = '';
@@ -37,8 +47,21 @@
   var webhookAuth = webhookFields.querySelector('select[name=auth]');
   var bearerFields = document.createElement('div');
   bearerFields.hidden = true;
-  bearerFields.innerHTML = '<label for="webhook-bearer-secret">Bearer secret</label><div class="row"><input id="webhook-bearer-secret" name="bearer_secret" type="password" autocomplete="new-password" placeholder="Paste a secret here…" aria-describedby="webhook-bearer-hint"><button type="button" class="secondary btn-narrow" id="webhook-generate">Generate</button></div><p class="muted small" id="webhook-bearer-hint"></p>';
-  webhookFields.appendChild(bearerFields);
+  bearerFields.innerHTML = '<label for="webhook-bearer-secret">Bearer secret</label><div class="row"><input id="webhook-bearer-secret" name="bearer_secret" type="password" autocomplete="new-password" placeholder="Paste your secret here, or click Generate for a random one" aria-describedby="webhook-bearer-hint"><button type="button" class="secondary btn-narrow" id="webhook-generate">Generate</button></div><p class="muted small" id="webhook-bearer-hint"></p>';
+  webhookFields.insertBefore(bearerFields, webhookAuth.nextElementSibling);
+  var payloadSelect = webhookFields.querySelector('select[name=mode]');
+  var configRow = document.createElement('div');
+  configRow.className = 'connector-config-row';
+  [payloadSelect, webhookAuth].forEach(function (select) {
+    var field = document.createElement('div');
+    field.appendChild(select.previousElementSibling);
+    field.appendChild(select);
+    configRow.appendChild(field);
+  });
+  webhookFields.insertBefore(configRow, bearerFields);
+  form.querySelectorAll('.connector-auto-actions').forEach(function (section) {
+    section.remove();
+  });
   var bearerInput = bearerFields.querySelector('input');
   var generateBtn = bearerFields.querySelector('button');
 
@@ -57,9 +80,11 @@
     document.getElementById('webhook-bearer-hint').textContent = editing
       ? 'Leave blank to keep the current secret. Paste only the token, without Bearer, or Generate a replacement. It changes when you save.'
       : 'Paste only the token, without Bearer, or click Generate. Copy it before saving if another app needs it.';
-    if (rotateBtn && sel.value === 'webhook') {
-      rotateBtn.hidden = !editing || active;
-      rotateBtn.textContent = 'Rotate signing secret';
+    if (rotateBtn) {
+      var canRotate = editing && !!idInput.value && (sel.value === 'api' || (sel.value === 'webhook' && !active));
+      rotateBtn.hidden = !canRotate;
+      rotateBtn.style.display = canRotate ? '' : 'none';
+      rotateBtn.textContent = sel.value === 'webhook' ? 'Rotate signing secret' : 'Rotate Key';
     }
   }
 
@@ -1659,9 +1684,27 @@ function clearUrlParams(names) {
       autoTrashSection.hidden = !autoTrash.checked;
     });
   }
-  // The auto-action controls live in their own form on the Connectors tab, so
-  // its action is the inbox edit endpoint's sibling and needs the open inbox id.
+  // The Connectors tab keeps its delivery-action controls in this form.
   var connectorsForm = document.getElementById('inbox-connectors-form');
+  var inboxSaveButton = document.getElementById('inbox-edit-save');
+  var inboxAutoActions = null;
+  if (connectorsForm) {
+    var autoActionsSave = document.getElementById('inbox-connectors-save');
+    if (autoActionsSave) {
+      autoActionsSave.remove();
+    }
+    var autoActionsHeading = Array.prototype.find.call(connectorsForm.children, function (el) {
+      return el.matches('h3.section-head') && el.textContent.trim() === 'After an agent handles mail';
+    });
+    if (autoActionsHeading) {
+      inboxAutoActions = document.createElement('div');
+      inboxAutoActions.className = 'inbox-auto-actions';
+      connectorsForm.insertBefore(inboxAutoActions, autoActionsHeading);
+      while (inboxAutoActions.nextSibling) {
+        inboxAutoActions.appendChild(inboxAutoActions.nextSibling);
+      }
+    }
+  }
   function setConnectorsFormAction(id) {
     if (connectorsForm) {
       connectorsForm.action = '/ui/inboxes/' + encodeURIComponent(id) + '/auto-actions';
@@ -1669,6 +1712,10 @@ function clearUrlParams(names) {
   }
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
+  // The editor creates its own forms, separate from inbox auto-actions.
+  if (connectorEditor && connectorsForm) {
+    connectorsForm.parentNode.insertBefore(connectorEditor, connectorsForm);
+  }
   var connectorAdd = document.getElementById('inbox-connector-add');
   var connectorHeader = connectorAdd ? connectorAdd.closest('.card-head') : null;
   var editConnectors = [];
@@ -1710,12 +1757,28 @@ function clearUrlParams(names) {
   form.addEventListener('submit', function () {
     inboxSubmitting = true;
   });
-  // The Connectors tab posts its own form to the auto-actions endpoint. Flag it
-  // too, so a browser that fires `close` on the dialog as the page unloads does
-  // not strip the URL params the redirect needs to reopen the dialog.
+  // Connector-tab save submits its dedicated form to the auto-actions endpoint.
   if (connectorsForm) {
     connectorsForm.addEventListener('submit', function () {
       inboxSubmitting = true;
+    });
+  }
+  if (inboxSaveButton) {
+    inboxSaveButton.addEventListener('click', function (event) {
+      if (!inboxAutoActions || dlg.querySelector('[data-inbox-panel=connectors]').hidden) {
+        return;
+      }
+      if (connectorEditor && !connectorEditor.classList.contains('connector-view-hidden')) {
+        event.preventDefault();
+        var connectorEditForm = connectorEditor.querySelector('#inbox-connector-edit-form');
+        if (connectorEditForm) {
+          connectorEditForm.requestSubmit();
+        }
+        return;
+      }
+      event.preventDefault();
+      inboxSubmitting = true;
+      connectorsForm.requestSubmit();
     });
   }
   function resumeInbox() {
@@ -1781,6 +1844,12 @@ function clearUrlParams(names) {
   }
 
   function setConnectorEditorMode(editing) {
+    if (inboxSaveButton && connectorEditor) {
+      inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-connectors-form');
+    }
+    if (inboxAutoActions) {
+      inboxAutoActions.classList.toggle('connector-view-hidden', !!editing);
+    }
     if (connectorList) {
       connectorList.classList.toggle('connector-view-hidden', !!editing);
     }
@@ -1808,20 +1877,20 @@ function clearUrlParams(names) {
       var isOpenClaw = c.Kind === 'openclaw';
       var label = isOpenClaw ? 'OpenClaw' : 'Hermes Relay';
       fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — ' + (isOpenClaw ? 'agent' : 'relay') + ' sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — ' + (isOpenClaw ? 'agent' : 'relay') + ' drafts and requests approval</option></select>';
-      actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a><button type="submit">Save</button>';
-      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
+       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>';
+       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
     } else {
       fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label>Bearer secret <span class="muted small">(leave blank to keep current)</span></label><input name="bearer_secret" type="password" autocomplete="new-password"></div>';
-      actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '') + '<button type="submit">Save</button>';
+       actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '');
       var toggleText = c.Enabled ? 'Pause webhook' : 'Enable webhook';
       var nextEnabled = c.Enabled ? '0' : '1';
-      connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3><button type="button" class="secondary btn-sm" data-connector-close>Back to connectors</button></div><form method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><form method="post" action="/ui/webhooks/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form></div>';
+       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><form method="post" action="/ui/webhooks/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form></div>';
     }
     setConnectorEditorMode(true);
-    var close = connectorEditor.querySelector('[data-connector-close]');
-    if (close) {
-      close.addEventListener('click', function () {
-        setConnectorEditorMode(false);
+    var connectorEditForm = connectorEditor.querySelector('#inbox-connector-edit-form');
+    if (connectorEditForm) {
+      connectorEditForm.addEventListener('submit', function () {
+        inboxSubmitting = true;
       });
     }
     connectorEditor.querySelectorAll('[data-inline-connector-delete]').forEach(function (deleteForm) {
@@ -2293,14 +2362,12 @@ function clearUrlParams(names) {
       }
       if (dlg.id === 'inbox-edit-dialog') {
         dlg.classList.add('inbox-dialog--wide');
-        // The inbox save button belongs to the main edit form; the Connectors
-        // tab carries its own form and save control, so hide the main one there
-        // (its fields are not that form's, and a cross-form submit would post
-        // empty auto-action fields). The connectors form's own button is shown
-        // by its presence.
+        // The dialog's single Save button submits the active tab's form.
         var inboxSave = dlg.querySelector('#inbox-edit-save');
         if (inboxSave) {
-          inboxSave.hidden = name === 'connectors';
+          inboxSave.hidden = false;
+          inboxSave.textContent = 'Save';
+          inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
         }
       }
     }

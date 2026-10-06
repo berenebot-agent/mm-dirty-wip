@@ -60,6 +60,24 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 			t.Fatalf("dashboard missing %q", want)
 		}
 	}
+	if !strings.Contains(body, `id="inbox-auto-trash"`) || !strings.Contains(body, `id="inbox-connectors-form"`) {
+		t.Fatal("inbox-level delivery settings are missing from inbox settings")
+	}
+	assetReq := httptest.NewRequest("GET", "/assets/app.js", nil)
+	assetRR := httptest.NewRecorder()
+	h.ServeHTTP(assetRR, assetReq)
+	asset := assetRR.Body.String()
+	if assetRR.Code != http.StatusOK ||
+		!strings.Contains(asset, "section.remove();") ||
+		!strings.Contains(asset, "insertBefore(bearerFields, webhookAuth.nextElementSibling)") ||
+		!strings.Contains(asset, "key-form-scroll") ||
+		!strings.Contains(asset, "connector-config-row") ||
+		!strings.Contains(asset, "autoActionsSave.remove()") ||
+		!strings.Contains(asset, "inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-connectors-form')") ||
+		!strings.Contains(asset, "inboxAutoActions.classList.toggle('connector-view-hidden', !!editing)") ||
+		!strings.Contains(asset, "#key-dialog #key-form>.dialog-actions") {
+		t.Fatalf("connector setup script does not remove inbox-level controls: status=%d", assetRR.Code)
+	}
 	if strings.Contains(body, "<h2>Hermes Relay</h2>") {
 		t.Fatal("standalone Hermes Relay card should be removed")
 	}
