@@ -2,9 +2,11 @@ package launcher_test
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/dellarb/mailmoose/dialmx"
 	"github.com/dellarb/mailmoose/dialmx/control"
 	"github.com/dellarb/mailmoose/internal/launcher"
 )
@@ -33,6 +35,22 @@ func TestStandbyEnvIsMinimal(t *testing.T) {
 		if !seen {
 			t.Fatalf("standby env missing %q in %v", k, env)
 		}
+	}
+}
+
+// TestStandbyEnvForwardsLogLevel verifies the non-secret verbosity knob reaches
+// the embedded child only when the operator set it, so the connect/session
+// diagnostics can be turned on without a rebuild.
+func TestStandbyEnvForwardsLogLevel(t *testing.T) {
+	t.Setenv(dialmx.EnvLogLevel, "")
+	if env := launcher.StandbyEnv(3, 4); strings.Contains(strings.Join(env, "\n"), dialmx.EnvLogLevel) {
+		t.Fatalf("standby env carried log level when unset: %v", env)
+	}
+
+	t.Setenv(dialmx.EnvLogLevel, "debug")
+	env := launcher.StandbyEnv(3, 4)
+	if !slices.Contains(env, dialmx.EnvLogLevel+"=debug") {
+		t.Fatalf("standby env did not forward log level: %v", env)
 	}
 }
 

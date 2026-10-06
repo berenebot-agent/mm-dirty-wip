@@ -230,9 +230,9 @@ func (s *session) logSessionStarted(state tls.ConnectionState, isTLS bool) {
 	if isTLS {
 		args = append(args, "tls_version", tlsVersionName(state.Version), "tls_cipher", tlsCipherName(state.CipherSuite))
 	}
-	s.srv.log.Info("mx session started", args...)
+	s.srv.log.Debug("mx session started", args...)
 	if isTLS && count > 1 {
-		s.srv.log.Info("mx starttls established",
+		s.srv.log.Debug("mx starttls established",
 			AttrConnectionID, s.connID,
 			"helo", s.helo,
 			"tls_version", tlsVersionName(state.Version),
@@ -678,7 +678,7 @@ func (s *session) armFinalReply(txID string) {
 func (s *session) logDataStaging(txID, stage string, extra ...any) {
 	args := []any{AttrConnectionID, s.connID, AttrTransactionID, txID, "stage", stage}
 	args = append(args, extra...)
-	s.srv.log.Info("mx data staging", args...)
+	s.srv.log.Debug("mx data staging", args...)
 }
 
 // logAuthEvidence records the full normalized SPF/DKIM/DMARC evidence array
@@ -688,7 +688,7 @@ func (s *session) logDataStaging(txID, stage string, extra ...any) {
 // header values or key material. The evidence types are bounded diagnostics:
 // results, domains, selectors and classifier strings only.
 func (s *session) logAuthEvidence(txID string, auth mxwire.AuthResults) {
-	s.srv.log.Info("mx auth evidence",
+	s.srv.log.Debug("mx auth evidence",
 		AttrConnectionID, s.connID,
 		AttrTransactionID, txID,
 		"spf_enabled", s.srv.cfg.VerifySPF,

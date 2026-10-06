@@ -685,8 +685,10 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 }
 
 // logSession emits a session lifecycle event (opened/hello/closed) with the
-// receiver and connection identity. It is safe to log: the event carries no
-// protocol bytes, only ids, bounded facts and a duration.
+// receiver and connection identity. These are DEBUG: for a managed one-core
+// receiver the transport/session chatter is noise, so it is hidden unless
+// DIALMX_LOG_LEVEL=debug. It is safe to log: the event carries no protocol
+// bytes, only ids, bounded facts and a duration.
 func (r *Receiver) logSession(c *connection, stage string, extra ...any) {
 	if r.log == nil {
 		return
@@ -711,7 +713,7 @@ func (r *Receiver) logSession(c *connection, stage string, extra ...any) {
 		args = append(args, "peer", c.ip)
 	}
 	args = append(args, extra...)
-	r.log.Info(event, args...)
+	r.log.Debug(event, args...)
 }
 
 // logProof records one step of the domain-ownership proof. phase is a bounded

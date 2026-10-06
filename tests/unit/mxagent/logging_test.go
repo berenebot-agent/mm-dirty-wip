@@ -198,10 +198,27 @@ func TestEdgeLifecycleLogging(t *testing.T) {
 			t.Fatalf("missing lifecycle event %q; records: %s", msg, messages(got))
 		}
 	}
-	// Every lifecycle event is INFO.
-	for _, r := range got {
-		if strings.HasPrefix(r.msg, "mx ") && r.level != slog.LevelInfo {
-			t.Fatalf("event %q at %v, want INFO", r.msg, r.level)
+	// Mail receipt and transfer are INFO; the per-connection and per-session
+	// transport chatter is DEBUG, hidden at the default level.
+	levels := map[string]slog.Level{
+		"mx connection opened":          slog.LevelDebug,
+		"mx session started":            slog.LevelDebug,
+		"mx mail transaction started":   slog.LevelInfo,
+		"mx recipient routing":          slog.LevelInfo,
+		"mx data staging":               slog.LevelDebug,
+		"mx auth evidence":              slog.LevelDebug,
+		"mx core ingest result":         slog.LevelInfo,
+		"mx smtp transaction decision":  slog.LevelInfo,
+		"mx smtp reply transport write": slog.LevelDebug,
+		"mx connection closed":          slog.LevelDebug,
+	}
+	for msg, want := range levels {
+		r, ok := recordFor(got, msg)
+		if !ok {
+			t.Fatalf("missing lifecycle event %q; records: %s", msg, messages(got))
+		}
+		if r.level != want {
+			t.Fatalf("event %q at %v, want %v", msg, r.level, want)
 		}
 	}
 

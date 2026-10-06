@@ -13,15 +13,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/logging"
 	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
 // This file is the receiver's complete structured observability contract. Every
-// record is JSON at INFO/ERROR through one *slog.Logger, so a shared SMTP edge
-// line and a receiver lifecycle line carry the same envelope. Events
-// deliberately carry only bounded, non-secret facts: ids, outcomes, classifiers,
-// counters and durations. Raw MIME, TXT proof records, signatures and key
-// material are never logged.
+// record is compact plain text (the same [MX]-tagged format the core uses, so
+// the included edge and the core interleave readably on one container stream)
+// at INFO through one *slog.Logger, so a shared SMTP edge line and a receiver
+// lifecycle line carry the same format. Events deliberately carry only bounded,
+// non-secret facts: ids, outcomes, classifiers, counters and durations. Raw
+// MIME, TXT proof records, signatures and key material are never logged.
+//
+// Verbosity: process lifecycle, mail receipt, mail transfer and failures are
+// INFO. The per-connection and per-session transport chatter (transport
+// accepted/closed, session opened/hello/closed; and the shared edge's
+// connection opened/closed, session started, STARTTLS and reply-write records)
+// is DEBUG, hidden unless DIALMX_LOG_LEVEL=debug. This is deliberate for the
+// managed one-core receiver, where the connect chatter is pure noise; the
+// event names below are unchanged, only their level differs.
 //
 // Event grammar (all messages are lower-case, space-separated, stable):
 //
@@ -33,13 +43,13 @@ import (
 //	dialmx listener failed            per listener
 //	dialmx settings                   once, effective configuration
 //
-//	dialmx transport accepted         per accepted TCP connection
-//	dialmx transport tls failure      per pre-handshake TLS failure
-//	dialmx transport closed           per closed TCP connection
-//	dialmx session rejected           per rejected session (never admitted)
-//	dialmx session opened             per admitted session
-//	dialmx session hello              per decoded Hello
-//	dialmx session closed             per session teardown
+//	dialmx transport accepted         per accepted TCP connection      (DEBUG)
+//	dialmx transport tls failure      per pre-handshake TLS failure    (DEBUG)
+//	dialmx transport closed           per closed TCP connection        (DEBUG)
+//	dialmx session rejected           per rejected session (never admitted) (INFO)
+//	dialmx session opened             per admitted session             (DEBUG)
+//	dialmx session hello              per decoded Hello                (DEBUG)
+//	dialmx session closed             per session teardown             (DEBUG)
 //
 //	dialmx domain proof               per DNS proof attempt (lookup/parse/key/signature/renew/lifecycle)
 //
@@ -47,12 +57,7 @@ import (
 //	dialmx handoff                    per connection handoff lifecycle
 //	dialmx handoff result             per recipient durable outcome
 //
-// Envelope (every record, from NewLogger): schema_version, service, boot_id,
-// event. "event" equals the slog message, so a consumer keys on it without
-// parsing text and it applies to shared-edge and abort/error lines too, not a
-// curated whitelist. Session records add receiver_id and core_connection_id;
-// transaction records add the edge's smtp_connection_id/message_transaction_id
-// via mxagent.TransactionAttrs. Timestamps are always UTC.
+// The shared SMTP edge's mx * records use the same [MX] text format.
 //
 // Registration metadata: a core enrolled through a named shared service (Antler
 // MX) supplies contact_email and setup_id on DomainAuth. Both are operational
@@ -61,20 +66,6 @@ import (
 // on resolve/handoff records so usage can be aggregated by operator contact;
 // they are omitted entirely for a custom receiver. A malformed value is dropped
 // and never rejects the proof.
-
-const (
-	// attrSchemaVersion versions the JSON record schema so a consumer can pin a
-	// parser. It is 1 for this contract.
-	attrSchemaVersion = "schema_version"
-	// attrServiceKey is the envelope attribute name and serviceName its value.
-	attrServiceKey = "service"
-	serviceName    = "dialmx"
-	// attrBootID is a random id stable for the life of one process boot.
-	attrBootID = "boot_id"
-	// attrEvent is the stable event name. It is set on every record and equals
-	// the slog message.
-	attrEvent = "event"
-)
 
 // Event names. They are used both as the slog message and as the event
 // attribute value, so the message and the attribute never drift. The process
@@ -102,65 +93,14 @@ const (
 	eventHandoffResult       = "dialmx handoff result"
 )
 
-// baseHandler injects schema_version, service, boot_id and event into every
-// record — for every message, with no whitelist — so a shared SMTP edge record
-// and a receiver abort/error record carry the same envelope.
-type baseHandler struct {
-	next   slog.Handler
-	bootID string
-}
-
-func (h baseHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return h.next.Enabled(ctx, level)
-}
-
-func (h baseHandler) Handle(ctx context.Context, r slog.Record) error {
-	return h.next.Handle(ctx, h.withEnvelope(r))
-}
-
-// withEnvelope builds a new record with the mandatory envelope attributes
-// prepended, preserving the caller's attrs and order after them.
-func (h baseHandler) withEnvelope(r slog.Record) slog.Record {
-	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
-	out.AddAttrs(
-		slog.Int(attrSchemaVersion, 1),
-		slog.String(attrServiceKey, serviceName),
-		slog.String(attrBootID, h.bootID),
-		slog.String(attrEvent, r.Message),
-	)
-	r.Attrs(func(a slog.Attr) bool {
-		out.AddAttrs(a)
-		return true
-	})
-	return out
-}
-
-func (h baseHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return baseHandler{next: h.next.WithAttrs(attrs), bootID: h.bootID}
-}
-
-func (h baseHandler) WithGroup(name string) slog.Handler {
-	return baseHandler{next: h.next.WithGroup(name), bootID: h.bootID}
-}
-
-// NewLogger wraps a JSON handler with the receiver envelope, forces UTC
-// timestamps via ReplaceAttr, and attaches the process-wide boot id. The process
+// NewLogger returns the receiver's one logger: the shared compact text handler
+// tagged [MX], so a receiver line and a shared SMTP edge line carry the same
+// format as the core's [Core] lines. level is the minimum level (Info by
+// default, Debug for the connect/session transport chatter). The process
 // entrypoint calls this once and passes the result to both the receiver and the
-// SMTP edge so every emitted record shares the same
-// schema_version/service/boot_id/event envelope.
-func NewLogger(level slog.Level, bootID string, w io.Writer) *slog.Logger {
-	h := slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				if t, ok := a.Value.Any().(time.Time); ok {
-					return slog.Time(slog.TimeKey, t.UTC())
-				}
-			}
-			return a
-		},
-	})
-	return slog.New(baseHandler{next: h, bootID: bootID})
+// SMTP edge.
+func NewLogger(level slog.Level, w io.Writer) *slog.Logger {
+	return logging.New(w, level, logging.PrefixMX)
 }
 
 // txnLog appends the edge-supplied correlation attributes (smtp_connection_id,
@@ -245,7 +185,7 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 		if st == nil {
 			return
 		}
-		tr.log.Info(eventTransportAccepted,
+		tr.log.Debug(eventTransportAccepted,
 			"transport_id", st.id,
 			"transport", transport,
 			"peer", st.peer,
@@ -263,7 +203,7 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 		reason := "closed"
 		if hc, ok := c.(handshakeCompleter); ok && !hc.ConnectionState().HandshakeComplete {
 			reason = "tls_handshake_failed"
-			tr.log.Info(eventTransportTLSFailure,
+			tr.log.Debug(eventTransportTLSFailure,
 				"transport_id", st.id,
 				"transport", "https",
 				"peer", st.peer,
@@ -272,7 +212,7 @@ func (tr *TransportTracker) ConnState(c net.Conn, s http.ConnState) {
 				"reason", reason,
 			)
 		}
-		tr.log.Info(eventTransportClosed,
+		tr.log.Debug(eventTransportClosed,
 			"transport_id", st.id,
 			"transport", transport,
 			"peer", st.peer,
