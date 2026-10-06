@@ -49,7 +49,127 @@ func newTestService(t *testing.T) *app.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	u, err := st.CreateAccountAndAdmin(context.Background(), "Runtime", "runtime@example.test", "unused-test-hash", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := st.CreateDomain(context.Background(), u.AccountID, "runtime.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, d.ID, "mx", nil, false); err != nil {
+		t.Fatal(err)
+	}
 	return svc
+}
+
+func TestMXRuntimeLastDomainStandbyAndRestart(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	edge := &fakeEdge{}
+	rt := newMXRuntime(svc, edge, testLogger())
+	defer rt.shutdown()
+	svc.MXRuntime = rt
+	saved, err := svc.SaveMXReceiverSettings(ctx, model.Principal{SystemAdmin: true}, app.MXReceiverInput{Mode: app.MXModeIncluded, Hostname: "mx.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := svc.Store.GetUserByEmail(ctx, "runtime@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	domains, err := svc.Store.ListDomains(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := domains[0]
+	if err := svc.Store.DeleteDomainReceivingConfig(ctx, u.AccountID, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Persisted Included settings alone must not activate anything at startup.
+	rt.reconcile(ctx)
+	if n, _, active := edge.calls(); n != 0 || active || rt.privateMgr != nil {
+		t.Fatal("unused Included receiver started")
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "mx", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if n, _, active := edge.calls(); n != 1 || !active || rt.privateMgr == nil {
+		t.Fatal("first MX domain did not activate receiver")
+	}
+	other, err := svc.Store.CreateAccountAndAdmin(ctx, "Other", "other-runtime@example.test", "unused-test-password", 50<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Store.CreateDomain(ctx, other.AccountID, "other.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, other.AccountID, second.ID, "mx", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.DeleteDomainReceivingConfig(ctx, u.AccountID, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if n, _, active := edge.calls(); n != 1 || !active {
+		t.Fatal("receiver stopped while another account still uses MX")
+	}
+	if err := svc.Store.DeleteDomainReceivingConfig(ctx, other.AccountID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if _, _, active := edge.calls(); active || rt.privateMgr != nil || rt.Status(ctx).State != stateDisabled {
+		t.Fatal("last MX domain removal did not stop receiver and dialer")
+	}
+	settings, err := svc.GetMXReceiverSettings(ctx)
+	if err != nil || settings.Revision != saved.Revision || settings.Hostname != "mx.test" {
+		t.Fatal("standby discarded saved settings")
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "mx", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if n, _, active := edge.calls(); n != 2 || !active || rt.privateMgr == nil {
+		t.Fatal("MX reselection did not restart receiver")
+	}
+	child, err := svc.Store.CreateDomain(ctx, u.AccountID, "child.runtime.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainParent(ctx, u.AccountID, child.ID, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainInheritance(ctx, u.AccountID, child.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if inherited, err := svc.Store.GetDomain(ctx, u.AccountID, child.ID); err != nil || inherited.ReceivingProvider != "mx" {
+		t.Fatalf("inherited MX not resolved: %+v %v", inherited, err)
+	}
+	rt.reconcile(ctx)
+	if _, _, active := edge.calls(); !active {
+		t.Fatal("inherited domain stopped receiver")
+	}
+	// Switching the ancestor to a webhook removes the inherited MX path too.
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if _, _, active := edge.calls(); active || rt.privateMgr != nil {
+		t.Fatal("provider switch left unused receiver running")
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, other.AccountID, second.ID, "mx", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if err := svc.Store.DeleteDomain(ctx, other.AccountID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	rt.reconcile(ctx)
+	if _, _, active := edge.calls(); active || rt.privateMgr != nil {
+		t.Fatal("last domain deletion left receiver running")
+	}
 }
 
 func testLogger() *slog.Logger {

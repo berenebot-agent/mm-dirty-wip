@@ -284,6 +284,9 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 // configuration. A generated provider secret (Cloudflare) is minted only when
 // missing and returned once as Worker code.
 func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
+	if s.Service.MXRuntime != nil {
+		defer s.Service.MXRuntime.Wake()
+	}
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
@@ -313,6 +316,11 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.domainEditorError(w, r, d.ID, "receiving", provider, err.Error())
 		return
+	}
+	if provider == "mx" && p.SystemAdmin {
+		if !s.saveIncludedMXForm(w, r) {
+			return
+		}
 	}
 	saved, generated, err := s.Service.SaveDomainReceivingConfig(ctx, p.AccountID, d.ID, provider, cfg, false)
 	if err != nil {
@@ -380,6 +388,9 @@ func (s *Server) uiDomainReceivingClear(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.domainNotice(w, r, "Receiving configuration removed")
+	if s.Service.MXRuntime != nil {
+		s.Service.MXRuntime.Wake()
+	}
 }
 
 // uiDomainReceivingRegenerate mints a fresh generated secret for the currently

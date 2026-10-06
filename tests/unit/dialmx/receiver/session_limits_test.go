@@ -15,6 +15,7 @@ import (
 
 	"github.com/dellarb/mailmoose/dialmx/receiver"
 	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/tests/support/smoke"
 )
 
 // TestReadyAdvertisesSessionLimits proves the receiver publishes its domain,
@@ -78,6 +79,48 @@ func TestReadyAdvertisesSessionLimits(t *testing.T) {
 		t.Fatalf("RevalidateSeconds = %d, want 90", ready.RevalidateSeconds)
 	}
 	cancel()
+}
+
+// TestIdleSessionSurvivesWriteDeadline exercises real HTTP/2 stream deadlines:
+// a completed Ready write must not leave the ten-second deadline armed.
+func TestIdleSessionSurvivesWriteDeadline(t *testing.T) {
+	smoke.Require(t)
+	_, srv, tlsConfig := newReceiverServer(t, receiver.Config{})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+mxwire.SessionPath, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig, ForceAttemptHTTP2: true}}
+	done := make(chan *http.Response, 1)
+	go func() {
+		resp, _ := client.Do(req)
+		done <- resp
+	}()
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+	if err := mxwire.WriteFrame(pw, hello); err != nil {
+		t.Fatal(err)
+	}
+	resp := <-done
+	if resp == nil {
+		t.Fatal("session request failed")
+	}
+	defer resp.Body.Close()
+	if f, err := mxwire.ReadFrame(resp.Body); err != nil || f.Type != mxwire.FrameReady {
+		t.Fatalf("Ready: %v type=%d", err, f.Type)
+	}
+	time.Sleep(11 * time.Second)
+	ping, _ := mxwire.JSONFrame(mxwire.FramePing, 0, 0, nil)
+	if err := mxwire.WriteFrame(pw, ping); err != nil {
+		t.Fatalf("idle session closed before ping: %v", err)
+	}
+	if f, err := mxwire.ReadFrame(resp.Body); err != nil || f.Type != mxwire.FramePong {
+		t.Fatalf("idle session must still answer: %v type=%d", err, f.Type)
+	}
 }
 
 // renewalDialer is a minimal core that authenticates many domains and answers

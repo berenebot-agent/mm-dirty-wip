@@ -143,6 +143,9 @@ func (s *Server) apiDomainSending(w http.ResponseWriter, r *http.Request) {
 //	PUT    /v1/admin/domains/{id}/receiving
 //	DELETE /v1/admin/domains/{id}/receiving
 func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && s.Service.MXRuntime != nil {
+		defer s.Service.MXRuntime.Wake()
+	}
 	p := principal(r)
 	if !adminOnly(w, p) {
 		return
