@@ -72,9 +72,8 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 		!strings.Contains(asset, "insertBefore(bearerFields, webhookAuth.nextElementSibling)") ||
 		!strings.Contains(asset, "key-form-scroll") ||
 		!strings.Contains(asset, "connector-config-row") ||
-		!strings.Contains(asset, "autoActionsSave.remove()") ||
 		!strings.Contains(asset, "inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-connectors-form')") ||
-		!strings.Contains(asset, "inboxAutoActions.classList.toggle('connector-view-hidden', !!editing)") ||
+		!strings.Contains(asset, "showInboxSubview") ||
 		!strings.Contains(asset, "#key-dialog #key-form>.dialog-actions") {
 		t.Fatalf("connector setup script does not remove inbox-level controls: status=%d", assetRR.Code)
 	}

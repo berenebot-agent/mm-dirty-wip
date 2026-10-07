@@ -92,10 +92,10 @@ func TestInboxAutoActionsFormIsAuthoritative(t *testing.T) {
 }
 
 // TestInboxConnectorsTabHasItsOwnForm pins the markup contract the Connectors
-// tab's save control depends on: the auto-action controls are inside a form of
+// panel's save control depends on: the auto-action controls are inside a form of
 // their own, outside the main inbox edit form, so the two saves cannot post each
-// other's fields. Without this the tab's controls are unreachable, because the
-// dialog hides its own save button while that tab is active.
+// other's fields. The settings footer's single Save targets that form when the
+// panel is active.
 func TestInboxConnectorsTabHasItsOwnForm(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -107,10 +107,10 @@ func TestInboxConnectorsTabHasItsOwnForm(t *testing.T) {
 
 	form := dialogHTML(t, body, "inbox-edit-dialog")
 	if !strings.Contains(form, `id="inbox-connectors-form"`) {
-		t.Fatalf("connectors tab has no form of its own:\n%s", form)
+		t.Fatalf("connectors panel has no form of its own:\n%s", form)
 	}
-	if !strings.Contains(form, `id="inbox-connectors-save"`) {
-		t.Fatalf("connectors tab has no save control:\n%s", form)
+	if !strings.Contains(form, `id="inbox-edit-save"`) {
+		t.Fatalf("connectors panel has no footer save control:\n%s", form)
 	}
 	// The auto-action controls must sit inside the connectors form: check the
 	// ordering, since both strings appear somewhere in the dialog.

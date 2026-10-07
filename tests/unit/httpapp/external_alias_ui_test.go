@@ -40,16 +40,16 @@ func TestUIExternalAliasLifecycle(t *testing.T) {
 		t.Fatalf("created alias %+v", alias)
 	}
 	aliasBase := base + "/" + alias.ID
-	dlgID := "external-alias-sending-dialog-" + alias.ID
 
-	// The dashboard renders the connector popup for the alias with the provider
-	// picker; the alias log page is read-only, mirroring the domain log.
+	// The dashboard renders the alias's sending editor as an in-modal sub-view
+	// with the provider picker; the alias log page is read-only, mirroring the
+	// domain log.
 	rr = domainGet(t, h, cookie, "/?alias="+alias.ID)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("dashboard %d %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{`id="` + dlgID + `"`, `name="provider"`, aliasBase + `/sending`, "Sending · agent@gmail.com"} {
+	for _, want := range []string{`data-inbox-subview="ext-alias-sending"`, `data-alias-id="` + alias.ID + `"`, `name="provider"`, aliasBase + `/sending`, "Sending · <b>agent@gmail.com</b>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
