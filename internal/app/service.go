@@ -40,6 +40,7 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/mx"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	_ "github.com/dellarb/mailmoose/internal/transport/remotemx"
 	_ "github.com/dellarb/mailmoose/internal/transport/resend"
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
@@ -57,9 +58,13 @@ type Service struct {
 	// before serving; when nil (tests, and deployments that wire no receiver)
 	// settings persist and reconcile on the next start, and status reports the
 	// persisted configuration without a live state.
-	MXRuntime     MXReceiverRuntime
-	Log           *slog.Logger
-	EncryptionKey []byte
+	MXRuntime MXReceiverRuntime
+	// RemoteMXRuntime is the process-owned controller for per-account Remote MX
+	// receivers. cmd/server sets it before serving; when nil (tests) settings
+	// persist and reconcile on the next start and no live state is reported.
+	RemoteMXRuntime AccountMXReceiverRuntime
+	Log             *slog.Logger
+	EncryptionKey   []byte
 	// encryptionKeys holds the primary key first and any legacy derivation
 	// after it, so decrypting pre-upgrade ciphertext still works.
 	encryptionKeys  [][]byte
@@ -603,6 +608,9 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 	if provider == "dialmx" {
 		return s.saveDialMXReceivingConfig(ctx, accountID, domainID, provider, cfg, existing, exists, regenerate)
 	}
+	if provider == RemoteMXProvider {
+		return s.saveRemoteMXReceivingConfig(ctx, accountID, domainID, provider, existing, exists, regenerate)
+	}
 	fields, err := inboundConfigFields(provider)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
@@ -711,6 +719,44 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 	if s.DialMX != nil {
 		s.DialMX.Wake()
 	}
+	return saved, nil, nil
+}
+
+// saveRemoteMXReceivingConfig selects the account-owned Remote MX receiver for a
+// domain. The receiver itself is configured once per account under
+// /v1/admin/account/mx; a domain only references it by selecting the provider, so
+// the stored config is empty. It requires the account to have a receiver
+// configured (otherwise the domain would silently accept nothing).
+func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, domainID, provider string, existing store.DomainReceivingConfig, exists, regenerate bool) (store.DomainReceivingConfig, map[string]string, error) {
+	if regenerate {
+		return store.DomainReceivingConfig{}, nil, invalidConfig("Remote MX has no per-domain secret to regenerate")
+	}
+	if _, err := s.Store.GetDomain(ctx, accountID, domainID); err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	receiver, err := s.Store.GetAccountMXReceiver(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return store.DomainReceivingConfig{}, nil, invalidConfig("configure this account's Remote MX receiver before selecting it for a domain")
+		}
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	if receiver.ReceiverURL == "" {
+		return store.DomainReceivingConfig{}, nil, invalidConfig("configure this account's Remote MX receiver before selecting it for a domain")
+	}
+	encrypted, err := s.encryptConfig(map[string]any{})
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	expected := store.ConfigVersion{}
+	if exists {
+		expected = store.ConfigVersion{ID: existing.ID, Revision: existing.Revision}
+	}
+	saved, err := s.Store.SaveDomainReceivingConfig(ctx, accountID, domainID, provider, encrypted, expected)
+	if err != nil {
+		return store.DomainReceivingConfig{}, nil, err
+	}
+	s.wakeRemoteMXRuntime()
 	return saved, nil, nil
 }
 

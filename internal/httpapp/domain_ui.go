@@ -673,12 +673,10 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 		return nil, false
 	}
 	e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: t.ConfigFields(), WebhookURL: domainIngestURL(baseURL, t), Steps: domainReceivingSteps(provider)}
-	// The Dial MX provider offers the zero-config Antler MX shared relay, so
-	// its selector entry states that plainly. The short label stays "Antler MX"
-	// in the domain row and provider box.
-	if provider == "dialmx" {
-		e.SelectLabel = "Antler MX (Free SMTP Relay - no port forwards required)"
-	}
+	// A provider may supply a longer, descriptive picker label than its short
+	// Description(): Antler MX states its zero-config nature, Remote MX states
+	// that the receiver is the account's own.
+	e.SelectLabel = transport.InboundSelectLabel(t)
 	for _, f := range e.Fields {
 		if f.Generated {
 			e.Generated = true

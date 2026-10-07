@@ -207,12 +207,50 @@ TXT record), whereas the Direct MX receiver editor is a single installation-wide
 Included or Remote. New deployments should use the installation receiver or
 Antler MX.
 
+## Remote MX (account-owned receiver)
+
+**Remote MX** is the third direct-SMTP receiving provider, alongside Direct MX
+(installation) and Antler MX (shared DNS relay). It lets an **account admin** run
+their own standalone Dial MX receiver and point any of the account's domains at
+it, with the same "configure once, select per domain" UX as the installation
+Direct MX receiver — but scoped to the account instead of the instance.
+
+It is Dial MX in **single mode only**: the core dials the account's receiver
+outbound over HTTPS/2 (or cleartext h2c for a private/LAN receiver) and
+authenticates with a shared bearer key, exactly like the installation **Remote**
+receiver. There is no DNS proof and no per-domain key; the receiver authorizes
+any domain on its one authenticated connection, and the core keeps the
+per-recipient account/domain authorization. (DNS-authenticated shared receivers
+remain Antler MX / per-domain Dial MX custom; Remote MX does not do DNS auth.)
+
+- **One receiver per account.** A system administrator's installation Direct MX
+  receiver is installation-wide; an account's Remote MX receiver is configured
+  once per account under the domain **Receiving → Remote MX** panel (or the
+  account API, `GET/PUT/DELETE /v1/admin/account/mx`, account-admin session or
+  admin bearer key). Any domain in the account then selects **Remote MX** under
+  Receiving → Provider, and receives through that receiver.
+- **One owner per receiver.** Because a single-mode receiver serves exactly one
+  core, one physical receiver (by URL) may be registered by exactly one account;
+  a second account registering the same URL is rejected. A wrong bearer key
+  simply never authenticates: the receiver's status shows connecting/failed and
+  only the correct-key core becomes its live session.
+- **Private/LAN receivers.** By default a Remote MX receiver URL must be an
+  HTTPS public-routable origin. The account admin can tick **Allow a private /
+  LAN receiver** to permit an `http` origin on a loopback or RFC1918 address (for
+  example a receiver on the account's own LAN), mirroring the installation
+  Remote receiver's private-destination support. A private CA bundle can be
+  supplied for a self-signed receiver certificate.
+- **Fail-closed clear.** Removing the account receiver is refused while one or
+  more domains still route to it, so a clear never silently breaks receiving.
+
+The core runs one outbound session per account receiver that is in use by at
+least one domain, and stops the session when the last domain stops using it.
+Nothing listens on the core: Remote MX opens no inbound port.
+
 **Auto** (pick the best receiver automatically) in the installation receiver
 setting is **not implemented** and is not offered in the UI;
 the API rejects it. Antler MX is the implemented zero-config service, offered
-per domain rather than as an installation mode.
-
-## Breaking change
+per domain rather than as an installation mode.## Breaking change
 
 The old edge-to-core HTTP/HMAC transport, `/internal/mx/resolve` and
 `/internal/mx/ingest` routes, `MX_EDGE_KEYS`, `MX_EDGE_KEY_ID`, `MX_EDGE_SECRET`,

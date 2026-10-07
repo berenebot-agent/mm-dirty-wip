@@ -27,6 +27,14 @@ func (Transport) Description() string {
 	// label via selectLabel in the HTTP layer.
 	return "Antler MX"
 }
+
+// SelectLabel is the longer provider-picker label (transport.SelectLabelProvider).
+// The Dial MX provider offers the zero-config Antler MX shared relay, so its
+// selector entry states that plainly while the short Description stays "Antler
+// MX" in the domain row and provider box.
+func (Transport) SelectLabel() string {
+	return "Antler MX (Free SMTP Relay - no port forwards required)"
+}
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
 		{Name: "service", Label: "Service", Type: "select", Default: ServiceAntler, Options: []transport.ConfigOption{
