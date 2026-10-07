@@ -8,6 +8,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Inbox settings: the Add and Edit inbox dialogs now share one full-height
+  settings shell with a fixed size, a left section list and a single scrollable
+  panel, so the dialog no longer resizes as sections change and the Save/Cancel
+  actions stay in a fixed footer. Alias, external-alias and connector editors
+  open inline inside the panel instead of as stacked popups.
 - Delivery auto-actions: saving the inbox edit dialog from any tab other than
   Connectors no longer clears the inbox's auto-action policy. The controls live
   on the Connectors tab, and a save that does not carry them now leaves the
