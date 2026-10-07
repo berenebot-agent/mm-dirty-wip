@@ -119,6 +119,7 @@ func main() {
 	// without ever crashing the core on a receiver failure.
 	importLegacyMXSettings(context.Background(), svc, cfg, log)
 	mxrt := startMXRuntime(svc, edge, log)
+	remoteMXrt := startRemoteMXRuntime(svc, log)
 	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
@@ -219,6 +220,10 @@ func main() {
 	defer mxCancel()
 	if err := mxrt.Shutdown(mxCtx); err != nil {
 		log.Warn("MX receiver shutdown timed out", "error", err)
+	}
+	// Stop the per-account Remote MX dialers before the store closes.
+	if err := remoteMXrt.Shutdown(mxCtx); err != nil {
+		log.Warn("Remote MX receiver shutdown timed out", "error", err)
 	}
 }
 

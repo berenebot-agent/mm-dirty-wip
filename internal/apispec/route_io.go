@@ -168,6 +168,11 @@ var routeIOByKey = map[string]routeIO{
 	"PUT /v1/admin/mx":    {Request: "MXSettingsPut", Response: "MXSettings"},
 	"DELETE /v1/admin/mx": {},
 
+	// Admin: Remote MX.
+	"GET /v1/admin/account/mx":    {Response: "AccountMXSettings"},
+	"PUT /v1/admin/account/mx":    {Request: "AccountMXSettingsPut", Response: "AccountMXSettings"},
+	"DELETE /v1/admin/account/mx": {},
+
 	// Admin: clients.
 	"GET /v1/admin/clients":                        {Response: "ClientList"},
 	"GET /v1/admin/clients/webhooks":               {Response: "WebhookClientList"},

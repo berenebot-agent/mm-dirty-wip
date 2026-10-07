@@ -159,6 +159,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("inboxes", "storage_quota_bytes"),
 			columnAdded("inboxes", "storage_used_bytes"),
 		)},
+		{version: "048", sql: migration048, detect: stateOf(tableExists("account_mx_receivers"))},
 	}
 }
 

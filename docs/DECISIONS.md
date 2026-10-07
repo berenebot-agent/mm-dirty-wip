@@ -2549,9 +2549,75 @@ h2c-enable condition and four env-tunable caps, plus tests and documentation.
 No new dependency, service, database or core change; the wire contract, SPF,
 the envelope-sender accepted risk and `emersion/go-smtp` are untouched.
 
-## Future extension register
+## D084 — Remote MX: an account-owned single-mode receiver
 
-Potential future additions include:
+**Requirement:** Give an account admin the same "configure a receiver once, then
+select it for any domain" UX that a system administrator has for the installation
+Direct MX receiver — but scoped to their own account — so a tenant can run their
+own standalone Dial MX receiver and point their domains at it without a system
+administrator and without exposing a public inbound port on the core.
+
+**Decision:** Add **Remote MX** (`remotemx`), a third direct-SMTP receiving
+provider alongside Direct MX (`mx`, installation) and Antler MX (`dialmx`
+service `antler`, shared DNS relay). It is Dial MX in **single mode only**: the
+core dials the account's receiver outbound over HTTPS/2 (or cleartext h2c for an
+explicitly-private receiver) and authenticates with a shared bearer key. There
+is no DNS proof and no per-domain key.
+
+- A per-account registry stores exactly one receiver per account
+  (`account_mx_receivers`, migration 048): a URL, an `APP_ENCRYPTION_KEY`-encrypted
+  bearer credential, an encrypted config blob (optional private CA and the
+  private-destination opt-in), and a CAS revision. It mirrors the installation
+  `mx_settings` row, scoped to the account and editable by an account Admin.
+- A domain selects Remote MX by provider; its stored receiving config is empty
+  (the receiver is account-scoped, not domain-scoped). Selecting it requires the
+  account to have a receiver configured, so a domain cannot silently accept
+  nothing.
+- The core runs one `mxdial.Manager` per account receiver that is in use by at
+  least one domain, using the existing single-mode dialer
+  (`mxdial.Config.ReceiverURL` + `CoreKey`, `AllowPrivateDestinations`). The
+  receiver authorizes any domain on its one authenticated connection and the core
+  keeps per-recipient account/domain authorization via the `remotemx` provider.
+- URL policy: a default Remote MX receiver must be an HTTPS public-routable
+  origin; the account admin may tick "allow private" to permit an `http` origin
+  on a loopback/RFC1918 destination.
+- One physical receiver belongs to exactly one account: a second account
+  registering the same receiver URL is rejected. A wrong bearer key never
+  authenticates — the receiver's live status shows connecting/failed and only
+  the correct-key core becomes its session — so no takeover code is needed.
+- Clearing the account receiver is refused while a domain still routes to it
+  (fail closed).
+
+The API is `GET/PUT/DELETE /v1/admin/account/mx` (account Admin, account-scoped
+bearer or the account-admin UI), and the UI panel is the account-level parallel
+of the system-administrator Direct MX editor.
+
+**Reason:** Remote MX reuses the already-shipped, already-tested Dial MX single
+mode — receiver, wire contract, and dialer — and adds only the core-side
+per-account registry and lifecycle. It makes the "bring your own receiver"
+capability available to tenants without a system administrator, and preserves
+every settled invariant: core-dials-receiver, no inbound core port, durable
+truth in the core, one owner per receiver, and no new dependency, service or
+database engine.
+
+**Consequences:**
+
+- The domain Receiving provider menu now offers three direct-SMTP paths:
+  **Direct MX** (installation, system administrator), **Antler MX** (shared,
+  DNS-authenticated, zero-config) and **Remote MX** (account, single-mode
+  bearer). DNS-authenticated shared receivers remain Antler MX / per-domain Dial
+  MX custom; Remote MX does not do DNS auth.
+- The receiver and the `mxdial` wire/dialer code are unchanged; the provider
+  slug `remotemx` carries no `ConfigField`s (the receiver is account-scoped) and
+  the account receiver editor is rendered directly by the UI/API.
+- Subdomains inherit Remote MX like any other receiving configuration; a
+  subdomain may select it independently of its parent.
+- The receiver's SMTP/STARTTLS/verification surface is the receiver container's
+  own environment (single mode), exactly as for the installation Remote
+  receiver; the core stores only the URL, bearer key and private-CA/private-host
+  options.
+
+## Future extension register
 
 - additional inbound transport adapters
 - custom-domain automation improvements

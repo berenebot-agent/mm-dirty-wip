@@ -2600,6 +2600,13 @@ function hideInboxSubview(dlg) {
         input.disabled = value !== 'mx';
       });
     }
+    // The Remote MX panel carries its own account-level form (a separate
+    // endpoint), so it is only shown/hidden with the provider choice; its inputs
+    // stay enabled so an account admin can configure the receiver from here.
+    var remoteMXPanel = dlg.querySelector('[data-remote-mx-panel]');
+    if (remoteMXPanel) {
+      remoteMXPanel.hidden = value !== 'remotemx';
+    }
     dlg.querySelectorAll('.provider-fields').forEach(function (group) {
       var active = group.getAttribute('data-provider') === value;
       group.hidden = !active;

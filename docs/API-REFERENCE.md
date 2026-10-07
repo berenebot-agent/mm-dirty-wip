@@ -184,6 +184,9 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/admin/mx | Get the installation MX receiver settings and live status (System admin session) | admin |
 | PUT | /v1/admin/mx | Set the installation MX receiver settings (System admin session) | admin |
 | DELETE | /v1/admin/mx | Clear the installation MX receiver settings (System admin session) | admin |
+| GET | /v1/admin/account/mx | Get the account Remote MX receiver settings and live status (Admin) | admin |
+| PUT | /v1/admin/account/mx | Set the account Remote MX receiver settings (Admin) | admin |
+| DELETE | /v1/admin/account/mx | Clear the account Remote MX receiver settings (Admin) | admin |
 
 ## Admin: clients
 

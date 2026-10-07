@@ -157,6 +157,9 @@ func (s *Service) ingestMX(ctx context.Context, routingProvider string, in MXIng
 			return MXIngestResult{}, ErrMXDisabled
 		}
 	}
+	// Remote MX routes per recipient to that recipient's own account receiver; a
+	// per-recipient miss is a rejection, not a global disable, so there is no
+	// installation-wide gate here.
 	recipients := in.Recipients
 	if len(recipients) == 0 && strings.TrimSpace(in.Recipient) != "" {
 		recipients = []string{in.Recipient}

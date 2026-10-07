@@ -115,3 +115,21 @@ type InboundTransport interface {
 type IngestPathProvider interface {
 	IngestPath() string
 }
+
+// SelectLabelProvider is implemented by inbound adapters whose provider <select>
+// entry needs a longer, descriptive label than Description(). When absent the
+// UI falls back to Description().
+type SelectLabelProvider interface {
+	SelectLabel() string
+}
+
+// InboundSelectLabel returns the provider-picker label for an inbound transport:
+// its descriptive SelectLabel when it provides one, otherwise its Description.
+func InboundSelectLabel(t InboundTransport) string {
+	if sl, ok := t.(SelectLabelProvider); ok {
+		if label := sl.SelectLabel(); label != "" {
+			return label
+		}
+	}
+	return t.Description()
+}

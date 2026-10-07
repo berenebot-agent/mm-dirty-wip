@@ -87,6 +87,11 @@ provider uses; Dial MX is not a fourth global choice. The installation setting
 also replaces the old core MX environment variables, which are now imported once
 and then ignored.
 
+A domain selecting the account-level **Remote MX** provider (`remotemx`) uses the
+same single-mode session transport, but the core dials the account's own receiver
+instead of a DNS-authenticated shared one. The core runs one such dialer per
+account receiver that is in use; see [MX.md](MX.md).
+
 The core defaults to a dedicated inbound webhook listener on `:8082` (configurable
 with `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`); that
 listener continues to accept the webhook connectors, so do not expose it to the

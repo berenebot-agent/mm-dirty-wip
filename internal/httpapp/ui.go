@@ -60,6 +60,23 @@ type mxSetupView struct {
 	SMTPAddr   string
 }
 
+// remoteMXSetupView is the account's Remote MX receiver panel: the redacted
+// configuration, whether a bearer credential is stored, and the live session
+// state. The bearer secret and private CA are never part of this view. It is
+// shown to account admins in the Remote MX dialog and drives the receiver
+// editor; non-admins see status only.
+type remoteMXSetupView struct {
+	URL           string
+	KeyConfigured bool
+	AllowPrivate  bool
+	CA            string
+	Revision      int64
+	State         string
+	Detail        string
+	Configured    bool
+	Error         string
+}
+
 // mxModeLabel renders the installation receiver mode for the Direct MX panel.
 func mxModeLabel(mode string) string {
 	switch mode {
@@ -212,6 +229,11 @@ type pageData struct {
 	// MXSetup holds the installation Direct MX receiver status for the per-domain
 	// Direct MX dialog. It is shared by every mx-effective domain.
 	MXSetup *mxSetupView
+	// RemoteMXSetup holds the account's Remote MX receiver panel for the
+	// per-domain Remote MX dialog and the account-admin receiver editor. It is
+	// shown to account admins only and carries the URL, live state and a
+	// redacted key-present flag, never the bearer secret.
+	RemoteMXSetup *remoteMXSetupView
 	// DomainParentCandidate maps a domain id to the name of the nearest existing
 	// ancestor domain, for a domain that was added before its parent and is not
 	// linked yet. It lets the sending/receiving provider menus offer "Inherited
@@ -1011,6 +1033,29 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 {{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}{{template "mx-editor" .}}{{end}}{{end}}
 </section>{{end}}
 </form>
+{{if $.RemoteMXSetup}}{{$r := $.RemoteMXSetup}}<section class="mx-setup" data-remote-mx-panel data-provider="remotemx"{{if ne $sel "remotemx"}} hidden{{end}}>
+<h3 class="section-head">Remote MX receiver</h3>
+{{if $r.Configured}}<p class="muted small">This account's own receiver at <code>{{$r.URL}}</code> · <span class="pill{{if ne $r.State "active"}} amber{{end}}">{{mxStateLabel $r.State}}</span>{{if $r.Detail}} · {{$r.Detail}}{{end}}</p>
+<p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No DNS key record is needed: your receiver authenticates this core with its bearer key.</p>
+{{else}}<p class="muted small">No Remote MX receiver is configured for this account yet. Add your own receiver below, then select it here.</p>{{end}}
+{{if $.Principal.Admin}}<details class="remote-mx-editor"{{if or $r.Error (not $r.Configured)}} open{{end}}><summary>Account receiver settings</summary>
+{{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
+<form method="post" action="/ui/account/mx" class="cfg-form" autocomplete="off" style="margin-top:8px">
+<input type="hidden" name="_csrf" value="{{$.CSRF}}">
+<input type="hidden" name="rx_revision" value="{{$r.Revision}}">
+<label>Receiver URL</label>
+<input name="rx_url" placeholder="https://mx.example.com" value="{{$r.URL}}">
+<p class="muted small">The HTTPS (or HTTP, if private) origin of your standalone Dial MX receiver, running with <code>DIALMX_MODE=single</code>.</p>
+<label>Bearer key{{if $r.KeyConfigured}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label>
+<input name="rx_bearer_key" type="password" autocomplete="off" placeholder="{{if $r.KeyConfigured}}unchanged{{else}}the receiver's DIALMX_CORE_KEY{{end}}">
+<label class="inherit-option"><input type="checkbox" name="rx_allow_private" value="1"{{if $r.AllowPrivate}} checked{{end}}> <span>Allow a private / LAN receiver (loopback or RFC1918 destination)</span></label>
+<label>Private CA bundle (PEM, optional)</label>
+<textarea name="rx_ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{$r.CA}}</textarea>
+<div class="dialog-actions"><button class="secondary" type="submit">Save receiver</button></div>
+</form>
+{{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><button class="secondary danger" type="submit">Remove receiver</button></form>{{end}}
+</details>{{end}}
+</section>{{end}}
 {{with index $.DialMXSetup $d.ID}}<section class="dialmx-setup">
 <h3 class="section-head">{{if eq .Service "antler"}}Antler MX{{else}}Dial MX{{end}} key &amp; DNS</h3>
 {{if .ContactEmail}}<p class="muted small">Contact email: <code>{{.ContactEmail}}</code></p>{{end}}
@@ -1300,6 +1345,37 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			mxSetup.Editors[d.ID] = mxReceiverEditorView{DomainID: d.ID, CSRF: csrf(r), MXForm: form, MXStatus: status, MXIncludedSupported: status.IncludedSupported}
 		}
 	}
+	// Remote MX: an account-owned single-mode receiver. Build the panel when the
+	// account admin's receiving editor set offers the remotemx provider, or when
+	// the provider is already configured (so status still renders for a
+	// non-admin viewing a domain that uses it). The bearer secret is never read
+	// here.
+	var remoteMXSetup *remoteMXSetupView
+	if p.Admin {
+		settings, err := s.Service.GetAccountMXReceiver(ctx, p.AccountID)
+		if err != nil {
+			s.Log.Error("cannot read Remote MX receiver settings", "error", err)
+			http.Error(w, "cannot read Remote MX receiver settings", 500)
+			return
+		}
+		view := &remoteMXSetupView{
+			URL:           settings.URL,
+			KeyConfigured: settings.KeyConfigured,
+			AllowPrivate:  settings.AllowPrivate,
+			CA:            settings.CA,
+			Revision:      settings.Revision,
+			Configured:    settings.URL != "",
+			Error:         r.URL.Query().Get("rx_error"),
+		}
+		if s.Service.RemoteMXRuntime != nil {
+			st := s.Service.RemoteMXRuntime.RemoteMXStatus(ctx, p.AccountID)
+			view.State, view.Detail = st.State, st.Detail
+		} else if view.Configured {
+			view.State = app.MXStateDisabled
+		}
+		remoteMXSetup = view
+	}
+
 	notice, secretLabel, secret := r.URL.Query().Get("notice"), "", ""
 	workerCode, workerWebhook := "", ""
 	// An external-alias connector flash is consumed only after the alias set is
@@ -1378,7 +1454,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, RemoteMXSetup: remoteMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {

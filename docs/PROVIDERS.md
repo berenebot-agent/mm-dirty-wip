@@ -124,6 +124,36 @@ proof. Other domains may continue using local/remote MX or webhook providers.
 Full setup, the session protocol, and known limitations are in
 [docs/DIALMX.md](DIALMX.md).
 
+## Inbound: Remote MX
+
+**Remote MX** is the account-owned direct-SMTP receiver: an account admin runs
+their own standalone Dial MX receiver (in `DIALMX_MODE=single`, authenticated by
+a shared bearer key) and points any of the account's domains at it. It is the
+per-account counterpart of the installation **Direct MX** receiver, with the
+same "configure once, select per domain" flow.
+
+1. In the domain's **Receiving → Remote MX** panel, an account admin enters the
+   receiver's HTTPS (or `http`, if the private/LAN option is ticked) base URL and
+   the receiver's `DIALMX_CORE_KEY`. This is stored once for the account.
+2. Any domain in the account then selects **Receiving → Remote MX**.
+3. Point each domain's MX record at the receiver's advertised SMTP hostname.
+
+One physical single-mode receiver belongs to exactly one account; registering
+the same receiver URL under a second account is rejected. No DNS `_mailmoose-mx`
+record is needed — the receiver authenticates the core with its bearer key.
+Removing the account receiver is refused while a domain still routes to it. The
+same operations are available through the account API:
+
+```http
+GET    /v1/admin/account/mx
+PUT    /v1/admin/account/mx
+DELETE /v1/admin/account/mx
+```
+
+Full receiver deployment, the single-mode session contract, and limitations are
+in [docs/DIALMX.md](DIALMX.md); the receiving-provider overview is in
+[docs/MX.md](MX.md).
+
 ---
 
 ## Outbound

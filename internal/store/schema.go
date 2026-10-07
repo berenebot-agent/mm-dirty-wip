@@ -1417,3 +1417,24 @@ const migration047 = `
 ALTER TABLE inboxes ADD COLUMN storage_quota_bytes INTEGER;
 ALTER TABLE inboxes ADD COLUMN storage_used_bytes INTEGER;
 `
+
+// migration048 adds account_mx_receivers, the per-account Remote MX receiver
+// configuration. It mirrors mx_settings but is scoped to one account: exactly
+// one row per account (account_id is the primary key), editable by an account
+// admin rather than a system administrator. The core dials the account's own
+// standalone receiver in Dial MX single mode, so routing fields (receiver_url)
+// are plaintext for a status read while the bearer credential and the optional
+// private CA bundle / private-destination opt-in are encrypted at rest with
+// APP_ENCRYPTION_KEY. revision is the optimistic-concurrency token a save must
+// present and the runtime reconciliation generation.
+const migration048 = `
+CREATE TABLE account_mx_receivers (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  receiver_url TEXT NOT NULL DEFAULT '',
+  encrypted_secret TEXT NOT NULL DEFAULT '',
+  encrypted_config TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`
