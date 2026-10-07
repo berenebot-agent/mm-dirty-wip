@@ -198,6 +198,9 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/admin/accounts/{id}/quota", s.withSession(s.withCSRF(s.uiAdminSetQuota)))
 	m.HandleFunc("POST /ui/domains/{id}/mx", s.withSession(s.withCSRF(s.uiAdminMXSave)))
 	m.HandleFunc("POST /ui/domains/{id}/mx/clear", s.withSession(s.withCSRF(s.uiAdminMXClear)))
+	// Account-owned Remote MX receiver (account Admin).
+	m.HandleFunc("POST /ui/account/mx", s.withSession(s.withCSRF(s.uiAccountMXSave)))
+	m.HandleFunc("POST /ui/account/mx/clear", s.withSession(s.withCSRF(s.uiAccountMXClear)))
 	// Account page: mailer and mailbox-operator management.
 	m.HandleFunc("POST /ui/account/mailer", s.withSession(s.withCSRF(s.uiAccountMailer)))
 	m.HandleFunc("POST /ui/account/operators/invites", s.withSession(s.withCSRF(s.uiOperatorCreateInvite)))
@@ -331,6 +334,9 @@ var v1Routes = []apiRoute{
 	{"GET /v1/limits", (*Server).apiLimits},
 	{"GET /v1/account/settings", (*Server).apiAccountSettings},
 	{"PATCH /v1/account/settings", (*Server).apiAccountSettings},
+	{"GET /v1/admin/account/mx", (*Server).apiAccountMXReceiver},
+	{"PUT /v1/admin/account/mx", (*Server).apiAccountMXReceiver},
+	{"DELETE /v1/admin/account/mx", (*Server).apiAccountMXReceiver},
 	{"GET /v1/inboxes", (*Server).apiInboxes},
 	{"POST /v1/inboxes", (*Server).apiInboxes},
 	{"GET /v1/inboxes/{id}", (*Server).apiInbox},
