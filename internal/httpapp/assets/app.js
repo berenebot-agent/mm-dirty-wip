@@ -871,85 +871,30 @@ var initSenderEditor = (function () {
   };
 })();
 
-// aliasEditors maps an inbox dialog id ("add"/"edit") to its active alias
-// editor, so the shared popup can commit into the right list.
-var aliasEditors = {};
-
-// aliasDialog is the single shared add/edit popup. It drives whichever inbox
-// dialog is open (the Add-inbox and Edit-inbox dialogs each register an editor
-// with initAliasEditor and delegate their popup interaction here).
-var aliasDialog = (function () {
-  var dlg = document.getElementById('alias-dialog');
-  if (!dlg) {
-    return { open: function () {}, close: function () {}, error: function () {} };
-  }
-  var titleEl = document.getElementById('alias-dialog-title');
-  var errEl = document.getElementById('alias-error');
-  var nameEl = document.getElementById('alias-name');
-  var localEl = document.getElementById('alias-local');
-  var domainEl = document.getElementById('alias-domain');
-  var saveEl = document.getElementById('alias-save');
-  var cancelEl = document.getElementById('alias-cancel');
-  var current = null;
-
-  function save() {
-    if (!current) {
-      return;
-    }
-    current.editor.commit(current.row, nameEl.value, localEl.value, domainEl.value);
-  }
-  function onKey(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      save();
-    }
-  }
-  saveEl.addEventListener('click', save);
-  cancelEl.addEventListener('click', function () {
-    dlg.close();
-  });
-  nameEl.addEventListener('keydown', onKey);
-  localEl.addEventListener('keydown', onKey);
-
-  return {
-    open: function (editor, row, name, local, domain) {
-      current = { editor: editor, row: row };
-      errEl.textContent = '';
-      errEl.hidden = true;
-      titleEl.textContent = row ? 'Edit alias' : 'Add alias';
-      saveEl.textContent = row ? 'Save' : 'Add';
-      nameEl.value = name || '';
-      localEl.value = local || '';
-      if (domain) {
-        domainEl.value = domain;
-      }
-      dlg.showModal();
-      nameEl.focus();
-    },
-    close: function () {
-      dlg.close();
-    },
-    error: function (msg) {
-      errEl.textContent = msg;
-      errEl.hidden = false;
-    }
-  };
-})();
-
-// initAliasEditor renders an inbox dialog's alias list (a name with the email
-// address beneath it, plus edit and remove buttons) and delegates add/edit to
-// the shared aliasDialog. Each alias is submitted as a repeated `alias` field
-// (the full address) plus a parallel repeated `alias_name` field, zipped by
-// index server-side.
+// initAliasEditor renders an inbox dialog's inline alias editor: a list of
+// aliases (a sender name with the email address beneath it, plus edit and
+// remove buttons) and an add/edit form inside the same panel. Each alias is
+// submitted as a repeated `alias` field (the full address) plus a parallel
+// repeated `alias_name` field, zipped by index server-side.
 var initAliasEditor = (function () {
   return function (opts) {
     var list = opts.list;
+    var form = opts.form || {};
+    var editing = null;
 
     function rows() {
       if (!list) {
         return [];
       }
       return Array.prototype.slice.call(list.querySelectorAll('li.alias-row'));
+    }
+
+    function setError(msg) {
+      if (!form.error) {
+        return;
+      }
+      form.error.textContent = msg || '';
+      form.error.hidden = !msg;
     }
 
     function refreshEmpty() {
@@ -1018,7 +963,7 @@ var initAliasEditor = (function () {
       var edit = iconButton('', 'Edit', pencilSVG);
       edit.addEventListener('click', function () {
         var at = address.lastIndexOf('@');
-        aliasDialog.open(aliasEditors[opts.id], li, name, at > 0 ? address.slice(0, at) : address, at > 0 ? address.slice(at + 1) : '');
+        openEditor(li, name, at > 0 ? address.slice(0, at) : address, at > 0 ? address.slice(at + 1) : '');
       });
       var remove = iconButton('danger', 'Remove', crossSVG);
       remove.addEventListener('click', function () {
@@ -1034,60 +979,83 @@ var initAliasEditor = (function () {
       return li;
     }
 
-    function splitAddress(address) {
-      var at = address.lastIndexOf('@');
-      if (at <= 0) {
-        return { local: address, domain: '' };
+    function openEditor(row, name, local, domain) {
+      editing = row || null;
+      setError('');
+      if (form.name) {
+        form.name.value = name || '';
       }
-      return { local: address.slice(0, at), domain: address.slice(at + 1) };
+      if (form.local) {
+        form.local.value = local || '';
+      }
+      if (form.domain && domain) {
+        form.domain.value = domain;
+      }
+      if (form.save) {
+        form.save.textContent = editing ? 'Save' : 'Add';
+      }
+      if (opts.editor) {
+        opts.editor.hidden = false;
+      }
+      if (form.name) {
+        form.name.focus();
+      }
     }
 
-    function commit(row, rawName, rawLocal, rawDomain) {
-      var name = (rawName || '').trim();
-      var local = (rawLocal || '').trim().toLowerCase();
-      var domain = (rawDomain || '').trim().toLowerCase();
+    function closeEditor() {
+      editing = null;
+      setError('');
+      if (opts.editor) {
+        opts.editor.hidden = true;
+      }
+    }
+
+    function commit() {
+      var name = (form.name ? form.name.value : '').trim();
+      var local = (form.local ? form.local.value : '').trim().toLowerCase();
+      var domain = (form.domain ? form.domain.value : '').trim().toLowerCase();
       if (!name) {
-        aliasDialog.error('Name is required.');
+        setError('Name is required.');
         return;
       }
       if (name.length > 128) {
-        aliasDialog.error('Name must be 128 characters or fewer.');
+        setError('Name must be 128 characters or fewer.');
         return;
       }
       if (name.indexOf(',') !== -1 || /[\r\n]/.test(name) || /[\x00-\x1f\x7f]/.test(name)) {
-        aliasDialog.error('Name may not contain commas, newlines or control characters.');
+        setError('Name may not contain commas, newlines or control characters.');
         return;
       }
       if (!local || local.indexOf('@') !== -1 || local.indexOf(' ') !== -1) {
-        aliasDialog.error('Enter a valid email local part.');
+        setError('Enter a valid email local part.');
         return;
       }
       if (!domain) {
-        aliasDialog.error('Choose a domain.');
+        setError('Choose a domain.');
         return;
       }
       var address = local + '@' + domain;
       var duplicate = rows().some(function (r) {
-        return r !== row && r.dataset.address === address;
+        return r !== editing && r.dataset.address === address;
       });
       if (duplicate) {
-        aliasDialog.error('That alias already exists.');
+        setError('That alias already exists.');
         return;
       }
-      if (row) {
-        row.dataset.address = address;
-        row.dataset.name = name;
-        var nameEl = row.querySelector('.alias-row-name');
+      if (editing) {
+        editing.dataset.address = address;
+        editing.dataset.name = name;
+        var nameEl = editing.querySelector('.alias-row-name');
         nameEl.textContent = name;
         nameEl.classList.remove('muted');
-        row.querySelector('.alias-row-addr').textContent = address;
-        row.querySelector('input[name=alias_name]').value = name;
-        row.querySelector('input[name=alias]').value = address;
+        editing.querySelector('.alias-row-addr').textContent = address;
+        editing.querySelector('input[name=alias_name]').value = name;
+        editing.querySelector('input[name=alias]').value = address;
       } else if (list) {
         list.appendChild(makeRow(name, address));
       }
+      closeEditor();
       refreshEmpty();
-      aliasDialog.close();
     }
 
     // setAliases takes the comma-joined address list and an optional parallel
@@ -1110,21 +1078,43 @@ var initAliasEditor = (function () {
     }
 
     function reset() {
+      closeEditor();
       if (list) {
         list.innerHTML = '';
+      }
+      if (form.name) {
+        form.name.value = '';
+      }
+      if (form.local) {
+        form.local.value = '';
       }
       refreshEmpty();
     }
 
     if (opts.addBtn) {
       opts.addBtn.addEventListener('click', function () {
-        var domainEl = document.getElementById('alias-domain');
-        aliasDialog.open(aliasEditors[opts.id], null, '', '', domainEl ? domainEl.value : '');
+        var domainEl = form.domain;
+        var def = domainEl && domainEl.options.length ? domainEl.options[0].value : '';
+        openEditor(null, '', '', def);
       });
     }
+    if (form.save) {
+      form.save.addEventListener('click', commit);
+    }
+    if (form.cancel) {
+      form.cancel.addEventListener('click', closeEditor);
+    }
+    [form.name, form.local].forEach(function (el) {
+      if (el) {
+        el.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          }
+        });
+      }
+    });
 
-    var editor = { commit: commit };
-    aliasEditors[opts.id] = editor;
     refreshEmpty();
 
     return {
@@ -1245,12 +1235,21 @@ function deleteExternalAlias(inboxID, aliasID, address) {
   form.submit();
 }
 
-// openExternalAliasDialog shows the connector popup for one external alias. The
-// dialogs are rendered server-side on the dashboard, keyed by alias id.
-function openExternalAliasDialog(aliasID) {
-  var dlg = document.getElementById('external-alias-sending-dialog-' + aliasID);
-  if (dlg && !dlg.open) {
-    dlg.showModal();
+// openExternalAliasDialog opens the external-alias sending editor as a sub-view
+// of the inbox settings dialog. The editors are rendered server-side on the
+// dashboard, keyed by alias id.
+function openExternalAliasDialog(dlg, aliasID) {
+  if (!dlg || !aliasID) {
+    return;
+  }
+  var found = false;
+  dlg.querySelectorAll('.extalias-sending-editor').forEach(function (ed) {
+    var on = ed.getAttribute('data-alias-id') === aliasID;
+    ed.hidden = !on;
+    found = found || on;
+  });
+  if (found) {
+    showInboxSubview(dlg, 'ext-alias-sending');
   }
 }
 
@@ -1386,8 +1385,16 @@ function aliasNameByAddress(list) {
   }
   var aliasEditor = initAliasEditor({
     list: addAliasList,
-    id: 'add',
     addBtn: document.getElementById('inbox-add-alias-add'),
+    editor: document.getElementById('inbox-add-alias-editor'),
+    form: {
+      name: document.getElementById('inbox-add-alias-name'),
+      local: document.getElementById('inbox-add-alias-local'),
+      domain: document.getElementById('inbox-add-alias-domain'),
+      error: document.getElementById('inbox-add-alias-error'),
+      save: document.getElementById('inbox-add-alias-save'),
+      cancel: document.getElementById('inbox-add-alias-cancel')
+    },
     onChange: refreshAddSender
   });
   var add = document.getElementById('add-inbox');
@@ -1410,6 +1417,7 @@ function aliasNameByAddress(list) {
       dlg.close();
     });
   }
+  bindInboxSettingsShell(dlg);
 })();
 
 (function () {
@@ -1684,40 +1692,11 @@ function clearUrlParams(names) {
       autoTrashSection.hidden = !autoTrash.checked;
     });
   }
-  // The Connectors tab keeps its delivery-action controls in this form.
+  // The Connectors panel keeps its delivery-action controls in this form.
   var connectorsForm = document.getElementById('inbox-connectors-form');
-  var inboxSaveButton = document.getElementById('inbox-edit-save');
-  var inboxAutoActions = null;
-  if (connectorsForm) {
-    var autoActionsSave = document.getElementById('inbox-connectors-save');
-    if (autoActionsSave) {
-      autoActionsSave.remove();
-    }
-    var autoActionsHeading = Array.prototype.find.call(connectorsForm.children, function (el) {
-      return el.matches('h3.section-head') && el.textContent.trim() === 'After an agent handles mail';
-    });
-    if (autoActionsHeading) {
-      inboxAutoActions = document.createElement('div');
-      inboxAutoActions.className = 'inbox-auto-actions';
-      connectorsForm.insertBefore(inboxAutoActions, autoActionsHeading);
-      while (inboxAutoActions.nextSibling) {
-        inboxAutoActions.appendChild(inboxAutoActions.nextSibling);
-      }
-    }
-  }
-  function setConnectorsFormAction(id) {
-    if (connectorsForm) {
-      connectorsForm.action = '/ui/inboxes/' + encodeURIComponent(id) + '/auto-actions';
-    }
-  }
   var connectorList = document.getElementById('inbox-connectors-list');
   var connectorEditor = document.getElementById('inbox-connector-editor');
-  // The editor creates its own forms, separate from inbox auto-actions.
-  if (connectorEditor && connectorsForm) {
-    connectorsForm.parentNode.insertBefore(connectorEditor, connectorsForm);
-  }
   var connectorAdd = document.getElementById('inbox-connector-add');
-  var connectorHeader = connectorAdd ? connectorAdd.closest('.card-head') : null;
   var editConnectors = [];
   var csrfValue = (form.querySelector('[name=_csrf]') || {}).value || '';
   var editor = initSenderEditor({
@@ -1731,68 +1710,39 @@ function clearUrlParams(names) {
     mxSection: document.getElementById('inbox-edit-require-auth-section'),
     addBtn: document.getElementById('inbox-sender-add')
   });
-  // suspendedFromInbox tracks whether an external-alias secondary (Add, Edit
-  // or Connector popup) was launched from inbox settings. Cancelling it
-  // resumes the inbox edit dialog on the Aliases tab instead of dropping to
-  // the bare dashboard. Submitting clears the flag: the page navigates and the
-  // server redirect (/?inbox=) takes over the return path.
-  var suspendedFromInbox = false;
-  function suspendInbox() {
-    suspendedFromInbox = true;
-    if (dlg.open) {
-      dlg.close();
-    }
-  }
-  // A genuine dismissal (Cancel, Esc, backdrop) drops the URL params that
-  // reopened this dialog. A suspension for a secondary popup, or a form submit
-  // that follows a server redirect, must not: those paths keep the params so
-  // the popup can resume this dialog or the redirect can reopen it.
+  // The inbox settings shell owns section navigation and sub-views; see
+  // bindInboxSettingsShell.
   var inboxSubmitting = false;
+  var inboxSaveButton = document.getElementById('inbox-edit-save');
+  // A genuine dismissal drops the URL params that reopened the dialog. A submit
+  // navigates, so the browser ignores the replace and the server redirect takes
+  // over the return path.
   dlg.addEventListener('close', function () {
-    if (suspendedFromInbox || inboxSubmitting) {
+    if (inboxSubmitting) {
       return;
     }
-    clearUrlParams(['inbox', 'inbox_tab']);
+    clearUrlParams(['inbox', 'inbox_tab', 'alias', 'provider']);
   });
   form.addEventListener('submit', function () {
     inboxSubmitting = true;
   });
-  // Connector-tab save submits its dedicated form to the auto-actions endpoint.
   if (connectorsForm) {
     connectorsForm.addEventListener('submit', function () {
       inboxSubmitting = true;
     });
   }
-  if (inboxSaveButton) {
+  // On the Connectors panel the footer Save posts the auto-actions form, which
+  // is separate from the inbox identity form.
+  if (inboxSaveButton && connectorsForm) {
     inboxSaveButton.addEventListener('click', function (event) {
-      if (!inboxAutoActions || dlg.querySelector('[data-inbox-panel=connectors]').hidden) {
-        return;
-      }
-      if (connectorEditor && !connectorEditor.classList.contains('connector-view-hidden')) {
-        event.preventDefault();
-        var connectorEditForm = connectorEditor.querySelector('#inbox-connector-edit-form');
-        if (connectorEditForm) {
-          connectorEditForm.requestSubmit();
-        }
+      var panel = dlg.querySelector('[data-inbox-panel=connectors]');
+      if (!panel || panel.hidden) {
         return;
       }
       event.preventDefault();
       inboxSubmitting = true;
       connectorsForm.requestSubmit();
     });
-  }
-  function resumeInbox() {
-    if (!suspendedFromInbox) {
-      return;
-    }
-    suspendedFromInbox = false;
-    if (!dlg.open) {
-      dlg.showModal();
-    }
-    var tab = dlg.querySelector('[data-inbox-tab=aliases]');
-    if (tab) {
-      tab.click();
-    }
   }
   var editAliasList = document.getElementById('inbox-alias-list');
   var editExternalList = document.getElementById('inbox-external-alias-list');
@@ -1822,8 +1772,16 @@ function clearUrlParams(names) {
   }
   var aliasEditor = initAliasEditor({
     list: editAliasList,
-    id: 'edit',
     addBtn: document.getElementById('inbox-alias-add'),
+    editor: document.getElementById('inbox-alias-editor'),
+    form: {
+      name: document.getElementById('inbox-alias-editor-name'),
+      local: document.getElementById('inbox-alias-editor-local'),
+      domain: document.getElementById('inbox-alias-editor-domain'),
+      error: document.getElementById('inbox-alias-editor-error'),
+      save: document.getElementById('inbox-alias-editor-save'),
+      cancel: document.getElementById('inbox-alias-editor-cancel')
+    },
     onChange: refreshEditSender
   });
 
@@ -1844,23 +1802,16 @@ function clearUrlParams(names) {
   }
 
   function setConnectorEditorMode(editing) {
+    // The connector editor is an in-modal sub-view: the whole panels area
+    // switches to it, so the footer Save follows the edit form.
     if (inboxSaveButton && connectorEditor) {
       inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-connectors-form');
     }
-    if (inboxAutoActions) {
-      inboxAutoActions.classList.toggle('connector-view-hidden', !!editing);
+    if (editing) {
+      showInboxSubview(dlg, 'connectors');
     }
-    if (connectorList) {
-      connectorList.classList.toggle('connector-view-hidden', !!editing);
-    }
-    if (connectorHeader) {
-      connectorHeader.classList.toggle('connector-view-hidden', !!editing);
-    }
-    if (connectorEditor) {
-      connectorEditor.classList.toggle('connector-view-hidden', !editing);
-      if (!editing) {
-        connectorEditor.textContent = '';
-      }
+    if (connectorEditor && !editing) {
+      connectorEditor.textContent = '';
     }
   }
 
@@ -2044,7 +1995,9 @@ function clearUrlParams(names) {
       var id = encodeURIComponent(btn.dataset.id || '');
       editInboxID = btn.dataset.id || '';
       form.action = '/ui/inboxes/' + id + '/edit';
-      setConnectorsFormAction(btn.dataset.id || '');
+      if (connectorsForm) {
+        connectorsForm.action = '/ui/inboxes/' + id + '/auto-actions';
+      }
       if (deleteBtn) {
         deleteBtn.dataset.id = btn.dataset.id || '';
         deleteBtn.dataset.address = btn.dataset.address || '';
@@ -2163,11 +2116,10 @@ function clearUrlParams(names) {
     });
   });
 
-  var extDlg = document.getElementById('external-alias-dialog');
+  var extEditor = document.getElementById('inbox-external-alias-editor');
   var extAdd = document.getElementById('inbox-external-alias-add');
-  var extTitle = document.getElementById('external-alias-dialog-title');
   var extSave = document.getElementById('external-alias-save');
-  function resetExternalAliasDialog() {
+  function resetExternalAliasEditor() {
     var err = document.getElementById('external-alias-error');
     if (err) {
       err.hidden = true;
@@ -2182,9 +2134,6 @@ function clearUrlParams(names) {
       addrEl.value = '';
       addrEl.disabled = false;
     }
-    if (extTitle) {
-      extTitle.textContent = 'Add external sending alias';
-    }
     if (extSave) {
       extSave.textContent = 'Add external alias';
     }
@@ -2193,13 +2142,13 @@ function clearUrlParams(names) {
       extForm.action = '/ui/inboxes/' + encodeURIComponent(editInboxID) + '/external-aliases';
     }
   }
-  // openExternalAliasEditor reuses the add dialog for renaming: the address is
+  // openExternalAliasEditor reuses the add editor for renaming: the address is
   // immutable, so it is shown disabled and only the sender name is submitted.
   function openExternalAliasEditor(aliasID, name, address) {
-    if (!extDlg) {
+    if (!extEditor) {
       return;
     }
-    resetExternalAliasDialog();
+    resetExternalAliasEditor();
     var nameEl = document.getElementById('external-alias-name');
     var addrEl = document.getElementById('external-alias-address');
     if (nameEl) {
@@ -2209,9 +2158,6 @@ function clearUrlParams(names) {
       addrEl.value = address || '';
       addrEl.disabled = true;
     }
-    if (extTitle) {
-      extTitle.textContent = 'Edit external alias';
-    }
     if (extSave) {
       extSave.textContent = 'Save';
     }
@@ -2219,54 +2165,33 @@ function clearUrlParams(names) {
     if (extForm) {
       extForm.action = '/ui/inboxes/' + encodeURIComponent(editInboxID) + '/external-aliases/' + encodeURIComponent(aliasID) + '/edit';
     }
-    suspendInbox();
-    extDlg.showModal();
+    extEditor.hidden = false;
     if (nameEl) {
       nameEl.focus();
     }
   }
-  if (extDlg && extAdd) {
+  if (extEditor && extAdd) {
     extAdd.addEventListener('click', function () {
-      resetExternalAliasDialog();
-      suspendInbox();
-      extDlg.showModal();
+      resetExternalAliasEditor();
+      extEditor.hidden = false;
+      var nameEl = document.getElementById('external-alias-name');
+      if (nameEl) {
+        nameEl.focus();
+      }
     });
     var extCancel = document.getElementById('external-alias-cancel');
     if (extCancel) {
       extCancel.addEventListener('click', function () {
-        extDlg.close();
+        extEditor.hidden = true;
       });
     }
-  }
-
-  // Closing a secondary (Cancel, Esc, backdrop) resumes the suspended inbox
-  // dialog; submitting clears the flag because the page navigates and the
-  // server redirect takes over the return path.
-  if (extDlg) {
-    extDlg.addEventListener('close', resumeInbox);
     var extFormEl = document.getElementById('external-alias-form');
     if (extFormEl) {
       extFormEl.addEventListener('submit', function () {
-        suspendedFromInbox = false;
+        inboxSubmitting = true;
       });
     }
   }
-  document.querySelectorAll('dialog[id^="external-alias-sending-dialog-"]').forEach(function (connDlg) {
-    connDlg.addEventListener('close', function () {
-      var wasSuspended = suspendedFromInbox;
-      resumeInbox();
-      // If this popup resumed the inbox dialog, keep the params so the inbox
-      // dialog stays open. Only clear when it was a standalone URL-opened popup.
-      if (!wasSuspended) {
-        clearUrlParams(['alias', 'provider']);
-      }
-    });
-    connDlg.querySelectorAll('form').forEach(function (f) {
-      f.addEventListener('submit', function () {
-        suspendedFromInbox = false;
-      });
-    });
-  });
   if (editExternalList) {
     editExternalList.addEventListener('click', function (e) {
       var edit = e.target.closest('.external-alias-edit');
@@ -2278,8 +2203,7 @@ function clearUrlParams(names) {
       var configure = e.target.closest('.external-alias-configure');
       if (configure) {
         e.preventDefault();
-        suspendInbox();
-        openExternalAliasDialog(configure.dataset.alias);
+        openExternalAliasDialog(dlg, configure.dataset.alias);
         return;
       }
       var remove = e.target.closest('.external-alias-remove');
@@ -2304,14 +2228,15 @@ function clearUrlParams(names) {
     });
   }
 
-  // Reopen the inbox edit dialog on its Aliases tab when the dashboard was
-  // loaded with an inbox to open (e.g. returning from a connector save). If a
-  // connector popup is also pending (validation error or fresh create), the
-  // inbox suspends first so cancelling the popup resumes it. The tab listeners
-  // are attached by a later IIFE, so defer past script execution.
+  // Reopen the inbox edit dialog on the section named in the URL when the
+  // dashboard was loaded with an inbox to open (e.g. returning from a connector
+  // or alias save). An external-alias connector flash opens its sending
+  // sub-view. The shell's tab listeners are attached by a later script block, so
+  // defer past script execution.
   var openCard = document.querySelector('[data-open-inbox]');
   var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
   var openInboxTab = openCard ? (openCard.getAttribute('data-open-inbox-tab') || 'aliases') : 'aliases';
+  var openAlias = openCard ? (openCard.getAttribute('data-open-alias') || '') : '';
   if (openInbox) {
     setTimeout(function () {
       var target = null;
@@ -2328,72 +2253,120 @@ function clearUrlParams(names) {
         }
         var pending = document.querySelector('.domain-dialog[data-open="1"]');
         if (pending && !pending.open && typeof pending.showModal === 'function') {
-          suspendInbox();
           pending.showModal();
+        }
+        if (openAlias) {
+          openExternalAliasDialog(dlg, openAlias);
         }
       }
     }, 0);
   }
 })();
 
-// Tabbed dialog panels shared by the add and edit inbox dialogs.
-(function () {
-  document.querySelectorAll('[data-inbox-tabs]').forEach(function (bar) {
-    var dlg = bar.closest('dialog');
-    if (!dlg) {
-      return;
-    }
-    var tabs = bar.querySelectorAll('[data-inbox-tab]');
-    var panels = dlg.querySelectorAll('[data-inbox-panel]');
+// bindInboxSettingsShell wires the shared full-height inbox settings shell used
+// by both the Add and Edit dialogs: vertical section navigation, a single
+// scrollable panel area, in-modal sub-views (connector editor, external-alias
+// sending) and a single footer save bar. It returns nothing and is idempotent
+// per dialog.
+function bindInboxSettingsShell(dlg) {
+  if (!dlg || dlg._inboxShellBound) {
+    return;
+  }
+  dlg._inboxShellBound = true;
+  var bar = dlg.querySelector('[data-inbox-tabs]');
+  if (!bar) {
+    return;
+  }
+  var tabs = bar.querySelectorAll('[data-inbox-tab]');
 
-    function activate(name) {
-      tabs.forEach(function (t) {
-        var on = t.getAttribute('data-inbox-tab') === name;
-        t.classList.toggle('active', on);
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
-      });
-      panels.forEach(function (p) {
-        p.hidden = p.getAttribute('data-inbox-panel') !== name;
-      });
-      // The Aliases tab needs room for the alias rows and action buttons;
-      // other tabs stay narrow for a tidier form layout.
-      if (dlg.id === 'inbox-dialog') {
-        dlg.classList.toggle('inbox-dialog--wide', name === 'aliases' || name === 'connectors');
-      }
-      if (dlg.id === 'inbox-edit-dialog') {
-        dlg.classList.add('inbox-dialog--wide');
-        // The dialog's single Save button submits the active tab's form.
-        var inboxSave = dlg.querySelector('#inbox-edit-save');
-        if (inboxSave) {
-          inboxSave.hidden = false;
-          inboxSave.textContent = 'Save';
-          inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
-        }
-      }
-    }
-
-    tabs.forEach(function (t) {
-      t.addEventListener('click', function () {
-        activate(t.getAttribute('data-inbox-tab'));
-      });
+  function activate(name) {
+    // Leaving a panel always drops back out of any sub-view.
+    dlg.classList.remove('inbox-settings--subview');
+    dlg.querySelectorAll('.inbox-subview.active').forEach(function (v) {
+      v.classList.remove('active');
     });
-
-    dlg._resetTabs = function () {
-      if (tabs.length) {
-        activate(tabs[0].getAttribute('data-inbox-tab'));
-      }
-    };
-
-    var form = dlg.querySelector('form');
-    if (form) {
-      form.addEventListener('invalid', function (e) {
-        var panel = e.target.closest ? e.target.closest('[data-inbox-panel]') : null;
-        if (panel) {
-          activate(panel.getAttribute('data-inbox-panel'));
-        }
-      }, true);
+    tabs.forEach(function (t) {
+      var on = t.getAttribute('data-inbox-tab') === name;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    dlg.querySelectorAll('[data-inbox-panel]').forEach(function (p) {
+      p.hidden = p.getAttribute('data-inbox-panel') !== name;
+    });
+    var inboxSave = dlg.querySelector('#inbox-edit-save');
+    if (inboxSave) {
+      inboxSave.hidden = false;
+      inboxSave.textContent = 'Save';
+      inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
     }
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      activate(t.getAttribute('data-inbox-tab'));
+    });
   });
+
+  dlg._resetTabs = function () {
+    if (tabs.length) {
+      activate(tabs[0].getAttribute('data-inbox-tab'));
+    }
+  };
+
+  // A required field in a hidden panel (e.g. a provider form posted from the
+  // footer) surfaces its panel rather than failing silently.
+  dlg.querySelectorAll('form').forEach(function (form) {
+    form.addEventListener('invalid', function (e) {
+      var panel = e.target.closest ? e.target.closest('[data-inbox-panel]') : null;
+      if (panel) {
+        activate(panel.getAttribute('data-inbox-panel'));
+      }
+    }, true);
+  });
+
+  dlg.querySelectorAll('.inbox-close').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      dlg.close();
+    });
+  });
+  dlg.querySelectorAll('.inbox-subview-back').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      hideInboxSubview(dlg);
+    });
+  });
+}
+
+// showInboxSubview switches the whole panels area to a sub-view (the connector
+// editor or the external-alias sending editor) and marks its footer submit so
+// only one Save is ever shown.
+function showInboxSubview(dlg, name) {
+  if (!dlg) {
+    return;
+  }
+  dlg.querySelectorAll('.inbox-subview').forEach(function (v) {
+    v.classList.toggle('active', v.getAttribute('data-inbox-subview') === name);
+  });
+  dlg.classList.add('inbox-settings--subview');
+}
+
+// hideInboxSubview returns from a sub-view to the current section panel.
+function hideInboxSubview(dlg) {
+  if (!dlg) {
+    return;
+  }
+  dlg.classList.remove('inbox-settings--subview');
+  dlg.querySelectorAll('.inbox-subview.active').forEach(function (v) {
+    v.classList.remove('active');
+  });
+  // Clear any transient connector editor markup the sub-view held.
+  var editor = dlg.querySelector('#inbox-connector-editor');
+  if (editor) {
+    editor.textContent = '';
+  }
+}
+
+(function () {
+  document.querySelectorAll('dialog.inbox-settings').forEach(bindInboxSettingsShell);
 })();
 
 (function () {
