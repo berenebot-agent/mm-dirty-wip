@@ -198,15 +198,16 @@ func TestEdgeLifecycleLogging(t *testing.T) {
 			t.Fatalf("missing lifecycle event %q; records: %s", msg, messages(got))
 		}
 	}
-	// Mail receipt and transfer are INFO; the per-connection and per-session
-	// transport chatter is DEBUG, hidden at the default level.
+	// Mail receipt, transfer and the single per-message auth evidence record are
+	// INFO; the per-connection and per-session transport chatter is DEBUG, hidden
+	// at the default level.
 	levels := map[string]slog.Level{
 		"mx connection opened":          slog.LevelDebug,
 		"mx session started":            slog.LevelDebug,
 		"mx mail transaction started":   slog.LevelInfo,
 		"mx recipient routing":          slog.LevelInfo,
 		"mx data staging":               slog.LevelDebug,
-		"mx auth evidence":              slog.LevelDebug,
+		"mx auth evidence":              slog.LevelInfo,
 		"mx core ingest result":         slog.LevelInfo,
 		"mx smtp transaction decision":  slog.LevelInfo,
 		"mx smtp reply transport write": slog.LevelDebug,
@@ -338,6 +339,11 @@ func TestEdgeAuthEvidenceFullArrays(t *testing.T) {
 	// present as a typed pointer even when it is a "none" verdict.
 	if evidence.SPF == nil {
 		t.Fatalf("auth_results.SPF is nil; full evidence not logged: %+v", evidence)
+	}
+	// The verification duration is folded into the single auth evidence record
+	// rather than emitted as a separate completion line.
+	if _, ok := rec.attrs["duration_ms"].(int64); !ok {
+		t.Fatalf("auth evidence duration_ms=%v (%T) want int64", rec.attrs["duration_ms"], rec.attrs["duration_ms"])
 	}
 }
 

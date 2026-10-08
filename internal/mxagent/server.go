@@ -567,8 +567,7 @@ func (s *session) Data(r io.Reader) error {
 	defer cancel()
 	verifyStart := time.Now()
 	auth := s.srv.verify.Verify(ctx, bytes.NewReader(raw), s.peerIP, s.helo, s.from, fromDomain)
-	s.logAuthEvidence(txID, auth)
-	s.logTxn(s.srv.log.Info, "mx auth verification completed", "duration_ms", time.Since(verifyStart).Milliseconds())
+	s.logAuthEvidence(txID, auth, time.Since(verifyStart))
 
 	recipients := make([]string, 0, len(s.rcpts))
 	for _, rcpt := range s.rcpts {
@@ -682,19 +681,21 @@ func (s *session) logDataStaging(txID, stage string, extra ...any) {
 }
 
 // logAuthEvidence records the full normalized SPF/DKIM/DMARC evidence array
-// alongside the enabled toggles, so a reader can distinguish "verification
-// disabled" (enabled false, empty result) from "enabled but no evidence"
-// (enabled true, empty/none result). It never logs message content, subject,
-// header values or key material. The evidence types are bounded diagnostics:
-// results, domains, selectors and classifier strings only.
-func (s *session) logAuthEvidence(txID string, auth mxwire.AuthResults) {
-	s.srv.log.Debug("mx auth evidence",
+// alongside the enabled toggles and the verification duration, in one INFO
+// record per message, so a reader can distinguish "verification disabled"
+// (enabled false, empty result) from "enabled but no evidence" (enabled true,
+// empty/none result) without a second completion line. It never logs message
+// content, subject, header values or key material. The evidence types are
+// bounded diagnostics: results, domains, selectors and classifier strings only.
+func (s *session) logAuthEvidence(txID string, auth mxwire.AuthResults, elapsed time.Duration) {
+	s.srv.log.Info("mx auth evidence",
 		AttrConnectionID, s.connID,
 		AttrTransactionID, txID,
 		"spf_enabled", s.srv.cfg.VerifySPF,
 		"dkim_enabled", s.srv.cfg.VerifyDKIM,
 		"dmarc_enabled", s.srv.cfg.VerifyDMARC,
 		"auth_results", auth,
+		"duration_ms", durationMs(elapsed),
 	)
 }
 

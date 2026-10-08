@@ -195,7 +195,8 @@ An Antler MX setup stores a per-domain **contact email** and a generated
 **setup id** and sends them as optional registration metadata on `DomainAuth`.
 They are operational metadata for the service operator's usage accounting, never
 credentials: domain authority remains the DNS-anchored Ed25519 proof. The
-receiver logs them with domain proof and per-recipient message records. The
+receiver logs them with the `dialmx domain auth` summary and per-recipient
+message records. The
 hosted receiver set is resolved from a versioned manifest (embedded and fetched
 live at setup-save time) and snapshotted per domain, so capacity changes reach
 new setups without a core release and existing MX records stay stable.

@@ -341,10 +341,11 @@ func TestSharedSMTPRecordsUseSameLogger(t *testing.T) {
 	}
 }
 
-// TestDomainProofPhaseLogging drives a real mxdial manager against the receiver
-// and asserts the proof phases are logged with ok results, a renewal is logged,
-// and that no raw TXT record or public key material leaks into any record.
-func TestDomainProofPhaseLogging(t *testing.T) {
+// TestDomainAuthSummaryLogging drives a real mxdial manager against the receiver
+// and asserts one domain proof attempt produces a single INFO "dialmx domain
+// auth" summary (terminal phase, result and folded steps), that the per-step
+// detail is DEBUG, and that no raw TXT record or public key material leaks.
+func TestDomainAuthSummaryLogging(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := mxwire.DomainTXT("key1", pub)
 	dns := func(context.Context, string) ([]string, error) { return []string{txt}, nil }
@@ -359,7 +360,7 @@ func TestDomainProofPhaseLogging(t *testing.T) {
 	ready(t, m, "example.test")
 
 	waitForRecords(t, sink, func(recs []map[string]any) bool {
-		for _, rec := range allRecords(recs, "dialmx domain proof") {
+		for _, rec := range allRecords(recs, "dialmx domain auth") {
 			if rec["phase"] == "renewal" && rec["result"] == "renewed" {
 				return true
 			}
@@ -367,21 +368,16 @@ func TestDomainProofPhaseLogging(t *testing.T) {
 		return false
 	})
 
-	proofs := allRecords(sink.records(t), "dialmx domain proof")
+	auths := allRecords(sink.records(t), "dialmx domain auth")
 	seen := map[string]string{}
-	for _, rec := range proofs {
+	for _, rec := range auths {
 		phase, _ := rec["phase"].(string)
 		result, _ := rec["result"].(string)
 		if phase != "" {
 			seen[phase] = result
 		}
 		if rec["domain"] != "example.test" || rec["key_id"] != "key1" {
-			t.Fatalf("proof record missing identity: %v", rec)
-		}
-	}
-	for _, phase := range []string{"dns_lookup", "parse_key", "signature", "registration"} {
-		if _, ok := seen[phase]; !ok {
-			t.Fatalf("missing proof phase %q; got %v", phase, seen)
+			t.Fatalf("domain auth record missing identity: %v", rec)
 		}
 	}
 	if seen["registration"] != "active" {
@@ -389,6 +385,24 @@ func TestDomainProofPhaseLogging(t *testing.T) {
 	}
 	if seen["renewal"] != "renewed" {
 		t.Fatalf("renewal result=%q want renewed", seen["renewal"])
+	}
+
+	// The summary folds the per-step outcomes into one "steps" string.
+	for _, rec := range auths {
+		steps, _ := rec["steps"].(string)
+		if !strings.Contains(steps, "dns_lookup=ok") || !strings.Contains(steps, "parse_key=ok") || !strings.Contains(steps, "grant=ok") {
+			t.Fatalf("domain auth summary missing folded steps: %v", rec)
+		}
+	}
+	// The per-step records still exist, but at DEBUG.
+	proofs := allRecords(sink.records(t), "dialmx domain proof")
+	if len(proofs) == 0 {
+		t.Fatal("expected per-step DEBUG proof records")
+	}
+	for _, rec := range proofs {
+		if rec["level"] != slog.LevelDebug.String() {
+			t.Fatalf("proof step level=%v want DEBUG: %v", rec["level"], rec)
+		}
 	}
 
 	// No raw TXT proof or public key material may appear in any captured line.
