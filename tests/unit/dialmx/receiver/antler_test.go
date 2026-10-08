@@ -36,14 +36,14 @@ func TestAntlerRegistrationMetadataLogged(t *testing.T) {
 	send(t, startEdgeWithLogger(t, 2, srv.URL, log), []string{"alice@example.test"})
 
 	waitForRecords(t, sink, func(recs []map[string]any) bool {
-		for _, rec := range allRecords(recs, "dialmx domain proof") {
+		for _, rec := range allRecords(recs, "dialmx domain auth") {
 			if rec["phase"] == "registration" && rec["contact_email"] == "ops@example.test" {
 				return true
 			}
 		}
 		return false
 	})
-	for _, rec := range allRecords(sink.records(t), "dialmx domain proof") {
+	for _, rec := range allRecords(sink.records(t), "dialmx domain auth") {
 		if rec["phase"] == "registration" {
 			if rec["contact_email"] != "ops@example.test" || rec["setup_id"] != "setup_abc123" {
 				t.Fatalf("registration metadata missing: %v", rec)

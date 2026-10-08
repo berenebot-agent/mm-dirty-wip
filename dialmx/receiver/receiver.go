@@ -892,8 +892,41 @@ func (r *Receiver) logSummary(interval time.Duration) {
 	)
 }
 
-// logProof records one step of the domain-ownership proof. phase is a bounded
-// token; the record never carries a raw TXT record, signature or key material.
+// proofTrace accumulates the bounded per-step outcomes of one domain proof
+// attempt so the INFO summary can report them as a compact "steps" string
+// ("dns_lookup=ok,parse_key=ok,signature=ok,grant=ok") without emitting a record
+// per step. A step whose result is not "ok" records "phase=result(reason)".
+type proofTrace struct {
+	steps []string
+}
+
+// add appends one step outcome. It is called for every phase the DEBUG records
+// also carry, so the summary and the detail never drift.
+func (t *proofTrace) add(phase, result, reason string) {
+	if t == nil {
+		return
+	}
+	step := phase + "=" + result
+	if reason != "" {
+		step += "(" + reason + ")"
+	}
+	t.steps = append(t.steps, step)
+}
+
+// String renders the accumulated steps, joined by commas.
+func (t *proofTrace) String() string {
+	if t == nil || len(t.steps) == 0 {
+		return ""
+	}
+	return strings.Join(t.steps, ",")
+}
+
+// logProof records one step of the domain-ownership proof at DEBUG. The default
+// INFO stream carries a single dialmx domain auth summary per attempt; these
+// per-step records are the detail behind it. phase is a bounded token; the
+// record never carries a raw TXT record, signature or key material. The
+// heartbeat counters are still accumulated here (at the terminal phases), so
+// demoting the step records to DEBUG does not change the periodic summary.
 func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason string, d time.Duration, extra ...any) {
 	if r.log == nil {
 		return
@@ -947,7 +980,41 @@ func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason 
 		args = append(args, "duration_ms", d.Milliseconds())
 	}
 	args = append(args, extra...)
-	r.log.Info(eventDomainProof, args...)
+	r.log.Debug(eventDomainProof, args...)
+}
+
+// logDomainAuth records the single INFO summary for one domain proof attempt:
+// its terminal phase, result, the bounded steps that produced it, and the
+// attempt duration. It carries the same identity fields as the per-step DEBUG
+// records so a reader can pivot between levels. It never carries a raw TXT
+// record, signature or key material.
+func (r *Receiver) logDomainAuth(c *connection, phase, domain, keyID, result, reason, steps string, d time.Duration, extra ...any) {
+	if r.log == nil {
+		return
+	}
+	args := []any{
+		"phase", phase,
+		"domain", domain,
+		"key_id", keyID,
+		"result", result,
+	}
+	if c != nil {
+		args = append(args, "core_connection_id", c.id, "receiver_id", c.receiver)
+		if c.transportID != "" {
+			args = append(args, "transport_id", c.transportID)
+		}
+	}
+	if reason != "" {
+		args = append(args, "reason", reason)
+	}
+	if steps != "" {
+		args = append(args, "steps", steps)
+	}
+	if d > 0 {
+		args = append(args, "duration_ms", d.Milliseconds())
+	}
+	args = append(args, extra...)
+	r.log.Info(eventDomainAuth, args...)
 }
 
 // logRejected records a session that was refused before it was ever admitted.
@@ -1110,7 +1177,7 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 			reason = "replaced"
 		}
 		r.mu.Unlock()
-		return r.authReply(c, f.ChannelID, d, a.KeyID, false, reason, time.Time{})
+		return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, reason, time.Time{}, &proofTrace{})
 	}
 	if _, ok := c.challenges[f.ChannelID]; ok {
 		r.mu.Unlock()
@@ -1118,7 +1185,7 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 	}
 	if len(c.domains)+len(c.challenges) >= r.cfg.MaxDomainsPerConnection || len(c.challenges) >= maxChallengesPerConn {
 		r.mu.Unlock()
-		return r.authReply(c, f.ChannelID, d, a.KeyID, false, "domain_limit", time.Time{})
+		return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, "domain_limit", time.Time{}, &proofTrace{})
 	}
 	// A binding this connection already holds (and lost to another connection)
 	// must not be reclaimed by a fresh initial auth on a new channel; old
@@ -1126,7 +1193,7 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 	for _, b := range c.domains {
 		if b.domain == d && b.state == bindReplaced {
 			r.mu.Unlock()
-			return r.authReply(c, f.ChannelID, d, a.KeyID, false, "replaced", time.Time{})
+			return r.authReply(c, f.ChannelID, "rejected", d, a.KeyID, false, "replaced", time.Time{}, &proofTrace{})
 		}
 	}
 	c.challenges[f.ChannelID] = challenge{keyID: a.KeyID, domain: d, expires: now.Add(challengeTTL), contactEmail: contactEmail, setupID: setupID}
@@ -1140,10 +1207,12 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 
 func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	started := time.Now()
+	trace := &proofTrace{}
 	if !r.acquireAuth(c) {
 		r.dropChallenge(c, ch)
 		r.logProof(c, "start", d, keyID, "rejected", "source_limit", time.Since(started))
-		_ = r.authReply(c, ch, d, keyID, false, "source_limit", time.Time{})
+		trace.add("start", "rejected", "source_limit")
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, "source_limit", time.Time{}, trace)
 		return
 	}
 	defer r.releaseAuth(c)
@@ -1151,18 +1220,20 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	defer cancel()
 	txt, err := r.lookupTXT(ctx, d)
 	r.logProof(c, "dns_lookup", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
+	trace.add("dns_lookup", resultWord(err == nil), boundedReason(err))
 	if err != nil {
 		r.dropChallenge(c, ch)
 		r.failIP(c)
-		_ = r.authReply(c, ch, d, keyID, false, "dns_unavailable", time.Time{})
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, "dns_unavailable", time.Time{}, trace)
 		return
 	}
 	_, err = mxwire.ParseDomainTXT(txt, keyID)
 	r.logProof(c, "parse_key", d, keyID, resultWord(err == nil), boundedReason(err), time.Since(started))
+	trace.add("parse_key", resultWord(err == nil), boundedReason(err))
 	if err != nil {
 		r.dropChallenge(c, ch)
 		r.failIP(c)
-		_ = r.authReply(c, ch, d, keyID, false, "key_unavailable", time.Time{})
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, "key_unavailable", time.Time{}, trace)
 		return
 	}
 	nonce := make([]byte, 32)
@@ -1189,8 +1260,29 @@ func (r *Receiver) dropChallenge(c *connection, ch uint64) {
 	r.mu.Unlock()
 }
 
-func (r *Receiver) authReply(c *connection, ch uint64, d, k string, ok bool, reason string, exp time.Time) error {
+// authReply sends the AuthResult frame and emits the single INFO summary for
+// the attempt. phase is the terminal attempt phase (registration/renewal/
+// rejected); trace carries the bounded per-step outcomes collected along the
+// way. The grant is folded into the summary as the accepted/expires_at fields
+// and a grant=... step, rather than emitted as its own INFO line. The DEBUG
+// per-step record is still emitted so the heartbeat counter is unchanged.
+func (r *Receiver) authReply(c *connection, ch uint64, phase, d, k string, ok bool, reason string, exp time.Time, trace *proofTrace, extra ...any) error {
 	r.logProof(c, "grant", d, k, resultWord(ok), reason, 0, "domain_channel_id", ch, "accepted", ok, "expires_at", exp)
+	trace.add("grant", resultWord(ok), reason)
+	result := "rejected"
+	switch {
+	case !ok:
+		result = "rejected"
+	case phase == "registration":
+		result = "active"
+	case phase == "renewal":
+		result = "renewed"
+	default:
+		result = phase
+	}
+	args := []any{"domain_channel_id", ch, "accepted", ok, "expires_at", exp}
+	args = append(args, extra...)
+	r.logDomainAuth(c, phase, d, k, result, reason, trace.String(), 0, args...)
 	return r.send(c, mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: d, KeyID: k, Accepted: ok, Reason: reason, ExpiresAt: exp})
 }
 
@@ -1210,7 +1302,7 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 	r.mu.Unlock()
 	if !ok || !now.Before(issued.expires) || issued.value.Nonce == "" || issued.domain != x.Domain || issued.keyID != x.KeyID || issued.value.Nonce != x.Nonce {
 		r.failIP(c)
-		return r.authReply(c, f.ChannelID, x.Domain, x.KeyID, false, "challenge_expired", time.Time{})
+		return r.authReply(c, f.ChannelID, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, &proofTrace{})
 	}
 	if !r.spawn(c, func() { r.verifyProof(c, f.ChannelID, issued, x) }) {
 		return nil
@@ -1220,6 +1312,7 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 
 func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxwire.ChallengeResponse) {
 	started := time.Now()
+	trace := &proofTrace{}
 	if !r.acquireAuth(c) {
 		if issued.binding != nil {
 			// A renewal that could not start because the source is at its
@@ -1228,10 +1321,13 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 			// revalidateConn re-issue the renewal on a later tick, before the
 			// grant expires. Only the grant's own expiry fails the binding.
 			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "source_limit", time.Since(started))
+			trace.add("renewal", "deferred", "source_limit")
+			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", "source_limit", trace.String(), time.Since(started))
 			return
 		}
 		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", "source_limit", time.Since(started))
-		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "source_limit", time.Time{})
+		trace.add("start", "rejected", "source_limit")
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "source_limit", time.Time{}, trace)
 		return
 	}
 	defer r.releaseAuth(c)
@@ -1239,10 +1335,13 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	txt, e := r.lookupTXT(ctx, x.Domain)
 	cancel()
 	r.logProof(c, "dns_lookup", x.Domain, x.KeyID, resultWord(e == nil), boundedReason(e), time.Since(started))
+	trace.add("dns_lookup", resultWord(e == nil), boundedReason(e))
 	pub, e2 := mxwire.ParseDomainTXT(txt, x.KeyID)
 	r.logProof(c, "parse_key", x.Domain, x.KeyID, resultWord(e2 == nil), boundedReason(e2), time.Since(started))
+	trace.add("parse_key", resultWord(e2 == nil), boundedReason(e2))
 	sigOK := e == nil && e2 == nil && mxwire.VerifyChallenge(pub, issued.value, x.Signature)
 	r.logProof(c, "signature", x.Domain, x.KeyID, resultWord(sigOK), "", time.Since(started))
+	trace.add("signature", resultWord(sigOK), "")
 	if e != nil || e2 != nil || !sigOK {
 		r.failIP(c)
 		if issued.binding != nil {
@@ -1250,7 +1349,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 			// could not be completed against fresh DNS.
 			r.revoke(issued.binding, "reauth_failed")
 		}
-		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "proof_invalid", time.Time{})
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "proof_invalid", time.Time{}, trace)
 		return
 	}
 	now := time.Now()
@@ -1259,7 +1358,8 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 			r.revoke(issued.binding, "reauth_failed")
 		}
 		r.logProof(c, "challenge", x.Domain, x.KeyID, "rejected", "challenge_expired", time.Since(started))
-		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "challenge_expired", time.Time{})
+		trace.add("challenge", "rejected", "challenge_expired")
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, trace)
 		return
 	}
 	if issued.binding != nil {
@@ -1271,7 +1371,8 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		if c.closing || b.state != bindActive || b.c != c || b.channel != ch || c.domains[ch] != b || r.domains[b.domain] != b {
 			r.mu.Unlock()
 			r.logProof(c, "renewal", x.Domain, x.KeyID, "rejected", "superseded", time.Since(started))
-			_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "superseded", time.Time{})
+			trace.add("renewal", "rejected", "superseded")
+			_ = r.authReply(c, ch, "renewal", x.Domain, x.KeyID, false, "superseded", time.Time{}, trace)
 			return
 		}
 		b.pub = pub
@@ -1284,7 +1385,8 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		email, setupID := b.contactEmail, b.setupID
 		r.mu.Unlock()
 		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
-		_ = r.authReply(c, ch, x.Domain, x.KeyID, true, "", exp)
+		_ = r.authReply(c, ch, "renewal", x.Domain, x.KeyID, true, "", exp, trace,
+			"expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
 		return
 	}
 	// Initial authentication: install a new binding, superseding any other.
@@ -1292,12 +1394,15 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	if c.closing {
 		r.mu.Unlock()
 		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "closing", time.Since(started))
+		trace.add("registration", "rejected", "closing")
+		r.logDomainAuth(c, "registration", x.Domain, x.KeyID, "rejected", "closing", trace.String(), time.Since(started))
 		return
 	}
 	if len(c.domains) >= r.cfg.MaxDomainsPerConnection && c.domains[ch] == nil {
 		r.mu.Unlock()
 		r.logProof(c, "registration", x.Domain, x.KeyID, "rejected", "domain_limit", time.Since(started))
-		_ = r.authReply(c, ch, x.Domain, x.KeyID, false, "domain_limit", time.Time{})
+		trace.add("registration", "rejected", "domain_limit")
+		_ = r.authReply(c, ch, "registration", x.Domain, x.KeyID, false, "domain_limit", time.Time{}, trace)
 		return
 	}
 	var replaced *binding
@@ -1325,7 +1430,8 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 			_ = r.send(sc, mxwire.FrameDomainRevoked, 0, sch, mxwire.DomainNotice{Domain: sdomain, Reason: "replaced"})
 		})
 	}
-	_ = r.authReply(c, ch, x.Domain, x.KeyID, true, "", b.expires)
+	_ = r.authReply(c, ch, "registration", x.Domain, x.KeyID, true, "", b.expires, trace,
+		"contact_email", b.contactEmail, "setup_id", b.setupID)
 }
 
 func (r *Receiver) unregister(c *connection, f mxwire.Frame) error {
@@ -1356,7 +1462,8 @@ func (r *Receiver) unregister(c *connection, f mxwire.Frame) error {
 	}
 	r.mu.Unlock()
 	if b != nil {
-		r.logProof(c, "revocation", domain, keyID, "revoked", "unregistered", 0)
+		r.statProofs.Add(1)
+		r.logDomainAuth(c, "revocation", domain, keyID, "revoked", "unregistered", "", 0)
 	}
 	for _, p := range pending {
 		r.release(c, p)
@@ -1504,7 +1611,8 @@ func (r *Receiver) revoke(b *binding, why string) {
 	if wasActive {
 		_ = r.send(c, mxwire.FrameDomainRevoked, 0, ch, mxwire.DomainNotice{Domain: domain, Reason: why})
 	}
-	r.logProof(c, "revocation", domain, keyID, "revoked", why, 0, "active", wasActive)
+	r.statProofs.Add(1)
+	r.logDomainAuth(c, "revocation", domain, keyID, "revoked", why, "", 0, "active", wasActive)
 	for _, p := range wake {
 		r.release(c, p)
 	}
