@@ -6,6 +6,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Receiver logging: a domain proof attempt now emits a single INFO
+  `dialmx domain auth` record (terminal phase, result, reason, duration and a
+  folded `steps` string) instead of one INFO `dialmx domain proof` record per
+  step. The per-step records remain available at `DIALMX_LOG_LEVEL=debug`, so the
+  default INFO stream is one line per domain authentication or renewal.
+- SMTP edge logging: `mx auth verification completed` is folded into
+  `mx auth evidence` as its `duration_ms`, and that single record is now INFO, so
+  each message logs one auth line rather than two.
+
 ### Fixed
 
 - Inbox settings: the Add and Edit inbox dialogs now share one full-height
@@ -51,9 +62,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   setup-save time, cached, with last-known-good and embedded fallbacks) and
   snapshotted per domain, so new capacity reaches new setups without a core
   upgrade while published MX records stay stable. The contact email and a
-  generated setup id are logged by the receiver with domain proof and
-  per-recipient message records for usage accounting; they are metadata, never
-  credentials. Dial MX **custom** service (manual receiver URLs) is unchanged.
+  generated setup id are logged by the receiver with the `dialmx domain auth`
+  summary and per-recipient message records for usage accounting; they are
+  metadata, never credentials. Dial MX **custom** service (manual receiver URLs)
+  is unchanged.
 - Domain receiving API/UI: a Dial MX setup now reports live per-receiver
   authentication `status`, cached published-record `dns` traffic lights (MX
   hostnames and TXT key) and copy-ready `instructions`, and the setup dialog

@@ -51,7 +51,8 @@ import (
 //	dialmx session hello              per decoded Hello                (DEBUG)
 //	dialmx session closed             per session teardown             (DEBUG)
 //
-//	dialmx domain proof               per DNS proof attempt (lookup/parse/key/signature/renew/lifecycle)
+//	dialmx domain auth                one INFO summary per DNS proof attempt (registration/renewal/revocation)
+//	dialmx domain proof               per proof step (DEBUG only; lookup/parse/key/signature/grant)
 //
 //	dialmx resolve                    per recipient routing decision
 //	dialmx handoff                    per connection handoff lifecycle
@@ -87,6 +88,7 @@ const (
 	eventSessionOpened       = "dialmx session opened"
 	eventSessionHello        = "dialmx session hello"
 	eventSessionClosed       = "dialmx session closed"
+	eventDomainAuth          = "dialmx domain auth"
 	eventDomainProof         = "dialmx domain proof"
 	eventResolve             = "dialmx resolve"
 	eventHandoff             = "dialmx handoff"

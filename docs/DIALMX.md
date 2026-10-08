@@ -492,21 +492,22 @@ warning/error diagnostics. Message bodies, subjects, raw headers, TXT records,
 challenge payloads, signatures and credentials are not logged. Envelope
 addresses, IPs, domains and normalized authentication evidence are logged.
 
-Verbosity is split by level. Process lifecycle, mail receipt, mail transfer and
-failures are INFO. The per-connection and per-session transport chatter —
-`dialmx transport accepted/closed`, `dialmx session opened/hello/closed`,
-`mx connection opened/closed`, `mx session started`, `mx starttls established`
-and the reply-write record — is DEBUG, hidden at the default level. For a
-managed one-core receiver this connect chatter is pure noise, so it stays off
-unless `DIALMX_LOG_LEVEL=debug` is set. In the embedded deployment the core
-forwards that variable to the included child; the standalone receiver reads it
-from its own environment.
+Verbosity is split by level. Process lifecycle, mail receipt, mail transfer,
+the single per-attempt domain-auth summary and failures are INFO. The
+per-connection and per-session transport chatter — `dialmx transport
+accepted/closed`, `dialmx session opened/hello/closed`, `mx connection
+opened/closed`, `mx session started`, `mx starttls established`, the reply-write
+record and the per-step `dialmx domain proof` records — is DEBUG, hidden at the
+default level. For a managed one-core receiver this chatter is pure noise, so it
+stays off unless `DIALMX_LOG_LEVEL=debug` is set. In the embedded deployment the
+core forwards that variable to the included child; the standalone receiver reads
+it from its own environment.
 
 A core enrolled through a named shared service (Antler MX) supplies
 `contact_email` and `setup_id` on `DomainAuth`. Both are operational metadata,
 never credentials: domain authority remains the DNS-anchored Ed25519 proof. A
 malformed value is dropped rather than failing the proof. The receiver logs both
-on the `dialmx domain proof` registration/renewal records and attaches them to
+on the `dialmx domain auth` registration/renewal records and attaches them to
 the per-recipient `dialmx resolve` and `dialmx handoff result` records, so usage
 (contact, setup id, domains, messages) can be read or exported from the log
 stream. They are omitted entirely for a custom receiver. Retention remains the
@@ -522,12 +523,16 @@ Docker log rotation described below; export before replacing a container.
   duration, close reason and counters. The label is caller-advertised, not a
   unique or authenticated core identity (the current core sends `gatehouse`).
   Domain/key bindings identify the authority proved on that connection.
-- **Domain authority:** `dialmx domain proof` records initial and renewal
-  DNS lookup, key parsing, signature validation, grants, expiry, revocation and
-  replacement. Fields include domain, key ID, core session, phase, outcome,
-  reason, query name, resolver setting, duration and grant expiry as applicable.
-  DNS lookup success and signature validity are distinct outcomes. `system`
-  denotes resolver configuration, not a known upstream resolver address.
+- **Domain authority:** `dialmx domain auth` records one INFO summary per proof
+  attempt (initial registration, renewal or revocation). Fields include domain,
+  key ID, core session, terminal phase, outcome, reason, duration, grant expiry
+  as applicable, and a compact `steps` string folding the per-step outcomes
+  (`dns_lookup=ok,parse_key=ok,signature=ok,grant=ok`). DNS lookup success and
+  signature validity remain distinct outcomes inside `steps`. The per-step
+  `dialmx domain proof` records (lookup, key parse, signature, grant, replacement)
+  carry the query name and resolver setting and are emitted at DEBUG only, so the
+  default INFO stream stays one line per attempt. `system` denotes resolver
+  configuration, not a known upstream resolver address.
 - **SMTP:** `mx connection opened/closed`, `mx session started` and
   `mx starttls established` record `smtp_connection_id`, endpoints, HELO,
   TLS details, byte counts and duration. Identity persists across STARTTLS.
@@ -546,9 +551,10 @@ Docker log rotation described below; export before replacing a container.
   than attributed to a core.
 - **Authentication:** `mx auth evidence` records normalized `auth_results`
   (SPF, DKIM signatures, DMARC policy/alignment and diagnostic reasons), enabled
-  flags and duration. Disabled verification differs from absent evidence. DKIM
-  selector/algorithm are omitted because the current evaluator does not populate
-  them.
+  flags and duration, in a single record per message (there is no separate
+  verification-completed line). Disabled verification differs from absent
+  evidence. DKIM selector/algorithm are omitted because the current evaluator
+  does not populate them.
 - **Handoff:** `dialmx handoff` start and terminal records contain recipients,
   domains, size/digest, completed body-chunk bytes, duration, phase and outcome.
   `handoff_id` combines `core_connection_id` and `wire_transaction_id`; wire
