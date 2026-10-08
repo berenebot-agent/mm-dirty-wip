@@ -195,6 +195,57 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 	if rr := do(http.MethodGet, ""); rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"smtp_hostname":"antler1.example.test"`) {
 		t.Fatalf("session status check: %d %s", rr.Code, rr.Body.String())
 	}
+	before, err := svc.Store.GetDomainReceivingConfig(context.Background(), u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeValues, err := svc.DecryptDomainReceivingConfig(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := svc.Store.GetDialMXCredential(context.Background(), u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A changed manifest must not change endpoints during an email-only save.
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "new", SessionURL: "https://new.example.test", SMTPHostname: "new.example.test", MXPriority: 10},
+	}}
+	update := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"provider":"dialmx","config":{"contact_email":"changed@example.test"}}`))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", token)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := update(""); rr.Code != http.StatusForbidden {
+		t.Fatalf("email save without CSRF: %d", rr.Code)
+	}
+	if rr := update(csrf); rr.Code != http.StatusOK {
+		t.Fatalf("email-only save: %d %s", rr.Code, rr.Body.String())
+	}
+	after, err := svc.Store.GetDomainReceivingConfig(context.Background(), u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterValues, err := svc.DecryptDomainReceivingConfig(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterValues["contact_email"] != "changed@example.test" {
+		t.Fatalf("email not saved: %v", afterValues)
+	}
+	for _, field := range []string{"receiver_urls", "antler_receivers", "setup_id", "enforcement"} {
+		if afterValues[field] != beforeValues[field] {
+			t.Fatalf("email save changed %s", field)
+		}
+	}
+	afterCredential, err := svc.Store.GetDialMXCredential(context.Background(), u.AccountID, domain.ID)
+	if err != nil || afterCredential.KeyID != credential.KeyID {
+		t.Fatalf("email save changed domain key: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

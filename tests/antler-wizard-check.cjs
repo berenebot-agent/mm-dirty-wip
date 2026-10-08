@@ -11,6 +11,7 @@ class Element {
   addEventListener(name, fn) { this.events[name] = fn; }
   appendChild(child) { this.children.push(child); return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
+  prepend(child) { this.children.unshift(child); }
   replaceChildren() { this.children = []; }
   setAttribute() {}
   removeAttribute() {}
@@ -21,18 +22,23 @@ class Element {
     return [];
   }
   set innerHTML(value) {
-    this.panels = [0, 1, 2, 3].map(() => new Element('SECTION'));
+    this.panels = [0, 1, 2, 3, 4].map(() => new Element('SECTION'));
     this.panels.forEach((panel, i) => { this.nodes['[data-antler-step="' + i + '"]'] = panel; });
+    this.panels.forEach((panel, i) => {
+      this.nodes['[data-antler-step="' + i + '"] h3'] = new Element('H3');
+      this.nodes['[data-antler-step="' + i + '"] p'] = new Element('P');
+    });
+    this.nodes['.antler-custom-urls'] = new Element('INPUT');
     for (const name of ['progress', 'records', 'dns', 'receivers', 'checks', 'check-note', 'check', 'error', 'back']) this.nodes['.antler-' + name] = new Element();
   }
 }
-async function main() {
+async function check(mode = 'hosted') {
   let now = 100000, tick, requests = [], statuses = [], saved, redirect;
   const dlg = new Element(); dlg.open = true;
   const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
   const group = new Element();
-  const service = new Element('SELECT'); service.value = 'antler'; service.previousElementSibling = new Element('LABEL');
+  const service = new Element('SELECT'); service.value = mode === 'custom' ? 'custom' : 'antler'; service.previousElementSibling = new Element('LABEL');
   const email = new Element('INPUT'); email.value = 'ops@example.com'; email.previousElementSibling = new Element('LABEL');
   const enforcement = new Element('SELECT'); enforcement.value = 'moderate'; enforcement.previousElementSibling = new Element('LABEL');
   const save = new Element('BUTTON');
@@ -40,19 +46,41 @@ async function main() {
   group.nodes = { '[name="cfg_dialmx_service"]': service, '[name="cfg_dialmx_contact_email"]': email, '[name="cfg_dialmx_enforcement"]': enforcement };
   group.children = [service.previousElementSibling, service];
   dlg.nodes = { '[data-save-provider]': save };
+  if (mode === 'status') dlg.nodes['.dialmx-setup'] = new Element();
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const response = () => ({ config: { enforcement: 'moderate' }, status: statuses, dns: [], instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: [{ hostname: 'mx.example.com', priority: 10 }] } });
+  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: [], instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
   vm.runInNewContext(source.slice(start, end), {
-    document: { querySelectorAll: () => [form], createElement: tag => new Element(tag.toUpperCase()) },
+    document: { querySelectorAll: () => [form], createElement: tag => new Element(tag.toUpperCase()), createTextNode: text => ({ textContent: text }) },
     Date: Clock, navigator: {}, window: { setInterval(fn) { tick = fn; return 1; }, clearInterval() {}, addEventListener() {}, location: { assign(url) { redirect = url; } } },
-    fetch(url, options) { requests.push({ url, options }); if (options.method === 'PUT') saved = JSON.parse(options.body); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
+    fetch(url, options) { requests.push({ url, options }); if (options.method !== 'GET') saved = JSON.parse(options.body); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
   });
   const wizard = group.children.at(-1);
   const flush = () => new Promise(resolve => setImmediate(resolve));
   const submit = async () => { form.events.submit({ preventDefault() {} }); await flush(); };
+  assert.equal(service.hidden, true, 'service selector is removed from every step');
+  if (mode === 'status') {
+    assert.equal(provider.hidden, true);
+    assert.equal(save.textContent, 'Save email');
+    tick(); await flush();
+    assert.equal(wizard.panels[2].hidden, false);
+    email.value = 'changed@example.com'; await submit();
+    assert.equal(requests.at(-1).options.method, 'POST');
+    assert.deepEqual(saved.config, { contact_email: 'changed@example.com' });
+    assert.equal(wizard.panels[3].hidden, true);
+    return;
+  }
   assert.equal(save.textContent, 'Next');
+  if (mode === 'custom') {
+    await submit();
+    assert.equal(wizard.panels[4].hidden, false, 'advanced path gets a URL screen');
+    assert.equal(provider.hidden, true);
+    wizard.nodes['.antler-custom-urls'].value = 'https://custom.example.com';
+  }
   await submit();
+  assert.equal(provider.hidden, true, 'provider selector disappears inside wizard');
   assert.equal(saved.config.enforcement, 'moderate');
+  assert.equal(saved.config.service, mode === 'custom' ? 'custom' : 'antler');
+  if (mode === 'custom') assert.equal(saved.config.receiver_urls, 'https://custom.example.com');
   assert.equal(requests.find(request => request.options.method === 'PUT').options.headers['X-CSRF-Token'], 'csrf');
   assert.match(requests[0].url, /^\/ui\/domains\/domain-1\/receiving\/setup$/);
   assert.equal(wizard.panels[1].hidden, false);
@@ -79,6 +107,8 @@ async function main() {
   assert.equal(saved.config.enforcement, 'hard'); assert.match(redirect, /Antler/);
   dlg.open = false; now += 20000;
   const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
-  console.log('Antler wizard interaction checks passed');
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+(async () => {
+  await check(); await check('custom'); await check('status');
+  console.log('Antler hosted/custom wizard and status interaction checks passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });
