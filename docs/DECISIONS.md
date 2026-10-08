@@ -2449,9 +2449,10 @@ durable queue.
 
 The receiving API (`GET /v1/admin/domains/{id}/receiving`) returns the live
 setup picture for Dial MX: per-receiver authentication `status` learned over the
-outbound session, cached best-effort published-record `dns` checks (MX hostnames
-and the TXT key), and copy-ready `instructions`. The checks are asynchronous and
-never block a save or a render.
+outbound session, best-effort published-record `dns` checks (MX hostnames and the
+TXT key), and copy-ready `instructions`. The checks resolve DNS live on every
+request, bounded by a four-second timeout and never cached in the core, so a
+record change shows on the next poll or explicit "Check now".
 
 The standalone receiver gains `DIALMX_BROWSER_REDIRECT_URL` (https, no
 fragment): a browser `GET /` with an HTML `Accept` header is 302-redirected to
@@ -2490,7 +2491,7 @@ later addition requiring no rework.
   receiver remains one stateless process outside the trust boundary.
 
 **Complexity:** One embedded manifest and resolver, per-domain config
-fields/snapshot, two optional wire fields and their logging, cached DNS checks
+fields/snapshot, two optional wire fields and their logging, live DNS checks
 plus a setup API/UI panel, and one receiver environment setting. Durable
 delivery, retry receipts and existing mx-v1/mx-v2 transport are unchanged.
 

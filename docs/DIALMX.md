@@ -241,21 +241,23 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
 - `status[]` — per-receiver authentication state learned over the core's
   outbound session (ready, rejected, connecting, …) with a bounded reason and
   expiry.
-- `dns[]` — cached, best-effort published-record checks: the domain's MX
-  hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
-  against the domain's exact key. `state` is `ok`, `pending` (not published yet)
-  or `mismatch`. The MX check is `ok` as soon as any one expected receiver
-  hostname is published and lists those in `matched` (the per-connector status
-  reads it); an operator who points MX at a single receiver is not failed by the
-  others in the advertised set. It is `mismatch` only when MX records exist but
-  none belongs to a receiver. The TXT check stays exact.
+- `dns[]` — best-effort published-record checks: the domain's MX hostnames
+  against the expected receivers, and the `_mailmoose-mx` TXT record against the
+  domain's exact key. `state` is `ok`, `pending` (not published yet) or
+  `mismatch`. The MX check is `ok` as soon as any one expected receiver hostname
+  is published and lists those in `matched` (the per-connector status reads it);
+  an operator who points MX at a single receiver is not failed by the others in
+  the advertised set. It is `mismatch` only when MX records exist but none
+  belongs to a receiver. The TXT check stays exact.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup.
 
-The checks are asynchronous and never block a save or a render. A green light
-means the record matches, or the receiver holds an active authenticated domain
-binding. Published MX records and receiver authentication are separate checks: a
-domain can authenticate while its MX still points elsewhere, and a green
-receiver session is not a public SMTP-port delivery test.
+The checks resolve DNS live on every request, bounded by a four-second timeout,
+and never block a save for longer than that. Nothing is cached in the core, so a
+record change is reflected on the next poll or an explicit "Check now". A green
+light means the record matches, or the receiver holds an active authenticated
+domain binding. Published MX records and receiver authentication are separate
+checks: a domain can authenticate while its MX still points elsewhere, and a
+green receiver session is not a public SMTP-port delivery test.
 
 ## 4. DNS authorisation flow
 
