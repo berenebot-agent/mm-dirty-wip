@@ -12,10 +12,12 @@ class Element {
   appendChild(child) { this.children.push(child); return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   prepend(child) { this.children.unshift(child); }
+  insertBefore(child) { this.children.unshift(child); return child; }
   replaceChildren() { this.children = []; }
   setAttribute() {}
   removeAttribute() {}
   reportValidity() { return true; }
+  closest() { return this.closestNode || null; }
   querySelector(selector) { return this.nodes[selector]; }
   querySelectorAll(selector) {
     if (selector === '[data-antler-step]') return this.panels;
@@ -23,25 +25,28 @@ class Element {
   }
   set innerHTML(value) {
     this.panels = [0, 1, 2, 3, 4].map(() => new Element('SECTION'));
-    this.panels.forEach((panel, i) => { this.nodes['[data-antler-step="' + i + '"]'] = panel; });
     this.panels.forEach((panel, i) => {
-      this.nodes['[data-antler-step="' + i + '"] h3'] = new Element('H3');
-      this.nodes['[data-antler-step="' + i + '"] p'] = new Element('P');
+      panel.nodes['h3'] = new Element('H3');
+      panel.nodes['p'] = new Element('P');
+      this.nodes['[data-antler-step="' + i + '"]'] = panel;
+      this.nodes['[data-antler-step="' + i + '"] h3'] = panel.nodes['h3'];
+      this.nodes['[data-antler-step="' + i + '"] p'] = panel.nodes['p'];
     });
     this.nodes['.antler-custom-urls'] = new Element('INPUT');
-    for (const name of ['progress', 'records', 'dns', 'receivers', 'checks', 'check-note', 'check', 'error', 'back']) this.nodes['.antler-' + name] = new Element();
+    for (const name of ['progress', 'records', 'note', 'receivers', 'checks', 'check-note', 'check', 'error']) this.nodes['.antler-' + name] = new Element();
   }
 }
 async function check(mode = 'hosted') {
   let now = 100000, tick, requests = [], statuses = [], saved, redirect;
   const dlg = new Element(); dlg.open = true;
-  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.closest = () => dlg;
+  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
   const group = new Element();
-  const service = new Element('SELECT'); service.value = mode === 'custom' ? 'custom' : 'antler'; service.previousElementSibling = new Element('LABEL');
+  const service = new Element('SELECT'); service.value = 'antler'; service.previousElementSibling = new Element('LABEL');
   const email = new Element('INPUT'); email.value = 'ops@example.com'; email.previousElementSibling = new Element('LABEL');
   const enforcement = new Element('SELECT'); enforcement.value = 'moderate'; enforcement.previousElementSibling = new Element('LABEL');
-  const save = new Element('BUTTON');
+  const footer = new Element();
+  const save = new Element('BUTTON'); save.closestNode = footer;
   form.nodes = { '.provider-select': provider, '[data-provider="dialmx"]': group, '[name="_csrf"]': { value: 'csrf' } };
   group.nodes = { '[name="cfg_dialmx_service"]': service, '[name="cfg_dialmx_contact_email"]': email, '[name="cfg_dialmx_enforcement"]': enforcement };
   group.children = [service.previousElementSibling, service];
@@ -49,14 +54,19 @@ async function check(mode = 'hosted') {
   if (mode === 'status') dlg.nodes['.dialmx-setup'] = new Element();
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: [], instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
+  const created = [];
   vm.runInNewContext(source.slice(start, end), {
-    document: { querySelectorAll: () => [form], createElement: tag => new Element(tag.toUpperCase()), createTextNode: text => ({ textContent: text }) },
+    document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
     Date: Clock, navigator: {}, window: { setInterval(fn) { tick = fn; return 1; }, clearInterval() {}, addEventListener() {}, location: { assign(url) { redirect = url; } } },
     fetch(url, options) { requests.push({ url, options }); if (options.method !== 'GET') saved = JSON.parse(options.body); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
   });
   const wizard = group.children.at(-1);
   const flush = () => new Promise(resolve => setImmediate(resolve));
   const submit = async () => { form.events.submit({ preventDefault() {} }); await flush(); };
+  const collect = node => [node.textContent || '', ...(node.children || []).map(collect)].join(' ');
+  const back = footer.children.find(child => child.className.includes('antler-back'));
+  assert.ok(back, 'Back lives in the dialog footer, not the wizard form');
+  assert.equal(back.hidden, true, 'Back is hidden before entering a wizard step');
   assert.equal(service.hidden, true, 'service selector is removed from every step');
   if (mode === 'status') {
     assert.equal(provider.hidden, true);
@@ -70,10 +80,21 @@ async function check(mode = 'hosted') {
     return;
   }
   assert.equal(save.textContent, 'Next');
+  if (mode !== 'status') {
+    // Back is not shown before a receiver type has been chosen and entered.
+    assert.equal(back.hidden, true);
+  }
   if (mode === 'custom') {
+    const adv = created.find(el => el.className === 'antler-advanced');
+    assert.ok(adv, 'advanced checkbox exists');
+    adv.checked = true; adv.events.change();
     await submit();
     assert.equal(wizard.panels[4].hidden, false, 'advanced path gets a URL screen');
     assert.equal(provider.hidden, true);
+    assert.equal(back.hidden, false, 'Back is available on the URL screen');
+    back.events.click();
+    assert.equal(wizard.panels[0].hidden, false, 'Back from the URL screen returns to contact email');
+    await submit();
     wizard.nodes['.antler-custom-urls'].value = 'https://custom.example.com';
   }
   await submit();
@@ -84,6 +105,21 @@ async function check(mode = 'hosted') {
   assert.equal(requests.find(request => request.options.method === 'PUT').options.headers['X-CSRF-Token'], 'csrf');
   assert.match(requests[0].url, /^\/ui\/domains\/domain-1\/receiving\/setup$/);
   assert.equal(wizard.panels[1].hidden, false);
+  assert.equal(back.hidden, false, 'Back appears once inside the wizard');
+  const table = collect(wizard.nodes['.antler-records']);
+  if (mode === 'custom') {
+    assert.match(table, /_mailmoose-mx\.example\.com/);
+  } else {
+    assert.match(table, /MX/);
+    assert.match(table, /mx\.example\.com/);
+    if (mode === 'subdomain') {
+      assert.match(table, /mail\.example\.com/, 'subdomain rows spell out the full name');
+      assert.doesNotMatch(table, /(^|\s)@(\s|$)/, 'subdomain rows do not use @');
+    } else {
+      assert.match(table, /@/, 'apex MX uses @');
+      assert.doesNotMatch(table, /mail\.example\.com/);
+    }
+  }
   tick(); await flush(); tick();
   assert.match(wizard.nodes['.antler-check-note'].textContent, /Refresh in 10s/);
   const count = requests.length;
@@ -109,6 +145,6 @@ async function check(mode = 'hosted') {
   const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
 }
 (async () => {
-  await check(); await check('custom'); await check('status');
-  console.log('Antler hosted/custom wizard and status interaction checks passed');
+  await check(); await check('subdomain'); await check('custom'); await check('status');
+  console.log('Antler hosted/subdomain/custom wizard and status interaction checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
