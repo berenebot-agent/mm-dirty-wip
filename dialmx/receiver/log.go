@@ -91,6 +91,16 @@ const (
 	eventResolve             = "dialmx resolve"
 	eventHandoff             = "dialmx handoff"
 	eventHandoffResult       = "dialmx handoff result"
+
+	// eventConnEstablished and eventConnClosed are the INFO lifecycle records.
+	// The DEBUG transport/session events above are per-step chatter; these two
+	// are the operator-facing view of "a core connected" and "a core
+	// disconnected", so a working receiver is visible at the default level
+	// instead of only producing lines when something fails.
+	eventConnEstablished = "dialmx core connected"
+	eventConnClosed      = "dialmx core disconnected"
+	// eventSummary is the periodic INFO heartbeat.
+	eventSummary = "dialmx summary"
 )
 
 // NewLogger returns the receiver's one logger: the shared compact text handler
