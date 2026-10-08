@@ -45,6 +45,7 @@ type Domain struct {
 // Status is the observable per-domain state for one receiver URL.
 type Status struct {
 	ReceiverURL  string
+	KeyID        string
 	State        string
 	Reason       string
 	SMTPHostname string
@@ -550,12 +551,12 @@ func statusKey(domain, url string) string { return domain + "\x00" + url }
 // owns the domain for this receiver URL. A shard that lost a domain to another
 // shard (or was torn down) can therefore never overwrite the current owner's
 // status with a stale row.
-func (m *Manager) setStatus(s *session, domain, state, reason, host string, expires time.Time) {
+func (m *Manager) setStatus(s *session, domain, state, reason, host string, expires time.Time, keyID string) {
 	m.mu.Lock()
 	if !m.stopping {
 		k := statusKey(domain, s.url)
 		if m.owner[k] == s {
-			m.status[k] = Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
+			m.status[k] = Status{ReceiverURL: s.url, KeyID: keyID, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
 		}
 	}
 	m.mu.Unlock()
@@ -830,7 +831,7 @@ func (s *session) run() {
 			reason = "idle_timeout"
 		}
 		for _, d := range live {
-			s.m.setStatus(s, d, "disconnected", reason, "", time.Time{})
+			s.m.setStatus(s, d, "disconnected", reason, "", time.Time{}, "")
 		}
 		wait := jitter(backoff)
 		select {
@@ -1346,7 +1347,7 @@ func (s *session) authResult(f mxwire.Frame) error {
 		ad.proofNonce = ""
 		ad.retryAt = now.Add(s.retryDelay(a.Reason))
 		s.cancelDomain(a.Domain)
-		s.m.setStatus(s, a.Domain, "rejected", authReason(a.Reason), s.ready.SMTPHostname, ad.expires)
+		s.m.setStatus(s, a.Domain, "rejected", authReason(a.Reason), s.ready.SMTPHostname, ad.expires, ad.domain.KeyID)
 		return nil
 	}
 	// An accepted result is trusted only after we locally signed the matching
@@ -1356,20 +1357,20 @@ func (s *session) authResult(f mxwire.Frame) error {
 		ad.state = authRejected
 		ad.proofNonce = ""
 		ad.retryAt = now.Add(s.m.cfg.AuthRetryInterval)
-		s.m.setStatus(s, a.Domain, "rejected", "authentication_failed", s.ready.SMTPHostname, time.Time{})
+		s.m.setStatus(s, a.Domain, "rejected", "authentication_failed", s.ready.SMTPHostname, time.Time{}, ad.domain.KeyID)
 		return nil
 	}
 	// A renewal must not shorten a still-valid authorization window.
 	if ad.state == authActive && now.Before(ad.expires) && a.ExpiresAt.Before(ad.expires) {
 		ad.proofNonce = ""
-		s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, ad.expires)
+		s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, ad.expires, ad.domain.KeyID)
 		return nil
 	}
 	ad.state = authActive
 	ad.proofNonce = ""
 	ad.expires = a.ExpiresAt
 	s.sawAuth = true
-	s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, a.ExpiresAt)
+	s.m.setStatus(s, a.Domain, "ready", "", s.ready.SMTPHostname, a.ExpiresAt, ad.domain.KeyID)
 	return nil
 }
 
@@ -1434,7 +1435,7 @@ func (s *session) notice(f mxwire.Frame, revoked bool) error {
 	if ad.state != authReplaced {
 		s.cancelDomain(n.Domain)
 	}
-	s.m.setStatus(s, n.Domain, "unavailable", reason, "", ad.expires)
+	s.m.setStatus(s, n.Domain, "unavailable", reason, "", ad.expires, ad.domain.KeyID)
 	return nil
 }
 

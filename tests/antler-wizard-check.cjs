@@ -31,13 +31,14 @@ class Element {
       this.nodes['[data-antler-step="' + i + '"]'] = panel;
       this.nodes['[data-antler-step="' + i + '"] h3'] = panel.nodes['h3'];
       this.nodes['[data-antler-step="' + i + '"] p'] = panel.nodes['p'];
+      this.nodes['[data-antler-step="' + i + '"] > p'] = panel.nodes['p'];
     });
     this.nodes['.antler-custom-urls'] = new Element('INPUT');
     for (const name of ['progress', 'records', 'note', 'receivers', 'checks', 'check-note', 'check', 'error']) this.nodes['.antler-' + name] = new Element();
   }
 }
 async function check(mode = 'hosted') {
-  let now = 100000, tick, requests = [], statuses = [], saved, redirect;
+  let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false;
   const dlg = new Element(); dlg.open = true;
   const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
@@ -52,13 +53,15 @@ async function check(mode = 'hosted') {
   group.children = [service.previousElementSibling, service];
   dlg.nodes = { '[data-save-provider]': save };
   if (mode === 'status') dlg.nodes['.dialmx-setup'] = new Element();
+  const rotate = new Element('FORM'); rotate.nodes.button = new Element('BUTTON');
+  dlg.nodes['form[data-antler-regenerate]'] = rotate;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: [], instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
   const created = [];
   vm.runInNewContext(source.slice(start, end), {
     document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
     Date: Clock, navigator: {}, window: { setInterval(fn) { tick = fn; return 1; }, clearInterval() {}, addEventListener() {}, location: { assign(url) { redirect = url; } } },
-    fetch(url, options) { requests.push({ url, options }); if (options.method !== 'GET') saved = JSON.parse(options.body); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
+    fetch(url, options) { requests.push({ url, options }); if (options.method !== 'GET') saved = JSON.parse(options.body); if (failRotation && saved && options.method === 'PUT' && saved.regenerate_secret) return Promise.reject(new Error('network error')); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
   });
   const wizard = group.children.at(-1);
   const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -72,11 +75,46 @@ async function check(mode = 'hosted') {
     assert.equal(provider.hidden, true);
     assert.equal(save.textContent, 'Save email');
     tick(); await flush();
-    assert.equal(wizard.panels[2].hidden, false);
+    assert.equal(wizard.panels[2].hidden, true);
     email.value = 'changed@example.com'; await submit();
     assert.equal(requests.at(-1).options.method, 'POST');
     assert.deepEqual(saved.config, { contact_email: 'changed@example.com' });
     assert.equal(wizard.panels[3].hidden, true);
+    const beforeCancel = requests.length;
+    rotate.events.submit({ defaultPrevented: true, preventDefault() {} }); await flush();
+    assert.equal(requests.length, beforeCancel, 'cancelled confirmation cannot rotate');
+    rotate.events.submit({ defaultPrevented: false, preventDefault() {} });
+    rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
+    assert.equal(requests.length, beforeCancel + 1, 'double submit rotates only once');
+    assert.deepEqual(saved, { provider: 'dialmx', regenerate_secret: true });
+    assert.equal(wizard.panels[1].hidden, false, 'rotation opens DNS step');
+    assert.match(collect(wizard.nodes['.antler-records']), /public-key/);
+    assert.equal(created.filter(el => el.tagName === 'DETAILS' && collect(el).includes('TXT')).at(-1).open, true);
+    assert.equal(back.hidden, true, 'rotation cannot return to contact/setup steps');
+    await submit();
+    assert.equal(wizard.panels[2].hidden, false);
+    assert.equal(save.textContent, 'Finish');
+    assert.equal(save.disabled, true, 'rotation waits for current readiness');
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }];
+    wizard.nodes['.antler-check'].events.click(); await flush();
+    assert.equal(save.disabled, false);
+    statuses = [{ state: 'disconnected' }];
+    await submit();
+    assert.equal(wizard.panels[2].hidden, false, 'Finish rechecks readiness');
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }]; now += 3000;
+    wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
+    assert.equal(save.textContent, 'Save email', 'Finish returns to status');
+    assert.equal(requests.filter(r => r.options.method === 'PUT').length, 1, 'Finish does not rewrite config or rotate again');
+    dlg.open = false; now += 20000;
+    const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
+    dlg.open = true; tick(); await flush();
+    assert.match(collect(wizard.nodes['.antler-records']), /Antler|TXT/, 'reopening refreshes status and DNS');
+    failRotation = true;
+    rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
+    assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);
+    const failedCount = requests.filter(r => r.options.method === 'PUT').length;
+    now += 20000; tick(); await flush();
+    assert.equal(requests.filter(r => r.options.method === 'PUT').length, failedCount, 'failed rotation is never automatically retried');
     return;
   }
   assert.equal(save.textContent, 'Next');
