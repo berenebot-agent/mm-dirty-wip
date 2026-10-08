@@ -89,7 +89,7 @@ type Server struct {
 	// webauthnLoginLimiter bounds passkey login attempts per source address,
 	// separate from the password limiter so one cannot exhaust the other.
 	webauthnLoginLimiter *limiter
-	// dns performs the cached published-record checks behind the Dial MX setup
+	// dns performs the live published-record checks behind the Dial MX setup
 	// traffic lights. It is never on a save path and never fails a request.
 	dns *dnsChecker
 }
