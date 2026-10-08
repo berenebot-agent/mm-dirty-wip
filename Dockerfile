@@ -12,8 +12,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose ./cmd/server
 # The optional MX edge is built into the same image so the embedded mode
-# (MX_ENABLE=true) can spawn it. The sidecar/remote deployments use the
-# separate, minimal mailmoose-mx image instead (Dockerfile.mx), and select it
+# (MX_ENABLE=true) can spawn it. The remote deployment uses the
+# separate, minimal mailmoose-mx image instead (Dockerfile.mx), and selects it
 # with MX_ENABLE=remote.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

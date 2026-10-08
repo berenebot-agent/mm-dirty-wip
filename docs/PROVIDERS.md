@@ -92,7 +92,7 @@ variable selects the mode only on first import. The server binary defaults to
 - **`false`** (server default) — no MX; receive via a webhook provider only. Set
   this in `.env` for a webhook-only deployment.
 - **`remote`** — receive on port 25 with the edge in its own container/image
-  (`mailmoose-mx`, via `docker-compose.mx-sidecar.yml`) or on another host. Needs
+  (`mailmoose-mx`, see README.md) or on another host. Needs
   `MX_RECEIVER_URL` and a shared `DIALMX_CORE_KEY`.
 
 The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages

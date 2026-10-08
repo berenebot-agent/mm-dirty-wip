@@ -924,7 +924,7 @@ memory. The single switch `MX_ENABLE` has three values: `false` (no MX), `true`
   two remedies (remove the hardening, or use `MX_ENABLE=remote` with the
   separate edge image). Silent same-uid degradation would defeat the isolation.
 - **Isolation is weaker than `remote`:** DAC + separate uid, no mount or
-  network namespaces. `docker-compose.mx-sidecar.yml` (the `mailmoose-mx` image)
+  network namespaces. The remote mode (the `mailmoose-mx` image, see README.md)
   remains the recommended mode when two containers are acceptable; the embedded
   mode trades namespace isolation for a one-container deployment.
 - **In-memory staging, capped:** the edge holds the original bytes in RAM for
@@ -955,8 +955,7 @@ binary itself defaults to `false` when `MX_ENABLE` is unset. A separate,
 self-contained `docker-compose.advanced.yml` mirrors the same MX default and adds
 the hardened stack (`read_only`, `/tmp` tmpfs, `no-new-privileges`, the optional
 `cap_drop`/`user` block, `MAILMOOSE_RUN_UID`/`GID`).
-`docker-compose.mx-sidecar.yml` is the two-container sidecar deployment and
-forces `MX_ENABLE=remote`.
+The two-container sidecar deployment (see README.md) forces `MX_ENABLE=remote`.
 
 **Requirement:** the earlier minimal Compose set no `MX_ENABLE` yet published
 host port 25, while the docs claimed embedded MX was the default. That was the
@@ -985,21 +984,21 @@ compose files and the matching documentation; no Go code, no new dependency, no
 new runtime service. Changing the settled default was made under the
 change-discipline rule for a settled decision (this entry).
 
-## D040 — Separate edge image for remote/sidecar MX (Dockerfile.mx)
+## D040 — Separate edge image for remote MX (Dockerfile.mx)
 
-The sidecar/remote edge runs from its own image, `mailmoose-mx` (`Dockerfile.mx`),
+The remote edge runs from its own image, `mailmoose-mx` (`Dockerfile.mx`),
 not the app image with an entrypoint override. The app image still builds the
 edge binary for `MX_ENABLE=true`; the separate image is edge-only.
 
 - **Why:** "which container is this?" should be obvious. A standalone MX host or
-  sidecar previously ran the full app image (including `mailmoose` and
+  remote receiver previously ran the full app image (including `mailmoose` and
   `libsqlite3`) with a different entrypoint. The edge links no SQLite and opens
   no files, so the edge image builds `CGO_ENABLED=0` static, ships only
   ca-certificates/tzdata, and runs as a non-root user with no `/data` volume.
 - **Debuggable base:** `debian:bookworm-slim` (not distroless) so the container
   has a shell and tools when diagnosing DNS/TLS issues.
 - **Credential unchanged:** `remote` still requires `MX_EDGE_KEYS` shared with
-  the edge (`MX_EDGE_SECRET` in the sidecar compose).
+  the edge (the receiver's `DIALMX_CORE_KEY` environment variable).
 
 ## D041 — Workflow mail has its own outbound queue (migration 022)
 

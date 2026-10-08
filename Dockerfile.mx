@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# Dedicated image for the optional MX edge, used by the sidecar and remote
-# deployments. The edge is pure Go with no cgo and opens no files, so it builds
+# Dedicated image for the optional MX edge, used by the remote
+# deployment. The edge is pure Go with no cgo and opens no files, so it builds
 # static and runs unprivileged. It needs ca-certificates (verified TLS to a
 # remote core over HTTPS) and DNS (/etc/resolv.conf) for SPF/DKIM/DMARC.
 #
