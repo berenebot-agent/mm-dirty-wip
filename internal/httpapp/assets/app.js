@@ -2750,43 +2750,85 @@ function hideInboxSubview(dlg) {
       var table = document.createElement('table');
       table.className = 'antler-dns-table';
       var head = document.createElement('tr');
-      ['Name', 'Type', 'Priority', 'Value', 'Status', ''].forEach(function (title) {
+      ['Connector', 'Connection status', 'MX status'].forEach(function (title) {
         var th = document.createElement('th');
         th.textContent = title;
         head.appendChild(th);
       });
       var thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
       var tbody = document.createElement('tbody');
-      function row(name, type, priority, value, entry) {
+      function statusCell(parent, light) {
+        var td = document.createElement('td');
+        td.appendChild(light.span);
+        td.appendChild(light.text);
+        parent.appendChild(td);
+      }
+      (instructions.mx || []).forEach(function (mx) {
         var tr = document.createElement('tr');
-        function cell(text, className) {
-          var td = document.createElement('td');
-          td.textContent = text;
-          if (className) { td.className = className; }
-          tr.appendChild(td);
+        var connector = document.createElement('td');
+        connector.textContent = mx.hostname;
+        tr.appendChild(connector);
+        var connection = (data.status || []).filter(function (status) {
+          return status.smtp_hostname === mx.hostname;
+        })[0];
+        var connectionLight = connection ? {
+          span: Object.assign(document.createElement('span'), { className: 'antler-light ' + (isReady(connection) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(connection.state) !== -1 ? 'red' : 'amber') }),
+          text: document.createElement('span')
+        } : lightFor(null);
+        connectionLight.text.textContent = connection ? (isReady(connection) ? 'Connected' : ({ connecting: 'Connecting', disconnected: 'Disconnected', rejected: 'Rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity' }[connection.state] || 'Waiting')) : 'Waiting';
+        if (connection && connection.reason) { connectionLight.text.title = connection.reason; }
+        statusCell(tr, connectionLight);
+        statusCell(tr, lightFor(dnsByKind.mx));
+        tbody.appendChild(tr);
+      });
+      if (!(instructions.mx || []).length) {
+        var waiting = document.createElement('tr');
+        var waitingCell = document.createElement('td');
+        waitingCell.colSpan = 3;
+        waitingCell.textContent = 'No connectors configured';
+        waiting.appendChild(waitingCell);
+        tbody.appendChild(waiting);
+      }
+      table.appendChild(tbody);
+      var txtEntry = dnsByKind.txt;
+      var auth = document.createElement('div');
+      auth.className = 'antler-domain-auth';
+      var authTitle = document.createElement('strong');
+      authTitle.textContent = 'Domain authentication — TXT record';
+      auth.appendChild(authTitle);
+      var authStatus = document.createElement('span');
+      var txtLight = lightFor(txtEntry);
+      authStatus.appendChild(txtLight.span);
+      authStatus.appendChild(txtLight.text);
+      auth.appendChild(authStatus);
+      records.appendChild(table);
+      records.appendChild(auth);
+      function remediation(label, name, value, priority, entry) {
+        if (!value || (entry && entry.state === 'ok')) { return; }
+        var box = document.createElement('details');
+        box.className = 'antler-dns-remediation';
+        var summary = document.createElement('summary');
+        summary.textContent = 'DNS action needed: ' + label;
+        box.appendChild(summary);
+        if (entry && entry.reason) {
+          var reason = document.createElement('p'); reason.textContent = entry.reason; box.appendChild(reason);
+        } else {
+          var pending = document.createElement('p'); pending.textContent = 'This record has not been confirmed yet. Add or correct it at your DNS provider, then check again.'; box.appendChild(pending);
         }
-        cell(name, 'antler-name');
-        cell(type);
-        cell(priority);
-        cell(value, 'antler-value');
-        var status = document.createElement('td');
-        var light = lightFor(entry);
-        status.appendChild(light.span); status.appendChild(light.text);
-        tr.appendChild(status);
-        var action = document.createElement('td');
+        var detail = document.createElement('p');
+        detail.textContent = 'Add or update a ' + label + ' record: name ' + name + (priority ? ', priority ' + priority : '') + ', value ' + value;
+        box.appendChild(detail);
         var copy = document.createElement('button');
-        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy';
+        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
         copy.addEventListener('click', function () {
           if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
           navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
         });
-        action.appendChild(copy); tr.appendChild(action);
-        tbody.appendChild(tr);
+        box.appendChild(copy);
+        records.appendChild(box);
       }
-      (instructions.mx || []).forEach(function (mx) { row(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
-      if (instructions.txt_value) { row(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
-      table.appendChild(tbody);
-      records.appendChild(table);
+      (instructions.mx || []).forEach(function (mx) { remediation('MX', mxName, mx.hostname, String(mx.priority), dnsByKind.mx); });
+      remediation('TXT', instructions.txt_name, instructions.txt_value, '', txtEntry);
       var nameNote = wizard.querySelector('.antler-note');
       if (nameNote) {
         nameNote.textContent = subdomain
@@ -2842,17 +2884,16 @@ function hideInboxSubview(dlg) {
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
       wizard.querySelector('.antler-progress').textContent = custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
-      // The saved-status view stacks the contact email, DNS table and receiver
-      // lights on one screen; the setup wizard shows one step at a time.
+      // The saved-status view replaces the separate receiver panel with a
+      // combined connection, MX, and domain-authentication status table.
       panels.forEach(function (panel, index) {
-        panel.hidden = statusMode ? (index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
+        panel.hidden = statusMode ? (index === 2 || index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
       });
       advancedLabel.hidden = statusMode;
       if (statusMode) {
         wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
         wizard.querySelector('[data-antler-step="0"] p').hidden = true;
-        wizard.querySelector('[data-antler-step="1"] h3').textContent = 'MX and TXT records';
-        wizard.querySelector('[data-antler-step="2"] h3').textContent = 'Antler MX connection status';
+        wizard.querySelector('[data-antler-step="1"] h3').textContent = 'Antler MX status';
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
       back.hidden = statusMode || (step === 0 && !entered);
