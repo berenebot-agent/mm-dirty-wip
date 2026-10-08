@@ -2775,14 +2775,19 @@ function hideInboxSubview(dlg) {
     // pending and is filled by the first render. While a check is in flight the
     // amber pending dots animate (see .antler-checking), which also covers every
     // wizard step's own pending rows.
-    function skeletonCell(parent, text) {
-      var td = document.createElement('td');
-      var span = document.createElement('span');
-      span.className = 'antler-light amber';
+    function skeletonLight(text) {
+      var wrap = document.createElement('span');
+      var dot = document.createElement('span');
+      dot.className = 'antler-light amber';
       var label = document.createElement('span');
       label.textContent = text;
-      td.appendChild(span);
-      td.appendChild(label);
+      wrap.appendChild(dot);
+      wrap.appendChild(label);
+      return wrap;
+    }
+    function skeletonCell(parent, text) {
+      var td = document.createElement('td');
+      td.appendChild(skeletonLight(text));
       parent.appendChild(td);
       return td;
     }
@@ -2824,7 +2829,7 @@ function hideInboxSubview(dlg) {
       var title = document.createElement('strong');
       title.textContent = 'Domain authentication — TXT record';
       auth.appendChild(title);
-      skeletonCell(auth, 'Pending');
+      auth.appendChild(skeletonLight('Pending'));
       records.appendChild(auth);
     }
     function render(data) {
@@ -3048,11 +3053,6 @@ function hideInboxSubview(dlg) {
       if (busy || !active() || !dlg.open || (!statusMode && (step === 0 || step === 3 || step === 4))) { return; }
       busy = true;
       if (manual) { manualUntil = Date.now() + 3000; }
-      // On the first check there is no state yet, so lay out the full status
-      // table (connectors, DNS and domain auth) before the GET returns. The
-      // first render then fills the values in place; the busy class makes the
-      // pending dots animate until it does.
-      if (statusMode && !state) { renderSkeleton(connectors); }
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
       api('GET').then(function (data) { render(data); fail(''); }).catch(function (err) { fail(err.message); }).finally(function () {
         busy = false; nextCheck = Date.now() + 10000;
@@ -3162,14 +3162,18 @@ function hideInboxSubview(dlg) {
       }
     }, 1000);
     window.addEventListener('pagehide', function () { window.clearInterval(timer); });
-    // A status dialog the server marked to open checks immediately rather than
-    // waiting for the first one-second poll tick, so its table is complete (and
-    // animating) from the first paint. Reopening it later re-checks likewise.
+    // A status dialog the server marked to open draws its complete connector
+    // table synchronously here, before the browser paints the open dialog, so it
+    // never flashes thin and then expands when the first poll lands. The auto-
+    // open runs in an earlier script block, so this must render eagerly rather
+    // than wait for the (queued) open event.
+    if (statusMode && !state) { renderSkeleton(connectors); }
+    update();
     if (statusMode && dlg.open) { refresh(true); }
+    // Reopening a status or wizard dialog later re-checks immediately.
     dlg.addEventListener('open', function () {
       if (active() && !busy && (statusMode || step === 1 || step === 2)) { refresh(false); }
     });
-    update();
   });
 })();
 
