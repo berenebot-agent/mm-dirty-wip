@@ -168,6 +168,69 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 }
 
+// TestDialMXAntlerPartialMXSetIsHealthy proves the MX check treats the receiver
+// set as redundancy: publishing only one of two advertised receivers is "ok",
+// matched lists the receiver that is actually pointed at, and the other is left
+// out of matched (so its connector row is not painted by the aggregate check).
+func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+		{ID: "antler-2", SessionURL: "https://antler2.example.test", SMTPHostname: "antler2.example.test", MXPriority: 20},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	cred, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+	txtValue := mxwire.DomainTXT(cred.KeyID, pub)
+
+	srv := httpapp.New(svc, nil)
+	// Only the priority-10 receiver is published.
+	srv.SetDNSResolver(fakeResolver{
+		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}},
+		txt: []string{txtValue},
+	})
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	do := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	body := waitForDNS(t, do)
+	var mx *map[string]any
+	for _, raw := range body["dns"].([]any) {
+		v := raw.(map[string]any)
+		if v["kind"] == "mx" {
+			m := v
+			mx = &m
+		}
+	}
+	if mx == nil {
+		t.Fatalf("no MX check returned: %v", body["dns"])
+	}
+	if (*mx)["state"] != "ok" {
+		t.Fatalf("partial MX set = %v, want ok", (*mx)["state"])
+	}
+	matched, _ := (*mx)["matched"].([]any)
+	if len(matched) != 1 || matched[0] != "antler1.example.test" {
+		t.Fatalf("matched = %v, want only the published receiver", matched)
+	}
+}
+
 // The browser uses session-scoped setup routes; saves require the existing
 // CSRF guard, and reads require a browser session.
 func TestAntlerWizardSessionSetup(t *testing.T) {

@@ -84,7 +84,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 				}
 			}
 			if !found {
-				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiver.SessionURL, SMTPHostname: receiver.SMTPHostname, State: "connecting"})
+				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiver.SessionURL, SMTPHostname: receiver.SMTPHostname, State: mxdial.StatusConnecting})
 			}
 		}
 	} else if raw, ok := values["receiver_urls"].(string); ok {
@@ -101,7 +101,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 				}
 			}
 			if !found {
-				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiverURL, State: "connecting"})
+				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiverURL, State: mxdial.StatusConnecting})
 			}
 		}
 	}
