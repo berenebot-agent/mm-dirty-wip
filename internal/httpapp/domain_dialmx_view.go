@@ -46,12 +46,40 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	}
 	if s.Service.DialMX != nil {
 		for _, st := range s.Service.DialMX.Status(domainName) {
+			if view.Service == mxdial.ServiceAntler {
+				configured := false
+				for _, receiver := range app.AntlerReceiversFromConfig(values) {
+					if receiver.SessionURL == st.ReceiverURL {
+						configured = true
+						break
+					}
+				}
+				if !configured {
+					continue
+				}
+			}
 			v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname}
 			if !st.ExpiresAt.IsZero() {
 				t := st.ExpiresAt
 				v.ExpiresAt = &t
 			}
 			view.Statuses = append(view.Statuses, v)
+		}
+	}
+	// Include receivers that have not reported a domain status yet, so setup
+	// always shows the complete saved Antler receiver set.
+	if view.Service == mxdial.ServiceAntler {
+		for _, receiver := range app.AntlerReceiversFromConfig(values) {
+			found := false
+			for _, status := range view.Statuses {
+				if status.ReceiverURL == receiver.SessionURL {
+					found = true
+					break
+				}
+			}
+			if !found {
+				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiver.SessionURL, SMTPHostname: receiver.SMTPHostname, State: "connecting"})
+			}
 		}
 	}
 	if view.TXTValue != "" {
