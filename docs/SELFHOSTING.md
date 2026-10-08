@@ -148,15 +148,7 @@ This is DAC + separate-uid isolation, not namespaces.
 The edge runs from its own minimal image (`Dockerfile.mx`) in its own
 filesystem and network namespace. Recommended when you can run two containers:
 
-```bash
-# .env
-DIALMX_CORE_KEY=<long random secret>   # generate: openssl rand -hex 32
-docker compose -f docker-compose.mx-sidecar.yml up -d
-```
-
-The sidecar file sets `MX_ENABLE=remote` on the core and runs the
-`mailmoose-mx` image for the edge. The edge does not boot as root and needs no
-writable filesystem.
+See [README.md](README.md) for the pull and compose examples.
 
 That is the whole required setup. Everything below is optional tuning.
 
