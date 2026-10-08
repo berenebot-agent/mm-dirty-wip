@@ -2664,7 +2664,14 @@ function hideInboxSubview(dlg) {
     var danger = dlg.querySelector('.dialog-danger');
     var rotate = dlg.querySelector('form[data-antler-regenerate]');
     if (statusMode && danger) {
-      Array.prototype.forEach.call(danger.children, function (child) { child.hidden = child !== rotate; });
+      // Keep key rotation and removing the receiving config; drop the
+      // provider-specific Worker-secret regenerate, which is not part of an
+      // Antler MX setup.
+      Array.prototype.forEach.call(danger.children, function (child) {
+        var button = child.querySelector('button');
+        var remove = button && button.className.indexOf('danger') !== -1;
+        child.hidden = child !== rotate && !remove;
+      });
     }
     var close = dlg.querySelector('[data-close-dialog]');
     if (statusMode && close) { close.textContent = 'Close'; }
@@ -2880,19 +2887,17 @@ function hideInboxSubview(dlg) {
       auth.appendChild(authStatus);
       records.appendChild(table);
       if (statusMode) { records.appendChild(auth); }
-      // Fix is offered whenever anything is not ready: a specific DNS record
-      // mismatch, or a receiver that has not reconnected. The label names the
-      // issue so the operator knows which step the button opens.
+      // Fix is only offered for a DNS record the operator must correct. A
+      // receiver that is connecting, reconnecting or waiting for capacity needs
+      // no action: the relay reconnects on its own, and the status table already
+      // shows it as in progress, so there is nothing to fix.
       fix.hidden = true;
       if (statusMode) {
         // A partial MX set is healthy: the aggregate check is "ok" once any one
         // receiver's MX is published, so the MX prompt only appears when no
         // connector has any MX (the check is pending or mismatched).
         var dnsIssue = !txtEntry || txtEntry.state !== 'ok' ? 'txt' : (instructions.mx || []).length && (!dnsByKind.mx || dnsByKind.mx.state !== 'ok') ? 'mx' : '';
-        if (dnsIssue || !ready || (data.status || []).some(function (status) { return !isReady(status); })) {
-          fixKind = dnsIssue; fix.textContent = dnsIssue ? 'Fix DNS setup' : 'Fix receiving setup';
-          fix.hidden = false;
-        }
+        if (dnsIssue) { fixKind = dnsIssue; fix.textContent = 'Fix DNS records'; fix.hidden = false; }
       }
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
       (data.status || []).forEach(function (status) {
@@ -2941,9 +2946,9 @@ function hideInboxSubview(dlg) {
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
-      wizard.querySelector('.antler-progress').textContent = repairing ? (fixKind ? 'Fix DNS · DNS → Receivers' : 'Fix receivers · Receivers') : rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('.antler-progress').textContent = repairing ? 'Fix DNS records' : rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
       wizard.querySelector('[data-antler-step="1"] h3').textContent = repairing ? 'Fix your ' + fixKind.toUpperCase() + ' record' : rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
-      wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
+      wizard.querySelector('[data-antler-step="1"] > p').textContent = repairing ? 'Update this record at your DNS provider, then choose Done. The core re-checks automatically once DNS propagates.' : rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
       // The saved-status view replaces the separate receiver panel with a
       // combined connection, MX, and domain-authentication status table.
       panels.forEach(function (panel, index) {
@@ -2957,13 +2962,17 @@ function hideInboxSubview(dlg) {
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
       if (statusMode) { wizard.querySelector('[data-antler-step="1"] > p').hidden = true; }
-      back.hidden = statusMode || ((rotating || repairing) ? step === 1 : step === 0 && !entered);
+      // Repair can always return to status; rotation's new-TXT step cannot go
+      // back to the pre-rotation state, but its receiver step can.
+      back.hidden = statusMode || (step === 0 && !entered) || (rotating && step === 1);
       back.disabled = busy;
       wizard.querySelector('.antler-checks').hidden = !statusMode && step !== 1 && step !== 2;
       save.hidden = statusMode && (custom || !emailDirty());
-      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : ((rotating || repairing) && step === 2) || step === 3 ? 'Finish' : 'Next';
+      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : repairing ? 'Done' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
-      save.disabled = busy || (!statusMode && (step === 2 || step === 3) && !ready);
+      // Rotation finishes regardless of readiness: the receiver re-authorizes on
+      // its own and the status view shows it as in progress.
+      save.disabled = busy || (!statusMode && !rotating && (step === 2 || step === 3) && !ready);
       check.disabled = busy || Date.now() < manualUntil;
       check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
     }
@@ -2980,7 +2989,7 @@ function hideInboxSubview(dlg) {
     check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
     fix.addEventListener('click', function () {
       if (busy) { return; }
-      repairing = true; statusMode = false; entered = true; step = fixKind ? 1 : 2;
+      repairing = true; statusMode = false; entered = true; step = 1;
       fail(''); render(state); nextCheck = Date.now();
     });
     email.addEventListener('input', update);
@@ -3005,6 +3014,7 @@ function hideInboxSubview(dlg) {
       });
     }
     back.addEventListener('click', function () {
+      if (repairing) { repairing = false; statusMode = true; render(state); fail(''); return; }
       if (step === 0) { entered = false; }
       else if (step === 4) { step = 0; }
       else if (step === 1 && custom) { step = 4; }
@@ -3014,13 +3024,21 @@ function hideInboxSubview(dlg) {
     form.addEventListener('submit', function (event) {
       if (!active()) { return; }
       event.preventDefault();
-      if (busy || (!statusMode && (step === 2 || step === 3) && !ready)) { return; }
-      if ((rotating || repairing) && step === 2) {
+      if (busy || (!statusMode && !rotating && (step === 2 || step === 3) && !ready)) { return; }
+      // Repair is a single DNS step: Done re-checks and returns to the status view.
+      if (repairing) {
         busy = true; update();
         api('GET').then(function (data) {
-          render(data);
-          if (!ready) { throw new Error('Wait for one Antler receiver to connect before finishing.'); }
-          rotating = false; repairing = false; statusMode = true; render(data); fail('');
+          repairing = false; statusMode = true; render(data); fail('');
+        }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
+        return;
+      }
+      // Rotation finishes regardless of readiness; the receiver re-authorizes on
+      // its own and the status view reports it as in progress.
+      if (rotating && step === 2) {
+        busy = true; update();
+        api('GET').then(function (data) {
+          rotating = false; statusMode = true; render(data); fail('');
         }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
         return;
       }
