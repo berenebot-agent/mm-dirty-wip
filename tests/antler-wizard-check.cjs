@@ -89,7 +89,9 @@ async function check(mode = 'hosted') {
     assert.deepEqual(saved, { provider: 'dialmx', regenerate_secret: true });
     assert.equal(wizard.panels[1].hidden, false, 'rotation opens DNS step');
     assert.match(collect(wizard.nodes['.antler-records']), /public-key/);
-    assert.equal(created.filter(el => el.tagName === 'DETAILS' && collect(el).includes('TXT')).at(-1).open, true);
+    assert.match(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
+    assert.match(collect(wizard.nodes['.antler-records']), /Copy value/);
+    assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Connection status/);
     assert.equal(back.hidden, true, 'rotation cannot return to contact/setup steps');
     await submit();
     assert.equal(wizard.panels[2].hidden, false);
@@ -104,6 +106,8 @@ async function check(mode = 'hosted') {
     statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }]; now += 3000;
     wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
     assert.equal(save.textContent, 'Save email', 'Finish returns to status');
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+    assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
     assert.equal(requests.filter(r => r.options.method === 'PUT').length, 1, 'Finish does not rewrite config or rotate again');
     dlg.open = false; now += 20000;
     const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
@@ -145,6 +149,7 @@ async function check(mode = 'hosted') {
   assert.equal(wizard.panels[1].hidden, false);
   assert.equal(back.hidden, false, 'Back appears once inside the wizard');
   const table = collect(wizard.nodes['.antler-records']);
+  assert.match(table, /Name Type Priority Value Status/, 'initial setup uses DNS record layout');
   if (mode === 'custom') {
     assert.match(table, /_mailmoose-mx\.example\.com/);
   } else {
