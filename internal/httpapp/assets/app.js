@@ -2656,6 +2656,15 @@ function hideInboxSubview(dlg) {
     var enforcement = group.querySelector('[name="cfg_dialmx_enforcement"]');
     var save = dlg.querySelector('[data-save-provider]');
     var oldSetup = dlg.querySelector('.dialmx-setup');
+    var statusMode = !!oldSetup && provider.value === 'dialmx';
+    var entered = statusMode;
+    var custom = service.value === 'custom';
+    var providerLabel = provider.previousElementSibling;
+    var serviceLabel = service.previousElementSibling;
+    var danger = dlg.querySelector('.dialog-danger');
+    if (statusMode && danger) { danger.hidden = true; }
+    var close = dlg.querySelector('[data-close-dialog]');
+    if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
     var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0;
     var state = null, savedEmail = null, timer = null;
@@ -2666,6 +2675,7 @@ function hideInboxSubview(dlg) {
       '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div><ul class="antler-dns"></ul><p class="muted small">DNS results are cached for up to one minute.</p></section>' +
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
+      '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
       '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><button type="button" class="secondary antler-check">Check now</button></div>' +
       '<p class="antler-error error" role="alert" hidden></p><button type="button" class="secondary antler-back" hidden>Back</button>';
     group.appendChild(wizard);
@@ -2677,12 +2687,23 @@ function hideInboxSubview(dlg) {
     }
     moveField(email, 0);
     moveField(enforcement, 3);
+    var advancedLabel = document.createElement('label');
+    var advanced = document.createElement('input');
+    advanced.type = 'checkbox'; advanced.checked = custom;
+    advanced.style = 'width:auto;margin-right:8px';
+    advancedLabel.appendChild(advanced);
+    advancedLabel.appendChild(document.createTextNode('Advanced: use custom receivers'));
+    wizard.querySelector('[data-antler-step="0"]').appendChild(advancedLabel);
+    var urls = wizard.querySelector('.antler-custom-urls');
+    var existingURLs = group.querySelector('[name="cfg_dialmx_receiver_urls"]');
+    urls.value = existingURLs ? existingURLs.value : '';
+    advanced.addEventListener('change', function () { custom = advanced.checked; update(); });
     var panels = wizard.querySelectorAll('[data-antler-step]');
     var check = wizard.querySelector('.antler-check');
     var note = wizard.querySelector('.antler-check-note');
     var back = wizard.querySelector('.antler-back');
     var error = wizard.querySelector('.antler-error');
-    function active() { return provider.value === 'dialmx' && service.value === 'antler'; }
+    function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
     function api(method, config) {
       var options = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
@@ -2726,7 +2747,10 @@ function hideInboxSubview(dlg) {
       var dns = wizard.querySelector('.antler-dns'); dns.replaceChildren();
       (data.dns || []).forEach(function (entry) {
         var li = document.createElement('li');
+        var light = document.createElement('span');
+        light.className = 'antler-light ' + (entry.state === 'ok' ? 'green' : entry.state === 'mismatch' ? 'red' : 'amber');
         li.textContent = entry.kind.toUpperCase() + ': ' + (entry.state === 'ok' ? 'Published and matching' : entry.reason || 'Waiting for DNS');
+        li.prepend(light);
         dns.appendChild(li);
       });
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
@@ -2737,6 +2761,9 @@ function hideInboxSubview(dlg) {
           rejected: 'Authorization rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity'
         }[status.state] || 'Waiting for DNS authorization';
         row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + label + (status.reason ? ' · ' + status.reason : '');
+        var light = document.createElement('span');
+        light.className = 'antler-light ' + (isReady(status) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(status.state) !== -1 ? 'red' : 'amber');
+        row.prepend(light);
         receivers.appendChild(row);
       });
       if (!(data.status || []).length) { receivers.textContent = 'Waiting for receiver status…'; }
@@ -2746,13 +2773,20 @@ function hideInboxSubview(dlg) {
       var enabled = active();
       provider.disabled = busy;
       service.disabled = busy || provider.value !== 'dialmx';
+      provider.hidden = enabled && entered;
+      if (providerLabel) { providerLabel.hidden = provider.hidden; }
+      service.hidden = true;
+      if (serviceLabel) { serviceLabel.hidden = true; }
       wizard.hidden = provider.value !== 'dialmx';
       // Keep the generic custom-service controls available outside the wizard.
       Array.prototype.forEach.call(group.children, function (child) {
-        if (child !== wizard && child !== service && child !== service.previousElementSibling && child.tagName !== 'TEMPLATE') { child.hidden = enabled; }
+        if (child !== wizard && child.tagName !== 'TEMPLATE') { child.hidden = enabled; }
       });
       email.type = enabled ? 'email' : 'text';
-      email.required = enabled;
+      email.required = enabled && !custom;
+      email.disabled = !enabled || (custom && step !== 0);
+      advanced.disabled = !enabled || busy;
+      urls.disabled = !enabled;
       if (oldSetup) { oldSetup.hidden = enabled || provider.value !== 'dialmx'; }
       if (!enabled) {
         // The moved fields still belong to the custom form.
@@ -2766,20 +2800,29 @@ function hideInboxSubview(dlg) {
         return;
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
-      wizard.querySelector('.antler-progress').hidden = false;
-      wizard.querySelector('.antler-progress').textContent = 'Step ' + (step + 1) + ' of 4 · Contact → DNS → Receivers → Enforcement';
-      panels.forEach(function (panel, index) { panel.hidden = index !== step; });
-      back.hidden = step === 0;
+      wizard.querySelector('.antler-progress').hidden = statusMode;
+      wizard.querySelector('.antler-progress').textContent = custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      panels.forEach(function (panel, index) { panel.hidden = statusMode ? index !== 2 && (index !== 0 || custom) : index !== step; });
+      advancedLabel.hidden = statusMode;
+      if (statusMode) {
+        wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
+        wizard.querySelector('[data-antler-step="0"] p').hidden = true;
+        wizard.querySelector('[data-antler-step="2"] h3').textContent = 'Antler MX connection status';
+        wizard.querySelector('[data-antler-step="2"] p').hidden = true;
+        wizard.querySelector('[data-antler-step="2"]').appendChild(wizard.querySelector('.antler-dns'));
+      }
+      back.hidden = statusMode || (step === 0 && !entered);
       back.disabled = busy;
-      wizard.querySelector('.antler-checks').hidden = step !== 1 && step !== 2;
-      save.textContent = busy ? 'Please wait…' : step === 3 ? 'Finish' : 'Next';
+      wizard.querySelector('.antler-checks').hidden = !statusMode && step !== 1 && step !== 2;
+      save.hidden = statusMode && custom;
+      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
-      save.disabled = busy || (step >= 2 && !ready);
+      save.disabled = busy || (!statusMode && (step === 2 || step === 3) && !ready);
       check.disabled = busy || Date.now() < manualUntil;
       check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
     }
     function refresh(manual) {
-      if (busy || !active() || !dlg.open || step === 0 || step === 3) { return; }
+      if (busy || !active() || !dlg.open || (!statusMode && (step === 0 || step === 3 || step === 4))) { return; }
       busy = true;
       if (manual) { manualUntil = Date.now() + 3000; }
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
@@ -2789,13 +2832,29 @@ function hideInboxSubview(dlg) {
       });
     }
     check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
-    back.addEventListener('click', function () { step = Math.max(0, step - 1); fail(''); update(); });
+    back.addEventListener('click', function () {
+      if (step === 0) { entered = false; }
+      else if (step === 4) { step = 0; }
+      else if (step === 1 && custom) { step = 4; }
+      else { step = Math.max(0, step - 1); }
+      fail(''); update();
+    });
     form.addEventListener('submit', function (event) {
       if (!active()) { return; }
       event.preventDefault();
-      if (busy || (step >= 2 && !ready)) { return; }
+      if (busy || (!statusMode && (step === 2 || step === 3) && !ready)) { return; }
+      if (statusMode) {
+        if (custom || !email.reportValidity()) { return; }
+        busy = true; update();
+        api('POST', { contact_email: email.value }).then(function (data) { render(data); fail(''); })
+          .catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
+        return;
+      }
+      entered = true;
+      if (step === 0 && custom) { step = 4; update(); return; }
       if (step === 1 || step === 2) { step++; update(); if (step === 2) { refresh(false); } return; }
-      if (!email.reportValidity()) { return; }
+      if (!custom && !email.reportValidity()) { return; }
+      if (step === 4 && !urls.value.trim()) { fail('Enter at least one receiver URL.'); return; }
       if (step === 0 && savedEmail === email.value && state) { step = 1; update(); return; }
       busy = true; fail(''); update();
       var finishing = step === 3;
@@ -2805,11 +2864,13 @@ function hideInboxSubview(dlg) {
       }) : api('GET').then(function (data) {
         // Reopening an existing setup must retain its enforcement until the
         // final step, and must not unnecessarily resolve a new receiver set.
-        if (data.provider === 'dialmx' && data.config.service === 'antler') { state = data; }
+        if (data.provider === 'dialmx' && data.config.service === (custom ? 'custom' : 'antler')) { state = data; }
       });
       beforeSave.then(function () {
-        if (!finishing && state && state.config.contact_email === email.value) { return state; }
-        return api('PUT', { service: 'antler', contact_email: email.value, enforcement: finishing ? enforcement.value : (state && state.config.enforcement || 'moderate') });
+        if (!finishing && !custom && state && state.config.contact_email === email.value) { return state; }
+        var config = { service: custom ? 'custom' : 'antler', enforcement: finishing ? enforcement.value : (state && state.config.enforcement || 'moderate') };
+        if (custom) { config.receiver_urls = urls.value; } else { config.contact_email = email.value; }
+        return api('PUT', config);
       }).then(function (data) {
         if (!finishing) { enforcement.value = data.config.enforcement || 'moderate'; }
         savedEmail = email.value; render(data);
@@ -2823,7 +2884,7 @@ function hideInboxSubview(dlg) {
     timer = window.setInterval(function () {
       if (!active() || !dlg.open) { return; }
       update();
-      if ((step === 1 || step === 2) && !busy) {
+      if ((statusMode || step === 1 || step === 2) && !busy) {
         if (Date.now() >= nextCheck) { refresh(false); }
         else { note.textContent = 'Refresh in ' + Math.ceil((nextCheck - Date.now()) / 1000) + 's' + (note.dataset.updated ? ' · Last checked ' + note.dataset.updated : ''); }
       }

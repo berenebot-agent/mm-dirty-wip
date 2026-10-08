@@ -280,6 +280,35 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 	s.domainNotice(w, r, "Sending configuration removed")
 }
 
+// uiAntlerContactEmail updates only the hosted setup's contact metadata.
+func (s *Server) uiAntlerContactEmail(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !adminOnly(w, p) {
+		return
+	}
+	var in struct {
+		Provider string `json:"provider"`
+		Config   struct {
+			ContactEmail string `json:"contact_email"`
+		} `json:"config"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	id := r.PathValue("id")
+	cfg, err := s.Service.UpdateAntlerContactEmail(r.Context(), p.AccountID, id, in.Config.ContactEmail)
+	if err != nil {
+		mapDomainConfigError(w, err)
+		return
+	}
+	response, err := s.domainReceivingResponse(r.Context(), id, cfg)
+	if err != nil {
+		mapDomainConfigError(w, err)
+		return
+	}
+	writeDomainConfigJSON(w, http.StatusOK, response)
+}
+
 // uiDomainReceiving creates, replaces or updates the domain's single receiving
 // configuration. A generated provider secret (Cloudflare) is minted only when
 // missing and returned once as Worker code.

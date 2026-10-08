@@ -827,6 +827,36 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	return nil
 }
 
+// UpdateAntlerContactEmail changes only the contact metadata, preserving the
+// saved receiver snapshot, setup identity, enforcement and domain credential.
+func (s *Service) UpdateAntlerContactEmail(ctx context.Context, accountID, domainID, email string) (store.DomainReceivingConfig, error) {
+	cfg, err := s.Store.GetDomainReceivingConfig(ctx, accountID, domainID)
+	if err != nil {
+		return store.DomainReceivingConfig{}, err
+	}
+	values, err := s.DecryptDomainReceivingConfig(cfg)
+	if err != nil {
+		return store.DomainReceivingConfig{}, err
+	}
+	if cfg.Provider != "dialmx" || values["service"] != mxdial.ServiceAntler {
+		return store.DomainReceivingConfig{}, invalidConfig("contact email is only available for hosted Antler MX")
+	}
+	email = strings.TrimSpace(email)
+	if !mxwire.ValidContactEmail(email) {
+		return store.DomainReceivingConfig{}, invalidConfig("a valid contact email is required")
+	}
+	values["contact_email"] = email
+	encrypted, err := s.encryptConfig(values)
+	if err != nil {
+		return store.DomainReceivingConfig{}, err
+	}
+	saved, err := s.Store.SaveDomainReceivingConfig(ctx, accountID, domainID, cfg.Provider, encrypted, store.ConfigVersion{ID: cfg.ID, Revision: cfg.Revision})
+	if err == nil && s.DialMX != nil {
+		s.DialMX.Wake()
+	}
+	return saved, err
+}
+
 // AntlerReceiversFromConfig decodes the receiver snapshot stored on an Antler
 // MX domain configuration. A custom configuration returns nil.
 func AntlerReceiversFromConfig(values map[string]any) []mxdial.AntlerReceiver {

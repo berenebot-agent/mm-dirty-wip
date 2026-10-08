@@ -219,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/domains/{id}/receiving", s.withSession(s.withCSRF(s.uiDomainReceiving)))
 	m.HandleFunc("GET /ui/domains/{id}/receiving/setup", s.withSession(s.apiDomainReceiving))
 	m.HandleFunc("PUT /ui/domains/{id}/receiving/setup", s.withSession(s.withCSRF(s.apiDomainReceiving)))
+	m.HandleFunc("POST /ui/domains/{id}/receiving/setup", s.withSession(s.withCSRF(s.uiAntlerContactEmail)))
 	m.HandleFunc("POST /ui/domains/{id}/receiving/clear", s.withSession(s.withCSRF(s.uiDomainReceivingClear)))
 	m.HandleFunc("POST /ui/domains/{id}/receiving/regenerate", s.withSession(s.withCSRF(s.uiDomainReceivingRegenerate)))
 	m.HandleFunc("GET /ui/domains/{id}/sending/deliveries", s.withSession(s.domainDeliveries))

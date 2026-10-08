@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
@@ -79,6 +80,23 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 			}
 			if !found {
 				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiver.SessionURL, SMTPHostname: receiver.SMTPHostname, State: "connecting"})
+			}
+		}
+	} else if raw, ok := values["receiver_urls"].(string); ok {
+		for _, receiverURL := range strings.Split(raw, ",") {
+			receiverURL = strings.TrimSpace(receiverURL)
+			if receiverURL == "" {
+				continue
+			}
+			found := false
+			for _, status := range view.Statuses {
+				if status.ReceiverURL == receiverURL {
+					found = true
+					break
+				}
+			}
+			if !found {
+				view.Statuses = append(view.Statuses, mxdialStatusView{ReceiverURL: receiverURL, State: "connecting"})
 			}
 		}
 	}
