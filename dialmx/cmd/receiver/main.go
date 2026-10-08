@@ -190,6 +190,10 @@ func runStandalone(log *slog.Logger) {
 	log.Info(receiver.EventListenerBound, "listener", "smtp", "addr", smtpLn.Addr().String())
 	log.Info(receiver.EventListenerBound, "listener", "session", "addr", tlsLn.Addr().String())
 	log.Info(receiver.EventReceiverReady, "boot_duration", time.Since(started).Round(time.Millisecond).String())
+	// Start the periodic INFO heartbeat now the listeners are bound. It reports
+	// session/proof/message totals and the delta since the previous tick, so a
+	// running deployment is observable without enabling debug.
+	r.Start()
 
 	run("mx edge", func() error { return edge.ListenAndServe(ctx, smtpLn) })
 	run("session", func() error {
@@ -256,6 +260,7 @@ func logSettings(log *slog.Logger, cfg dialmx.Config) {
 		"resolve_timeout", cfg.Receiver.ResolveTimeout.String(),
 		"ingest_timeout", cfg.Receiver.IngestTimeout.String(),
 		"revalidate_interval", cfg.Receiver.RevalidateInterval.String(),
+		"summary_interval", cfg.Receiver.SummaryInterval.String(),
 	)
 }
 

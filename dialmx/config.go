@@ -72,6 +72,10 @@ func Load() (Config, error) {
 	r.ResolveTimeout = time.Duration(envInt("MX_RESOLVE_TIMEOUT_SECONDS", 10)) * time.Second
 	r.IngestTimeout = time.Duration(envInt("MX_INGEST_TIMEOUT_SECONDS", 180)) * time.Second
 	r.RevalidateInterval = time.Duration(envInt("MX_REVALIDATE_SECONDS", 240)) * time.Second
+	// The INFO heartbeat. 0 (or unset) selects the receiver's own default of
+	// five minutes; a negative value disables it, which is useful when the log
+	// is being consumed by a test harness that asserts an exact record set.
+	r.SummaryInterval = time.Duration(envInt("DIALMX_SUMMARY_SECONDS", 300)) * time.Second
 	if err := c.validate(); err != nil {
 		return Config{}, err
 	}
