@@ -2662,11 +2662,14 @@ function hideInboxSubview(dlg) {
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
-    if (statusMode && danger) { danger.hidden = true; }
+    var rotate = dlg.querySelector('form[data-antler-regenerate]');
+    if (statusMode && danger) {
+      Array.prototype.forEach.call(danger.children, function (child) { child.hidden = child !== rotate; });
+    }
     var close = dlg.querySelector('[data-close-dialog]');
     if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
-    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0;
+    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0, rotating = false;
     var state = null, savedEmail = null, timer = null;
     var wizard = document.createElement('section');
     wizard.className = 'antler-wizard';
@@ -2710,12 +2713,12 @@ function hideInboxSubview(dlg) {
     if (footer) { footer.insertBefore(back, footer.firstChild); }
     function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
-    function api(method, config) {
+    function api(method, config, regenerate) {
       var options = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
-      if (config) {
+      if (config || regenerate) {
         options.headers['Content-Type'] = 'application/json';
         options.headers['X-CSRF-Token'] = form.querySelector('[name="_csrf"]').value;
-        options.body = JSON.stringify({ provider: 'dialmx', config: config });
+        options.body = JSON.stringify(regenerate ? { provider: 'dialmx', regenerate_secret: true } : { provider: 'dialmx', config: config });
       }
       return fetch(endpoint, options).then(function (response) {
         if (!response.ok) { throw new Error('Unable to ' + (method === 'GET' ? 'check' : 'save') + ' setup. Please try again.'); }
@@ -2804,13 +2807,16 @@ function hideInboxSubview(dlg) {
       records.appendChild(table);
       records.appendChild(auth);
       function remediation(label, name, value, priority, entry) {
-        if (!value || (entry && entry.state === 'ok')) { return; }
+        if (!value || (entry && entry.state === 'ok' && !(rotating && label === 'TXT'))) { return; }
         var box = document.createElement('details');
         box.className = 'antler-dns-remediation';
         var summary = document.createElement('summary');
-        summary.textContent = 'DNS action needed: ' + label;
+        summary.textContent = entry && entry.state === 'ok' ? 'Current authorization TXT record' : 'DNS action needed: ' + label;
+        box.open = rotating && label === 'TXT';
         box.appendChild(summary);
-        if (entry && entry.reason) {
+        if (entry && entry.state === 'ok') {
+          var matched = document.createElement('p'); matched.textContent = 'DNS matches the new receiving key.'; box.appendChild(matched);
+        } else if (entry && entry.reason) {
           var reason = document.createElement('p'); reason.textContent = entry.reason; box.appendChild(reason);
         } else {
           var pending = document.createElement('p'); pending.textContent = 'This record has not been confirmed yet. Add or correct it at your DNS provider, then check again.'; box.appendChild(pending);
@@ -2853,6 +2859,7 @@ function hideInboxSubview(dlg) {
     }
     function update() {
       var enabled = active();
+      if (rotate) { rotate.querySelector('button').disabled = busy || rotating; }
       provider.disabled = busy;
       service.disabled = busy || provider.value !== 'dialmx';
       provider.hidden = enabled && entered;
@@ -2883,7 +2890,9 @@ function hideInboxSubview(dlg) {
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
-      wizard.querySelector('.antler-progress').textContent = custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('.antler-progress').textContent = rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('[data-antler-step="1"] h3').textContent = rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
+      wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
       // The saved-status view replaces the separate receiver panel with a
       // combined connection, MX, and domain-authentication status table.
       panels.forEach(function (panel, index) {
@@ -2896,11 +2905,11 @@ function hideInboxSubview(dlg) {
         wizard.querySelector('[data-antler-step="1"] h3').textContent = 'Antler MX status';
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
-      back.hidden = statusMode || (step === 0 && !entered);
+      back.hidden = statusMode || (rotating ? step === 1 : step === 0 && !entered);
       back.disabled = busy;
       wizard.querySelector('.antler-checks').hidden = !statusMode && step !== 1 && step !== 2;
       save.hidden = statusMode && custom;
-      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : step === 3 ? 'Finish' : 'Next';
+      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
       save.disabled = busy || (!statusMode && (step === 2 || step === 3) && !ready);
       check.disabled = busy || Date.now() < manualUntil;
@@ -2917,6 +2926,26 @@ function hideInboxSubview(dlg) {
       });
     }
     check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
+    if (rotate) {
+      rotate.addEventListener('submit', function (event) {
+        if (!active()) { return; }
+        var cancelled = event.defaultPrevented;
+        event.preventDefault();
+        if (cancelled) { return; }
+        if (busy || rotating) { return; }
+        // The shared data-confirm handler runs first. Cancellation must never
+        // reach the rotation endpoint.
+        busy = true; fail(''); update();
+        api('PUT', null, true).then(function (data) {
+          rotating = true; statusMode = false; entered = true; step = 1;
+          state = null; ready = false;
+          render(data); nextCheck = Date.now() + 10000;
+        }).catch(function () {
+          fail('Unable to confirm key rotation. Check the current DNS instructions before trying again; the key may already have changed.');
+          nextCheck = Date.now();
+        }).finally(function () { busy = false; update(); });
+      });
+    }
     back.addEventListener('click', function () {
       if (step === 0) { entered = false; }
       else if (step === 4) { step = 0; }
@@ -2928,6 +2957,15 @@ function hideInboxSubview(dlg) {
       if (!active()) { return; }
       event.preventDefault();
       if (busy || (!statusMode && (step === 2 || step === 3) && !ready)) { return; }
+      if (rotating && step === 2) {
+        busy = true; update();
+        api('GET').then(function (data) {
+          render(data);
+          if (!ready) { throw new Error('Wait for one Antler receiver to reconnect with the new key before finishing.'); }
+          rotating = false; statusMode = true; fail('');
+        }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
+        return;
+      }
       if (statusMode) {
         if (custom || !email.reportValidity()) { return; }
         busy = true; update();

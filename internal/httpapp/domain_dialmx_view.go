@@ -47,6 +47,11 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	}
 	if s.Service.DialMX != nil {
 		for _, st := range s.Service.DialMX.Status(domainName) {
+			// A rotation can precede the manager's next reconciliation. Never
+			// present authorization for the previous key as current readiness.
+			if st.KeyID != "" && st.KeyID != keyID {
+				continue
+			}
 			if view.Service == mxdial.ServiceAntler {
 				configured := false
 				for _, receiver := range app.AntlerReceiversFromConfig(values) {
