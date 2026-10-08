@@ -7,7 +7,7 @@ const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
 const start = source.indexOf('(function () {\n  document.querySelectorAll(\'form[data-antler-domain]\')');
 const end = source.indexOf('\n(function () {', start + 1);
 class Element {
-  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.classList = { toggle() {} }; }
+  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.className = ''; this.classList = { toggle() {} }; }
   addEventListener(name, fn) { this.events[name] = fn; }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
@@ -58,6 +58,13 @@ async function check(mode = 'hosted') {
   if (mode === 'status') dlg.nodes['.dialmx-setup'] = new Element();
   const rotate = new Element('FORM'); rotate.nodes.button = new Element('BUTTON');
   dlg.nodes['form[data-antler-regenerate]'] = rotate;
+  // The receiving footer's danger cluster: a provider Worker-secret regenerate
+  // (amber), the Antler key rotate and the Remove receiving form. The status
+  // view must keep rotate + remove and hide the unrelated Worker regenerate.
+  const workerRegenerate = new Element('FORM'); workerRegenerate.nodes.button = new Element('BUTTON'); workerRegenerate.nodes.button.className = 'amber';
+  const removeReceiving = new Element('FORM'); removeReceiving.nodes.button = new Element('BUTTON'); removeReceiving.nodes.button.className = 'secondary danger';
+  const danger = new Element('DIV'); danger.children = [workerRegenerate, rotate, removeReceiving];
+  dlg.nodes['.dialog-danger'] = danger;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler', ...(mode === 'status' ? { contact_email: 'ops@example.com' } : {}) }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList } });
   const created = [];
@@ -76,6 +83,11 @@ async function check(mode = 'hosted') {
   assert.equal(service.hidden, true, 'service selector is removed from every step');
   if (mode === 'status') {
     assert.equal(provider.hidden, true);
+    // The status footer keeps key rotation and Remove receiving, and hides the
+    // provider-specific Worker-secret regenerate that is not an Antler concern.
+    assert.equal(workerRegenerate.hidden, true, 'Worker-secret regenerate is hidden on Antler status');
+    assert.equal(rotate.hidden, false, 'Regenerate key stays available on status');
+    assert.equal(removeReceiving.hidden, false, 'Remove receiving stays available on status');
     assert.equal(save.textContent, 'Save email');
     tick(); await flush();
     assert.equal(wizard.panels[2].hidden, true);
@@ -105,16 +117,12 @@ async function check(mode = 'hosted') {
     await submit();
     assert.equal(wizard.panels[2].hidden, false);
     assert.equal(save.textContent, 'Finish');
-    assert.equal(save.disabled, true, 'rotation waits for current readiness');
-    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }];
-    wizard.nodes['.antler-check'].events.click(); await flush();
-    assert.equal(save.disabled, false);
+    assert.equal(save.disabled, false, 'rotation Finish is never blocked on readiness');
+    // A receiver that has not reconnected yet must not trap the operator: Finish
+    // returns to status, which shows the receiver as in progress.
     statuses = [{ state: 'disconnected' }];
     await submit();
-    assert.equal(wizard.panels[2].hidden, false, 'Finish rechecks readiness');
-    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }]; now += 3000;
-    wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
-    assert.equal(save.textContent, 'Save email', 'Finish returns to status');
+    assert.equal(save.textContent, 'Save email', 'Finish returns to status without waiting for a receiver');
     assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
     assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
     assert.equal(requests.filter(r => r.options.method === 'PUT').length, 1, 'Finish does not rewrite config or rotate again');
@@ -130,35 +138,27 @@ async function check(mode = 'hosted') {
       assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').length, 1);
       assert.ok(fix, 'DNS status has a targeted Fix button');
       assert.equal(fix.hidden, false);
-      assert.equal(fix.textContent, 'Fix DNS setup');
+      assert.equal(fix.textContent, 'Fix DNS records');
       fix.events.click();
-      assert.equal(wizard.panels[1].hidden, false);
+      assert.equal(wizard.panels[1].hidden, false, 'Fix opens the DNS record step');
+      assert.equal(wizard.panels[2].hidden, true, 'Fix never opens the receiver step');
       assert.equal(wizard.nodes['[data-antler-step="1"] h3'].textContent, 'Fix your ' + kind.toUpperCase() + ' record');
       assert.match(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
+      assert.equal(save.textContent, 'Done', 'repair offers Done, not a readiness-gated Finish');
+      assert.equal(save.disabled, false, 'repair Done is never blocked on readiness');
       await submit();
-      assert.equal(wizard.panels[2].hidden, false);
-      back.events.click();
-      assert.equal(wizard.panels[1].hidden, false, 'repair Back returns to DNS');
-      await submit();
-      assert.equal(save.textContent, 'Finish');
-      dns = [{ kind: kind, state: 'mismatch' }]; await submit();
-      assert.equal(save.textContent, 'Save email', 'ready receiver completes repair even while DNS check is cached');
-      assert.equal(save.textContent, 'Save email');
+      assert.equal(save.textContent, 'Save email', 'Done returns to status');
       assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
       assert.equal(requests.filter(r => r.options.method !== 'GET').length, writesBefore, 'Fix never rotates or rewrites configuration');
       dns = []; now += 20000; tick(); await flush();
     }
+    // With every record published but a receiver still reconnecting there is
+    // nothing to fix: no Fix button is shown, so the operator cannot be led into
+    // a step they cannot act on.
     dns = [{ kind: 'mx', state: 'ok' }, { kind: 'txt', state: 'ok' }];
     statuses = [{ state: 'disconnected' }]; now += 20000; tick(); await flush();
-    const receivingFix = wizard.nodes['.antler-checks'].children.find(el => el.className === 'secondary antler-fix');
-    assert.equal(receivingFix.textContent, 'Fix receiving setup');
-    receivingFix.events.click();
-    assert.equal(wizard.panels[2].hidden, false, 'connection-only Fix opens receiver step');
-    assert.equal(save.disabled, true);
-    dlg.open = false; now += 20000; const pausedCount = requests.length; tick(); await flush();
-    assert.equal(requests.length, pausedCount);
-    dlg.open = true; statuses = [{ state: 'ready' }]; tick(); await flush(); await submit();
-    assert.equal(save.textContent, 'Save email', 'reopened repair completes to status');
+    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'waiting on a receiver shows no Fix');
+    statuses = [{ state: 'ready' }]; now += 20000; tick(); await flush();
     assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'healthy status has no Fix');
     // A partial MX set: one receiver's MX published, the other's not. The
     // aggregate check is ok and each row lights on its own hostname, so the
