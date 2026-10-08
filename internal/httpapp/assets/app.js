@@ -2659,6 +2659,10 @@ function hideInboxSubview(dlg) {
     var statusMode = !!oldSetup && provider.value === 'dialmx';
     var entered = statusMode;
     var custom = service.value === 'custom';
+    // The saved status view draws its connector skeleton from the names embedded
+    // on the form, so it opens complete and the first poll only fills values.
+    var connectors = [];
+    try { connectors = JSON.parse(form.dataset.antlerConnectors || '[]') || []; } catch (err) { connectors = []; }
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
@@ -2763,6 +2767,65 @@ function hideInboxSubview(dlg) {
         unreachable: 'Receiver unreachable',
         deferred: 'Waiting for capacity'
       }[status.state] || 'Waiting';
+    }
+    // The saved status view draws its full connector table before the first
+    // poll returns, so the dialog no longer opens half-empty and fills later.
+    // The connector names are the only thing not known from live status, so they
+    // are embedded on the form (data-antler-connectors); every value cell starts
+    // pending and is filled by the first render. While a check is in flight the
+    // amber pending dots animate (see .antler-checking), which also covers every
+    // wizard step's own pending rows.
+    function skeletonCell(parent, text) {
+      var td = document.createElement('td');
+      var span = document.createElement('span');
+      span.className = 'antler-light amber';
+      var label = document.createElement('span');
+      label.textContent = text;
+      td.appendChild(span);
+      td.appendChild(label);
+      parent.appendChild(td);
+      return td;
+    }
+    function renderSkeleton(connectors) {
+      var records = wizard.querySelector('.antler-records');
+      records.replaceChildren();
+      var table = document.createElement('table');
+      table.className = 'antler-dns-table antler-status-table';
+      var head = document.createElement('tr');
+      ['Connector', 'Connection status', 'MX status'].forEach(function (title) {
+        var th = document.createElement('th');
+        th.textContent = title;
+        head.appendChild(th);
+      });
+      var thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
+      var tbody = document.createElement('tbody');
+      if (connectors.length) {
+        connectors.forEach(function (mx) {
+          var tr = document.createElement('tr');
+          var connector = document.createElement('td');
+          connector.textContent = mx.hostname;
+          tr.appendChild(connector);
+          skeletonCell(tr, 'Pending');
+          skeletonCell(tr, 'Pending');
+          tbody.appendChild(tr);
+        });
+      } else {
+        var waiting = document.createElement('tr');
+        var cell = document.createElement('td');
+        cell.colSpan = 3;
+        cell.textContent = 'No connectors configured';
+        waiting.appendChild(cell);
+        tbody.appendChild(waiting);
+      }
+      table.appendChild(tbody);
+      records.appendChild(table);
+      var auth = document.createElement('div');
+      auth.className = 'antler-domain-auth';
+      var title = document.createElement('strong');
+      title.textContent = 'Domain authentication — TXT record';
+      auth.appendChild(title);
+      skeletonCell(auth, 'Pending');
+      records.appendChild(auth);
     }
     function render(data) {
       state = data;
@@ -2975,11 +3038,21 @@ function hideInboxSubview(dlg) {
       save.disabled = busy || (!statusMode && !rotating && (step === 2 || step === 3) && !ready);
       check.disabled = busy || Date.now() < manualUntil;
       check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
+      // While a check is in flight, pending amber dots animate as spinners so a
+      // not-yet-resolved connector or DNS record reads as "in progress" rather
+      // than a settled amber state.
+      wizard.querySelector('.antler-records').classList.toggle('antler-checking', busy);
+      wizard.querySelector('.antler-receivers').classList.toggle('antler-checking', busy);
     }
     function refresh(manual) {
       if (busy || !active() || !dlg.open || (!statusMode && (step === 0 || step === 3 || step === 4))) { return; }
       busy = true;
       if (manual) { manualUntil = Date.now() + 3000; }
+      // On the first check there is no state yet, so lay out the full status
+      // table (connectors, DNS and domain auth) before the GET returns. The
+      // first render then fills the values in place; the busy class makes the
+      // pending dots animate until it does.
+      if (statusMode && !state) { renderSkeleton(connectors); }
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
       api('GET').then(function (data) { render(data); fail(''); }).catch(function (err) { fail(err.message); }).finally(function () {
         busy = false; nextCheck = Date.now() + 10000;
@@ -3089,6 +3162,13 @@ function hideInboxSubview(dlg) {
       }
     }, 1000);
     window.addEventListener('pagehide', function () { window.clearInterval(timer); });
+    // A status dialog the server marked to open checks immediately rather than
+    // waiting for the first one-second poll tick, so its table is complete (and
+    // animating) from the first paint. Reopening it later re-checks likewise.
+    if (statusMode && dlg.open) { refresh(true); }
+    dlg.addEventListener('open', function () {
+      if (active() && !busy && (statusMode || step === 1 || step === 2)) { refresh(false); }
+    });
     update();
   });
 })();
