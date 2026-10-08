@@ -2753,7 +2753,7 @@ function hideInboxSubview(dlg) {
       var table = document.createElement('table');
       table.className = 'antler-dns-table';
       var head = document.createElement('tr');
-      ['Connector', 'Connection status', 'MX status'].forEach(function (title) {
+      (statusMode ? ['Connector', 'Connection status', 'MX status'] : ['Name', 'Type', 'Priority', 'Value', 'Status', '']).forEach(function (title) {
         var th = document.createElement('th');
         th.textContent = title;
         head.appendChild(th);
@@ -2766,31 +2766,55 @@ function hideInboxSubview(dlg) {
         td.appendChild(light.text);
         parent.appendChild(td);
       }
-      (instructions.mx || []).forEach(function (mx) {
-        var tr = document.createElement('tr');
-        var connector = document.createElement('td');
-        connector.textContent = mx.hostname;
-        tr.appendChild(connector);
-        var connection = (data.status || []).filter(function (status) {
-          return status.smtp_hostname === mx.hostname;
-        })[0];
-        var connectionLight = connection ? {
-          span: Object.assign(document.createElement('span'), { className: 'antler-light ' + (isReady(connection) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(connection.state) !== -1 ? 'red' : 'amber') }),
-          text: document.createElement('span')
-        } : lightFor(null);
-        connectionLight.text.textContent = connection ? (isReady(connection) ? 'Connected' : ({ connecting: 'Connecting', disconnected: 'Disconnected', rejected: 'Rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity' }[connection.state] || 'Waiting')) : 'Waiting';
-        if (connection && connection.reason) { connectionLight.text.title = connection.reason; }
-        statusCell(tr, connectionLight);
-        statusCell(tr, lightFor(dnsByKind.mx));
-        tbody.appendChild(tr);
-      });
-      if (!(instructions.mx || []).length) {
-        var waiting = document.createElement('tr');
-        var waitingCell = document.createElement('td');
-        waitingCell.colSpan = 3;
-        waitingCell.textContent = 'No connectors configured';
-        waiting.appendChild(waitingCell);
-        tbody.appendChild(waiting);
+      if (!statusMode) {
+        function recordRow(name, type, priority, value, entry) {
+          var tr = document.createElement('tr');
+          [name, type, priority, value].forEach(function (text, index) {
+            var td = document.createElement('td');
+            td.textContent = text;
+            if (index === 0) { td.className = 'antler-name'; }
+            if (index === 3) { td.className = 'antler-value'; }
+            tr.appendChild(td);
+          });
+          statusCell(tr, lightFor(entry));
+          var action = document.createElement('td');
+          var copy = document.createElement('button');
+          copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
+          copy.addEventListener('click', function () {
+            if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
+            navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+          });
+          action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
+        }
+        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
+        if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
+      } else {
+        (instructions.mx || []).forEach(function (mx) {
+          var tr = document.createElement('tr');
+          var connector = document.createElement('td');
+          connector.textContent = mx.hostname;
+          tr.appendChild(connector);
+          var connection = (data.status || []).filter(function (status) {
+            return status.smtp_hostname === mx.hostname;
+          })[0];
+          var connectionLight = connection ? {
+            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + (isReady(connection) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(connection.state) !== -1 ? 'red' : 'amber') }),
+            text: document.createElement('span')
+          } : lightFor(null);
+          connectionLight.text.textContent = connection ? (isReady(connection) ? 'Connected' : ({ connecting: 'Connecting', disconnected: 'Disconnected', rejected: 'Rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity' }[connection.state] || 'Waiting')) : 'Waiting';
+          if (connection && connection.reason) { connectionLight.text.title = connection.reason; }
+          statusCell(tr, connectionLight);
+          statusCell(tr, lightFor(dnsByKind.mx));
+          tbody.appendChild(tr);
+        });
+        if (!(instructions.mx || []).length) {
+          var waiting = document.createElement('tr');
+          var waitingCell = document.createElement('td');
+          waitingCell.colSpan = 3;
+          waitingCell.textContent = 'No connectors configured';
+          waiting.appendChild(waitingCell);
+          tbody.appendChild(waiting);
+        }
       }
       table.appendChild(tbody);
       var txtEntry = dnsByKind.txt;
@@ -2805,7 +2829,7 @@ function hideInboxSubview(dlg) {
       authStatus.appendChild(txtLight.text);
       auth.appendChild(authStatus);
       records.appendChild(table);
-      records.appendChild(auth);
+      if (statusMode) { records.appendChild(auth); }
       function remediation(label, name, value, priority, entry) {
         if (!value || (entry && entry.state === 'ok' && !(rotating && label === 'TXT'))) { return; }
         var box = document.createElement('details');
@@ -2833,8 +2857,10 @@ function hideInboxSubview(dlg) {
         box.appendChild(copy);
         records.appendChild(box);
       }
-      (instructions.mx || []).forEach(function (mx) { remediation('MX', mxName, mx.hostname, String(mx.priority), dnsByKind.mx); });
-      remediation('TXT', instructions.txt_name, instructions.txt_value, '', txtEntry);
+      if (statusMode) {
+        (instructions.mx || []).forEach(function (mx) { remediation('MX', mxName, mx.hostname, String(mx.priority), dnsByKind.mx); });
+        remediation('TXT', instructions.txt_name, instructions.txt_value, '', txtEntry);
+      }
       var nameNote = wizard.querySelector('.antler-note');
       if (nameNote) {
         nameNote.textContent = subdomain
@@ -2962,7 +2988,7 @@ function hideInboxSubview(dlg) {
         api('GET').then(function (data) {
           render(data);
           if (!ready) { throw new Error('Wait for one Antler receiver to reconnect with the new key before finishing.'); }
-          rotating = false; statusMode = true; fail('');
+          rotating = false; statusMode = true; render(data); fail('');
         }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
         return;
       }
