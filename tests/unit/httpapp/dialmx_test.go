@@ -230,6 +230,61 @@ func TestDialMXUINoNestedForm(t *testing.T) {
 	}
 }
 
+// The session-authenticated wizard rotation endpoint must return the newly
+// persisted DNS key and preserve the saved connector settings.
+func TestDialMXWizardRotationReturnsCurrentDNS(t *testing.T) {
+	svc, h, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example", "enforcement": "hard"}, false); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	before, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/ui/domains/" + domain.ID + "/receiving/setup"
+	rotate := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(`{"provider":"dialmx","regenerate_secret":true}`))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", token)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := rotate(""); rr.Code != http.StatusForbidden {
+		t.Fatalf("missing CSRF: %d %s", rr.Code, rr.Body.String())
+	}
+	rr := rotate(csrf)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("wizard rotation: %d %s", rr.Code, rr.Body.String())
+	}
+	after, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil || after.KeyID == before.KeyID {
+		t.Fatalf("key not rotated: %+v %v", after, err)
+	}
+	for _, response := range []string{rr.Body.String(), domainGet(t, h, cookie, path).Body.String()} {
+		if !strings.Contains(response, after.PublicKey) || strings.Contains(response, before.PublicKey) || !strings.Contains(response, "_mailmoose-mx."+domain.Name) {
+			t.Fatalf("rotation/reopen must return current DNS instructions: %s", response)
+		}
+	}
+	afterConfig, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, domain.ID)
+	if err != nil || afterConfig != beforeConfig {
+		t.Fatalf("rotation rewrote connector settings: before=%+v after=%+v err=%v", beforeConfig, afterConfig, err)
+	}
+	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)
+	for _, want := range []string{"data-antler-regenerate", "This invalidates the current key", "replace the authorization TXT record", "Your MX records stay the same."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("rotation confirmation missing %q", want)
+		}
+	}
+}
+
 // TestDialMXRegenerateIsScopedToSelectedProvider pins that the key rotation
 // action is only rendered for domains whose effective receiving provider is
 // Dial MX; a domain viewed with ?provider=dialmx but configured for something

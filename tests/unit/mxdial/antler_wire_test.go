@@ -39,6 +39,11 @@ func TestDomainAuthCarriesRegistrationMetadata(t *testing.T) {
 	m, cancel := managerFor(t, be, rc, t.TempDir())
 	defer cancel()
 	waitReady(t, m, "antler.test", 4*time.Second)
+	for _, status := range m.Status("antler.test") {
+		if status.State == "ready" && status.KeyID != rc.keyID {
+			t.Fatalf("readiness must identify the authenticated key: %+v", status)
+		}
+	}
 
 	select {
 	case a := <-got:
