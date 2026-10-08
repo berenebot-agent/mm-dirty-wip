@@ -766,9 +766,14 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   `unavailable`, …), bounded `reason`, advertised `smtp_hostname` and
   `expires_at`.
 - `dns[]` — cached published-record checks: `kind` (`mx`/`txt`), `name`,
-  `expected`, bounded `found`, `state` (`ok`, `pending`, `mismatch`) and a short
-  `reason`. Checks are asynchronous: a first read may report `pending` with
-  "checking published records".
+  `expected`, bounded `found`, bounded `matched`, `state` (`ok`, `pending`,
+  `mismatch`) and a short `reason`. Checks are asynchronous: a first read may
+  report `pending` with "checking published records". For an MX check `matched`
+  lists the expected receiver hostnames actually published and is what the
+  per-connector lights read; the check is `ok` once at least one expected
+  hostname is published (the receiver set is redundancy), and `mismatch` only
+  when MX records exist but none belongs to a receiver. The TXT check remains
+  exact.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
   custom service, the TXT record only.

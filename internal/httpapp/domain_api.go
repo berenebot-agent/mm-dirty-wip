@@ -51,12 +51,15 @@ type mxdialStatusView struct {
 }
 
 // domainDNSView is one published-record check. State is "ok", "pending" or
-// "mismatch" and carries a short human reason.
+// "mismatch" and carries a short human reason. For an MX check, Matched lists
+// the expected receiver hostnames actually published (the per-connector lights
+// read it), while Found is the published set shown to the operator.
 type domainDNSView struct {
 	Kind     string   `json:"kind"` // "mx" | "txt"
 	Name     string   `json:"name"`
 	Expected string   `json:"expected"`
 	Found    []string `json:"found,omitempty"`
+	Matched  []string `json:"matched,omitempty"`
 	State    string   `json:"state"`
 	Reason   string   `json:"reason,omitempty"`
 }

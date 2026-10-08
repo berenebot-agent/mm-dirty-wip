@@ -244,7 +244,11 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
 - `dns[]` — cached, best-effort published-record checks: the domain's MX
   hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
   against the domain's exact key. `state` is `ok`, `pending` (not published yet)
-  or `mismatch`.
+  or `mismatch`. The MX check is `ok` as soon as any one expected receiver
+  hostname is published and lists those in `matched` (the per-connector status
+  reads it); an operator who points MX at a single receiver is not failed by the
+  others in the advertised set. It is `mismatch` only when MX records exist but
+  none belongs to a receiver. The TXT check stays exact.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup.
 
 The checks are asynchronous and never block a save or a render. A green light
