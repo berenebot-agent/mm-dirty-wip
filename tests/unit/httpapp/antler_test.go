@@ -106,6 +106,16 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 		return rr
 	}
 	body := waitForDNS(t, do)
+	statuses, _ := body["status"].([]any)
+	if len(statuses) != 2 {
+		t.Fatalf("must show both receivers before their first connection: %v", body["status"])
+	}
+	for _, raw := range statuses {
+		status := raw.(map[string]any)
+		if status["state"] != "connecting" || status["smtp_hostname"] == nil {
+			t.Fatalf("unexpected initial receiver status: %v", status)
+		}
+	}
 
 	instr, _ := body["instructions"].(map[string]any)
 	if instr == nil || instr["service"] != "antler" || instr["contact_email"] != "ops@example.test" {
@@ -155,6 +165,41 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("setup panel missing %q", want)
 		}
+	}
+}
+
+// The browser uses session-scoped setup routes; saves require the existing
+// CSRF guard, and reads require a browser session.
+func TestAntlerWizardSessionSetup(t *testing.T) {
+	svc, h, u, domain, _ := httpFixture(t)
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	cookie, csrf := uiSession(t, svc, u.ID)
+	path := "/ui/domains/" + domain.ID + "/receiving/setup"
+	do := func(method, token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"provider":"dialmx","config":{"service":"antler","contact_email":"ops@example.test","enforcement":"moderate"}}`))
+		req.AddCookie(cookie)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-CSRF-Token", token)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := do(http.MethodPut, ""); rr.Code != http.StatusForbidden {
+		t.Fatalf("save without CSRF: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(http.MethodPut, csrf); rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"txt_value"`) {
+		t.Fatalf("session setup save: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := do(http.MethodGet, ""); rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"smtp_hostname":"antler1.example.test"`) {
+		t.Fatalf("session status check: %d %s", rr.Code, rr.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("setup must require a session: %d", rr.Code)
 	}
 }
 
