@@ -14,7 +14,8 @@ func TestBrandAssetsServed(t *testing.T) {
 		ct   string
 	}{
 		{"/favicon.ico", "image/x-icon"},
-		{"/favicon.svg", "image/svg+xml"},
+		{"/favicon-16x16.png", "image/png"},
+		{"/favicon-32x32.png", "image/png"},
 		{"/apple-touch-icon.png", "image/png"},
 		{"/assets/logo-horizontal.png", "image/png"},
 	} {

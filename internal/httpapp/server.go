@@ -49,8 +49,11 @@ var openClawConnectorPNG []byte
 //go:embed assets/favicon.ico
 var faviconICO []byte
 
-//go:embed assets/favicon.svg
-var faviconSVG []byte
+//go:embed assets/favicon-16x16.png
+var favicon16PNG []byte
+
+//go:embed assets/favicon-32x32.png
+var favicon32PNG []byte
 
 //go:embed assets/apple-touch-icon.png
 var appleTouchIconPNG []byte
@@ -105,7 +108,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		log = slog.Default()
 	}
 	h := sha256.New()
-	for _, b := range [][]byte{appJS, logoHorizontalPNG, hermesConnectorPNG, openClawConnectorPNG, faviconICO, faviconSVG, appleTouchIconPNG} {
+	for _, b := range [][]byte{appJS, logoHorizontalPNG, hermesConnectorPNG, openClawConnectorPNG, faviconICO, favicon16PNG, favicon32PNG, appleTouchIconPNG} {
 		_, _ = h.Write(b)
 	}
 	sum := h.Sum(nil)
@@ -156,7 +159,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /assets/hermes-connector.png", s.showHermesConnectorIcon)
 	m.HandleFunc("GET /assets/openclaw-connector.png", s.showOpenClawConnectorIcon)
 	m.HandleFunc("GET /favicon.ico", s.showFaviconICO)
-	m.HandleFunc("GET /favicon.svg", s.showFaviconSVG)
+	m.HandleFunc("GET /favicon-16x16.png", s.showFavicon16)
+	m.HandleFunc("GET /favicon-32x32.png", s.showFavicon32)
 	m.HandleFunc("GET /apple-touch-icon.png", s.showAppleTouchIcon)
 	m.HandleFunc("POST /relay/enroll", s.Relay.Enroll)
 	m.HandleFunc("GET /relay", s.Relay.ServeWebSocket)
@@ -560,8 +564,11 @@ func (s *Server) showOpenClawConnectorIcon(w http.ResponseWriter, r *http.Reques
 func (s *Server) showFaviconICO(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/x-icon", "public, max-age=86400", faviconICO)
 }
-func (s *Server) showFaviconSVG(w http.ResponseWriter, r *http.Request) {
-	serveBlob(w, "image/svg+xml", "public, max-age=86400", faviconSVG)
+func (s *Server) showFavicon16(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=86400", favicon16PNG)
+}
+func (s *Server) showFavicon32(w http.ResponseWriter, r *http.Request) {
+	serveBlob(w, "image/png", "public, max-age=86400", favicon32PNG)
 }
 func (s *Server) showAppleTouchIcon(w http.ResponseWriter, r *http.Request) {
 	serveBlob(w, "image/png", "public, max-age=86400", appleTouchIconPNG)
