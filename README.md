@@ -86,6 +86,49 @@ Open `BASE_URL`, sign in with the system administrator credentials, and add your
 - Direct-SMTP (MX) on port 25 — choose the receiver under **Admin → MX receiver** (Included or Remote) — hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
 
+## Remote MX receiver (separate container)
+
+Run the MX receiver in its own container for stronger isolation (separate filesystem and network namespace). The receiver needs no `/data` mount or app key.
+
+### Pull the prebuilt image
+
+```bash
+docker pull ghcr.io/dellarb/mailmoose-mx:latest
+```
+
+Then run it with the key from your `.env`:
+
+```bash
+docker run -d --name mailmoose-mx \
+  -e DIALMX_MODE=single \
+  -e DIALMX_CORE_KEY=<from .env> \
+  -e MX_HOSTNAME=mailmoose-mx \
+  -p 2525:2525 \
+  --security-opt no-new-privileges:true \
+  ghcr.io/dellarb/mailmoose-mx:latest
+```
+
+### Build from source (Compose)
+
+```yaml
+# In your docker-compose.yml, alongside the core service:
+  mailmoose-mx:
+    image: mailmoose-mx:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.mx
+    environment:
+      DIALMX_MODE: single
+      DIALMX_CORE_KEY: ${DIALMX_CORE_KEY:?set DIALMX_CORE_KEY in .env}
+      MX_HOSTNAME: ${MX_HOSTNAME:-mailmoose-mx}
+    ports:
+      - "0.0.0.0:25:2525"
+    security_opt:
+      - no-new-privileges:true
+```
+
+Then in the UI, set **Admin → MX receiver** to Remote, enter `http://mailmoose-mx:8443` and the same `DIALMX_CORE_KEY` as the bearer token.
+
 ## Key Features
 
 - **Give every agent its own identity.** Inboxes are lightweight database rows — spin up per-role, per-project, or per-task addresses instantly, with aliases, catch-all routing, and API keys scoped to exactly the mailboxes each agent should touch (`read` / `assistant` / `owner`).

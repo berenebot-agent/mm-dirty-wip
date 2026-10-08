@@ -103,8 +103,8 @@ MX_LISTEN_ADDR=:2525
 
 Then, via `/v1/admin/mx`, save mode `remote`, the receiver URL
 (e.g. `http://receiver:8443`) and the **same** `DIALMX_CORE_KEY` value as the
-bearer key, and save. The bundle `docker-compose.mx-sidecar.yml` wires this for
-you (receiver env only). Generate a key with `openssl rand -hex 32`.
+bearer key, and save. The pull and compose examples are in the README.
+Generate a key with `openssl rand -hex 32`.
 
 The core sends the key in the session's `Authorization: Bearer` header. The
 receiver compares hashed values in constant time and does not log the credential.
@@ -117,12 +117,7 @@ Already-pinned transactions may finish on the old live session. Disconnection
 does not restore an older session as the default. An unavailable core results
 in temporary SMTP failures so sending MTAs retry.
 
-For the bundled sidecar:
-
-```bash
-# Put DIALMX_CORE_KEY in .env first.
-docker compose -f docker-compose.mx-sidecar.yml up -d --build
-```
+For the bundled sidecar, see README.md for the pull and compose examples.
 
 The receiver needs inbound SMTP and the session listener; the core needs only
 outbound connectivity to it. No MX ingest HTTP endpoint exists on the core.
