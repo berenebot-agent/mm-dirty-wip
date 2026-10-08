@@ -39,6 +39,7 @@ class Element {
 }
 async function check(mode = 'hosted') {
   let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [];
+  let mxList = mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }];
   const dlg = new Element(); dlg.open = true;
   const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
@@ -56,7 +57,7 @@ async function check(mode = 'hosted') {
   const rotate = new Element('FORM'); rotate.nodes.button = new Element('BUTTON');
   dlg.nodes['form[data-antler-regenerate]'] = rotate;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
+  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList } });
   const created = [];
   vm.runInNewContext(source.slice(start, end), {
     document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
@@ -147,6 +148,19 @@ async function check(mode = 'hosted') {
     dlg.open = true; statuses = [{ state: 'ready' }]; tick(); await flush(); await submit();
     assert.equal(save.textContent, 'Save email', 'reopened repair completes to status');
     assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 0, 'healthy status has no Fix');
+    // A partial MX set: one receiver's MX published, the other's not. The
+    // aggregate check is ok and each row lights on its own hostname, so the
+    // missing secondary receiver never paints the whole setup red or prompts a
+    // Fix.
+    mxList = [{ hostname: 'mx.example.com', priority: 10 }, { hostname: 'mx2.example.com', priority: 20 }];
+    dns = [{ kind: 'mx', state: 'ok', matched: ['mx.example.com'] }, { kind: 'txt', state: 'ok' }];
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'ready', smtp_hostname: 'mx2.example.com' }];
+    now += 20000; tick(); await flush();
+    const tbody = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1];
+    const mxLightClass = i => tbody.children[i].children[2].children[0].className;
+    assert.match(mxLightClass(0), /green/, 'published receiver MX is green');
+    assert.match(mxLightClass(1), /amber/, 'unpublished receiver MX is not painted red');
+    assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 0, 'partial MX set is healthy: no Fix');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);

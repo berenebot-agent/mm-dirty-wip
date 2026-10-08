@@ -2728,6 +2728,24 @@ function hideInboxSubview(dlg) {
     function isReady(status) {
       return status.state === 'ready' && (!status.expires_at || Date.parse(status.expires_at) > Date.now());
     }
+    // A receiver row reads its real state: red is a fact about the receiver (it
+    // refused, it is gone, or the core cannot reach it at all), amber is only
+    // ever "in progress" — an authorization or a physical attempt still running.
+    function receiverLightClass(status) {
+      if (isReady(status)) { return 'green'; }
+      return ['connecting', 'deferred'].indexOf(status.state) !== -1 ? 'amber' : 'red';
+    }
+    function receiverLabel(status) {
+      if (isReady(status)) { return 'Ready to receive'; }
+      return {
+        connecting: 'Authorizing',
+        disconnected: 'Reconnecting',
+        rejected: 'Rejected',
+        unavailable: 'Unavailable',
+        unreachable: 'Receiver unreachable',
+        deferred: 'Waiting for capacity'
+      }[status.state] || 'Waiting';
+    }
     function render(data) {
       state = data;
       note.dataset.updated = new Date().toLocaleTimeString();
@@ -2747,6 +2765,25 @@ function hideInboxSubview(dlg) {
         span.className = 'antler-light ' + (!entry || entry.state === 'pending' ? 'amber' : entry.state === 'ok' ? 'green' : 'red');
         var text = document.createElement('span');
         text.textContent = !entry ? 'Waiting' : entry.state === 'ok' ? 'Matching' : entry.state === 'mismatch' ? 'Mismatch' : 'Pending';
+        span.title = (entry && entry.reason) || '';
+        return { span: span, text: text };
+      }
+      // One receiver's MX record is valid whenever that receiver's hostname is
+      // among the published MX records, independent of the other receivers. The
+      // aggregate MX check is "ok" once any one is published, so a secondary
+      // receiver that is not pointed at must not paint every row red.
+      function mxLightFor(mx, entry) {
+        var span = document.createElement('span');
+        var text = document.createElement('span');
+        var matched = (entry && entry.matched ? entry.matched : []).map(function (host) { return String(host).toLowerCase(); });
+        var mine = String(mx.hostname).toLowerCase();
+        if (matched.indexOf(mine) !== -1) {
+          span.className = 'antler-light green';
+          text.textContent = 'Published';
+        } else {
+          span.className = 'antler-light amber';
+          text.textContent = !entry || entry.state === 'pending' ? 'Pending' : 'Not published';
+        }
         span.title = (entry && entry.reason) || '';
         return { span: span, text: text };
       }
@@ -2779,7 +2816,7 @@ function hideInboxSubview(dlg) {
         parent.appendChild(fix);
       }
       if (!statusMode) {
-        function recordRow(name, type, priority, value, entry) {
+        function recordRow(name, type, priority, value, entry, mxHost) {
           var tr = document.createElement('tr');
           tr.dataset.dnsKind = type.toLowerCase();
           [name, type, priority, value].forEach(function (text, index) {
@@ -2789,7 +2826,7 @@ function hideInboxSubview(dlg) {
             if (index === 3) { td.className = 'antler-value'; }
             tr.appendChild(td);
           });
-          statusCell(tr, lightFor(entry));
+          statusCell(tr, mxHost ? mxLightFor({ hostname: mxHost }, entry) : lightFor(entry));
           var action = document.createElement('td');
           var copy = document.createElement('button');
           copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
@@ -2799,7 +2836,7 @@ function hideInboxSubview(dlg) {
           });
           action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
         }
-        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
+        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx, mx.hostname); });
         if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
       } else {
         (instructions.mx || []).forEach(function (mx) {
@@ -2811,13 +2848,13 @@ function hideInboxSubview(dlg) {
             return status.smtp_hostname === mx.hostname;
           })[0];
           var connectionLight = connection ? {
-            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + (isReady(connection) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(connection.state) !== -1 ? 'red' : 'amber') }),
+            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + receiverLightClass(connection) }),
             text: document.createElement('span')
           } : lightFor(null);
-          connectionLight.text.textContent = connection ? (isReady(connection) ? 'Connected' : ({ connecting: 'Connecting', disconnected: 'Disconnected', rejected: 'Rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity' }[connection.state] || 'Waiting')) : 'Waiting';
+          connectionLight.text.textContent = connection ? receiverLabel(connection) : 'Waiting';
           if (connection && connection.reason) { connectionLight.text.title = connection.reason; }
           statusCell(tr, connectionLight);
-          statusCell(tr, lightFor(dnsByKind.mx));
+          statusCell(tr, mxLightFor(mx, dnsByKind.mx));
           tbody.appendChild(tr);
         });
         if (!(instructions.mx || []).length) {
@@ -2844,6 +2881,9 @@ function hideInboxSubview(dlg) {
       records.appendChild(table);
       if (statusMode) { records.appendChild(auth); }
       if (statusMode) {
+        // A partial MX set is healthy: the aggregate check is "ok" once any one
+        // receiver's MX is published, so the MX prompt only appears when no
+        // connector has any MX (the check is pending or mismatched).
         var dnsIssue = !txtEntry || txtEntry.state !== 'ok' ? 'txt' : (instructions.mx || []).length && (!dnsByKind.mx || dnsByKind.mx.state !== 'ok') ? 'mx' : '';
         if (dnsIssue || !ready || (data.status || []).some(function (status) { return !isReady(status); })) { fixButton(records, dnsIssue); }
       }
@@ -2856,13 +2896,9 @@ function hideInboxSubview(dlg) {
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
       (data.status || []).forEach(function (status) {
         var row = document.createElement('p');
-        var label = isReady(status) ? 'Ready to receive' : {
-          connecting: 'Connecting / waiting for DNS authorization', disconnected: 'Disconnected',
-          rejected: 'Authorization rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity'
-        }[status.state] || 'Waiting for DNS authorization';
-        row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + label + (status.reason ? ' · ' + status.reason : '');
+        row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + receiverLabel(status) + (status.reason ? ' · ' + status.reason : '');
         var light = document.createElement('span');
-        light.className = 'antler-light ' + (isReady(status) ? 'green' : ['disconnected', 'rejected', 'unavailable'].indexOf(status.state) !== -1 ? 'red' : 'amber');
+        light.className = 'antler-light ' + receiverLightClass(status);
         row.prepend(light);
         receivers.appendChild(row);
       });

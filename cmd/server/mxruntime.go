@@ -523,16 +523,19 @@ func (rt *mxRuntime) refreshIncluded(ctx context.Context, mgr *mxdial.Manager) {
 }
 
 // applyConnectionStatus maps the private dialer's real handshake state onto the
-// receiver status. Only a reported "ready" is active; anything else (including
-// an empty state) is connecting, so a receiver that has not completed a
-// handshake is never shown as ready.
+// receiver status. Only a reported "ready" is active; a receiver that could not
+// be reached at all is unreachable — never connecting — because nothing about it
+// is in progress. A receiver that was reached and is being retried stays
+// connecting.
 func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 	switch strings.ToLower(strings.TrimSpace(st.State)) {
-	case "ready":
+	case mxdial.StatusActive:
 		rt.mu.Lock()
 		rt.smtpAddr = st.SMTPHostname
 		rt.mu.Unlock()
 		rt.setStatus(stateActive, "", st.SMTPHostname, "")
+	case mxdial.StatusUnreachable:
+		rt.setStatus(stateUnavailable, unreachableDetail(st.Reason), "", "")
 	default:
 		reason := st.Reason
 		if reason == "" {
@@ -540,6 +543,22 @@ func (rt *mxRuntime) applyConnectionStatus(st mxdial.Status) {
 		}
 		rt.setStatus(stateConnecting, reason, "", "")
 	}
+}
+
+// unreachableDetail renders an operator-facing reason for a receiver the core
+// cannot reach, from the dialer's stable failure token.
+func unreachableDetail(reason string) string {
+	switch reason {
+	case mxdial.ReasonDNSFailure:
+		return "receiver hostname does not resolve"
+	case mxdial.ReasonTLSCertificate:
+		return "receiver TLS certificate could not be verified"
+	case mxdial.ReasonHTTP2Required:
+		return "receiver answered HTTP/1.1 where HTTP/2 is required"
+	case mxdial.ReasonIdleTimeout:
+		return "receiver session timed out repeatedly"
+	}
+	return "receiver unreachable"
 }
 
 func (rt *mxRuntime) markPending(pending bool) {

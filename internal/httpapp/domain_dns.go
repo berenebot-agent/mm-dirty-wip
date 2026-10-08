@@ -71,6 +71,14 @@ func (s *Server) SetDNSResolver(r DNSResolver) {
 // checkMX returns the current check for the domain's MX records against the
 // expected hostnames, starting a background refresh when the cached result is
 // stale.
+//
+// A domain's receiver set is redundancy, not an all-must-match set: the setup is
+// "ok" as long as at least one expected hostname is published, so an operator who
+// points MX at a single Antler receiver is not dragged to a mismatch by the
+// other advertised receivers. Matched lists which expected hostnames were found
+// (it is what the per-connector status lights read); Found is the published set
+// shown to the operator. The state is "mismatch" only when MX records exist but
+// none of them is one of our receivers.
 func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) domainDNSView {
 	key := "mx|" + domain + "|" + formatMXExpected(expected)
 	pending := domainDNSView{Kind: "mx", Name: domain, Expected: formatMXExpected(expected), State: "pending", Reason: "checking published records"}
@@ -94,10 +102,13 @@ func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) doma
 		}
 		view.Found = hosts
 		for _, want := range expected {
-			if !found[strings.ToLower(want.Hostname)] {
-				view.State, view.Reason = "mismatch", "an expected MX hostname is not published"
-				return view
+			if found[strings.ToLower(want.Hostname)] {
+				view.Matched = append(view.Matched, want.Hostname)
 			}
+		}
+		if len(view.Matched) == 0 {
+			view.State, view.Reason = "mismatch", "no expected MX hostname is published"
+			return view
 		}
 		view.State = "ok"
 		return view

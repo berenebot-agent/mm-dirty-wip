@@ -1,0 +1,199 @@
+name: publish
+
+# Publish runnable images to GitHub Container Registry without cutting a release.
+#
+# release.yml already publishes the same three images, but only for a
+# v…-alpha/beta/rc.N tag. This workflow is the "just give me something to pull
+# for testing" path: push to a branch, or run it by hand, and the image lands in
+# GHCR with a `dev` tag so it can never be mistaken for a release.
+#
+# Image names (note the `mailmoose-wip` repository prefix):
+#   ghcr.io/<owner>/mailmoose-wip-dialmx    the standalone Dial MX receiver
+#   ghcr.io/<owner>/mailmoose-wip-mx        the MX edge
+#   ghcr.io/<owner>/mailmoose-wip           the core
+#
+# Tags applied to each:
+#   dev                     always, a moving pointer at the newest build
+#   dev-<short-sha>         immutable, so a host can pin an exact build
+#   dev-<branch>            a moving pointer per branch (slashes become dashes)
+#
+# Platforms: linux/arm64 and linux/amd64. arm64 costs QEMU emulation in the image
+# stage but the Go builds are cross-compiled, so it stays cheap for the receiver
+# and the edge (CGO_ENABLED=0). The core needs cgo (SQLite), so its arm64 build
+# is the slow one.
+#
+# The packages are **private** when first created. Either make the package
+# public in the repository's package settings, or authenticate on the host:
+#   echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this build (recorded in the run summary)"
+        required: false
+        default: "manual test build"
+      platforms:
+        description: "Build platforms"
+        required: false
+        default: "linux/amd64,linux/arm64"
+        type: choice
+        options:
+          - "linux/amd64,linux/arm64"
+          - "linux/arm64"
+          - "linux/amd64"
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # Reuse the project's own gate so a broken revision never reaches a registry.
+  # `dialmx` is included because it is the image most testing pulls.
+  gate:
+    name: Test gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install SQLite development library
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal tests dialmx)"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: vet
+        run: go vet ./...
+      - name: build
+        run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/...
+      - name: test
+        run: go test -race -count=1 -timeout=60s ./...
+
+  publish:
+    name: Publish images
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute tags
+        id: meta
+        shell: bash
+        run: |
+          short="$(git rev-parse --short=12 HEAD)"
+          # A branch name can contain slashes, which are not valid in a tag.
+          branch="$(printf '%s' "${GITHUB_REF_NAME}" | tr '/' '-')"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Building dev-$short from ${GITHUB_REF_NAME}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Dial MX receiver ---------------------------------------------------
+      # The image a remote host pulls to run a standalone receiver.
+      - name: Dial MX receiver — tags
+        id: dialmx_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip-dialmx
+          tags: |
+            type=raw,value=dev
+            type=raw,value=dev-${{ steps.meta.outputs.short }}
+            type=raw,value=dev-${{ steps.meta.outputs.branch }}
+      - name: Dial MX receiver — build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dialmx/Dockerfile
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.dialmx_meta.outputs.tags }}
+          labels: ${{ steps.dialmx_meta.outputs.labels }}
+          cache-from: type=gha,scope=dialmx
+          cache-to: type=gha,mode=max,scope=dialmx
+
+      # --- MX edge ------------------------------------------------------------
+      - name: MX edge — tags
+        id: mx_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip-mx
+          tags: |
+            type=raw,value=dev
+            type=raw,value=dev-${{ steps.meta.outputs.short }}
+            type=raw,value=dev-${{ steps.meta.outputs.branch }}
+      - name: MX edge — build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mx
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.mx_meta.outputs.tags }}
+          labels: ${{ steps.mx_meta.outputs.labels }}
+          cache-from: type=gha,scope=mx
+          cache-to: type=gha,mode=max,scope=mx
+
+      # --- Core ---------------------------------------------------------------
+      - name: Core — tags
+        id: core_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/mailmoose-wip
+          tags: |
+            type=raw,value=dev
+            type=raw,value=dev-${{ steps.meta.outputs.short }}
+            type=raw,value=dev-${{ steps.meta.outputs.branch }}
+      - name: Core — build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64,linux/arm64' }}
+          push: true
+          tags: ${{ steps.core_meta.outputs.tags }}
+          labels: ${{ steps.core_meta.outputs.labels }}
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,mode=max,scope=core
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### Published (dev channel)"
+            echo
+            echo '```'
+            echo "${{ steps.dialmx_meta.outputs.tags }}"
+            echo "${{ steps.mx_meta.outputs.tags }}"
+            echo "${{ steps.core_meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Pull on the test host:"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${OWNER}/mailmoose-wip-dialmx:dev-\$${{ steps.meta.outputs.short }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

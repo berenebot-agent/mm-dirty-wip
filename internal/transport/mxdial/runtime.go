@@ -52,6 +52,31 @@ type Status struct {
 	ExpiresAt    time.Time
 }
 
+// Status state vocabulary, shared by the per-domain rows and the single-mode
+// connection row. "connecting" is the only in-progress state and means an
+// authentication exchange is genuinely outstanding; a physical session that
+// cannot be established at all is reported as its own state so the UI can tell
+// a receiver that is down from one that is still authorizing this domain.
+const (
+	// StatusActive: the receiver granted this domain's key over a live session.
+	StatusActive = "ready"
+	// StatusConnecting: an authentication is outstanding or awaiting retry.
+	StatusConnecting = "connecting"
+	// StatusRejected: the receiver answered and refused, or answered something
+	// this core could not trust. The receiver is reachable.
+	StatusRejected = "rejected"
+	// StatusUnreachable: no session could be established at all (DNS/TCP/TLS/
+	// HTTP handshake failure). Nothing about this domain's authorization is
+	// known, so it must never be presented as "connecting".
+	StatusUnreachable = "unreachable"
+	// StatusUnavailable: the receiver terminated the binding from its side.
+	StatusUnavailable = "unavailable"
+	// StatusDeferred: the receiver's advertised capacity is full for now.
+	StatusDeferred = "deferred"
+	// StatusDisconnected: an established session ended. Retrying.
+	StatusDisconnected = "disconnected"
+)
+
 // Backend is the application surface shared by private bearer sessions and
 // shared sessions with DNS-authenticated domain channels.
 type Backend interface {
@@ -208,7 +233,7 @@ func (m *Manager) ConnectionStatus() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.connection.State == "" {
-		return Status{ReceiverURL: m.cfg.ReceiverURL, State: "connecting"}
+		return Status{ReceiverURL: m.cfg.ReceiverURL, State: StatusConnecting}
 	}
 	return m.connection
 }
@@ -223,6 +248,13 @@ func (s *session) connectionStatus(state, reason string) {
 }
 
 // Status returns the current per-receiver status for a canonical domain.
+//
+// A receiver the domain is configured for but which has no live row is reported
+// explicitly instead of being omitted: a caller that only ever saw live rows
+// could not tell "no session has been attempted yet" from "the receiver is
+// unreachable", and would have to invent a state for the gap. A single-mode
+// manager knows the real connection state and reports it; a shared-mode manager
+// reports "connecting" until the receiver answers.
 func (m *Manager) Status(domain string) []Status {
 	d, err := mxwire.CanonicalDomain(domain)
 	if err != nil {
@@ -235,9 +267,36 @@ func (m *Manager) Status(domain string) []Status {
 			out = append(out, v)
 		}
 	}
+	connection := m.connection
+	single := m.cfg.ReceiverURL != ""
 	m.mu.Unlock()
+	if single {
+		if !statusListed(out, m.cfg.ReceiverURL) {
+			out = append(out, connectionRow(connection, m.cfg.ReceiverURL))
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ReceiverURL < out[j].ReceiverURL })
 	return out
+}
+
+// statusListed reports whether a receiver URL already has a row.
+func statusListed(rows []Status, url string) bool {
+	for _, r := range rows {
+		if r.ReceiverURL == url {
+			return true
+		}
+	}
+	return false
+}
+
+// connectionRow normalizes the single-mode connection row: an unset row means
+// the dialer has not completed an attempt yet, which is "connecting" — never a
+// fabricated ready or disconnected state.
+func connectionRow(connection Status, url string) Status {
+	if connection.State == "" {
+		return Status{ReceiverURL: url, State: StatusConnecting}
+	}
+	return connection
 }
 
 // Run reconciles until ctx is canceled, then closes every session and waits for
@@ -802,18 +861,124 @@ func jitter(d time.Duration) time.Duration {
 	return half + time.Duration(time.Now().UnixNano()%int64(half+1))
 }
 
+// Failure reasons a receiver row can carry. They are stable tokens (the UI and
+// the API surface them), not prose: boundStatusReason still truncates anything
+// a receiver supplies.
+const (
+	// ReasonDisconnected means an established session ended. Retrying.
+	ReasonDisconnected = "disconnected"
+	// ReasonRejected means the receiver answered and refused this core's bearer
+	// key. The receiver is reachable; the credential is the problem.
+	ReasonRejected = "session_rejected"
+	// ReasonDestinationNotAllowed means the outbound policy refused the receiver
+	// destination (a private or non-routable address without an opt-in).
+	ReasonDestinationNotAllowed = "destination_not_allowed"
+	// ReasonUnreachable means no physical session could be established.
+	ReasonUnreachable = "unreachable"
+	// ReasonDNSFailure means the receiver hostname did not resolve.
+	ReasonDNSFailure = "dns_failure"
+	// ReasonTLSCertificate means the receiver's certificate could not be verified.
+	ReasonTLSCertificate = "tls_certificate"
+	// ReasonHTTP2Required means the receiver answered with HTTP/1.1.
+	ReasonHTTP2Required = "http2_required"
+	// ReasonIdleTimeout means an established session was closed after idling.
+	ReasonIdleTimeout = "idle_timeout"
+)
+
+// ConnectionFailureReason classifies one physical session failure so an operator
+// can see why the core could not reach a receiver. An error carrying a specific
+// DNS or TLS text is reported as its own token; everything else that is not a
+// protocol-shape error is a plain unreachable receiver.
+func ConnectionFailureReason(err error) string {
+	if err == nil {
+		return ReasonUnreachable
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "no such host"), strings.Contains(msg, "dns_failure"),
+		strings.Contains(msg, "name resolution"), strings.Contains(msg, "server misbehaving"):
+		return ReasonDNSFailure
+	case strings.Contains(msg, "not public-routable"), strings.Contains(msg, "resolved no addresses"):
+		return ReasonDestinationNotAllowed
+	case strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"),
+		strings.Contains(msg, "tls:"), strings.Contains(msg, "unrecognized name"),
+		strings.Contains(msg, "handshake failure"):
+		return ReasonTLSCertificate
+	case errors.Is(err, errHTTP1):
+		return ReasonHTTP2Required
+	case errors.Is(err, errIdle):
+		return ReasonIdleTimeout
+	case errors.Is(err, ErrSessionRejected):
+		return ReasonRejected
+	}
+	return ReasonUnreachable
+}
+
+// unreachableReason reports whether a failure token means the core could not talk
+// to the receiver at all. A receiver that answered — a refused bearer, an
+// HTTP/1.1 reply — is not unreachable, and neither is a destination the outbound
+// policy refused before any dial: those are reachable-but-unusable or not
+// attempted, and calling them unreachable would send the operator looking at the
+// receiver's network instead of the credential or the policy.
+func unreachableReason(reason string) bool {
+	switch reason {
+	case ReasonUnreachable, ReasonDNSFailure, ReasonTLSCertificate:
+		return true
+	}
+	return false
+}
+
+// failureState maps one failed connection attempt onto the state a receiver row
+// carries. A receiver that has never answered is unreachable; one that has been
+// reached before is disconnected and retrying; one that answered but refused is
+// disconnected, because the receiver itself is fine.
+func failureState(reason string, everConnected bool) string {
+	if !everConnected && unreachableReason(reason) {
+		return StatusUnreachable
+	}
+	return StatusDisconnected
+}
+
+// backoffFor is the doubling backoff a repeatedly failing connection uses.
+func backoffFor(attempt int) time.Duration {
+	d := time.Second
+	for i := 1; i < attempt && d < maxBackoff; i++ {
+		d *= 2
+	}
+	if d > maxBackoff {
+		d = maxBackoff
+	}
+	return d
+}
+
 // run owns the session lifetime: it reconnects until the session is closed.
 func (s *session) run() {
 	defer s.m.closeSession(s)
 	defer close(s.done)
 
-	backoff := time.Second
+	// everConnected distinguishes a receiver that was reached at least once
+	// from one that has never answered: only the latter is "unreachable".
+	everConnected := false
+	attempt := 0
 	for s.ctx.Err() == nil {
 		started := time.Now()
 		s.sawAuth = false
 		err := s.connect()
-		s.connectionStatus("disconnected", "connection_failed")
-		live := s.trackedDomains()
+		s.connectionStatus(StatusDisconnected, ReasonDisconnected)
+		reason := ""
+		if err != nil {
+			reason = ConnectionFailureReason(err)
+		}
+		live := s.configuredDomains()
+		// Reachability is the handshake, not the domain set: a session that
+		// was given domains it never got to talk about is still unreachable.
+		handshake := s.ready.ReceiverID != ""
+		if len(live) == 0 {
+			// Single mode owns one connection row and no per-domain rows, so
+			// the physical failure is reported there. A receiver that is down
+			// must not be shown as still authorizing.
+			s.connectionStatus(failureState(reason, everConnected), reason)
+		}
 		s.resetConnection()
 		if s.ctx.Err() != nil {
 			return
@@ -822,30 +987,23 @@ func (s *session) run() {
 		// the backoff; a mere Ready handshake is not enough, or a flapping
 		// receiver would storm.
 		if s.sawAuth && time.Since(started) >= minStableLifetime {
-			backoff = time.Second
+			everConnected = true
+			attempt = 0
 		}
-		reason := "disconnected"
-		if errors.Is(err, errHTTP1) {
-			reason = "http2_required"
-		} else if errors.Is(err, errIdle) {
-			reason = "idle_timeout"
+		if handshake {
+			everConnected = true
 		}
 		for _, d := range live {
-			s.m.setStatus(s, d, "disconnected", reason, "", time.Time{}, "")
+			s.m.setStatus(s, d, failureState(reason, everConnected), reason, "", time.Time{}, "")
 		}
-		wait := jitter(backoff)
+		wait := jitter(backoffFor(attempt))
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-time.After(wait):
 		case <-s.updateCh:
 		}
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
+		attempt++
 	}
 }
 
@@ -857,16 +1015,35 @@ func (s *session) trackedDomains() []string {
 	return out
 }
 
+// configuredDomains returns the domains this session is responsible for,
+// whether or not a handshake ever completed. A session that cannot reach its
+// receiver must still report that fact for the domains it was given: using the
+// per-connection set instead would leave an unreachable receiver with no status
+// row at all, and a caller then has to invent a state for it.
+func (s *session) configuredDomains() []string {
+	s.wantMu.Lock()
+	defer s.wantMu.Unlock()
+	out := make([]string, 0, len(s.desired))
+	for d := range s.desired {
+		out = append(out, d)
+	}
+	out = append(out, s.trackedDomains()...)
+	return out
+}
+
 var (
 	errHTTP1 = errors.New("HTTP/2 required")
 	errIdle  = errors.New("session idle timeout")
+	// ErrSessionRejected is exported so callers can attribute a refusal (the
+	// receiver answered and said no) apart from a reachability failure.
+	ErrSessionRejected = errors.New("session rejected")
 )
 
 // connect performs one logical session. The connection loop it runs owns all
 // auth and transaction state for the connection's lifetime; backend workers
 // report back through s.jobs.
 func (s *session) connect() error {
-	s.connectionStatus("connecting", "")
+	s.connectionStatus(StatusConnecting, "")
 	pr, pw := io.Pipe()
 	s.lifeMu.Lock()
 	if s.ctx.Err() != nil {
@@ -933,6 +1110,23 @@ func (s *session) connect() error {
 
 	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
 	if err = s.write(hello); err != nil {
+		// The transport may already have failed the dial, in which case it
+		// closed the request body and the write reports only "closed pipe".
+		// Prefer the transport's error: it names the real cause (a refused
+		// connection, a refused destination), which is what the receiver row
+		// must report.
+		select {
+		case r := <-done:
+			if r.err != nil {
+				return r.err
+			}
+			if r.resp != nil {
+				_ = r.resp.Body.Close()
+			}
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		case <-time.After(readyTimeout):
+		}
 		return err
 	}
 
@@ -954,7 +1148,7 @@ func (s *session) connect() error {
 		return errHTTP1
 	}
 	if resp.StatusCode != http.StatusOK {
-		return errors.New("session rejected")
+		return ErrSessionRejected
 	}
 	defer resp.Body.Close()
 
