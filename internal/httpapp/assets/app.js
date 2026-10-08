@@ -2672,12 +2672,12 @@ function hideInboxSubview(dlg) {
     wizard.className = 'antler-wizard';
     wizard.innerHTML = '<p class="antler-progress" aria-live="polite"></p>' +
       '<section data-antler-step="0"><h3>Contact email</h3><p class="muted small">Enter a contact email for your Antler MX setup.</p></section>' +
-      '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div><ul class="antler-dns"></ul><p class="muted small">DNS results are cached for up to one minute.</p></section>' +
+      '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div><p class="muted small antler-note"></p><p class="muted small">DNS results are cached for up to one minute.</p></section>' +
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
       '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><button type="button" class="secondary antler-check">Check now</button></div>' +
-      '<p class="antler-error error" role="alert" hidden></p><button type="button" class="secondary antler-back" hidden>Back</button>';
+      '<p class="antler-error error" role="alert" hidden></p>';
     group.appendChild(wizard);
     function moveField(input, index) {
       var label = input.previousElementSibling;
@@ -2690,6 +2690,7 @@ function hideInboxSubview(dlg) {
     var advancedLabel = document.createElement('label');
     var advanced = document.createElement('input');
     advanced.type = 'checkbox'; advanced.checked = custom;
+    advanced.className = 'antler-advanced';
     advanced.style = 'width:auto;margin-right:8px';
     advancedLabel.appendChild(advanced);
     advancedLabel.appendChild(document.createTextNode('Advanced: use custom receivers'));
@@ -2701,8 +2702,12 @@ function hideInboxSubview(dlg) {
     var panels = wizard.querySelectorAll('[data-antler-step]');
     var check = wizard.querySelector('.antler-check');
     var note = wizard.querySelector('.antler-check-note');
-    var back = wizard.querySelector('.antler-back');
     var error = wizard.querySelector('.antler-error');
+    // Back is part of the dialog's bottom navigation, not the upper form.
+    var footer = save.closest('.dialog-actions');
+    var back = document.createElement('button');
+    back.type = 'button'; back.className = 'secondary antler-back'; back.textContent = 'Back'; back.hidden = true;
+    if (footer) { footer.insertBefore(back, footer.firstChild); }
     function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
     function api(method, config) {
@@ -2727,32 +2732,67 @@ function hideInboxSubview(dlg) {
       ready = (data.status || []).some(isReady);
       var records = wizard.querySelector('.antler-records');
       records.replaceChildren();
-      function record(type, name, value, priority) {
-        var box = document.createElement('div');
-        var heading = document.createElement('p');
-        heading.textContent = type + ' · Name: ' + name + (priority == null ? '' : ' · Priority: ' + priority);
-        var code = document.createElement('pre');
-        code.className = 'dialmx-txt';
-        code.textContent = value;
+      var domainName = form.dataset.antlerDomainName || '';
+      var subdomain = !!form.dataset.antlerParent;
+      // For a subdomain, spell out the record name so it is unambiguous. The
+      // apex is the common case and reads best as the provider's "@".
+      var mxName = subdomain ? domainName : '@';
+      var dnsByKind = {};
+      (data.dns || []).forEach(function (entry) { dnsByKind[entry.kind] = entry; });
+      function lightFor(entry) {
+        var span = document.createElement('span');
+        span.className = 'antler-light ' + (!entry || entry.state === 'pending' ? 'amber' : entry.state === 'ok' ? 'green' : 'red');
+        var text = document.createElement('span');
+        text.textContent = !entry ? 'Waiting' : entry.state === 'ok' ? 'Matching' : entry.state === 'mismatch' ? 'Mismatch' : 'Pending';
+        span.title = (entry && entry.reason) || '';
+        return { span: span, text: text };
+      }
+      var table = document.createElement('table');
+      table.className = 'antler-dns-table';
+      var head = document.createElement('tr');
+      ['Name', 'Type', 'Priority', 'Value', 'Status', ''].forEach(function (title) {
+        var th = document.createElement('th');
+        th.textContent = title;
+        head.appendChild(th);
+      });
+      var thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
+      var tbody = document.createElement('tbody');
+      function row(name, type, priority, value, entry) {
+        var tr = document.createElement('tr');
+        function cell(text, className) {
+          var td = document.createElement('td');
+          td.textContent = text;
+          if (className) { td.className = className; }
+          tr.appendChild(td);
+        }
+        cell(name, 'antler-name');
+        cell(type);
+        cell(priority);
+        cell(value, 'antler-value');
+        var status = document.createElement('td');
+        var light = lightFor(entry);
+        status.appendChild(light.span); status.appendChild(light.text);
+        tr.appendChild(status);
+        var action = document.createElement('td');
         var copy = document.createElement('button');
-        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
+        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy';
         copy.addEventListener('click', function () {
           if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
           navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
         });
-        box.append(heading, code, copy); records.appendChild(box);
+        action.appendChild(copy); tr.appendChild(action);
+        tbody.appendChild(tr);
       }
-      (instructions.mx || []).forEach(function (mx) { record('MX', '@', mx.hostname, mx.priority); });
-      if (instructions.txt_value) { record('TXT', instructions.txt_name, instructions.txt_value); }
-      var dns = wizard.querySelector('.antler-dns'); dns.replaceChildren();
-      (data.dns || []).forEach(function (entry) {
-        var li = document.createElement('li');
-        var light = document.createElement('span');
-        light.className = 'antler-light ' + (entry.state === 'ok' ? 'green' : entry.state === 'mismatch' ? 'red' : 'amber');
-        li.textContent = entry.kind.toUpperCase() + ': ' + (entry.state === 'ok' ? 'Published and matching' : entry.reason || 'Waiting for DNS');
-        li.prepend(light);
-        dns.appendChild(li);
-      });
+      (instructions.mx || []).forEach(function (mx) { row(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
+      if (instructions.txt_value) { row(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
+      table.appendChild(tbody);
+      records.appendChild(table);
+      var nameNote = wizard.querySelector('.antler-note');
+      if (nameNote) {
+        nameNote.textContent = subdomain
+          ? 'For ' + domainName + ', some DNS providers want the relative name "subdomain" instead of the full name shown above.'
+          : 'For the domain apex, "@" means ' + domainName + '. Some DNS providers want the bare domain name instead.';
+      }
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
       (data.status || []).forEach(function (status) {
         var row = document.createElement('p');
@@ -2802,14 +2842,18 @@ function hideInboxSubview(dlg) {
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
       wizard.querySelector('.antler-progress').textContent = custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
-      panels.forEach(function (panel, index) { panel.hidden = statusMode ? index !== 2 && (index !== 0 || custom) : index !== step; });
+      // The saved-status view stacks the contact email, DNS table and receiver
+      // lights on one screen; the setup wizard shows one step at a time.
+      panels.forEach(function (panel, index) {
+        panel.hidden = statusMode ? (index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
+      });
       advancedLabel.hidden = statusMode;
       if (statusMode) {
         wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
         wizard.querySelector('[data-antler-step="0"] p').hidden = true;
+        wizard.querySelector('[data-antler-step="1"] h3').textContent = 'MX and TXT records';
         wizard.querySelector('[data-antler-step="2"] h3').textContent = 'Antler MX connection status';
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
-        wizard.querySelector('[data-antler-step="2"]').appendChild(wizard.querySelector('.antler-dns'));
       }
       back.hidden = statusMode || (step === 0 && !entered);
       back.disabled = busy;
