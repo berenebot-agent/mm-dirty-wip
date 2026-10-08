@@ -2646,6 +2646,194 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  document.querySelectorAll('form[data-antler-domain]').forEach(function (form) {
+    var dlg = form.closest('dialog');
+    var provider = form.querySelector('.provider-select');
+    var group = form.querySelector('[data-provider="dialmx"]');
+    if (!group) { return; }
+    var service = group.querySelector('[name="cfg_dialmx_service"]');
+    var email = group.querySelector('[name="cfg_dialmx_contact_email"]');
+    var enforcement = group.querySelector('[name="cfg_dialmx_enforcement"]');
+    var save = dlg.querySelector('[data-save-provider]');
+    var oldSetup = dlg.querySelector('.dialmx-setup');
+    var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
+    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0;
+    var state = null, savedEmail = null, timer = null;
+    var wizard = document.createElement('section');
+    wizard.className = 'antler-wizard';
+    wizard.innerHTML = '<p class="antler-progress" aria-live="polite"></p>' +
+      '<section data-antler-step="0"><h3>Contact email</h3><p class="muted small">Enter a contact email for your Antler MX setup.</p></section>' +
+      '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div><ul class="antler-dns"></ul><p class="muted small">DNS results are cached for up to one minute.</p></section>' +
+      '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
+      '<section data-antler-step="3" hidden><h3>Authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
+      '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><button type="button" class="secondary antler-check">Check now</button></div>' +
+      '<p class="antler-error error" role="alert" hidden></p><button type="button" class="secondary antler-back" hidden>Back</button>';
+    group.appendChild(wizard);
+    function moveField(input, index) {
+      var label = input.previousElementSibling;
+      var panel = wizard.querySelector('[data-antler-step="' + index + '"]');
+      if (label && label.tagName === 'LABEL') { panel.appendChild(label); }
+      panel.appendChild(input);
+    }
+    moveField(email, 0);
+    moveField(enforcement, 3);
+    var panels = wizard.querySelectorAll('[data-antler-step]');
+    var check = wizard.querySelector('.antler-check');
+    var note = wizard.querySelector('.antler-check-note');
+    var back = wizard.querySelector('.antler-back');
+    var error = wizard.querySelector('.antler-error');
+    function active() { return provider.value === 'dialmx' && service.value === 'antler'; }
+    function fail(message) { error.textContent = message; error.hidden = !message; }
+    function api(method, config) {
+      var options = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
+      if (config) {
+        options.headers['Content-Type'] = 'application/json';
+        options.headers['X-CSRF-Token'] = form.querySelector('[name="_csrf"]').value;
+        options.body = JSON.stringify({ provider: 'dialmx', config: config });
+      }
+      return fetch(endpoint, options).then(function (response) {
+        if (!response.ok) { throw new Error('Unable to ' + (method === 'GET' ? 'check' : 'save') + ' setup. Please try again.'); }
+        return response.json();
+      });
+    }
+    function isReady(status) {
+      return status.state === 'ready' && (!status.expires_at || Date.parse(status.expires_at) > Date.now());
+    }
+    function render(data) {
+      state = data;
+      note.dataset.updated = new Date().toLocaleTimeString();
+      var instructions = data.instructions || {};
+      ready = (data.status || []).some(isReady);
+      var records = wizard.querySelector('.antler-records');
+      records.replaceChildren();
+      function record(type, name, value, priority) {
+        var box = document.createElement('div');
+        var heading = document.createElement('p');
+        heading.textContent = type + ' · Name: ' + name + (priority == null ? '' : ' · Priority: ' + priority);
+        var code = document.createElement('pre');
+        code.className = 'dialmx-txt';
+        code.textContent = value;
+        var copy = document.createElement('button');
+        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
+        copy.addEventListener('click', function () {
+          if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
+          navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+        });
+        box.append(heading, code, copy); records.appendChild(box);
+      }
+      (instructions.mx || []).forEach(function (mx) { record('MX', '@', mx.hostname, mx.priority); });
+      if (instructions.txt_value) { record('TXT', instructions.txt_name, instructions.txt_value); }
+      var dns = wizard.querySelector('.antler-dns'); dns.replaceChildren();
+      (data.dns || []).forEach(function (entry) {
+        var li = document.createElement('li');
+        li.textContent = entry.kind.toUpperCase() + ': ' + (entry.state === 'ok' ? 'Published and matching' : entry.reason || 'Waiting for DNS');
+        dns.appendChild(li);
+      });
+      var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
+      (data.status || []).forEach(function (status) {
+        var row = document.createElement('p');
+        var label = isReady(status) ? 'Ready to receive' : {
+          connecting: 'Connecting / waiting for DNS authorization', disconnected: 'Disconnected',
+          rejected: 'Authorization rejected', unavailable: 'Unavailable', deferred: 'Waiting for capacity'
+        }[status.state] || 'Waiting for DNS authorization';
+        row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + label + (status.reason ? ' · ' + status.reason : '');
+        receivers.appendChild(row);
+      });
+      if (!(data.status || []).length) { receivers.textContent = 'Waiting for receiver status…'; }
+      update();
+    }
+    function update() {
+      var enabled = active();
+      provider.disabled = busy;
+      service.disabled = busy || provider.value !== 'dialmx';
+      wizard.hidden = provider.value !== 'dialmx';
+      // Keep the generic custom-service controls available outside the wizard.
+      Array.prototype.forEach.call(group.children, function (child) {
+        if (child !== wizard && child !== service && child !== service.previousElementSibling && child.tagName !== 'TEMPLATE') { child.hidden = enabled; }
+      });
+      email.type = enabled ? 'email' : 'text';
+      email.required = enabled;
+      if (oldSetup) { oldSetup.hidden = enabled || provider.value !== 'dialmx'; }
+      if (!enabled) {
+        // The moved fields still belong to the custom form.
+        wizard.hidden = provider.value !== 'dialmx';
+        panels.forEach(function (panel, index) { panel.hidden = index !== 0 && index !== 3; });
+        wizard.querySelector('.antler-progress').hidden = true;
+        back.hidden = true;
+        wizard.querySelector('.antler-checks').hidden = true;
+        wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = true; });
+        if (provider.value === 'dialmx') { save.textContent = 'Save'; save.disabled = false; }
+        return;
+      }
+      wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
+      wizard.querySelector('.antler-progress').hidden = false;
+      wizard.querySelector('.antler-progress').textContent = 'Step ' + (step + 1) + ' of 4 · Contact → DNS → Receivers → Enforcement';
+      panels.forEach(function (panel, index) { panel.hidden = index !== step; });
+      back.hidden = step === 0;
+      back.disabled = busy;
+      wizard.querySelector('.antler-checks').hidden = step !== 1 && step !== 2;
+      save.textContent = busy ? 'Please wait…' : step === 3 ? 'Finish' : 'Next';
+      if (state) { ready = (state.status || []).some(isReady); }
+      save.disabled = busy || (step >= 2 && !ready);
+      check.disabled = busy || Date.now() < manualUntil;
+      check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
+    }
+    function refresh(manual) {
+      if (busy || !active() || !dlg.open || step === 0 || step === 3) { return; }
+      busy = true;
+      if (manual) { manualUntil = Date.now() + 3000; }
+      note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
+      api('GET').then(function (data) { render(data); fail(''); }).catch(function (err) { fail(err.message); }).finally(function () {
+        busy = false; nextCheck = Date.now() + 10000;
+        note.removeAttribute('aria-busy'); update();
+      });
+    }
+    check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
+    back.addEventListener('click', function () { step = Math.max(0, step - 1); fail(''); update(); });
+    form.addEventListener('submit', function (event) {
+      if (!active()) { return; }
+      event.preventDefault();
+      if (busy || (step >= 2 && !ready)) { return; }
+      if (step === 1 || step === 2) { step++; update(); if (step === 2) { refresh(false); } return; }
+      if (!email.reportValidity()) { return; }
+      if (step === 0 && savedEmail === email.value && state) { step = 1; update(); return; }
+      busy = true; fail(''); update();
+      var finishing = step === 3;
+      var beforeSave = finishing ? api('GET').then(function (data) {
+        render(data);
+        if (!ready) { step = 2; throw new Error('No Antler receiver is ready now. Wait for one receiver to reconnect before finishing.'); }
+      }) : api('GET').then(function (data) {
+        // Reopening an existing setup must retain its enforcement until the
+        // final step, and must not unnecessarily resolve a new receiver set.
+        if (data.provider === 'dialmx' && data.config.service === 'antler') { state = data; }
+      });
+      beforeSave.then(function () {
+        if (!finishing && state && state.config.contact_email === email.value) { return state; }
+        return api('PUT', { service: 'antler', contact_email: email.value, enforcement: finishing ? enforcement.value : (state && state.config.enforcement || 'moderate') });
+      }).then(function (data) {
+        if (!finishing) { enforcement.value = data.config.enforcement || 'moderate'; }
+        savedEmail = email.value; render(data);
+        if (finishing) { window.location.assign('/?notice=' + encodeURIComponent('Antler MX receiving configured')); }
+        else { step = 1; nextCheck = Date.now(); }
+      }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
+    });
+    provider.addEventListener('change', update);
+    service.addEventListener('change', update);
+    // Poll only while this dialog is open; no background checks after dismissal.
+    timer = window.setInterval(function () {
+      if (!active() || !dlg.open) { return; }
+      update();
+      if ((step === 1 || step === 2) && !busy) {
+        if (Date.now() >= nextCheck) { refresh(false); }
+        else { note.textContent = 'Refresh in ' + Math.ceil((nextCheck - Date.now()) / 1000) + 's' + (note.dataset.updated ? ' · Last checked ' + note.dataset.updated : ''); }
+      }
+    }, 1000);
+    window.addEventListener('pagehide', function () { window.clearInterval(timer); });
+    update();
+  });
+})();
+
+(function () {
   var input = document.querySelector('input[type=file][name=attachments]');
   if (!input || typeof DataTransfer === 'undefined') {
     return;
