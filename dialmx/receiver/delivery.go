@@ -218,6 +218,7 @@ func (rc *resolveCompletion) finish(t *transaction, ctx context.Context, started
 	if rc.contactEmail != "" || rc.setupID != "" {
 		args = append(args, "contact_email", rc.contactEmail, "setup_id", rc.setupID)
 	}
+	t.r.statResolves.Add(1)
 	log.Info(eventResolve, args...)
 }
 
@@ -523,6 +524,7 @@ func (t *transaction) logHandoffResult(ctx context.Context, c *connection, tx ui
 	if b := t.accepted[strings.ToLower(rr.Recipient)]; b != nil && (b.contactEmail != "" || b.setupID != "") {
 		args = append(args, "contact_email", b.contactEmail, "setup_id", b.setupID)
 	}
+	t.r.statMessages.Add(1)
 	log.Info(eventHandoffResult, args...)
 }
 

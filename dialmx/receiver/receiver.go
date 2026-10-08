@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,6 +60,11 @@ const (
 	readDeadline = 90 * time.Second
 	// writeDeadline bounds one frame write; a stuck peer cannot wedge a session.
 	writeDeadline = 10 * time.Second
+
+	// defaultSummaryInterval is the heartbeat period. Long enough that a quiet
+	// receiver is not chatty, short enough to see mail flowing while watching
+	// a deployment come up.
+	defaultSummaryInterval = 5 * time.Minute
 )
 
 // Config is the standalone receiver configuration. The SMTP edge settings
@@ -130,6 +136,12 @@ type Config struct {
 	// receiver's root is redirected (302). API and health routes are unchanged;
 	// only GET / with an HTML Accept header is served a redirect.
 	BrowserRedirectURL string
+
+	// SummaryInterval is how often the receiver emits its INFO heartbeat: a
+	// single line of totals plus the delta since the previous tick. Zero
+	// selects defaultSummaryInterval. A negative value disables it, which is
+	// what a test that asserts on an exact record set wants.
+	SummaryInterval time.Duration
 }
 
 func (c *Config) maxAuthConcurrent() int {
@@ -267,6 +279,27 @@ type Receiver struct {
 
 	active   atomic.Int64
 	stopping atomic.Bool
+
+	// Counters for the periodic summary. They are plain totals since start, so
+	// the heartbeat can report both the running total and the delta since the
+	// previous tick. touched is set whenever a counter changes, so an idle
+	// receiver can stay quiet. lastSummary holds the previous tick's values.
+	statSessions         atomic.Int64
+	statProofs           atomic.Int64
+	statProofFails       atomic.Int64
+	statResolves         atomic.Int64
+	statMessages         atomic.Int64
+	statRejected         atomic.Int64
+	statActive           atomic.Int64
+	lastSummarySess      atomic.Int64
+	lastSummaryProof     atomic.Int64
+	lastSummaryProofFail atomic.Int64
+	lastSummaryResolve   atomic.Int64
+	lastSummaryMessage   atomic.Int64
+	lastSummaryReject    atomic.Int64
+	summaryStarted       atomic.Bool
+	summaryRun           atomic.Bool
+	summaryDone          chan struct{}
 }
 
 type ipState struct {
@@ -395,6 +428,7 @@ func New(cfg Config, l *slog.Logger) *Receiver {
 		dnsSem:      make(chan struct{}, dnsJobs),
 		ips:         map[string]*ipState{},
 		domainTx:    map[string]int{},
+		summaryDone: make(chan struct{}),
 	}
 	return r
 }
@@ -566,6 +600,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	r.connections[c.id] = c
 	r.mu.Unlock()
 	r.active.Add(1)
+	r.statActive.Add(1)
 	started := time.Now()
 	var tlsVersion, tlsCipher uint16
 	if q.TLS != nil {
@@ -586,8 +621,10 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		c.writer.close()
 		c.jobs.Wait()
 		r.mu.Lock()
+		domains := make([]string, 0, len(c.domains))
 		for ch, b := range c.domains {
 			b.state = bindRevoked
+			domains = append(domains, b.domain)
 			if r.domains[b.domain] == b {
 				delete(r.domains, b.domain)
 			}
@@ -603,11 +640,17 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 			r.release(c, p)
 		}
 		r.active.Add(-1)
+		r.statActive.Add(-1)
 		r.logSession(c, "closed",
 			"duration_ms", time.Since(started).Milliseconds(),
 			"reason", closeReason,
 			"active_connections", r.active.Load(),
 		)
+		// The operator-facing disconnect record: INFO, so an established-then-
+		// lost core session is visible without enabling debug. It carries the
+		// domains the connection held authority for, which is what makes
+		// "which receiver stopped serving which domain" answerable.
+		r.logConnClosed(c, time.Since(started), closeReason, domains)
 	}()
 	if !r.spawn(c, func() { r.maintenance(c) }) {
 		closeReason = "spawn_failed"
@@ -664,6 +707,11 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		MaxAuthInflight:   r.cfg.maxAuthConcurrent(),
 		RevalidateSeconds: int(r.cfg.RevalidateInterval / time.Second),
 	})
+	// The session is admitted: count it and emit the operator-facing INFO
+	// record. This is after Ready is written, so the line never claims a
+	// session the core has not actually been granted.
+	r.statSessions.Add(1)
+	r.logConnEstablished(c, cleartext, cleartextTrusted, tlsVersion, q.Proto)
 	for {
 		if c.ctx.Err() != nil {
 			closeReason = "canceled"
@@ -716,11 +764,162 @@ func (r *Receiver) logSession(c *connection, stage string, extra ...any) {
 	r.log.Debug(event, args...)
 }
 
+// logConnEstablished emits the operator-facing INFO record for a session that
+// completed its handshake and can now carry mail. The DEBUG session/transport
+// events describe each protocol step; this one answers "did a core connect?"
+// at the default log level, which is the question an operator actually asks.
+// It is emitted after Ready is written, so it never claims a session that has
+// not been admitted.
+func (r *Receiver) logConnEstablished(c *connection, cleartext, cleartextTrusted bool, tlsVersion uint16, proto string) {
+	if r.log == nil {
+		return
+	}
+	transport := "tls"
+	if cleartext {
+		transport = "cleartext"
+	}
+	args := []any{
+		"core_connection_id", c.id,
+		"receiver_id", c.receiver,
+		"peer", c.ip,
+		"transport", transport,
+		"cleartext_trusted", cleartextTrusted,
+		"protocol", proto,
+		"tls_version", tlsVersion,
+		"active_connections", r.active.Load(),
+	}
+	if c.transportID != "" {
+		args = append(args, "transport_id", c.transportID)
+	}
+	r.log.Info(eventConnEstablished, args...)
+}
+
+// logConnClosed emits the operator-facing INFO record for a session that has
+// ended, with how long it lived, why it ended, and the domains it had authority
+// for. domains may be empty (a session that authenticated nothing), which is
+// itself useful: it means the core connected but never proved a domain.
+func (r *Receiver) logConnClosed(c *connection, uptime time.Duration, reason string, domains []string) {
+	if r.log == nil {
+		return
+	}
+	sort.Strings(domains)
+	args := []any{
+		"core_connection_id", c.id,
+		"receiver_id", c.receiver,
+		"peer", c.ip,
+		"uptime_ms", uptime.Milliseconds(),
+		"reason", reason,
+		"domains", len(domains),
+		"active_connections", r.active.Load(),
+	}
+	if len(domains) > 0 {
+		args = append(args, "domain_list", boundedList(domains))
+	}
+	r.log.Info(eventConnClosed, args...)
+}
+
+// boundedList renders up to a handful of domains for a log line, so one
+// connection holding many domains cannot inflate the record.
+func boundedList(in []string) string {
+	const max = 8
+	if len(in) > max {
+		in = in[:max]
+		return "[" + strings.Join(in, " ") + " +" + strconv.Itoa(len(in)) + "]"
+	}
+	return "[" + strings.Join(in, " ") + "]"
+}
+
+// logSummary emits the periodic INFO heartbeat: totals since start and the
+// delta since the previous tick. lastSummary* holds the previous values, so a
+// steady-state receiver reports "0 new" rather than repeating a growing total
+// with no sense of rate. It is a single line, deliberately.
+func (r *Receiver) logSummary(interval time.Duration) {
+	if r.log == nil {
+		return
+	}
+	sess := r.statSessions.Load()
+	proofs := r.statProofs.Load()
+	proofFails := r.statProofFails.Load()
+	resolves := r.statResolves.Load()
+	messages := r.statMessages.Load()
+	rejected := r.statRejected.Load()
+
+	prevSess := r.lastSummarySess.Swap(sess)
+	prevProof := r.lastSummaryProof.Swap(proofs)
+	prevProofFail := r.lastSummaryProofFail.Swap(proofFails)
+	prevResolve := r.lastSummaryResolve.Swap(resolves)
+	prevMessage := r.lastSummaryMessage.Swap(messages)
+	prevReject := r.lastSummaryReject.Swap(rejected)
+
+	first := !r.summaryStarted.Swap(true)
+	if first {
+		// The first tick reports no rate: there is no previous window to
+		// compare against, and a delta measured from process start would be
+		// misleading.
+		prevSess, prevProof, prevProofFail = sess, proofs, proofFails
+		prevResolve, prevMessage, prevReject = resolves, messages, rejected
+
+		r.log.Info(eventSummary,
+			"interval_s", int(interval/time.Second),
+			"active_connections", r.active.Load(),
+			"sessions_total", sess,
+			"proofs_total", proofs,
+			"proof_failures_total", proofFails,
+			"resolves_total", resolves,
+			"messages_total", messages,
+			"session_rejections_total", rejected,
+		)
+		return
+	}
+
+	// Later ticks keep a stable line shape: totals plus the delta for this
+	// window, so a monitor can parse one format and still see the rate.
+	r.log.Info(eventSummary,
+		"interval_s", int(interval/time.Second),
+		"active_connections", r.active.Load(),
+		"sessions_total", sess,
+		"proofs_total", proofs,
+		"proof_failures_total", proofFails,
+		"resolves_total", resolves,
+		"messages_total", messages,
+		"session_rejections_total", rejected,
+		"sessions", sess-prevSess,
+		"proofs", proofs-prevProof,
+		"proof_failures", proofFails-prevProofFail,
+		"resolves", resolves-prevResolve,
+		"messages", messages-prevMessage,
+		"session_rejections", rejected-prevReject,
+	)
+}
+
 // logProof records one step of the domain-ownership proof. phase is a bounded
 // token; the record never carries a raw TXT record, signature or key material.
 func (r *Receiver) logProof(c *connection, phase, domain, keyID, result, reason string, d time.Duration, extra ...any) {
 	if r.log == nil {
 		return
+	}
+	// Count at the terminal proof phases only, so the heartbeat reflects real
+	// proofs rather than each step of one. "grant", "renewal", "registration"
+	// and "revocation" are the outcomes; the walk-through phases are steps.
+	switch phase {
+	case "registration":
+		if result == "active" {
+			r.statProofs.Add(1)
+		} else {
+			r.statProofFails.Add(1)
+		}
+	case "renewal":
+		if result == "renewed" {
+			r.statProofs.Add(1)
+		} else {
+			r.statProofFails.Add(1)
+		}
+	case "revocation":
+		r.statProofs.Add(1)
+	case "grant":
+		if result != "accepted" && result != "true" {
+			r.statProofFails.Add(1)
+		}
 	}
 	args := []any{
 		"phase", phase,
@@ -758,6 +957,7 @@ func (r *Receiver) logRejected(peer, reason string) {
 	if r.log == nil {
 		return
 	}
+	r.statRejected.Add(1)
 	args := []any{"reason", reason}
 	if peer != "" {
 		args = append(args, "peer", peer)
@@ -1458,8 +1658,44 @@ func (r *Receiver) lookupTXT(ctx context.Context, d string) ([]string, error) {
 // Stop marks the receiver stopping so readiness fails and new sessions are
 // refused. It does not tear down existing sessions; the caller shuts down the
 // HTTP server.
+// Start begins the receiver's own background work: currently the periodic INFO
+// heartbeat. It is idempotent and safe to call from the entrypoint once the
+// listeners are bound. Stop ends it.
+func (r *Receiver) Start() {
+	if r.cfg.SummaryInterval < 0 {
+		return
+	}
+	if !r.summaryRun.CompareAndSwap(false, true) {
+		return
+	}
+	interval := r.cfg.SummaryInterval
+	if interval == 0 {
+		interval = defaultSummaryInterval
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-r.summaryDone:
+				return
+			case <-t.C:
+				r.logSummary(interval)
+			}
+		}
+	}()
+}
+
+// Stop signals shutdown: it refuses new sessions and ends the heartbeat.
 func (r *Receiver) Stop() {
 	r.stopping.Store(true)
+	if r.summaryRun.Load() {
+		select {
+		case <-r.summaryDone:
+		default:
+			close(r.summaryDone)
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range r.connections {
