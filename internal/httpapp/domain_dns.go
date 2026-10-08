@@ -10,21 +10,15 @@ import (
 	"time"
 )
 
-// dnsChecker performs the bounded, cached published-record checks behind the
-// Dial MX traffic lights. Checks are asynchronous: a render returns the last
-// known result (or a "checking" placeholder) and kicks a background refresh, so
-// an open dialog or a dashboard never blocks on DNS. A resolver failure is
-// reported as a check state, never as an API error.
+// dnsChecker performs the bounded published-record checks behind the Dial MX
+// traffic lights. Every check is a fresh resolver lookup: results are never
+// cached, so a record change is reflected on the next poll or an explicit
+// "Check now". Each lookup is bounded by dnsCheckTimeout so a slow resolver
+// cannot stall a render indefinitely, and a resolver failure is reported as a
+// check state, never as an API error.
 type dnsChecker struct {
+	mu       sync.Mutex
 	resolver dnsResolver
-	ttl      time.Duration
-	now      func() time.Time
-
-	mu         sync.Mutex
-	entries    map[string]domainDNSView
-	times      map[string]time.Time
-	refreshing map[string]bool
-	generation int
 }
 
 // DNSResolver is the small resolver surface the checker needs. *net.Resolver
@@ -37,40 +31,27 @@ type DNSResolver interface {
 type dnsResolver = DNSResolver
 
 const (
-	dnsCheckTTL     = time.Minute
 	dnsCheckTimeout = 4 * time.Second
 	dnsMaxFound     = 4
 )
 
 func newDNSChecker() *dnsChecker {
-	return &dnsChecker{
-		resolver:   net.DefaultResolver,
-		ttl:        dnsCheckTTL,
-		now:        time.Now,
-		entries:    map[string]domainDNSView{},
-		times:      map[string]time.Time{},
-		refreshing: map[string]bool{},
-	}
+	return &dnsChecker{resolver: net.DefaultResolver}
 }
 
-// SetDNSResolver replaces the resolver used for published-record checks and
-// drops the cache. It is for tests; production always uses the system resolver.
+// SetDNSResolver replaces the resolver used for published-record checks. It is
+// for tests; production always uses the system resolver.
 func (s *Server) SetDNSResolver(r DNSResolver) {
 	if r == nil {
 		return
 	}
 	s.dns.mu.Lock()
 	s.dns.resolver = r
-	s.dns.entries = map[string]domainDNSView{}
-	s.dns.times = map[string]time.Time{}
-	s.dns.refreshing = map[string]bool{}
-	s.dns.generation++
 	s.dns.mu.Unlock()
 }
 
 // checkMX returns the current check for the domain's MX records against the
-// expected hostnames, starting a background refresh when the cached result is
-// stale.
+// expected hostnames, resolved fresh on every call.
 //
 // A domain's receiver set is redundancy, not an all-must-match set: the setup is
 // "ok" as long as at least one expected hostname is published, so an operator who
@@ -80,9 +61,7 @@ func (s *Server) SetDNSResolver(r DNSResolver) {
 // shown to the operator. The state is "mismatch" only when MX records exist but
 // none of them is one of our receivers.
 func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) domainDNSView {
-	key := "mx|" + domain + "|" + formatMXExpected(expected)
-	pending := domainDNSView{Kind: "mx", Name: domain, Expected: formatMXExpected(expected), State: "pending", Reason: "checking published records"}
-	return c.view(key, pending, func(resolver DNSResolver, ctx context.Context) domainDNSView {
+	return c.view(func(resolver DNSResolver, ctx context.Context) domainDNSView {
 		view := domainDNSView{Kind: "mx", Name: domain, Expected: formatMXExpected(expected)}
 		records, err := resolver.LookupMX(ctx, domain)
 		if err != nil || len(records) == 0 {
@@ -116,12 +95,10 @@ func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) doma
 }
 
 // checkTXT returns the current check for the domain's _mailmoose-mx TXT record
-// against the exact key the receiver will require.
+// against the exact key the receiver will require, resolved fresh on every call.
 func (c *dnsChecker) checkTXT(domain, keyID string, want []byte, expectedValue string) domainDNSView {
 	name := "_mailmoose-mx." + domain
-	key := "txt|" + name + "|" + keyID
-	pending := domainDNSView{Kind: "txt", Name: name, Expected: expectedValue, State: "pending", Reason: "checking published records"}
-	return c.view(key, pending, func(resolver DNSResolver, ctx context.Context) domainDNSView {
+	return c.view(func(resolver DNSResolver, ctx context.Context) domainDNSView {
 		view := domainDNSView{Kind: "txt", Name: name, Expected: expectedValue}
 		records, err := resolver.LookupTXT(ctx, name)
 		if err != nil || len(records) == 0 {
@@ -142,48 +119,16 @@ func (c *dnsChecker) checkTXT(domain, keyID string, want []byte, expectedValue s
 	})
 }
 
-// view returns the cached result when it is fresh; otherwise it starts one
-// background refresh per key and returns the last known result, or the pending
-// placeholder when no result has ever been computed. The resolver is snapshotted
-// under the lock and handed to the refresh goroutine, so a concurrent resolver
-// swap never races with an in-flight lookup.
-func (c *dnsChecker) view(key string, pending domainDNSView, lookup func(DNSResolver, context.Context) domainDNSView) domainDNSView {
-	now := c.now()
+// view runs one lookup against the current resolver, bounded by dnsCheckTimeout.
+// Nothing is cached: the resolver is consulted afresh on every call so the
+// traffic lights always reflect current DNS.
+func (c *dnsChecker) view(lookup func(DNSResolver, context.Context) domainDNSView) domainDNSView {
 	c.mu.Lock()
-	cached, ok := c.entries[key]
-	if ok && now.Sub(c.times[key]) < c.ttl {
-		c.mu.Unlock()
-		return cached
-	}
-	if c.refreshing[key] {
-		c.mu.Unlock()
-		if ok {
-			return cached
-		}
-		return pending
-	}
-	c.refreshing[key] = true
 	resolver := c.resolver
-	gen := c.generation
 	c.mu.Unlock()
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), dnsCheckTimeout)
-		defer cancel()
-		result := lookup(resolver, ctx)
-		c.mu.Lock()
-		// A resolver swap (test hook) invalidates results from the old resolver.
-		if c.generation == gen {
-			c.entries[key] = result
-			c.times[key] = c.now()
-		}
-		delete(c.refreshing, key)
-		c.mu.Unlock()
-	}()
-	if ok {
-		return cached
-	}
-	return pending
+	ctx, cancel := context.WithTimeout(context.Background(), dnsCheckTimeout)
+	defer cancel()
+	return lookup(resolver, ctx)
 }
 
 // txtMatches reports whether exactly one MM1 key is published for keyID and

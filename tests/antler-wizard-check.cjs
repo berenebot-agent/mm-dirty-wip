@@ -9,11 +9,13 @@ const end = source.indexOf('\n(function () {', start + 1);
 class Element {
   constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.classList = { toggle() {} }; }
   addEventListener(name, fn) { this.events[name] = fn; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
   prepend(child) { this.children.unshift(child); }
   insertBefore(child) { this.children.unshift(child); return child; }
   replaceChildren() { this.children = []; }
+  removeChild(child) { this.children = this.children.filter(c => c !== child); return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
   setAttribute() {}
   removeAttribute() {}
   reportValidity() { return true; }
@@ -57,7 +59,7 @@ async function check(mode = 'hosted') {
   const rotate = new Element('FORM'); rotate.nodes.button = new Element('BUTTON');
   dlg.nodes['form[data-antler-regenerate]'] = rotate;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList } });
+  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler', ...(mode === 'status' ? { contact_email: 'ops@example.com' } : {}) }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mxList } });
   const created = [];
   vm.runInNewContext(source.slice(start, end), {
     document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
@@ -77,7 +79,13 @@ async function check(mode = 'hosted') {
     assert.equal(save.textContent, 'Save email');
     tick(); await flush();
     assert.equal(wizard.panels[2].hidden, true);
-    email.value = 'changed@example.com'; await submit();
+    assert.equal(save.hidden, true, 'Save email is hidden while the contact email is unchanged');
+    email.value = 'changed@example.com'; email.events.input();
+    assert.equal(save.hidden, false, 'Save email appears once the contact email changes');
+    email.value = 'ops@example.com'; email.events.input();
+    assert.equal(save.hidden, true, 'Save email hides again when the email is reverted');
+    email.value = 'changed@example.com'; email.events.input();
+    await submit();
     assert.equal(requests.at(-1).options.method, 'POST');
     assert.deepEqual(saved.config, { contact_email: 'changed@example.com' });
     assert.equal(wizard.panels[3].hidden, true);
@@ -118,9 +126,11 @@ async function check(mode = 'hosted') {
       dns = [{ kind: kind, state: 'mismatch' }, { kind: kind === 'mx' ? 'txt' : 'mx', state: 'ok' }];
       now += 20000; tick(); await flush();
       const writesBefore = requests.filter(r => r.options.method !== 'GET').length;
-      const fix = wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix')[0];
-      assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 1);
+      const fix = wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix')[0];
+      assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').length, 1);
       assert.ok(fix, 'DNS status has a targeted Fix button');
+      assert.equal(fix.hidden, false);
+      assert.equal(fix.textContent, 'Fix DNS setup');
       fix.events.click();
       assert.equal(wizard.panels[1].hidden, false);
       assert.equal(wizard.nodes['[data-antler-step="1"] h3'].textContent, 'Fix your ' + kind.toUpperCase() + ' record');
@@ -140,14 +150,16 @@ async function check(mode = 'hosted') {
     }
     dns = [{ kind: 'mx', state: 'ok' }, { kind: 'txt', state: 'ok' }];
     statuses = [{ state: 'disconnected' }]; now += 20000; tick(); await flush();
-    wizard.nodes['.antler-records'].children.find(el => el.className === 'secondary antler-fix').events.click();
+    const receivingFix = wizard.nodes['.antler-checks'].children.find(el => el.className === 'secondary antler-fix');
+    assert.equal(receivingFix.textContent, 'Fix receiving setup');
+    receivingFix.events.click();
     assert.equal(wizard.panels[2].hidden, false, 'connection-only Fix opens receiver step');
     assert.equal(save.disabled, true);
     dlg.open = false; now += 20000; const pausedCount = requests.length; tick(); await flush();
     assert.equal(requests.length, pausedCount);
     dlg.open = true; statuses = [{ state: 'ready' }]; tick(); await flush(); await submit();
     assert.equal(save.textContent, 'Save email', 'reopened repair completes to status');
-    assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 0, 'healthy status has no Fix');
+    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'healthy status has no Fix');
     // A partial MX set: one receiver's MX published, the other's not. The
     // aggregate check is ok and each row lights on its own hostname, so the
     // missing secondary receiver never paints the whole setup red or prompts a
@@ -160,7 +172,7 @@ async function check(mode = 'hosted') {
     const mxLightClass = i => tbody.children[i].children[2].children[0].className;
     assert.match(mxLightClass(0), /green/, 'published receiver MX is green');
     assert.match(mxLightClass(1), /amber/, 'unpublished receiver MX is not painted red');
-    assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 0, 'partial MX set is healthy: no Fix');
+    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'partial MX set is healthy: no Fix');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);

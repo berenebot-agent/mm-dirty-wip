@@ -2675,7 +2675,7 @@ function hideInboxSubview(dlg) {
     wizard.className = 'antler-wizard';
     wizard.innerHTML = '<p class="antler-progress" aria-live="polite"></p>' +
       '<section data-antler-step="0"><h3>Contact email</h3><p class="muted small">Enter a contact email for your Antler MX setup.</p></section>' +
-      '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div><p class="muted small antler-note"></p><p class="muted small">DNS results are cached for up to one minute.</p></section>' +
+      '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div></section>' +
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
@@ -2703,9 +2703,14 @@ function hideInboxSubview(dlg) {
     urls.value = existingURLs ? existingURLs.value : '';
     advanced.addEventListener('change', function () { custom = advanced.checked; update(); });
     var panels = wizard.querySelectorAll('[data-antler-step]');
+    var checksRow = wizard.querySelector('.antler-checks');
     var check = wizard.querySelector('.antler-check');
     var note = wizard.querySelector('.antler-check-note');
     var error = wizard.querySelector('.antler-error');
+    // Fix lives beside Check now, right-aligned, and acts on the current issue.
+    var fix = document.createElement('button');
+    fix.type = 'button'; fix.className = 'secondary antler-fix'; fix.hidden = true;
+    checksRow.appendChild(fix);
     // Back is part of the dialog's bottom navigation, not the upper form.
     var footer = save.closest('.dialog-actions');
     var back = document.createElement('button');
@@ -2727,6 +2732,12 @@ function hideInboxSubview(dlg) {
     }
     function isReady(status) {
       return status.state === 'ready' && (!status.expires_at || Date.parse(status.expires_at) > Date.now());
+    }
+    // The status view only offers Save email once the contact email actually
+    // differs from the saved one; otherwise Close is the only action.
+    function emailDirty() {
+      var saved = state && state.config ? state.config.contact_email || '' : '';
+      return email.value.trim() !== saved;
     }
     // A receiver row reads its real state: red is a fact about the receiver (it
     // refused, it is gone, or the core cannot reach it at all), amber is only
@@ -2804,17 +2815,6 @@ function hideInboxSubview(dlg) {
         parent.appendChild(td);
         return td;
       }
-      function fixButton(parent, kind) {
-        var fix = document.createElement('button');
-        fix.type = 'button'; fix.className = 'secondary antler-fix'; fix.textContent = 'Fix setup';
-        fix.disabled = busy;
-        fix.addEventListener('click', function () {
-          if (busy) { return; }
-          repairing = true; fixKind = kind; statusMode = false; entered = true; step = kind ? 1 : 2;
-          fail(''); render(state); nextCheck = Date.now();
-        });
-        parent.appendChild(fix);
-      }
       if (!statusMode) {
         function recordRow(name, type, priority, value, entry, mxHost) {
           var tr = document.createElement('tr');
@@ -2880,18 +2880,19 @@ function hideInboxSubview(dlg) {
       auth.appendChild(authStatus);
       records.appendChild(table);
       if (statusMode) { records.appendChild(auth); }
+      // Fix is offered whenever anything is not ready: a specific DNS record
+      // mismatch, or a receiver that has not reconnected. The label names the
+      // issue so the operator knows which step the button opens.
+      fix.hidden = true;
       if (statusMode) {
         // A partial MX set is healthy: the aggregate check is "ok" once any one
         // receiver's MX is published, so the MX prompt only appears when no
         // connector has any MX (the check is pending or mismatched).
         var dnsIssue = !txtEntry || txtEntry.state !== 'ok' ? 'txt' : (instructions.mx || []).length && (!dnsByKind.mx || dnsByKind.mx.state !== 'ok') ? 'mx' : '';
-        if (dnsIssue || !ready || (data.status || []).some(function (status) { return !isReady(status); })) { fixButton(records, dnsIssue); }
-      }
-      var nameNote = wizard.querySelector('.antler-note');
-      if (nameNote) {
-        nameNote.textContent = subdomain
-          ? 'For ' + domainName + ', some DNS providers want the relative name "subdomain" instead of the full name shown above.'
-          : 'For the domain apex, "@" means ' + domainName + '. Some DNS providers want the bare domain name instead.';
+        if (dnsIssue || !ready || (data.status || []).some(function (status) { return !isReady(status); })) {
+          fixKind = dnsIssue; fix.textContent = dnsIssue ? 'Fix DNS setup' : 'Fix receiving setup';
+          fix.hidden = false;
+        }
       }
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
       (data.status || []).forEach(function (status) {
@@ -2909,7 +2910,7 @@ function hideInboxSubview(dlg) {
       var enabled = active();
       dlg.classList.toggle('antler-dialog', enabled);
       if (rotate) { rotate.querySelector('button').disabled = busy || rotating || repairing; }
-      wizard.querySelectorAll('.antler-fix').forEach(function (button) { button.disabled = busy; });
+      fix.disabled = busy;
       provider.disabled = busy;
       service.disabled = busy || provider.value !== 'dialmx';
       provider.hidden = enabled && entered;
@@ -2940,7 +2941,7 @@ function hideInboxSubview(dlg) {
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
-      wizard.querySelector('.antler-progress').textContent = repairing ? 'Fix DNS · DNS → Receivers' : rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('.antler-progress').textContent = repairing ? (fixKind ? 'Fix DNS · DNS → Receivers' : 'Fix receivers · Receivers') : rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
       wizard.querySelector('[data-antler-step="1"] h3').textContent = repairing ? 'Fix your ' + fixKind.toUpperCase() + ' record' : rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
       wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
       // The saved-status view replaces the separate receiver panel with a
@@ -2959,7 +2960,7 @@ function hideInboxSubview(dlg) {
       back.hidden = statusMode || ((rotating || repairing) ? step === 1 : step === 0 && !entered);
       back.disabled = busy;
       wizard.querySelector('.antler-checks').hidden = !statusMode && step !== 1 && step !== 2;
-      save.hidden = statusMode && custom;
+      save.hidden = statusMode && (custom || !emailDirty());
       save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : ((rotating || repairing) && step === 2) || step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
       save.disabled = busy || (!statusMode && (step === 2 || step === 3) && !ready);
@@ -2977,6 +2978,12 @@ function hideInboxSubview(dlg) {
       });
     }
     check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
+    fix.addEventListener('click', function () {
+      if (busy) { return; }
+      repairing = true; statusMode = false; entered = true; step = fixKind ? 1 : 2;
+      fail(''); render(state); nextCheck = Date.now();
+    });
+    email.addEventListener('input', update);
     if (rotate) {
       rotate.addEventListener('submit', function (event) {
         if (!active()) { return; }
@@ -3018,7 +3025,7 @@ function hideInboxSubview(dlg) {
         return;
       }
       if (statusMode) {
-        if (custom || !email.reportValidity()) { return; }
+        if (custom || !emailDirty() || !email.reportValidity()) { return; }
         busy = true; update();
         api('POST', { contact_email: email.value }).then(function (data) { render(data); fail(''); })
           .catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });

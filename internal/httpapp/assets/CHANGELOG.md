@@ -8,6 +8,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Dial MX / Antler MX setup: the published MX and `_mailmoose-mx` TXT checks now
+  resolve DNS live on every refresh (bounded by a four-second timeout) and are no
+  longer cached in the core. Editing a TXT record is reflected on the next poll or
+  **Check now** instead of waiting out a one-minute TTL, so the domain-auth
+  traffic light and the wizard agree with what the receivers actually resolve.
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
   folded `steps` string) instead of one INFO `dialmx domain proof` record per

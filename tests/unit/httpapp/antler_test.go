@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/mxwire"
@@ -36,32 +36,52 @@ func (f fakeResolver) LookupTXT(context.Context, string) ([]string, error) {
 	return f.txt, f.txtE
 }
 
-// waitForDNS polls until the asynchronous DNS checks settle past the
-// "checking" placeholder.
+// switchableResolver returns the current answers and counts lookups, so a test
+// can prove each request resolves DNS afresh with no core-side cache.
+type switchableResolver struct {
+	mu     sync.Mutex
+	mx     []*net.MX
+	txt    []string
+	mxHits int
+	txHits int
+}
+
+func (s *switchableResolver) set(mx []*net.MX, txt []string) {
+	s.mu.Lock()
+	s.mx, s.txt = mx, txt
+	s.mu.Unlock()
+}
+
+func (s *switchableResolver) counts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mxHits, s.txHits
+}
+
+func (s *switchableResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mxHits++
+	return s.mx, nil
+}
+
+func (s *switchableResolver) LookupTXT(context.Context, string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.txHits++
+	return s.txt, nil
+}
+
+// waitForDNS returns the receiving-status body. The published-record checks now
+// resolve synchronously on every request, so one call has a settled result.
 func waitForDNS(t *testing.T, do func() *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
-	for i := 0; i < 100; i++ {
-		rr := do()
-		var body map[string]any
-		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		dns, _ := body["dns"].([]any)
-		checking := false
-		for _, raw := range dns {
-			v, _ := raw.(map[string]any)
-			reason, _ := v["reason"].(string)
-			if v["state"] == "pending" && strings.Contains(reason, "checking") {
-				checking = true
-			}
-		}
-		if len(dns) > 0 && !checking {
-			return body
-		}
-		time.Sleep(20 * time.Millisecond)
+	rr := do()
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	t.Fatal("DNS checks never settled")
-	return nil
+	return body
 }
 
 // TestDialMXAntlerReceivingAPITrafficLights proves the receiving API returns the
@@ -165,6 +185,74 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 		if !strings.Contains(page.Body.String(), want) {
 			t.Fatalf("setup panel missing %q", want)
 		}
+	}
+}
+
+// TestDialMXAntlerDNSChecksAreNotCached proves the published-record checks are
+// live: each request re-resolves DNS, so a TXT record changed between two reads
+// is reflected immediately rather than served from a TTL cache.
+func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	cred, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+	txtValue := mxwire.DomainTXT(cred.KeyID, pub)
+
+	res := &switchableResolver{}
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{txtValue})
+	srv := httpapp.New(svc, nil)
+	srv.SetDNSResolver(res)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	do := func() map[string]any {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
+	}
+	txtState := func(body map[string]any) string {
+		for _, raw := range body["dns"].([]any) {
+			v := raw.(map[string]any)
+			if v["kind"] == "txt" {
+				return v["state"].(string)
+			}
+		}
+		return ""
+	}
+
+	if got := txtState(do()); got != "ok" {
+		t.Fatalf("first TXT light = %q, want ok", got)
+	}
+	// The record changes to a key that no longer matches the domain's exact key.
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{
+		"v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub),
+	})
+	if got := txtState(do()); got != "mismatch" {
+		t.Fatalf("second TXT light = %q, want mismatch (a cached result would stay ok)", got)
+	}
+	mxHits, txHits := res.counts()
+	if mxHits < 2 || txHits < 2 {
+		t.Fatalf("resolver hits mx=%d txt=%d, want >=2 each (checks must not be cached)", mxHits, txHits)
 	}
 }
 
