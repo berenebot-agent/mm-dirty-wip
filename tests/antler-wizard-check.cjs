@@ -7,7 +7,7 @@ const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
 const start = source.indexOf('(function () {\n  document.querySelectorAll(\'form[data-antler-domain]\')');
 const end = source.indexOf('\n(function () {', start + 1);
 class Element {
-  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.className = ''; this.classList = { toggle() {} }; }
+  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.className = ''; const classes = new Set(); this.classList = { toggle: (name, on) => { if (on === undefined) { on = !classes.has(name); } if (on) { classes.add(name); } else { classes.delete(name); } }, contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name) }; }
   addEventListener(name, fn) { this.events[name] = fn; }
   appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
@@ -43,7 +43,7 @@ async function check(mode = 'hosted') {
   let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [];
   let mxList = mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }];
   const dlg = new Element(); dlg.open = true;
-  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.closest = () => dlg;
+  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.dataset.antlerConnectors = JSON.stringify(mxList); form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
   const group = new Element();
   const service = new Element('SELECT'); service.value = 'antler'; service.previousElementSibling = new Element('LABEL');
@@ -82,6 +82,16 @@ async function check(mode = 'hosted') {
   assert.equal(back.hidden, true, 'Back is hidden before entering a wizard step');
   assert.equal(service.hidden, true, 'service selector is removed from every step');
   if (mode === 'status') {
+    // Opening the saved status view checks immediately rather than waiting for
+    // the first poll tick, and lays out the complete table from the embedded
+    // connector names so nothing appears half-loaded.
+    assert.equal(requests.filter(r => r.options.method === 'GET').length, 1, 'status opens with an immediate check');
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/, 'status skeleton is laid out before the first poll returns');
+    assert.match(collect(wizard.nodes['.antler-records']), /mx\.example\.com/, 'skeleton rows carry the connector names');
+    assert.match(collect(wizard.nodes['.antler-records']), /Pending/, 'skeleton value cells start pending');
+    assert.ok(wizard.nodes['.antler-records'].classList.contains('antler-checking'), 'pending skeleton animates while the first check is in flight');
+    await flush();
+    assert.equal(wizard.nodes['.antler-records'].classList.contains('antler-checking'), false, 'pending animation stops once the check returns');
     assert.equal(provider.hidden, true);
     // The status footer keeps key rotation and Remove receiving, and hides the
     // provider-specific Worker-secret regenerate that is not an Antler concern.
