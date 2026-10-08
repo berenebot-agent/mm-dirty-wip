@@ -1013,6 +1013,21 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 </style>{{range .Domains}}{{$d := .}}{{$sel := index $.DomainReceivingSelected .ID}}
 <dialog id="domain-receiving-dialog-{{.ID}}" class="domain-dialog"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "receiving")}} data-open="1"{{end}}>
 <h2>Receiving · {{.Name}}</h2>
+<style>
+.antler-dialog .provider-box,.antler-dialog .antler-wizard,.antler-dialog .antler-records{max-height:none;overflow:visible}
+.antler-dialog{width:min(900px,calc(100vw - 48px))}
+.antler-dns-table th,.antler-dns-table td{width:auto!important}
+.antler-status-table th:first-child,.antler-status-table td:first-child{width:48%!important}
+.antler-record-table{table-layout:fixed}
+.antler-record-table th:nth-child(1){width:20%!important}
+.antler-record-table th:nth-child(2){width:7%!important}
+.antler-record-table th:nth-child(3){width:8%!important}
+.antler-record-table th:nth-child(4){width:39%!important}
+.antler-record-table th:nth-child(5){width:12%!important}
+.antler-record-table th:nth-child(6){width:14%!important}
+.antler-record-table button{padding:4px 8px;font-size:12px;white-space:normal}
+.antler-domain-auth{flex-wrap:wrap}.antler-fix{margin-top:12px}
+</style>
 <form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <label>Provider</label>

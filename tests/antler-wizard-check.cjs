@@ -7,7 +7,7 @@ const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
 const start = source.indexOf('(function () {\n  document.querySelectorAll(\'form[data-antler-domain]\')');
 const end = source.indexOf('\n(function () {', start + 1);
 class Element {
-  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; }
+  constructor(tag = 'DIV') { this.tagName = tag; this.children = []; this.events = {}; this.dataset = {}; this.value = ''; this.hidden = false; this.nodes = {}; this.classList = { toggle() {} }; }
   addEventListener(name, fn) { this.events[name] = fn; }
   appendChild(child) { this.children.push(child); return child; }
   append(...children) { children.forEach(child => this.appendChild(child)); }
@@ -38,7 +38,7 @@ class Element {
   }
 }
 async function check(mode = 'hosted') {
-  let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false;
+  let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [];
   const dlg = new Element(); dlg.open = true;
   const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
@@ -56,7 +56,7 @@ async function check(mode = 'hosted') {
   const rotate = new Element('FORM'); rotate.nodes.button = new Element('BUTTON');
   dlg.nodes['form[data-antler-regenerate]'] = rotate;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: [], instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
+  const response = () => ({ provider: mode === 'status' ? 'dialmx' : '', config: { enforcement: 'moderate', service: mode === 'custom' ? 'custom' : 'antler' }, status: statuses, dns: dns, instructions: { txt_name: '_mailmoose-mx.example.com', txt_value: 'public-key', mx: mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }] } });
   const created = [];
   vm.runInNewContext(source.slice(start, end), {
     document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
@@ -89,7 +89,9 @@ async function check(mode = 'hosted') {
     assert.deepEqual(saved, { provider: 'dialmx', regenerate_secret: true });
     assert.equal(wizard.panels[1].hidden, false, 'rotation opens DNS step');
     assert.match(collect(wizard.nodes['.antler-records']), /public-key/);
-    assert.equal(created.filter(el => el.tagName === 'DETAILS' && collect(el).includes('TXT')).at(-1).open, true);
+    assert.match(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
+    assert.match(collect(wizard.nodes['.antler-records']), /Copy value/);
+    assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Connection status/);
     assert.equal(back.hidden, true, 'rotation cannot return to contact/setup steps');
     await submit();
     assert.equal(wizard.panels[2].hidden, false);
@@ -104,11 +106,47 @@ async function check(mode = 'hosted') {
     statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }]; now += 3000;
     wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
     assert.equal(save.textContent, 'Save email', 'Finish returns to status');
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+    assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
     assert.equal(requests.filter(r => r.options.method === 'PUT').length, 1, 'Finish does not rewrite config or rotate again');
     dlg.open = false; now += 20000;
     const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
     dlg.open = true; tick(); await flush();
     assert.match(collect(wizard.nodes['.antler-records']), /Antler|TXT/, 'reopening refreshes status and DNS');
+    for (const kind of ['mx', 'txt']) {
+      dns = [{ kind: kind, state: 'mismatch' }, { kind: kind === 'mx' ? 'txt' : 'mx', state: 'ok' }];
+      now += 20000; tick(); await flush();
+      const writesBefore = requests.filter(r => r.options.method !== 'GET').length;
+      const fix = wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix')[0];
+      assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 1);
+      assert.ok(fix, 'DNS status has a targeted Fix button');
+      fix.events.click();
+      assert.equal(wizard.panels[1].hidden, false);
+      assert.equal(wizard.nodes['[data-antler-step="1"] h3'].textContent, 'Fix your ' + kind.toUpperCase() + ' record');
+      assert.match(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
+      await submit();
+      assert.equal(wizard.panels[2].hidden, false);
+      back.events.click();
+      assert.equal(wizard.panels[1].hidden, false, 'repair Back returns to DNS');
+      await submit();
+      assert.equal(save.textContent, 'Finish');
+      dns = [{ kind: kind, state: 'mismatch' }]; await submit();
+      assert.equal(save.textContent, 'Save email', 'ready receiver completes repair even while DNS check is cached');
+      assert.equal(save.textContent, 'Save email');
+      assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+      assert.equal(requests.filter(r => r.options.method !== 'GET').length, writesBefore, 'Fix never rotates or rewrites configuration');
+      dns = []; now += 20000; tick(); await flush();
+    }
+    dns = [{ kind: 'mx', state: 'ok' }, { kind: 'txt', state: 'ok' }];
+    statuses = [{ state: 'disconnected' }]; now += 20000; tick(); await flush();
+    wizard.nodes['.antler-records'].children.find(el => el.className === 'secondary antler-fix').events.click();
+    assert.equal(wizard.panels[2].hidden, false, 'connection-only Fix opens receiver step');
+    assert.equal(save.disabled, true);
+    dlg.open = false; now += 20000; const pausedCount = requests.length; tick(); await flush();
+    assert.equal(requests.length, pausedCount);
+    dlg.open = true; statuses = [{ state: 'ready' }]; tick(); await flush(); await submit();
+    assert.equal(save.textContent, 'Save email', 'reopened repair completes to status');
+    assert.equal(wizard.nodes['.antler-records'].children.filter(el => el.className === 'secondary antler-fix').length, 0, 'healthy status has no Fix');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);
@@ -145,6 +183,7 @@ async function check(mode = 'hosted') {
   assert.equal(wizard.panels[1].hidden, false);
   assert.equal(back.hidden, false, 'Back appears once inside the wizard');
   const table = collect(wizard.nodes['.antler-records']);
+  assert.match(table, /Name Type Priority Value Status/, 'initial setup uses DNS record layout');
   if (mode === 'custom') {
     assert.match(table, /_mailmoose-mx\.example\.com/);
   } else {
@@ -178,7 +217,10 @@ async function check(mode = 'hosted') {
   now += 3000; statuses = [{ state: 'ready' }, { state: 'rejected' }];
   wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
   enforcement.value = 'hard'; await submit();
-  assert.equal(saved.config.enforcement, 'hard'); assert.match(redirect, /Antler/);
+  assert.equal(saved.config.enforcement, 'hard'); assert.equal(redirect, undefined);
+  assert.equal(save.textContent, 'Save email');
+  assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+  assert.equal(wizard.panels[2].hidden, true, 'initial Finish returns to status');
   dlg.open = false; now += 20000;
   const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
 }
