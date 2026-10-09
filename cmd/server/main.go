@@ -15,6 +15,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/admincli"
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/dnsfallback"
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/launcher"
@@ -39,6 +40,15 @@ func main() {
 		os.Exit(2)
 	}
 	log.Info("starting", "mode", cfg.Mode, "data_dir", cfg.DataDir)
+
+	// Install ordered resolver failover before any network client or goroutine
+	// starts, so outbound provider HTTP, SMTP, direct MX, SPF/DKIM/DMARC and
+	// domain checks all recover when the host's configured DNS servers fail. A
+	// nil list leaves native DNS untouched.
+	net.DefaultResolver = dnsfallback.New(cfg.DNSFallbackServers)
+	if len(cfg.DNSFallbackServers) > 0 {
+		log.Info("DNS fallback configured", "servers", cfg.DNSFallbackServers)
+	}
 
 	runUID, runGID, err := privdrop.ResolvedIdentity()
 	if err != nil {
