@@ -45,6 +45,54 @@ func (s *Service) ResolveDialMXRecipients(ctx context.Context, recipients []stri
 	return s.resolveMXRecipients(ctx, "dialmx", recipients)
 }
 
+// selfHostedReceivingProviders returns the provider spellings that name a
+// self-hosted receiver, most specific first.
+//
+// The self-hosted family is served by two spellings: the embedded/private MX
+// edge ("mx") and the per-account Remote MX receiver ("remotemx"). Both describe
+// the same kind of deployment — an operator-run receiver the core dials
+// outbound to — and an account picks one per domain in the receiving dialog.
+//
+// A session backend serves whichever receiver it was started for, but the
+// domain's receiving config records the operator's own choice. Resolving
+// against only the backend's spelling means a domain configured for the other
+// member of the family rejects every recipient as unknown (550 at RCPT), which
+// reads as "no such mailbox" rather than "wrong provider name". Accepting the
+// family keeps the operator's choice authoritative without leaking existence:
+// if neither spelling resolves, the recipient is still reported unknown.
+//
+// "dialmx" (the hosted Antler MX service) is deliberately NOT part of the
+// family: a domain routed to the hosted service must not be accepted by a
+// self-hosted receiver, or vice versa.
+func selfHostedReceivingProviders(provider string) []string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case mxProvider:
+		return []string{mxProvider, RemoteMXProvider}
+	case RemoteMXProvider:
+		return []string{RemoteMXProvider, mxProvider}
+	default:
+		return []string{provider}
+	}
+}
+
+// resolveInboundBindingForProvider resolves the inbound binding for a routing
+// provider, tolerating either self-hosted provider spelling. The first spelling
+// that resolves wins; when none does, the initial error is returned so the
+// caller maps it to the same unknown-recipient verdict as before.
+func (s *Service) resolveInboundBindingForProvider(ctx context.Context, routingProvider, recipient string) (transport.InboundBinding, error) {
+	var firstErr error
+	for _, p := range selfHostedReceivingProviders(routingProvider) {
+		b, err := s.ResolveInboundBinding(ctx, p, recipient)
+		if err == nil {
+			return b, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return transport.InboundBinding{}, firstErr
+}
+
 func (s *Service) resolveMXRecipients(ctx context.Context, routingProvider string, recipients []string) []MXResolveResult {
 	out := make([]MXResolveResult, 0, len(recipients))
 	seen := map[string]bool{}
@@ -55,7 +103,7 @@ func (s *Service) resolveMXRecipients(ctx context.Context, routingProvider strin
 		}
 		seen[r] = true
 		res := MXResolveResult{Recipient: r}
-		binding, err := s.Store.ResolveInboundBinding(ctx, routingProvider, r)
+		binding, err := s.resolveInboundBindingForProvider(ctx, routingProvider, r)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				res.Code = mxwire.CodeUnknownRecipient
