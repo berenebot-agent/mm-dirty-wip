@@ -384,6 +384,7 @@ func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed 
 		AccountID:          inbox.AccountID,
 		InboxID:            inbox.ID,
 		Provider:           msg.Provider,
+		Source:             msg.Source,
 		ProviderDeliveryID: msg.DeliveryID,
 		EnvelopeRecipient:  msg.Recipient,
 		FromName:           parsed.From.Name,

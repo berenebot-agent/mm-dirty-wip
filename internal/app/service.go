@@ -95,6 +95,19 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
 }
 
+// providerSourceLabel returns the human source label for a webhook provider
+// that carries no receiver identity. It prefers the registered transport's short
+// description and falls back to the provider name so the activity log always
+// shows something usable.
+func providerSourceLabel(provider string) string {
+	if t, ok := transport.LookupInbound(provider); ok {
+		if d := strings.TrimSpace(t.Description()); d != "" {
+			return d
+		}
+	}
+	return provider
+}
+
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
 // keyed on the receiving domain rather than the full recipient, so random local
 // parts on a MailMoose-controlled domain cannot each produce an audit row; the
@@ -322,6 +335,13 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	// rather than truncated, so malformed metadata can neither authorize an
 	// approval nor be echoed downstream.
 	msg.EnvelopeFrom = normalizeEnvelopeSender(msg.EnvelopeFrom)
+	// The activity-log source is the concrete receiver a transport supplied
+	// (MX/Dial MX); a webhook provider has no receiver selection, so fall back
+	// to its display name. Snapshotting it here means both the control-record
+	// and the ordinary message/blocked paths label the same source.
+	if msg.Source == "" {
+		msg.Source = providerSourceLabel(provider)
+	}
 	// A strict approval control subject, or a reply quoting the approval email's
 	// [GH-REQUEST:<token>] reference line, is consumed as workflow input before
 	// ordinary delivery, so the token never becomes mailbox content. It is
@@ -352,7 +372,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 		}
 		bm, dup, err := s.Store.CommitBlockedInbound(ctx, store.BlockedRecord{
 			AccountID: inbox.AccountID, InboxID: inbox.ID, Provider: provider,
-			ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
+			Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, EnvelopeRecipient: msg.Recipient,
 			From: blockedFrom, To: parsed.To,
 			Subject: parsed.Subject, Reason: blockReason, SizeBytes: msg.Size, ReceivedAt: blockedAt,
 		})
@@ -382,7 +402,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 	if received.IsZero() {
 		received = time.Now().UTC()
 	}
-	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, EnvelopeFrom: msg.EnvelopeFrom, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
+	m, ev, dup, err := s.Store.CommitInbound(ctx, store.InboundRecord{Inbox: inbox, Provider: provider, Source: msg.Source, ProviderDeliveryID: msg.DeliveryID, ProviderMessageID: firstNonEmpty(msg.ProviderMessageID, parsed.RFCMessageID), EnvelopeRecipient: msg.Recipient, EnvelopeFrom: msg.EnvelopeFrom, RFCMessageID: parsed.RFCMessageID, InReplyTo: parsed.InReplyTo, References: parsed.References, From: from, To: parsed.To, CC: parsed.CC, EnvelopeTo: []string{msg.Recipient}, Subject: parsed.Subject, Text: parsed.Text, HTML: parsed.HTML, RawPath: filepath.ToSlash(rel), SizeBytes: msg.Size, ReceivedAt: received, Attachments: atts, Spam: mx.spam(), SpamReason: mx.reason(), AuthResults: mx.authJSON(), DeliveryFingerprint: mx.fingerprint(), ReceiptTTL: mx.receiptTTL()})
 	if err != nil {
 		_ = os.Remove(final)
 		return model.Message{}, false, err

@@ -83,7 +83,10 @@ const (
 type Backend interface {
 	Domains(context.Context) ([]Domain, error)
 	Resolve(context.Context, string, []string) (mxwire.ResolveResponse, error)
-	Ingest(context.Context, []string, mxwire.IngestMetadata, string) (mxwire.IngestResponse, error)
+	// Ingest persists one staged message. receiverURL is the canonical base URL
+	// of the receiver session the message arrived on, so the core can label the
+	// activity-log source with the concrete receiver.
+	Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error)
 }
 
 // Config bounds the manager. Zero values select the documented defaults.
@@ -1988,6 +1991,7 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 	t.busy = true
 
 	path, meta := t.path, t.meta
+	receiverURL := s.url
 	jobs, connectionCtx := s.jobs, s.connectionCtx
 	txctx := t.ctx
 	domains := make([]string, 0, len(t.domains))
@@ -2011,7 +2015,7 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 					response = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
 				}
 			}()
-			r, err := s.m.backend.Ingest(ctx, domains, meta, path)
+			r, err := s.m.backend.Ingest(ctx, domains, meta, path, receiverURL)
 			if err != nil {
 				r = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
 			}

@@ -235,7 +235,7 @@ type scriptedBackend struct {
 	afterOnce sync.Once
 }
 
-func (b *scriptedBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error) {
+func (b *scriptedBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error) {
 	b.mu.Lock()
 	fail := b.failNext
 	b.failNext = false
@@ -248,7 +248,7 @@ func (b *scriptedBackend) Ingest(ctx context.Context, domains []string, meta mxw
 		}
 		return out, nil
 	}
-	res, err := b.Backend.Ingest(ctx, domains, meta, path)
+	res, err := b.Backend.Ingest(ctx, domains, meta, path, receiverURL)
 	if after != nil {
 		b.afterOnce.Do(after)
 	}

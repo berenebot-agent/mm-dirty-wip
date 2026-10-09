@@ -1461,3 +1461,15 @@ const migration050 = `
 CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mx_receivers_url_nocase
   ON account_mx_receivers(receiver_url COLLATE NOCASE) WHERE receiver_url<>'';
 `
+
+// migration051 adds a source label to every inbound activity row so the domain
+// log can show where received mail came from. For MX-family mail the source is
+// the concrete receiver (for example "Antler MX: antler1.hgolabs.com"); for a
+// webhook provider it is the provider's display name. The label is snapshotted
+// at ingest because the live receiver session it derives from does not survive
+// a restart. Outbound rows continue to use outbound_delivery_log.client_label.
+const migration051 = `
+ALTER TABLE inbound_delivery_log ADD COLUMN source TEXT NOT NULL DEFAULT '';
+ALTER TABLE blocked_messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
+ALTER TABLE inbound_control_messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
+`

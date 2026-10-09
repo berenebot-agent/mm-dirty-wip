@@ -88,7 +88,7 @@ func (b dialMXBackend) Resolve(ctx context.Context, domain string, recipients []
 	return response, nil
 }
 
-func (b dialMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, rawPath string) (mxwire.IngestResponse, error) {
+func (b dialMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, rawPath, receiverURL string) (mxwire.IngestResponse, error) {
 	if len(domains) == 0 || len(meta.Recipients) == 0 {
 		return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 	}
@@ -97,7 +97,7 @@ func (b dialMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire
 			return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 		}
 	}
-	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID}
+	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID, ReceiverURL: receiverURL}
 	var result MXIngestResult
 	var err error
 	if b.private {

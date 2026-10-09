@@ -41,7 +41,7 @@ func (b *drainBackend) Resolve(_ context.Context, _ string, rs []string) (mxwire
 	return x, nil
 }
 
-func (b *drainBackend) Ingest(_ context.Context, _ []string, m mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error) {
+func (b *drainBackend) Ingest(_ context.Context, _ []string, m mxwire.IngestMetadata, path, _ string) (mxwire.IngestResponse, error) {
 	if b.blocked {
 		select {
 		case b.ingestIn <- struct{}{}:

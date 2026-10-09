@@ -193,7 +193,7 @@ func TestMissingBackendResultGetsScopedTemporaryResult(t *testing.T) {
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
-	b.ingestFn = func(domains []string, meta mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error) {
+	b.ingestFn = func(domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error) {
 		// Deliberately return no per-recipient results.
 		return mxwire.IngestResponse{MachineCode: mxwire.CodeOK}, nil
 	}

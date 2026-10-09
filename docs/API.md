@@ -263,10 +263,11 @@ Messages received through the optional MX edge carry `spam_reason` (a bounded
 classification string) and `auth_results` (bounded normalized SPF/DKIM/DMARC
 evidence).
 
-Outbound messages additionally carry `client`: the name of the API key or
-Hermes credential that sent the message (`UI` for a web-UI send, omitted when
-there is no credential, e.g. an email-approved send). Inbound mail has no
-`client`.
+Outbound messages carry `source`: the name of the API key or Hermes credential
+that sent the message (`UI` for a web-UI send, omitted when there is no
+credential, e.g. an email-approved send). Inbound message rows have no
+`source`; the domain activity log's `source` (below) names the receiving
+receiver instead.
 
 ### Labels
 
@@ -804,12 +805,13 @@ log: delivered inbound mail (`kind` `received`), inbound mail rejected by an
 inbox's allowed-senders rule (`kind` `blocked`), and consumed approval control
 mail (`kind` `approval`), newest first (`limit`, default `100`, max `200`;
 `before` is a timestamp keyset cursor on `created_at`). Each row carries the
-kind, timestamp, inbox, provider, from/to, subject and size. Blocked rows add
-the reason; approval rows set `subject` to the reviewed draft subject labelled
-`Approval: <subject>` (or `Rejected: <subject>` when the outcome is `rejected`),
-carry the `action` (`approve`/`reject`) and the `status` outcome (`approved`,
-`rejected`, `invalid` or `error`) plus the reason, and set `client` to `Control`;
-delivered rows add the click-through
+kind, timestamp, inbox, provider, `source`, from/to, subject and size. Blocked
+rows add the reason; approval rows set `subject` to the reviewed draft subject
+labelled `Approval: <subject>` (or `Rejected: <subject>` when the outcome is
+`rejected`), carry the `action` (`approve`/`reject`) and the `status` outcome
+(`approved`, `rejected`, `invalid` or `error`) plus the reason, and set `source`
+to `Control` when no receiver source was recorded; delivered rows add the
+click-through
 `message_id`. The domain's UI log
 merges this with the sending side into one two-way timeline. Both logs are
 scoped by domain rather than by the current provider config.

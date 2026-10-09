@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
 // mxwire.Provider is the registered receiving provider name for the MX edge.
@@ -161,6 +163,10 @@ type MXIngestInput struct {
 	AuthResults       mxwire.AuthResults
 	TrustedAuth       bool
 	ProviderMessageID string
+	// ReceiverURL is the canonical base URL of the receiver session the message
+	// arrived on, used to label the activity-log source with the concrete
+	// receiver (for example "Antler: antler1.hgolabs.com").
+	ReceiverURL string
 }
 
 // MXIngestResult is the durable outcome returned to the edge: one result per
@@ -369,6 +375,7 @@ func (s *Service) ingestMXRecipient(ctx context.Context, routingProvider string,
 		ProviderMessageID:   in.ProviderMessageID,
 		AuthResults:         in.AuthResults,
 		TrustedAuth:         in.TrustedAuth,
+		Source:              s.mxSourceLabel(ctx, binding, routingProvider, in.ReceiverURL),
 	}
 	m, dup, err := s.deliverStaged(ctx, mxProvider, msg, inbox, parsed, single, &mxDeliverAuth{
 		Spam:          class.Spam,
@@ -419,6 +426,58 @@ func (s *Service) ingestMXRecipient(ctx context.Context, routingProvider string,
 		code = mxwire.CodeDuplicate
 	}
 	return mxwire.RecipientIngestResult{Recipient: recipient, Disposition: disp, MachineCode: code, MessageID: m.ID, Reason: class.Reason, Duplicate: dup}
+}
+
+// mxSourceLabel composes the activity-log source label for one MX-family
+// delivery: the human name of the receiving path. Direct MX and Remote MX use
+// their short provider names; a Dial MX domain names the concrete receiver — an
+// Antler shared receiver is labelled "Antler: <host>" from the configured
+// receiver matching the session URL, and a custom receiver falls back to its
+// dialed host. A receiver URL with no configured match still yields a usable
+// host-based label.
+func (s *Service) mxSourceLabel(ctx context.Context, binding store.InboundBinding, routingProvider, receiverURL string) string {
+	switch routingProvider {
+	case RemoteMXProvider:
+		return "Remote MX"
+	case mxProvider:
+		return "Direct MX"
+	}
+	host := receiverHost(receiverURL)
+	if routingProvider != mxdial.Provider {
+		if host == "" {
+			return routingProvider
+		}
+		return routingProvider + ": " + host
+	}
+	values, err := s.decryptConfig(configAAD(binding.AccountID, binding.ConfigDomainID), binding.EncryptedConfig)
+	if err != nil {
+		return "Dial MX"
+	}
+	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
+		for _, r := range AntlerReceiversFromConfig(values) {
+			if r.SessionURL == receiverURL && r.SMTPHostname != "" {
+				return "Antler: " + r.SMTPHostname
+			}
+		}
+		if host == "" {
+			return "Antler MX"
+		}
+		return "Antler: " + host
+	}
+	if host == "" {
+		return "Dial MX"
+	}
+	return "Dial MX: " + host
+}
+
+// receiverHost returns the hostname of a canonical receiver URL, or "" when the
+// URL is empty or unparsable.
+func receiverHost(receiverURL string) string {
+	u, err := url.Parse(strings.TrimSpace(receiverURL))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // domainEnforcement reads the per-domain auth enforcement mode, defaulting to

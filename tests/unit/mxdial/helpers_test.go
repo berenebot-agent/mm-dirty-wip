@@ -354,7 +354,7 @@ type scriptedBackend struct {
 	ingestHold   chan struct{}
 	ingestErr    error
 	resolveFn    func(domain string, recipients []string) mxwire.ResolveResponse
-	ingestFn     func(domains []string, meta mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error)
+	ingestFn     func(domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error)
 }
 
 func (b *scriptedBackend) setDomains(ds ...mxdial.Domain) {
@@ -397,7 +397,7 @@ func (b *scriptedBackend) Resolve(_ context.Context, d string, rs []string) (mxw
 	return out, nil
 }
 
-func (b *scriptedBackend) Ingest(_ context.Context, domains []string, meta mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error) {
+func (b *scriptedBackend) Ingest(_ context.Context, domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error) {
 	b.mu.Lock()
 	b.ingests++
 	b.lastMeta = meta
@@ -421,7 +421,7 @@ func (b *scriptedBackend) Ingest(_ context.Context, domains []string, meta mxwir
 		time.Sleep(delay)
 	}
 	if fn != nil {
-		return fn(domains, meta, path)
+		return fn(domains, meta, path, receiverURL)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

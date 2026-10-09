@@ -60,7 +60,7 @@ func (b *backend) Resolve(_ context.Context, d string, rs []string) (mxwire.Reso
 	return x, nil
 }
 
-func (b *backend) Ingest(_ context.Context, _ []string, m mxwire.IngestMetadata, path string) (mxwire.IngestResponse, error) {
+func (b *backend) Ingest(_ context.Context, _ []string, m mxwire.IngestMetadata, path, _ string) (mxwire.IngestResponse, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	raw, e := os.ReadFile(path)

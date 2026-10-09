@@ -166,6 +166,11 @@ func migrations(dataDir string) []migration {
 			indexExists("idx_account_mx_receivers_url"),
 		)},
 		{version: "050", sql: migration050, detect: stateOf(indexExists("idx_account_mx_receivers_url_nocase"))},
+		{version: "051", sql: migration051, detect: allOf(
+			columnAdded("inbound_delivery_log", "source"),
+			columnAdded("blocked_messages", "source"),
+			columnAdded("inbound_control_messages", "source"),
+		)},
 	}
 }
 

@@ -2814,6 +2814,41 @@ management and API-key endpoints are unchanged.
 **Complexity:** New handlers reuse `CreateAPIKey`/`UpdateAPIKey`/`SetUserRoles`/
 `CreateInvite`; no new dependencies or runtime services.
 
+## D090 — Activity-log source names the receiving receiver
+
+**Decision (2026-10-10):** The domain activity log (and the dashboard
+"Recent messages" table) label every row's origin in a single **Source** column,
+renamed from **Client**. For outbound mail the source is unchanged — the API
+key / Hermes credential that sent it. For inbound mail it now names the
+concrete receiver: `Antler: <smtp_hostname>` for a hosted Antler MX shared
+receiver (resolved from the domain's saved receiver snapshot by matching the
+session URL, never hard-coded), `Dial MX: <host>` for a custom Dial MX receiver,
+`Direct MX` for the installation receiver, `Remote MX` for an account receiver,
+and the transport's display name for a webhook provider.
+
+**Schema:** Migration 051 adds a `source` column to `inbound_delivery_log`,
+`blocked_messages` and `inbound_control_messages`; it is snapshotted at ingest
+because the live receiver session it derives from does not survive a restart.
+`outbound_delivery_log.client_label` continues to hold the outbound source.
+
+**API:** `Message`, `DeliveryAttempt` and `DomainLogEntry` rename their `client`
+JSON field to `source` (a breaking change to those response fields, approved as
+part of this work).
+
+**Implementation note:** the identity is tagged where it is already known — the
+`mxdial` session passes its receiver URL to `Backend.Ingest`, and the app layer
+composes the label. No `mxwire` protocol change and no receiver rollout is
+required.
+
+**Reason:** an operator could previously see only "mx" for all three MX families
+and had no way to tell which Antler receiver delivered a message. The receiver
+is known at receive time, so labelling it there is both cheaper and more
+accurate than reconstructing it later.
+
+**Compatibility:** Additive for stored data (existing rows default to an empty
+source); the `< 051` read paths are unchanged. Webhook inbound leaves source
+empty at the adapter and the core fills the provider display name.
+
 ## Future extension register
 
 - additional inbound transport adapters
