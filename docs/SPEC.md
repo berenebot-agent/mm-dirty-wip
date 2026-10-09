@@ -170,7 +170,7 @@ Permissions are assigned **per mailbox**, using three simple mailbox roles:
 
 A single API key may have different roles on different mailboxes. These roles
 also apply to human users: an account Admin has Owner access to every mailbox
-in the account, while a **mailbox operator** is a non-admin user granted Owner
+in the account, while a **mailbox user** is a non-admin user granted Owner
 on a chosen subset of mailboxes.
 
 Example:
@@ -213,6 +213,16 @@ acknowledges, failures retry with backoff for a configurable window (seven days
 by default), after which the delivery is marked failed and the cursor advances.
 A webhook can be paused without losing its place. Destinations must be public
 HTTPS, so a webhook cannot target a private or loopback address.
+
+An inbox's settings expose a **Clients & Access** tab (account Admin only) that
+pivots the account-level Clients onto the inbox: it lists the API keys holding a
+role on that inbox with an inline role control (Read/Assistant/Owner, or
+removal of that inbox's binding without revoking the key), the mailbox users who
+can sign in to it, and its pending invitations. From there an Admin can create a
+new API key scoped to just that inbox (its one-time secret is shown once), grant
+an existing account key or user access, invite a new person, and revoke a pending
+invitation. Account Admin keys have implicit Owner on every inbox and appear
+read-only. Connectors keep their own inbox-bound tab.
 
 An inbox may carry delivery-triggered auto-actions for its agent/relay
 connectors: mark a delivered message read, and optionally move it to Trash a
@@ -313,7 +323,7 @@ services:
 
 The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional MailMoose MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
 
-The installation has one **system administrator**: the login named by `ADMIN_EMAIL` / `ADMIN_PASSWORD` (either may come from a `*_FILE` secret). While supplied, these credentials are authoritative — they create the login on first start (or adopt an existing user with that email, forcing it to account Admin and system Admin) and rotate its stored email/password on later starts (revoking its sessions); when absent the stored login is preserved. There is no unauthenticated setup form. The system administrator has an account of their own and an **Admin** page listing accounts, but no automatic access to other accounts' mail. Each account has one Admin; the **Account** page separates a user's personal settings (**Your settings**) from account-wide controls (**Account settings**: account name, default time zone, Trash retention) and account administration (**mailer** mailbox, mailbox operators, invitations), the latter two visible and enforced for the account Admin only. Trash retention is account-wide by default and may be overridden per inbox. An invitation is either a new, separate account with its own Admin, or a mailbox operator on an existing account; the invitee sets their password from a single-use, expiring link. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
+The installation has one **system administrator**: the login named by `ADMIN_EMAIL` / `ADMIN_PASSWORD` (either may come from a `*_FILE` secret). While supplied, these credentials are authoritative — they create the login on first start (or adopt an existing user with that email, forcing it to account Admin and system Admin) and rotate its stored email/password on later starts (revoking its sessions); when absent the stored login is preserved. There is no unauthenticated setup form. The system administrator has an account of their own and an **Admin** page listing accounts, but no automatic access to other accounts' mail. Each account has one Admin; the **Account** page separates a user's personal settings (**Your settings**) from account-wide controls (**Account settings**: account name, default time zone, Trash retention) and account administration (**mailer** mailbox, mailbox users, invitations), the latter two visible and enforced for the account Admin only. Trash retention is account-wide by default and may be overridden per inbox. An invitation is either a new, separate account with its own Admin, or a mailbox user on an existing account; the invitee sets their password from a single-use, expiring link. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
 A person may also sign in to the web UI with a **non-admin mailbox API key** (the login page offers *Sign in with an API key* alongside password and passkey). The resulting browser session maps exactly that key's mailbox bindings and nothing more: it lands on the operator view, cannot reach the account Admin dashboard, the Admin plane, or the installation-management API, and is refused once the key is revoked or rotated. Admin keys are rejected — this path is for mailbox access, not admin mode. The session is a separate disposable credential: only its hash is stored, it is capped at 24 hours, and it carries a CSRF token like any other session.
 

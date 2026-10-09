@@ -6,6 +6,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Inbox settings gain a **Clients & Access** tab (account Admin only) listing the
+  API keys and mailbox users with access to that inbox, plus its pending
+  invitations. An Admin can create a new inbox-scoped API key, grant an existing
+  key or user access, change a key's role inline (Read/Assistant/Owner), remove a
+  single inbox binding without revoking the key, invite a person, and revoke a
+  pending invitation. Account Admin keys appear read-only (D089).
+
 ### Fixed — release follow-up
 
 - SMTP and Direct MX DATA waits observe cancellation; slow webhook attempts

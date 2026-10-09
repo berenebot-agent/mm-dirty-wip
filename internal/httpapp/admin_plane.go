@@ -2,8 +2,10 @@ package httpapp
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,7 +31,7 @@ type inviteView struct {
 func newInviteView(inv model.Invite, now time.Time) inviteView {
 	kind := "New account"
 	if inv.Kind == model.InviteKindOperator {
-		kind = "Mailbox operator"
+		kind = "Mailbox user"
 	}
 	status := "Pending"
 	switch {
@@ -288,8 +290,8 @@ const accountOperatorsSection = `{{if .Principal.Admin}}
 <p class="muted">Manage who can sign in to {{.Account.Name}} and how its invitations are sent.</p>
 {{if .InviteLink}}<section class="card"><h2>Setup link</h2><p class="muted">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><div class="secret"><pre>{{.InviteLink}}</pre></div></section>{{end}}
 <section class="card"><h2>Mailer</h2><p class="muted">The mailbox this account sends its invitations from. Only this account's mailboxes can be selected.</p><form method="post" action="/ui/account/mailer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Mailbox</label><select name="inbox"><option value="">None</option>{{range .Inboxes}}<option value="{{.ID}}"{{if eq .ID $.AccountMailerInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select><div class="dialog-actions"><button>Save</button></div></form></section>
-<section class="card"><div class="card-head"><h2>Mailbox operators</h2><button type="button" id="add-operator">Create invitation</button></div><p class="muted">Operators sign in with their own login and are Owner of the mailboxes you select. They cannot manage domains, clients or account settings.</p>
-{{if .Operators}}<div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Mailboxes</th><th></th></tr></thead><tbody>{{range .Operators}}<tr><td>{{.Email}}</td><td>{{range .InboxAddresses}}<span class="pill">{{.}}</span> {{end}}{{if not .InboxAddresses}}<span class="muted">—</span>{{end}}</td><td class="actions"><button type="button" class="secondary btn-sm edit-operator" data-id="{{.ID}}" data-email="{{.Email}}" data-inboxes="{{.InboxesCSV}}">Edit</button><form method="post" action="/ui/account/operators/{{.ID}}/delete" data-confirm="Remove this operator?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Remove</button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No operators yet.</p>{{end}}
+<section class="card"><div class="card-head"><h2>Mailbox users</h2><button type="button" id="add-operator">Create invitation</button></div><p class="muted">Mailbox users sign in with their own login and are Owner of the mailboxes you select. They cannot manage domains, clients or account settings.</p>
+{{if .Operators}}<div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Mailboxes</th><th></th></tr></thead><tbody>{{range .Operators}}<tr><td>{{.Email}}</td><td>{{range .InboxAddresses}}<span class="pill">{{.}}</span> {{end}}{{if not .InboxAddresses}}<span class="muted">—</span>{{end}}</td><td class="actions"><button type="button" class="secondary btn-sm edit-operator" data-id="{{.ID}}" data-email="{{.Email}}" data-inboxes="{{.InboxesCSV}}">Edit</button><form method="post" action="/ui/account/operators/{{.ID}}/delete" data-confirm="Remove this mailbox user?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Remove</button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No mailbox users yet.</p>{{end}}
 {{if .Invites}}<h3>Pending invitations</h3><div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Expires</th><th></th></tr></thead><tbody>{{range .Invites}}<tr><td>{{.Email}}</td><td class="muted">{{mailDate .Expires}}</td><td class="actions"><form method="post" action="/ui/account/operators/invites/{{.ID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer above first"{{end}}>Send</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form></td></tr>{{end}}</tbody></table></div>{{end}}</section>
 <dialog id="operator-invite-dialog"><form method="post" action="/ui/account/operators/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="operator-invite-title">Create invitation</h2>{{if .Inboxes}}<fieldset style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:4px 0 10px"><legend class="muted">Mailboxes</legend>{{range .Inboxes}}<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="inboxes" value="{{.ID}}" style="width:auto;margin:0"> {{.Address}}</label>{{end}}</fieldset>{{else}}<p class="muted">Create a mailbox first.</p>{{end}}<label>Email</label><input type="email" name="email" required><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" id="operator-invite-submit">Create invitation</button></div></form></dialog>
 {{end}}`
@@ -398,6 +400,334 @@ func (s *Server) uiOperatorDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Service.Hub.CancelScope("user:" + r.PathValue("id"))
 	http.Redirect(w, r, "/account?notice=Operator+removed", 303)
+}
+
+// ---------------------------------------------------------------------------
+// Clients & Access tab: per-inbox management of API keys, mailbox users and
+// pending invitations. Every handler is account-Admin only and confirms the
+// inbox belongs to the caller's account before acting.
+// ---------------------------------------------------------------------------
+
+// accessRedirect returns to the inbox settings dialog on the Clients & Access
+// tab with a notice, so the dialog reopens with fresh data.
+func accessRedirect(w http.ResponseWriter, r *http.Request, inboxID, notice string) {
+	dest := "/?inbox=" + url.QueryEscape(inboxID) + "&inbox_tab=access"
+	if notice != "" {
+		dest += "&notice=" + url.QueryEscape(notice)
+	}
+	http.Redirect(w, r, dest, 303)
+}
+
+// accessInbox verifies an inbox id belongs to the caller's account and is
+// scoped to it, returning false after writing an error when it is not.
+func (s *Server) accessInbox(w http.ResponseWriter, r *http.Request, p model.Principal) (string, bool) {
+	inboxID := r.PathValue("id")
+	if _, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, inboxID); err != nil {
+		http.Error(w, "inbox not found", 404)
+		return "", false
+	}
+	return inboxID, true
+}
+
+// accessRole validates a submitted mailbox role, returning "" for the "no
+// access" choice.
+func accessRole(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", true
+	case "read", "assistant", "owner":
+		return strings.ToLower(strings.TrimSpace(raw)), true
+	default:
+		return "", false
+	}
+}
+
+// uiInboxAccessCreateKey creates a new API key bound only to this inbox with
+// the submitted role, returning the one-time secret inline (JSON) or via flash.
+func (s *Server) uiInboxAccessCreateKey(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	role, valid := accessRole(r.Form.Get("role"))
+	if !valid || role == "" {
+		s.uiError(w, fmt.Errorf("choose a role for the new client"), 400)
+		return
+	}
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if name == "" {
+		name = "API key"
+	}
+	_, plain, err := s.Service.Store.CreateAPIKey(r.Context(), p.AccountID, name, false, map[string]string{inboxID: role})
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "key.created", name)
+	if wantsJSON(r) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 201, map[string]string{"notice": "API key created", "label": "Copy this API key now — you will only be able to see this key now, it will not be shown again.", "secret": plain})
+		return
+	}
+	s.flashSecret(w, r, "API key created", "Copy this API key now — you will only be able to see this key now, it will not be shown again.", plain)
+}
+
+// uiInboxAccessSetKeyRole sets (or clears, when role is empty) an API key's role
+// on this inbox by rewriting the key's full binding map.
+func (s *Server) uiInboxAccessSetKeyRole(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	role, valid := accessRole(r.Form.Get("role"))
+	if !valid {
+		s.uiError(w, fmt.Errorf("invalid role"), 400)
+		return
+	}
+	keyID := r.PathValue("keyID")
+	keys, err := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	var target *model.APIKey
+	for i := range keys {
+		if keys[i].ID == keyID {
+			target = &keys[i]
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, "client not found", 404)
+		return
+	}
+	if target.Admin {
+		s.uiError(w, fmt.Errorf("account Admin keys have implicit access and cannot be edited per inbox"), 400)
+		return
+	}
+	roles := map[string]string{}
+	for id, existing := range target.Roles {
+		roles[id] = existing
+	}
+	if role == "" {
+		delete(roles, inboxID)
+	} else {
+		roles[inboxID] = role
+	}
+	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, keyID, target.Name, false, roles); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Hub.CancelScope("key:" + keyID)
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), keyID)
+	accessRedirect(w, r, inboxID, "Client updated")
+}
+
+// uiInboxAccessRemoveKey removes this inbox's binding from an API key without
+// revoking the key itself.
+func (s *Server) uiInboxAccessRemoveKey(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	keyID := r.PathValue("keyID")
+	keys, err := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	var target *model.APIKey
+	for i := range keys {
+		if keys[i].ID == keyID {
+			target = &keys[i]
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, "client not found", 404)
+		return
+	}
+	if target.Admin {
+		s.uiError(w, fmt.Errorf("account Admin keys cannot be removed per inbox"), 400)
+		return
+	}
+	roles := map[string]string{}
+	for id, existing := range target.Roles {
+		if id != inboxID {
+			roles[id] = existing
+		}
+	}
+	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, keyID, target.Name, false, roles); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Hub.CancelScope("key:" + keyID)
+	s.Service.Store.DeleteKeySessionsForClient(r.Context(), keyID)
+	accessRedirect(w, r, inboxID, "Client access removed")
+}
+
+// uiInboxAccessAddUser grants an existing account user Owner on this inbox by
+// merging the role into their existing map.
+func (s *Server) uiInboxAccessAddUser(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	userID := strings.TrimSpace(r.Form.Get("user"))
+	if userID == "" {
+		s.uiError(w, fmt.Errorf("choose a person to add"), 400)
+		return
+	}
+	users, err := s.Service.Store.ListAccountUsers(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	var target *model.User
+	for i := range users {
+		if users[i].ID == userID {
+			target = &users[i]
+			break
+		}
+	}
+	if target == nil || target.IsAdmin || target.SystemAdmin {
+		s.uiError(w, fmt.Errorf("choose a non-admin member of this account"), 400)
+		return
+	}
+	roles := map[string]string{}
+	for id, existing := range target.Roles {
+		roles[id] = existing
+	}
+	roles[inboxID] = "owner"
+	if err := s.Service.Store.SetUserRoles(r.Context(), p.AccountID, userID, roles); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Hub.CancelScope("user:" + userID)
+	accessRedirect(w, r, inboxID, "Mailbox user added")
+}
+
+// uiInboxAccessRemoveUser removes this inbox's role from an account user,
+// leaving their other mailbox roles intact.
+func (s *Server) uiInboxAccessRemoveUser(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	userID := r.PathValue("userID")
+	users, err := s.Service.Store.ListAccountUsers(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	var target *model.User
+	for i := range users {
+		if users[i].ID == userID {
+			target = &users[i]
+			break
+		}
+	}
+	if target == nil || target.IsAdmin || target.SystemAdmin {
+		http.Error(w, "mailbox user not found", 404)
+		return
+	}
+	roles := map[string]string{}
+	for id, existing := range target.Roles {
+		if id != inboxID {
+			roles[id] = existing
+		}
+	}
+	if err := s.Service.Store.SetUserRoles(r.Context(), p.AccountID, userID, roles); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Hub.CancelScope("user:" + userID)
+	accessRedirect(w, r, inboxID, "Mailbox user access removed")
+}
+
+// uiInboxAccessInvite creates a mailbox-operator invitation for this inbox
+// (Owner on redemption). The one-time setup link is shown once on the account
+// page, matching the existing invitation flow.
+func (s *Server) uiInboxAccessInvite(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	inv, token, err := s.Service.Store.CreateInvite(r.Context(), store.InviteInput{
+		AccountID: p.AccountID,
+		Email:     r.Form.Get("email"),
+		Kind:      model.InviteKindOperator,
+		InboxIDs:  []string{inboxID},
+		Quota:     s.Service.Config.DefaultQuotaBytes,
+		CreatedBy: p.UserID,
+		TTL:       inviteTTL,
+	})
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "invite.created", inv.Email)
+	notice := "Invitation created"
+	if token != "" {
+		if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
+			notice = "Invitation created — setup link on the Account page"
+		}
+	}
+	accessRedirect(w, r, inboxID, notice)
+}
+
+// uiInboxAccessRevokeInvite revokes a pending invitation.
+func (s *Server) uiInboxAccessRevokeInvite(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	inboxID, ok := s.accessInbox(w, r, p)
+	if !ok {
+		return
+	}
+	inv, err := s.Service.Store.GetInviteByID(r.Context(), r.PathValue("inviteID"))
+	if err != nil || inv.AccountID != p.AccountID {
+		http.Error(w, "invitation not found", 404)
+		return
+	}
+	if err := s.Service.Store.RevokeInvite(r.Context(), p.AccountID, inv.ID); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	s.Service.Store.Audit(r.Context(), p.AccountID, "invite.revoked", inv.Email)
+	accessRedirect(w, r, inboxID, "Invitation revoked")
 }
 
 // sendInviteEmail rotates the invite's one-time token and enqueues the

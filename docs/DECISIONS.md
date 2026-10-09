@@ -2776,6 +2776,37 @@ before upgrading, rather than silently losing one account's settings.
 **Complexity:** Local changes within existing Go/SQLite/HTTP boundaries; no new
 dependencies or runtime services.
 
+## D089 — Per-inbox Clients & Access tab
+
+**Decision (2026-10-09):** Inbox settings gain a **Clients & Access** tab
+(account Admin only, matching the rest of the inbox dialog) that pivots the
+account-level Clients and human users onto a single inbox. It shows the API keys
+holding an explicit role on that inbox with an inline Read/Assistant/Owner
+control, the mailbox users who can sign in to it, and its pending invitations.
+An Admin can create a new API key scoped to just this inbox (the one-time secret
+is shown once), grant an existing account key or user access, invite a new
+person, and revoke a pending invitation. Removing a key or user here removes
+only this inbox's binding (via read-modify-write of the key's or user's role
+map); it never revokes the key or the user's other mailbox roles. Account Admin
+keys have implicit Owner on every inbox and are shown read-only. Connectors keep
+their separate inbox-bound tab. Each change posts immediately (no footer Save on
+this tab) and returns to the reloaded dialog.
+
+Human users remain **Owner-only** in this tab: `user_mailbox_roles` already
+accepts `read`/`assistant`/`owner`, but the UI still grants only Owner, pending a
+separate decision to expose the human role ladder. The tab is a UI extension of
+the existing `client_inbox_bindings` / `user_mailbox_roles` model; no schema
+migration is involved. In the UI, the non-admin human role is now labelled
+**mailbox user** (was "mailbox operator"), leaving the self-hoster sense of
+"operator" unambiguous; internal identifiers, routes and the `operator` invite
+kind are unchanged.
+
+**Compatibility:** Additive; existing Clients card, `/account` mailbox-user
+management and API-key endpoints are unchanged.
+
+**Complexity:** New handlers reuse `CreateAPIKey`/`UpdateAPIKey`/`SetUserRoles`/
+`CreateInvite`; no new dependencies or runtime services.
+
 ## Future extension register
 
 - additional inbound transport adapters
