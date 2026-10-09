@@ -93,35 +93,26 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
-// providerErrorBodyLimit bounds how much of a provider's error response is
-// retained in an error message. Provider bodies are persisted to the message's
-// last_error and shown to mailbox readers, so the raw response is truncated and
-// stripped of control characters rather than stored in full.
-const providerErrorBodyLimit = 512
-
-// ProviderError builds an error from a provider's non-2xx response. The body is
-// truncated to a short, single-line snippet so a large or secret-bearing
-// response cannot be persisted to the delivery log or surfaced verbatim.
-func ProviderError(provider, status string, body []byte) error {
-	return fmt.Errorf("%s returned %s: %s", provider, status, snippet(body))
-}
-
-// snippet returns at most providerErrorBodyLimit bytes of body as a single
-// control-character-free line.
-func snippet(body []byte) string {
-	if len(body) > providerErrorBodyLimit {
-		body = body[:providerErrorBodyLimit]
+// ProviderError builds a safe diagnostic from a provider's non-2xx response.
+// Arbitrary response bodies and reason phrases are never retained.
+func ProviderError(provider, status string, _ []byte) error {
+	// Provider bodies can echo credentials or private infrastructure details.
+	// Never persist arbitrary text, including an apparently harmless prefix.
+	diagnostic := "provider rejected the request; check the provider dashboard"
+	switch {
+	case strings.HasPrefix(status, "401"), strings.HasPrefix(status, "403"):
+		diagnostic = "check the connector credentials and sender permissions"
+	case strings.HasPrefix(status, "429"):
+		diagnostic = "provider rate limit reached; try again later"
+	case strings.HasPrefix(status, "400"), strings.HasPrefix(status, "422"):
+		diagnostic = "check recipients, sender verification and message requirements"
+	case strings.HasPrefix(status, "5"):
+		diagnostic = "provider is temporarily unavailable"
 	}
-	var b strings.Builder
-	for _, c := range body {
-		if c == '\r' || c == '\n' || c == '\t' {
-			b.WriteByte(' ')
-			continue
-		}
-		if c < 0x20 || c == 0x7f {
-			continue
-		}
-		b.WriteByte(c)
+	// Keep only the numeric status; even the HTTP reason phrase is untrusted.
+	code := "unknown status"
+	if len(status) >= 3 && status[0] >= '1' && status[0] <= '5' && status[1] >= '0' && status[1] <= '9' && status[2] >= '0' && status[2] <= '9' {
+		code = status[:3]
 	}
-	return strings.TrimSpace(b.String())
+	return fmt.Errorf("%s returned HTTP %s: %s", provider, code, diagnostic)
 }

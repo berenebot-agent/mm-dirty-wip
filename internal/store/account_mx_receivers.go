@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // AccountMXReceiver is the per-account Remote MX receiver configuration. It
@@ -54,6 +55,13 @@ func (s *Store) SaveAccountMXReceiverCAS(ctx context.Context, accountID, receive
 		return AccountMXReceiver{}, err
 	}
 	defer tx.Rollback()
+	var used int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM account_mx_receivers WHERE account_id<>? AND receiver_url=? COLLATE NOCASE AND receiver_url<>''`, accountID, receiverURL).Scan(&used); err != nil {
+		return AccountMXReceiver{}, err
+	}
+	if used != 0 {
+		return AccountMXReceiver{}, ErrConflict
+	}
 	now := nowText()
 	if expected.Revision == 0 {
 		var n int
@@ -65,12 +73,18 @@ func (s *Store) SaveAccountMXReceiverCAS(ctx context.Context, accountID, receive
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO account_mx_receivers(account_id,receiver_url,encrypted_secret,encrypted_config,revision,created_at,updated_at) VALUES(?,?,?,?,1,?,?)`,
 			accountID, receiverURL, encryptedSecret, encryptedConfig, now, now); err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return AccountMXReceiver{}, ErrConflict
+			}
 			return AccountMXReceiver{}, err
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, `UPDATE account_mx_receivers SET receiver_url=?,encrypted_secret=?,encrypted_config=?,revision=revision+1,updated_at=? WHERE account_id=? AND revision=?`,
 			receiverURL, encryptedSecret, encryptedConfig, now, accountID, expected.Revision)
 		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+				return AccountMXReceiver{}, ErrConflict
+			}
 			return AccountMXReceiver{}, err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {

@@ -463,7 +463,7 @@ private destinations by default broke legitimate private gateways, local relays
 and LAN receivers while offering no protection against the operator's own
 network. The guard therefore becomes an explicit operator choice, and the
 per-account Remote MX `allow_private` flag is effective only when the operator
-permits private outbound. See D083 (superseding the default) for the change
+permits private outbound. See D086 (superseding the default) for the change
 record.
 
 **Complexity:** One config flag, a shared `netutil` gate, and adapter wiring; no
@@ -2746,6 +2746,35 @@ startup warning — or let one surface (installation remote) diverge from anothe
 
 **Complexity:** One boolean config, one startup warning, one shared validation
 signature; no new dependency or service.
+
+## D088 — Release follow-up: delivery bounds, safe diagnostics and approval limits
+
+**Decision (2026-10-09):** Email-approved user sends count toward the same
+account allowance as UI/API/relay sends; installation invitation mail remains
+exempt. A rate-limited approval remains pending and is a retryable inbound
+failure. Idempotent replay of an existing enqueue does not consume allowance.
+
+Provider HTTP errors retain only numeric status and a fixed actionable
+diagnostic, never arbitrary body/reason-phrase text. SMTP and Direct MX socket
+I/O observes context cancellation after dialing, including DATA and its final
+reply. Webhook attempts have individual budgets and cancellation-independent
+outcome persistence, so a slow client cannot consume subsequent clients' budget.
+
+Resend rejects recipient overflow before unauthenticated lookup rather than
+acknowledging truncated delivery. Mailgun URL-encoded MIME streams to disk with
+bounded fields/occurrences. API message responses consistently sanitize HTML
+while preserving CID attachment references. Session-expiry compose state remains
+in a bounded flash through password, passkey and API-key sign-in, including
+uploaded attachments; authentication failures retain the resume path.
+
+**Compatibility:** D086/D087 self-host defaults remain intact. Included-MX
+operators must retain the explicit Compose port-25 mapping during upgrades.
+Migration 050 enforces case-insensitive receiver URL uniqueness; an installation
+with pre-existing duplicate URLs fails migration and must resolve ownership
+before upgrading, rather than silently losing one account's settings.
+
+**Complexity:** Local changes within existing Go/SQLite/HTTP boundaries; no new
+dependencies or runtime services.
 
 ## Future extension register
 

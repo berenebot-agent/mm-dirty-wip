@@ -3640,7 +3640,12 @@ function hideInboxSubview(dlg) {
         rpID = publicKey.rpId;
         return navigator.credentials.get({ publicKey: publicKey }).then(function (cred) {
           if (!cred) { throw new Error('no credential returned'); }
-          return postJSON(button.getAttribute('data-finish'), credentialToJSON(cred), data.challenge_token);
+          var nextField = document.querySelector('input[name="next"]');
+          var finishURL = button.getAttribute('data-finish');
+          if (nextField && nextField.value) {
+            finishURL += '?next=' + encodeURIComponent(nextField.value);
+          }
+          return postJSON(finishURL, credentialToJSON(cred), data.challenge_token);
         });
       }).then(function (result) {
         if (isRegister) {
@@ -3648,7 +3653,9 @@ function hideInboxSubview(dlg) {
           if (result && result.password_only) {
             msg = 'Passkey added; password sign-in disabled. Reloading…';
           } else if (result && result.warning) {
-            msg = result.warning + ' Reloading…';
+            setStatus(statusEl, result.warning, true);
+            button.disabled = false;
+            return;
           }
           setStatus(statusEl, msg, false);
           window.location.reload();

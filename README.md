@@ -83,7 +83,7 @@ Open `BASE_URL`, sign in with the system administrator credentials, and add your
 
 - Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - Connect an **agent or service to an inbox** (Hermes Relay, OpenClaw, webhook, API key) → [docs/CONNECTORS.md](docs/CONNECTORS.md)
-- Direct-SMTP (MX) on port 25 — choose the receiver under **Admin → MX receiver** (Included or Remote) — hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
+- Direct-SMTP (MX) on port 25 — publish `25:2525` explicitly for Included MX, then select it under **Domain → Receiving → Direct MX**. Hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Remote MX receiver (separate container)

@@ -170,21 +170,27 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 		_, _ = mac.Write(body)
 		req.Header.Set("X-MailMoose-Signature", "t="+ts+",v1="+hex.EncodeToString(mac.Sum(nil)))
 	}
-	resp, err := w.client.Do(req)
+	// Reserve the pass's remaining budget for other clients and persist the
+	// outcome independently of a cancelled network attempt.
+	attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := w.client.Do(req.WithContext(attemptCtx))
+	outcomeCtx, outcomeCancel := outcomeContext(ctx)
+	defer outcomeCancel()
 	now := time.Now().UTC()
 	deadline := now.Add(w.svc.Config.WebhookRetryWindow)
 	if err == nil {
 		defer resp.Body.Close()
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return w.svc.Store.RecordWebhookDelivery(ctx, d.Client.ID, d.EventID, true, "", now, deadline)
+			return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, true, "", now, deadline)
 		}
 		err = fmt.Errorf("webhook returned HTTP %d", resp.StatusCode)
 	}
 	var previous int
-	_ = w.svc.Store.WebhookAttemptCount(ctx, d.Client.ID, d.EventID, &previous)
+	_ = w.svc.Store.WebhookAttemptCount(outcomeCtx, d.Client.ID, d.EventID, &previous)
 	delay := webhookBackoff(previous, d.Client.ID, d.EventID)
-	return w.svc.Store.RecordWebhookDelivery(ctx, d.Client.ID, d.EventID, false, truncateWebhookError(err.Error()), now.Add(delay), deadline)
+	return w.svc.Store.RecordWebhookDelivery(outcomeCtx, d.Client.ID, d.EventID, false, truncateWebhookError(err.Error()), now.Add(delay), deadline)
 }
 
 // webhookBackoff returns the retry delay for the next attempt. It is the

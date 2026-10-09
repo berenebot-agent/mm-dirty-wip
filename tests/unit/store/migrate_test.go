@@ -171,4 +171,7 @@ func TestMigration049Indexes(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE account_mx_receivers SET receiver_url='https://mx.example' WHERE account_id='a2'`); err == nil {
 		t.Fatal("duplicate non-empty receiver_url was accepted")
 	}
+	if _, err := db.ExecContext(ctx, `UPDATE account_mx_receivers SET receiver_url='https://MX.EXAMPLE' WHERE account_id='a2'`); err == nil {
+		t.Fatal("case-equivalent receiver URL was accepted")
+	}
 }

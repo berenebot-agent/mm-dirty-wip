@@ -645,18 +645,30 @@ func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string
 		// A resumed request always came from an expired session; tell the user.
 		data.Notice = "Your session expired. Please sign in to continue."
 	}
-	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.flashes.peek(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
+			s.flashes.take(r.URL.Query().Get("_flash"))
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
+		} else if _, ok := v.(composeFlash); ok && data.Next != "" {
+			data.Next += "?_flash=" + url.QueryEscape(r.URL.Query().Get("_flash"))
 		}
 	}
-	s.render(w, r, authBody, data)
+	body := strings.Replace(authBody, `href="/login/key"`, `href="/login/key?next={{.Next | querystring}}"`, 1)
+	s.render(w, r, body, data)
 }
 
 // flashAuth stores an auth error and redirects back to the form.
 func (s *Server) flashAuth(w http.ResponseWriter, r *http.Request, dest, title, msg, email string) {
+	query := url.Values{}
+	if next := safeNextPath(r.Form.Get("next")); next != "/" {
+		query.Set("next", next)
+	}
+	msg = safeErrorMessage(errors.New(msg), "Something went wrong. Please try again.")
 	if tok := s.flashes.put(authFlash{Title: title, Error: msg, Email: email}, len(title)+len(msg)+len(email)+32); tok != "" {
-		dest += "?_flash=" + tok
+		query.Set("_flash", tok)
+	}
+	if len(query) > 0 {
+		dest += "?" + query.Encode()
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
@@ -725,7 +737,7 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auth.ValidatePassword(password); err != nil {
-		s.flashSetup(w, r, err.Error(), email, accountName)
+		s.flashSetup(w, r, safeErrorMessage(err, "Could not complete setup. Please try again."), email, accountName)
 		return
 	}
 	if accountName == "" {
@@ -739,7 +751,7 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 			s.flashAuth(w, r, "/login", "Log In", "This instance has already been set up. Sign in instead.", "")
 			return
 		}
-		s.flashSetup(w, r, err.Error(), email, accountName)
+		s.flashSetup(w, r, safeErrorMessage(err, "Could not complete setup. Please try again."), email, accountName)
 		return
 	}
 	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
@@ -754,6 +766,7 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 // flashSetup stores a setup error and redirects back to the form, preserving
 // the non-secret values the visitor already typed.
 func (s *Server) flashSetup(w http.ResponseWriter, r *http.Request, msg, email, accountName string) {
+	msg = safeErrorMessage(errors.New(msg), "Could not complete setup. Please try again.")
 	dest := "/setup"
 	if tok := s.flashes.put(setupFlash{Error: msg, Email: email, AccountName: accountName}, len(msg)+len(email)+len(accountName)+32); tok != "" {
 		dest += "?_flash=" + tok
@@ -786,7 +799,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.Service.Store.CreateAccountAndAdmin(r.Context(), name, r.Form.Get("email"), r.Form.Get("password"), s.Service.Config.DefaultQuotaBytes)
 	if err != nil {
-		s.flashAuth(w, r, "/register", "Create Account", err.Error(), r.Form.Get("email"))
+		s.flashAuth(w, r, "/register", "Create Account", safeErrorMessage(err, "Could not create account. Please try again."), r.Form.Get("email"))
 		return
 	}
 	tok, _, _ := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
@@ -799,12 +812,14 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) keyLoginGet(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Title: "Sign in with an API key", CSRF: s.setPreAuthCSRF(w, r)}
+	data.Next = safeNextPath(r.URL.Query().Get("next"))
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Notice = f.Error
 		}
 	}
-	s.render(w, r, keyLoginBody, data)
+	body := strings.Replace(keyLoginBody, `<label>API key</label>`, `<input type="hidden" name="next" value="{{.Next}}"><label>API key</label>`, 1)
+	s.render(w, r, body, data)
 }
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r, s.Service.Config)
@@ -870,7 +885,7 @@ func (s *Server) keyLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "key.login", p.APIKeyID)
 	s.setKeySessionCookie(w, r, tok)
-	http.Redirect(w, r, "/", 303)
+	http.Redirect(w, r, safeNextPath(r.Form.Get("next")), 303)
 }
 func (s *Server) logoutPost(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("mmm_session"); err == nil {
@@ -913,6 +928,7 @@ const settingsBody = `<h1>Account</h1>{{if .Notice}}<div class="ok notice" role=
 // settingsRedirect stores a settings flash and redirects back to the settings
 // page (Post/Redirect/Get).
 func (s *Server) settingsRedirect(w http.ResponseWriter, r *http.Request, notice, errMsg string) {
+	errMsg = safeErrorMessage(errors.New(errMsg), "Could not save settings. Please try again.")
 	dest := "/account"
 	if tok := s.flashes.put(settingsFlash{Error: errMsg, Notice: notice}, len(notice)+len(errMsg)+32); tok != "" {
 		dest += "?_flash=" + tok
@@ -1040,7 +1056,7 @@ func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.UpdateAccountName(r.Context(), p.AccountID, r.Form.Get("name")); err != nil {
-		s.settingsRedirect(w, r, "", err.Error())
+		s.settingsRedirect(w, r, "", safeErrorMessage(err, "Could not save settings. Please try again."))
 		return
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "account.rename", "")
@@ -1061,7 +1077,7 @@ func (s *Server) uiSettingsTrashRetention(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.Service.Store.SetTrashRetention(r.Context(), p, days); err != nil {
-		s.settingsRedirect(w, r, "", err.Error())
+		s.settingsRedirect(w, r, "", safeErrorMessage(err, "Could not save settings. Please try again."))
 		return
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "account.trash_retention", strconv.Itoa(days))
@@ -1078,7 +1094,7 @@ func (s *Server) uiSettingsAccountTimezone(w http.ResponseWriter, r *http.Reques
 	}
 	tz := strings.TrimSpace(r.Form.Get("timezone"))
 	if err := s.Service.Store.SetAccountTimezone(r.Context(), p, tz); err != nil {
-		s.settingsRedirect(w, r, "", err.Error())
+		s.settingsRedirect(w, r, "", safeErrorMessage(err, "Could not save settings. Please try again."))
 		return
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "account.timezone", tz)
@@ -1091,7 +1107,7 @@ func (s *Server) uiSettingsUserTimezone(w http.ResponseWriter, r *http.Request) 
 	p := principal(r)
 	tz := strings.TrimSpace(r.Form.Get("timezone"))
 	if err := s.Service.Store.SetUserTimezone(r.Context(), p, tz); err != nil {
-		s.settingsRedirect(w, r, "", err.Error())
+		s.settingsRedirect(w, r, "", safeErrorMessage(err, "Could not save settings. Please try again."))
 		return
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "user.timezone", tz)
@@ -1111,7 +1127,7 @@ func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Service.Store.UpdateUserEmail(r.Context(), p.UserID, p.AccountID, r.Form.Get("email"), r.Form.Get("current_password"))
 	if err != nil {
-		msg := err.Error()
+		msg := safeErrorMessage(err, "Could not update sign-in details. Please try again.")
 		switch {
 		case errors.Is(err, store.ErrForbidden):
 			msg = "Current password is incorrect"
@@ -1151,7 +1167,7 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 		keep = c.Value
 	}
 	if err := s.Service.Store.UpdateUserPassword(r.Context(), p.UserID, current, newPassword, keep); err != nil {
-		msg := err.Error()
+		msg := safeErrorMessage(err, "Could not update sign-in details. Please try again.")
 		if errors.Is(err, store.ErrForbidden) {
 			msg = "Current password is incorrect"
 		}
@@ -1692,7 +1708,7 @@ func safeErrorMessage(err error, fallback string) string {
 	}
 	msg := err.Error()
 	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
-		if strings.HasPrefix(msg, prefix) {
+		if strings.Contains(msg, prefix) {
 			return fallback
 		}
 	}
@@ -1721,7 +1737,7 @@ func isEngineFault(err error) bool {
 	}
 	msg := err.Error()
 	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
-		if strings.HasPrefix(msg, prefix) {
+		if strings.Contains(msg, prefix) {
 			return true
 		}
 	}

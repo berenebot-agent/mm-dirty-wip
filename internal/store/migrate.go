@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 )
@@ -164,6 +165,7 @@ func migrations(dataDir string) []migration {
 			indexExists("idx_draft_send_requests_pending_token"),
 			indexExists("idx_account_mx_receivers_url"),
 		)},
+		{version: "050", sql: migration050, detect: stateOf(indexExists("idx_account_mx_receivers_url_nocase"))},
 	}
 }
 
@@ -184,7 +186,7 @@ func tableSQLContains(table, substr string) detector {
 
 // runMigration applies one migration and records its marker in a single
 // transaction on the pinned connection.
-func runMigration(ctx context.Context, conn *sql.Conn, m migration) error {
+func runMigration(ctx context.Context, conn *sql.Conn, m migration) (result error) {
 	if m.fkOff {
 		if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 			return err
@@ -195,7 +197,8 @@ func runMigration(ctx context.Context, conn *sql.Conn, m migration) error {
 				// single connection, so leaving this off would silently disable
 				// cascades for the process lifetime. Close it instead: the pool
 				// opens a fresh connection whose pragmas the driver re-applies.
-				_ = conn.Close()
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+				result = fmt.Errorf("restore foreign keys: %w", err)
 			}
 		}()
 	}
