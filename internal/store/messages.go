@@ -25,7 +25,11 @@ type AttachmentInput struct {
 type InboundRecord struct {
 	Inbox                                           model.Inbox
 	Provider, ProviderDeliveryID, ProviderMessageID string
-	EnvelopeRecipient                               string
+	// Source is the human label the activity log shows for where the message was
+	// received (for example a concrete Antler receiver or a webhook provider
+	// name). It is snapshotted on the inbound_delivery_log row.
+	Source            string
+	EnvelopeRecipient string
 	// EnvelopeFrom is the transport-supplied envelope sender. It is persisted
 	// verbatim (bounded by the ingest layer) and is empty when the transport
 	// supplied none; it is never inferred from the MIME From header.
@@ -166,7 +170,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if _, err = tx.ExecContext(ctx, `UPDATE threads SET updated_at=? WHERE id=?`, now, threadID); err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider_delivery_id,provider_message_id,message_id,from_address,to_json,subject,size_bytes,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.Inbox.AccountID, r.Inbox.DomainID, r.Inbox.ID, r.Provider, nullString(r.ProviderDeliveryID), r.ProviderMessageID, id, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, "received", now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO inbound_delivery_log(account_id,domain_id,inbox_id,provider,provider_delivery_id,provider_message_id,message_id,from_address,to_json,subject,size_bytes,status,created_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, r.Inbox.AccountID, r.Inbox.DomainID, r.Inbox.ID, r.Provider, nullString(r.ProviderDeliveryID), r.ProviderMessageID, id, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, "received", now, r.Source); err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
 	if err = pruneInboundDeliveryLogTx(ctx, tx, r.Inbox.AccountID); err != nil {
@@ -318,7 +322,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var read int
 	var has, internal, spam int
 	var authResults, envelopeFrom, envelopeRecipient, deliveriesJSON string
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Client, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON)
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON)
 	if err != nil {
 		return m, err
 	}
@@ -1298,12 +1302,15 @@ func ftsQuery(q string) (string, error) {
 
 type BlockedRecord struct {
 	AccountID, InboxID, Provider, ProviderDeliveryID string
-	EnvelopeRecipient                                string
-	From                                             model.Address
-	To                                               []string
-	Subject, Reason                                  string
-	SizeBytes                                        int64
-	ReceivedAt                                       time.Time
+	// Source is the human label the activity log shows for where the message was
+	// received, mirroring InboundRecord.Source.
+	Source            string
+	EnvelopeRecipient string
+	From              model.Address
+	To                []string
+	Subject, Reason   string
+	SizeBytes         int64
+	ReceivedAt        time.Time
 }
 
 // CommitBlockedInbound records metadata for mail rejected by an inbox's
@@ -1329,8 +1336,8 @@ func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (mode
 	}
 	id := idgen.New("blk")
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, recipient, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, recipient, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now, r.Source); err != nil {
 		return model.BlockedMessage{}, false, err
 	}
 	if err = tx.Commit(); err != nil {

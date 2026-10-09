@@ -62,6 +62,12 @@ type InboundMessage struct {
 	// TrustedAuth marks AuthResults as computed by an authenticated adapter.
 	// Without it, the core must not apply authentication-based Spam policy.
 	TrustedAuth bool
+	// Source is the human label the domain log shows for where the message was
+	// received, for example the concrete Antler receiver or the webhook
+	// provider's name. It is composed by the core at ingest and snapshotted on
+	// the activity row. Empty for adapters that do not set it; the core falls
+	// back to the provider's display name.
+	Source string
 }
 
 // InboundBinding is the account/domain/credential tuple a provider webhook

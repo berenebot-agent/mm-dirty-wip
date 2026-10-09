@@ -817,13 +817,16 @@ type ControlMessageRecord struct {
 	InboxID            string
 	Provider           string
 	ProviderDeliveryID string
-	EnvelopeRecipient  string
-	FromName           string
-	FromAddress        string
-	RequestID          string
-	Action             string
-	Outcome            string
-	Reason             string
+	// Source is the human label the activity log shows for where the control
+	// message was received, mirroring InboundRecord.Source.
+	Source            string
+	EnvelopeRecipient string
+	FromName          string
+	FromAddress       string
+	RequestID         string
+	Action            string
+	Outcome           string
+	Reason            string
 	// Subject is the reviewed draft subject snapshotted at decision time. It is
 	// never the raw inbound subject, which carries the approval token.
 	Subject string
@@ -884,7 +887,7 @@ func scanControlMessages(rows *sql.Rows) ([]ControlMessage, error) {
 // webhook retry is a harmless no-op.
 func (s *Store) RecordControlMessage(ctx context.Context, r ControlMessageRecord) (bool, error) {
 	now := nowText()
-	res, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbound_control_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,request_id,action,outcome,reason,subject,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, idgen.New("icm"), r.AccountID, r.InboxID, r.Provider, nullString(r.ProviderDeliveryID), r.EnvelopeRecipient, r.FromName, r.FromAddress, r.RequestID, r.Action, r.Outcome, r.Reason, r.Subject, now)
+	res, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbound_control_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,request_id,action,outcome,reason,subject,created_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, idgen.New("icm"), r.AccountID, r.InboxID, r.Provider, nullString(r.ProviderDeliveryID), r.EnvelopeRecipient, r.FromName, r.FromAddress, r.RequestID, r.Action, r.Outcome, r.Reason, r.Subject, now, r.Source)
 	if err != nil {
 		return false, err
 	}

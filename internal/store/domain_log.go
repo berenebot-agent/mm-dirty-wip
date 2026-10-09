@@ -24,10 +24,11 @@ type DomainLogEntry struct {
 	FromAddress string    `json:"from_address,omitempty"`
 	To          []string  `json:"to,omitempty"`
 	Subject     string    `json:"subject,omitempty"`
-	// Client names the credential that sent an outbound message, or "Control"
-	// for a consumed approval control message. It is empty for received and
-	// blocked inbound mail.
-	Client            string `json:"client,omitempty"`
+	// Source names where the row came from. For outbound mail it is the sending
+	// credential label (or "Control" for a consumed approval control message);
+	// for received and blocked inbound mail it is the receiving source, for
+	// example "Antler: antler1.hgolabs.com" or the webhook provider's name.
+	Source            string `json:"source,omitempty"`
 	SizeBytes         int64  `json:"size_bytes,omitempty"`
 	ProviderMessageID string `json:"provider_message_id,omitempty"`
 	Attempt           int    `json:"attempt,omitempty"`
@@ -119,7 +120,7 @@ func (s *Store) listDomainLog(ctx context.Context, accountID, domainID string, l
 // appendDomainReceiving adds delivered inbound messages and blocked inbound
 // records whose inbox belongs to the domain.
 func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	deliveredQ := `SELECT CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN l.message_id ELSE '' END,l.inbox_id,l.provider,l.provider_message_id,l.from_address,l.to_json,l.subject,l.size_bytes,l.created_at
+	deliveredQ := `SELECT CASE WHEN EXISTS(SELECT 1 FROM messages m WHERE m.id=l.message_id AND m.account_id=l.account_id) THEN l.message_id ELSE '' END,l.inbox_id,l.provider,l.provider_message_id,l.from_address,l.to_json,l.subject,l.size_bytes,l.created_at,l.source
 		FROM inbound_delivery_log l
 		WHERE l.account_id=?`
 	deliveredArgs := []any{accountID}
@@ -140,7 +141,7 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 	for rows.Next() {
 		var e DomainLogEntry
 		var created, to string
-		if err = rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.ProviderMessageID, &e.FromAddress, &to, &e.Subject, &e.SizeBytes, &created); err != nil {
+		if err = rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.ProviderMessageID, &e.FromAddress, &to, &e.Subject, &e.SizeBytes, &created, &e.Source); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -159,7 +160,7 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 	}
 	rows.Close()
 
-	blockedQ := `SELECT b.id,b.inbox_id,b.provider,b.from_address,b.to_json,b.subject,b.size_bytes,b.reason,b.created_at
+	blockedQ := `SELECT b.id,b.inbox_id,b.provider,b.from_address,b.to_json,b.subject,b.size_bytes,b.reason,b.created_at,b.source
 		FROM blocked_messages b JOIN inboxes i ON i.id=b.inbox_id AND i.account_id=b.account_id
 		WHERE b.account_id=?`
 	blockedArgs := []any{accountID}
@@ -181,7 +182,7 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 	for brows.Next() {
 		var e DomainLogEntry
 		var created, to string
-		if err = brows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &to, &e.Subject, &e.SizeBytes, &e.Reason, &created); err != nil {
+		if err = brows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &to, &e.Subject, &e.SizeBytes, &e.Reason, &created, &e.Source); err != nil {
 			return nil, err
 		}
 		e.Kind = "blocked"
@@ -196,7 +197,7 @@ func (s *Store) appendDomainReceiving(ctx context.Context, out []DomainLogEntry,
 // appendDomainControl adds consumed approval control messages for the domain's
 // inboxes, so an operator can see that a decision email was consumed.
 func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, accountID, domainID, beforeText string, limit int) ([]DomainLogEntry, error) {
-	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.subject,c.created_at
+	q := `SELECT c.id,c.inbox_id,c.provider,c.from_address,c.request_id,c.action,c.outcome,c.reason,c.subject,c.created_at,c.source
 		FROM inbound_control_messages c JOIN inboxes i ON i.id=c.inbox_id AND i.account_id=c.account_id
 		WHERE c.account_id=?`
 	args := []any{accountID}
@@ -218,13 +219,15 @@ func (s *Store) appendDomainControl(ctx context.Context, out []DomainLogEntry, a
 	for rows.Next() {
 		var e DomainLogEntry
 		var created, outcome, subject string
-		if err := rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &e.RequestID, &e.Action, &outcome, &e.Reason, &subject, &created); err != nil {
+		if err := rows.Scan(&e.ID, &e.InboxID, &e.Provider, &e.FromAddress, &e.RequestID, &e.Action, &outcome, &e.Reason, &subject, &created, &e.Source); err != nil {
 			return nil, err
 		}
 		e.Kind = "approval"
 		e.Status = outcome
 		e.Subject = ApprovalSubjectLabel(outcome, subject)
-		e.Client = "Control"
+		if e.Source == "" {
+			e.Source = "Control"
+		}
 		e.At = parseTime(created)
 		out = append(out, e)
 	}
@@ -259,7 +262,7 @@ func (s *Store) appendDomainOutbound(ctx context.Context, out []DomainLogEntry, 
 		var e DomainLogEntry
 		var id int64
 		var created, to string
-		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID, &e.Client); err != nil {
+		if err = rows.Scan(&id, &e.Provider, &e.MessageID, &e.Attempt, &e.Status, &e.ProviderMessageID, &e.ErrorText, &created, &e.FromAddress, &to, &e.Subject, &e.InboxID, &e.Source); err != nil {
 			return nil, err
 		}
 		e.Kind = e.Status
