@@ -5,9 +5,10 @@
 # Direct SMTP (MX) ingress is configured in the UI, not with environment
 # variables: sign in as the system administrator and set Admin -> MX receiver to
 # Included (this deployment runs the receiver on :2525) or Remote (a separate
-# receiver). Host port 25 is published here for Included; remove the :25 mapping
-# if you receive mail only through a webhook provider (Mailgun, Cloudflare Email
-# Routing, Resend).
+# receiver). Host port 25 is commented out by default: uncomment the :25 mapping
+# only when this deployment is an Included MX receiver reached from the public
+# internet. Leave it commented if you receive mail only through a webhook
+# provider (Mailgun, Cloudflare Email Routing, Resend).
 #
 # Project name pinned explicitly. Without this, Compose derives it from the
 # directory basename, so a checkout whose parent directory is also named
@@ -34,5 +35,6 @@ services:
       # Optional dedicated webhook listener: uncomment to publish its port.
       # Keep commented when DEDICATED_RECEIVER_ENABLE=false to free the host port.
       - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
-      # :25 = direct SMTP when using this as an Included MX receiver.
-      - "0.0.0.0:25:2525"
+      # :25 = direct SMTP when using this as an Included MX receiver. Uncomment
+      # to publish it (and set Admin -> MX receiver to Included).
+      # - "0.0.0.0:25:2525"

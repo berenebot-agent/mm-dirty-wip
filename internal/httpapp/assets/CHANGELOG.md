@@ -31,6 +31,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The build-from-source `docker-compose.yml` (and the hardened
+  `docker-compose.advanced.yml`) no longer publish host port 25 by default;
+  uncomment the `:25` mapping only when the deployment is an Included MX
+  receiver reached from the internet.
+- Provider credentials (domain/alias sending and receiving configs, account and
+  installation Remote MX, and the Dial MX private seed) are now bound to their
+  owning row with AES-GCM additional authenticated data, so a ciphertext copied
+  to another row fails to decrypt. Existing rows keep working via a versioned
+  envelope with a legacy fallback.
 - Direct-SMTP edge: single-mode receivers now log a startup warning when they
   accept cleartext from a non-loopback address (the bearer key and mail are then
   unencrypted), and `DIALMX_REQUIRE_TLS=true` opts into accepting cleartext only
@@ -42,6 +51,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Invite acceptance: a failure while redeeming a setup token now logs the cause
+  and shows a generic message instead of echoing the raw error to the anonymous
+  visitor.
+- Added a partial index for the inbound approval-token lookup and a unique
+  partial index enforcing one physical receiver per account at the database,
+  closing the read-then-write race in the account Remote MX check.
 - SMTP outbound: a 5xx reply is now classed as a permanent failure (matching
   the Direct MX transport) instead of being retried for hours, and the
   connection deadline is refreshed per command and cleared before the body
