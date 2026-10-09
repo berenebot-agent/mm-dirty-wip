@@ -176,7 +176,39 @@ entryPoints:
 The session client tolerates 90s of idleness (`sessionIdleTimeout`) and sends a
 keepalive every 30s (`keepaliveInterval`), so a proxy timeout of 60s cannot be
 worked around from the core side — it must be disabled, or set comfortably above
-90s. Keep the SMTP edge direct:
+90s.
+
+The proxy's address on the shared network must also be **stable**, because
+`DIALMX_TRUSTED_PROXIES` takes a CIDR and the receiver refuses to start on
+anything else:
+
+```
+invalid DIALMX_TRUSTED_PROXIES entry "proxy": netip.ParsePrefix("proxy"): no '/'
+```
+
+An unpinned container address is reassigned whenever the network or containers
+are recreated — adding a service, recreating an image, restarting the stack. The
+allowlist then points at a different container, the session stops coming up, and
+because resolve fails during the outage the sender sees the same intermittent
+`550` as the timeout case rather than an address error. Pin the front-end's
+address explicitly and declare the subnet so the address is valid:
+
+```yaml
+services:
+  proxy:
+    networks:
+      proxy:
+        ipv4_address: 172.18.0.2   # must match DIALMX_TRUSTED_PROXIES
+
+networks:
+  proxy:
+    name: proxy
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+```
+
+Keep the SMTP edge direct:
 if the proxy also fronted `:25` the receiver would see the proxy's IP, breaking
 SPF alignment and per-source limits. Behind a proxy every core arrives from the
 proxy's IP, so the per-source caps (`MX_PER_IP_*`) are shared; raise them if one

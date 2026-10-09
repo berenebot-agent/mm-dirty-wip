@@ -54,6 +54,7 @@ func TestDashboardRendersClientsAccessTab(t *testing.T) {
 	}
 	body := rr.Body.String()
 	for _, want := range []string{
+		`data-inbox-tab="basic">Identity`,
 		`data-inbox-tab="access"`,
 		`Clients &amp; Access`,
 		`data-inbox-panel="access"`,
@@ -67,6 +68,10 @@ func TestDashboardRendersClientsAccessTab(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+	// The approver hint no longer states the approver is always allowed.
+	if strings.Contains(body, "always allowed") {
+		t.Fatal("allow-list hint should not mention the approver being always allowed")
 	}
 	// The key's binding must be embedded, secret-free, in the edit button.
 	if !strings.Contains(body, `data-access=`) || !strings.Contains(body, `"`+key.ID+`"`) {
