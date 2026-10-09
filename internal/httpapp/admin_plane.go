@@ -477,62 +477,6 @@ func (s *Server) uiInboxAccessCreateKey(w http.ResponseWriter, r *http.Request) 
 	s.flashSecret(w, r, "API key created", "Copy this API key now — you will only be able to see this key now, it will not be shown again.", plain)
 }
 
-// uiInboxAccessSetKeyRole sets (or clears, when role is empty) an API key's role
-// on this inbox by rewriting the key's full binding map.
-func (s *Server) uiInboxAccessSetKeyRole(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if !p.Admin {
-		http.Error(w, "admin required", 403)
-		return
-	}
-	inboxID, ok := s.accessInbox(w, r, p)
-	if !ok {
-		return
-	}
-	role, valid := accessRole(r.Form.Get("role"))
-	if !valid {
-		s.uiError(w, fmt.Errorf("invalid role"), 400)
-		return
-	}
-	keyID := r.PathValue("keyID")
-	keys, err := s.Service.Store.ListAPIKeys(r.Context(), p.AccountID)
-	if err != nil {
-		s.uiError(w, err, 500)
-		return
-	}
-	var target *model.APIKey
-	for i := range keys {
-		if keys[i].ID == keyID {
-			target = &keys[i]
-			break
-		}
-	}
-	if target == nil {
-		http.Error(w, "client not found", 404)
-		return
-	}
-	if target.Admin {
-		s.uiError(w, fmt.Errorf("account Admin keys have implicit access and cannot be edited per inbox"), 400)
-		return
-	}
-	roles := map[string]string{}
-	for id, existing := range target.Roles {
-		roles[id] = existing
-	}
-	if role == "" {
-		delete(roles, inboxID)
-	} else {
-		roles[inboxID] = role
-	}
-	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, keyID, target.Name, false, roles); err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	s.Service.Hub.CancelScope("key:" + keyID)
-	s.Service.Store.DeleteKeySessionsForClient(r.Context(), keyID)
-	accessRedirect(w, r, inboxID, "Client updated")
-}
-
 // uiInboxAccessRemoveKey removes this inbox's binding from an API key without
 // revoking the key itself.
 func (s *Server) uiInboxAccessRemoveKey(w http.ResponseWriter, r *http.Request) {

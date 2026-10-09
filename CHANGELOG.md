@@ -16,7 +16,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   pending invitation. Account Admin keys appear read-only (D089). Inviting an
   address that already belongs to an account member grants access directly
   instead of erroring; the administrator, an address already on the inbox, and a
-  duplicate pending invitation each get a specific message.
+  duplicate pending invitation each get a specific message. Role changes are
+  staged and committed by the footer Save, alongside every other tab's edits in
+  a single request.
 
 ### Fixed — release follow-up
 
@@ -40,6 +42,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Inbox settings: the first tab is renamed **Identity** (was Basic) and the
+  **Clients & Access** tab moves up beside it. The footer Save now commits every
+  tab's staged edits (including Clients & Access role changes) in one request,
+  and the allow-list hint no longer states that the approver is always allowed.
 - Outbound destination policy: `ALLOW_PRIVATE_OUTBOUND` now defaults to `true`,
   so a self-hosted instance may send through a private gateway, local relay or
   LAN MX receiver without extra configuration. A hosted operator that must

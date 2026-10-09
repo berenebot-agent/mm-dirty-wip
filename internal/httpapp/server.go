@@ -237,7 +237,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes/{id}/auto-actions", s.withSession(s.withCSRF(s.uiInboxAutoActions)))
 	m.HandleFunc("POST /ui/inboxes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteInbox)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/keys", s.withSession(s.withCSRF(s.uiInboxAccessCreateKey)))
-	m.HandleFunc("POST /ui/inboxes/{id}/access/keys/{keyID}", s.withSession(s.withCSRF(s.uiInboxAccessSetKeyRole)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/keys/{keyID}/remove", s.withSession(s.withCSRF(s.uiInboxAccessRemoveKey)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/users", s.withSession(s.withCSRF(s.uiInboxAccessAddUser)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/users/{userID}/remove", s.withSession(s.withCSRF(s.uiInboxAccessRemoveUser)))
