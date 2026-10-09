@@ -556,7 +556,7 @@ var schemas = map[string]any{
 		"bearer_key":     str("Always empty on a read; the credential is never returned."),
 		"key_configured": boolean("Whether a bearer credential is stored."),
 		"ca":             str("PEM CA bundle for a private receiver; empty uses system roots."),
-		"allow_private":  boolean("Whether the dialer may reach a loopback/LAN receiver."),
+		"allow_private":  boolean("Whether the dialer may reach a loopback/LAN receiver. Only honoured when the operator allows private outbound (ALLOW_PRIVATE_OUTBOUND=true, the default)."),
 		"revision":       integer("Optimistic-concurrency token a save must echo."),
 		"status":         Ref("AccountMXStatus"),
 	}),
@@ -564,7 +564,7 @@ var schemas = map[string]any{
 		"url":           str("Required. HTTP or HTTPS origin with no path, userinfo, query or fragment. A public receiver must use https and a public-routable host; set allow_private for a loopback/LAN receiver."),
 		"bearer_key":    str("Required on a first save; a blank value retains the stored credential. Must match the receiver's DIALMX_CORE_KEY."),
 		"ca":            str("Optional PEM CA bundle for a private receiver."),
-		"allow_private": boolean("Permit the dialer to reach a loopback/LAN receiver."),
+		"allow_private": boolean("Permit the dialer to reach a loopback/LAN receiver. Only honoured when the operator allows private outbound (ALLOW_PRIVATE_OUTBOUND=true, the default)."),
 		"revision":      integer("Current revision, or zero to create."),
 	}, "url"),
 	"AccountMXStatus": obj(map[string]any{

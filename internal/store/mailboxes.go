@@ -1286,6 +1286,19 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 	if _, err = tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes-?) WHERE id=?`, total, accountID); err != nil {
 		return nil, err
 	}
+	// Delete the inbox's relay/webhook clients (and their enroll tokens and
+	// bindings) before the inbox row goes, mirroring PurgeDomain. client_push
+	// cascades on inbox delete, but the parent clients rows would otherwise be
+	// orphaned.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM clients WHERE id IN (SELECT p.client_id FROM client_push p JOIN clients c ON c.id=p.client_id WHERE p.inbox_id=? AND c.type IN ('hermes','openclaw','webhook'))`, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM hermes_enroll_tokens WHERE inbox_id=?`, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM client_inbox_bindings WHERE inbox_id=?`, id); err != nil {
+		return nil, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inboxes WHERE id=? AND account_id=?`, id, accountID); err != nil {
 		return nil, err
 	}

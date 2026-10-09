@@ -191,8 +191,12 @@ type Config struct {
 	SendLimitPerMinute     int
 	RegisterLimitPerMinute int
 	// AllowPrivateOutbound disables the public-routable destination check for
-	// outbound transports. It exists for operators who intentionally send
-	// through a private gateway or local relay.
+	// outbound transports. It defaults to true because self-hosting is the
+	// primary model, where sending through a private gateway, local relay, or
+	// LAN MX receiver is normal. A hosted operator that must confine outbound
+	// traffic to the public internet sets ALLOW_PRIVATE_OUTBOUND=false; that
+	// policy then also governs the per-account Remote MX receiver, so a tenant
+	// cannot re-enable private destinations on their own.
 	AllowPrivateOutbound bool
 	InboundConcurrency   int
 	MaxMultipartParts    int
@@ -293,7 +297,7 @@ func Load() (Config, error) {
 		LoginLimitPerMinute:     envInt("LOGIN_LIMIT_PER_MINUTE", 10),
 		SendLimitPerMinute:      envInt("SEND_LIMIT_PER_MINUTE", 60),
 		RegisterLimitPerMinute:  envInt("REGISTER_LIMIT_PER_MINUTE", 5),
-		AllowPrivateOutbound:    envBool("ALLOW_PRIVATE_OUTBOUND", false),
+		AllowPrivateOutbound:    envBool("ALLOW_PRIVATE_OUTBOUND", true),
 		InboundConcurrency:      envInt("INBOUND_CONCURRENCY", 32),
 		MaxMultipartParts:       envInt("MAX_MULTIPART_PARTS", 64),
 		MaxMIMEDepth:            envInt("MAX_MIME_DEPTH", 8),
