@@ -180,6 +180,7 @@ func runStandalone(log *slog.Logger) {
 		os.Exit(1)
 	}
 	logSettings(log, cfg)
+	warnCleartext(log, cfg)
 
 	tlsLn, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -240,6 +241,7 @@ func logSettings(log *slog.Logger, cfg dialmx.Config) {
 		"smtp_listen", cfg.SMTP.ListenAddr,
 		"hostname", cfg.SMTP.Hostname,
 		"require_tls", cfg.SMTP.RequireTLS,
+		"session_require_tls", cfg.Receiver.RequireTLS,
 		"verify_spf", cfg.SMTP.VerifySPF,
 		"verify_dkim", cfg.SMTP.VerifyDKIM,
 		"verify_dmarc", cfg.SMTP.VerifyDMARC,
@@ -275,4 +277,36 @@ func prefixesString(prefixes []netip.Prefix) string {
 		parts = append(parts, p.String())
 	}
 	return strings.Join(parts, ",")
+}
+
+// warnCleartext logs a warning when the session listener serves cleartext HTTP/2
+// on a non-loopback address without DIALMX_REQUIRE_TLS. Cleartext is allowed by
+// default (self-hosting), but the bearer key and mail then cross the wire
+// unencrypted, so it must be visible rather than silent.
+func warnCleartext(log *slog.Logger, cfg dialmx.Config) {
+	if cfg.TLSCertFile != "" || cfg.Receiver.RequireTLS || listenIsLoopback(cfg.ListenAddr) {
+		return
+	}
+	log.Warn("session listener accepts cleartext from non-loopback peers; the bearer key and mail are unencrypted",
+		"session_listen", cfg.ListenAddr,
+		"remedy", "set DIALMX_TLS_CERT/DIALMX_TLS_KEY, DIALMX_REQUIRE_TLS=true, bind to loopback, or front the listener with a trusted TLS-terminating proxy")
+}
+
+// listenIsLoopback reports whether a listen address is bound only to loopback.
+// An empty or wildcard host ("":8443, ":8443", "0.0.0.0:8443", "[::]:8443") is
+// not loopback-only.
+func listenIsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return a.IsLoopback()
 }

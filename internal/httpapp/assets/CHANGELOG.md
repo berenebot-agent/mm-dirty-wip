@@ -29,8 +29,22 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   `mx auth evidence` as its `duration_ms`, and that single record is now INFO, so
   each message logs one auth line rather than two.
 
+### Changed
+
+- Direct-SMTP edge: single-mode receivers now log a startup warning when they
+  accept cleartext from a non-loopback address (the bearer key and mail are then
+  unencrypted), and `DIALMX_REQUIRE_TLS=true` opts into accepting cleartext only
+  from loopback or `DIALMX_TRUSTED_PROXIES`. Cleartext stays allowed by default
+  for self-hosting.
+- Remote MX receiver URLs (installation and per-account) now share one policy:
+  `http`/private/LAN origins are allowed by default and held to `https` plus
+  public-routable only when the operator sets `ALLOW_PRIVATE_OUTBOUND=false`.
+
 ### Fixed
 
+- Direct-SMTP edge: the core and the standalone receiver now sweep stale
+  `mxdial-*` staging files left by a previous crash at startup (with a grace
+  window), so they cannot accumulate and exhaust the disk.
 - Relay outbound: in-flight outbound operations per socket are bounded, so a
   gateway cannot exhaust goroutines and SQLite capacity by bursting frames;
   excess outbound requests receive a bounded "too many in-flight" result.
