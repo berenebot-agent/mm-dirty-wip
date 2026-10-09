@@ -192,7 +192,7 @@ func dialMXStatusLabel(st mxdialStatusView) string {
 	case mxdial.StatusUnavailable:
 		return "unavailable"
 	case mxdial.StatusDeferred:
-		return "waiting for capacity"
+		return "waiting to retry"
 	case mxdial.StatusDisconnected:
 		return "reconnecting"
 	}

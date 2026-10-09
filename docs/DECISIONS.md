@@ -2849,6 +2849,40 @@ accurate than reconstructing it later.
 source); the `< 051` read paths are unchanged. Webhook inbound leaves source
 empty at the adapter and the core fills the provider display name.
 
+## D091 — Domain-scoped failure cooldown on the Dial MX receiver
+
+**Requirement:** A single failed domain proof must not deny domain registration
+for any other domain from the same core. A freshly onboarded core registers its
+domains in one burst while DNS may not have propagated; with a source-IP-scoped
+cooldown, one transient `dns_unavailable` for one domain put the whole source IP
+in a five-second block, so the core's other (valid) domains received
+`AuthResult{accepted:false, reason:"source_limit"}` — surfaced as a red
+`rejected` / `authentication_failed` row for domains whose authority was never
+in question.
+
+**Decision:** Scope the receiver's failure cooldown to `(source IP, domain)`
+instead of the source IP. `ipState` replaces the single `cooldown time.Time` with
+`domainCooldown map[string]time.Time`; `failIP` becomes `failDomain(c, domain)`
+and is called with the specific domain on each failure path; `acquireAuth` takes
+the domain and refuses only when *that* domain is within its cooldown (reason
+`domain_cooldown`), leaving the per-source concurrent and per-minute auth caps as
+the per-IP DNS bound (reason `source_limit`). A successful proof clears the
+domain's cooldown immediately. The 5 s duration, the per-IP connection/auth caps
+and the global DNS worker pool are unchanged, and a domain-keyed cooldown is not
+used (it would let one source deny a victim domain's registration for everyone).
+The core maps `domain_cooldown` to the amber transient `deferred` state rather
+than `rejected`, so a valid domain shows as "waiting to retry", not failed.
+
+**Reason:** The cooldown exists to damp a source abusing the auth path, not to
+punish unrelated domains. Per-domain scoping removes the false-red symptom while
+keeping identical protection against a source flooding a single name, and the
+per-source window/concurrent caps still bound total DNS work.
+
+**Complexity:** One receiver struct field, two method renames and an added
+return token, one core reason mapping, plus tests and docs. No new dependency,
+service, wire frame or protocol change; the mx-v2 frame set and the DNS-anchored
+proof are untouched.
+
 ## Future extension register
 
 - additional inbound transport adapters

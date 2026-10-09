@@ -400,9 +400,57 @@ func TestReplacementPinnedDataStillDelivers(t *testing.T) {
 	}
 }
 
+// TestFailureCooldownIsPerDomain proves a failed proof cools down only the
+// domain that failed: a sibling domain on the same source still receives a
+// challenge, while the failed domain's own retry is refused with
+// domain_cooldown (not source_limit).
+func TestFailureCooldownIsPerDomain(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	dns := func(_ context.Context, name string) ([]string, error) {
+		if strings.HasPrefix(name, "_mailmoose-mx.bad.test") {
+			return nil, errors.New("dns unavailable")
+		}
+		return []string{mxwire.DomainTXT("key1", pub)}, nil
+	}
+	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: client, ForceAttemptHTTP2: true}}
+	s := newRawSession(t, hc, srv.URL)
+	defer s.close()
+
+	authResult := func(ch uint64, domain string) mxwire.AuthResult {
+		auth, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, ch, mxwire.DomainAuth{Domain: domain, KeyID: "key1"})
+		s.write(auth)
+		f := s.read()
+		if f.Type != mxwire.FrameAuthResult {
+			t.Fatalf("domain %s: expected AuthResult, got frame type %d", domain, f.Type)
+		}
+		var a mxwire.AuthResult
+		if mxwire.DecodeFrame(f, &a) != nil {
+			t.Fatalf("domain %s: bad auth result", domain)
+		}
+		return a
+	}
+
+	// First failure on bad.test arms only bad.test's cooldown.
+	if a := authResult(1, "bad.test"); a.Accepted || a.Reason != "dns_unavailable" {
+		t.Fatalf("bad.test = %+v, want rejected dns_unavailable", a)
+	}
+	// A sibling domain on the same source is unaffected: it gets a challenge.
+	auth, _ := mxwire.JSONFrame(mxwire.FrameDomainAuth, 0, 2, mxwire.DomainAuth{Domain: "good.test", KeyID: "key1"})
+	s.write(auth)
+	if f := s.read(); f.Type != mxwire.FrameChallenge {
+		t.Fatalf("good.test expected Challenge, got frame type %d", f.Type)
+	}
+	// bad.test is still cooling down: its retry is refused with domain_cooldown.
+	if a := authResult(3, "bad.test"); a.Accepted || a.Reason != "domain_cooldown" {
+		t.Fatalf("bad.test retry = %+v, want rejected domain_cooldown", a)
+	}
+}
+
 // TestDNSFailureCooldownBoundsAuthGrowth proves a source that triggers DNS
-// failures is cooled down: after the first burst, further auth attempts from the
-// same source do no additional DNS work until the cooldown lapses.
+// failures is cooled down: after the first burst for a domain, further auth
+// attempts for that domain from the same source do no additional DNS work until
+// the cooldown lapses.
 func TestDNSFailureCooldownBoundsAuthGrowth(t *testing.T) {
 	var mu sync.Mutex
 	lookups := 0

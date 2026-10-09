@@ -3270,7 +3270,7 @@ function hideInboxSubview(dlg) {
         rejected: 'Rejected',
         unavailable: 'Unavailable',
         unreachable: 'Receiver unreachable',
-        deferred: 'Waiting for capacity'
+        deferred: 'Waiting to retry'
       }[status.state] || 'Waiting';
     }
     // The saved status view draws its full connector table before the first

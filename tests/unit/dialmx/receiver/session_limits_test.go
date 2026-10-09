@@ -336,6 +336,6 @@ func TestRenewalSourceLimitDoesNotRevoke(t *testing.T) {
 		t.Fatal("no renewals were attempted")
 	}
 	if got := d.revoked.Load(); got != 0 {
-		t.Fatalf("bindings revoked on temporary source_limit: %d", got)
+		t.Fatalf("bindings revoked on temporary per-domain/source limit: %d", got)
 	}
 }
