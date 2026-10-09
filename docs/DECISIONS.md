@@ -2618,6 +2618,54 @@ database engine.
   receiver; the core stores only the URL, bearer key and private-CA/private-host
   options.
 
+## D085 — First-run HTTP setup wizard (supersedes D055 in part)
+
+**Context:** D055 removed the unauthenticated `/setup` claim flow and made
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` the only way to create the system
+administrator: a fresh instance with no credentials served a static "not
+configured" page with no HTTP path to claim it. That is safe but gives a
+self-hoster no out-of-box onboarding: Docker secrets must be generated and
+re-entered before the first login, and there is no in-browser way to claim a
+fresh container. The comparable product (Tiller Router) ships a one-shot
+first-run setup page instead.
+
+**Decision:** Add a one-shot first-run setup wizard, reversing only the
+"no HTTP path can claim the instance" clause of D055. `ADMIN_EMAIL` /
+`ADMIN_PASSWORD` remain supported and authoritative when supplied.
+
+- `GET /setup` renders a real form (account name, email, password, confirm)
+  while the database has no users; it redirects to `/login` once any user
+  exists. The static "not configured" page is removed.
+- `POST /setup` claims the instance by calling the existing atomic
+  `Store.CreateInitialAdmin` (a `BEGIN IMMEDIATE` empty-users check followed by
+  the account/user insert, returning `store.ErrConflict` to a second caller).
+  On success it mints a normal session and signs the new administrator in.
+- The route is registered unconditionally but self-disables: every request
+  re-checks `HasUsers` and redirects to `/login` once a user exists, so it can
+  never act as a standing claim or a backdoor.
+- Defences: the pre-auth CSRF token (`withPreAuthCSRF`, cookie `mmm_csrf`), a
+  same-origin check (`Sec-Fetch-Site` / `Origin` vs `Host`), and a per-source
+  rate limit, all in addition to the atomic store claim.
+
+**Reason:** The store already contained the race-free one-shot bootstrap
+primitive (`CreateInitialAdmin`), previously reachable only from tests. Wiring
+it to a form gives parity with the comparable product's out-of-box experience
+without inventing a new claim mechanism, and the guards above keep the original
+D055 concern (a standing unauthenticated claim on a fresh instance) contained:
+the endpoint exists for at most the first successful claim and is otherwise
+refused. Deployments that prefer deployment-time credentials are unaffected.
+
+**Consequences:**
+
+- A fresh self-hosted container can be claimed from the browser; alternatively
+  `ADMIN_EMAIL` / `ADMIN_PASSWORD` still pre-create the administrator at
+  startup, in which case `/setup` redirects straight to `/login`.
+- The wizard-created administrator is an ordinary system administrator: later
+  supplying `ADMIN_EMAIL` pointing at its email adopts and reconciles it
+  through the existing `SyncSystemAdmin` path.
+- `unconfiguredBody` is replaced by `setupBody`; the startup log now points at
+  the setup page as well as the environment variables.
+
 ## Future extension register
 
 - additional inbound transport adapters
