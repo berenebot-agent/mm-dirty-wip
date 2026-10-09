@@ -51,6 +51,10 @@ const (
 	// small; the cap only guards against an unexpectedly huge body.
 	maxMetadataBytes = 32 << 20
 	signatureMaxAge  = 5 * time.Minute
+	// maxRecipients bounds how many To/Cc/Bcc addresses one webhook may carry.
+	// The service resolves each recipient with a database lookup, so an
+	// unbounded recipient list is a cheap amplification vector.
+	maxRecipients = 256
 )
 
 // Svix signature headers sent with every Resend webhook.
@@ -144,7 +148,8 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 }
 
 // canonicalRecipients normalizes and de-duplicates every recipient in a Resend
-// event, preserving order.
+// event, preserving order, and caps the count so one webhook cannot drive an
+// unbounded number of per-recipient database lookups.
 func canonicalRecipients(recipients []string) []string {
 	out := make([]string, 0, len(recipients))
 	seen := map[string]bool{}
@@ -155,6 +160,9 @@ func canonicalRecipients(recipients []string) []string {
 		}
 		seen[c] = true
 		out = append(out, c)
+		if len(out) >= maxRecipients {
+			break
+		}
 	}
 	return out
 }

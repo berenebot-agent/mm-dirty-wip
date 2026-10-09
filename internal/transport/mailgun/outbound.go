@@ -143,7 +143,7 @@ func Send(ctx context.Context, c Config, m SendRequest) (SendResult, error) {
 	defer resp.Body.Close()
 	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		err := fmt.Errorf("mailgun returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		err := transport.ProviderError("mailgun", resp.Status, responseBody)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return SendResult{}, &transport.PermanentError{Err: err}
 		}

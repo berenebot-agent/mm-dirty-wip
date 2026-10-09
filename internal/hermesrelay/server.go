@@ -37,6 +37,11 @@ type Server struct {
 // reconnect loop: a gateway that connected recently logs at Debug instead.
 const relayQuietReconnectWindow = 10 * time.Minute
 
+// maxConcurrentOutbound bounds in-flight outbound operations per relay socket,
+// so a gateway cannot force unbounded goroutine and SQLite pressure by bursting
+// outbound frames.
+const maxConcurrentOutbound = 16
+
 func New(svc *app.Service) *Server {
 	return &Server{
 		Service:             svc,
@@ -268,6 +273,10 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 	ackCh := make(chan int64, 8)
 	helloCh := make(chan struct{}, 1)
 	errCh := make(chan error, 1)
+	// Bound concurrent outbound operations per socket. Each outbound op spawns a
+	// goroutine that touches SQLite and may run a full send pipeline; without a
+	// cap a gateway could burst thousands of frames and exhaust the process.
+	outboundSem := make(chan struct{}, maxConcurrentOutbound)
 	go func() {
 		defer cancel()
 		for {
@@ -312,7 +321,19 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				if a.Op != "typing" {
 					s.Log.Info("relay outbound", "gateway_id", h.GatewayID, "request_id", f.RequestID, "op", a.Op, "chat_id", a.ChatID)
 				}
-				go s.handleOutbound(ctx, wr, h, f.RequestID, a)
+				// Acquire a slot without blocking the read loop; if the socket
+				// already has too many in-flight outbound ops, reject this one
+				// instead of spawning another goroutine.
+				select {
+				case outboundSem <- struct{}{}:
+					go func() {
+						defer func() { <-outboundSem }()
+						s.handleOutbound(ctx, wr, h, f.RequestID, a)
+					}()
+				default:
+					s.Log.Warn("relay outbound rejected: too many in-flight", "gateway_id", h.GatewayID, "request_id", f.RequestID)
+					_ = wr.JSON(outboundResult(f.RequestID, false, "too many in-flight outbound operations", ""))
+				}
 			case "interrupt":
 				// Email sends are short, transactional operations. Interrupt is acknowledged implicitly by the next result.
 			}

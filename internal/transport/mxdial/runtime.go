@@ -1668,10 +1668,21 @@ func (s *session) resolve(f mxwire.Frame) error {
 		defer s.connWG.Done()
 		ctx, cancel := context.WithTimeout(txctx, resolveBackendTimeout)
 		defer cancel()
-		res, err := s.m.backend.Resolve(ctx, domain, []string{recipient})
-		if err != nil {
-			res = mxwire.ResolveResponse{MachineCode: mxwire.CodeTempFail}
-		}
+		var res mxwire.ResolveResponse
+		func() {
+			// A panic in the backend must not crash the core; report a
+			// temporary failure so the sender retries.
+			defer func() {
+				if rec := recover(); rec != nil {
+					res = mxwire.ResolveResponse{MachineCode: mxwire.CodeTempFail}
+				}
+			}()
+			r, err := s.m.backend.Resolve(ctx, domain, []string{recipient})
+			if err != nil {
+				r = mxwire.ResolveResponse{MachineCode: mxwire.CodeTempFail}
+			}
+			res = r
+		}()
 		res = normalizeResolve(res, domain, recipient)
 		select {
 		case jobs <- jobResult{kind: jobResolve, txid: f.TxID, channel: f.ChannelID, domain: domain, recipient: recipient, resolve: res}:
@@ -1957,10 +1968,21 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 		defer s.connWG.Done()
 		ctx, cancel := context.WithTimeout(txctx, ingestBackendTimeout)
 		defer cancel()
-		response, err := s.m.backend.Ingest(ctx, domains, meta, path)
-		if err != nil {
-			response = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
-		}
+		var response mxwire.IngestResponse
+		func() {
+			// A panic in the backend must not crash the core; report a
+			// temporary failure so the sender retries.
+			defer func() {
+				if rec := recover(); rec != nil {
+					response = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
+				}
+			}()
+			r, err := s.m.backend.Ingest(ctx, domains, meta, path)
+			if err != nil {
+				r = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
+			}
+			response = r
+		}()
 		response = normalizeIngest(response, meta.Recipients)
 		select {
 		case jobs <- jobResult{kind: jobIngest, txid: f.TxID, ingest: response}:

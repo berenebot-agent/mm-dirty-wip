@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
 
 type OutboundMessage struct {
@@ -89,4 +91,37 @@ func (e *PermanentError) Unwrap() error { return e.Err }
 func IsPermanent(err error) bool {
 	var pe *PermanentError
 	return errors.As(err, &pe)
+}
+
+// providerErrorBodyLimit bounds how much of a provider's error response is
+// retained in an error message. Provider bodies are persisted to the message's
+// last_error and shown to mailbox readers, so the raw response is truncated and
+// stripped of control characters rather than stored in full.
+const providerErrorBodyLimit = 512
+
+// ProviderError builds an error from a provider's non-2xx response. The body is
+// truncated to a short, single-line snippet so a large or secret-bearing
+// response cannot be persisted to the delivery log or surfaced verbatim.
+func ProviderError(provider, status string, body []byte) error {
+	return fmt.Errorf("%s returned %s: %s", provider, status, snippet(body))
+}
+
+// snippet returns at most providerErrorBodyLimit bytes of body as a single
+// control-character-free line.
+func snippet(body []byte) string {
+	if len(body) > providerErrorBodyLimit {
+		body = body[:providerErrorBodyLimit]
+	}
+	var b strings.Builder
+	for _, c := range body {
+		if c == '\r' || c == '\n' || c == '\t' {
+			b.WriteByte(' ')
+			continue
+		}
+		if c < 0x20 || c == 0x7f {
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return strings.TrimSpace(b.String())
 }

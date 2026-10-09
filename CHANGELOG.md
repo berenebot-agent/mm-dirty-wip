@@ -31,6 +31,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Relay outbound: in-flight outbound operations per socket are bounded, so a
+  gateway cannot exhaust goroutines and SQLite capacity by bursting frames;
+  excess outbound requests receive a bounded "too many in-flight" result.
+- Provider errors: the provider response body is truncated to a short,
+  single-line snippet before it is stored in a message's `last_error` and shown
+  to mailbox readers, instead of up to 1 MiB of raw provider output.
+- Direct-SMTP edge: a panic in a per-connection receiver job, the read-deadline
+  watcher, the summary ticker, or an mxdial backend worker is now recovered and
+  logged (mxdial reports a temporary failure) instead of crashing the process.
+- Resend inbound: the recipient list on a webhook is capped, so one event cannot
+  drive an unbounded number of per-recipient database lookups.
 - Outbound send rate limit: the per-account limit is now enforced centrally in
   the send service, so it also applies to the reply, draft-send, UI and relay
   paths instead of only the `/v1/send` endpoint; the limit is no longer
