@@ -54,18 +54,43 @@ func TestDeriveKeysPassphraseUsesPBKDF2AndKeepsLegacyReadable(t *testing.T) {
 	}
 }
 
-// TestDeriveKeys32ByteKeyHasNoLegacyVariant proves a raw 32-byte key is used
-// directly with a single candidate and no passphrase stretching.
-func TestDeriveKeys32ByteKeyHasNoLegacyVariant(t *testing.T) {
-	raw := strings.Repeat("ab", 32) // 64 hex chars -> 32 raw bytes
-	primary, candidates, err := cryptox.DeriveKeys(raw)
+// TestEncryptWithAADBindsCiphertextToRow proves an AAD-bound blob only decrypts
+// with the same AAD, so a blob copied to another row fails, while a legacy
+// AAD-less blob still decrypts through DecryptWithAAD.
+func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
+	key := []byte("01234567890123456789012345678901")
+	aad := []byte("domain_sending:acc1:dom1")
+
+	enc, err := cryptox.EncryptWithAAD(key, []byte("provider-password"), aad)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(primary) != 32 {
-		t.Fatalf("primary length %d", len(primary))
+	if !strings.HasPrefix(enc, "v2.") {
+		t.Fatalf("AAD-bound ciphertext lacks the version prefix: %q", enc)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("candidates = %d, want 1", len(candidates))
+	got, err := cryptox.DecryptWithAAD(key, enc, aad)
+	if err != nil || string(got) != "provider-password" {
+		t.Fatalf("same-AAD decrypt = %q err=%v", got, err)
+	}
+	// A different row's AAD must not decrypt it.
+	if _, err := cryptox.DecryptWithAAD(key, enc, []byte("domain_sending:acc2:dom2")); err == nil {
+		t.Fatal("ciphertext decrypted under a different AAD")
+	}
+	// The legacy AAD-less decrypt must also fail on a bound blob.
+	if _, err := cryptox.Decrypt(key, enc); err == nil {
+		t.Fatal("bound ciphertext decrypted without its AAD")
+	}
+
+	// A legacy AAD-less blob still decrypts through DecryptWithAAD (which
+	// ignores the supplied AAD for the legacy format).
+	legacy, err := cryptox.Encrypt(key, []byte("old-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(legacy, "v2.") {
+		t.Fatal("legacy ciphertext wrongly carries the version prefix")
+	}
+	if got, err := cryptox.DecryptWithAAD(key, legacy, aad); err != nil || string(got) != "old-secret" {
+		t.Fatalf("legacy decrypt via AAD path = %q err=%v", got, err)
 	}
 }

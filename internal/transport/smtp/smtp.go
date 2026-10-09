@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	smtpstd "net/smtp"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -95,7 +96,13 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 			last = err
 			continue
 		}
-		_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+		// A per-command deadline, refreshed before each phase. It is cleared
+		// before the body upload so a large message is not killed by a
+		// total-transaction timer (which could report failure after the remote
+		// already accepted the message, causing a duplicate on retry).
+		setPhaseDeadline := func() { _ = conn.SetDeadline(time.Now().Add(30 * time.Second)) }
+		clearDeadline := func() { _ = conn.SetDeadline(time.Time{}) }
+		setPhaseDeadline()
 		if sec == "tls" {
 			conn = tls.Client(conn, &tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12})
 		}
@@ -113,33 +120,40 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 					last = fmt.Errorf("smtp server does not offer STARTTLS")
 					return
 				}
+				setPhaseDeadline()
 				if err := cl.StartTLS(&tls.Config{ServerName: c.Host, MinVersion: tls.VersionTLS12}); err != nil {
-					last = err
+					last = classifySMTPError(err)
 					return
 				}
 			}
+			setPhaseDeadline()
 			if c.Username != "" {
 				auth := smtpstd.PlainAuth("", c.Username, c.Password, c.Host)
 				if err := cl.Auth(auth); err != nil {
-					last = err
+					last = classifySMTPError(err)
 					return
 				}
 			}
+			setPhaseDeadline()
 			if err := cl.Mail(m.From); err != nil {
-				last = err
+				last = classifySMTPError(err)
 				return
 			}
+			setPhaseDeadline()
 			for _, rcpt := range m.To {
 				if err := cl.Rcpt(rcpt); err != nil {
-					last = err
+					last = classifySMTPError(err)
 					return
 				}
 			}
+			setPhaseDeadline()
 			wc, err := cl.Data()
 			if err != nil {
-				last = err
+				last = classifySMTPError(err)
 				return
 			}
+			// The body upload is bounded only by the caller's context.
+			clearDeadline()
 			bw := bufio.NewWriter(wc)
 			if _, err = bw.Write(m.Raw); err == nil {
 				err = bw.Flush()
@@ -149,19 +163,39 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 				last = err
 				return
 			}
+			// wc.Close() sends the terminating dot and reads the server's
+			// verdict: a 2xx means the remote accepted the message, so a
+			// subsequent QUIT failure must not be reported as a delivery
+			// failure (it would trigger a duplicate).
 			if cerr != nil {
-				last = cerr
+				last = classifySMTPError(cerr)
 				return
 			}
+			setPhaseDeadline()
 			_ = cl.Quit()
 			ok = true
 		}()
 		if ok {
 			return nil
 		}
+		// A permanent (5xx) rejection will never succeed on another address:
+		// stop trying the remaining IPs and let the worker fail the message.
+		if transport.IsPermanent(last) {
+			return last
+		}
 	}
 	if last == nil {
 		last = fmt.Errorf("no usable smtp destination")
 	}
 	return last
+}
+
+// classifySMTPError wraps a 5xx SMTP reply as a permanent error so the outbox
+// fails it immediately instead of retrying with backoff. It mirrors the MX
+// transport's classification.
+func classifySMTPError(err error) error {
+	if e, ok := err.(*textproto.Error); ok && e.Code >= 500 && e.Code < 600 {
+		return &transport.PermanentError{Err: err}
+	}
+	return err
 }

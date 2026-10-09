@@ -42,6 +42,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- SMTP outbound: a 5xx reply is now classed as a permanent failure (matching
+  the Direct MX transport) instead of being retried for hours, and the
+  connection deadline is refreshed per command and cleared before the body
+  upload, so a large or slow message is not cut off after the remote accepted
+  it (which could otherwise cause a duplicate on retry).
+- Webhook delivery: retry backoff now includes deterministic +/-25% jitter, so
+  many endpoints that failed together do not all retry in lockstep.
 - Direct-SMTP edge: the core and the standalone receiver now sweep stale
   `mxdial-*` staging files left by a previous crash at startup (with a grace
   window), so they cannot accumulate and exhaust the disk.
