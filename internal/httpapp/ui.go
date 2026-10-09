@@ -54,9 +54,10 @@ type dialMXSetupView struct {
 	// live state and no secret.
 	ConnectorsJSON string
 	// Light is the aggregate traffic light for the domain's receiving setup
-	// ("ok" or "danger"), and LightTitle its tooltip. It is green when at least
-	// one receiver is ready, so the dashboard answers "will inbound mail be
-	// accepted?" at a glance without opening the dialog.
+	// ("ok" or "danger"), and LightTitle its tooltip. It is green only when at
+	// least one receiver is both authorized and published in the domain's MX
+	// records, so the dashboard answers "will inbound mail be accepted?" at a
+	// glance without opening the dialog.
 	Light      string
 	LightTitle string
 }
@@ -1685,7 +1686,16 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			setup.Statuses = s.dialMXStatuses(d.Name)
 		}
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
-		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, time.Now())
+		mxChecked := false
+		var mxMatched []string
+		for _, check := range setup.DNS {
+			if check.Kind == "mx" {
+				mxChecked = true
+				mxMatched = check.Matched
+				break
+			}
+		}
+		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, mxChecked, mxMatched, time.Now())
 		dialMXSetup[d.ID] = setup
 	}
 	// A root domain may have had an ancestor added after it, so offer "Inherited

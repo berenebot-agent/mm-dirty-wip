@@ -320,10 +320,12 @@ checks: a domain can authenticate while its MX still points elsewhere, and a
 green receiver session is not a public SMTP-port delivery test.
 
 The dashboard's Domains table also shows one aggregate connector light per Dial
-MX domain: green when at least one receiver holds a current authorization (so
-inbound mail will be accepted), amber while receivers are still connecting
-(startup and reconnect), and red once every receiver has settled into a failure.
-It answers "will mail arrive?" at a glance; the receiving dialog carries the
+MX domain. It is binary: green when at least one receiver is both authorized and
+its hostname is published in the domain's MX records (so inbound mail will be
+accepted), red otherwise. A receiver that is connected but not routed by MX, and
+a receiver that has disconnected, been rejected, or become unreachable, all show
+red — green means mail will arrive now, not merely that a session exists. It
+answers "will mail arrive?" at a glance; the receiving dialog carries the
 per-connector detail. A receiver the core cannot reach reports no advertised
 hostname, so the status view keeps the configured `smtp_hostname` for it — the
 connector row names the receiver and shows the real failure instead of an
