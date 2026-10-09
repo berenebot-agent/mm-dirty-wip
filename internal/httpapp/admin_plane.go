@@ -114,13 +114,12 @@ func isSystemAdmin(w http.ResponseWriter, p model.Principal) bool {
 // invitation. Account-level work (mailer, operators) lives on the account page.
 // ---------------------------------------------------------------------------
 
-const adminPlaneBody = `<h1>Admin</h1>
-{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+const adminPlaneBody = settingsShellOpen + `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 {{if .InviteLink}}<section class="card"><h2>Setup link</h2><p class="muted">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><div class="secret"><pre>{{.InviteLink}}</pre></div></section>{{end}}
 <section class="card"><div class="card-head"><h2>Accounts</h2><button type="button" id="add-account">Create invitation</button></div><p class="muted">Each account has its own Admin, domains and mailboxes. Invite a new person to create a separate account.</p>
 {{if .Accounts}}<div class="table-wrap"><table class="dense"><thead><tr><th>Account</th><th>Admin</th><th>Status</th><th>Quota</th><th></th></tr></thead><tbody>{{range .Accounts}}<tr><td>{{.Name}}</td><td>{{if .AdminEmail}}{{.AdminEmail}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .AdminEmail}}<span class="pill">Active</span>{{else if .InviteID}}<span class="pill amber">Invitation pending</span> <span class="muted">· expires {{mailDate .InviteExpiresAt}}</span>{{else}}<span class="muted">No admin</span>{{end}}</td><td>{{if .StorageQuotaBytes}}{{filesize .StorageUsedBytes}} of {{filesize .StorageQuotaBytes}}{{else}}{{filesize .StorageUsedBytes}} of unlimited{{end}}</td><td class="actions">{{if and (not .AdminEmail) .InviteID}}<form method="post" action="/ui/admin/invites/{{.InviteID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer on your account page first"{{end}}>Send</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/admin/invites/{{.InviteID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form>{{end}}<button type="button" class="secondary btn-sm edit-quota" data-id="{{.ID}}" data-name="{{.Name}}" data-quota="{{.StorageQuotaBytes}}" data-used="{{.StorageUsedBytes}}">Edit quota</button></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No accounts yet.</p>{{end}}</section>
 <dialog id="account-invite-dialog"><form method="post" action="/ui/admin/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2>Invite a new account</h2><p class="muted">Creates a separate account whose Admin sets their own password from a link. The invitation is sent from your own account's mailer.</p><label>Email</label><input type="email" name="email" required><label>Account name (optional)</label><input name="account_name"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Create invitation</button></div></form></dialog>
-<dialog id="quota-dialog"><form method="post" id="quota-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="quota-title">Edit storage quota</h2><p class="muted">The account's storage limit. Enter 0 to make it unlimited.</p><label>Quota</label><div class="row"><input id="quota-value" name="quota_value" type="number" min="0" step="any" required style="flex:1;margin:4px 0"><select id="quota-unit" name="quota_unit" style="flex:0 0 96px;margin:4px 0"><option value="b">B</option><option value="kb">KB</option><option value="mb" selected>MB</option><option value="gb">GB</option><option value="tb">TB</option></select></div><p class="muted small" id="quota-used"></p><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Save</button></div></form></dialog>`
+<dialog id="quota-dialog"><form method="post" id="quota-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="quota-title">Edit storage quota</h2><p class="muted">The account's storage limit. Enter 0 to make it unlimited.</p><label>Quota</label><div class="row"><input id="quota-value" name="quota_value" type="number" min="0" step="any" required style="flex:1;margin:4px 0"><select id="quota-unit" name="quota_unit" style="flex:0 0 96px;margin:4px 0"><option value="b">B</option><option value="kb">KB</option><option value="mb" selected>MB</option><option value="gb">GB</option><option value="tb">TB</option></select></div><p class="muted small" id="quota-used"></p><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit">Save</button></div></form></dialog>` + settingsShellClose
 
 func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -135,7 +134,7 @@ func (s *Server) adminPlane(w http.ResponseWriter, r *http.Request) {
 	}
 	mailer, _ := s.Service.Store.AccountMailerInboxID(ctx, p.AccountID)
 	acc, _ := s.Service.Store.GetAccount(ctx, p.AccountID)
-	s.render(w, r, adminPlaneBody, pageData{Title: "Admin", Tab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice")})
+	s.render(w, r, adminPlaneBody, pageData{Title: "Admin", Tab: "admin", SettingsTab: "admin", Principal: p, CSRF: csrf(r), Account: acc, Accounts: accounts, AccountMailerInboxID: mailer, InviteLink: s.peekInviteLink(r), Notice: r.URL.Query().Get("notice")})
 }
 
 // createInvite handles the shared invite creation. accountID is the target
@@ -288,12 +287,16 @@ func (s *Server) uiAdminSetQuota(w http.ResponseWriter, r *http.Request) {
 const accountOperatorsSection = `{{if .Principal.Admin}}
 <h3 class="section-head">Account administration</h3>
 <p class="muted">Manage who can sign in to {{.Account.Name}} and how its invitations are sent.</p>
-{{if .InviteLink}}<section class="card"><h2>Setup link</h2><p class="muted">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><div class="secret"><pre>{{.InviteLink}}</pre></div></section>{{end}}
-<section class="card"><h2>Mailer</h2><p class="muted">The mailbox this account sends its invitations from. Only this account's mailboxes can be selected.</p><form method="post" action="/ui/account/mailer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Mailbox</label><select name="inbox"><option value="">None</option>{{range .Inboxes}}<option value="{{.ID}}"{{if eq .ID $.AccountMailerInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select><div class="dialog-actions"><button>Save</button></div></form></section>
-<section class="card"><div class="card-head"><h2>Mailbox users</h2><button type="button" id="add-operator">Create invitation</button></div><p class="muted">Mailbox users sign in with their own login and are Owner of the mailboxes you select. They cannot manage domains, clients or account settings.</p>
+{{if .InviteLink}}<div class="secret"><b>Setup link</b><p class="muted small">Share this single-use link now — it is shown only once. Sending the invitation or creating another one replaces it.</p><pre>{{.InviteLink}}</pre></div>{{end}}
+<form method="post" action="/ui/account/mailer"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_tab" value="account">
+<div class="setting-row"><div class="setting-label"><label for="settings-mailer">Mailer</label><p class="muted small">The mailbox this account sends its invitations from. Only this account's mailboxes can be selected.</p></div><div><select id="settings-mailer" name="inbox"><option value="">None</option>{{range .Inboxes}}<option value="{{.ID}}"{{if eq .ID $.AccountMailerInboxID}} selected{{end}}>{{.Address}}</option>{{end}}</select></div></div>
+</form>
+<h3 class="section-head">Mailbox users</h3>
+<p class="muted">Mailbox users sign in with their own login and are Owner of the mailboxes you select. They cannot manage domains, clients or account settings.</p>
+<p><button type="button" id="add-operator">Create invitation</button></p>
 {{if .Operators}}<div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Mailboxes</th><th></th></tr></thead><tbody>{{range .Operators}}<tr><td>{{.Email}}</td><td>{{range .InboxAddresses}}<span class="pill">{{.}}</span> {{end}}{{if not .InboxAddresses}}<span class="muted">—</span>{{end}}</td><td class="actions"><button type="button" class="secondary btn-sm edit-operator" data-id="{{.ID}}" data-email="{{.Email}}" data-inboxes="{{.InboxesCSV}}">Edit</button><form method="post" action="/ui/account/operators/{{.ID}}/delete" data-confirm="Remove this mailbox user?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Remove</button></form></td></tr>{{end}}</tbody></table></div>{{else}}<p class="muted">No mailbox users yet.</p>{{end}}
-{{if .Invites}}<h3>Pending invitations</h3><div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Expires</th><th></th></tr></thead><tbody>{{range .Invites}}<tr><td>{{.Email}}</td><td class="muted">{{mailDate .Expires}}</td><td class="actions"><form method="post" action="/ui/account/operators/invites/{{.ID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer above first"{{end}}>Send</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form></td></tr>{{end}}</tbody></table></div>{{end}}</section>
-<dialog id="operator-invite-dialog"><form method="post" action="/ui/account/operators/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><h2 id="operator-invite-title">Create invitation</h2>{{if .Inboxes}}<fieldset style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:4px 0 10px"><legend class="muted">Mailboxes</legend>{{range .Inboxes}}<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="inboxes" value="{{.ID}}" style="width:auto;margin:0"> {{.Address}}</label>{{end}}</fieldset>{{else}}<p class="muted">Create a mailbox first.</p>{{end}}<label>Email</label><input type="email" name="email" required><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" id="operator-invite-submit">Create invitation</button></div></form></dialog>
+{{if .Invites}}<h3 class="section-head">Pending invitations</h3><div class="table-wrap"><table class="dense"><thead><tr><th>Email</th><th>Expires</th><th></th></tr></thead><tbody>{{range .Invites}}<tr><td>{{.Email}}</td><td class="muted">{{mailDate .Expires}}</td><td class="actions"><form method="post" action="/ui/account/operators/invites/{{.ID}}/send"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm"{{if not $.AccountMailerInboxID}} disabled title="Set a mailer above first"{{end}}>Send</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/reissue"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Reissue link</button></form><form method="post" action="/ui/account/operators/invites/{{.ID}}/revoke" data-confirm="Revoke this invitation?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm danger">Revoke</button></form></td></tr>{{end}}</tbody></table></div>{{end}}
+<dialog id="operator-invite-dialog"><form method="post" action="/ui/account/operators/invites"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_tab" value="account"><h2 id="operator-invite-title">Create invitation</h2>{{if .Inboxes}}<fieldset style="border:1px solid #ddd;border-radius:8px;padding:8px 12px;margin:4px 0 10px"><legend class="muted">Mailboxes</legend>{{range .Inboxes}}<label style="display:flex;align-items:center;gap:8px"><input type="checkbox" name="inboxes" value="{{.ID}}" style="width:auto;margin:0"> {{.Address}}</label>{{end}}</fieldset>{{else}}<p class="muted">Create a mailbox first.</p>{{end}}<label>Email</label><input type="email" name="email" required><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" id="operator-invite-submit">Create invitation</button></div></form></dialog>
 {{end}}`
 
 func (s *Server) uiAccountMailer(w http.ResponseWriter, r *http.Request) {
@@ -306,7 +309,7 @@ func (s *Server) uiAccountMailer(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, err, 400)
 		return
 	}
-	http.Redirect(w, r, "/account?notice=Mailer+saved", 303)
+	http.Redirect(w, r, "/account?tab=account&notice=Mailer+saved", 303)
 }
 
 func (s *Server) uiOperatorCreateInvite(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +318,7 @@ func (s *Server) uiOperatorCreateInvite(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "admin required", 403)
 		return
 	}
-	s.createInvite(w, r, p.AccountID, model.InviteKindOperator, "/account")
+	s.createInvite(w, r, p.AccountID, model.InviteKindOperator, "/account?tab=account")
 }
 
 func (s *Server) uiOperatorSendInvite(w http.ResponseWriter, r *http.Request) {
@@ -324,7 +327,7 @@ func (s *Server) uiOperatorSendInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
-	s.sendInviteEmail(w, r, p, p.AccountID, r.PathValue("id"), "/account")
+	s.sendInviteEmail(w, r, p, p.AccountID, r.PathValue("id"), "/account?tab=account")
 }
 
 func (s *Server) uiOperatorReissueInvite(w http.ResponseWriter, r *http.Request) {
@@ -347,9 +350,9 @@ func (s *Server) uiOperatorReissueInvite(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "cannot refresh invitation token", 500)
 		return
 	}
-	dest := "/account"
+	dest := "/account?tab=account"
 	if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
-		dest += "?_flash=" + tok
+		dest += "&_flash=" + tok
 	}
 	http.Redirect(w, r, dest, 303)
 }
@@ -364,7 +367,7 @@ func (s *Server) uiOperatorRevokeInvite(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invitation not found", 404)
 		return
 	}
-	http.Redirect(w, r, "/account?notice=Invitation+revoked", 303)
+	http.Redirect(w, r, "/account?tab=account&notice=Invitation+revoked", 303)
 }
 
 func (s *Server) uiOperatorSetRoles(w http.ResponseWriter, r *http.Request) {
@@ -385,7 +388,7 @@ func (s *Server) uiOperatorSetRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("user:" + r.PathValue("id"))
-	http.Redirect(w, r, "/account?notice=Operator+access+updated", 303)
+	http.Redirect(w, r, "/account?tab=account&notice=Operator+access+updated", 303)
 }
 
 func (s *Server) uiOperatorDelete(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +402,7 @@ func (s *Server) uiOperatorDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Service.Hub.CancelScope("user:" + r.PathValue("id"))
-	http.Redirect(w, r, "/account?notice=Operator+removed", 303)
+	http.Redirect(w, r, "/account?tab=account&notice=Operator+removed", 303)
 }
 
 // ---------------------------------------------------------------------------
