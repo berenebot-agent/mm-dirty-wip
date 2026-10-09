@@ -253,7 +253,7 @@ func ensureSystemAdmin(svc *app.Service, log *slog.Logger) {
 		os.Exit(1)
 	}
 	if !has {
-		log.Info("MailMoose has not been configured; set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
+		log.Info("MailMoose has not been configured; complete the first-run setup page, or set ADMIN_EMAIL and ADMIN_PASSWORD and restart")
 	}
 }
 

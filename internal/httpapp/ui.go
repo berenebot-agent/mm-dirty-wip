@@ -419,6 +419,10 @@ type pageData struct {
 	KeyMailboxes []keyMailboxView
 
 	Email string
+
+	// SetupAccountName and SetupError carry the first-run setup form's retained
+	// values back across the Post/Redirect/Get round trip.
+	SetupAccountName string
 }
 
 // keyMailboxView is one row of the key-session Account page's mailbox table.
@@ -609,11 +613,13 @@ const authBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.aut
 
 const keyLoginBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.auth-form input{margin:3px 0 8px}.auth-button{display:flex;width:100%;height:40px;box-sizing:border-box;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 12px}.auth-actions{display:grid;gap:8px;margin-top:8px}</style><div class="card" style="max-width:460px;margin:60px auto"><h1>Sign in with an API key</h1>{{if .Notice}}<div class="error" role="alert">{{.Notice}}</div>{{end}}<form method="post" action="/login/key" class="auth-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>API key</label><input type="password" name="api_key" autocomplete="off" spellcheck="false" placeholder="mmm_…" required autofocus><div class="auth-actions"><button class="auth-button">Sign in</button><a class="btn secondary auth-button" href="/login">Cancel</a></div></form></div>`
 
-// unconfiguredBody is shown when the database has no system administrator and
-// no ADMIN_EMAIL / ADMIN_PASSWORD credentials were supplied. It is deliberately
-// static: there is no unauthenticated form that can claim the instance. The
-// operator must set ADMIN_EMAIL and ADMIN_PASSWORD and restart.
-const unconfiguredBody = `<div class="card" style="max-width:560px;margin:60px auto"><h1>MailMoose has not been configured</h1><p>Set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> and restart MailMoose.</p><p class="muted">The system administrator is created from these values; changing them later rotates the login on restart.</p></div>`
+// setupBody is the first-run setup form shown while the database has no users.
+// The first visitor claims the instance as its system administrator; the POST
+// is a one-shot, atomic claim in the store and the route self-disables once any
+// user exists. An operator may alternatively pre-create the system
+// administrator from ADMIN_EMAIL / ADMIN_PASSWORD before startup, in which case
+// this page is never shown.
+const setupBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.auth-form input{margin:3px 0 8px}.auth-button{display:flex;width:100%;height:40px;box-sizing:border-box;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 12px}</style><div class="card" style="max-width:460px;margin:60px auto"><h1>Set up MailMoose</h1><p class="muted">This instance has no administrator yet. Create one to claim it; this page is then permanently disabled.</p>{{if .Notice}}<div class="error" role="alert">{{.Notice}}</div>{{end}}<form method="post" action="/setup" class="auth-form" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Account name</label><input name="account" maxlength="80" value="{{.SetupAccountName}}" placeholder="Optional, defaults to your email name"><label>Email</label><input type="email" name="email" required value="{{.Email}}" autocomplete="username"><label>Password</label><input type="password" name="password" minlength="10" required autocomplete="new-password"><label>Confirm password</label><input type="password" name="confirm" minlength="10" required autocomplete="new-password"><button class="auth-button">Create administrator</button></form><div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee"><p class="muted" style="font-size:12px;margin:0">Operators can instead set <code>ADMIN_EMAIL</code> and <code>ADMIN_PASSWORD</code> before startup.</p></div></div>`
 
 type authFlash struct {
 	Title, Error, Email string
@@ -639,10 +645,12 @@ func (s *Server) flashAuth(w http.ResponseWriter, r *http.Request, dest, title, 
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
-// setupGet shows the unconfigured page on a fresh install. There is no POST
-// counterpart: an unconfigured instance cannot be claimed over HTTP. The
-// operator creates the system administrator by setting ADMIN_EMAIL and
-// ADMIN_PASSWORD before startup.
+// setupGet shows the first-run setup form on an unconfigured install, letting
+// the first visitor claim the instance as its system administrator. Once any
+// user exists the page redirects to the login page; the matching POST is the
+// one-shot claim and is atomic in the store. An operator can still pre-create
+// the system administrator from ADMIN_EMAIL / ADMIN_PASSWORD, in which case the
+// instance is already configured and this page is never shown.
 func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 	has, err := s.Service.Store.HasUsers(r.Context())
 	if err != nil {
@@ -653,7 +661,88 @@ func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", 303)
 		return
 	}
-	s.render(w, r, unconfiguredBody, pageData{Title: "MailMoose has not been configured"})
+	data := pageData{Title: "Set up MailMoose", CSRF: s.setPreAuthCSRF(w, r)}
+	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+		if f, ok := v.(setupFlash); ok {
+			data.Notice, data.Email, data.SetupAccountName = f.Error, f.Email, f.AccountName
+		}
+	}
+	s.render(w, r, setupBody, data)
+}
+
+// setupFlash restores the form fields and any error after a failed setup POST
+// (Post/Redirect/Get), so the first visitor does not re-enter everything.
+type setupFlash struct {
+	Error, Email, AccountName string
+}
+
+// setupPost claims an unconfigured instance: it creates the first account and
+// its system-administrator user in one atomic store operation, then signs the
+// new administrator in. The route is only reachable while no user exists; a
+// second claim (concurrent or replayed) gets ErrConflict and is sent to the
+// login page instead of overwriting the administrator.
+func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
+	has, err := s.Service.Store.HasUsers(r.Context())
+	if err != nil {
+		http.Error(w, "database error", 500)
+		return
+	}
+	if has {
+		http.Redirect(w, r, "/login", 303)
+		return
+	}
+	if !s.sameOrigin(r) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	ip := clientIP(r, s.Service.Config)
+	if s.setupLimiter != nil && !s.setupLimiter.Allow(ip) {
+		http.Error(w, "too many setup attempts", 429)
+		return
+	}
+	_ = r.ParseForm()
+	email := strings.TrimSpace(r.Form.Get("email"))
+	password := r.Form.Get("password")
+	accountName := strings.TrimSpace(r.Form.Get("account"))
+	if password != r.Form.Get("confirm") {
+		s.flashSetup(w, r, "Passwords do not match", email, accountName)
+		return
+	}
+	if err := auth.ValidatePassword(password); err != nil {
+		s.flashSetup(w, r, err.Error(), email, accountName)
+		return
+	}
+	if accountName == "" {
+		accountName = strings.Split(email, "@")[0]
+	}
+	u, err := s.Service.Store.CreateInitialAdmin(r.Context(), accountName, email, password, s.Service.Config.DefaultQuotaBytes)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			// Another request claimed the instance first. The administrator now
+			// exists; a fresh page render would redirect, so send them to login.
+			s.flashAuth(w, r, "/login", "Log In", "This instance has already been set up. Sign in instead.", "")
+			return
+		}
+		s.flashSetup(w, r, err.Error(), email, accountName)
+		return
+	}
+	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
+	if err != nil {
+		http.Error(w, "session error", 500)
+		return
+	}
+	s.setSessionCookie(w, r, tok)
+	http.Redirect(w, r, "/", 303)
+}
+
+// flashSetup stores a setup error and redirects back to the form, preserving
+// the non-secret values the visitor already typed.
+func (s *Server) flashSetup(w http.ResponseWriter, r *http.Request, msg, email, accountName string) {
+	dest := "/setup"
+	if tok := s.flashes.put(setupFlash{Error: msg, Email: email, AccountName: accountName}, len(msg)+len(email)+len(accountName)+32); tok != "" {
+		dest += "?_flash=" + tok
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 func (s *Server) registerGet(w http.ResponseWriter, r *http.Request) {
 	if !s.Service.Config.AllowRegistration {
