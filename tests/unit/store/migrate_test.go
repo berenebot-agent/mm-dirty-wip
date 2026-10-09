@@ -129,3 +129,46 @@ func TestMigration035EnvelopeFromAndSkippedStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestMigration049Indexes proves the pre-release-review indexes exist on a fresh
+// database: the pending approval-token lookup index and the unique
+// one-receiver-per-account index. It also proves the unique index rejects a
+// duplicate non-empty receiver URL while permitting many empty ones.
+func TestMigration049Indexes(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if n := markerCount(t, st, "049"); n != 1 {
+		t.Fatalf("migration 049 marker count %d", n)
+	}
+	db := rawDB(t, st.Path())
+	defer db.Close()
+	ctx := context.Background()
+	for _, idx := range []string{"idx_draft_send_requests_pending_token", "idx_account_mx_receivers_url"} {
+		var n int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, idx).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("index %s missing", idx)
+		}
+	}
+	// The unique index is partial on non-empty URLs: two accounts may both have
+	// an empty receiver URL, but not the same non-empty one.
+	mustExec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, q, args...); err != nil {
+			t.Fatalf("exec %q: %v", q, err)
+		}
+	}
+	mustExec(`INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES('a1','A',0,'2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO accounts(id,name,storage_quota_bytes,created_at) VALUES('a2','B',0,'2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO account_mx_receivers(account_id,receiver_url,created_at,updated_at) VALUES('a1','','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	mustExec(`INSERT INTO account_mx_receivers(account_id,receiver_url,created_at,updated_at) VALUES('a2','','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`)
+	mustExec(`UPDATE account_mx_receivers SET receiver_url='https://mx.example' WHERE account_id='a1'`)
+	if _, err := db.ExecContext(ctx, `UPDATE account_mx_receivers SET receiver_url='https://mx.example' WHERE account_id='a2'`); err == nil {
+		t.Fatal("duplicate non-empty receiver_url was accepted")
+	}
+}

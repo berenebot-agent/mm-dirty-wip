@@ -51,7 +51,8 @@ func (s *Server) invitePost(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrConflict):
 			renderErr("That email address is already in use.")
 		default:
-			renderErr("Could not complete setup: " + err.Error())
+			s.Log.Error("invite redemption failed", "error", err)
+			renderErr("Could not complete setup. Please try again.")
 		}
 		return
 	}

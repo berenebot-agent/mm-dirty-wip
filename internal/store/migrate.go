@@ -160,6 +160,10 @@ func migrations(dataDir string) []migration {
 			columnAdded("inboxes", "storage_used_bytes"),
 		)},
 		{version: "048", sql: migration048, detect: stateOf(tableExists("account_mx_receivers"))},
+		{version: "049", sql: migration049, detect: allOf(
+			indexExists("idx_draft_send_requests_pending_token"),
+			indexExists("idx_account_mx_receivers_url"),
+		)},
 	}
 }
 
@@ -307,6 +311,17 @@ func tableExists(name string) detector {
 	return func(ctx context.Context, conn *sql.Conn) (bool, error) {
 		var n int
 		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type IN ('table','view') AND name=?`, name).Scan(&n); err != nil {
+			return false, err
+		}
+		return n > 0, nil
+	}
+}
+
+// indexExists reports whether a named index is present in sqlite_master.
+func indexExists(name string) detector {
+	return func(ctx context.Context, conn *sql.Conn) (bool, error) {
+		var n int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&n); err != nil {
 			return false, err
 		}
 		return n > 0, nil
