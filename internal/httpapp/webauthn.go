@@ -152,7 +152,7 @@ func (s *Server) uiPasskeyRegisterFinish(w http.ResponseWriter, r *http.Request)
 			// (password), so this is not a failure: report success with a
 			// warning rather than an error that invites a retry which would
 			// then say "already registered".
-			warning = "Passkey added, but password sign-in could not be turned off. You can turn it off from Account settings."
+			warning = "Passkey added, but password sign-in could not be turned off. Both sign-in methods remain available."
 		} else {
 			passwordOnly = true
 		}
@@ -279,7 +279,7 @@ func (s *Server) webauthnLoginFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, r, sess)
 	s.Service.Store.Audit(r.Context(), u.AccountID, "user.login", "passkey")
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "redirect": "/"})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "redirect": safeNextPath(r.URL.Query().Get("next"))})
 }
 
 func transportsToStrings(ts []protocol.AuthenticatorTransport) []string {

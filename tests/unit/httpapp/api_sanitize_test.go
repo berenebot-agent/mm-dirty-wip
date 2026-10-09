@@ -23,7 +23,7 @@ func TestAPIMessageSanitizesHTML(t *testing.T) {
 		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "sanitize-1", RFCMessageID: "<s@test>",
 		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address},
 		Subject: "sanitize", Text: "hello",
-		HTML:    `<p>hi</p><script>alert(1)</script><img src=x onerror=alert(2)>`,
+		HTML:    `<p>hi</p><script>alert(1)</script><img src="cid:photo" onerror=alert(2)>`,
 		RawPath: "messages/s.eml", SizeBytes: 10, ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -52,5 +52,17 @@ func TestAPIMessageSanitizesHTML(t *testing.T) {
 	}
 	if !strings.Contains(got.HTML, "hi") {
 		t.Fatalf("sanitised HTML lost benign content: %q", got.HTML)
+	}
+	if !strings.Contains(got.HTML, "cid:photo") {
+		t.Fatal("API lost the inline attachment reference")
+	}
+	for _, path := range []string{"/v1/threads/" + m.ThreadID, "/v1/threads/" + m.ThreadID + "/messages"} {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 || strings.Contains(rr.Body.String(), "alert(1)") || strings.Contains(rr.Body.String(), "onerror") {
+			t.Fatalf("thread HTML boundary %s: %s", path, rr.Body.String())
+		}
 	}
 }

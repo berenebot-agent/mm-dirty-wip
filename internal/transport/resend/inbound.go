@@ -104,6 +104,11 @@ func (Transport) Receive(ctx context.Context, r *http.Request, resolver transpor
 	if err = json.Unmarshal(body, &wh); err != nil {
 		return msg, binding, fmt.Errorf("invalid webhook json: %w", err)
 	}
+	// Bound work before the secret-selection lookup, which precedes signature
+	// verification. Never acknowledge a truncated recipient list as delivered.
+	if len(wh.Data.To) > maxRecipients {
+		return msg, binding, fmt.Errorf("too many envelope recipients")
+	}
 	// Authenticate the provider before trusting the event classification. The
 	// signature is bound to the whole body, but verifying it requires the
 	// domain's secret, which is selected by a recipient. Events that carry no
@@ -160,9 +165,6 @@ func canonicalRecipients(recipients []string) []string {
 		}
 		seen[c] = true
 		out = append(out, c)
-		if len(out) >= maxRecipients {
-			break
-		}
 	}
 	return out
 }

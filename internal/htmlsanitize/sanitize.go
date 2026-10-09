@@ -61,6 +61,10 @@ func policy() *bluemonday.Policy {
 		p.AllowAttrs("class").Matching(bluemonday.SpaceSeparatedTokens).Globally()
 
 		p.AllowImages()
+		// CID URLs identify attachments and do not execute code. Keeping them
+		// preserves the API's image-to-attachment relationship; the UI rewrites
+		// them to authenticated inline attachment URLs before sanitization.
+		p.AllowURLSchemes("cid")
 		p.AllowLists()
 		p.AllowTables()
 

@@ -1,6 +1,7 @@
 package mailgun
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -202,48 +203,59 @@ func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.B
 }
 
 // receiveURLEncoded handles application/x-www-form-urlencoded webhooks with
-// explicit caps on the encoded body, field size and field count. The raw body
-// is bounded before it is read, and read straight into a string (no []byte
-// copy), so an unauthenticated caller cannot force the roughly doubled peak
-// allocation that []byte+string would. The encoded cap allows the worst-case
+// explicit caps on the encoded body, field size and field count. MIME streams
+// to disk rather than being buffered in memory. The encoded cap allows the worst-case
 // percent-encoding expansion (3x) of a full-size body plus one non-MIME field,
 // so no legitimate message that fits the MIME limit is rejected.
 func receiveURLEncoded(ctx context.Context, r *http.Request, resolver transport.BindingResolver, tmpPath string, maxBytes int64) (InboundForm, transport.InboundBinding, error) {
 	var form InboundForm
 	encodedCap := maxBytes*3 + maxFieldBytes
 	r.Body = http.MaxBytesReader(nil, r.Body, encodedCap)
-	var sb strings.Builder
-	if _, err := io.Copy(&sb, r.Body); err != nil {
-		return form, transport.InboundBinding{}, err
-	}
-	vals, err := url.ParseQuery(sb.String())
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return form, transport.InboundBinding{}, err
 	}
-	if len(vals) > maxFormFields {
-		return form, transport.InboundBinding{}, fmt.Errorf("too many form fields")
-	}
+	defer f.Close()
+	reader := bufio.NewReader(r.Body)
+	mimeWriter := bufio.NewWriter(f)
 	seen := map[string]bool{}
-	for k, v := range vals {
-		if len(v) > 1 && isSingletonField(k) {
-			return form, transport.InboundBinding{}, fmt.Errorf("duplicate field %s", k)
+	wroteMIME := false
+	for fields := 0; ; fields++ {
+		if _, err := reader.Peek(1); err == io.EOF {
+			break
+		} else if err != nil {
+			return form, transport.InboundBinding{}, err
 		}
-		if len(v) == 0 {
+		if fields >= maxFormFields {
+			return form, transport.InboundBinding{}, fmt.Errorf("too many form fields")
+		}
+		var name strings.Builder
+		_, delimiter, err := decodeFormPart(reader, &name, 1024, true)
+		if err != nil {
+			return form, transport.InboundBinding{}, err
+		}
+		if delimiter != '=' {
 			continue
 		}
-		if len(v[0]) > maxFieldBytes {
-			return form, transport.InboundBinding{}, fmt.Errorf("form field too large")
+		if name.String() == "body-mime" {
+			if wroteMIME {
+				return form, transport.InboundBinding{}, fmt.Errorf("multiple body-mime parts")
+			}
+			form.Size, _, err = decodeFormPart(reader, mimeWriter, maxBytes, false)
+			wroteMIME = true
+		} else {
+			var value strings.Builder
+			_, _, err = decodeFormPart(reader, &value, maxFieldBytes, false)
+			if err == nil {
+				err = setField(&form, name.String(), value.String(), seen)
+			}
 		}
-		if err = setField(&form, k, v[0], seen); err != nil {
+		if err != nil {
 			return form, transport.InboundBinding{}, err
 		}
 	}
-	raw := vals.Get("body-mime")
-	if raw == "" {
+	if !wroteMIME || form.Size == 0 {
 		return form, transport.InboundBinding{}, fmt.Errorf("body-mime missing")
-	}
-	if int64(len(raw)) > maxBytes {
-		return form, transport.InboundBinding{}, fmt.Errorf("message too large")
 	}
 	if !authReady(form) {
 		return form, transport.InboundBinding{}, transport.ErrInboundUnauthorized
@@ -252,12 +264,52 @@ func receiveURLEncoded(ctx context.Context, r *http.Request, resolver transport.
 	if err != nil {
 		return form, transport.InboundBinding{}, err
 	}
-	if err = os.WriteFile(tmpPath, []byte(raw), 0o600); err != nil {
+	if err = mimeWriter.Flush(); err != nil {
 		return form, transport.InboundBinding{}, err
 	}
 	form.RawPath = tmpPath
-	form.Size = int64(len(raw))
 	return form, binding, nil
+}
+
+// decodeFormPart decodes one query component with bounded memory. MIME bytes
+// stream to disk; each field occurrence (including repeated unknown keys) counts.
+func decodeFormPart(r *bufio.Reader, w io.ByteWriter, limit int64, name bool) (int64, byte, error) {
+	var n int64
+	for {
+		c, err := r.ReadByte()
+		if err == io.EOF {
+			return n, 0, nil
+		}
+		if err != nil {
+			return n, 0, err
+		}
+		if c == '&' || (name && c == '=') {
+			return n, c, nil
+		}
+		if c == ';' {
+			return n, 0, fmt.Errorf("invalid urlencoded form")
+		}
+		if c == '+' {
+			c = ' '
+		} else if c == '%' {
+			var pair [2]byte
+			if _, err := io.ReadFull(r, pair[:]); err != nil {
+				return n, 0, fmt.Errorf("invalid urlencoded form")
+			}
+			decoded, err := url.QueryUnescape("%" + string(pair[:]))
+			if err != nil {
+				return n, 0, fmt.Errorf("invalid urlencoded form")
+			}
+			c = decoded[0]
+		}
+		n++
+		if n > limit {
+			return n, 0, fmt.Errorf("form field too large")
+		}
+		if err := w.WriteByte(c); err != nil {
+			return n, 0, err
+		}
+	}
 }
 
 // bounds for Mailgun webhook parsing. The multipart part count is capped so a
