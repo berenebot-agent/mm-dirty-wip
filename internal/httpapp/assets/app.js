@@ -326,6 +326,11 @@
       opt.hidden = !visible;
       opt.disabled = !visible;
     }
+    var group = sel.querySelector('optgroup[data-group=clients]');
+    if (group) {
+      group.hidden = !visible;
+      group.disabled = !visible;
+    }
   }
 
   function openCreate() {
