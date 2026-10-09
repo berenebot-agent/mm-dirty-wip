@@ -30,7 +30,8 @@ type DeliveryAttempt struct {
 	Subject           string    `json:"subject,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	InboxID           string    `json:"-"`
-	Client            string    `json:"client,omitempty"`
+	// Source is the sending credential label snapshotted at attempt time.
+	Source string `json:"source,omitempty"`
 }
 
 // maxDeliveryLogPerAccount is the retention cap for the delivery log: the
@@ -69,7 +70,7 @@ func (s *Store) RecordDeliveryAttempt(ctx context.Context, a DeliveryAttempt) er
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.AccountID, nullString(domainID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText(), a.InboxID, a.FromAddress, jsonString(a.To), a.Subject, a.Client); err != nil {
+		a.AccountID, nullString(domainID), a.Provider, nullString(a.MessageID), a.Attempt, a.Status, a.ProviderMessageID, a.ErrorText, nowText(), a.InboxID, a.FromAddress, jsonString(a.To), a.Subject, a.Source); err != nil {
 		return err
 	}
 	if err = s.pruneDeliveryLogTx(ctx, tx, a.AccountID); err != nil {

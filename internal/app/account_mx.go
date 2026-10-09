@@ -314,7 +314,7 @@ func (b remoteMXBackend) Resolve(ctx context.Context, domain string, recipients 
 	return response, nil
 }
 
-func (b remoteMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, rawPath string) (mxwire.IngestResponse, error) {
+func (b remoteMXBackend) Ingest(ctx context.Context, domains []string, meta mxwire.IngestMetadata, rawPath, receiverURL string) (mxwire.IngestResponse, error) {
 	if len(domains) == 0 || len(meta.Recipients) == 0 {
 		return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 	}
@@ -323,7 +323,7 @@ func (b remoteMXBackend) Ingest(ctx context.Context, domains []string, meta mxwi
 			return mxwire.IngestResponse{MachineCode: mxwire.CodeUnauthorized}, nil
 		}
 	}
-	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID}
+	input := MXIngestInput{Recipients: meta.Recipients, EnvelopeFrom: meta.EnvelopeFrom, RawPath: rawPath, Size: meta.Size, ContentDigest: meta.ContentDigest, AuthResults: meta.AuthResults, TrustedAuth: true, ProviderMessageID: meta.ProviderMessageID, ReceiverURL: receiverURL}
 	result, err := b.service.IngestRemoteMX(ctx, input)
 	if err != nil {
 		return mxwire.IngestResponse{}, err
