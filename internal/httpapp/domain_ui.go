@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -78,7 +79,8 @@ func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID,
 }
 
 // domainSendingEditors builds one editor per outbound provider so the dialog can
-// switch between them client-side without a round trip.
+// switch between them client-side without a round trip. The primary providers
+// lead in a fixed order; the rest follow alphabetically by display label.
 func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
 	out := []*domainEditorView{}
 	for _, t := range transport.ListOutbound() {
@@ -86,10 +88,13 @@ func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID s
 			out = append(out, e)
 		}
 	}
+	sortDomainEditors(out, map[string]int{"smtp": 0, "mx": 1})
 	return out
 }
 
 // domainReceivingEditors is the receiving counterpart of domainSendingEditors.
+// Antler MX, Direct MX and Remote MX lead in that order; the rest follow
+// alphabetically by display label.
 func (s *Server) domainReceivingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
 	out := []*domainEditorView{}
 	for _, t := range transport.ListInbound() {
@@ -97,7 +102,33 @@ func (s *Server) domainReceivingEditors(ctx context.Context, accountID, domainID
 			out = append(out, e)
 		}
 	}
+	sortDomainEditors(out, map[string]int{"dialmx": 0, "mx": 1, "remotemx": 2})
 	return out
+}
+
+// sortDomainEditors orders provider editors by an explicit priority map, then
+// alphabetically by the label shown in the <select>. Providers absent from
+// priorities sort after every listed provider.
+func sortDomainEditors(editors []*domainEditorView, priorities map[string]int) {
+	priority := func(p string) int {
+		if n, ok := priorities[p]; ok {
+			return n
+		}
+		return len(priorities)
+	}
+	label := func(e *domainEditorView) string {
+		if e.SelectLabel != "" {
+			return e.SelectLabel
+		}
+		return e.ProviderLabel
+	}
+	sort.SliceStable(editors, func(i, j int) bool {
+		pi, pj := priority(editors[i].Provider), priority(editors[j].Provider)
+		if pi != pj {
+			return pi < pj
+		}
+		return label(editors[i]) < label(editors[j])
+	})
 }
 
 // domainWorkerFlash carries freshly generated Cloudflare Worker code (which
