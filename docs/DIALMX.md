@@ -279,10 +279,15 @@ repository at setup-save time:
   "schema_version": 1,
   "receivers": [
     { "id": "antler-1", "session_url": "https://antler1.hgolabs.com", "smtp_hostname": "antler1.hgolabs.com", "mx_priority": 10 },
-    { "id": "antler-2", "session_url": "https://antler2.hgolabs.com", "smtp_hostname": "antler2.hgolabs.com", "mx_priority": 20 }
+    { "id": "antler-2", "session_url": "https://antler2.hgolabs.com", "smtp_hostname": "antler2.hgolabs.com", "mx_priority": 10 }
   ]
 }
 ```
+
+Receivers are published at **equal MX preference**, so senders treat them as
+equivalent and spread delivery across all of them instead of using the lower
+ones only as failover. This load-sharing is best-effort: it is the sending MTA
+that chooses, so it is neither a guaranteed round-robin nor capacity-aware.
 
 The live copy is cached for ten minutes; a fetch failure or outage falls back to
 the last known good copy and then to the embedded copy, so setup never depends
