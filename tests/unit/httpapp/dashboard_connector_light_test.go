@@ -13,8 +13,10 @@ import (
 // TestDashboardConnectorLightRendersForDialMXOnly proves the dashboard's
 // Domains table draws the aggregate red/green connector light for a Dial MX
 // domain and leaves a non-Dial MX domain's Receiving cell untouched. With no
-// live manager the configured Antler receiver is only "connecting", so the
-// light is red — the honest state when no receiver can be confirmed ready.
+// live manager the configured Antler receiver is only "connecting", and the
+// light is red — the honest state when no receiver can be confirmed ready and
+// routed. (The red/green MX-gating logic itself is pinned by
+// TestDialMXHealthAggregatesReceiverStatus.)
 func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 	svc, h, u, mailgunDomain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -45,7 +47,7 @@ func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 	if !strings.Contains(body, `class="secondary btn-sm cell-edit domain-provider-edit open-domain-dialog"`) {
 		t.Fatalf("dashboard missing the Dial MX receiving provider button:\n%s", body)
 	}
-	if !strings.Contains(body, `<span class="dns-light amber" title="Inbound connectors are still connecting`) {
+	if !strings.Contains(body, `<span class="dns-light danger" title="No inbound connector is ready`) {
 		t.Fatalf("dashboard missing the Dial MX connector light:\n%s", body)
 	}
 	// Count only the in-button lights, which carry the receiving data-kind
@@ -56,7 +58,7 @@ func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 	}
 	// The light sits inside the receiving provider button, ahead of its label,
 	// rather than outside it.
-	if !strings.Contains(body, `data-kind="receiving"><span class="dns-light amber"`) {
+	if !strings.Contains(body, `data-kind="receiving"><span class="dns-light danger"`) {
 		t.Fatalf("connector light must be inside the receiving button")
 	}
 }
