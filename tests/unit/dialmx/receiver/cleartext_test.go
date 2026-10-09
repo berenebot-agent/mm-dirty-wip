@@ -144,3 +144,70 @@ func TestSharedModeCleartextLoopback(t *testing.T) {
 		t.Fatalf("healthz status %d", resp.StatusCode)
 	}
 }
+
+// cleartextSessionBearer opens a cleartext session with a bearer header and
+// returns the HTTP status.
+func cleartextSessionBearer(t *testing.T, base, bearer string) int {
+	t.Helper()
+	pr, pw := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+mxwire.SessionPath, pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", bearer)
+	}
+	done := make(chan *http.Response, 1)
+	go func() {
+		resp, _ := h2cClient().Do(req)
+		done <- resp
+	}()
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "test"})
+	if err := mxwire.WriteFrame(pw, hello); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case resp := <-done:
+		if resp == nil {
+			t.Fatal("no response")
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleartext handshake timeout")
+		return 0
+	}
+}
+
+// TestSingleModeCleartextAllowedByDefault proves a self-hoster's cleartext
+// single-mode receiver admits a routable, correctly authenticated core by
+// default (self-hosting must not be blocked).
+func TestSingleModeCleartextAllowedByDefault(t *testing.T) {
+	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key"})
+	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
+	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusOK {
+		t.Fatalf("expected cleartext single-mode admission by default, got %d", code)
+	}
+}
+
+// TestSingleModeRequireTLSRejectsRoutableCleartext proves DIALMX_REQUIRE_TLS
+// refuses cleartext from a routable peer in single mode.
+func TestSingleModeRequireTLSRejectsRoutableCleartext(t *testing.T) {
+	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key", RequireTLS: true})
+	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
+	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusUpgradeRequired {
+		t.Fatalf("expected 426 under RequireTLS, got %d", code)
+	}
+}
+
+// TestSingleModeRequireTLSAdmitsLoopback proves RequireTLS still admits loopback
+// cleartext (the embedded receiver dials 127.0.0.1).
+func TestSingleModeRequireTLSAdmitsLoopback(t *testing.T) {
+	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key", RequireTLS: true})
+	srv := newCleartextH2Server(t, r, "127.0.0.1:5555")
+	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusOK {
+		t.Fatalf("expected loopback admission under RequireTLS, got %d", code)
+	}
+}

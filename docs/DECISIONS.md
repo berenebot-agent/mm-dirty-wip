@@ -2710,6 +2710,43 @@ is enforced in both the save path and the dialer.
 **Complexity:** One default flip and one boolean conjunction; no new dependency,
 service, or storage.
 
+## D087 — Receiver cleartext and remote-MX URLs default to allow, with a warning
+
+**Context:** The pre-release review flagged two related exposures. (1) In single
+mode the Dial MX receiver admitted cleartext HTTP/2 sessions from any routable
+peer, so the bearer key and mail crossed the wire unencrypted (shared mode
+already gated cleartext to loopback/trusted proxies). (2) The installation
+Remote MX receiver URL (`validateMXReceiverURL`) accepted any `http`/`https`
+origin and the private dialer forced `AllowPrivateDestinations=true`, unlike the
+per-account Remote MX receiver, which is held to the operator's private-outbound
+policy. Both could be "fixed" by hard-blocking cleartext and private
+destinations, but self-hosting is the primary model and operators legitimately
+run a receiver on their own LAN.
+
+**Decision:** Default to allow, make the risk visible, and offer one-flag
+opt-in to strictness — never silently block a working self-hosted topology.
+
+- Single mode accepts cleartext from any peer by default. A receiver serving
+  cleartext on a non-loopback listen address logs a single startup warning
+  naming the exposure and the remedy. `DIALMX_REQUIRE_TLS=true` applies the
+  shared-mode peer gate (loopback or `DIALMX_TRUSTED_PROXIES`) to single mode;
+  loopback cleartext remains allowed so the included/embedded receiver is
+  unaffected. Shared mode is unchanged (strict unless a trusted proxy is set).
+- The installation Remote MX URL follows the same global policy as the account
+  receiver: `http`/private/LAN is accepted by default, and held to `https` plus
+  public-routable when `ALLOW_PRIVATE_OUTBOUND=false`. The runtime dialer uses
+  `AllowPrivateDestinations = !RequirePublicOutbound()` rather than an
+  unconditional `true`.
+
+**Reason:** Consistency with D086 and the self-host-first posture: the operator,
+not the code, decides whether their own network and a cleartext LAN receiver are
+acceptable. What the code must not do is make that choice silently — hence the
+startup warning — or let one surface (installation remote) diverge from another
+(account remote) for no user-visible reason.
+
+**Complexity:** One boolean config, one startup warning, one shared validation
+signature; no new dependency or service.
+
 ## Future extension register
 
 - additional inbound transport adapters

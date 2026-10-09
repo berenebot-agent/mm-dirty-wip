@@ -133,7 +133,10 @@ enables verified HTTPS/HTTP2 instead; save an `https://` URL via `/v1/admin/mx`
 hostname verification remains mandatory
 and there is no insecure mode. (`DIALMX_CA_FILE` is a separate core environment
 setting used only by the legacy per-domain Dial MX dialer.) Cleartext sessions
-carry both the bearer credential and email content without encryption.
+carry both the bearer credential and email content without encryption, so a
+receiver serving cleartext on a non-loopback address logs a startup warning.
+Cleartext is allowed by default (self-hosting); set `DIALMX_REQUIRE_TLS=true` to
+accept cleartext only from loopback or `DIALMX_TRUSTED_PROXIES`.
 
 Shared mode normally requires a session certificate. To front it with a
 TLS-terminating reverse proxy, set `DIALMX_TRUSTED_PROXIES` to the proxy address

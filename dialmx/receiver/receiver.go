@@ -124,8 +124,16 @@ type Config struct {
 	// loopback or one of these prefixes; an empty list means every shared
 	// session must be TLS. It lets a TLS-terminating reverse proxy front the
 	// session listener without the receiver holding a certificate. In single
-	// mode the bearer key is the control and cleartext is not peer-gated.
+	// mode the bearer key is the control and cleartext is not peer-gated unless
+	// RequireTLS is set.
 	TrustedProxies []netip.Prefix
+	// RequireTLS refuses cleartext sessions from any peer that is not loopback
+	// or a trusted proxy, in both single and shared mode. It defaults to false:
+	// self-hosting is the primary model and an operator may deliberately run a
+	// cleartext receiver on their own LAN. When false the receiver logs a
+	// startup warning for a non-loopback cleartext listener, because the bearer
+	// key and mail then cross the wire unencrypted.
+	RequireTLS bool
 	// MaxRenewalsInFlight bounds receiver-driven renewal challenges outstanding
 	// on one session at once. Zero selects the effective auth-concurrency limit.
 	// Raising it lets tests observe paced renewals without changing production
@@ -494,11 +502,12 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	}
 	// Shared mode requires TLS unless the immediate peer is a trusted local
 	// proxy (or loopback): the receiver then holds no certificate and a
-	// TLS-terminating proxy fronts the listener. The bearer key stays the
-	// control in single mode, where cleartext is accepted for loopback.
+	// TLS-terminating proxy fronts the listener. In single mode cleartext is
+	// allowed by default (self-hosting), but RequireTLS applies the same peer
+	// gate there too.
 	cleartext := q.TLS == nil
 	cleartextTrusted := false
-	if cleartext && r.cfg.Mode == "shared" {
+	if cleartext && (r.cfg.Mode == "shared" || r.cfg.RequireTLS) {
 		if !r.cleartextPeerAllowed(ip) {
 			r.logRejected(peer, "cleartext_not_trusted")
 			http.Error(w, "TLS HTTP/2 required", 426)

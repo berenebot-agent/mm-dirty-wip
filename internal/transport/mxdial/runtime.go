@@ -313,6 +313,11 @@ func (m *Manager) Run(ctx context.Context) {
 	m.mu.Unlock()
 	defer cancel()
 
+	// Sweep staging files left behind by a previous crash before serving. The
+	// core shares messages/.tmp but only writes "in*.eml"; the "mxdial-*"
+	// namespace is this manager's alone.
+	m.sweepStaleTemp()
+
 	t := time.NewTicker(m.cfg.ReconcileInterval)
 	defer t.Stop()
 	for {
@@ -326,6 +331,32 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 	}
 }
+
+// sweepStaleTemp removes mxdial staging files left by a previous process. A
+// file is removed only when it is older than the grace window, so a second
+// manager sharing the directory is not disrupted mid-write.
+func (m *Manager) sweepStaleTemp() {
+	root := filepath.Join(m.cfg.DataDir, "messages", ".tmp")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-sweepGrace)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "mxdial-") {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(root, e.Name()))
+	}
+}
+
+// sweepGrace is how old an mxdial staging file must be before the startup sweep
+// removes it, so a concurrently running manager is never disrupted.
+const sweepGrace = 10 * time.Minute
 
 func (m *Manager) stopAll() {
 	m.mu.Lock()

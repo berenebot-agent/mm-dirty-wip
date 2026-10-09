@@ -45,6 +45,32 @@ func testCertPEM(t *testing.T) string {
 	return strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})))
 }
 
+// TestMXReceiverSettingsInstallationURLPolicy proves the installation Remote MX
+// receiver URL follows the operator's private-outbound policy: cleartext/LAN is
+// allowed by default, and held to https+public-routable when the operator
+// confines outbound to the public internet.
+func TestMXReceiverSettingsInstallationURLPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	// Default (private outbound allowed): a cleartext LAN URL is accepted.
+	svcAllow, _, _ := newMXServiceWithOutboundPolicy(t, true)
+	if _, err := svcAllow.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: "http://mailmoose-mx:8443", BearerKey: "k"}); err != nil {
+		t.Fatalf("default cleartext remote URL rejected: %v", err)
+	}
+
+	// Operator confines outbound to the public internet: cleartext and
+	// private-literal URLs are refused.
+	svcStrict, _, _ := newMXServiceWithOutboundPolicy(t, false)
+	for _, bad := range []string{"http://mailmoose-mx:8443", "http://10.0.0.5:8443", "https://127.0.0.1:8443"} {
+		if _, err := svcStrict.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: bad, BearerKey: "k"}); !errors.Is(err, app.ErrMXInvalidInput) {
+			t.Fatalf("public-only policy accepted %q: %v", bad, err)
+		}
+	}
+	if _, err := svcStrict.SaveMXReceiverSettings(ctx, sysadmin, app.MXReceiverInput{Mode: app.MXModeRemote, URL: "https://r.example", BearerKey: "k"}); err != nil {
+		t.Fatalf("public https remote URL rejected: %v", err)
+	}
+}
+
 // TestMXReceiverSettingsSaveAndRedact covers the system-administrator save
 // contract: permission, validation, CAS, key generation/retention and
 // redaction.
