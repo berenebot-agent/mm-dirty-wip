@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 // MX receiver modes as exposed through the UI/API. An empty mode means no
@@ -267,7 +269,7 @@ func (s *Service) SaveMXReceiverSettings(ctx context.Context, p model.Principal,
 		if receiverURL == "" {
 			return MXReceiverSettings{}, fmt.Errorf("%w: a remote receiver requires a URL", ErrMXInvalidInput)
 		}
-		if err := validateMXReceiverURL(receiverURL); err != nil {
+		if err := validateMXReceiverURL(receiverURL, s.Config.RequirePublicOutbound()); err != nil {
 			return MXReceiverSettings{}, err
 		}
 		// Reject included-only fields in remote mode rather than store values
@@ -601,10 +603,25 @@ func validateCAPEM(pemData string) error {
 	return nil
 }
 
-func validateMXReceiverURL(raw string) error {
+// validateMXReceiverURL accepts an HTTP or HTTPS origin for the installation
+// Remote MX receiver. Cleartext and private/LAN hosts are allowed by default
+// (self-hosting: the receiver is commonly another container on the same host or
+// LAN). When the operator confines outbound to the public internet
+// (requirePublic), the URL must be https and public-routable, matching the
+// per-account Remote MX receiver policy.
+func validateMXReceiverURL(raw string, requirePublic bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return fmt.Errorf("%w: receiver URL must be an HTTP or HTTPS origin", ErrMXInvalidInput)
+	}
+	if !requirePublic {
+		return nil
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("%w: a public receiver must use https", ErrMXInvalidInput)
+	}
+	if ip := net.ParseIP(u.Hostname()); ip != nil && !netutil.PublicIP(ip) {
+		return fmt.Errorf("%w: receiver host is not public-routable (set ALLOW_PRIVATE_OUTBOUND=true to allow this)", ErrMXInvalidInput)
 	}
 	return nil
 }

@@ -32,6 +32,7 @@ func Load() (Config, error) {
 	c.Receiver.Mode = env("DIALMX_MODE", "single")
 	c.Receiver.CoreKey = strings.TrimSpace(os.Getenv("DIALMX_CORE_KEY"))
 	c.Receiver.BrowserRedirectURL = strings.TrimSpace(os.Getenv("DIALMX_BROWSER_REDIRECT_URL"))
+	c.Receiver.RequireTLS = envBool("DIALMX_REQUIRE_TLS", false)
 	trusted, err := parseTrustedProxies(os.Getenv("DIALMX_TRUSTED_PROXIES"))
 	if err != nil {
 		return Config{}, err
@@ -100,6 +101,8 @@ func (c *Config) validate() error {
 	// Shared mode may serve cleartext only from a trusted local proxy (the
 	// proxy terminates TLS). Without an allowlist it keeps the strict
 	// requirement, so a misconfiguration cannot silently expose the listener.
+	// Single mode allows cleartext by default; DIALMX_REQUIRE_TLS=true applies
+	// the same peer gate there.
 	if c.Receiver.Mode == "shared" && c.TLSCertFile == "" && len(c.Receiver.TrustedProxies) == 0 {
 		return fmt.Errorf("shared mode requires DIALMX_TLS_CERT and DIALMX_TLS_KEY, or DIALMX_TRUSTED_PROXIES for a TLS-terminating proxy")
 	}

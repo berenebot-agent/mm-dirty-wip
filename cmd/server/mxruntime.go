@@ -402,7 +402,11 @@ func (rt *mxRuntime) applyRemote(s app.MXReceiverSettings) error {
 // blocks: the dialer retries internally, so a receiver that is briefly down does
 // not stall reconciliation.
 func (rt *mxRuntime) startPrivate(cfg mxdial.Config) {
-	cfg.AllowPrivateDestinations = true
+	// Private/LAN receivers are allowed by default (self-hosting), but the
+	// operator's global policy wins: when outbound is confined to the public
+	// internet the installation Remote receiver is held to the same rule as the
+	// per-account one.
+	cfg.AllowPrivateDestinations = !rt.svc.Config.RequirePublicOutbound()
 	rt.stopPrivate()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
