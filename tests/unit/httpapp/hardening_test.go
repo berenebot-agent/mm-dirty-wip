@@ -201,7 +201,7 @@ func TestSearchFiltersFromToBefore(t *testing.T) {
 	}
 }
 
-func TestUnconfiguredInstanceCannotBeClaimed(t *testing.T) {
+func TestUnconfiguredInstanceClaimIsOneShot(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -214,31 +214,64 @@ func TestUnconfiguredInstanceCannotBeClaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := httpapp.New(svc, nil).Handler()
-	// A fresh instance serves the static unconfigured page with the operator
-	// instructions and no claim form.
+	// A fresh instance serves the first-run setup form.
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("setup get = %d", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "MailMoose has not been configured") {
-		t.Fatalf("unconfigured page missing message: %s", rr.Body.String())
+	if !strings.Contains(rr.Body.String(), `action="/setup"`) {
+		t.Fatalf("fresh instance has no setup form: %s", rr.Body.String())
 	}
-	if strings.Contains(rr.Body.String(), "<form method=\"post\"") {
-		t.Fatal("unconfigured page must not expose a claim form")
+	var csrf *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "mmm_csrf" {
+			csrf = c
+		}
 	}
-	// There is no unauthenticated POST that can create the first admin.
-	form := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=csrf"
-	req := httptest.NewRequest("POST", "/setup", strings.NewReader(form))
+	if csrf == nil {
+		t.Fatal("setup page did not set a pre-auth CSRF cookie")
+	}
+	// Without a valid CSRF token the claim is refused, even same-origin.
+	bad := "account=A&email=admin@example.com&password=correct-horse-battery-staple&_csrf=wrong"
+	req := httptest.NewRequest("POST", "/setup", strings.NewReader(bad))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(&http.Cookie{Name: "mmm_csrf", Value: "csrf"})
+	req.AddCookie(csrf)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusMethodNotAllowed && rr.Code != http.StatusNotFound {
-		t.Fatalf("POST /setup = %d, want the claim route to be gone", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("POST /setup with bad csrf = %d, want 403", rr.Code)
 	}
 	if has, _ := st.HasUsers(context.Background()); has {
-		t.Fatal("admin created through a removed setup route")
+		t.Fatal("admin created without a valid CSRF token")
+	}
+	// With a valid token the instance is claimed exactly once.
+	good := "account=A&email=admin@example.com&password=correct-horse-battery-staple&confirm=correct-horse-battery-staple&_csrf=" + csrf.Value
+	req = httptest.NewRequest("POST", "/setup", strings.NewReader(good))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("POST /setup = %d location=%q body=%s", rr.Code, rr.Header().Get("Location"), rr.Body.String())
+	}
+	if has, _ := st.HasUsers(context.Background()); !has {
+		t.Fatal("setup did not create the first administrator")
+	}
+	// Once configured, GET /setup redirects to login and the claim route is
+	// inert: a second claim never runs, even with a valid CSRF token.
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("GET /setup when configured = %d location=%q", rr.Code, rr.Header().Get("Location"))
+	}
+	req = httptest.NewRequest("POST", "/setup", strings.NewReader(good))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/login" {
+		t.Fatalf("second POST /setup = %d location=%q, want redirect to /login", rr.Code, rr.Header().Get("Location"))
 	}
 }
 
