@@ -2790,7 +2790,12 @@ only this inbox's binding (via read-modify-write of the key's or user's role
 map); it never revokes the key or the user's other mailbox roles. Account Admin
 keys have implicit Owner on every inbox and are shown read-only. Connectors keep
 their separate inbox-bound tab. Each change posts immediately (no footer Save on
-this tab) and returns to the reloaded dialog.
+this tab) and returns to the reloaded dialog; while this tab is active the footer
+secondary button reads **Close** rather than **Cancel**, since nothing is staged.
+Inviting an address that is already an existing non-admin member grants that
+member access directly (rather than surfacing the invite path's email-conflict);
+the account administrator, an address already holding access on the inbox, and a
+duplicate pending invitation are each reported with a specific message.
 
 Human users remain **Owner-only** in this tab: `user_mailbox_roles` already
 accepts `read`/`assistant`/`owner`, but the UI still grants only Owner, pending a

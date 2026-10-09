@@ -222,7 +222,11 @@ can sign in to it, and its pending invitations. From there an Admin can create a
 new API key scoped to just that inbox (its one-time secret is shown once), grant
 an existing account key or user access, invite a new person, and revoke a pending
 invitation. Account Admin keys have implicit Owner on every inbox and appear
-read-only. Connectors keep their own inbox-bound tab.
+read-only. Connectors keep their own inbox-bound tab. Inviting an address that is
+already an existing account member grants that member access directly rather than
+creating an invitation; inviting the account administrator, an address that
+already has access to the inbox, or one with a pending invitation is reported with
+a specific message.
 
 An inbox may carry delivery-triggered auto-actions for its agent/relay
 connectors: mark a delivered message read, and optionally move it to Trash a
