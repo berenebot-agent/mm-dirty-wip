@@ -484,6 +484,6 @@ Use small in-process rate limiters for login and outbound-send endpoints. Accoun
 
 ## 13. HTTP and TLS boundary
 
-The application listens on plain HTTP inside its deployment network. A reverse proxy such as Nginx Proxy Manager, Caddy, or Traefik terminates public TLS and forwards the original scheme/host using trusted proxy headers.
+The application listens on plain HTTP inside its deployment network. A reverse proxy such as Nginx Proxy Manager, Caddy, or Traefik terminates public TLS and forwards the original scheme/host using trusted proxy headers. For the Dial MX session listener specifically, the proxy must be able to forward **cleartext HTTP/2** to the upstream — see [MX.md](MX.md) for the per-proxy settings, including Traefik's `loadBalancer.server.scheme=h2c`.
 
 A second HTTP listener defaults to `:8082` and serves only the inbound webhook connector and health checks. It can be disabled or assigned another port using `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The receiver can also terminate TLS using `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.
