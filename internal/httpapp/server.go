@@ -185,6 +185,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /login/webauthn/finish", s.webauthnLoginFinish)
 	m.HandleFunc("POST /logout", s.withSession(s.withCSRF(s.logoutPost)))
 	m.HandleFunc("GET /account", s.withSession(s.settingsGet))
+	m.HandleFunc("POST /ui/account/settings", s.withSession(s.withCSRF(s.uiSettingsAccountBatch)))
+	m.HandleFunc("POST /ui/account/settings/me", s.withSession(s.withCSRF(s.uiSettingsPersonalBatch)))
 	m.HandleFunc("POST /ui/account/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))

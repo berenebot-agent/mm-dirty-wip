@@ -42,6 +42,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Account and system-admin settings collapse into one **Settings** modal opened
+  from the header, replacing the separate Account and Admin links. It reuses the
+  inbox-settings dialog chrome and has URL-addressable **Personal**, **Account**
+  and **Admin** tabs (each shown only to those permitted: everyone, account
+  Admins, system Admins), so the former `/account` and `/admin` pages remain
+  reachable and bookmarkable as tabs of a single modal. The Personal and Account
+  tabs present their fields as horizontal rows with one **Save** in the footer,
+  and each tab's edits are committed in a single request.
 - Inbox settings: the first tab is renamed **Identity** (was Basic) and the
   **Clients & Access** tab moves up beside it. The footer Save now commits every
   tab's staged edits (including Clients & Access role changes) in one request,

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestAccountSettingsRequireAdmin verifies that account name and account time
@@ -20,7 +21,7 @@ func TestAccountSettingsRequireAdmin(t *testing.T) {
 
 	// An operator: Owner of one mailbox, not an account Admin.
 	cookie, csrf := uiSession(t, svc, root.ID)
-	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
 	op := acceptInvite(t, h, token, "correct horse battery staple")
 	opUser, err := svc.Store.GetUserByEmail(ctx, "op@example.com")
 	if err != nil {
@@ -190,4 +191,97 @@ func TestAPIInboxTrashRetentionOverride(t *testing.T) {
 	if rr := do(`{"trash_retention_days":-1}`); rr.Code != 400 {
 		t.Fatalf("negative override %d %s", rr.Code, rr.Body.String())
 	}
+}
+
+// TestAccountSettingsBatch verifies the Account tab's single Save applies the
+// name, default time zone and Trash retention in one POST, and that a non-admin
+// cannot use it.
+func TestAccountSettingsBatch(t *testing.T) {
+	svc, h, root, mailerBox := systemAdminFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, root.ID)
+
+	rr := domainPost(t, h, cookie, "/ui/account/settings", url.Values{
+		"_csrf": {csrf}, "_tab": {"account"},
+		"name": {"Renamed Co"}, "timezone": {"Asia/Tokyo"}, "days": {"30"},
+	})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("account batch = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if acc, _ := svc.Store.GetAccount(ctx, root.AccountID); acc.Name != "Renamed Co" {
+		t.Fatalf("account name = %q", acc.Name)
+	}
+	if tz, _ := svc.Store.GetAccountTimezone(ctx, model.Principal{AccountID: root.AccountID, Admin: true}); tz != "Asia/Tokyo" {
+		t.Fatalf("account timezone = %q", tz)
+	}
+	p := model.Principal{AccountID: root.AccountID, Admin: true}
+	if days, _ := svc.Store.GetTrashRetention(ctx, p); days != 30 {
+		t.Fatalf("trash retention = %d", days)
+	}
+	// The page renders the rows and the single footer Save.
+	page := uiGet(t, h, cookie, "/account?tab=account")
+	for _, want := range []string{`id="settings-account-form"`, `id="settings-account-name"`, `form="settings-account-form"`} {
+		if !strings.Contains(page.Body.String(), want) {
+			t.Fatalf("account tab missing %q", want)
+		}
+	}
+
+	// A non-admin operator cannot change account settings through the batch.
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op2@example.com"}, "inboxes": {mailerBox.ID}})
+	op := acceptInvite(t, h, token, "correct horse battery staple")
+	opCookie, opCSRF := uiSession(t, svc, mustUserID(t, svc.Store, "op2@example.com"))
+	if rr := domainPost(t, h, opCookie, "/ui/account/settings", url.Values{"_csrf": {opCSRF}, "name": {"Hacked"}, "timezone": {"UTC"}, "days": {"0"}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("operator account batch = %d", rr.Code)
+	}
+	if acc, _ := svc.Store.GetAccount(ctx, root.AccountID); acc.Name != "Renamed Co" {
+		t.Fatalf("operator changed account name to %q", acc.Name)
+	}
+	_ = op
+}
+
+// TestPersonalSettingsBatch verifies the Personal tab's single Save applies the
+// time zone and, when filled in, the sign-in email and password in one POST.
+func TestPersonalSettingsBatch(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	rr := domainPost(t, h, cookie, "/ui/account/settings/me", url.Values{
+		"_csrf":            {csrf},
+		"timezone":         {"Europe/Paris"},
+		"email":            {"renamed@example.com"},
+		"current_password": {"correct horse battery staple"},
+		"new_password":     {"a brand new passphrase"},
+		"confirm_password": {"a brand new passphrase"},
+	})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("personal batch = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if got, _ := svc.Store.GetUser(ctx, u.ID); got.Timezone != "Europe/Paris" || got.Email != "renamed@example.com" {
+		t.Fatalf("user after batch = %#v", got)
+	}
+
+	// A mismatched new password is rejected and changes nothing further.
+	rr = domainPost(t, h, cookie, "/ui/account/settings/me", url.Values{
+		"_csrf":            {csrf},
+		"timezone":         {""},
+		"current_password": {"a brand new passphrase"},
+		"new_password":     {"one"},
+		"confirm_password": {"two"},
+	})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("mismatch status = %d", rr.Code)
+	}
+	if got, _ := svc.Store.GetUser(ctx, u.ID); got.Timezone != "Europe/Paris" {
+		t.Fatalf("mismatch should not change timezone: %q", got.Timezone)
+	}
+}
+
+func mustUserID(t *testing.T, st *store.Store, email string) string {
+	t.Helper()
+	usr, err := st.GetUserByEmail(context.Background(), email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return usr.ID
 }
