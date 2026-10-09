@@ -439,6 +439,85 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	}
 }
 
+// TestRelayOutboundBurstIsBounded proves a burst of outbound frames does not
+// spawn unbounded work: every request receives exactly one result (success or a
+// bounded "too many in-flight" rejection) and the socket stays healthy.
+func TestRelayOutboundBurstIsBounded(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SendLimitPerMinute: 1 << 30}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
+	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-burst", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	thread, _, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "burst-1", RFCMessageID: "<b1@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Burst", Text: "hi", RawPath: "messages/b.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := hermesrelay.New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	client := dialRawWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/relay", makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": inbound["bufferId"]}); err != nil {
+		t.Fatal(err)
+	}
+	const burst = 64
+	for i := 0; i < burst; i++ {
+		req := fmt.Sprintf("burst-%d", i)
+		if err = client.writeJSON(map[string]any{"type": "outbound", "requestId": req, "action": map[string]any{"op": "send", "chat_id": thread.ThreadID, "content": "reply"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]int{}
+	for len(seen) < burst {
+		var result map[string]any
+		if err = client.readJSON(&result); err != nil {
+			t.Fatalf("after %d results: %v", len(seen), err)
+		}
+		if result["type"] != "outbound_result" {
+			continue
+		}
+		rid, _ := result["requestId"].(string)
+		if rid == "" {
+			t.Fatalf("result without requestId: %#v", result)
+		}
+		seen[rid]++
+	}
+	for rid, n := range seen {
+		if n != 1 {
+			t.Fatalf("request %s received %d results, want 1", rid, n)
+		}
+	}
+}
+
 // A message.received event whose message was later deleted must be skipped
 // rather than tearing the socket down, which would reconnect-loop forever on
 // the same stale event.
