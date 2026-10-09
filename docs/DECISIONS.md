@@ -2883,6 +2883,80 @@ return token, one core reason mapping, plus tests and docs. No new dependency,
 service, wire frame or protocol change; the mx-v2 frame set and the DNS-anchored
 proof are untouched.
 
+## D092 — Configurable outbound provider HTTP timeout
+
+**Requirement:** Sending a large batch of attachment mail, the shared client's
+hard-coded 30-second `http.Client.Timeout` aborted each send with `context
+deadline exceeded (Client.Timeout exceeded while awaiting headers)`. The bound
+covers the entire request — connect, upload of the body (Brevo base64-inflates
+attachments ~+33% into a JSON payload; Mailgun builds a multipart body), and the
+wait for response headers — so a slow uplink could not deliver a message that the
+provider would otherwise have accepted.
+
+**Decision (2026-10-10):** Make the shared outbound provider HTTP client's
+overall timeout configurable with `OUTBOUND_HTTP_TIMEOUT_SECONDS` (default `300`,
+five minutes; must be positive), applied at startup through
+`netutil.SetOutboundHTTPTimeout`. `SetRequirePublic`-style rebuild semantics drop
+the cached client when the value changes. The guarded transport additionally sets
+`ResponseHeaderTimeout` to the same budget, so a server that accepts the body then
+goes silent still fails at that point. Every HTTP adapter (Brevo, Resend,
+Mailgun) keeps using the shared client, so the value applies uniformly.
+
+**Reason:** Five minutes comfortably covers a large attachment batch on a slow
+uplink while staying finite. A longer client timeout does not weaken the
+per-message outbox budget, which bounds the whole delivery independently.
+Making the value an operator setting lets a deployment on a constrained uplink
+raise it further without a code change.
+
+**Duplicate-send risk — resolved (amended 2026-10-10):** A timeout that fires
+while awaiting response headers can follow a send the provider already accepted.
+Brevo and Mailgun expose no idempotency key, so the existing backoff retry could
+double-send in that window. The adapters now detect a client timeout
+(`netutil.IsClientTimeout`) and wrap it in `transport.AmbiguousError`; `fail` and
+`failWorkflow` treat an ambiguous error as terminal (no retry, no `next_attempt_at`)
+rather than retrying. Resend is unaffected: it carries an `Idempotency-Key` and
+keeps its retry behaviour. The conservative cost is that a timeout that occurred
+before the request was transmitted (a pure connect timeout) is also not retried;
+the operator can resend manually. This is the correct trade against a silent
+duplicate.
+
+**Complexity:** One config field and validation, one atomic in `netutil` plus a
+transport-header bound, one `AmbiguousError` type and two adapter call sites, and
+one startup wiring line. No new dependency or runtime service.
+
+## D093 — Concurrent outbox senders
+
+**Requirement:** The outbox worker delivered one message at a time, so a large
+attachment batch was sent strictly serially and a single slow send stalled every
+message behind it. With the client timeout raised (D092), a slow-but-succeeding
+send holds the single sender for longer, worsening head-of-line blocking.
+
+**Decision (2026-10-10):** Run the outbox and workflow delivery passes as a
+bounded pool of sender goroutines, sized by `OUTBOUND_CONCURRENCY` (default `5`;
+validated `1..32`). Each sender runs the existing claim→deliver loop; the store's
+claim (`ClaimNextPending`/`ClaimNextWorkflow`, which excludes already-claimed
+rows) keeps senders from claiming the same work, so no schema or claim change is
+needed. Each sender goroutine is independently panic-guarded so one fault cannot
+take down the pass. The per-attempt budget is derived from the provider HTTP
+timeout (`OutboundDeliveryAttemptTimeout` = client timeout + 30s) so the client's
+own timeout fires before the delivery context's deadline; a timeout is therefore
+reported as an ambiguous send (D092) rather than a context cancellation.
+`NewOutboxWorker` clamps the value to `maxSendConcurrency`.
+
+**Reason:** Sends happen outside any DB transaction — the claim is a short
+write-tx committed before the provider call, and only the pre-send and outcome
+writes touch the serialized writer — so additional concurrent senders do not
+contend on the writer during the network call. The binding constraint is memory:
+each in-flight send buffers its reconstructed attachments (and the encoded
+request body) in RAM, so a small default bounds peak memory while giving real
+parallelism, and the `1..32` ceiling plus per-family validation keeps a mis-set
+`OUTBOUND_CONCURRENCY` from OOMing a single-process deployment. Deeper
+concurrency needs streaming attachment encoding, which is out of scope here.
+
+**Complexity:** A `WaitGroup`-based bounded pool in `worker.go`, one config
+field with validation, and a per-attempt timeout helper. No new dependency,
+service, schema change or claim-protocol change.
+
 ## Future extension register
 
 - additional inbound transport adapters

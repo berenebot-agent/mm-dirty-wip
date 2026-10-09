@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/config"
 )
@@ -113,6 +114,58 @@ func TestHostedModeIsRejected(t *testing.T) {
 	t.Setenv("MODE", "hosted")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("MODE=hosted must be rejected")
+	}
+}
+
+func TestOutboundHTTPTimeoutAndConcurrency(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+
+	// Defaults.
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OutboundHTTPTimeout != 300*time.Second {
+		t.Fatalf("default OutboundHTTPTimeout = %s, want 5m", cfg.OutboundHTTPTimeout)
+	}
+	if cfg.OutboundConcurrency != 5 || cfg.OutboundConcurrencyCount() != 5 {
+		t.Fatalf("default OutboundConcurrency = %d, want 5", cfg.OutboundConcurrency)
+	}
+	// The per-attempt budget must exceed the client timeout so the client fires
+	// first and an ambiguous send is reported as a timeout, not a cancelled ctx.
+	if cfg.OutboundDeliveryAttemptTimeout() <= cfg.OutboundHTTPTimeout {
+		t.Fatalf("attempt timeout %s must exceed the client timeout %s", cfg.OutboundDeliveryAttemptTimeout(), cfg.OutboundHTTPTimeout)
+	}
+
+	// Overrides.
+	t.Setenv("OUTBOUND_HTTP_TIMEOUT_SECONDS", "600")
+	t.Setenv("OUTBOUND_CONCURRENCY", "8")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OutboundHTTPTimeout != 600*time.Second {
+		t.Fatalf("OutboundHTTPTimeout = %s, want 10m", cfg.OutboundHTTPTimeout)
+	}
+	if cfg.OutboundConcurrency != 8 {
+		t.Fatalf("OutboundConcurrency = %d, want 8", cfg.OutboundConcurrency)
+	}
+
+	// Out-of-range concurrency is refused.
+	t.Setenv("OUTBOUND_CONCURRENCY", "0")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("OUTBOUND_CONCURRENCY=0 must be rejected")
+	}
+	t.Setenv("OUTBOUND_CONCURRENCY", "33")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("OUTBOUND_CONCURRENCY=33 must be rejected")
+	}
+
+	// A non-positive HTTP timeout is refused.
+	t.Setenv("OUTBOUND_CONCURRENCY", "5")
+	t.Setenv("OUTBOUND_HTTP_TIMEOUT_SECONDS", "0")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("OUTBOUND_HTTP_TIMEOUT_SECONDS=0 must be rejected")
 	}
 }
 

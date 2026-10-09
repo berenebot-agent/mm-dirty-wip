@@ -93,6 +93,23 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
+// AmbiguousError marks a send whose outcome is unknown: the request may have
+// reached the provider and been accepted, or may never have been transmitted.
+// It is returned when a client-side timeout fires while awaiting response
+// headers. Automated retry is unsafe for a provider without an idempotency key
+// (it could deliver twice), so adapters wrap such timeouts in an AmbiguousError
+// and the outbox fails the message terminally rather than retrying it.
+type AmbiguousError struct{ Err error }
+
+func (e *AmbiguousError) Error() string { return e.Err.Error() }
+func (e *AmbiguousError) Unwrap() error { return e.Err }
+
+// AsAmbiguous reports whether err is (or wraps) an ambiguous send outcome.
+func AsAmbiguous(err error) bool {
+	var ae *AmbiguousError
+	return errors.As(err, &ae)
+}
+
 // ProviderError builds a safe diagnostic from a provider's non-2xx response.
 // Arbitrary response bodies and reason phrases are never retained.
 func ProviderError(provider, status string, _ []byte) error {

@@ -138,6 +138,12 @@ func Send(ctx context.Context, c Config, m SendRequest) (SendResult, error) {
 	req.SetBasicAuth("api", c.APIKey)
 	resp, err := netutil.HTTPClient().Do(req)
 	if err != nil {
+		// Mailgun exposes no idempotency key, so a client timeout while awaiting
+		// headers leaves an unknown outcome; mark it ambiguous so the outbox
+		// does not retry and risk a duplicate delivery.
+		if netutil.IsClientTimeout(err) {
+			return SendResult{}, &transport.AmbiguousError{Err: err}
+		}
 		return SendResult{}, err
 	}
 	defer resp.Body.Close()

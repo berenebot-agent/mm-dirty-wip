@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/brevo"
@@ -120,5 +121,36 @@ func TestRequirePublicRejectsPrivateAPIBase(t *testing.T) {
 	_, err = brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: "http://api.brevo.com"}, transport.OutboundMessage{FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "must use https") {
 		t.Fatalf("plaintext API base should be rejected: %v", err)
+	}
+}
+
+// Brevo has no idempotency key, so a client timeout while awaiting headers must
+// be reported as ambiguous (the send may have been accepted) rather than a plain
+// transient error the outbox would retry and risk duplicating.
+func TestSendClientTimeoutIsAmbiguous(t *testing.T) {
+	netutil.SetRequirePublic(false)
+	defer netutil.SetRequirePublic(false)
+	netutil.SetOutboundHTTPTimeout(100 * time.Millisecond)
+	defer netutil.SetOutboundHTTPTimeout(0)
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<late>"}`)
+	}))
+	defer func() { close(release); srv.Close() }()
+
+	_, err := brevo.Send(context.Background(), brevo.Config{APIKey: "k", APIBase: srv.URL}, transport.OutboundMessage{
+		FromAddress: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t",
+	})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !transport.AsAmbiguous(err) {
+		t.Fatalf("timeout error %v should be ambiguous", err)
+	}
+	if transport.IsPermanent(err) {
+		t.Fatal("an ambiguous timeout is not a permanent 4xx error")
 	}
 }
