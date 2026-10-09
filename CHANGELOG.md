@@ -49,6 +49,20 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   `http`/private/LAN origins are allowed by default and held to `https` plus
   public-routable only when the operator sets `ALLOW_PRIVATE_OUTBOUND=false`.
 
+### Changed
+
+- The relay connector no longer mints or returns a `deliveryKey`: it was stored
+  and shown but never validated. The Hermes `.env` block, OpenClaw config block,
+  enroll response, and the OpenClaw plugin schema/setup no longer carry it.
+- The single-message and search JSON API endpoints now return the HTML body
+  sanitised with the same policy as the web UI, so an agent/LLM consumer cannot
+  receive script-bearing email markup.
+- UI error responses redact internal engine/filesystem fault text while keeping
+  deliberate validation messages, so no page leaks database or path detail.
+- The encryption-key derivation cache is keyed by a hash of the input and capped,
+  so the raw secret is not retained as a map key and the cache cannot grow
+  without bound.
+
 ### Fixed
 
 - Session expiry during a form submission: a cookie-authenticated POST with an

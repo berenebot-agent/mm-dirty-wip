@@ -194,7 +194,7 @@ func (s *Server) uiExternalAlias(w http.ResponseWriter, r *http.Request) {
 	before, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("before")), 10, 64)
 	attempts, err := s.Service.Store.ListExternalAliasDeliveryAttempts(ctx, p.AccountID, box.ID, a.ID, 51, before)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.uiError(w, err, http.StatusBadRequest)
 		return
 	}
 	hasMore := len(attempts) > 50
@@ -385,7 +385,7 @@ func (s *Server) externalAliasSaveError(w http.ResponseWriter, r *http.Request, 
 func (s *Server) externalAliasError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrInvalidAlias), errors.Is(err, store.ErrConflict):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.uiError(w, err, http.StatusBadRequest)
 	case errors.Is(err, store.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrForbidden):

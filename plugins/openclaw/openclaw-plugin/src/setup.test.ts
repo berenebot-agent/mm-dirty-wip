@@ -19,7 +19,7 @@ test("claimMailMooseSetupCode posts the code and returns credentials", async () 
   const calls: Array<{ url: string; body: string }> = [];
   const fetchImpl = (async (url: string, init: { body: string }) => {
     calls.push({ url: String(url), body: init.body });
-    return new Response(JSON.stringify({ secret: "sec", deliveryKey: "del", gatewayId: "gw-x", kind: "openclaw" }), {
+    return new Response(JSON.stringify({ secret: "sec", gatewayId: "gw-x", kind: "openclaw" }), {
       status: 200,
     });
   }) as unknown as typeof fetch;
@@ -32,7 +32,6 @@ test("claimMailMooseSetupCode posts the code and returns credentials", async () 
   assert.equal(calls[0].url, "http://mail.example.com/relay/enroll");
   assert.deepEqual(JSON.parse(calls[0].body), { enrollmentToken: "abc", gatewayId: "gw-x" });
   assert.equal(result.secret, "sec");
-  assert.equal(result.deliveryKey, "del");
 });
 
 test("claimMailMooseSetupCode surfaces an expired code", async () => {

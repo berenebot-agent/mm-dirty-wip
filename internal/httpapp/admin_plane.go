@@ -155,7 +155,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, accountID,
 		TTL:         inviteTTL,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Store.Audit(r.Context(), inv.AccountID, "invite.created", inv.Email)
@@ -301,7 +301,7 @@ func (s *Server) uiAccountMailer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.SetAccountMailerInbox(r.Context(), p.AccountID, strings.TrimSpace(r.Form.Get("inbox"))); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/account?notice=Mailer+saved", 303)
@@ -379,7 +379,7 @@ func (s *Server) uiOperatorSetRoles(w http.ResponseWriter, r *http.Request) {
 		roles[id] = "owner"
 	}
 	if err := s.Service.Store.SetUserRoles(r.Context(), p.AccountID, r.PathValue("id"), roles); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Hub.CancelScope("user:" + r.PathValue("id"))

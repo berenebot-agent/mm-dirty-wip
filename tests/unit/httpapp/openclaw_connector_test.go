@@ -34,10 +34,9 @@ func TestOpenClawConnectorAPI(t *testing.T) {
 		t.Fatalf("enroll %d %s", rr.Code, rr.Body.String())
 	}
 	var enrolled struct {
-		GatewayID   string `json:"gateway_id"`
-		Secret      string `json:"secret"`
-		DeliveryKey string `json:"delivery_key"`
-		Kind        string `json:"kind"`
+		GatewayID string `json:"gateway_id"`
+		Secret    string `json:"secret"`
+		Kind      string `json:"kind"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &enrolled); err != nil {
 		t.Fatalf("decode %v body=%s", err, rr.Body.String())

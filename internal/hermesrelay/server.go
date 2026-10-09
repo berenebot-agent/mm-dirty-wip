@@ -59,10 +59,9 @@ type EnrollRequest struct {
 }
 
 type EnrollResponse struct {
-	Secret      string `json:"secret"`
-	DeliveryKey string `json:"deliveryKey"`
-	Tenant      string `json:"tenant"`
-	GatewayID   string `json:"gatewayId"`
+	Secret    string `json:"secret"`
+	Tenant    string `json:"tenant"`
+	GatewayID string `json:"gatewayId"`
 	// Kind echoes the connector kind the redeemed setup code created:
 	// "hermes" or "openclaw". Older claimants may ignore it.
 	Kind string `json:"kind,omitempty"`
@@ -97,17 +96,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	delivery, err := auth.RandomToken(32)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
-		return
-	}
 	secEnc, err := s.Service.EncryptSecret([]byte(secret))
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
-		return
-	}
-	delEnc, err := s.Service.EncryptSecret([]byte(delivery))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
@@ -115,7 +104,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 	// The token is consumed and the connection created/replaced in one
 	// transaction; a gateway owned by another account is rejected without
 	// burning the token.
-	conn, err := s.Store.EnrollHermesConnection(r.Context(), req.EnrollmentToken, req.GatewayID, secEnc, delEnc)
+	conn, err := s.Store.EnrollHermesConnection(r.Context(), req.EnrollmentToken, req.GatewayID, secEnc, "")
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrForbidden) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid or expired enrollment token"})
@@ -125,7 +114,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("relay enrolled", "gateway_id", conn.GatewayID, "account_id", conn.AccountID, "inbox_id", conn.InboxID, "kind", conn.Kind)
-	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, DeliveryKey: delivery, Tenant: conn.AccountID, GatewayID: req.GatewayID, Kind: conn.Kind, Name: conn.Name})
+	writeJSON(w, http.StatusOK, EnrollResponse{Secret: secret, Tenant: conn.AccountID, GatewayID: req.GatewayID, Kind: conn.Kind, Name: conn.Name})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -156,7 +156,7 @@ func (s *Server) uiDomainCatchAll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "domain not found", 404)
 			return
 		}
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.domainNotice(w, r, "Catch-all inbox updated")
@@ -274,7 +274,7 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "domain not found", 404)
 			return
 		}
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.domainNotice(w, r, "Sending configuration removed")
@@ -413,7 +413,7 @@ func (s *Server) uiDomainReceivingClear(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "domain not found", 404)
 			return
 		}
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.domainNotice(w, r, "Receiving configuration removed")
@@ -502,7 +502,7 @@ func (s *Server) domainDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.Service.Store.ListDomainLog(ctx, p.AccountID, d.ID, 51, before)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	hasMore := len(entries) > 50

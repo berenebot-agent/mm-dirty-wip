@@ -241,7 +241,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	}
 	drafts, err := s.Service.Store.ListDrafts(r.Context(), p, box.ID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
@@ -281,7 +281,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
 	msgs, err := s.Service.Store.ListOutboxBefore(r.Context(), p, box.ID, before, inboxPageSize+1)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	hasMore := len(msgs) > inboxPageSize
@@ -401,7 +401,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 	in, err := s.parseMessageForm(w, r)
 	if err != nil {
 		s.Log.Error("draft save: parse form", "draft_id", draftID, "error", err)
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	action := r.Form.Get("action")
@@ -423,7 +423,7 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.Service.SendDraft(r.Context(), p, draftID, in, ""); err != nil {
 			s.Log.Error("draft send: enqueue failed", "draft_id", draftID, "inbox_id", box.ID, "error", err)
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
@@ -438,22 +438,22 @@ func (s *Server) uiDraftSave(w http.ResponseWriter, r *http.Request) {
 		d, err = s.Service.Store.CreateDraft(r.Context(), p, d)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	// Persist any uploaded attachments to disk.
 	atts, err := s.formAttachments(r)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if _, err = s.persistDraftAttachments(r.Context(), p, d.ID, atts); err != nil {
-		http.Error(w, err.Error(), 500)
+		s.uiError(w, err, 500)
 		return
 	}
 	if action == "request-send" {
 		if _, err = s.Service.RequestSend(r.Context(), p, d.ID, false); err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Send+requested", 303)
@@ -472,7 +472,7 @@ func (s *Server) uiDraftDelete(w http.ResponseWriter, r *http.Request) {
 	draftID := r.PathValue("draftId")
 	paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, draftID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	for _, path := range paths {
@@ -489,7 +489,7 @@ func (s *Server) uiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = s.Service.RequestSend(r.Context(), p, r.PathValue("draftId"), false); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Send+requested", 303)
@@ -504,7 +504,7 @@ func (s *Server) uiDraftApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	feedback := strings.TrimSpace(r.Form.Get("feedback"))
 	if _, err = s.Service.ApproveDraft(r.Context(), p, r.PathValue("draftId"), feedback, model.DecisionMethodUI, ""); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"?notice=Draft+sent", 303)
@@ -523,7 +523,7 @@ func (s *Server) uiDraftReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = s.Service.RejectDraft(r.Context(), p, r.PathValue("draftId"), feedback, model.DecisionMethodUI); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice=Draft+rejected", 303)
@@ -537,7 +537,7 @@ func (s *Server) uiDraftCancelSendRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if _, err = s.Service.CancelSendRequest(r.Context(), p, r.PathValue("draftId")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts/"+r.PathValue("draftId")+"/edit?notice=Request+cancelled", 303)
@@ -551,7 +551,7 @@ func (s *Server) uiOutboxRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = s.Service.Store.RequeueFailed(r.Context(), p, r.PathValue("msgId")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/outbox?notice=Message+queued+for+retry", 303)
@@ -566,7 +566,7 @@ func (s *Server) uiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	_, ev, err := s.Service.Store.DeleteOutboxMessage(r.Context(), p, r.PathValue("msgId"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if ev != nil {
@@ -622,7 +622,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
 	msgs, err := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: id, Direction: direction, SpamOnly: spamOnly, Trashed: trashed, IncludeSpam: trashed, Labels: labels, Before: before, Limit: inboxPageSize + 1})
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	hasMore := len(msgs) > inboxPageSize
@@ -845,7 +845,7 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 			d, err = s.Service.Store.CreateDraft(r.Context(), p, d)
 		}
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		// Persist uploaded attachments.
@@ -855,7 +855,7 @@ func (s *Server) uiComposeSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, err = s.persistDraftAttachments(r.Context(), p, d.ID, atts); err != nil {
-			http.Error(w, err.Error(), 500)
+			s.uiError(w, err, 500)
 			return
 		}
 		http.Redirect(w, r, returnTo(r, box.ID, "drafts"), 303)
@@ -1145,7 +1145,7 @@ func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 	}
 	read := r.Form.Get("read") == "1"
 	if err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	target := "/ui/inboxes/" + m.InboxID
@@ -1164,7 +1164,7 @@ func (s *Server) uiMessageSpam(w http.ResponseWriter, r *http.Request) {
 	}
 	spam := r.Form.Get("spam") == "1"
 	if _, ev, err := s.Service.Store.SetMessageSpam(r.Context(), p, m.ID, spam); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	} else if ev != nil {
 		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
@@ -1190,7 +1190,7 @@ func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	_, ev, err := s.Service.Store.TrashMessage(r.Context(), p, m.ID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if ev != nil {
@@ -1213,7 +1213,7 @@ func (s *Server) uiMessageRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	_, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, m.ID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if ev != nil {
@@ -1232,7 +1232,7 @@ func (s *Server) uiMessagePurge(w http.ResponseWriter, r *http.Request) {
 	}
 	path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, m.ID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if path != "" {
@@ -1252,7 +1252,7 @@ func (s *Server) uiInboxTrashEmpty(w http.ResponseWriter, r *http.Request) {
 	}
 	paths, events, err := s.Service.Store.EmptyTrash(r.Context(), p, box.ID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	for _, path := range paths {

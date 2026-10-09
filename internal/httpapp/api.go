@@ -527,6 +527,22 @@ func firstString(v []string) string {
 	return ""
 }
 
+// sanitizedMessage returns a copy of the message with its HTML body passed
+// through the same sanitiser the browser views use, so an API/agent consumer
+// never receives unsanitised email HTML.
+func sanitizedMessage(m model.Message) model.Message {
+	m.HTML = htmlsanitize.Sanitize(m.HTML)
+	return m
+}
+
+// sanitizedMessages maps sanitizedMessage over a message list.
+func sanitizedMessages(ms []model.Message) []model.Message {
+	for i := range ms {
+		ms[i].HTML = htmlsanitize.Sanitize(ms[i].HTML)
+	}
+	return ms
+}
+
 func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	unread, ok := boolQuery(w, r, "unread")
@@ -585,7 +601,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	writeJSON(w, 200, items)
+	writeJSON(w, 200, sanitizedMessages(items))
 }
 func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -606,7 +622,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, openAgentMessage(m))
 			return
 		}
-		writeJSON(w, 200, m)
+		writeJSON(w, 200, sanitizedMessage(m))
 	case http.MethodPatch:
 		var in struct {
 			Read   *bool     `json:"read"`
@@ -647,7 +663,7 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, m)
+		writeJSON(w, 200, sanitizedMessage(m))
 	case http.MethodDelete:
 		// Delete moves the message to Trash (recoverable); use the purge route
 		// to erase it permanently.
@@ -676,7 +692,7 @@ func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
 		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 		s.Service.Hub.Publish(*ev)
 	}
-	writeJSON(w, 200, m)
+	writeJSON(w, 200, sanitizedMessage(m))
 }
 
 // apiMessagePurge permanently erases a trashed message and unlinks its file.
@@ -826,7 +842,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, items)
+	writeJSON(w, 200, sanitizedMessages(items))
 }
 
 func (s *Server) apiLabels(w http.ResponseWriter, r *http.Request) {
@@ -1653,7 +1669,7 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			if compat {
 				writeJSON(w, 200, openAgentMessage(m))
 			} else {
-				writeJSON(w, 200, m)
+				writeJSON(w, 200, sanitizedMessage(m))
 			}
 			return
 		}
@@ -2041,12 +2057,12 @@ func (s *Server) apiHermesEnroll(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	gatewayID, secret, deliveryKey, err := s.Service.CreateHermesRelay(r.Context(), p, in.InboxID, in.Name)
+	gatewayID, secret, _, err := s.Service.CreateHermesRelay(r.Context(), p, in.InboxID, in.Name)
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "delivery_key": deliveryKey, "connector_url": s.Service.Config.BaseURL, "env": hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, secret, deliveryKey)})
+	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "connector_url": s.Service.Config.BaseURL, "env": hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, secret)})
 }
 func (s *Server) apiHermesList(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -2119,12 +2135,12 @@ func (s *Server) apiOpenClawEnroll(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	gatewayID, secret, deliveryKey, err := s.Service.CreateRelay(r.Context(), p, in.InboxID, in.Name, store.KindOpenClaw)
+	gatewayID, secret, _, err := s.Service.CreateRelay(r.Context(), p, in.InboxID, in.Name, store.KindOpenClaw)
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "delivery_key": deliveryKey, "connector_url": s.Service.Config.BaseURL, "kind": "openclaw"})
+	writeJSON(w, 201, map[string]any{"gateway_id": gatewayID, "secret": secret, "connector_url": s.Service.Config.BaseURL, "kind": "openclaw"})
 }
 
 // apiOpenClawList lists the account's OpenClaw relay connectors, never secrets.

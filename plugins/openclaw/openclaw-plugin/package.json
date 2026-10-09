@@ -92,15 +92,6 @@
               "flags": "--secret <secret>",
               "description": "MailMoose relay secret (manual setup)"
             }
-          },
-          {
-            "key": "deliveryKey",
-            "kind": "string",
-            "sensitive": true,
-            "cli": {
-              "flags": "--delivery-key <key>",
-              "description": "MailMoose delivery key (retained for parity; optional)"
-            }
           }
         ]
       }

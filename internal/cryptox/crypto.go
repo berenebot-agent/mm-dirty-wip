@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -33,15 +34,28 @@ func DeriveKey(raw string) ([]byte, error) {
 	return primary, err
 }
 
-// derivedKeys caches derivations by raw input. Stretching a passphrase is
-// deliberately expensive, and the result is deterministic, so repeated New()
-// calls (notably across tests) do not re-pay the cost.
-var derivedKeys sync.Map // map[string]derived
+// derivedKeys caches derivations keyed by the SHA-256 of the raw input (so the
+// raw secret is not retained as a map key). Stretching a passphrase is
+// deliberately expensive and deterministic, so repeated New() calls (notably
+// across tests) do not re-pay the cost. The number of distinct keys in a
+// process is tiny in production; the cap bounds growth when many distinct keys
+// are seen (tests).
+var derivedKeys sync.Map // map[[32]byte]derived
+
+// derivedKeyCacheMax bounds the cache so a caller that varies the key cannot
+// grow it without limit.
+const derivedKeyCacheMax = 64
+
+var derivedKeyCount atomic.Int64
 
 type derived struct {
 	primary    []byte
 	candidates [][]byte
 	err        error
+}
+
+func derivedCacheKey(raw string) [32]byte {
+	return sha256.Sum256([]byte(raw))
 }
 
 // DeriveKeys returns the primary encryption key and every key that may still
@@ -50,12 +64,17 @@ type derived struct {
 // the PBKDF2 change keeps decrypting; a 32-byte key has no legacy variant.
 func DeriveKeys(raw string) (primary []byte, candidates [][]byte, err error) {
 	raw = strings.TrimSpace(raw)
-	if v, ok := derivedKeys.Load(raw); ok {
+	ck := derivedCacheKey(raw)
+	if v, ok := derivedKeys.Load(ck); ok {
 		d := v.(derived)
 		return d.primary, d.candidates, d.err
 	}
 	primary, candidates, err = deriveKeys(raw)
-	derivedKeys.Store(raw, derived{primary, candidates, err})
+	if derivedKeyCount.Load() < derivedKeyCacheMax {
+		if _, loaded := derivedKeys.LoadOrStore(ck, derived{primary, candidates, err}); !loaded {
+			derivedKeyCount.Add(1)
+		}
+	}
 	return primary, candidates, err
 }
 
