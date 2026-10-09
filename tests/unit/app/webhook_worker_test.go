@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +193,78 @@ func TestWebhookWorkerRetriesOnServerError(t *testing.T) {
 	if entries[0].Status == "delivered" || entries[0].Status == "acknowledged" || entries[0].Attempts != 1 || entries[0].LastError == "" {
 		t.Fatalf("retry log entry %#v", entries[0])
 	}
+}
+
+// TestWebhookBackedOffClientDoesNotBlockOthers proves that one webhook whose
+// delivery is backed off does not pin the queue head: another webhook on the
+// same inbox with a due event is still delivered.
+func TestWebhookBackedOffClientDoesNotBlockOthers(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
+
+	enc, _ := svc.EncryptSecret([]byte("s"))
+	failing, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "failing", "https://hooks.example.test/x", "notify", "signature", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "good", "https://hooks.example.test/y", "notify", "signature", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusInternalServerError)
+	}))
+	defer badSrv.Close()
+	var goodDelivered int32
+	goodSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&goodDelivered, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer goodSrv.Close()
+	if err := svc.Store.UpdateWebhookClient(ctx, u.AccountID, failing.ID, "failing", badSrv.URL, "notify", "signature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.UpdateWebhookClient(ctx, u.AccountID, good.ID, "good", goodSrv.URL, "notify", "signature"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := app.NewWebhookWorker(svc)
+	w.SetHTTPClient(&http.Client{Transport: &fixedTransport{bad: badSrv.Client().Transport, good: goodSrv.Client().Transport, badHost: badSrv.URL, goodHost: goodSrv.URL}})
+
+	// Drain until only the backed-off failing client remains.
+	for i := 0; i < 8; i++ {
+		err := w.RunOnce(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("RunOnce %d: %v", i, err)
+		}
+	}
+	if atomic.LoadInt32(&goodDelivered) == 0 {
+		t.Fatal("a backed-off webhook blocked another webhook's delivery")
+	}
+	// The good client's event is acknowledged; the failing one stays pending.
+	entries, err := svc.Store.ClientDeliveryLog(ctx, u.AccountID, good.ID, 10, 1<<62)
+	if err != nil || len(entries) == 0 || entries[0].Status != "delivered" {
+		t.Fatalf("good client log %v %#v", err, entries)
+	}
+}
+
+// fixedTransport routes requests to one of two upstreams by URL prefix, so a
+// single worker can exercise a failing and a succeeding endpoint.
+type fixedTransport struct {
+	bad, good         http.RoundTripper
+	badHost, goodHost string
+}
+
+func (t *fixedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(r.URL.String(), t.badHost) {
+		return t.bad.RoundTrip(r)
+	}
+	return t.good.RoundTrip(r)
 }
 
 // TestWebhookWorkerDeliveryLogRecordsSuccess proves a successful delivery is

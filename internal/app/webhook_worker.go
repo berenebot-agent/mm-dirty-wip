@@ -183,11 +183,36 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 	}
 	var previous int
 	_ = w.svc.Store.WebhookAttemptCount(ctx, d.Client.ID, d.EventID, &previous)
-	delay := time.Second * time.Duration(1<<min(previous, 10))
-	if delay > time.Hour {
-		delay = time.Hour
-	}
+	delay := webhookBackoff(previous, d.Client.ID, d.EventID)
 	return w.svc.Store.RecordWebhookDelivery(ctx, d.Client.ID, d.EventID, false, truncateWebhookError(err.Error()), now.Add(delay), deadline)
+}
+
+// webhookBackoff returns the retry delay for the next attempt. It is the
+// exponential base (2^attempts, capped at an hour) plus up to +/-25% jitter,
+// so many endpoints that failed together do not all retry in lockstep. Jitter
+// is derived deterministically from the client and event id, so a retry's
+// scheduled time is stable across processes and a test can assert bounds.
+func webhookBackoff(previous int, clientID string, eventID int64) time.Duration {
+	base := time.Second * time.Duration(1<<min(previous, 10))
+	if base > time.Hour {
+		base = time.Hour
+	}
+	span := int64(base / 4)
+	if span <= 0 {
+		return base
+	}
+	h := sha256.Sum256([]byte(clientID + ":" + strconv.FormatInt(eventID, 10)))
+	// Map the low 8 bytes into [-span, +span].
+	var u uint64
+	for i := 0; i < 8; i++ {
+		u = u<<8 | uint64(h[i])
+	}
+	offset := int64(u%uint64(2*span+1)) - span
+	jittered := base + time.Duration(offset)
+	if jittered < time.Second {
+		jittered = time.Second
+	}
+	return jittered
 }
 
 // HeaderEnvelopeFrom and HeaderEnvelopeTo are the exact shared outbound forward

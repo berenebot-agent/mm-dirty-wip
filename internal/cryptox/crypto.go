@@ -108,6 +108,16 @@ func DecryptFirst(keys [][]byte, encoded string) ([]byte, error) {
 }
 
 func Encrypt(key, plaintext []byte) (string, error) {
+	return EncryptWithAAD(key, plaintext, nil)
+}
+
+// EncryptWithAAD encrypts plaintext and binds the ciphertext to aad, so a blob
+// copied to a different row (a different account/domain/kind) fails to decrypt
+// under its new owner. The envelope is versioned: a "v2." prefix marks an
+// AAD-bound blob, while an unprefixed value is the legacy AAD-less format.
+// Passing a nil/empty aad produces the legacy format, preserving compatibility
+// for callers not yet migrated.
+func EncryptWithAAD(key, plaintext, aad []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -120,11 +130,34 @@ func Encrypt(key, plaintext []byte) (string, error) {
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	ct := gcm.Seal(nil, nonce, plaintext, nil)
+	ct := gcm.Seal(nil, nonce, plaintext, aad)
 	out := append(nonce, ct...)
-	return base64.RawURLEncoding.EncodeToString(out), nil
+	enc := base64.RawURLEncoding.EncodeToString(out)
+	if len(aad) == 0 {
+		return enc, nil
+	}
+	return envelopeAADPrefix + enc, nil
 }
+
+// envelopeAADPrefix marks an AAD-bound ciphertext. The legacy format has no
+// prefix, so DecryptWithAAD can tell them apart.
+const envelopeAADPrefix = "v2."
+
+// Decrypt decrypts a legacy (AAD-less) ciphertext.
 func Decrypt(key []byte, encoded string) ([]byte, error) {
+	return DecryptWithAAD(key, encoded, nil)
+}
+
+// DecryptWithAAD decrypts a ciphertext, using aad when the blob is AAD-bound (a
+// "v2." prefix) and ignoring the supplied aad for a legacy blob. This lets a
+// migrated call site read both old and new rows.
+func DecryptWithAAD(key []byte, encoded string, aad []byte) ([]byte, error) {
+	bound := strings.HasPrefix(encoded, envelopeAADPrefix)
+	if bound {
+		encoded = strings.TrimPrefix(encoded, envelopeAADPrefix)
+	} else {
+		aad = nil
+	}
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err
@@ -140,5 +173,5 @@ func Decrypt(key []byte, encoded string) ([]byte, error) {
 	if len(raw) < gcm.NonceSize() {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
-	return gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+	return gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], aad)
 }
