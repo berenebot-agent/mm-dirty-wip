@@ -4233,4 +4233,28 @@ function hideInboxSubview(dlg) {
     });
   }
 
+  /* The Settings modal is rendered on /account and /admin and auto-opens so
+     those routes read as one dialog. Its tab rail links to real URLs, so a tab
+     click is an ordinary navigation; the only client behaviour is opening on
+     load and returning to the dashboard when the dialog is dismissed. */
+  var settingsDialog = document.getElementById('settings-dialog');
+  if (settingsDialog && typeof settingsDialog.showModal === 'function') {
+    if (!settingsDialog.open) {
+      settingsDialog.showModal();
+    }
+    var leaveSettings = function () { window.location.assign('/'); };
+    settingsDialog.querySelectorAll('.settings-close').forEach(function (b) {
+      b.addEventListener('click', leaveSettings);
+    });
+    settingsDialog.addEventListener('cancel', function (e) {
+      e.preventDefault();
+      leaveSettings();
+    });
+    settingsDialog.addEventListener('click', function (e) {
+      if (e.target === settingsDialog) {
+        leaveSettings();
+      }
+    });
+  }
+
 })();

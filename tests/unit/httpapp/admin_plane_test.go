@@ -72,7 +72,11 @@ func createInvite(t *testing.T, h http.Handler, cookie *http.Cookie, csrf, postP
 	if i := strings.Index(loc, "_flash="); i >= 0 {
 		flash = loc[i+len("_flash="):]
 	}
-	rr = uiGet(t, h, cookie, flashPage+"?_flash="+flash)
+	sep := "?"
+	if strings.Contains(flashPage, "?") {
+		sep = "&"
+	}
+	rr = uiGet(t, h, cookie, flashPage+sep+"_flash="+flash)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("flash page %s status = %d", flashPage, rr.Code)
 	}
@@ -120,7 +124,7 @@ func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusForbidden {
 		t.Fatalf("account admin /admin = %d, want 403", rr.Code)
 	}
-	rr := uiGet(t, h, cookie, "/account")
+	rr := uiGet(t, h, cookie, "/account?tab=account")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("account admin /account = %d, want 200", rr.Code)
 	}
@@ -132,7 +136,7 @@ func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
 func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, root.ID)
-	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
 	op := acceptInvite(t, h, token, "correct horse battery staple")
 	rr := uiGet(t, h, op, "/account")
 	if rr.Code != http.StatusOK {
@@ -184,7 +188,7 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, root.ID)
-	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
 	// The system admin plane lists accounts only; an operator invite must not
 	// leak into it.
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusOK || strings.Contains(rr.Body.String(), "op@example.com") {
@@ -231,7 +235,7 @@ func TestAccountMailerSendsOperatorInvite(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, root.ID)
-	createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"queued@example.com"}, "inboxes": {mailerBox.ID}})
+	createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"queued@example.com"}, "inboxes": {mailerBox.ID}})
 	invites, err := svc.Store.ListInvites(ctx, root.AccountID)
 	if err != nil || len(invites) != 1 {
 		t.Fatalf("ListInvites = %d, %v", len(invites), err)
@@ -254,7 +258,7 @@ func TestReissueRotatesOperatorLink(t *testing.T) {
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, root.ID)
-	oldToken := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	oldToken := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
 	invites, err := svc.Store.ListInvites(ctx, root.AccountID)
 	if err != nil || len(invites) != 1 {
 		t.Fatalf("ListInvites = %d, %v", len(invites), err)
@@ -265,7 +269,7 @@ func TestReissueRotatesOperatorLink(t *testing.T) {
 	}
 	loc := rr.Header().Get("Location")
 	flash := loc[strings.Index(loc, "_flash=")+len("_flash="):]
-	page := uiGet(t, h, cookie, "/account?_flash="+flash)
+	page := uiGet(t, h, cookie, "/account?tab=account&_flash="+flash)
 	newToken := inviteToken(t, page.Body.String())
 	if newToken == oldToken {
 		t.Fatal("reissue must rotate the setup token")
