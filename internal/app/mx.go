@@ -405,8 +405,13 @@ func mxAuthPtr(a mxwire.AuthResults, trusted bool) *mxwire.AuthResults {
 // of a lookalike domain never counts. It is only consulted when the edge's
 // evidence is trusted.
 func mxAuthenticated(a mxwire.AuthResults) bool {
-	if a.DMARC != nil && strings.EqualFold(strings.TrimSpace(a.DMARC.Result), "pass") {
-		return true
+	// When a DMARC policy was discovered, DMARC is the authority: an aligned
+	// SPF/DKIM pass that the policy itself rejects (for example a strict
+	// adkim=s From domain with only a relaxed DKIM pass) must not authenticate.
+	// Only when no policy was available do we fall back to the per-mechanism
+	// alignment flags.
+	if a.DMARC != nil && (strings.EqualFold(strings.TrimSpace(a.DMARC.Result), "pass") || strings.EqualFold(strings.TrimSpace(a.DMARC.Result), "fail")) {
+		return strings.EqualFold(strings.TrimSpace(a.DMARC.Result), "pass")
 	}
 	if a.SPF != nil && strings.EqualFold(strings.TrimSpace(a.SPF.Result), "pass") &&
 		a.SPF.Aligned {

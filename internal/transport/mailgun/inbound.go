@@ -202,15 +202,21 @@ func receiveMultipart(ctx context.Context, r *http.Request, resolver transport.B
 }
 
 // receiveURLEncoded handles application/x-www-form-urlencoded webhooks with
-// explicit caps on the encoded body, field size and field count.
+// explicit caps on the encoded body, field size and field count. The raw body
+// is bounded before it is read, and read straight into a string (no []byte
+// copy), so an unauthenticated caller cannot force the roughly doubled peak
+// allocation that []byte+string would. The encoded cap allows the worst-case
+// percent-encoding expansion (3x) of a full-size body plus one non-MIME field,
+// so no legitimate message that fits the MIME limit is rejected.
 func receiveURLEncoded(ctx context.Context, r *http.Request, resolver transport.BindingResolver, tmpPath string, maxBytes int64) (InboundForm, transport.InboundBinding, error) {
 	var form InboundForm
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes*2)
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
+	encodedCap := maxBytes*3 + maxFieldBytes
+	r.Body = http.MaxBytesReader(nil, r.Body, encodedCap)
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, r.Body); err != nil {
 		return form, transport.InboundBinding{}, err
 	}
-	vals, err := url.ParseQuery(string(b))
+	vals, err := url.ParseQuery(sb.String())
 	if err != nil {
 		return form, transport.InboundBinding{}, err
 	}

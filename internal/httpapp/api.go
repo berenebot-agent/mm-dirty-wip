@@ -857,14 +857,6 @@ func (x *stringList) UnmarshalJSON(b []byte) error {
 }
 func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	key := p.AccountID
-	if p.APIKeyID != "" {
-		key = p.APIKeyID
-	}
-	if !s.sendLimiter.Allow(key) {
-		writeError(w, 429, "send rate limit exceeded")
-		return
-	}
 	var in struct {
 		InboxID string `json:"inbox_id"`
 		// From selects the inbox when inbox_id is omitted; Sender chooses the
@@ -1125,14 +1117,6 @@ const maxFeedbackBytes = 4096
 // and sent. The draft is frozen until the request is decided or cancelled.
 func (s *Server) apiDraftRequestSend(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	key := p.AccountID
-	if p.APIKeyID != "" {
-		key = p.APIKeyID
-	}
-	if !s.sendLimiter.Allow(key) {
-		writeError(w, 429, "send rate limit exceeded")
-		return
-	}
 	in, ok := s.decodeDraftWrite(w, r)
 	if !ok {
 		return
