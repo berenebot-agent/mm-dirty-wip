@@ -3703,4 +3703,16 @@ function hideInboxSubview(dlg) {
     b.addEventListener('click', function () { dlg.close(); });
   });
 
+  /* The Feedback button lives in the signed-in header and opens the shared
+     feedback dialog, which points users at the project mailbox. It is a plain
+     mailto link, so there is no request to send. */
+  var feedbackOpen = document.getElementById('feedback-open');
+  var feedbackDialog = document.getElementById('feedback-dialog');
+  if (feedbackOpen && feedbackDialog && typeof feedbackDialog.showModal === 'function') {
+    feedbackOpen.addEventListener('click', function () { feedbackDialog.showModal(); });
+    feedbackDialog.querySelectorAll('[data-close-dialog]').forEach(function (b) {
+      b.addEventListener('click', function () { feedbackDialog.close(); });
+    });
+  }
+
 })();
