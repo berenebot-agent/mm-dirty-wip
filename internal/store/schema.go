@@ -1438,3 +1438,18 @@ CREATE TABLE account_mx_receivers (
   updated_at TEXT NOT NULL
 );
 `
+
+// migration049 adds indexes the pre-release review identified as missing: a
+// partial index for the inbound approval-token lookup (draft_send_requests is
+// scanned by token_hash on every approval-control email, but only pending rows
+// matter), and a unique partial index enforcing the one-physical-receiver-per-
+// account invariant for account Remote MX receivers at the database, closing the
+// read-then-write race in the application-level check. The unique index is
+// partial on non-empty receiver_url so an unconfigured/cleared receiver (empty
+// URL) never collides.
+const migration049 = `
+CREATE INDEX IF NOT EXISTS idx_draft_send_requests_pending_token
+  ON draft_send_requests(inbox_id, token_hash) WHERE status='pending';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mx_receivers_url
+  ON account_mx_receivers(receiver_url) WHERE receiver_url<>'';
+`
