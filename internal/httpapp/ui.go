@@ -346,8 +346,11 @@ type pageData struct {
 	Attachments                 []model.Attachment
 	Notice, SecretLabel, Secret string
 	Error                       string
-	HasUsers                    bool
-	BaseURL                     string
+	// Next is a validated same-origin path carried through a login form so a
+	// session-expiry redirect can resume the interrupted request.
+	Next     string
+	HasUsers bool
+	BaseURL  string
 
 	Inbox        *model.Inbox
 	InboxAddr    map[string]string
@@ -612,7 +615,7 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
-const authBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.auth-form input{margin:3px 0 8px}.auth-action{margin-top:8px}.auth-button{display:flex;width:100%;height:40px;box-sizing:border-box;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 12px}.auth-action p{margin:4px 0 0}</style><div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post" class="auth-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button class="auth-button">{{.Title}}</button></form>{{if .PasskeyEnabled}}<div class="auth-action"><button type="button" class="secondary auth-button" id="passkey-signin" data-begin="/login/webauthn/begin" data-finish="/login/webauthn/finish">Sign in with a passkey</button><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></div>{{end}}<div class="auth-action"><a class="btn secondary auth-button" href="/login/key">Sign in with an API key</a></div><div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
+const authBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.auth-form input{margin:3px 0 8px}.auth-action{margin-top:8px}.auth-button{display:flex;width:100%;height:40px;box-sizing:border-box;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 12px}.auth-action p{margin:4px 0 0}</style><div class="card" style="max-width:460px;margin:60px auto"><h1>{{.Title}}</h1>{{if .Notice}}<div class="error">{{.Notice}}</div>{{end}}<form method="post" class="auth-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="next" value="{{.Next}}"><label>Email</label><input type="email" name="email" required value="{{.Email}}"><label>Password</label><input type="password" name="password" minlength="10" required><button class="auth-button">{{.Title}}</button></form>{{if .PasskeyEnabled}}<div class="auth-action"><button type="button" class="secondary auth-button" id="passkey-signin" data-begin="/login/webauthn/begin" data-finish="/login/webauthn/finish">Sign in with a passkey</button><p class="muted small" id="passkey-status" role="status" aria-live="polite"></p></div>{{end}}<div class="auth-action"><a class="btn secondary auth-button" href="/login/key">Sign in with an API key</a></div><div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee"><p style="font-size:14px;margin:0 0 6px">Agents: see <a href="/agent">/agent</a> for API access instructions</p><p class="muted" style="font-size:12px;margin:0">Reference: <a href="/openapi.json">/openapi.json</a> · <a href="/examples/python">/examples/python</a> · <a href="/examples/bash">/examples/bash</a> · <a href="/.well-known/mailmoose">/.well-known/mailmoose</a></p></div></div>`
 
 const keyLoginBody = `<style>.auth-form{margin:0}.auth-form label{display:block}.auth-form input{margin:3px 0 8px}.auth-button{display:flex;width:100%;height:40px;box-sizing:border-box;align-items:center;justify-content:center;text-align:center;line-height:1.2;padding:0 12px}.auth-actions{display:grid;gap:8px;margin-top:8px}</style><div class="card" style="max-width:460px;margin:60px auto"><h1>Sign in with an API key</h1>{{if .Notice}}<div class="error" role="alert">{{.Notice}}</div>{{end}}<form method="post" action="/login/key" class="auth-form"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>API key</label><input type="password" name="api_key" autocomplete="off" spellcheck="false" placeholder="mmm_…" required autofocus><div class="auth-actions"><button class="auth-button">Sign in</button><a class="btn secondary auth-button" href="/login">Cancel</a></div></form></div>`
 
@@ -637,6 +640,11 @@ type authFlash struct {
 // redirect from a failed POST (Post/Redirect/Get).
 func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string) {
 	data := pageData{Title: title, CSRF: s.setPreAuthCSRF(w, r), PasskeyEnabled: s.webauthn != nil}
+	if next := safeNextPath(r.URL.Query().Get("next")); next != "/" {
+		data.Next = next
+		// A resumed request always came from an expired session; tell the user.
+		data.Notice = "Your session expired. Please sign in to continue."
+	}
 	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
@@ -816,7 +824,18 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, tok)
-	http.Redirect(w, r, "/", 303)
+	http.Redirect(w, r, safeNextPath(r.Form.Get("next")), 303)
+}
+
+// safeNextPath returns a same-origin next path for a post-login redirect, or "/"
+// when none is valid. It rejects scheme-relative and backslash forms that
+// browsers may normalize to an off-site redirect.
+func safeNextPath(next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
+		return "/"
+	}
+	return next
 }
 
 // keyLoginPost signs in a browser session from a non-admin mailbox API key.

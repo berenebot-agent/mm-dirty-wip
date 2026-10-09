@@ -51,6 +51,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Session expiry during a form submission: a cookie-authenticated POST with an
+  expired session now returns to login with a "session expired" notice, and a
+  compose/reply/forward body is preserved and restored after signing back in,
+  instead of silently discarding the typed message.
+- Passkey registration: choosing "use only this passkey" and failing to disable
+  password sign-in now reports success with a warning (both methods stay
+  enabled) instead of a hard error that invites a retry which reports the
+  passkey as already registered.
 - Domain and inbox deletion now require the typed confirmation server-side, not
   just in the browser, so a script cannot bypass the guard; a mismatch returns
   the user to the dashboard with an error banner.

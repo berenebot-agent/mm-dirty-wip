@@ -145,15 +145,24 @@ func (s *Server) uiPasskeyRegisterFinish(w http.ResponseWriter, r *http.Request)
 	// system administrator keeps password sign-in as a break-glass recovery
 	// path, so the request is ignored for them.
 	passwordOnly := false
+	warning := ""
 	if r.URL.Query().Get("only") == "1" && !u.SystemAdmin {
 		if err := s.Service.Store.SetPasswordAuth(r.Context(), p.UserID, p.AccountID, false); err != nil {
-			writeError(w, http.StatusInternalServerError, "passkey saved, but could not disable password sign-in")
-			return
+			// The passkey is saved and the account still has a working method
+			// (password), so this is not a failure: report success with a
+			// warning rather than an error that invites a retry which would
+			// then say "already registered".
+			warning = "Passkey added, but password sign-in could not be turned off. You can turn it off from Account settings."
+		} else {
+			passwordOnly = true
 		}
-		passwordOnly = true
 	}
 	s.Service.Store.Audit(r.Context(), p.AccountID, "user.passkey_add", name)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "password_only": passwordOnly})
+	resp := map[string]any{"ok": true, "password_only": passwordOnly}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // uiPasskeyEnablePassword re-enables password sign-in for a passkey-only user
