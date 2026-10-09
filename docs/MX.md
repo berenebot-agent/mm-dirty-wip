@@ -181,6 +181,18 @@ every accepted recipient; quota/transient failures cause sender retries.
 `MX_RECEIPT_RETENTION_HOURS` defaults to 168 hours, preserving retry deduplication
 even after the original message is deleted. This is not exactly-once delivery.
 
+The SMTP edge requires CRLF line endings, as RFC 5321 mandates. The underlying
+`go-smtp` command/`DATA` reader recognises only `CRLF` as a line terminator: a
+sender that uses bare `LF` line endings may have the first leading dot of a DATA
+line silently stripped and may stall until the data timeout, rather than being
+rejected. Well-behaved MTAs send CRLF, so this only affects non-conforming
+clients.
+
+The edge's per-signature DKIM evidence reports the signing domain and the
+validation result but not the selector or algorithm, because the `go-msgauth`
+verifier version in use does not expose them. This is a diagnostic limitation
+only; it does not affect the pass/fail decision or DMARC alignment.
+
 ## Shared receivers (per-domain Dial MX and Antler MX)
 
 Use `DIALMX_MODE=shared` for a public multi-tenant receiver. It retains TLS and

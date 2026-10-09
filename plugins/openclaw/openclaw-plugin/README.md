@@ -60,7 +60,6 @@ config block** instead and paste the generated `channels.mailmoose` block:
 | `baseUrl` | MailMoose base URL. |
 | `gatewayId` | Connector gateway id. |
 | `secret` | Relay authentication secret (sensitive). |
-| `deliveryKey` | Retained for relay parity; optional. |
 | `allowFrom` | Optional OpenClaw-side sender allowlist. MailMoose inbox allowlists remain the primary gate. |
 | `dmPolicy` | `allowlist` (default), `open`, or `pairing`. |
 | `agentId` | Optional agent to route this inbox to. |

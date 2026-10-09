@@ -660,14 +660,12 @@ var schemas = map[string]any{
 	"HermesEnrollment": obj(map[string]any{
 		"gateway_id":    str("Minted gateway id."),
 		"secret":        str("Gateway secret, returned once."),
-		"delivery_key":  str("Delivery key, returned once."),
 		"connector_url": str("Relay connector URL."),
 		"env":           str("Ready-to-paste environment block."),
 	}),
 	"OpenClawEnrollment": obj(map[string]any{
 		"gateway_id":    str("Minted gateway id."),
 		"secret":        str("Relay secret, returned once."),
-		"delivery_key":  str("Delivery key, returned once."),
 		"connector_url": str("Relay connector URL."),
 		"kind":          str("Connector kind (openclaw)."),
 	}),

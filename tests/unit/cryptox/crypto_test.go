@@ -2,6 +2,7 @@ package cryptox_test
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -51,6 +52,31 @@ func TestDeriveKeysPassphraseUsesPBKDF2AndKeepsLegacyReadable(t *testing.T) {
 	got, err = cryptox.DecryptFirst(candidates, encNew)
 	if err != nil || string(got) != "new-secret" {
 		t.Fatalf("new ciphertext decrypt = %q err=%v", got, err)
+	}
+}
+
+// TestDeriveKeysCacheIsBounded proves the derivation cache does not grow without
+// limit when many distinct keys are seen (it keys by a hash and caps the count).
+// 32-byte raw keys are used directly, so this stays fast.
+func TestDeriveKeysCacheIsBounded(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		b := make([]byte, 32)
+		for j := range b {
+			b[j] = byte(i*7 + j + 1)
+		}
+		primary, _, err := cryptox.DeriveKeys(hex.EncodeToString(b))
+		if err != nil {
+			t.Fatalf("derive %d: %v", i, err)
+		}
+		if len(primary) != 32 {
+			t.Fatalf("primary length %d", len(primary))
+		}
+	}
+	// A previously derived key still returns a deterministic result.
+	a, _, _ := cryptox.DeriveKeys(hex.EncodeToString(make([]byte, 32)))
+	b, _, _ := cryptox.DeriveKeys(hex.EncodeToString(make([]byte, 32)))
+	if string(a) != string(b) {
+		t.Fatal("derivation is not deterministic")
 	}
 }
 

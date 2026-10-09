@@ -27,13 +27,11 @@ export type MailMooseSetupInput = {
   baseUrl?: string;
   gatewayId?: string;
   secret?: string;
-  deliveryKey?: string;
   allowFrom?: string[];
 };
 
 type ClaimResult = {
   secret: string;
-  deliveryKey?: string;
   gatewayId: string;
   name?: string;
   kind?: string;
@@ -106,7 +104,6 @@ export async function claimMailMooseSetupCode(params: {
     }
     const body = (await response.json()) as {
       secret?: string;
-      deliveryKey?: string;
       gatewayId?: string;
       name?: string;
       kind?: string;
@@ -116,7 +113,6 @@ export async function claimMailMooseSetupCode(params: {
     }
     return {
       secret: body.secret,
-      deliveryKey: body.deliveryKey,
       gatewayId: body.gatewayId || gatewayId,
       name: body.name,
       kind: body.kind,
@@ -151,7 +147,6 @@ export const mailMooseSetupAdapter = {
       baseUrl: parsed.baseUrl,
       gatewayId: claim.gatewayId,
       secret: claim.secret,
-      deliveryKey: claim.deliveryKey,
     };
   },
   validateInput: ({ input }: { cfg: CoreConfig; accountId: string; input: MailMooseSetupInput }) => {
@@ -194,7 +189,6 @@ export const mailMooseSetupAdapter = {
         ...(normalizeBaseUrl(input.baseUrl) ? { baseUrl: normalizeBaseUrl(input.baseUrl) } : {}),
         ...(input.gatewayId?.trim() ? { gatewayId: input.gatewayId.trim() } : {}),
         ...(input.secret?.trim() ? { secret: input.secret.trim() } : {}),
-        ...(input.deliveryKey?.trim() ? { deliveryKey: input.deliveryKey.trim() } : {}),
         ...(input.name?.trim() ? { name: input.name.trim() } : {}),
       },
     }),
@@ -219,11 +213,6 @@ export const mailMooseSetupContract = defineChannelSetupContract({
       kind: "string",
       sensitive: true,
       cli: { flags: "--secret <secret>", description: "MailMoose relay secret" },
-    },
-    deliveryKey: {
-      kind: "string",
-      sensitive: true,
-      cli: { flags: "--delivery-key <key>", description: "MailMoose delivery key (optional)" },
     },
   },
   legacyAdapter: mailMooseSetupAdapter,

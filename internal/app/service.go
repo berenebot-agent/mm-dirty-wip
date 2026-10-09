@@ -1305,15 +1305,7 @@ func (s *Service) CreateRelay(ctx context.Context, p model.Principal, inboxID, n
 	if err != nil {
 		return "", "", "", err
 	}
-	deliveryKey, err := auth.RandomToken(32)
-	if err != nil {
-		return "", "", "", err
-	}
 	secEnc, err := cryptox.Encrypt(s.EncryptionKey, []byte(secret))
-	if err != nil {
-		return "", "", "", err
-	}
-	delEnc, err := cryptox.Encrypt(s.EncryptionKey, []byte(deliveryKey))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -1325,10 +1317,10 @@ func (s *Service) CreateRelay(ctx context.Context, p model.Principal, inboxID, n
 			rec.Name = "Hermes"
 		}
 	}
-	if _, err = s.Store.CreateHermesConnection(ctx, rec, gatewayID, secEnc, delEnc); err != nil {
+	if _, err = s.Store.CreateHermesConnection(ctx, rec, gatewayID, secEnc, ""); err != nil {
 		return "", "", "", err
 	}
-	return gatewayID, secret, deliveryKey, nil
+	return gatewayID, secret, "", nil
 }
 
 // CreateRelayEnrollCode mints a one-time setup code that a connector host
