@@ -117,7 +117,9 @@ func (e *Edge) Status(ctx context.Context) (control.Status, error) {
 // knob when the operator set it; the SMTP settings and bearer secret arrive
 // over the control channel on activation. DIALMX_LOG_LEVEL is a non-secret
 // verbosity selector, so forwarding it lets an operator turn on the edge's
-// connect/session diagnostics without a rebuild.
+// connect/session diagnostics without a rebuild. The DNS fallback list is
+// likewise non-secret and is forwarded so the edge's SPF/DKIM/DMARC and TXT
+// proof lookups recover from a resolver outage the same way the core does.
 func StandbyEnv(cmdFD, replyFD int) []string {
 	env := []string{
 		"PATH=" + envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
@@ -126,6 +128,9 @@ func StandbyEnv(cmdFD, replyFD int) []string {
 	}
 	if lvl := strings.TrimSpace(os.Getenv(dialmx.EnvLogLevel)); lvl != "" {
 		env = append(env, dialmx.EnvLogLevel+"="+lvl)
+	}
+	if servers := strings.TrimSpace(os.Getenv("MAILMOOSE_DNS_FALLBACK_SERVERS")); servers != "" {
+		env = append(env, "MAILMOOSE_DNS_FALLBACK_SERVERS="+servers)
 	}
 	return env
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/auth"
+	"github.com/dellarb/mailmoose/internal/dnsfallback"
 )
 
 // InboundAddr is the default address of the dedicated inbound webhook listener.
@@ -244,6 +245,12 @@ type Config struct {
 	InboundTLSKeyFile  string
 	// DialMXCAFile optionally adds private receiver CAs to the system trust roots.
 	DialMXCAFile string
+	// DNSFallbackServers are the ordered public resolvers tried when the host's
+	// configured DNS servers fail an exchange. A nil slice means failover is
+	// disabled and the native resolver is left untouched. Populated from
+	// MAILMOOSE_DNS_FALLBACK_SERVERS; empty selects the Cloudflare-then-Google
+	// defaults and "off" disables failover.
+	DNSFallbackServers []string
 }
 
 func Load() (Config, error) {
@@ -268,6 +275,10 @@ func Load() (Config, error) {
 	admin, err := loadAdmin()
 	if err != nil {
 		return Config{}, err
+	}
+	dnsFallbackServers, err := dnsfallback.ParseServers(env("MAILMOOSE_DNS_FALLBACK_SERVERS", ""))
+	if err != nil {
+		return Config{}, fmt.Errorf("MAILMOOSE_DNS_FALLBACK_SERVERS: %w", err)
 	}
 	baseURL := strings.TrimRight(env("BASE_URL", "http://localhost:8081"), "/")
 	baseHost, err := parseBaseHost(baseURL)
@@ -317,6 +328,7 @@ func Load() (Config, error) {
 		InboundTLSCertFile:      strings.TrimSpace(os.Getenv("INBOUND_TLS_CERT_FILE")),
 		InboundTLSKeyFile:       strings.TrimSpace(os.Getenv("INBOUND_TLS_KEY_FILE")),
 		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
+		DNSFallbackServers:      dnsFallbackServers,
 	}
 	if cfg.AppEncryptionKey == "" {
 		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
