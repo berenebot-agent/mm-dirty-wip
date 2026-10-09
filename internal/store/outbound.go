@@ -389,6 +389,14 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 // ListOutbox lists pending and failed outbound messages for an account,
 // optionally scoped to an inbox.
 func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Message, error) {
+	return s.ListOutboxBefore(ctx, p, inboxID, "", limit)
+}
+
+// ListOutboxBefore lists queued outbound messages (pending or failed) newest
+// first, optionally older than the message id `before` (a keyset cursor). It
+// backs the Outbox pager so more than one page of queued mail is reachable;
+// ListOutbox is the unpaged form.
+func (s *Store) ListOutboxBefore(ctx context.Context, p model.Principal, inboxID, before string, limit int) ([]model.Message, error) {
 	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0 AND m.deleted_at IS NULL AND m.direction='outbound' AND m.status IN ('pending','failed')`
 	args := []any{p.AccountID}
 	if inboxID != "" {
@@ -407,10 +415,20 @@ func (s *Store) ListOutbox(ctx context.Context, p model.Principal, inboxID strin
 			args = append(args, id)
 		}
 	}
+	if before != "" {
+		var beforeCreated string
+		err := s.read.QueryRowContext(ctx, `SELECT created_at FROM messages WHERE id=? AND account_id=?`, before, p.AccountID).Scan(&beforeCreated)
+		if err == nil {
+			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
+			args = append(args, beforeCreated, beforeCreated, before, p.AccountID)
+		} else if err != sql.ErrNoRows {
+			return nil, err
+		}
+	}
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	q += ` ORDER BY m.created_at DESC LIMIT ?`
+	q += ` ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {

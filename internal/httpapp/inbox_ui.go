@@ -94,7 +94,7 @@ const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displ
 <div class="inboxbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-<section class="card">{{if .Messages}}<div class="mailheader"><span></span><span>To</span><span>Subject</span><span class="hcenter">Status</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow outbox"><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{if eq .Status "failed"}}<span class="pill danger">Failed</span>{{else if .Sending}}<span class="pill amber">Sending…</span>{{else}}<span class="pill">Pending</span>{{end}}</span></a><span class="mailaction">{{if eq .Status "failed"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/outbox/{{.ID}}/retry"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Retry</button></form>{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/outbox/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Remove this message from the outbox?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{else}}<p class="muted">No messages in the outbox.</p>{{end}}</section></div></div>`
+<section class="card">{{if .Messages}}<div class="mailheader"><span></span><span>To</span><span>Subject</span><span class="hcenter">Status</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow outbox"><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{if eq .Status "failed"}}<span class="pill danger">Failed</span>{{else if .Sending}}<span class="pill amber">Sending…</span>{{else}}<span class="pill">Pending</span>{{end}}</span></a><span class="mailaction">{{if eq .Status "failed"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/outbox/{{.ID}}/retry"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Retry</button></form>{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/outbox/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Remove this message from the outbox?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in the outbox.</p>{{end}}</section></div></div>`
 
 // composeFlash carries a failed send (including uploaded attachment bytes)
 // from the POST to the GET form, so refreshing never re-submits and the user's
@@ -278,10 +278,19 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inbox not found", 404)
 		return
 	}
-	msgs, err := s.Service.Store.ListOutbox(r.Context(), p, box.ID, inboxPageSize)
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	msgs, err := s.Service.Store.ListOutboxBefore(r.Context(), p, box.ID, before, inboxPageSize+1)
 	if err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	}
+	hasMore := len(msgs) > inboxPageSize
+	if hasMore {
+		msgs = msgs[:inboxPageSize]
+	}
+	pagerURL := ""
+	if hasMore && len(msgs) > 0 {
+		pagerURL = "/ui/inboxes/" + box.ID + "/outbox?before=" + url.QueryEscape(msgs[len(msgs)-1].ID)
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
@@ -299,6 +308,8 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 		Inbox:       &box,
 		Messages:    msgs,
 		Folder:      "outbox",
+		HasMore:     hasMore,
+		PagerURL:    pagerURL,
 		Labels:      inboxLabels,
 		LabelUnread: labelUnread,
 		UnreadCount: unread[box.ID],

@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -800,9 +801,10 @@ func TestUIDeleteInboxConfirmDialog(t *testing.T) {
 		t.Fatal("inbox delete should route through the confirm dialog, not data-confirm")
 	}
 
-	// The delete route is unchanged.
+	// The delete route is unchanged, but now requires the server-side typed
+	// confirmation (the inbox address).
 	post := httptest.NewRecorder()
-	delReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/delete", strings.NewReader("_csrf="+csrf))
+	delReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/delete", strings.NewReader("_csrf="+csrf+"&confirm="+url.QueryEscape(box.Address)))
 	delReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	delReq.AddCookie(cookie)
 	h.ServeHTTP(post, delReq)
