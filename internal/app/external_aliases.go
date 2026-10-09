@@ -69,7 +69,7 @@ func (s *Service) SaveExternalAliasSendingConfig(ctx context.Context, p model.Pr
 	same := a.Configured && strings.EqualFold(a.Provider, provider)
 	var old map[string]any
 	if same {
-		old, err = s.decryptConfig(a.EncryptedConfig)
+		old, err = s.decryptConfig(configAAD(p.AccountID, "alias:"+aliasID), a.EncryptedConfig)
 		if err != nil {
 			return a, err
 		}
@@ -81,7 +81,7 @@ func (s *Service) SaveExternalAliasSendingConfig(ctx context.Context, p model.Pr
 	if err = s.validateProviderBase(merged); err != nil {
 		return a, err
 	}
-	enc, err := s.encryptConfig(merged)
+	enc, err := s.encryptConfig(configAAD(p.AccountID, "alias:"+aliasID), merged)
 	if err != nil {
 		return a, err
 	}
@@ -115,5 +115,5 @@ func (s *Service) DeleteExternalAliasSendingConfig(ctx context.Context, p model.
 }
 
 func (s *Service) DecryptExternalAliasSendingConfig(a store.ExternalAlias) (map[string]any, error) {
-	return s.decryptConfig(a.EncryptedConfig)
+	return s.decryptConfig(configAAD(a.AccountID, "alias:"+a.ID), a.EncryptedConfig)
 }

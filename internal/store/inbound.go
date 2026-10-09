@@ -12,6 +12,11 @@ import (
 // decrypts EncryptedConfig before handing it to a transport adapter.
 type InboundBinding struct {
 	AccountID, DomainID, CredentialID, Provider, EncryptedConfig, Recipient string
+	// ConfigDomainID is the domain the encrypted config was actually stored
+	// under, which may be an ancestor when receiving is inherited. It is the AAD
+	// scope for EncryptedConfig, distinct from DomainID (the recipient's own
+	// domain, used for authorization).
+	ConfigDomainID string
 }
 
 // ResolveInboundBinding maps an envelope recipient to the domain and its
@@ -49,6 +54,7 @@ func (s *Store) ResolveInboundBinding(ctx context.Context, provider, recipient s
 	}
 	b.AccountID = accountID
 	b.DomainID = domainID
+	b.ConfigDomainID = cfg.DomainID
 	b.CredentialID = cfg.ID
 	b.Provider = cfg.Provider
 	b.EncryptedConfig = cfg.EncryptedConfig

@@ -144,7 +144,7 @@ func TestDialMXReceiverURLValidationAndEncryptedCredentialRotation(t *testing.T)
 	if strings.Contains(first.EncryptedPrivateSeed, first.PublicKey) || first.EncryptedPrivateSeed == first.PublicKey {
 		t.Fatal("private material is not encrypted separately")
 	}
-	seed, err := svc.DecryptSecret(first.EncryptedPrivateSeed)
+	seed, err := svc.DecryptDialMXSeed(u.AccountID, d.ID, first.EncryptedPrivateSeed)
 	if err != nil || len(seed) != 32 {
 		t.Fatalf("private seed decrypt len=%d err=%v", len(seed), err)
 	}

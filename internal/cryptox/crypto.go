@@ -93,9 +93,16 @@ func decode32(raw string) ([]byte, bool) {
 // DecryptFirst tries each key in order and returns the first successful
 // plaintext, so a rotated or upgraded derivation still reads old ciphertext.
 func DecryptFirst(keys [][]byte, encoded string) ([]byte, error) {
+	return DecryptFirstAAD(keys, encoded, nil)
+}
+
+// DecryptFirstAAD is DecryptFirst with an AAD binding. An AAD-bound ("v2.")
+// blob requires the same aad; a legacy blob ignores it, so a migrated call site
+// reads both old and new rows.
+func DecryptFirstAAD(keys [][]byte, encoded string, aad []byte) ([]byte, error) {
 	var last error
 	for _, k := range keys {
-		b, err := Decrypt(k, encoded)
+		b, err := DecryptWithAAD(k, encoded, aad)
 		if err == nil {
 			return b, nil
 		}
