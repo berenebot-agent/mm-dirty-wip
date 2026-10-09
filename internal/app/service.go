@@ -88,6 +88,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 		return nil, err
 	}
 	netutil.SetRequirePublic(cfg.RequirePublicOutbound())
+	netutil.SetOutboundHTTPTimeout(cfg.OutboundHTTPTimeout)
 	concurrency := cfg.InboundConcurrency
 	if concurrency < 1 {
 		concurrency = 32
@@ -1958,8 +1959,11 @@ func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID string,
 // outcome.
 func (s *Service) fail(ctx context.Context, m model.Message, err error, provider string) error {
 	// A permanent provider error will never succeed on retry, so fail the
-	// message immediately instead of retrying with backoff.
-	if transport.IsPermanent(err) || errors.Is(err, store.ErrExternalAliasDeleted) {
+	// message immediately instead of retrying with backoff. An ambiguous send
+	// (a client timeout that may follow a provider-accepted request) is also
+	// terminal: retrying a provider without an idempotency key could deliver
+	// twice.
+	if transport.IsPermanent(err) || transport.AsAmbiguous(err) || errors.Is(err, store.ErrExternalAliasDeleted) {
 		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider)
 		if ferr != nil {
 			return ferr
@@ -2103,9 +2107,10 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 }
 
 // failWorkflow records a failed workflow handoff with exponential backoff. A
-// permanent provider error is terminal immediately.
+// permanent provider error is terminal immediately, as is an ambiguous send
+// (see fail).
 func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error, provider string) error {
-	if transport.IsPermanent(err) {
+	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
 		events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), time.Time{}, 1, provider)
 		if ferr != nil {
 			return ferr

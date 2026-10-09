@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
@@ -87,4 +88,51 @@ func TestHTTPClientDoesNotFollowRedirect(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("status = %d, want 302 (redirect must not be followed)", resp.StatusCode)
 	}
+}
+
+// A slow response must be aborted once the configured outbound timeout elapses,
+// and the error must be recognisable as a client timeout (the signal the
+// adapters use to mark a send ambiguous).
+func TestOutboundHTTPTimeoutAbortsSlowResponse(t *testing.T) {
+	netutil.SetRequirePublic(false)
+	defer netutil.SetRequirePublic(false)
+	netutil.SetOutboundHTTPTimeout(100 * time.Millisecond)
+	defer netutil.SetOutboundHTTPTimeout(0)
+
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer func() { close(release); ts.Close() }()
+
+	start := time.Now()
+	_, err := netutil.HTTPClient().Get(ts.URL)
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !netutil.IsClientTimeout(err) {
+		t.Fatalf("IsClientTimeout(%v) = false, want true", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("timeout took %s, want it bounded near the configured 100ms", elapsed)
+	}
+}
+
+// A restored (zero) override must not retain the shortened timeout.
+func TestSetOutboundHTTPTimeoutRestoresDefault(t *testing.T) {
+	netutil.SetOutboundHTTPTimeout(50 * time.Millisecond)
+	netutil.SetOutboundHTTPTimeout(0)
+	defer netutil.SetRequirePublic(false)
+	netutil.SetRequirePublic(false)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+	resp, err := netutil.HTTPClient().Get(ts.URL)
+	if err != nil {
+		t.Fatalf("default timeout should tolerate a 200ms response: %v", err)
+	}
+	resp.Body.Close()
 }

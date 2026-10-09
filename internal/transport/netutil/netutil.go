@@ -19,11 +19,40 @@ import (
 
 var requirePublic atomic.Bool
 
+// defaultHTTPTimeout is the shared outbound provider client's overall timeout,
+// used when the operator has not overridden it. It bounds the entire request:
+// connect, upload of the (possibly attachment-heavy) body, and the wait for
+// response headers.
+const defaultHTTPTimeout = 30 * time.Second
+
+// outboundHTTPTimeout holds the effective timeout in nanoseconds. Zero means the
+// default; SetOutboundHTTPTimeout stores the operator's value.
+var outboundHTTPTimeout atomic.Int64
+
 var (
 	clientMu   sync.Mutex
 	shared     *http.Client
 	sharedLong *http.Client
 )
+
+// SetOutboundHTTPTimeout overrides the shared outbound provider client's overall
+// timeout. Large attachment sends can take far longer than the 30-second default
+// on a slow uplink, and a client timeout that fires while awaiting response
+// headers can follow a send the provider already accepted. A non-positive value
+// restores the default. It drops the shared client so the next use rebuilds it
+// with the new timeout.
+func SetOutboundHTTPTimeout(d time.Duration) {
+	if d <= 0 {
+		d = defaultHTTPTimeout
+	}
+	outboundHTTPTimeout.Store(int64(d))
+	clientMu.Lock()
+	if shared != nil {
+		shared.CloseIdleConnections()
+		shared = nil
+	}
+	clientMu.Unlock()
+}
 
 // SetRequirePublic controls whether outbound transports reject non-public
 // destinations. It also selects whether the outbound HTTP client honours the
@@ -45,6 +74,20 @@ func SetRequirePublic(v bool) {
 
 // RequirePublic reports whether public-destination enforcement is active.
 func RequirePublic() bool { return requirePublic.Load() }
+
+// IsClientTimeout reports whether err is a client-side timeout: the request may
+// or may not have reached the server. http.Client.Do returns an error whose
+// text wraps "context deadline exceeded (Client.Timeout exceeded ...)"; both
+// os.ErrDeadlineExceeded and context.DeadlineExceeded satisfy net.Error by
+// value, so neither error.Is nor errors.As matches reliably — match the
+// standard message instead.
+func IsClientTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Client.Timeout exceeded") || strings.Contains(msg, "context deadline exceeded")
+}
 
 // lookupIP resolves a host. It consults net.DefaultResolver at call time rather
 // than binding the method value at package init, so a test can install a
@@ -167,9 +210,18 @@ func HTTPClient() *http.Client {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if shared == nil {
-		shared = newClient(30 * time.Second)
+		shared = newClient(outboundTimeout())
 	}
 	return shared
+}
+
+// outboundTimeout is the effective outbound client timeout: the operator's
+// override, or the default when unset.
+func outboundTimeout() time.Duration {
+	if d := time.Duration(outboundHTTPTimeout.Load()); d > 0 {
+		return d
+	}
+	return defaultHTTPTimeout
 }
 
 // HTTPClientLong returns a client with a longer timeout for large downloads
@@ -207,6 +259,10 @@ func guardedTransport() http.RoundTripper {
 		MaxIdleConns:        10,
 		IdleConnTimeout:     30 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
+		// Bound the wait for response headers by the same overall budget, so a
+		// server that accepts the body then goes silent is failed at the same
+		// point a whole-request deadline would fire.
+		ResponseHeaderTimeout: outboundTimeout(),
 	}
 }
 

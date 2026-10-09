@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/mailgun"
@@ -81,5 +82,32 @@ func TestRequirePublicRejectsPrivateAPIBase(t *testing.T) {
 	_, err := mailgun.Send(context.Background(), mailgun.Config{APIKey: "key", Domain: "mg.example.com", APIBase: "https://127.0.0.1:9999"}, mailgun.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t"})
 	if err == nil || !strings.Contains(err.Error(), "not public-routable") {
 		t.Fatalf("private API base should be rejected: %v", err)
+	}
+}
+
+// Mailgun has no idempotency key, so a client timeout while awaiting headers
+// must be ambiguous, not a retryable transient error.
+func TestSendClientTimeoutIsAmbiguous(t *testing.T) {
+	netutil.SetRequirePublic(false)
+	defer netutil.SetRequirePublic(false)
+	netutil.SetOutboundHTTPTimeout(100 * time.Millisecond)
+	defer netutil.SetOutboundHTTPTimeout(0)
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"<late>"}`)
+	}))
+	defer func() { close(release); srv.Close() }()
+
+	_, err := mailgun.Send(context.Background(), mailgun.Config{APIKey: "key", Domain: "mg.example.com", APIBase: srv.URL}, mailgun.SendRequest{
+		From: "a@b.test", To: []string{"c@d.test"}, Subject: "s", Text: "t",
+	})
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if !transport.AsAmbiguous(err) {
+		t.Fatalf("timeout error %v should be ambiguous", err)
 	}
 }
