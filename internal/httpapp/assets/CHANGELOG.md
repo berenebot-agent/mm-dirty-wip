@@ -13,7 +13,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   invitations. An Admin can create a new inbox-scoped API key, grant an existing
   key or user access, change a key's role inline (Read/Assistant/Owner), remove a
   single inbox binding without revoking the key, invite a person, and revoke a
-  pending invitation. Account Admin keys appear read-only (D089).
+  pending invitation. Account Admin keys appear read-only (D089). Inviting an
+  address that already belongs to an account member grants access directly
+  instead of erroring; the administrator, an address already on the inbox, and a
+  duplicate pending invitation each get a specific message.
 
 ### Fixed — release follow-up
 

@@ -683,9 +683,63 @@ func (s *Server) uiInboxAccessInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	email := strings.TrimSpace(r.Form.Get("email"))
+	if email == "" || !strings.Contains(email, "@") {
+		s.uiError(w, fmt.Errorf("enter a valid email address to invite"), 400)
+		return
+	}
+	// Classify the address before inviting. The invite path rejects an email
+	// that already belongs to a user or has a pending invitation; rather than
+	// surfacing that conflict, resolve it: an existing non-admin member without
+	// access here is simply granted access, and the genuinely-blocked cases get
+	// a clear, specific message.
+	users, err := s.Service.Store.ListAccountUsers(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	for i := range users {
+		u := users[i]
+		if !strings.EqualFold(u.Email, email) {
+			continue
+		}
+		if u.IsAdmin || u.SystemAdmin {
+			s.uiError(w, fmt.Errorf("That address is the account administrator and already has full access."), 400)
+			return
+		}
+		if _, has := u.Roles[inboxID]; has {
+			s.uiError(w, fmt.Errorf("%s already has access to this inbox.", u.Email), 400)
+			return
+		}
+		// Auto-route: grant access to the existing member rather than inviting.
+		roles := map[string]string{}
+		for id, role := range u.Roles {
+			roles[id] = role
+		}
+		roles[inboxID] = "owner"
+		if err := s.Service.Store.SetUserRoles(r.Context(), p.AccountID, u.ID, roles); err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+		s.Service.Hub.CancelScope("user:" + u.ID)
+		accessRedirect(w, r, inboxID, u.Email+" added to this inbox")
+		return
+	}
+	invites, err := s.Service.Store.ListInvites(r.Context(), p.AccountID)
+	if err != nil {
+		s.uiError(w, err, 500)
+		return
+	}
+	now := time.Now().UTC()
+	for _, existing := range invites {
+		if existing.Pending(now) && strings.EqualFold(existing.Email, email) {
+			s.uiError(w, fmt.Errorf("%s already has a pending invitation.", existing.Email), 400)
+			return
+		}
+	}
 	inv, token, err := s.Service.Store.CreateInvite(r.Context(), store.InviteInput{
 		AccountID: p.AccountID,
-		Email:     r.Form.Get("email"),
+		Email:     email,
 		Kind:      model.InviteKindOperator,
 		InboxIDs:  []string{inboxID},
 		Quota:     s.Service.Config.DefaultQuotaBytes,
@@ -693,6 +747,11 @@ func (s *Server) uiInboxAccessInvite(w http.ResponseWriter, r *http.Request) {
 		TTL:       inviteTTL,
 	})
 	if err != nil {
+		// A concurrent create can still race us here; keep the message friendly.
+		if errors.Is(err, store.ErrConflict) {
+			s.uiError(w, fmt.Errorf("That address already has a mailbox account or a pending invitation."), 400)
+			return
+		}
 		s.uiError(w, err, 400)
 		return
 	}

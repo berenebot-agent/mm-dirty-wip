@@ -75,6 +75,18 @@ func TestDashboardRendersClientsAccessTab(t *testing.T) {
 	if strings.Contains(body, "onclick=") {
 		t.Fatal("inline event handlers are blocked by CSP and must not be used")
 	}
+	// The new-key flow shows the one-time secret in the shared client result
+	// dialog, not a browser alert popup.
+	assetReq := httptest.NewRequest("GET", "/assets/app.js", nil)
+	assetRR := httptest.NewRecorder()
+	h.ServeHTTP(assetRR, assetReq)
+	asset := assetRR.Body.String()
+	if !strings.Contains(asset, "window.mailmooseShowKeyResult") {
+		t.Fatal("access tab must reuse the shared key result view")
+	}
+	if strings.Contains(asset, "window.alert((data.notice") {
+		t.Fatal("access key creation must not use a browser alert for the secret")
+	}
 }
 
 func TestInboxAccessCreateKey(t *testing.T) {
@@ -242,6 +254,107 @@ func TestInboxAccessInviteForwardsToAccount(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("invitation not created")
+	}
+}
+
+// TestInboxAccessInviteAutoRoutesExistingMember verifies that inviting the
+// email of an existing non-admin member who lacks access here grants access
+// directly instead of creating an invite (and never surfaces a raw conflict).
+func TestInboxAccessInviteAutoRoutesExistingMember(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", second.ID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {"member@example.com"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("auto-route invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	users, _ := svc.Store.ListAccountUsers(context.Background(), u.AccountID)
+	for _, m := range users {
+		if m.ID == member.ID && m.Roles[box.ID] != "owner" {
+			t.Fatalf("member not granted access: %#v", m.Roles)
+		}
+	}
+	invites, _ := svc.Store.ListInvites(context.Background(), u.AccountID)
+	now := time.Now().UTC()
+	for _, inv := range invites {
+		if strings.EqualFold(inv.Email, "member@example.com") && inv.Pending(now) {
+			t.Fatal("no pending invitation should be created for an existing member")
+		}
+	}
+}
+
+// TestInboxAccessInviteClassifiesAdmin verifies the account administrator is
+// reported as such rather than surfacing a raw email-conflict message.
+func TestInboxAccessInviteClassifiesAdmin(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {u.Email}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("admin invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "administrator") {
+		t.Fatalf("expected administrator message, got %q", body)
+	}
+}
+
+// TestInboxAccessInviteClassifiesPending verifies a duplicate pending invite is
+// reported clearly.
+func TestInboxAccessInviteClassifiesPending(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	inv, _, err := svc.Store.CreateInvite(context.Background(), store.InviteInput{
+		AccountID: u.AccountID, Email: "pending@example.com", Kind: model.InviteKindOperator,
+		InboxIDs: []string{box.ID}, CreatedBy: u.ID, TTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = inv
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {"pending@example.com"}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("pending invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "pending invitation") {
+		t.Fatalf("expected pending-invitation message, got %q", body)
+	}
+}
+
+// TestInboxAccessInviteClassifiesExistingAccess verifies a member who already
+// has a role here is reported as already having access.
+func TestInboxAccessInviteClassifiesExistingAccess(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", box.ID)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{"email": {member.Email}, "_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/invites", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("existing-access invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "already has access") {
+		t.Fatalf("expected already-has-access message, got %q", body)
 	}
 }
 
