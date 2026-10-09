@@ -29,6 +29,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - The outbox delivers concurrently through a bounded sender pool
   (`OUTBOUND_CONCURRENCY`, default 5, max 32), so a slow attachment send no longer
   stalls the rest of a batch (D093).
+- Outbound delivery no longer reads the whole stored message into memory for HTTP
+  providers; only raw-MIME transports (SMTP, Direct MX) load it, and HTTP adapters
+  reconstruct just the attachment bytes they send (D093).
 - A provider HTTP timeout while awaiting headers is now treated as an ambiguous
   send and failed terminally for Brevo and Mailgun (which have no idempotency
   key), preventing a retry from double-delivering; Resend keeps its idempotent
