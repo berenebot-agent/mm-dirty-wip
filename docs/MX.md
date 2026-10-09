@@ -146,8 +146,62 @@ session listener, and the receiver admits cleartext only from that allowlist
 origin with hostname verification, and the per-domain DNS proof is still the
 authority. The proxy must support cleartext HTTP/2 to the upstream; nginx
 `proxy_pass` does not, but Nginx Proxy Manager **Streams** with SSL, Caddy
-(`transport http { versions h2c }`) and HAProxy do. Leave SMTP direct: a proxy
-on `:25` would hide the sender's IP from SPF.
+(`transport http { versions h2c }`), HAProxy and Traefik (see below) do. Leave
+SMTP direct: a proxy on `:25` would hide the sender's IP from SPF.
+
+#### Configuring Traefik as the session front
+
+Traefik serves cleartext HTTP/2 to a backend through its gRPC-grade h2c
+support — the label `loadBalancer.server.scheme=h2c` (file provider:
+`url: "h2c://host:port"`). It works as a session front, with two points to get
+right:
+
+- **The scheme must be set explicitly.** Traefik defaults to HTTP/1.1 to the
+  backend, and an HTTP/1.1 upstream cannot carry the held-open request body the
+  session needs. Without `h2c` the backend sees an HTTP/1.1 frame where HTTP/2
+  was expected and the session never comes up.
+- **`DIALMX_TRUSTED_PROXIES` takes CIDRs, not hostnames.** A container name
+  fails configuration and the receiver will not start:
+  `invalid DIALMX_TRUSTED_PROXIES entry "proxy": netip.ParsePrefix("proxy"): no '/'`.
+  Resolve the proxy's address on the shared Docker network (for example
+  `docker network inspect <network>`) and use it as a `/32`. Keep it to the
+  proxy alone — a wider range admits any peer on that network as a cleartext
+  session. These addresses are dynamic, so a recreated network changes the
+  proxy's IP and silently breaks the allowlist; pin the subnet or assign the
+  proxy a static address on a long-lived deployment.
+
+A worked example, with the receiver listening on the proxy network's `8443`
+and publishing no session port of its own:
+
+```yaml
+services:
+  dialmx:
+    image: mailmoose-dialmx:latest
+    environment:
+      DIALMX_MODE: shared
+      DIALMX_TRUSTED_PROXIES: "172.18.0.2/32"   # the proxy's address, not a name
+      MX_HOSTNAME: mx.example.com
+    networks: [proxy]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dialmx.rule=Host(`mx.example.com`)"
+      - "traefik.http.routers.dialmx.entrypoints=websecure"
+      - "traefik.http.routers.dialmx.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dialmx.loadbalancer.server.port=8443"
+      # Required: forward CLEARTEXT HTTP/2, not HTTP/1.1.
+      - "traefik.http.services.dialmx.loadbalancer.server.scheme=h2c"
+    ports:
+      - "25:2525"    # SMTP stays direct, never behind the proxy
+```
+
+Traefik needs port 80 as well as 443 if it is issuing its own certificates: the
+ACME HTTP-01 challenge is served over `:80`, so an entrypoint-level redirect to
+HTTPS would stop cert issuance. Do the redirect per-router via a middleware
+instead.
+
+A core configured with `MX_RECEIVER_URL` then dials the proxy's public origin in
+the usual way; the h2c leg is internal to the proxy and nothing on the core side
+changes.
 
 SMTP STARTTLS is independent: use `MX_TLS_CERT` / `MX_TLS_KEY`, optionally
 `MX_REQUIRE_TLS=true`. Session certificates do not automatically enable SMTP TLS.

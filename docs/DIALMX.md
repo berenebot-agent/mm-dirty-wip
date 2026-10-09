@@ -148,7 +148,35 @@ other cleartext session with `426`. The core still dials the proxy over verified
 `https`, so its TLS and the DNS-anchored domain proof are unchanged. The proxy
 must forward **cleartext HTTP/2 to the upstream** (nginx `proxy_pass` cannot —
 use Nginx Proxy Manager **Streams** with SSL, Caddy `transport http { versions
-h2c }`, HAProxy `proto h2c`, or a similar L4 front). Keep the SMTP edge direct:
+h2c }`, HAProxy `proto h2c`, Traefik `loadBalancer.server.scheme=h2c`, or a
+similar L4 front). The proxy's **request/read timeout must also be disabled for
+this route.** The session is a held-open bidirectional stream, not a
+request/response: the core dials out once and the receiver answers
+`Resolve`/`Ingest` on that same stream for as long as it lives. A proxy that
+applies a finite read timeout tears the session down when it fires, and the
+receiver reports `core disconnected ... uptime_ms=<timeout> reason="stream
+error`. During each reconnect window recipient resolution fails, so senders see
+an **intermittent 550 at RCPT** that looks like a routing fault rather than a
+proxy setting. For reference, Traefik's default `readTimeout` is 60s and it will
+cut the stream at exactly 60s every time:
+
+```yaml
+# Traefik v3 static config: disable the responding timeouts on the entrypoint
+# that fronts the session.
+entryPoints:
+  websecure:
+    address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 0    # 0 = no deadline
+        writeTimeout: 0
+        idleTimeout: 0
+```
+
+The session client tolerates 90s of idleness (`sessionIdleTimeout`) and sends a
+keepalive every 30s (`keepaliveInterval`), so a proxy timeout of 60s cannot be
+worked around from the core side — it must be disabled, or set comfortably above
+90s. Keep the SMTP edge direct:
 if the proxy also fronted `:25` the receiver would see the proxy's IP, breaking
 SPF alignment and per-source limits. Behind a proxy every core arrives from the
 proxy's IP, so the per-source caps (`MX_PER_IP_*`) are shared; raise them if one
