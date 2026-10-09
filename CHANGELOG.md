@@ -51,6 +51,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Domain and inbox deletion now require the typed confirmation server-side, not
+  just in the browser, so a script cannot bypass the guard; a mismatch returns
+  the user to the dashboard with an error banner.
+- Adding a domain or inbox with invalid input now returns to the dashboard with
+  a friendly error instead of a bare 400 page, so the user is not stranded.
+- The Outbox now paginates ("Load older") instead of silently truncating at one
+  page, so queued mail beyond the first page stays reachable.
 - Invite acceptance: a failure while redeeming a setup token now logs the cause
   and shows a generic message instead of echoing the raw error to the anonymous
   visitor.

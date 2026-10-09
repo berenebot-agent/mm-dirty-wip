@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -1144,7 +1145,7 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 	s.settingsRedirect(w, r, "Password changed. Other devices have been logged out.", "")
 }
 
-const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
+const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error notice" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
  {{if .DomainWorkerCode}}<dialog id="cf-setup-dialog" class="cf-setup-dialog" data-open="1"><div id="cf-worker-step"><h2>Cloudflare setup code</h2><p class="muted">Paste this into Cloudflare. It contains the generated shared secret and is shown only once.</p><ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Start with Hello World</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li></ol><pre class="cf-code" id="cf-code">{{.DomainWorkerCode}}</pre><p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><button type="button" class="btn" id="cf-next">Next</button></div></div><div id="cf-routing-step" hidden><h2>Email Routing</h2><p class="muted">Now point this domain's mail at the Worker.</p><ol class="steps"><li>In Cloudflare, open <b>Email Routing</b> for this domain and onboard it, adding the <b>DNS records</b> Cloudflare lists.</li><li>In <b>Email Routing</b>, edit the <b>catch-all</b> rule, choose <b>Send to a Worker</b>, and select this Worker.</li><li><b>Enable</b> the catch-all rule.</li></ol><div class="dialog-actions"><button type="button" class="btn" id="cf-done">Done</button></div></div></dialog>{{end}}
 <div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>
 <div class="grid dashboard-grid"><section class="card" style="grid-column:1/-1" data-open-inbox="{{.InboxOpenID}}" data-open-inbox-tab="{{.InboxOpenTab}}" data-open-alias="{{.InboxOpenAlias}}"><div class="card-head"><h2>Inboxes</h2><button type="button" id="add-inbox">Add Inbox</button></div>{{if .Inboxes}}{{template "inboxes-table" .}}{{else}}<p class="muted">No inboxes yet.</p>{{end}}</section>
@@ -1550,6 +1551,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	notice, secretLabel, secret := r.URL.Query().Get("notice"), "", ""
+	dashboardError := r.URL.Query().Get("error")
 	workerCode, workerWebhook := "", ""
 	// An external-alias connector flash is consumed only after the alias set is
 	// known, so a stale flash is never applied to the wrong alias.
@@ -1627,7 +1629,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
-	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, RemoteMXSetup: remoteMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret})
+	s.render(w, r, dashboardBody, pageData{Title: "Dashboard", Tab: "home", Principal: p, CSRF: csrf(r), Account: acc, BaseURL: s.Service.Config.BaseURL, Domains: domains, DomainSendingReady: sendingReady, DomainReceivingReady: receivingReady, DomainIsMX: domainIsMX, InboxSendingReady: inboxSendingReady, DomainInboxes: domainInboxes, DomainSendingEditors: sendingEditors, DomainReceivingEditors: receivingEditors, DomainSendingSelected: sendingSelected, DomainReceivingSelected: receivingSelected, DomainSendingLabel: sendingLabel, DomainReceivingLabel: receivingLabel, DomainReceivingRegenerate: receivingRegenerate, DialMXSetup: dialMXSetup, MXSetup: mxSetup, RemoteMXSetup: remoteMXSetup, DomainParentCandidate: domainParentCandidate, DomainOpenID: openID, DomainOpenKind: openKind, DomainWorkerCode: workerCode, DomainWorkerWebhook: workerWebhook, DomainNamesCSV: domainNamesCSV(domains), Inboxes: boxes, Messages: msgs, Credentials: credentialViews(keys, nil, nil), InboxConnectors: inboxConnectors, Unread: unread, MailboxSizes: mailboxSizes, InboxQuotas: inboxQuotas, DraftCounts: draftCounts, InboxAddr: inboxAddrMap(boxes), ExternalAliasDialogs: aliasDialogs, InboxOpenID: inboxOpenID, InboxOpenTab: inboxOpenTab, InboxOpenAlias: inboxOpenAlias, Notice: notice, SecretLabel: secretLabel, Secret: secret, Error: dashboardError})
 }
 
 func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
@@ -1646,10 +1648,31 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 		opts.DisableSending = r.Form.Get("inherit_sending") != "1"
 	}
 	if _, err := s.Service.Store.CreateDomainWithOptions(r.Context(), p.AccountID, r.Form.Get("name"), opts); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Redirect(w, r, "/?error="+url.QueryEscape(createErrorMessage(err)), 303)
 		return
 	}
 	http.Redirect(w, r, "/?notice=Domain+created", 303)
+}
+
+// createErrorMessage maps a domain/inbox creation error to a user-safe message.
+// Deliberately client-side validation errors keep their text; anything that
+// looks like an internal engine fault is replaced with a generic message so the
+// dashboard never shows database or filesystem detail.
+func createErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
+		if strings.HasPrefix(msg, prefix) {
+			return "Could not create it. Please try again."
+		}
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return "Could not create it. Please try again."
+	}
+	return msg
 }
 
 // domainNamesCSV joins the account's domain names for the Add Domain dialog's
@@ -1691,6 +1714,15 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
+	dom, err := s.Service.Store.GetDomain(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if !typedConfirmMatches(r.FormValue("confirm"), dom.Name) {
+		http.Redirect(w, r, "/?error="+url.QueryEscape("Type the domain name exactly to confirm deletion."), 303)
+		return
+	}
 	paths, err := s.Service.Store.PurgeDomain(r.Context(), p.AccountID, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), 400)
@@ -1701,6 +1733,14 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/?notice=Domain+deleted", 303)
 }
+
+// typedConfirmMatches reports whether the caller's typed confirmation matches
+// the object's name, ignoring case and surrounding whitespace. It is the
+// server-side half of the "type the name to delete" guard; the browser check is
+// only a convenience and a script can bypass it.
+func typedConfirmMatches(confirm, expected string) bool {
+	return strings.EqualFold(strings.TrimSpace(confirm), strings.TrimSpace(expected))
+}
 func (s *Server) uiCreateInbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
@@ -1709,16 +1749,16 @@ func (s *Server) uiCreateInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := parseInboxConfig(r)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Redirect(w, r, "/?error="+url.QueryEscape(err.Error()), 303)
 		return
 	}
 	inbox, err := s.Service.Store.CreateInbox(r.Context(), p.AccountID, r.Form.Get("domain"), r.Form.Get("local"), r.Form.Get("display"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Redirect(w, r, "/?error="+url.QueryEscape(createErrorMessage(err)), 303)
 		return
 	}
 	if err = s.applyInboxConfig(r.Context(), p.AccountID, inbox.ID, cfg); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Redirect(w, r, "/?error="+url.QueryEscape(createErrorMessage(err)), 303)
 		return
 	}
 	http.Redirect(w, r, "/?notice=Inbox+created", 303)
@@ -2090,6 +2130,15 @@ func (s *Server) uiDeleteInbox(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
+		return
+	}
+	inbox, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
+	if !typedConfirmMatches(r.FormValue("confirm"), inbox.Address) {
+		http.Redirect(w, r, "/?error="+url.QueryEscape("Type the inbox address exactly to confirm deletion."), 303)
 		return
 	}
 	paths, err := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, r.PathValue("id"))
