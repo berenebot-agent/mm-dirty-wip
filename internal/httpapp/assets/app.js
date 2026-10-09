@@ -3543,9 +3543,11 @@ function hideInboxSubview(dlg) {
       save.hidden = statusMode && (custom || !emailDirty());
       save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : repairing ? 'Done' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
-      // Rotation finishes regardless of readiness: the receiver re-authorizes on
-      // its own and the status view shows it as in progress.
-      save.disabled = busy || (!statusMode && !rotating && (step === 2 || step === 3) && !ready);
+      // Only the receivers step requires a ready receiver to advance. Key
+      // rotation and the enforcement-step Finish are never readiness-gated: the
+      // receiver re-authorizes on its own and the status view shows it as in
+      // progress.
+      save.disabled = busy || (!statusMode && !rotating && step === 2 && !ready);
       check.disabled = busy || Date.now() < manualUntil;
       check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
       // While a check is in flight, pending amber dots animate as spinners so a
@@ -3602,7 +3604,7 @@ function hideInboxSubview(dlg) {
     form.addEventListener('submit', function (event) {
       if (!active()) { return; }
       event.preventDefault();
-      if (busy || (!statusMode && !rotating && (step === 2 || step === 3) && !ready)) { return; }
+      if (busy || (!statusMode && !rotating && step === 2 && !ready)) { return; }
       // Repair is a single DNS step: Done re-checks and returns to the status view.
       if (repairing) {
         busy = true; update();
@@ -3636,8 +3638,12 @@ function hideInboxSubview(dlg) {
       busy = true; fail(''); update();
       var finishing = step === 3;
       var beforeSave = finishing ? api('GET').then(function (data) {
+        // Finish is never gated on receiver readiness: once the operator is past
+        // the receiver step, saving re-renders the status view, which reports the
+        // receiver authorizing/reconnecting until it reconnects. Bouncing back to
+        // the receiver step would trap the operator for a state that needs no
+        // action and matches neither key rotation nor DNS repair.
         render(data);
-        if (!ready) { step = 2; throw new Error('No Antler receiver is ready now. Wait for one receiver to reconnect before finishing.'); }
       }) : api('GET').then(function (data) {
         // Reopening an existing setup must retain its enforcement until the
         // final step, and must not unnecessarily resolve a new receiver set.
