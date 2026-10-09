@@ -1767,15 +1767,52 @@ function clearUrlParams(names) {
   }
   // On the Connectors panel the footer Save posts the auto-actions form, which
   // is separate from the inbox identity form.
-  if (inboxSaveButton && connectorsForm) {
+  // The footer Save commits every tab's staged edits in one POST. The inbox
+  // identity/allow/approver/quota/aliases fields live in the main form; the
+  // delivery auto-action controls (Connectors tab) live in a separate form, so
+  // their current values are mirrored onto the main form at submit time. Staged
+  // Clients & Access role changes are already attached to the main form.
+  function syncAutoActionsToMainForm() {
+    if (!form || !connectorsForm) {
+      return;
+    }
+    form.querySelectorAll('input[data-auto-actions]').forEach(function (el) {
+      el.remove();
+    });
+    connectorsForm.querySelectorAll('input[name], select[name]').forEach(function (el) {
+      if (!el.name || el.disabled) {
+        return;
+      }
+      var hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.setAttribute('data-auto-actions', '1');
+      hidden.name = el.name;
+      if (el.type === 'checkbox') {
+        if (el.checked) {
+          hidden.value = el.value || '1';
+        } else {
+          return;
+        }
+      } else {
+        hidden.value = el.value;
+      }
+      form.appendChild(hidden);
+    });
+  }
+  if (inboxSaveButton) {
     inboxSaveButton.addEventListener('click', function (event) {
-      var panel = dlg.querySelector('[data-inbox-panel=connectors]');
-      if (!panel || panel.hidden) {
+      // The connector editor is a sub-view with its own form and its own Save
+      // target: leave those alone.
+      var inConnectorEditor = dlg.classList.contains('inbox-settings--subview') &&
+        dlg.querySelector('.inbox-subview.active[data-inbox-subview=connectors]');
+      if (inConnectorEditor) {
         return;
       }
       event.preventDefault();
       inboxSubmitting = true;
-      connectorsForm.requestSubmit();
+      syncAutoActionsToMainForm();
+      syncStagedKeyRoles();
+      form.requestSubmit();
     });
   }
   var editAliasList = document.getElementById('inbox-alias-list');
@@ -1837,9 +1874,11 @@ function clearUrlParams(names) {
 
   function setConnectorEditorMode(editing) {
     // The connector editor is an in-modal sub-view: the whole panels area
-    // switches to it, so the footer Save follows the edit form.
+    // switches to it. While it is open the footer Save targets its own edit
+    // form; the click handler leaves that case alone. Returning to the tab
+    // restores the main form as the Save target.
     if (inboxSaveButton && connectorEditor) {
-      inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-connectors-form');
+      inboxSaveButton.setAttribute('form', editing ? 'inbox-connector-edit-form' : 'inbox-edit-form');
     }
     if (editing) {
       showInboxSubview(dlg, 'connectors');
@@ -2058,17 +2097,21 @@ function clearUrlParams(names) {
     if (notice) {
       dest += '&notice=' + encodeURIComponent(notice);
     }
-    window.location.href = dest;
+    window.location.assign(dest);
   }
 
-  // accessPost submits a tiny form to a per-inbox access endpoint and reloads
-  // on success, surfacing an error inline otherwise.
-  function accessPost(path, fields, confirmText) {
+  // accessPost submits a tiny form to a per-inbox access endpoint and reloads on
+  // success, surfacing an error inline otherwise. The triggering control is
+  // disabled while the request is in flight so a change reads as committed.
+  function accessPost(path, fields, confirmText, control) {
     if (confirmText && !window.confirm(confirmText)) {
       return;
     }
     if (typeof window.fetch !== 'function') {
       return;
+    }
+    if (control) {
+      control.disabled = true;
     }
     var body = new URLSearchParams();
     body.append('_csrf', csrfValue);
@@ -2090,6 +2133,9 @@ function clearUrlParams(names) {
       }
       accessReload('');
     }).catch(function (err) {
+      if (control) {
+        control.disabled = false;
+      }
       var message = err.message || 'Could not update access';
       if (dlg && dlg.classList.contains('inbox-settings--subview') && accessAddBody) {
         accessAddError(message);
@@ -2100,7 +2146,10 @@ function clearUrlParams(names) {
   }
 
   // accessRoleSeg renders the same None/Read/Assistant/Owner segmented control
-  // used by the Clients card, wired to post a role change for an API key.
+  // used by the Clients card. Unlike the Clients card it stages the role change
+  // in the DOM and commits it with the inbox settings Save (via a hidden
+  // access_role_<keyID> input), so a role change does not reload the page.
+  var stagedKeyRoles = {};
   function accessRoleSeg(keyID, role) {
     var wrap = document.createElement('div');
     wrap.className = 'seg access-role';
@@ -2112,14 +2161,39 @@ function clearUrlParams(names) {
       btn.className = on ? 'active' : '';
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       btn.addEventListener('click', function () {
-        if (on) {
+        if (btn.classList.contains('active')) {
           return;
         }
-        accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/keys/' + encodeURIComponent(keyID), [['role', pair[0]]]);
+        wrap.querySelectorAll('button').forEach(function (b) {
+          var active = b === btn;
+          b.className = active ? 'active' : '';
+          b.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        stagedKeyRoles[keyID] = pair[0] || '';
+        syncStagedKeyRoles();
       });
       wrap.appendChild(btn);
     });
     return wrap;
+  }
+
+  // syncStagedKeyRoles mirrors the staged role changes onto hidden inputs inside
+  // the inbox edit form, so the footer Save submits them with everything else.
+  function syncStagedKeyRoles() {
+    if (!form) {
+      return;
+    }
+    form.querySelectorAll('input[data-access-role]').forEach(function (el) {
+      el.remove();
+    });
+    Object.keys(stagedKeyRoles).forEach(function (keyID) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.setAttribute('data-access-role', '1');
+      input.name = 'access_role_' + keyID;
+      input.value = stagedKeyRoles[keyID];
+      form.appendChild(input);
+    });
   }
 
   function accessKeyRow(k) {
@@ -2151,7 +2225,7 @@ function clearUrlParams(names) {
     remove.title = 'Remove this inbox from the client. The key keeps its other mailbox access.';
     remove.addEventListener('click', function () {
       accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/keys/' + encodeURIComponent(k.id) + '/remove', [],
-        'Remove this inbox from ' + k.name + '? The key keeps its other mailbox access.');
+        'Remove this inbox from ' + k.name + '? The key keeps its other mailbox access.', remove);
     });
     row.appendChild(remove);
     return row;
@@ -2181,7 +2255,7 @@ function clearUrlParams(names) {
     remove.textContent = 'Remove';
     remove.addEventListener('click', function () {
       accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/users/' + encodeURIComponent(u.id) + '/remove', [],
-        'Remove ' + u.email + ' from this inbox?');
+        'Remove ' + u.email + ' from this inbox?', remove);
     });
     row.appendChild(remove);
     return row;
@@ -2441,6 +2515,9 @@ function clearUrlParams(names) {
       } catch (e) {
         renderAccess({ keys: [], admin_keys: [], users: [], invites: [] });
       }
+      // A freshly opened inbox starts with no staged access changes.
+      stagedKeyRoles = {};
+      syncStagedKeyRoles();
       if (connectorAdd) {
         connectorAdd.setAttribute('data-inbox', editInboxID);
       }
@@ -2719,18 +2796,13 @@ function bindInboxSettingsShell(dlg) {
     });
     var inboxSave = dlg.querySelector('#inbox-edit-save');
     if (inboxSave) {
-      // The Clients & Access tab applies each change immediately, so the footer
-      // save button is hidden there; every other tab keeps it.
-      inboxSave.hidden = name === 'access';
+      // Save is always shown; the click handler (bound once) submits the single
+      // main inbox-edit form, mirroring the delivery auto-actions and any staged
+      // Clients & Access role changes onto it. The connectors tab keeps the
+      // main-form target so a Save there commits auto-actions too.
+      inboxSave.hidden = false;
       inboxSave.textContent = 'Save';
-      inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
-    }
-    // With no Save on the Clients & Access tab, the remaining secondary button
-    // closes the dialog; label it accordingly rather than "Cancel" (there is
-    // nothing staged to discard).
-    var inboxCancel = dlg.querySelector('#inbox-edit-cancel');
-    if (inboxCancel) {
-      inboxCancel.textContent = name === 'access' ? 'Close' : 'Cancel';
+      inboxSave.setAttribute('form', 'inbox-edit-form');
     }
   }
 

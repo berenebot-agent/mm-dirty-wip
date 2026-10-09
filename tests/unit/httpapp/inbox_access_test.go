@@ -142,10 +142,16 @@ func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	other, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Untouched", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	set := url.Values{"role": {"assistant"}, "_csrf": {csrf}}
-	setReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/keys/"+key.ID, strings.NewReader(set.Encode()))
+	// A role change is committed by the inbox settings Save (the access tab
+	// stages it as access_role_<keyID>), not a dedicated endpoint.
+	set := url.Values{"_csrf": {csrf}, "access_role_" + key.ID: {"assistant"}}
+	setReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(set.Encode()))
 	setReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	setReq.AddCookie(cookie)
 	setRR := httptest.NewRecorder()
@@ -153,20 +159,34 @@ func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
 	if setRR.Code != http.StatusSeeOther {
 		t.Fatalf("set role = %d body=%s", setRR.Code, setRR.Body.String())
 	}
-	if loc := setRR.Header().Get("Location"); !strings.Contains(loc, "inbox_tab=access") || !strings.Contains(loc, "inbox="+box.ID) {
-		t.Fatalf("redirect = %q", loc)
+
+	keys, _ := svc.Store.ListAPIKeys(context.Background(), u.AccountID)
+	for _, k := range keys {
+		if k.ID == key.ID {
+			if k.Roles[box.ID] != "assistant" {
+				t.Fatalf("role not updated: %#v", k.Roles)
+			}
+			if k.Roles[second.ID] != "owner" {
+				t.Fatalf("other inbox binding lost: %#v", k.Roles)
+			}
+		}
+		if k.ID == other.ID && k.Roles[box.ID] != "owner" {
+			t.Fatalf("untouched key must keep its role: %#v", k.Roles)
+		}
 	}
 
-	rem := url.Values{"_csrf": {csrf}}
-	remReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/keys/"+key.ID+"/remove", strings.NewReader(rem.Encode()))
-	remReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	remReq.AddCookie(cookie)
-	remRR := httptest.NewRecorder()
-	h.ServeHTTP(remRR, remReq)
-	if remRR.Code != http.StatusSeeOther {
-		t.Fatalf("remove = %d body=%s", remRR.Code, remRR.Body.String())
+	// Removing the binding for one inbox via the same save leaves the key and
+	// its other bindings intact.
+	clear := url.Values{"_csrf": {csrf}, "access_role_" + key.ID: {""}}
+	clearReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear role = %d body=%s", clearRR.Code, clearRR.Body.String())
 	}
-	keys, _ := svc.Store.ListAPIKeys(context.Background(), u.AccountID)
+	keys, _ = svc.Store.ListAPIKeys(context.Background(), u.AccountID)
 	for _, k := range keys {
 		if k.ID != key.ID {
 			continue
@@ -187,8 +207,8 @@ func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, u.ID)
-	form := url.Values{"role": {"owner"}, "_csrf": {csrf}}
-	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/access/keys/"+adminKey.ID, strings.NewReader(form.Encode()))
+	form := url.Values{"_csrf": {csrf}, "access_role_" + adminKey.ID: {"owner"}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
@@ -370,8 +390,8 @@ func TestInboxAccessRejectsForeignInbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	cookie, csrf := uiSession(t, svc, u.ID)
-	form := url.Values{"role": {"read"}, "_csrf": {csrf}}
-	req := httptest.NewRequest("POST", "/ui/inboxes/does-not-exist/access/keys/"+key.ID, strings.NewReader(form.Encode()))
+	form := url.Values{"_csrf": {csrf}}
+	req := httptest.NewRequest("POST", "/ui/inboxes/does-not-exist/access/keys/"+key.ID+"/remove", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
