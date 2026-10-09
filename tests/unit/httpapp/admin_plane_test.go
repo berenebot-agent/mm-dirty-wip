@@ -124,8 +124,8 @@ func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("account admin /account = %d, want 200", rr.Code)
 	}
-	if !strings.Contains(rr.Body.String(), "Mailbox operators") {
-		t.Fatal("account page must show the operators section for account Admins")
+	if !strings.Contains(rr.Body.String(), "Mailbox users") {
+		t.Fatal("account page must show the mailbox users section for account Admins")
 	}
 }
 
@@ -138,8 +138,8 @@ func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("operator /account = %d", rr.Code)
 	}
-	if strings.Contains(rr.Body.String(), "Mailbox operators") {
-		t.Fatal("operators must not see the operators section")
+	if strings.Contains(rr.Body.String(), "Mailbox users") {
+		t.Fatal("operators must not see the mailbox users section")
 	}
 }
 

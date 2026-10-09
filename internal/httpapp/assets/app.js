@@ -1995,6 +1995,346 @@ function clearUrlParams(names) {
     });
   }
 
+  // ---- Clients & Access tab ----------------------------------------------
+  // Per-inbox management of API keys, mailbox users and pending invitations.
+  // Role changes, adds and removes post immediately (fetch) and then reload the
+  // dashboard onto this dialog/tab so the lists reflect the durable state.
+  var accessKeysList = document.getElementById('inbox-access-keys');
+  var accessUsersList = document.getElementById('inbox-access-users');
+  var accessInvitesList = document.getElementById('inbox-access-invites');
+  var accessAddKey = document.getElementById('access-add-key');
+  var accessAddUser = document.getElementById('access-add-user');
+  var accessAddTitle = document.getElementById('access-add-title');
+  var accessAddBody = document.getElementById('access-add-body');
+  var editAccess = { keys: [], admin_keys: [], users: [], invites: [] };
+
+  function accessEsc(s) {
+    return String(s == null ? '' : s);
+  }
+
+  // accessReload returns to the server render of this inbox on the access tab.
+  function accessReload(notice) {
+    var dest = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
+    if (notice) {
+      dest += '&notice=' + encodeURIComponent(notice);
+    }
+    window.location.href = dest;
+  }
+
+  // accessPost submits a tiny form to a per-inbox access endpoint and reloads
+  // on success, surfacing an error inline otherwise.
+  function accessPost(path, fields, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) {
+      return;
+    }
+    if (typeof window.fetch !== 'function') {
+      return;
+    }
+    var body = new URLSearchParams();
+    body.append('_csrf', csrfValue);
+    (fields || []).forEach(function (f) {
+      body.append(f[0], f[1]);
+    });
+    fetch(path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: body.toString(),
+      credentials: 'same-origin'
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (text) {
+          throw new Error(text || 'Could not update access');
+        });
+      }
+      accessReload('');
+    }).catch(function (err) {
+      window.alert(err.message || 'Could not update access');
+    });
+  }
+
+  // accessRoleSeg renders the same None/Read/Assistant/Owner segmented control
+  // used by the Clients card, wired to post a role change for an API key.
+  function accessRoleSeg(keyID, role) {
+    var wrap = document.createElement('div');
+    wrap.className = 'seg access-role';
+    [['', 'None'], ['read', 'Read'], ['assistant', 'Assistant'], ['owner', 'Owner']].forEach(function (pair) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = pair[1];
+      var on = (pair[0] || '') === (role || '');
+      btn.className = on ? 'active' : '';
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.addEventListener('click', function () {
+        if (on) {
+          return;
+        }
+        accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/keys/' + encodeURIComponent(keyID), [['role', pair[0]]]);
+      });
+      wrap.appendChild(btn);
+    });
+    return wrap;
+  }
+
+  function accessKeyRow(k) {
+    var row = document.createElement('div');
+    row.className = 'access-row';
+    var main = document.createElement('div');
+    main.className = 'access-main';
+    var name = document.createElement('div');
+    name.className = 'access-name';
+    name.textContent = accessEsc(k.name);
+    var meta = document.createElement('div');
+    meta.className = 'access-meta';
+    meta.textContent = k.admin ? 'Account Admin key · implicit Owner on every inbox' : 'API key';
+    main.appendChild(name);
+    main.appendChild(meta);
+    row.appendChild(main);
+    if (k.admin) {
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = 'Admin';
+      row.appendChild(pill);
+      return row;
+    }
+    row.appendChild(accessRoleSeg(k.id, k.role));
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary btn-sm danger access-remove';
+    remove.textContent = 'Remove';
+    remove.title = 'Remove this inbox from the client. The key keeps its other mailbox access.';
+    remove.addEventListener('click', function () {
+      accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/keys/' + encodeURIComponent(k.id) + '/remove', [],
+        'Remove this inbox from ' + k.name + '? The key keeps its other mailbox access.');
+    });
+    row.appendChild(remove);
+    return row;
+  }
+
+  function accessUserRow(u) {
+    var row = document.createElement('div');
+    row.className = 'access-row';
+    var main = document.createElement('div');
+    main.className = 'access-main';
+    var name = document.createElement('div');
+    name.className = 'access-name';
+    name.textContent = accessEsc(u.email);
+    var meta = document.createElement('div');
+    meta.className = 'access-meta';
+    meta.textContent = 'Mailbox user';
+    main.appendChild(name);
+    main.appendChild(meta);
+    row.appendChild(main);
+    var pill = document.createElement('span');
+    pill.className = 'pill';
+    pill.textContent = 'Owner';
+    row.appendChild(pill);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'secondary btn-sm danger access-remove';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', function () {
+      accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/users/' + encodeURIComponent(u.id) + '/remove', [],
+        'Remove ' + u.email + ' from this inbox?');
+    });
+    row.appendChild(remove);
+    return row;
+  }
+
+  function accessInviteRow(inv) {
+    var row = document.createElement('div');
+    row.className = 'access-row';
+    var main = document.createElement('div');
+    main.className = 'access-main';
+    var name = document.createElement('div');
+    name.className = 'access-name';
+    name.textContent = accessEsc(inv.email);
+    var meta = document.createElement('div');
+    meta.className = 'access-meta';
+    meta.textContent = 'Invitation pending';
+    main.appendChild(name);
+    main.appendChild(meta);
+    row.appendChild(main);
+    var revoke = document.createElement('button');
+    revoke.type = 'button';
+    revoke.className = 'secondary btn-sm danger access-remove';
+    revoke.textContent = 'Revoke';
+    revoke.addEventListener('click', function () {
+      accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/invites/' + encodeURIComponent(inv.id) + '/revoke', [],
+        'Revoke the invitation for ' + inv.email + '?');
+    });
+    row.appendChild(revoke);
+    return row;
+  }
+
+  function accessEmpty(text) {
+    var p = document.createElement('p');
+    p.className = 'access-empty muted';
+    p.textContent = text;
+    return p;
+  }
+
+  function renderAccess(grant) {
+    editAccess = grant || { keys: [], admin_keys: [], users: [], invites: [] };
+    var keys = (editAccess.keys || []).concat(editAccess.admin_keys || []);
+    if (accessKeysList) {
+      accessKeysList.textContent = '';
+      if (!keys.length) {
+        accessKeysList.appendChild(accessEmpty('No clients have access to this inbox.'));
+      } else {
+        keys.forEach(function (k) {
+          accessKeysList.appendChild(accessKeyRow(k));
+        });
+      }
+    }
+    if (accessUsersList) {
+      accessUsersList.textContent = '';
+      var users = editAccess.users || [];
+      if (!users.length) {
+        accessUsersList.appendChild(accessEmpty('No mailbox users have access to this inbox.'));
+      } else {
+        users.forEach(function (u) {
+          accessUsersList.appendChild(accessUserRow(u));
+        });
+      }
+    }
+    if (accessInvitesList) {
+      accessInvitesList.textContent = '';
+      var invites = editAccess.invites || [];
+      if (!invites.length) {
+        accessInvitesList.appendChild(accessEmpty('No pending invitations.'));
+      } else {
+        invites.forEach(function (inv) {
+          accessInvitesList.appendChild(accessInviteRow(inv));
+        });
+      }
+    }
+  }
+
+  // available account users = members without a role on this inbox already.
+  function accessAvailableUsers() {
+    return (window.__accessMembers || []).filter(function (m) {
+      return !(editAccess.users || []).some(function (u) {
+        return u.id === m.id;
+      });
+    });
+  }
+
+  function openAccessAdd(mode) {
+    if (!accessAddBody) {
+      return;
+    }
+    accessAddBody.textContent = '';
+    if (mode === 'key') {
+      if (accessAddTitle) {
+        accessAddTitle.textContent = 'Add client';
+      }
+      var keyForm = document.createElement('div');
+      keyForm.innerHTML = '<label>Name</label><input id="access-key-name" placeholder="API key" maxlength="80"><label>Role on this inbox</label>' +
+        '<select id="access-key-role"><option value="read">Read</option><option value="assistant">Assistant</option><option value="owner" selected>Owner</option></select>' +
+        '<p class="muted small">The key is created with access to this inbox only. Copy its secret when it is shown.</p>' +
+        '<div class="dialog-actions"><button type="button" class="secondary" id="access-key-cancel">Cancel</button><button type="button" id="access-key-save">Create client</button></div>';
+      accessAddBody.appendChild(keyForm);
+      accessAddBody.querySelector('#access-key-cancel').addEventListener('click', function () {
+        hideInboxSubview(dlg);
+      });
+      accessAddBody.querySelector('#access-key-save').addEventListener('click', function () {
+        var name = (accessAddBody.querySelector('#access-key-name').value || '').trim();
+        var role = accessAddBody.querySelector('#access-key-role').value;
+        accessCreateKey(name, role);
+      });
+    } else {
+      if (accessAddTitle) {
+        accessAddTitle.textContent = 'Add mailbox user';
+      }
+      if (!window.__accessMembers || !window.__accessMembers.length) {
+        accessAddBody.appendChild(accessEmpty('Everyone in this account already has access, or there is nobody else to add. Invite a new person by email below.'));
+      }
+      var wrap = document.createElement('div');
+      if (window.__accessMembers && window.__accessMembers.length) {
+        var opts = accessAvailableUsers().map(function (m) {
+          return '<option value="' + accessEsc(m.id) + '">' + accessEsc(m.email) + '</option>';
+        }).join('');
+        wrap.innerHTML = '<label>Existing account member</label><div class="row"><select id="access-user-select">' + opts + '</select><button type="button" class="secondary btn-narrow" id="access-user-save">Add</button></div>' +
+          '<p class="muted small">They become Owner of this inbox.</p>';
+      }
+      wrap.innerHTML += '<h3 class="section-head">Invite a new person</h3><label>Email</label><input type="email" id="access-invite-email" placeholder="person@example.com">' +
+        '<p class="muted small">They set their own password from a single-use link and become Owner of this inbox.</p>' +
+        '<div class="dialog-actions"><button type="button" class="secondary" id="access-user-cancel">Cancel</button><button type="button" id="access-invite-save">Send invitation</button></div>';
+      accessAddBody.appendChild(wrap);
+      accessAddBody.querySelector('#access-user-cancel').addEventListener('click', function () {
+        hideInboxSubview(dlg);
+      });
+      var userSave = accessAddBody.querySelector('#access-user-save');
+      if (userSave) {
+        userSave.addEventListener('click', function () {
+          var sel = accessAddBody.querySelector('#access-user-select');
+          if (sel && sel.value) {
+            accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/users', [['user', sel.value]]);
+          }
+        });
+      }
+      accessAddBody.querySelector('#access-invite-save').addEventListener('click', function () {
+        var email = (accessAddBody.querySelector('#access-invite-email').value || '').trim();
+        if (!email) {
+          window.alert('Enter an email address to invite.');
+          return;
+        }
+        accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/invites', [['email', email]]);
+      });
+    }
+    showInboxSubview(dlg, 'access-add');
+  }
+
+  // accessCreateKey posts the new-key form; on success the returned secret is
+  // shown in a one-time dialog before returning to the account page.
+  function accessCreateKey(name, role) {
+    if (typeof window.fetch !== 'function') {
+      return;
+    }
+    if (!name) {
+      name = 'API key';
+    }
+    var body = new URLSearchParams();
+    body.append('_csrf', csrfValue);
+    body.append('name', name);
+    body.append('role', role);
+    fetch('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/keys', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: body.toString(),
+      credentials: 'same-origin'
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.text().then(function (text) {
+          throw new Error(text || 'Could not create client');
+        });
+      }
+      return res.json();
+    }).then(function (data) {
+      dlg.close();
+      window.alert((data.notice || 'API key created') + '\n\n' + (data.label || '') + '\n\n' + (data.secret || ''));
+      window.location.href = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
+    }).catch(function (err) {
+      window.alert(err.message || 'Could not create client');
+    });
+  }
+
+  if (accessAddKey) {
+    accessAddKey.addEventListener('click', function () {
+      openAccessAdd('key');
+    });
+  }
+  if (accessAddUser) {
+    accessAddUser.addEventListener('click', function () {
+      openAccessAdd('user');
+    });
+  }
+
   document.querySelectorAll('.edit-inbox').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = encodeURIComponent(btn.dataset.id || '');
@@ -2029,6 +2369,11 @@ function clearUrlParams(names) {
         editConnectors = JSON.parse(btn.dataset.connectors || '[]') || [];
       } catch (e) {
         editConnectors = [];
+      }
+      try {
+        renderAccess(JSON.parse(btn.dataset.access || '{}') || {});
+      } catch (e) {
+        renderAccess({ keys: [], admin_keys: [], users: [], invites: [] });
       }
       if (connectorAdd) {
         connectorAdd.setAttribute('data-inbox', editInboxID);
@@ -2242,6 +2587,14 @@ function clearUrlParams(names) {
   var openInbox = openCard ? openCard.getAttribute('data-open-inbox') : '';
   var openInboxTab = openCard ? (openCard.getAttribute('data-open-inbox-tab') || 'aliases') : 'aliases';
   var openAlias = openCard ? (openCard.getAttribute('data-open-alias') || '') : '';
+  window.__accessMembers = [];
+  if (openCard) {
+    try {
+      window.__accessMembers = JSON.parse(openCard.getAttribute('data-access-members') || '[]') || [];
+    } catch (e) {
+      window.__accessMembers = [];
+    }
+  }
   if (openInbox) {
     setTimeout(function () {
       var target = null;
@@ -2300,7 +2653,9 @@ function bindInboxSettingsShell(dlg) {
     });
     var inboxSave = dlg.querySelector('#inbox-edit-save');
     if (inboxSave) {
-      inboxSave.hidden = false;
+      // The Clients & Access tab applies each change immediately, so the footer
+      // save button is hidden there; every other tab keeps it.
+      inboxSave.hidden = name === 'access';
       inboxSave.textContent = 'Save';
       inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
     }
