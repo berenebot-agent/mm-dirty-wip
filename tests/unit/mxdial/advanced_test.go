@@ -105,6 +105,42 @@ func TestUnknownRecipientStaysPermanent(t *testing.T) {
 	}
 }
 
+// TestBackendPanicIsContained verifies a panic in the resolve backend does not
+// crash the core: the client receives a temporary failure and the manager keeps
+// running.
+func TestBackendPanicIsContained(t *testing.T) {
+	rc := newFakeReceiver(t)
+	b := &scriptedBackend{}
+	b.setDomains(domainFor(t, rc, "example.test"))
+	b.resolveFn = func(domain string, recipients []string) mxwire.ResolveResponse {
+		panic("boom")
+	}
+
+	result := make(chan mxwire.ResolveResponse, 1)
+	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
+		fc.send(mxwire.FrameResolve, 1, ch, mxwire.V2Resolve{Domain: domain, Recipient: "x@" + domain})
+	}
+	rc.onFrame = func(fc *fakeConn, f mxwire.Frame) bool {
+		if f.Type == mxwire.FrameResolveResult {
+			var r mxwire.ResolveResponse
+			_ = mxwire.DecodeFrame(f, &r)
+			result <- r
+			return true
+		}
+		return false
+	}
+
+	managerFor(t, b, rc, t.TempDir())
+	select {
+	case r := <-result:
+		if len(r.Results) != 1 || !r.Results[0].Temporary {
+			t.Fatalf("panic was not reported as temporary: %#v", r)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("no resolve result after backend panic")
+	}
+}
+
 // TestBackoffNotBypassedByReconcile verifies a stable configuration does not
 // wake the session every reconcile tick, so reconnect backoff is honoured.
 func TestBackoffNotBypassedByReconcile(t *testing.T) {

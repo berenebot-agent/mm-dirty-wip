@@ -665,6 +665,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	watchExited := make(chan struct{})
 	go func() {
 		defer close(watchExited)
+		defer r.recoverJob("read-deadline-watcher")
 		select {
 		case <-c.ctx.Done():
 			_ = ctl.SetReadDeadline(time.Now())
@@ -1053,9 +1054,25 @@ func (r *Receiver) spawn(c *connection, fn func()) bool {
 	r.mu.Unlock()
 	go func() {
 		defer c.jobs.Done()
+		// A panic in a per-connection job must not take down the whole receiver
+		// (and every other session with it): contain it, log it, and let the
+		// connection's normal close path release the job.
+		defer r.recoverJob("connection")
 		fn()
 	}()
 	return true
+}
+
+// recoverJob is the deferred panic guard for background goroutines that are not
+// tied to a connection's spawn (the read-deadline watcher, the summary ticker
+// and the mxdial-style workers). It logs and contains a panic so one bad job
+// cannot crash the process.
+func (r *Receiver) recoverJob(scope string) {
+	if rec := recover(); rec != nil {
+		if r.log != nil {
+			r.log.Error("dialmx receiver job panic recovered", "scope", scope, "panic", rec)
+		}
+	}
 }
 
 // maintenance drives keepalive pings, challenge expiry and binding renewals on
@@ -1781,6 +1798,7 @@ func (r *Receiver) Start() {
 		interval = defaultSummaryInterval
 	}
 	go func() {
+		defer r.recoverJob("summary")
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
