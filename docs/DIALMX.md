@@ -261,11 +261,13 @@ green receiver session is not a public SMTP-port delivery test.
 
 The dashboard's Domains table also shows one aggregate connector light per Dial
 MX domain: green when at least one receiver holds a current authorization (so
-inbound mail will be accepted), red otherwise. It answers "will mail arrive?"
-at a glance; the receiving dialog carries the per-connector detail. A receiver
-the core cannot reach reports no advertised hostname, so the status view keeps
-the configured `smtp_hostname` for it — the connector row names the receiver and
-shows the real failure instead of an indeterminate wait.
+inbound mail will be accepted), amber while receivers are still connecting
+(startup and reconnect), and red once every receiver has settled into a failure.
+It answers "will mail arrive?" at a glance; the receiving dialog carries the
+per-connector detail. A receiver the core cannot reach reports no advertised
+hostname, so the status view keeps the configured `smtp_hostname` for it — the
+connector row names the receiver and shows the real failure instead of an
+indeterminate wait.
 
 ## 4. DNS authorisation flow
 

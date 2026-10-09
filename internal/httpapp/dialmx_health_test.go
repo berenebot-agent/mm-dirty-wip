@@ -20,11 +20,12 @@ func TestDialMXHealthAggregatesReceiverStatus(t *testing.T) {
 		statuses  []mxdialStatusView
 		wantLight string
 	}{
-		{"no receivers", nil, "danger"},
-		{"all connecting", []mxdialStatusView{{State: "connecting"}, {State: "connecting"}}, "danger"},
+		{"no receivers", nil, "amber"},
+		{"all connecting", []mxdialStatusView{{State: "connecting"}, {State: "connecting"}}, "amber"},
 		{"one ready", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "connecting"}}, "ok"},
 		{"ready but expired", []mxdialStatusView{{State: "ready", ExpiresAt: &past}}, "danger"},
 		{"ready without expiry", []mxdialStatusView{{State: "ready"}}, "ok"},
+		{"connecting and failed", []mxdialStatusView{{State: "connecting"}, {State: "unreachable"}}, "amber"},
 		{"all failed", []mxdialStatusView{{State: "unreachable"}, {State: "rejected"}}, "danger"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
