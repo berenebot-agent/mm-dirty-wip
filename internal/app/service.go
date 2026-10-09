@@ -1860,10 +1860,6 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if err != nil {
 		return s.failDetached(ctx, m, err, sending.Provider)
 	}
-	raw, err := os.ReadFile(rawPath)
-	if err != nil {
-		return s.failDetached(ctx, m, err, sending.Provider)
-	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
 		return s.failDetached(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
@@ -1883,13 +1879,19 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 		MessageID:      m.RFCMessageID,
 		InReplyTo:      m.InReplyTo,
 		References:     m.References,
-		RawMIME:        raw,
 		IdempotencyKey: m.ID,
 	}
-	// HTTP adapters build their request from structured fields, so the
-	// attachment bytes must be reconstructed from the stored MIME. Transports
-	// that send the raw MIME directly (SMTP) skip this.
-	if !prefersRawMIME(provider) {
+	// Transports that build their request from the raw MIME (SMTP, Direct MX)
+	// need the stored message read into memory. HTTP adapters build from
+	// structured fields, so reading the whole message here would be an unused
+	// full-size allocation; they reconstruct only the attachment bytes instead.
+	if prefersRawMIME(provider) {
+		raw, rerr := os.ReadFile(rawPath)
+		if rerr != nil {
+			return s.failDetached(ctx, m, rerr, sending.Provider)
+		}
+		outbound.RawMIME = raw
+	} else {
 		atts, aerr := s.deliveryAttachments(m)
 		if aerr != nil {
 			return s.failDetached(ctx, m, aerr, sending.Provider)
@@ -2048,10 +2050,6 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if err != nil {
 		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
 	}
-	raw, err := os.ReadFile(rawPath)
-	if err != nil {
-		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
-	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
 		return s.failWorkflowDetached(ctx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
@@ -2068,9 +2066,16 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 		Subject:     w.Subject,
 		Text:        w.Text,
 		HTML:        w.HTML,
-		RawMIME:     raw,
 	}
-	if !prefersRawMIME(provider) {
+	// Only raw-MIME transports need the whole message in memory; HTTP adapters
+	// reconstruct just the attachment bytes (see Deliver).
+	if prefersRawMIME(provider) {
+		raw, rerr := os.ReadFile(rawPath)
+		if rerr != nil {
+			return s.failWorkflowDetached(ctx, w, rerr, sending.Provider)
+		}
+		outbound.RawMIME = raw
+	} else {
 		atts, aerr := s.workflowAttachments(w)
 		if aerr != nil {
 			return s.failWorkflowDetached(ctx, w, aerr, sending.Provider)

@@ -2953,9 +2953,20 @@ parallelism, and the `1..32` ceiling plus per-family validation keeps a mis-set
 `OUTBOUND_CONCURRENCY` from OOMing a single-process deployment. Deeper
 concurrency needs streaming attachment encoding, which is out of scope here.
 
+**Memory refinement (2026-10-10):** Delivery previously read the entire stored
+message into memory (`os.ReadFile(rawPath)`) for every provider, but only the
+raw-MIME transports (SMTP, Direct MX) consume it: the HTTP adapters (Brevo,
+Resend, Mailgun) build their request from structured fields and ignored the
+buffer. Delivery now reads the raw message only when the provider prefers raw
+MIME and reconstructs just the attachment bytes otherwise, removing one unused
+full-size allocation per in-flight HTTP send. Streaming the attachment encoding
+itself (so the decoded attachments and the encoded body are not each buffered)
+remains a separate, larger change.
+
 **Complexity:** A `WaitGroup`-based bounded pool in `worker.go`, one config
-field with validation, and a per-attempt timeout helper. No new dependency,
-service, schema change or claim-protocol change.
+field with validation, a per-attempt timeout helper, and a provider-conditional
+read in `Deliver`/`DeliverWorkflow`. No new dependency, service, schema change or
+claim-protocol change.
 
 ## Future extension register
 
