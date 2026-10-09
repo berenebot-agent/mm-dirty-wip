@@ -1678,20 +1678,55 @@ func (s *Server) uiCreateDomain(w http.ResponseWriter, r *http.Request) {
 // looks like an internal engine fault is replaced with a generic message so the
 // dashboard never shows database or filesystem detail.
 func createErrorMessage(err error) string {
+	return safeErrorMessage(err, "Could not create it. Please try again.")
+}
+
+// safeErrorMessage returns err's text unless it looks like an internal engine
+// fault (a SQLite error or a filesystem path error), in which case it returns
+// fallback. Validation errors produced deliberately keep their message; engine
+// faults are redacted so the UI never leaks schema, query state or on-disk
+// paths. It mirrors the API's isInternalStoreError policy.
+func safeErrorMessage(err error, fallback string) string {
 	if err == nil {
 		return ""
 	}
 	msg := err.Error()
 	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
 		if strings.HasPrefix(msg, prefix) {
-			return "Could not create it. Please try again."
+			return fallback
 		}
 	}
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
-		return "Could not create it. Please try again."
+		return fallback
 	}
 	return msg
+}
+
+// uiError writes a UI error response, redacting engine faults while preserving
+// deliberate validation text. Use it wherever a store/service error would
+// otherwise be echoed verbatim to the browser.
+func (s *Server) uiError(w http.ResponseWriter, err error, code int) {
+	if isEngineFault(err) || code >= 500 {
+		s.Log.Error("ui handler error", "error", err)
+	}
+	http.Error(w, safeErrorMessage(err, "Something went wrong. Please try again."), code)
+}
+
+// isEngineFault reports whether err looks like an internal engine/filesystem
+// fault rather than a deliberate validation error.
+func isEngineFault(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
+		if strings.HasPrefix(msg, prefix) {
+			return true
+		}
+	}
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr)
 }
 
 // domainNamesCSV joins the account's domain names for the Add Domain dialog's
@@ -1744,7 +1779,7 @@ func (s *Server) uiDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	paths, err := s.Service.Store.PurgeDomain(r.Context(), p.AccountID, r.PathValue("id"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	for _, path := range paths {
@@ -2131,15 +2166,15 @@ func (s *Server) uiUpdateInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := parseInboxConfig(r)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if err = s.Service.Store.SetInboxDisplayName(r.Context(), p.AccountID, id, r.Form.Get("display")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if err = s.applyInboxConfig(r.Context(), p.AccountID, id, cfg); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/?notice=Inbox+updated", 303)
@@ -2162,7 +2197,7 @@ func (s *Server) uiDeleteInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	paths, err := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, r.PathValue("id"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	for _, path := range paths {
@@ -2187,7 +2222,7 @@ func (s *Server) uiInboxAutoActions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.applyInboxAutoActionsForm(r, p.AccountID, id); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	http.Redirect(w, r, "/?notice=Inbox+auto-actions+saved&inbox="+url.QueryEscape(id)+"&inbox_tab=connectors", 303)
@@ -2235,21 +2270,21 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			authMode = "signature"
 		}
 		if err := validateWebhookConfig(r.Form.Get("url"), mode, authMode); err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		if err := validateWebhookBearerSecret(authMode, r.Form.Get("bearer_secret")); err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		plain, err := webhookSecret(r.Form.Get("bearer_secret"))
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		enc, err := s.Service.EncryptSecret([]byte(plain))
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		name := strings.TrimSpace(r.Form.Get("name"))
@@ -2257,7 +2292,7 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			name = "Webhook"
 		}
 		if _, err := s.Service.Store.CreateWebhookClient(r.Context(), p.AccountID, r.Form.Get("inbox"), name, strings.TrimSpace(r.Form.Get("url")), mode, authMode, enc); err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		notice, label, secret = "Webhook created", "Copy this signing secret now — you will only be able to see it now, it will not be shown again.", plain
@@ -2270,12 +2305,12 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "confirm the no-allow-list risk before creating a Hermes relay connection to this inbox", 400)
 			return
 		}
-		gatewayID, gwSecret, deliveryKey, err := s.Service.CreateHermesRelay(r.Context(), p, inboxID, r.Form.Get("name"))
+		gatewayID, gwSecret, _, err := s.Service.CreateHermesRelay(r.Context(), p, inboxID, r.Form.Get("name"))
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
-		notice, label, secret = "Hermes relay connection created", "Paste these lines into the gateway .env", hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, gwSecret, deliveryKey)
+		notice, label, secret = "Hermes relay connection created", "Paste these lines into the gateway .env", hermesEnvBlock(s.Service.Config.BaseURL, gatewayID, gwSecret)
 	} else if r.Form.Get("type") == "openclaw" {
 		inboxID := r.Form.Get("inbox")
 		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, inboxID); err == nil && !box.SenderRestricted && r.Form.Get("ack") != "1" {
@@ -2296,7 +2331,7 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 		}
 		_, plain, err := s.Service.Store.CreateAPIKey(r.Context(), p.AccountID, r.Form.Get("name"), r.Form.Get("admin") == "1", roles)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 		notice, label, secret = "API key created", "Copy this API key now — you will only be able to see this key now, it will not be shown again.", plain
@@ -2339,7 +2374,7 @@ func (s *Server) uiUpdateKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, r.PathValue("id"), r.Form.Get("name"), r.Form.Get("admin") == "1", roles); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
@@ -2355,7 +2390,7 @@ func (s *Server) uiRotateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	plain, err := s.Service.Store.RotateAPIKey(r.Context(), p.AccountID, r.PathValue("id"))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
@@ -2375,7 +2410,7 @@ func (s *Server) uiDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.RevokeAPIKey(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Hub.CancelScope("key:" + r.PathValue("id"))
@@ -2398,7 +2433,7 @@ func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateWebhookConfig(r.Form.Get("url"), r.Form.Get("mode"), r.Form.Get("auth")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	name := strings.TrimSpace(r.Form.Get("name"))
@@ -2406,7 +2441,7 @@ func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
 		name = "Webhook"
 	}
 	if err := validateWebhookBearerSecret(r.Form.Get("auth"), r.Form.Get("bearer_secret")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	encrypted := ""
@@ -2419,7 +2454,7 @@ func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Service.Store.UpdateWebhookClientWithSecret(r.Context(), p.AccountID, r.PathValue("id"), name, strings.TrimSpace(r.Form.Get("url")), r.Form.Get("mode"), r.Form.Get("auth"), encrypted); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	connectorSettingsRedirect(w, r, "Webhook updated")
@@ -2433,16 +2468,16 @@ func (s *Server) uiRotateWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	plain, err := auth.RandomToken(32)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	enc, err := s.Service.EncryptSecret([]byte(plain))
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if err := s.Service.Store.RotateWebhookSecret(r.Context(), p.AccountID, r.PathValue("id"), enc); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if wantsJSON(r) {
@@ -2488,7 +2523,7 @@ func (s *Server) clientDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := s.Service.Store.ClientDeliveryLog(ctx, p.AccountID, id, 51, beforeID)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	hasMore := len(entries) > 50
@@ -2521,7 +2556,7 @@ func (s *Server) uiToggleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.SetWebhookEnabled(r.Context(), p.AccountID, r.PathValue("id"), r.Form.Get("enabled") == "1"); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	connectorSettingsRedirect(w, r, "Webhook updated")
@@ -2534,7 +2569,7 @@ func (s *Server) uiDeleteWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.DeleteWebhookClient(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	connectorSettingsRedirect(w, r, "Webhook deleted")
@@ -2547,12 +2582,12 @@ func (s *Server) uiUpdateHermes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.UpdateHermesConnectionName(r.Context(), p.AccountID, r.PathValue("id"), r.Form.Get("name")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	if role := r.Form.Get("role"); role != "" {
 		if err := s.Service.Store.SetHermesOutboundRole(r.Context(), p.AccountID, r.PathValue("id"), role); err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return
 		}
 	}
@@ -2566,7 +2601,7 @@ func (s *Server) uiDeleteHermes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Service.Store.DeleteHermesConnection(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Hub.CancelScope("hrm:" + r.PathValue("id"))
@@ -2686,9 +2721,9 @@ func titleRole(role string) string {
 	return strings.ToUpper(role[:1]) + role[1:]
 }
 
-func hermesEnvBlock(baseURL, gatewayID, secret, deliveryKey string) string {
-	return fmt.Sprintf("GATEWAY_RELAY_URL=%s\nGATEWAY_RELAY_ID=%s\nGATEWAY_RELAY_SECRET=%s\nGATEWAY_RELAY_DELIVERY_KEY=%s\nGATEWAY_RELAY_PLATFORMS=email\nGATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true",
-		baseURL, gatewayID, secret, deliveryKey)
+func hermesEnvBlock(baseURL, gatewayID, secret string) string {
+	return fmt.Sprintf("GATEWAY_RELAY_URL=%s\nGATEWAY_RELAY_ID=%s\nGATEWAY_RELAY_SECRET=%s\nGATEWAY_RELAY_PLATFORMS=email\nGATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true",
+		baseURL, gatewayID, secret)
 }
 
 // createOpenClawConnector creates an OpenClaw relay connector (direct
@@ -2699,18 +2734,18 @@ func hermesEnvBlock(baseURL, gatewayID, secret, deliveryKey string) string {
 func (s *Server) createOpenClawConnector(w http.ResponseWriter, r *http.Request, p model.Principal, inboxID string) (notice, label, secret string) {
 	name := r.Form.Get("name")
 	if r.Form.Get("setup") == "manual" {
-		gatewayID, gwSecret, deliveryKey, err := s.Service.CreateRelay(r.Context(), p, inboxID, name, store.KindOpenClaw)
+		gatewayID, gwSecret, _, err := s.Service.CreateRelay(r.Context(), p, inboxID, name, store.KindOpenClaw)
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			s.uiError(w, err, 400)
 			return "", "", ""
 		}
 		return "OpenClaw connector created",
 			"Paste this config block into the OpenClaw host (~/.openclaw/openclaw.json), then restart the Gateway. The secret is shown only once.",
-			openClawConfigBlock(s.Service.Config.BaseURL, gatewayID, gwSecret, deliveryKey)
+			openClawConfigBlock(s.Service.Config.BaseURL, gatewayID, gwSecret)
 	}
 	code, err := s.Service.CreateRelayEnrollCode(r.Context(), p, inboxID, name, store.KindOpenClaw, 15*time.Minute)
 	if err != nil {
-		http.Error(w, err.Error(), 400)
+		s.uiError(w, err, 400)
 		return "", "", ""
 	}
 	base := strings.TrimRight(s.Service.Config.BaseURL, "/")
@@ -2721,7 +2756,7 @@ func (s *Server) createOpenClawConnector(w http.ResponseWriter, r *http.Request,
 
 // openClawConfigBlock is the manual fallback for air-gapped installs: a
 // channels.mailmoose JSON5 block carrying the minted credentials.
-func openClawConfigBlock(baseURL, gatewayID, secret, deliveryKey string) string {
+func openClawConfigBlock(baseURL, gatewayID, secret string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	return fmt.Sprintf(`{
   "channels": {
@@ -2729,11 +2764,10 @@ func openClawConfigBlock(baseURL, gatewayID, secret, deliveryKey string) string 
       "enabled": true,
       "baseUrl": %q,
       "gatewayId": %q,
-      "secret": %q,
-      "deliveryKey": %q
+      "secret": %q
     }
   }
-}`, baseURL, gatewayID, secret, deliveryKey)
+}`, baseURL, gatewayID, secret)
 }
 
 const messageBody = `<div class="mail-layout">` + mailSidebar + `<div class="mailcontent">

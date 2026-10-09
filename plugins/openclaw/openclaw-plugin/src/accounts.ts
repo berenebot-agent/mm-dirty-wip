@@ -66,7 +66,6 @@ export function resolveMailMooseAccount(
     baseUrl,
     gatewayId,
     secret,
-    deliveryKey: normalizeOptionalString(config.deliveryKey),
     allowFrom: normalizeAllowFrom(config.allowFrom),
     dmPolicy: normalizeOptionalString(config.dmPolicy) ?? "allowlist",
     agentId: normalizeOptionalString(config.agentId),

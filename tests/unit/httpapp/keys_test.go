@@ -25,10 +25,9 @@ func TestHermesEnvBlock(t *testing.T) {
 		t.Fatalf("enroll %d %s", rr.Code, rr.Body.String())
 	}
 	var got struct {
-		GatewayID   string `json:"gateway_id"`
-		Secret      string `json:"secret"`
-		DeliveryKey string `json:"delivery_key"`
-		Env         string `json:"env"`
+		GatewayID string `json:"gateway_id"`
+		Secret    string `json:"secret"`
+		Env       string `json:"env"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v body=%s", err, rr.Body.String())
@@ -36,7 +35,6 @@ func TestHermesEnvBlock(t *testing.T) {
 	want := "GATEWAY_RELAY_URL=http://example.test\n" +
 		"GATEWAY_RELAY_ID=" + got.GatewayID + "\n" +
 		"GATEWAY_RELAY_SECRET=" + got.Secret + "\n" +
-		"GATEWAY_RELAY_DELIVERY_KEY=" + got.DeliveryKey + "\n" +
 		"GATEWAY_RELAY_PLATFORMS=email\n" +
 		"GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true"
 	if got.Env != want {

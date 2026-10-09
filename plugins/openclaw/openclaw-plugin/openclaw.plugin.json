@@ -34,10 +34,6 @@
             "type": "string",
             "description": "Relay authentication secret"
           },
-          "deliveryKey": {
-            "type": "string",
-            "description": "Retained for relay delivery parity; optional"
-          },
           "allowFrom": {
             "type": "array",
             "items": {
@@ -65,10 +61,6 @@
         },
         "secret": {
           "label": "Relay secret",
-          "sensitive": true
-        },
-        "deliveryKey": {
-          "label": "Delivery key",
           "sensitive": true
         }
       }

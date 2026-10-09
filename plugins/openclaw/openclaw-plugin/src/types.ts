@@ -13,7 +13,6 @@ export type MailMooseChannelConfig = {
   baseUrl?: string;
   gatewayId?: string;
   secret?: string;
-  deliveryKey?: string;
   allowFrom?: string[];
   dmPolicy?: string;
   agentId?: string;
@@ -32,7 +31,6 @@ export type ResolvedMailMooseAccount = {
   baseUrl: string;
   gatewayId: string;
   secret: string;
-  deliveryKey?: string;
   allowFrom: string[];
   dmPolicy: string;
   agentId?: string;
