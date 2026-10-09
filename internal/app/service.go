@@ -69,6 +69,7 @@ type Service struct {
 	// after it, so decrypting pre-upgrade ciphertext still works.
 	encryptionKeys  [][]byte
 	unroutedLim     *rateLimiter
+	sendLim         *rateLimiter
 	dialMXIngestSem chan struct{}
 }
 
@@ -91,7 +92,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if concurrency < 1 {
 		concurrency = 32
 	}
-	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
 }
 
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
@@ -487,6 +488,12 @@ var ErrInvalidConfig = errors.New("invalid config")
 // ErrReplyFromSpam is returned when a send or draft would use a Spam message as
 // its reply source. The message must be released from Spam first.
 var ErrReplyFromSpam = errors.New("message is in spam; release it before replying")
+
+// ErrRateLimited is returned when an account exceeds its outbound send rate.
+// Every send path funnels through Send/SendDraft, so enforcing it here (rather
+// than at one HTTP route) means a caller cannot bypass the limit by using the
+// reply, draft-send, UI or relay paths instead of the send endpoint.
+var ErrRateLimited = errors.New("send rate limit exceeded")
 
 // invalidConfig builds a validation error without ever including a secret
 // value: only field labels and option names are reported.
@@ -1383,6 +1390,9 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
+	if !s.sendLim.Allow(p.AccountID) {
+		return SendResult{}, ErrRateLimited
+	}
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err
 	}
@@ -1634,6 +1644,9 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	}
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
+	}
+	if !s.sendLim.Allow(p.AccountID) {
+		return SendResult{}, ErrRateLimited
 	}
 	if in.InboxID == "" {
 		in.InboxID = d.InboxID
