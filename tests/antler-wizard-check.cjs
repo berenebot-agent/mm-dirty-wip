@@ -183,6 +183,26 @@ async function check(mode = 'hosted') {
     assert.match(mxLightClass(0), /green/, 'published receiver MX is green');
     assert.match(mxLightClass(1), /amber/, 'unpublished receiver MX is not painted red');
     assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'partial MX set is healthy: no Fix');
+    // A receiver the core cannot reach is a fact, not "in progress": its
+    // connector row must paint red and name the failure. The server fills the
+    // configured smtp_hostname even when the unreachable receiver advertised
+    // none, so the row still resolves to its status instead of a bare amber
+    // "Waiting".
+    const connLightClass = i => {
+      const row = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1].children[i];
+      return row.children[1].children[0].className;
+    };
+    const connLabel = i => {
+      const row = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1].children[i];
+      return row.children[1].children[1].textContent;
+    };
+    statuses = [{ state: 'unreachable', smtp_hostname: 'mx.example.com', reason: 'unreachable' }];
+    now += 20000; tick(); await flush();
+    assert.match(connLightClass(0), /red/, 'an unreachable connector is red, not amber');
+    assert.equal(connLabel(0), 'Receiver unreachable');
+    statuses = [{ state: 'disconnected', smtp_hostname: 'mx2.example.com' }];
+    now += 20000; tick(); await flush();
+    assert.match(connLightClass(1), /red/, 'a disconnected connector is red, not amber');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);
