@@ -72,7 +72,8 @@ const (
 	StatusUnreachable = "unreachable"
 	// StatusUnavailable: the receiver terminated the binding from its side.
 	StatusUnavailable = "unavailable"
-	// StatusDeferred: the receiver's advertised capacity is full for now.
+	// StatusDeferred: a transient backpressure state — the receiver's advertised
+	// capacity is full, or this one domain is in its own short failure cooldown.
 	StatusDeferred = "deferred"
 	// StatusDisconnected: an established session ended. Retrying.
 	StatusDisconnected = "disconnected"
@@ -1576,7 +1577,8 @@ func (s *session) authResult(f mxwire.Frame) error {
 		ad.proofNonce = ""
 		ad.retryAt = now.Add(s.retryDelay(a.Reason))
 		s.cancelDomain(a.Domain)
-		s.m.setStatus(s, a.Domain, "rejected", authReason(a.Reason), s.ready.SMTPHostname, ad.expires, ad.domain.KeyID)
+		state, detail := authOutcome(a.Reason)
+		s.m.setStatus(s, a.Domain, state, detail, s.ready.SMTPHostname, ad.expires, ad.domain.KeyID)
 		return nil
 	}
 	// An accepted result is trusted only after we locally signed the matching
@@ -1622,6 +1624,20 @@ func authReason(reason string) string {
 	default:
 		return "authentication_failed"
 	}
+}
+
+// authOutcome maps a receiver's rejection reason to the observable state and
+// bounded detail for that domain. A "domain_cooldown" is a transient per-domain
+// pacing refusal: the receiver declined to start the DNS proof because that one
+// domain failed recently, not a verdict on the domain's authority. It is
+// reported as the amber "deferred" state (like capacity backpressure) so a valid
+// domain is never shown as red for a pacing delay. Everything else keeps the
+// historical rejected/authentication_failed mapping.
+func authOutcome(reason string) (state, detail string) {
+	if reason == "domain_cooldown" {
+		return StatusDeferred, "domain_cooldown"
+	}
+	return "rejected", authReason(reason)
 }
 
 func (s *session) notice(f mxwire.Frame, revoked bool) error {
