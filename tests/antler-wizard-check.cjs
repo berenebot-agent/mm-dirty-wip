@@ -268,15 +268,19 @@ async function check(mode = 'hosted') {
   wizard.nodes['.antler-check'].events.click(); await flush();
   assert.equal(save.disabled, false, 'one ready receiver must unlock Next');
   await submit(); assert.equal(wizard.panels[3].hidden, false); assert.equal(save.textContent, 'Finish');
+  // Finish is never gated on readiness: a receiver that has not reconnected
+  // must not bounce the operator back to the receiver step. It saves and
+  // returns to status, which reports the receiver as in progress.
   statuses = [{ state: 'disconnected' }];
-  await submit(); assert.equal(redirect, undefined); assert.equal(wizard.panels[2].hidden, false);
-  now += 3000; statuses = [{ state: 'ready' }, { state: 'rejected' }];
-  wizard.nodes['.antler-check'].events.click(); await flush(); await submit();
+  assert.equal(save.disabled, false, 'enforcement Finish is never blocked on readiness');
+  const finishPuts = requests.filter(r => r.options.method === 'PUT').length;
   enforcement.value = 'hard'; await submit();
-  assert.equal(saved.config.enforcement, 'hard'); assert.equal(redirect, undefined);
-  assert.equal(save.textContent, 'Save email');
+  assert.equal(saved.config.enforcement, 'hard');
+  assert.equal(redirect, undefined);
+  assert.equal(save.textContent, 'Save email', 'Finish returns to status without waiting for a receiver');
   assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
   assert.equal(wizard.panels[2].hidden, true, 'initial Finish returns to status');
+  assert.equal(requests.filter(r => r.options.method === 'PUT').length, finishPuts + 1, 'Finish saves the config once and never rotates again');
   dlg.open = false; now += 20000;
   const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
 }
