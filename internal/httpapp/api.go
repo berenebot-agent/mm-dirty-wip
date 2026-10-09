@@ -1367,8 +1367,28 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+// eventsCursor parses the ?after= cursor for the list and stream endpoints.
+// An absent cursor means "from the beginning" (0); a present one must be a
+// well-formed evt_ cursor, so a typo fails fast with 400 instead of silently
+// replaying the account's entire event history.
+func eventsCursor(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("after"))
+	if raw == "" {
+		return 0, true
+	}
+	n, ok := store.ParseCursorStrict(raw)
+	if !ok {
+		writeError(w, 400, "invalid after: must be an evt_ cursor")
+		return 0, false
+	}
+	return n, true
+}
+
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
-	after := store.ParseCursor(r.URL.Query().Get("after"))
+	after, ok := eventsCursor(w, r)
+	if !ok {
+		return
+	}
 	limit, ok := limitQuery(w, r)
 	if !ok {
 		return
@@ -1469,7 +1489,10 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 	defer cancelCtx()
 	stop := context.AfterFunc(scopeCtx, cancelCtx)
 	defer stop()
-	after := store.ParseCursor(r.URL.Query().Get("after"))
+	after, ok := eventsCursor(w, r)
+	if !ok {
+		return
+	}
 	inbox := r.URL.Query().Get("inbox")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

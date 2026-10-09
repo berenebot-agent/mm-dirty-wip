@@ -230,12 +230,16 @@ remain Antler MX / per-domain Dial MX custom; Remote MX does not do DNS auth.)
   a second account registering the same URL is rejected. A wrong bearer key
   simply never authenticates: the receiver's status shows connecting/failed and
   only the correct-key core becomes its live session.
-- **Private/LAN receivers.** By default a Remote MX receiver URL must be an
-  HTTPS public-routable origin. The account admin can tick **Allow a private /
+- **Private/LAN receivers.** The account admin can tick **Allow a private /
   LAN receiver** to permit an `http` origin on a loopback or RFC1918 address (for
   example a receiver on the account's own LAN), mirroring the installation
-  Remote receiver's private-destination support. A private CA bundle can be
-  supplied for a self-signed receiver certificate.
+  Remote receiver's private-destination support; when unticked, the URL must be
+  an HTTPS public-routable origin. The operator's global
+  `ALLOW_PRIVATE_OUTBOUND` governs whether the tick is honoured: it defaults to
+  `true` (private destinations allowed), and a hosted operator that sets
+  `ALLOW_PRIVATE_OUTBOUND=false` confines every outbound connection to the public
+  internet, so the per-account tick cannot re-enable a private receiver. A
+  private CA bundle can be supplied for a self-signed receiver certificate.
 - **Fail-closed clear.** Removing the account receiver is refused while one or
   more domains still route to it, so a clear never silently breaks receiving.
 

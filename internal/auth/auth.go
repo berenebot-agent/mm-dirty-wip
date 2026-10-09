@@ -15,8 +15,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Argon2id parameters for human-chosen passwords. They match tiller-router so
-// both products share one password-hashing level.
+// Argon2id parameters for human-chosen passwords.
 const (
 	argonMemory      = 64 * 1024 // 64 MiB
 	argonIterations  = 3
@@ -112,8 +111,8 @@ func HashPassword(password string) (string, error) {
 		return "", err
 	}
 	acquireArgonSlot()
+	defer releaseArgonSlot()
 	hash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLen)
-	releaseArgonSlot()
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", memory, iterations, parallelism,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash)), nil
 }
@@ -180,8 +179,8 @@ func checkArgon2id(encoded, password string) bool {
 		return false
 	}
 	acquireArgonSlot()
+	defer releaseArgonSlot()
 	got := argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(memory), uint8(parallelism), uint32(len(want)))
-	releaseArgonSlot()
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 

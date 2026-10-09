@@ -98,8 +98,9 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		return model.Message{}, model.Event{}, false, err
 	}
 	defer tx.Rollback()
+	recipient := normalizeAddress(r.EnvelopeRecipient)
 	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.Inbox.AccountID, r.Provider, r.EnvelopeRecipient, r.ProviderDeliveryID).Scan(&existing)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.Inbox.AccountID, r.Provider, recipient, r.ProviderDeliveryID).Scan(&existing)
 	if err == nil {
 		m, e := model.Message{}, model.Event{}
 		_ = tx.Rollback()
@@ -141,7 +142,7 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 		}
 	}
 	id := idgen.New("msg")
-	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), normalizeAddress(r.EnvelopeRecipient), strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
+	_, err = tx.ExecContext(ctx, `INSERT INTO messages(id,account_id,inbox_id,thread_id,direction,provider,provider_delivery_id,provider_message_id,rfc_message_id,in_reply_to,references_json,from_name,from_address,to_json,cc_json,envelope_to_json,envelope_recipient,envelope_from,subject,text_body,html_body,raw_path,size_bytes,is_read,received_at,created_at,is_spam,auth_results_json,spam_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`, id, r.Inbox.AccountID, r.Inbox.ID, threadID, "inbound", r.Provider, r.ProviderDeliveryID, r.ProviderMessageID, r.RFCMessageID, r.InReplyTo, jsonString(r.References), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), jsonString(r.CC), jsonString(r.EnvelopeTo), recipient, strings.TrimSpace(r.EnvelopeFrom), r.Subject, r.Text, r.HTML, r.RawPath, r.SizeBytes, timeText(r.ReceivedAt), now, boolInt(r.Spam), firstJSON(r.AuthResults), r.SpamReason)
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
@@ -600,7 +601,7 @@ func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id st
 		return ErrForbidden
 	}
 	if read != nil {
-		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=?`, boolInt(*read), id)
+		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=? AND account_id=?`, boolInt(*read), id, p.AccountID)
 	}
 	return err
 }
@@ -1158,7 +1159,7 @@ func (s *Store) ListAttachments(ctx context.Context, p model.Principal, messageI
 
 // ListAttachmentsInternal lists a message's attachments without a principal.
 func (s *Store) ListAttachmentsInternal(ctx context.Context, accountID, messageID string) ([]model.Attachment, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT id,message_id,filename,content_type,size_bytes,part_index,content_id FROM attachments WHERE message_id=? ORDER BY part_index`, messageID)
+	rows, err := s.read.QueryContext(ctx, `SELECT a.id,a.message_id,a.filename,a.content_type,a.size_bytes,a.part_index,a.content_id FROM attachments a JOIN messages m ON m.id=a.message_id AND m.account_id=? WHERE a.message_id=? ORDER BY a.part_index`, accountID, messageID)
 	if err != nil {
 		return nil, err
 	}
@@ -1315,8 +1316,9 @@ func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (mode
 		return model.BlockedMessage{}, false, err
 	}
 	defer tx.Rollback()
+	recipient := normalizeAddress(r.EnvelopeRecipient)
 	var existing string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.AccountID, r.Provider, r.EnvelopeRecipient, r.ProviderDeliveryID).Scan(&existing)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM blocked_messages WHERE account_id=? AND provider=? AND envelope_recipient=? AND provider_delivery_id=?`, r.AccountID, r.Provider, recipient, r.ProviderDeliveryID).Scan(&existing)
 	if err == nil {
 		_ = tx.Rollback()
 		m, e := s.GetBlockedMessage(ctx, r.AccountID, existing)
@@ -1328,7 +1330,7 @@ func (s *Store) CommitBlockedInbound(ctx context.Context, r BlockedRecord) (mode
 	id := idgen.New("blk")
 	now := nowText()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO blocked_messages(id,account_id,inbox_id,provider,provider_delivery_id,envelope_recipient,from_name,from_address,to_json,subject,size_bytes,reason,received_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, normalizeAddress(r.EnvelopeRecipient), r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
+		id, r.AccountID, r.InboxID, r.Provider, r.ProviderDeliveryID, recipient, r.From.Name, normalizeAddress(r.From.Address), jsonString(r.To), r.Subject, r.SizeBytes, r.Reason, timeText(r.ReceivedAt), now); err != nil {
 		return model.BlockedMessage{}, false, err
 	}
 	if err = tx.Commit(); err != nil {
