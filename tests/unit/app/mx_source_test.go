@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"context"
+	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,6 +59,52 @@ func TestMXSourceLabelPerFamily(t *testing.T) {
 			t.Fatalf("direct source = %q", src)
 		}
 	})
+}
+
+// logSink is a minimal slog handler that captures rendered attribute values by
+// key so a test can read what the ingest log stamped for a given field.
+type logSink struct {
+	mu    sync.Mutex
+	attrs map[string][]string
+}
+
+func newLogSink() *logSink { return &logSink{attrs: map[string][]string{}} }
+
+func (h *logSink) Enabled(context.Context, slog.Level) bool { return true }
+func (h *logSink) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r.Attrs(func(a slog.Attr) bool {
+		h.attrs[a.Key] = append(h.attrs[a.Key], a.Value.String())
+		return true
+	})
+	return nil
+}
+func (h *logSink) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *logSink) WithGroup(string) slog.Handler      { return h }
+
+func (h *logSink) values(key string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.attrs[key]...)
+}
+
+// TestMXIngestLogsReceivingSourceAsProvider pins the "inbound received" log
+// attribute to the human receiving source rather than the internal provider
+// identifier, so the mx ingest path (which persists Provider="mx" for every
+// receiving family) does not log provider=mx for Direct MX, Remote MX and Dial
+// MX alike.
+func TestMXIngestLogsReceivingSourceAsProvider(t *testing.T) {
+	svc, _, _, box := mxService(t)
+	sink := newLogSink()
+	svc.Log = slog.New(sink)
+	if _, err := svc.IngestMX(context.Background(), mxInput(t, svc, box.Address, goodRaw, mxwire.AuthResults{})); err != nil {
+		t.Fatal(err)
+	}
+	got := sink.values("provider")
+	if len(got) != 1 || got[0] != "Direct MX" {
+		t.Fatalf("provider log attrs = %q, want [Direct MX]", got)
+	}
 }
 
 // createMXInbox creates an inbox under the domain and registers a dialmx
