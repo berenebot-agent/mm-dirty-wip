@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -46,17 +47,27 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 		view.Service = mxdial.ServiceCustom
 	}
 	if s.Service.DialMX != nil {
+		antlerReceivers := app.AntlerReceiversFromConfig(values)
 		for _, st := range s.Service.DialMX.Status(domainName) {
 			// A rotation can precede the manager's next reconciliation. Never
 			// present authorization for the previous key as current readiness.
 			if st.KeyID != "" && st.KeyID != keyID {
 				continue
 			}
+			hostname := st.SMTPHostname
 			if view.Service == mxdial.ServiceAntler {
 				configured := false
-				for _, receiver := range app.AntlerReceiversFromConfig(values) {
+				for _, receiver := range antlerReceivers {
 					if receiver.SessionURL == st.ReceiverURL {
 						configured = true
+						// A receiver the core cannot reach reports no advertised
+						// hostname. Fall back to the configured SMTP hostname so
+						// the connector row still resolves to its real state
+						// (red) instead of an amber "waiting" that hides the
+						// failure.
+						if hostname == "" {
+							hostname = receiver.SMTPHostname
+						}
 						break
 					}
 				}
@@ -64,7 +75,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 					continue
 				}
 			}
-			v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: st.SMTPHostname}
+			v := mxdialStatusView{ReceiverURL: st.ReceiverURL, State: st.State, Reason: boundStatusReason(st.Reason), SMTPHostname: hostname}
 			if !st.ExpiresAt.IsZero() {
 				t := st.ExpiresAt
 				v.ExpiresAt = &t
@@ -112,6 +123,30 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 		view.DNS = append(view.DNS, s.dns.checkMX(domainName, view.MX))
 	}
 	return view
+}
+
+// dialMXHealth aggregates a domain's receiver statuses into the single traffic
+// light shown on the dashboard. Inbound mail is delivered as long as one
+// receiver holds a current authorization, so the light is green when any
+// receiver is ready and unexpired and red otherwise. It answers the one
+// question an operator needs at a glance — will mail arrive? — rather than
+// enumerating each receiver; the receiving dialog carries the per-connector
+// detail. light is a "dns-light" token ("ok" or "danger") and title is the
+// human explanation for its tooltip.
+func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title string) {
+	ready := 0
+	for _, st := range statuses {
+		if st.State == mxdial.StatusActive && (st.ExpiresAt == nil || st.ExpiresAt.After(now)) {
+			ready++
+		}
+	}
+	if ready > 0 {
+		return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
+	}
+	if len(statuses) == 0 {
+		return "danger", "No inbound connector is ready — mail cannot be delivered"
+	}
+	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver reconnects"
 }
 
 // boundStatusReason truncates a receiver-supplied reason so an unexpectedly
