@@ -2142,6 +2142,12 @@ type inboxConfig struct {
 	// tab. Nil means the inbox is uncapped (only the account quota applies); a
 	// pointer to 0 is treated the same; a positive value is the cap.
 	storageQuota *int64
+	// keyRoles holds staged Clients & Access role changes for API keys that
+	// already have (or will lose) access to this inbox, keyed by client id. A
+	// value is one of read/assistant/owner; an empty value removes this inbox's
+	// binding. Only keys the admin touched appear, so untouched keys are left
+	// alone. Parsed from access_role_<keyID> hidden inputs.
+	keyRoles map[string]string
 }
 
 func parseInboxConfig(r *http.Request) (inboxConfig, error) {
@@ -2202,6 +2208,26 @@ func parseInboxConfig(r *http.Request) (inboxConfig, error) {
 		quota := int64(math.Round(bytes))
 		storageQuota = &quota
 	}
+	// Staged Clients & Access role changes: access_role_<keyID> hidden inputs
+	// carry the intended role for each touched key. An empty value removes this
+	// inbox's binding. Only touched keys are present.
+	keyRoles := map[string]string{}
+	for name, values := range r.Form {
+		if !strings.HasPrefix(name, "access_role_") {
+			continue
+		}
+		keyID := strings.TrimPrefix(name, "access_role_")
+		if keyID == "" || len(values) == 0 {
+			continue
+		}
+		role := strings.ToLower(strings.TrimSpace(values[len(values)-1]))
+		switch role {
+		case "", "read", "assistant", "owner":
+			keyRoles[keyID] = role
+		default:
+			return inboxConfig{}, fmt.Errorf("invalid access role %q", role)
+		}
+	}
 	return inboxConfig{
 		allowedSenders:         senders,
 		approverEmail:          approverEmail,
@@ -2215,6 +2241,7 @@ func parseInboxConfig(r *http.Request) (inboxConfig, error) {
 		autoTrashHours:         autoTrashHours,
 		deliveryTrigger:        trigger,
 		storageQuota:           storageQuota,
+		keyRoles:               keyRoles,
 	}, nil
 }
 
@@ -2317,8 +2344,55 @@ func (s *Server) applyInboxConfig(ctx context.Context, accountID, inboxID string
 	if err := s.applyInboxAliases(ctx, accountID, inboxID, cfg.aliases); err != nil {
 		return err
 	}
+	// Staged Clients & Access role changes, applied in the same save. This runs
+	// after aliases so a failed inbox edit never half-applies access.
+	if err := s.applyInboxKeyRoles(ctx, accountID, inboxID, cfg.keyRoles); err != nil {
+		return err
+	}
 	// Applied after aliases so a just-set alias can be the default sender.
 	return s.Service.Store.SetInboxDefaultSender(ctx, accountID, inboxID, cfg.defaultSender)
+}
+
+// applyInboxKeyRoles applies staged per-inbox role changes for API keys. Each
+// touched key's full role map is rewritten (read-modify-write) so other inbox
+// bindings are preserved; an empty role removes this inbox's binding. Account
+// Admin keys have implicit access and cannot be edited per inbox.
+func (s *Server) applyInboxKeyRoles(ctx context.Context, accountID, inboxID string, keyRoles map[string]string) error {
+	if len(keyRoles) == 0 {
+		return nil
+	}
+	keys, err := s.Service.Store.ListAPIKeys(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]model.APIKey, len(keys))
+	for _, k := range keys {
+		byID[k.ID] = k
+	}
+	for keyID, role := range keyRoles {
+		key, ok := byID[keyID]
+		if !ok {
+			return fmt.Errorf("client not found")
+		}
+		if key.Admin {
+			return fmt.Errorf("account Admin keys have implicit access and cannot be edited per inbox")
+		}
+		roles := map[string]string{}
+		for id, existing := range key.Roles {
+			roles[id] = existing
+		}
+		if role == "" {
+			delete(roles, inboxID)
+		} else {
+			roles[inboxID] = role
+		}
+		if err := s.Service.Store.UpdateAPIKey(ctx, accountID, keyID, key.Name, false, roles); err != nil {
+			return err
+		}
+		s.Service.Hub.CancelScope("key:" + keyID)
+		s.Service.Store.DeleteKeySessionsForClient(ctx, keyID)
+	}
+	return nil
 }
 
 func (s *Server) uiUpdateInbox(w http.ResponseWriter, r *http.Request) {
