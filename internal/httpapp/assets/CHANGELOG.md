@@ -221,9 +221,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   linking to the project mailbox at mailmoose@hgolabs.com.
 - Dashboard: each Dial MX / Antler MX domain in the Domains table now shows one
   aggregate connector light. Green when at least one receiver holds a current
-  authorization, so inbound mail will be accepted; red otherwise. It answers
-  "will mail arrive?" at a glance, while the receiving dialog keeps the
-  per-connector detail.
+  authorization, so inbound mail will be accepted; amber while receivers are
+  still connecting (the startup and reconnect state, so a red light never cries
+  failure before the outcome is known); red once every receiver has settled into
+  a failure. It answers "will mail arrive?" at a glance, while the receiving
+  dialog keeps the per-connector detail.
 - Antler MX: a zero-config hosted shared relay for direct-SMTP receiving.
   Select **Antler MX (Free SMTP Relay - no port forwards required)** as the
   domain's receiving provider, enter a contact email, and publish the shown MX

@@ -128,23 +128,34 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic
 // light shown on the dashboard. Inbound mail is delivered as long as one
 // receiver holds a current authorization, so the light is green when any
-// receiver is ready and unexpired and red otherwise. It answers the one
+// receiver is ready and unexpired, red when every receiver has settled into a
+// failure, and amber (pending) while at least one receiver is still working —
+// connecting, deferred, or waiting for its first status. Amber is the honest
+// "not yet" state at startup and during a reconnect: a red light would cry
+// failure while the core is still authorizing. The light answers the one
 // question an operator needs at a glance — will mail arrive? — rather than
 // enumerating each receiver; the receiving dialog carries the per-connector
-// detail. light is a "dns-light" token ("ok" or "danger") and title is the
-// human explanation for its tooltip.
+// detail. light is a "dns-light" token ("ok", "amber" or "danger") and title is
+// the human explanation for its tooltip.
 func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title string) {
 	ready := 0
+	pending := 0
 	for _, st := range statuses {
-		if st.State == mxdial.StatusActive && (st.ExpiresAt == nil || st.ExpiresAt.After(now)) {
+		switch {
+		case st.State == mxdial.StatusActive && (st.ExpiresAt == nil || st.ExpiresAt.After(now)):
 			ready++
+		case st.State == mxdial.StatusConnecting, st.State == mxdial.StatusDeferred, st.State == mxdial.StatusDisconnected, st.State == "":
+			pending++
 		}
 	}
 	if ready > 0 {
 		return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
 	}
+	if pending > 0 {
+		return "amber", "Inbound connectors are still connecting — not ready yet"
+	}
 	if len(statuses) == 0 {
-		return "danger", "No inbound connector is ready — mail cannot be delivered"
+		return "amber", "Waiting for inbound connector status"
 	}
 	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver reconnects"
 }
