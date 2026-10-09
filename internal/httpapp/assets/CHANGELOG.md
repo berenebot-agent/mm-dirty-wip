@@ -24,6 +24,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Dial MX / Antler MX status: an unreachable receiver no longer shows as a
+  yellow "waiting" connector. The core fills the configured `smtp_hostname` when
+  a receiver it cannot reach advertises none, so the connector row resolves to
+  its real state and paints red ("Receiver unreachable"/"Reconnecting") with the
+  failure reason instead of an indeterminate wait.
 - Inbox settings: the Add and Edit inbox dialogs now share one full-height
   settings shell with a fixed size, a left section list and a single scrollable
   panel, so the dialog no longer resizes as sections change and the Save/Cancel
@@ -57,6 +62,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Dashboard: each Dial MX / Antler MX domain in the Domains table now shows one
+  aggregate connector light. Green when at least one receiver holds a current
+  authorization, so inbound mail will be accepted; red otherwise. It answers
+  "will mail arrive?" at a glance, while the receiving dialog keeps the
+  per-connector detail.
 - Antler MX: a zero-config hosted shared relay for direct-SMTP receiving.
   Select **Antler MX (Free SMTP Relay - no port forwards required)** as the
   domain's receiving provider, enter a contact email, and publish the shown MX

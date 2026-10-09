@@ -764,7 +764,10 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
 - `status[]` — per-receiver authentication state learned over the core's
   outbound session: `receiver_url`, `state` (`ready`, `rejected`, `connecting`,
   `unavailable`, …), bounded `reason`, advertised `smtp_hostname` and
-  `expires_at`.
+  `expires_at`. For an Antler MX setup an unreachable receiver reports no
+  advertised hostname, so the configured `smtp_hostname` (from the saved
+  receiver snapshot) is returned instead; the status rows always name their
+  connector.
 - `dns[]` — published-record checks: `kind` (`mx`/`txt`), `name`, `expected`,
   bounded `found`, bounded `matched`, `state` (`ok`, `pending`, `mismatch`) and a
   short `reason`. Checks resolve DNS live on every request (bounded by a
