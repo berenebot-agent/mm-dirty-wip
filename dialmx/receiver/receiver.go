@@ -33,9 +33,10 @@ const (
 	// bounds how many sessions one source may open per minute so short-lived
 	// cycling cannot evade the concurrent cap; the auth window bounds how many
 	// challenges a source may start per minute so a burst of DomainAuth frames
-	// cannot turn into unbounded DNS work. The cooldown is applied during AUTH,
-	// not on connection open, so a legitimate sender that opens many short
-	// connections is not punished for a single failed lookup.
+	// cannot turn into unbounded DNS work. A failed proof arms a short cooldown
+	// for only the domain that failed, applied during AUTH, so a domain's
+	// transient DNS/key failure neither denies a core's other domains nor
+	// punishes a legitimate sender for opening many short connections.
 	perIPConnLimit       = 16
 	perIPConnWindow      = time.Minute
 	perIPConnWindowMax   = 128
@@ -323,7 +324,44 @@ type ipState struct {
 	auths      int
 	authCount  int
 	authWindow time.Time
-	cooldown   time.Time
+	// domainCooldown is the per-domain failure cooldown. A failed proof cools
+	// down only the domain that failed — never the whole source IP — so one
+	// domain's transient DNS failure cannot deny registration of a core's
+	// other domains. Entries are pruned when observed expired.
+	domainCooldown map[string]time.Time
+}
+
+// coolingDown reports whether domain is within its failure cooldown as of now.
+// Callers hold r.mu.
+func (st *ipState) coolingDown(domain string, now time.Time) bool {
+	return now.Before(st.domainCooldown[domain])
+}
+
+// anyCooldown reports whether any domain cooldown is still in effect as of now.
+// Callers hold r.mu.
+func (st *ipState) anyCooldown(now time.Time) bool {
+	for _, until := range st.domainCooldown {
+		if now.Before(until) {
+			return true
+		}
+	}
+	return false
+}
+
+// pruneCooldowns drops expired per-domain cooldowns so the map cannot grow
+// without bound. Callers hold r.mu.
+func (st *ipState) pruneCooldowns(now time.Time) {
+	for domain, until := range st.domainCooldown {
+		if !now.Before(until) {
+			delete(st.domainCooldown, domain)
+		}
+	}
+}
+
+// clearCooldown drops a domain's failure cooldown once it proves successfully,
+// so a recovered domain is immediately eligible again. Callers hold r.mu.
+func (st *ipState) clearCooldown(domain string) {
+	delete(st.domainCooldown, domain)
 }
 
 // binding is one connection's authority over a domain. registry membership is
@@ -527,10 +565,11 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	}
 	r.mu.Lock()
 	st := r.ips[ip]
+	now := time.Now()
 	if st == nil {
 		if len(r.ips) >= ipMapCap {
 			for key, entry := range r.ips {
-				if entry.conns == 0 && entry.auths == 0 && time.Now().After(entry.cooldown) && time.Since(entry.authWindow) >= perIPAuthWindow {
+				if entry.conns == 0 && entry.auths == 0 && !entry.anyCooldown(now) && time.Since(entry.authWindow) >= perIPAuthWindow {
 					delete(r.ips, key)
 				}
 			}
@@ -547,7 +586,6 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	// The failure cooldown is enforced during AUTH, not on connection open, so
 	// a source is not punished for opening a short connection. The concurrent
 	// cap and the per-minute connection window both bound connection churn.
-	now := time.Now()
 	if now.Sub(st.connWindow) >= perIPConnWindow {
 		st.connWindow = now
 		st.connCount = 0
@@ -564,7 +602,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	defer func() {
 		r.mu.Lock()
 		st.conns--
-		if st.conns == 0 && st.auths == 0 && time.Now().After(st.cooldown) && time.Since(st.authWindow) >= perIPAuthWindow {
+		if st.conns == 0 && st.auths == 0 && !st.anyCooldown(time.Now()) && time.Since(st.authWindow) >= perIPAuthWindow {
 			delete(r.ips, ip)
 		}
 		r.mu.Unlock()
@@ -1235,11 +1273,11 @@ func (r *Receiver) auth(c *connection, f mxwire.Frame) error {
 func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	started := time.Now()
 	trace := &proofTrace{}
-	if !r.acquireAuth(c) {
+	if ok, reason := r.acquireAuth(c, d); !ok {
 		r.dropChallenge(c, ch)
-		r.logProof(c, "start", d, keyID, "rejected", "source_limit", time.Since(started))
-		trace.add("start", "rejected", "source_limit")
-		_ = r.authReply(c, ch, "rejected", d, keyID, false, "source_limit", time.Time{}, trace)
+		r.logProof(c, "start", d, keyID, "rejected", reason, time.Since(started))
+		trace.add("start", "rejected", reason)
+		_ = r.authReply(c, ch, "rejected", d, keyID, false, reason, time.Time{}, trace)
 		return
 	}
 	defer r.releaseAuth(c)
@@ -1250,7 +1288,7 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	trace.add("dns_lookup", resultWord(err == nil), boundedReason(err))
 	if err != nil {
 		r.dropChallenge(c, ch)
-		r.failIP(c)
+		r.failDomain(c, d)
 		_ = r.authReply(c, ch, "rejected", d, keyID, false, "dns_unavailable", time.Time{}, trace)
 		return
 	}
@@ -1259,7 +1297,7 @@ func (r *Receiver) initialAuth(c *connection, ch uint64, d, keyID string) {
 	trace.add("parse_key", resultWord(err == nil), boundedReason(err))
 	if err != nil {
 		r.dropChallenge(c, ch)
-		r.failIP(c)
+		r.failDomain(c, d)
 		_ = r.authReply(c, ch, "rejected", d, keyID, false, "key_unavailable", time.Time{}, trace)
 		return
 	}
@@ -1328,7 +1366,12 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 	}
 	r.mu.Unlock()
 	if !ok || !now.Before(issued.expires) || issued.value.Nonce == "" || issued.domain != x.Domain || issued.keyID != x.KeyID || issued.value.Nonce != x.Nonce {
-		r.failIP(c)
+		// Damp only the domain that was actually challenged; a mismatched
+		// response's own domain is attacker-chosen and must not seed cooldown
+		// entries for arbitrary names.
+		if issued.domain != "" {
+			r.failDomain(c, issued.domain)
+		}
 		return r.authReply(c, f.ChannelID, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, &proofTrace{})
 	}
 	if !r.spawn(c, func() { r.verifyProof(c, f.ChannelID, issued, x) }) {
@@ -1340,21 +1383,22 @@ func (r *Receiver) proof(c *connection, f mxwire.Frame) error {
 func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxwire.ChallengeResponse) {
 	started := time.Now()
 	trace := &proofTrace{}
-	if !r.acquireAuth(c) {
+	if ok, reason := r.acquireAuth(c, x.Domain); !ok {
 		if issued.binding != nil {
 			// A renewal that could not start because the source is at its
-			// temporary authentication capacity is NOT a failed proof: the
-			// existing grant is still valid. Leave the binding untouched and let
-			// revalidateConn re-issue the renewal on a later tick, before the
-			// grant expires. Only the grant's own expiry fails the binding.
-			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "source_limit", time.Since(started))
-			trace.add("renewal", "deferred", "source_limit")
-			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", "source_limit", trace.String(), time.Since(started))
+			// temporary authentication capacity, or the domain is in its own
+			// failure cooldown, is NOT a failed proof: the existing grant is
+			// still valid. Leave the binding untouched and let revalidateConn
+			// re-issue the renewal on a later tick, before the grant expires.
+			// Only the grant's own expiry fails the binding.
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", reason, time.Since(started))
+			trace.add("renewal", "deferred", reason)
+			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", reason, trace.String(), time.Since(started))
 			return
 		}
-		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", "source_limit", time.Since(started))
-		trace.add("start", "rejected", "source_limit")
-		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "source_limit", time.Time{}, trace)
+		r.logProof(c, "start", x.Domain, x.KeyID, "rejected", reason, time.Since(started))
+		trace.add("start", "rejected", reason)
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, reason, time.Time{}, trace)
 		return
 	}
 	defer r.releaseAuth(c)
@@ -1370,7 +1414,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	r.logProof(c, "signature", x.Domain, x.KeyID, resultWord(sigOK), "", time.Since(started))
 	trace.add("signature", resultWord(sigOK), "")
 	if e != nil || e2 != nil || !sigOK {
-		r.failIP(c)
+		r.failDomain(c, x.Domain)
 		if issued.binding != nil {
 			// A failed renewal invalidates the domain fail-closed: the proof
 			// could not be completed against fresh DNS.
@@ -1411,6 +1455,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		expiresIn := time.Until(exp)
 		email, setupID := b.contactEmail, b.setupID
 		r.mu.Unlock()
+		r.clearDomainCooldown(c, x.Domain)
 		r.logProof(c, "renewal", x.Domain, x.KeyID, "renewed", "", time.Since(started), "expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
 		_ = r.authReply(c, ch, "renewal", x.Domain, x.KeyID, true, "", exp, trace,
 			"expires_in_ms", expiresIn.Milliseconds(), "contact_email", email, "setup_id", setupID)
@@ -1444,6 +1489,7 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	c.domains[ch] = b
 	r.domains[x.Domain] = b
 	r.mu.Unlock()
+	r.clearDomainCooldown(c, x.Domain)
 	r.logProof(c, "registration", x.Domain, x.KeyID, "active", "", time.Since(started), "contact_email", b.contactEmail, "setup_id", b.setupID)
 	if replaced != nil && replaced.c != c {
 		sc := replaced.c
@@ -1736,45 +1782,74 @@ func (r *Receiver) release(c *connection, p *pending) {
 	r.mu.Unlock()
 }
 
-func (r *Receiver) failIP(c *connection) {
+// reasonDomainCooldown and reasonSourceLimit are the bounded tokens acquireAuth
+// returns when it refuses to start a job. domain_cooldown means this specific
+// domain is still in its failure cooldown; source_limit means the source IP is
+// at its concurrent or per-minute authentication capacity. They are distinct so
+// an operator can tell a single domain being damped from a source at capacity.
+const (
+	reasonDomainCooldown = "domain_cooldown"
+	reasonSourceLimit    = "source_limit"
+)
+
+// failDomain arms the failure cooldown for one domain on the source IP that
+// failed it. Only that domain is damped: a transient DNS or key failure for one
+// domain must not deny registration of any other domain from the same source.
+func (r *Receiver) failDomain(c *connection, domain string) {
 	now := time.Now()
 	r.mu.Lock()
 	if st := r.ips[c.ip]; st != nil {
-		st.cooldown = now.Add(ipFailureCooldown)
+		if st.domainCooldown == nil {
+			st.domainCooldown = map[string]time.Time{}
+		}
+		st.domainCooldown[domain] = now.Add(ipFailureCooldown)
 	}
 	r.mu.Unlock()
 }
 
-// acquireAuth bounds concurrent authentication jobs per source IP and enforces
-// the per-minute auth window. A source that exceeded its window is refused
-// rather than allowed to grow unbounded DNS work.
-func (r *Receiver) acquireAuth(c *connection) bool {
+// acquireAuth decides whether one authentication job may start for the given
+// domain from this source IP. It refuses when the domain is in its own failure
+// cooldown, when the source exceeded its per-minute auth window, or when the
+// source is at its concurrent-auth capacity. The returned reason is "" on
+// success, else reasonDomainCooldown or reasonSourceLimit.
+func (r *Receiver) acquireAuth(c *connection, domain string) (ok bool, reason string) {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	st := r.ips[c.ip]
 	if st == nil {
-		return false
+		return false, reasonSourceLimit
 	}
-	if now.Before(st.cooldown) {
-		return false
+	st.pruneCooldowns(now)
+	if st.coolingDown(domain, now) {
+		return false, reasonDomainCooldown
 	}
 	if now.Sub(st.authWindow) >= perIPAuthWindow {
 		st.authWindow = now
 		st.authCount = 0
 	}
 	if st.authCount >= r.cfg.authWindowMax() || st.auths >= r.cfg.maxAuthConcurrent() {
-		return false
+		return false, reasonSourceLimit
 	}
 	st.auths++
 	st.authCount++
-	return true
+	return true, ""
 }
 
 func (r *Receiver) releaseAuth(c *connection) {
 	r.mu.Lock()
 	if st := r.ips[c.ip]; st != nil && st.auths > 0 {
 		st.auths--
+	}
+	r.mu.Unlock()
+}
+
+// clearDomainCooldown drops a domain's failure cooldown after a successful
+// proof, so a recovered domain is eligible again without waiting out the clock.
+func (r *Receiver) clearDomainCooldown(c *connection, domain string) {
+	r.mu.Lock()
+	if st := r.ips[c.ip]; st != nil {
+		st.clearCooldown(domain)
 	}
 	r.mu.Unlock()
 }

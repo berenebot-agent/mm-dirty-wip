@@ -401,9 +401,14 @@ per source IP as well as in aggregate:
 - a per-IP authentication window bounds how many domain challenges a source may
   start per minute, and a per-IP concurrent-auth cap bounds DNS work in flight,
   so a burst of `DomainAuth` frames cannot become unbounded resolver load;
-- a short failure cooldown is applied during `AUTH`, not on connection open, so
-  a legitimate sender opening many short connections is not punished for a
-  single failed lookup.
+- a short, **per-domain** failure cooldown is applied during `AUTH`, not on
+  connection open. A failed proof arms the cooldown only for the domain that
+  failed, so a transient DNS or key failure for one domain never denies
+  registration of a core's other domains, and a legitimate sender opening many
+  short connections is not punished for a single failed lookup. The refusal is
+  reported with reason `domain_cooldown`, distinct from `source_limit` (the
+  source is at its concurrent or per-minute auth capacity) so the two are
+  tellable apart in logs.
 
 The core paces its own `DomainAuth` frames: `MaxAuthInflight` bounds concurrent
 authentications across every session (and is further clamped to a receiver's

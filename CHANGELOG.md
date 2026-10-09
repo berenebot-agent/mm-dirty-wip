@@ -39,6 +39,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   restoration failures discard the connection and fail startup.
 - Deployment and connector instructions reflect explicit port-25 publication
   and removal of the unused delivery key.
+- Dial MX receiver: a failed domain proof now cools down only the domain that
+  failed, not the whole source IP, so a transient DNS or key failure on one
+  domain no longer denies registration of a core's other domains. The refusal
+  is a distinct `domain_cooldown` reason that the core surfaces as the amber
+  "waiting to retry" state rather than red "rejected" (D091).
 
 ### Changed
 

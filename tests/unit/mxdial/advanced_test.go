@@ -236,6 +236,24 @@ func TestMissingBackendResultGetsScopedTemporaryResult(t *testing.T) {
 	}
 }
 
+// TestDomainCooldownShowsDeferred verifies a receiver's transient per-domain
+// cooldown refusal is surfaced as the amber "deferred" state, never as a red
+// "rejected" verdict on the domain's authority.
+func TestDomainCooldownShowsDeferred(t *testing.T) {
+	rc := newFakeReceiver(t)
+	rc.onAuth = func(fc *fakeConn, ch uint64, a mxwire.DomainAuth) {
+		fc.send(mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: a.Domain, KeyID: a.KeyID, Accepted: false, Reason: "domain_cooldown"})
+	}
+	b := &scriptedBackend{}
+	b.setDomains(domainFor(t, rc, "example.test"))
+	m, _ := managerFor(t, b, rc, t.TempDir())
+
+	waitState(t, m, "example.test", "deferred", 3*time.Second)
+	if s := m.Status("example.test"); len(s) > 0 && s[0].Reason != "domain_cooldown" {
+		t.Fatalf("deferred reason = %q, want domain_cooldown", s[0].Reason)
+	}
+}
+
 // TestAuthRejectRetriesSameConnection verifies a rejected authentication is
 // retried on the same connection after the bounded retry window, without
 // tearing the connection down.
