@@ -80,11 +80,14 @@ type Server struct {
 	unroutedLim     *limiter
 	passwordLimiter *limiter
 	registerLimiter *limiter
-	flashes         *flashStore
-	assetVersion    string
-	inboundSem      chan struct{}
-	streamLimiter   *concurrentLimiter
-	waitLimiter     *concurrentLimiter
+	// setupLimiter bounds first-run setup claim attempts per source address,
+	// separate from the registration limiter so neither can exhaust the other.
+	setupLimiter  *limiter
+	flashes       *flashStore
+	assetVersion  string
+	inboundSem    chan struct{}
+	streamLimiter *concurrentLimiter
+	waitLimiter   *concurrentLimiter
 	// webauthn is the passkey ceremony service. It is nil when the deployment
 	// has no usable relying-party id (e.g. a struct-literal test config with no
 	// BASE_URL), in which case passkey routes report that they are unavailable.
@@ -123,6 +126,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		unroutedLim:          newLimiter(1, time.Minute),
 		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		registerLimiter:      newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
+		setupLimiter:         newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
 		flashes:              newFlashStore(64, 64<<20),
 		assetVersion:         fmt.Sprintf("%x", sum[:6]),
 		inboundSem:           make(chan struct{}, conc),
@@ -168,6 +172,7 @@ func (s *Server) Handler() http.Handler {
 	// Human UI.
 	m.HandleFunc("GET /", s.home)
 	m.HandleFunc("GET /setup", s.setupGet)
+	m.HandleFunc("POST /setup", s.withPreAuthCSRF(s.setupPost))
 	m.HandleFunc("GET /register", s.registerGet)
 	m.HandleFunc("POST /register", s.withPreAuthCSRF(s.registerPost))
 	m.HandleFunc("GET /login", s.loginGet)
@@ -1097,6 +1102,33 @@ func remoteIP(remoteAddr string) string {
 		return addr.String()
 	}
 	return trimmed
+}
+
+// sameOrigin reports whether a state-changing request comes from the same
+// origin as the page that served it. It is a defence-in-depth check for the
+// first-run setup claim, on top of the pre-auth CSRF token: a cross-site POST
+// is refused even if a CSRF token were somehow reused. It trusts the standard
+// Fetch metadata when present and otherwise falls back to comparing the Origin
+// header's host against the request Host. A missing Origin with no
+// Sec-Fetch-Site (some non-browser clients) is allowed, since CSRF still
+// applies and those clients cannot rely on ambient browser credentials.
+func (s *Server) sameOrigin(r *http.Request) bool {
+	// Sec-Fetch-Site is set by browsers and cannot be forged by page script.
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))) {
+	case "same-origin", "none":
+		return true
+	case "same-site", "cross-site":
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // parseXFF splits an X-Forwarded-For header into valid addresses, closest last.
