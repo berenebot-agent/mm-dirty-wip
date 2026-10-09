@@ -381,7 +381,7 @@ func (s *Service) domainEnforcement(ctx context.Context, accountID, domainID, ro
 	if err != nil {
 		return mxwire.EnforcementModerate
 	}
-	cfg, err := s.decryptConfig(b.EncryptedConfig)
+	cfg, err := s.decryptConfig(configAAD(b.AccountID, b.DomainID), b.EncryptedConfig)
 	if err != nil {
 		return mxwire.EnforcementModerate
 	}

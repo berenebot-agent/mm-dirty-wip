@@ -87,7 +87,7 @@ func (s *Service) AccountMXReceiverSettingsForRuntime(ctx context.Context, accou
 		return AccountMXReceiver{}, err
 	}
 	if m.EncryptedSecret != "" {
-		secret, derr := s.DecryptSecret(m.EncryptedSecret)
+		secret, derr := s.DecryptSecretAAD(accountMXAAD(m.AccountID), m.EncryptedSecret)
 		if derr != nil {
 			return AccountMXReceiver{}, derr
 		}
@@ -95,6 +95,12 @@ func (s *Service) AccountMXReceiverSettingsForRuntime(ctx context.Context, accou
 		out.KeyConfigured = true
 	}
 	return out, nil
+}
+
+// accountMXAAD is the additional-authenticated-data binding for an account
+// Remote MX receiver's stored secret and config blob.
+func accountMXAAD(accountID string) string {
+	return "account_mx:" + accountID
 }
 
 // SaveAccountMXReceiver validates the principal, validates the input, retains or
@@ -143,7 +149,7 @@ func (s *Service) SaveAccountMXReceiver(ctx context.Context, p model.Principal, 
 	var encryptedSecret string
 	switch {
 	case strings.TrimSpace(in.BearerKey) != "":
-		enc, eerr := s.EncryptSecret([]byte(strings.TrimSpace(in.BearerKey)))
+		enc, eerr := s.EncryptSecretAAD(accountMXAAD(p.AccountID), []byte(strings.TrimSpace(in.BearerKey)))
 		if eerr != nil {
 			return AccountMXReceiver{}, eerr
 		}
@@ -157,7 +163,7 @@ func (s *Service) SaveAccountMXReceiver(ctx context.Context, p model.Principal, 
 	if merr != nil {
 		return AccountMXReceiver{}, merr
 	}
-	encryptedConfig, eerr := s.EncryptSecret(raw)
+	encryptedConfig, eerr := s.EncryptSecretAAD(accountMXAAD(p.AccountID), raw)
 	if eerr != nil {
 		return AccountMXReceiver{}, eerr
 	}
@@ -212,7 +218,7 @@ func (s *Service) decryptAccountMXStoredConfig(m store.AccountMXReceiver) (accou
 	if m.EncryptedConfig == "" {
 		return accountMXStoredConfig{}, nil
 	}
-	raw, err := s.DecryptSecret(m.EncryptedConfig)
+	raw, err := s.DecryptSecretAAD(accountMXAAD(m.AccountID), m.EncryptedConfig)
 	if err != nil {
 		return accountMXStoredConfig{}, err
 	}

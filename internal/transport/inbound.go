@@ -75,6 +75,9 @@ type InboundBinding struct {
 	Provider     string
 	Recipient    string
 	Config       map[string]any
+	// ConfigDomainID is the domain the config was stored under (an ancestor when
+	// receiving is inherited); it is the AAD scope for the stored credential.
+	ConfigDomainID string
 }
 
 // BindingResolver maps an envelope recipient to the domain and assigned

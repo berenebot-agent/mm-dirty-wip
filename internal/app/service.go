@@ -151,17 +151,18 @@ func (s *Service) ResolveInboundBinding(ctx context.Context, provider, recipient
 		}
 		return transport.InboundBinding{}, err
 	}
-	cfg, err := s.decryptConfig(b.EncryptedConfig)
+	cfg, err := s.decryptConfig(configAAD(b.AccountID, b.ConfigDomainID), b.EncryptedConfig)
 	if err != nil {
 		return transport.InboundBinding{}, err
 	}
 	return transport.InboundBinding{
-		AccountID:    b.AccountID,
-		DomainID:     b.DomainID,
-		CredentialID: b.CredentialID,
-		Provider:     b.Provider,
-		Recipient:    b.Recipient,
-		Config:       cfg,
+		AccountID:      b.AccountID,
+		DomainID:       b.DomainID,
+		CredentialID:   b.CredentialID,
+		Provider:       b.Provider,
+		Recipient:      b.Recipient,
+		Config:         cfg,
+		ConfigDomainID: b.ConfigDomainID,
 	}, nil
 }
 
@@ -572,7 +573,7 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	if err := s.validateProviderBase(merged); err != nil {
 		return store.DomainSendingConfig{}, err
 	}
-	enc, err := s.encryptConfig(merged)
+	enc, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
 		return store.DomainSendingConfig{}, err
 	}
@@ -643,7 +644,7 @@ func (s *Service) SaveDomainReceivingConfig(ctx context.Context, accountID, doma
 	if err := s.validateProviderBase(merged); err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
-	enc, err := s.encryptConfig(merged)
+	enc, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
@@ -708,7 +709,7 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		delete(merged, "setup_id")
 		delete(merged, "antler_receivers")
 	}
-	enc, err := s.encryptConfig(merged)
+	enc, err := s.encryptConfig(configAAD(accountID, domainID), merged)
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
@@ -751,7 +752,7 @@ func (s *Service) saveRemoteMXReceivingConfig(ctx context.Context, accountID, do
 	if receiver.ReceiverURL == "" {
 		return store.DomainReceivingConfig{}, nil, invalidConfig("configure this account's Remote MX receiver before selecting it for a domain")
 	}
-	encrypted, err := s.encryptConfig(map[string]any{})
+	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), map[string]any{})
 	if err != nil {
 		return store.DomainReceivingConfig{}, nil, err
 	}
@@ -853,7 +854,7 @@ func (s *Service) UpdateAntlerContactEmail(ctx context.Context, accountID, domai
 		return store.DomainReceivingConfig{}, invalidConfig("a valid contact email is required")
 	}
 	values["contact_email"] = email
-	encrypted, err := s.encryptConfig(values)
+	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), values)
 	if err != nil {
 		return store.DomainReceivingConfig{}, err
 	}
@@ -911,11 +912,21 @@ func validateDialMXReceiverURLs(raw string) ([]string, error) {
 }
 
 func (s *Service) DecryptDomainSendingConfig(c store.DomainSendingConfig) (map[string]any, error) {
-	return s.decryptConfig(c.EncryptedConfig)
+	return s.decryptConfig(sendingConfigAAD(c.AccountID, c.DomainID, c.ExternalAliasID), c.EncryptedConfig)
 }
 
 func (s *Service) DecryptDomainReceivingConfig(c store.DomainReceivingConfig) (map[string]any, error) {
-	return s.decryptConfig(c.EncryptedConfig)
+	return s.decryptConfig(configAAD(c.AccountID, c.DomainID), c.EncryptedConfig)
+}
+
+// sendingConfigAAD is the AAD scope for a sending configuration, which is keyed
+// by domain or, for an external sending alias, by the alias id. The two are
+// distinct so an alias config cannot be swapped with a domain config.
+func sendingConfigAAD(accountID, domainID, externalAliasID string) string {
+	if externalAliasID != "" {
+		return configAAD(accountID, "alias:"+externalAliasID)
+	}
+	return configAAD(accountID, domainID)
 }
 
 // getSendingConfig distinguishes "domain has no sending config" (ErrNoProvider)
@@ -1153,6 +1164,13 @@ func (s *Service) DecryptSecret(encrypted string) ([]byte, error) {
 	return cryptox.DecryptFirst(s.encryptionKeys, encrypted)
 }
 
+// DecryptSecretAAD decrypts a secret bound to a row identity. A legacy
+// (unbound) blob is still read, so migrating a call site does not strand
+// existing data.
+func (s *Service) DecryptSecretAAD(aad string, encrypted string) ([]byte, error) {
+	return cryptox.DecryptFirstAAD(s.encryptionKeys, encrypted, []byte(aad))
+}
+
 // EnsureDialMXCredential creates an exact-domain key without copying inherited
 // receiving settings. Concurrent creators converge on the first saved key.
 func (s *Service) EnsureDialMXCredential(ctx context.Context, accountID, domainID string) (store.DialMXCredential, error) {
@@ -1166,7 +1184,7 @@ func (s *Service) EnsureDialMXCredential(ctx context.Context, accountID, domainI
 	if !errors.Is(err, store.ErrNoProvider) {
 		return store.DialMXCredential{}, err
 	}
-	c, err = s.newDialMXCredential()
+	c, err = s.newDialMXCredential(accountID, domainID)
 	if err != nil {
 		return store.DialMXCredential{}, err
 	}
@@ -1179,7 +1197,7 @@ func (s *Service) RotateDialMXCredential(ctx context.Context, accountID, domainI
 	if err != nil {
 		return store.DialMXCredential{}, err
 	}
-	next, err := s.newDialMXCredential()
+	next, err := s.newDialMXCredential(accountID, domainID)
 	if err != nil {
 		return store.DialMXCredential{}, err
 	}
@@ -1190,12 +1208,12 @@ func (s *Service) RotateDialMXCredential(ctx context.Context, accountID, domainI
 	return credential, err
 }
 
-func (s *Service) newDialMXCredential() (store.DialMXCredential, error) {
+func (s *Service) newDialMXCredential(accountID, domainID string) (store.DialMXCredential, error) {
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return store.DialMXCredential{}, err
 	}
-	encrypted, err := s.EncryptSecret(private.Seed())
+	encrypted, err := s.EncryptSecretAAD(dialMXSeedAAD(accountID, domainID), private.Seed())
 	if err != nil {
 		return store.DialMXCredential{}, err
 	}
@@ -1211,8 +1229,33 @@ func (s *Service) EncryptSecret(plaintext []byte) (string, error) {
 	return cryptox.Encrypt(s.EncryptionKey, plaintext)
 }
 
-func (s *Service) decryptConfig(encrypted string) (map[string]any, error) {
-	b, err := s.DecryptSecret(encrypted)
+// EncryptSecretAAD encrypts a secret bound to a row identity, so a blob copied
+// to another row fails to decrypt under its new owner.
+func (s *Service) EncryptSecretAAD(aad string, plaintext []byte) (string, error) {
+	return cryptox.EncryptWithAAD(s.EncryptionKey, plaintext, []byte(aad))
+}
+
+// configAAD is the additional-authenticated-data binding for an encrypted
+// provider/connector configuration blob: its owning account and the scoped row
+// (a domain id or an external-alias id).
+func configAAD(accountID, scopeID string) string {
+	return "cfg:" + accountID + ":" + scopeID
+}
+
+// dialMXSeedAAD binds a Dial MX credential's encrypted private seed to its
+// account and domain.
+func dialMXSeedAAD(accountID, domainID string) string {
+	return "dialmx_seed:" + accountID + ":" + domainID
+}
+
+// DecryptDialMXSeed decrypts a Dial MX credential's private seed, unbound by its
+// account and domain.
+func (s *Service) DecryptDialMXSeed(accountID, domainID, encrypted string) ([]byte, error) {
+	return s.DecryptSecretAAD(dialMXSeedAAD(accountID, domainID), encrypted)
+}
+
+func (s *Service) decryptConfig(aad, encrypted string) (map[string]any, error) {
+	b, err := s.DecryptSecretAAD(aad, encrypted)
 	if err != nil {
 		return nil, err
 	}
@@ -1223,12 +1266,12 @@ func (s *Service) decryptConfig(encrypted string) (map[string]any, error) {
 	return out, nil
 }
 
-func (s *Service) encryptConfig(values map[string]any) (string, error) {
+func (s *Service) encryptConfig(aad string, values map[string]any) (string, error) {
 	b, err := json.Marshal(values)
 	if err != nil {
 		return "", err
 	}
-	return cryptox.Encrypt(s.EncryptionKey, b)
+	return s.EncryptSecretAAD(aad, b)
 }
 
 // CreateHermesRelay issues a Hermes relay connection's credentials directly

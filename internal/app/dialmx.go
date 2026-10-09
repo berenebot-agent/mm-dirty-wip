@@ -43,7 +43,7 @@ func (b dialMXBackend) Domains(ctx context.Context) ([]mxdial.Domain, error) {
 		if err != nil {
 			return nil, err
 		}
-		seed, err := b.service.DecryptSecret(credential.EncryptedPrivateSeed)
+		seed, err := b.service.DecryptSecretAAD(dialMXSeedAAD(d.AccountID, d.ID), credential.EncryptedPrivateSeed)
 		if err != nil || len(seed) != ed25519.SeedSize {
 			return nil, errors.New("invalid Dial MX credential")
 		}
