@@ -204,6 +204,16 @@ type Config struct {
 	MaxMIMEDepth         int
 	MaxMIMEParts         int
 	BodyReadTimeout      time.Duration
+	// OutboundHTTPTimeout bounds one outbound provider HTTP request in full:
+	// connect, upload of the (possibly attachment-heavy) body, and the wait for
+	// response headers. A short bound aborts large attachment sends that a slow
+	// uplink cannot complete, and a timeout while awaiting headers can follow a
+	// send the provider already accepted.
+	OutboundHTTPTimeout time.Duration
+	// OutboundConcurrency is the number of outbox deliveries sent at once. Each
+	// in-flight send holds its attachments in memory, so this bounds peak memory
+	// as well as parallelism. Values below 1 behave as 1.
+	OutboundConcurrency int
 	// ApprovalExpiryHours bounds how long an external email approval request
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
@@ -314,6 +324,8 @@ func Load() (Config, error) {
 		MaxMIMEDepth:            envInt("MAX_MIME_DEPTH", 8),
 		MaxMIMEParts:            envInt("MAX_MIME_PARTS", 256),
 		BodyReadTimeout:         time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
+		OutboundHTTPTimeout:     time.Duration(envInt("OUTBOUND_HTTP_TIMEOUT_SECONDS", 300)) * time.Second,
+		OutboundConcurrency:     envInt("OUTBOUND_CONCURRENCY", 5),
 		ApprovalExpiryHours:     envInt("APPROVAL_EXPIRY_HOURS", 48),
 		WebhookRetryWindow:      time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
 		MXMode:                  mxMode,
@@ -349,6 +361,12 @@ func Load() (Config, error) {
 	}
 	if cfg.MaxMultipartParts < 1 || cfg.MaxMIMEDepth < 1 || cfg.MaxMIMEParts < 1 {
 		return Config{}, fmt.Errorf("MIME/multipart limits must be at least 1")
+	}
+	if cfg.OutboundHTTPTimeout <= 0 {
+		return Config{}, fmt.Errorf("OUTBOUND_HTTP_TIMEOUT_SECONDS must be positive")
+	}
+	if cfg.OutboundConcurrency < 1 || cfg.OutboundConcurrency > 32 {
+		return Config{}, fmt.Errorf("OUTBOUND_CONCURRENCY must be between 1 and 32")
 	}
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")
@@ -594,6 +612,33 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 // opts out.
 func (c Config) RequirePublicOutbound() bool {
 	return !c.AllowPrivateOutbound
+}
+
+// outboundDeliveryMargin is added to the provider HTTP timeout to size the
+// per-message delivery context, so the client's own timeout fires before the
+// delivery context's deadline and a timeout is reported as an ambiguous send
+// rather than a context cancellation.
+const outboundDeliveryMargin = 30 * time.Second
+
+// OutboundDeliveryAttemptTimeout is the per-attempt budget the outbox worker
+// gives one outbound delivery. It is derived from the provider HTTP timeout plus
+// a fixed margin so recording the outcome and the read/write work fit inside it.
+func (c Config) OutboundDeliveryAttemptTimeout() time.Duration {
+	t := c.OutboundHTTPTimeout
+	if t <= 0 {
+		t = 300 * time.Second
+	}
+	return t + outboundDeliveryMargin
+}
+
+// OutboundConcurrency is the number of outbox deliveries sent at once. Each
+// in-flight send holds its attachments in memory, so this bounds peak memory as
+// well as parallelism.
+func (c Config) OutboundConcurrencyCount() int {
+	if c.OutboundConcurrency < 1 {
+		return 1
+	}
+	return c.OutboundConcurrency
 }
 
 func env(name, fallback string) string {

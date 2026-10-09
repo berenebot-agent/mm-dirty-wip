@@ -22,6 +22,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed — release follow-up
 
+- Outbound provider HTTP requests use a configurable overall timeout
+  (`OUTBOUND_HTTP_TIMEOUT_SECONDS`, default 300s) instead of a hard-coded 30s, so
+  large attachment batches no longer fail with a client timeout while awaiting
+  response headers (D092).
+- The outbox delivers concurrently through a bounded sender pool
+  (`OUTBOUND_CONCURRENCY`, default 5, max 32), so a slow attachment send no longer
+  stalls the rest of a batch (D093).
+- A provider HTTP timeout while awaiting headers is now treated as an ambiguous
+  send and failed terminally for Brevo and Mailgun (which have no idempotency
+  key), preventing a retry from double-delivering; Resend keeps its idempotent
+  retry (D092).
 - SMTP and Direct MX DATA waits observe cancellation; slow webhook attempts
   have independent budgets and durable retry outcomes.
 - Session-expiry login restores compose text, sender and uploads across sign-in

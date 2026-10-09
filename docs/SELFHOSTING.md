@@ -206,6 +206,8 @@ webhook registrations and regenerate/redeploy Cloudflare Worker code.
 | `MX_RECEIVER_URL` | built-in loopback | Receiver HTTP/HTTPS origin; required for `remote`. |
 | `DIALMX_CORE_KEY` | auto-generated (embedded) | Bearer key shared with the private receiver; required for `remote`. |
 | `INBOUND_TLS_CERT_FILE` / `INBOUND_TLS_KEY_FILE` | empty | Optional TLS directly on the dedicated receiver port; set both or neither. Usually unnecessary when a reverse proxy terminates TLS. |
+| `OUTBOUND_HTTP_TIMEOUT_SECONDS` | `300` (5 minutes) | Overall timeout for one outbound provider HTTP request (connect, upload body, wait for response headers) for the Brevo, Resend and Mailgun adapters. Raise it if large attachment sends time out on a slow uplink. |
+| `OUTBOUND_CONCURRENCY` | `5` | Sender goroutines running outbox deliveries at once (1–32). Higher values send large batches in parallel but raise peak memory, since each in-flight send holds its attachments in RAM. |
 
 Edge service (`mailmoose-mx`):
 

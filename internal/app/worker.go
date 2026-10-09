@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
@@ -19,8 +20,13 @@ import (
 // log's 30-day floor.
 const workflowRetention = 30 * 24 * time.Hour
 
-// OutboxWorker delivers pending outbound messages in the background. It is a
-// single goroutine that polls the outbox on an interval, claiming one due
+// maxSendConcurrency bounds the outbox sender pool. Each in-flight delivery
+// holds its reconstructed attachments in memory, so this caps peak memory as
+// well as parallelism; it must match the OUTBOUND_CONCURRENCY ceiling.
+const maxSendConcurrency = 32
+
+// OutboxWorker delivers pending outbound messages in the background. It runs a
+// bounded pool of sender goroutines that poll the outbox, each claiming one due
 // message at a time and delivering it. On startup it recovers claims left by a
 // previous process and re-scans so pending messages resume.
 type OutboxWorker struct {
@@ -30,13 +36,26 @@ type OutboxWorker struct {
 	done   chan struct{}
 	period time.Duration
 	owner  string
+	// sendConcurrency is the number of sender goroutines per delivery pass. It
+	// is set before Start (from the config) and never changed concurrently.
+	sendConcurrency int
 }
 
 func NewOutboxWorker(svc *Service, log *slog.Logger) *OutboxWorker {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), period: 5 * time.Second, owner: idgen.New("wrk")}
+	concurrency := 1
+	if svc != nil {
+		concurrency = svc.Config.OutboundConcurrencyCount()
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > maxSendConcurrency {
+		concurrency = maxSendConcurrency
+	}
+	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), period: 5 * time.Second, owner: idgen.New("wrk"), sendConcurrency: concurrency}
 }
 
 // Start launches the worker loop. It returns immediately.
@@ -276,12 +295,55 @@ func (w *OutboxWorker) redactWorkflows() {
 	}
 }
 
+// runSenders runs fn in sendConcurrency goroutines and waits for them all to
+// finish. Each sender loops until no work is due, so the pool drains a backlog
+// within the pass and does not accumulate goroutines between ticks. Each sender
+// is independently panic-guarded so one faulting sender cannot take down the
+// pass or the other senders.
+func (w *OutboxWorker) runSenders(fn func()) {
+	n := w.sendConcurrency
+	if n < 1 {
+		n = 1
+	}
+	if n == 1 {
+		w.guardSender(fn)
+		return
+	}
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			w.guardSender(fn)
+		}()
+	}
+	wg.Wait()
+}
+
+// guardSender contains a panic in one sender goroutine's pass so it cannot exit
+// the process. The panic value is never logged, only its type and the stack,
+// matching the worker's other recovery paths.
+func (w *OutboxWorker) guardSender(fn func()) {
+	defer func() {
+		if x := recover(); x != nil {
+			w.log.Error("sender panic recovered", "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
+		}
+	}()
+	fn()
+}
+
 func (w *OutboxWorker) deliverWorkflowDue() {
+	w.runSenders(w.deliverWorkflowsLoop)
+}
+
+// deliverWorkflowsLoop claims and delivers due workflow jobs until none is due
+// or the worker is stopping. It is run by each sender goroutine in the pool.
+func (w *OutboxWorker) deliverWorkflowsLoop() {
 	for {
 		if w.stopping() {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), w.svc.Config.OutboundDeliveryAttemptTimeout())
 		workflowID, err := w.svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
 		if err != nil {
 			cancel()
@@ -351,14 +413,23 @@ func (w *OutboxWorker) expireApprovals() {
 }
 
 func (w *OutboxWorker) deliverDue() {
+	w.runSenders(w.deliverMessagesLoop)
+}
+
+// deliverMessagesLoop claims and delivers due outbound messages until none is
+// due or the worker is stopping. It is run by each sender goroutine in the
+// pool; the store's claim keeps the senders from claiming the same message.
+func (w *OutboxWorker) deliverMessagesLoop() {
 	for {
 		// Stop promptly on shutdown instead of draining a whole backlog first.
 		if w.stopping() {
 			return
 		}
 		// Each message gets its own deadline so one slow delivery cannot consume
-		// the whole loop's budget.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		// the whole loop's budget. It is sized from the provider HTTP timeout so
+		// the client's own timeout fires first, making an ambiguous send a
+		// client timeout rather than a context cancellation.
+		ctx, cancel := context.WithTimeout(context.Background(), w.svc.Config.OutboundDeliveryAttemptTimeout())
 		msgID, err := w.svc.Store.ClaimNextPending(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
 		if err != nil {
 			cancel()
