@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
@@ -91,6 +92,79 @@ func TestPlainSMTPAndPublicRoutableSSRF(t *testing.T) {
 	}
 	if err := smtp.Send(ctx, smtp.Config{Host: "localhost", Port: port, Security: "bogus"}, smtp.SendRequest{}, false); err == nil {
 		t.Fatal("invalid security accepted")
+	}
+}
+
+// fakeSMTPReject is a fake server that rejects RCPT with the given reply.
+func fakeSMTPReject(t *testing.T, rcptReply string) (host string, port int, closeFn func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		w := bufio.NewWriter(c)
+		fmt.Fprint(w, "220 test ESMTP\r\n")
+		w.Flush()
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			switch upper := strings.ToUpper(line); {
+			case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+				fmt.Fprint(w, "250-test\r\n250 OK\r\n")
+			case strings.HasPrefix(upper, "MAIL FROM"):
+				fmt.Fprint(w, "250 ok\r\n")
+			case strings.HasPrefix(upper, "RCPT TO"):
+				fmt.Fprint(w, rcptReply)
+			case strings.HasPrefix(upper, "QUIT"):
+				fmt.Fprint(w, "221 bye\r\n")
+				w.Flush()
+				return
+			default:
+				fmt.Fprint(w, "250 ok\r\n")
+			}
+			w.Flush()
+		}
+	}()
+	a := ln.Addr().(*net.TCPAddr)
+	return "localhost", a.Port, func() { ln.Close() }
+}
+
+// TestSMTPFiveHundredIsPermanent proves a 5xx reply is classified as a
+// permanent error (so the outbox fails it instead of retrying for hours).
+func TestSMTPFiveHundredIsPermanent(t *testing.T) {
+	host, port, closeFn := fakeSMTPReject(t, "550 5.1.1 user unknown\r\n")
+	defer closeFn()
+	raw := []byte("From: a@b.test\r\nTo: c@d.test\r\nSubject: hi\r\n\r\nbody\r\n")
+	err := smtp.Send(context.Background(), smtp.Config{Host: host, Port: port, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, false)
+	if err == nil {
+		t.Fatal("5xx rejection was not an error")
+	}
+	if !transport.IsPermanent(err) {
+		t.Fatalf("5xx rejection not classified permanent: %v", err)
+	}
+}
+
+// TestSMTPFourHundredIsRetryable proves a 4xx (transient) reply is not
+// classified as permanent.
+func TestSMTPFourHundredIsRetryable(t *testing.T) {
+	host, port, closeFn := fakeSMTPReject(t, "451 4.3.0 try later\r\n")
+	defer closeFn()
+	raw := []byte("From: a@b.test\r\nTo: c@d.test\r\nSubject: hi\r\n\r\nbody\r\n")
+	err := smtp.Send(context.Background(), smtp.Config{Host: host, Port: port, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: raw}, false)
+	if err == nil {
+		t.Fatal("4xx rejection was not an error")
+	}
+	if transport.IsPermanent(err) {
+		t.Fatalf("4xx rejection wrongly classified permanent: %v", err)
 	}
 }
 
