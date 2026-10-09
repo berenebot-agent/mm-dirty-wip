@@ -1453,3 +1453,11 @@ CREATE INDEX IF NOT EXISTS idx_draft_send_requests_pending_token
 CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mx_receivers_url
   ON account_mx_receivers(receiver_url) WHERE receiver_url<>'';
 `
+
+// Preserve existing URL values but enforce hostname case-equivalence for all
+// writers, including concurrent updates. Pre-existing duplicates fail startup
+// rather than arbitrarily choosing an account's receiver ownership.
+const migration050 = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_account_mx_receivers_url_nocase
+  ON account_mx_receivers(receiver_url COLLATE NOCASE) WHERE receiver_url<>'';
+`

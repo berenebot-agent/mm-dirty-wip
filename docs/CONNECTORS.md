@@ -134,14 +134,13 @@ them **once**:
 GATEWAY_RELAY_URL=https://mail.example.com
 GATEWAY_RELAY_ID=gw-...
 GATEWAY_RELAY_SECRET=...
-GATEWAY_RELAY_DELIVERY_KEY=...
 GATEWAY_RELAY_PLATFORMS=email
 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true
 ```
 
 Paste that block into the Hermes host's `.env` and restart the gateway. The same
 block is returned by `POST /v1/admin/hermes/enroll` (`{"inbox_id","name"}`) as
-its `env` field, alongside `gateway_id`, `secret`, `delivery_key` and
+its `env` field, alongside `gateway_id`, `secret` and
 `connector_url`.
 
 ### The wire contract
@@ -235,8 +234,7 @@ generated block into the OpenClaw host's config:
       "enabled": true,
       "baseUrl": "https://mail.example.com",
       "gatewayId": "gw-oc-…",
-      "secret": "…",
-      "deliveryKey": "…"
+      "secret": "…"
     }
   }
 }

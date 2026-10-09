@@ -77,10 +77,14 @@ Manager, Caddy, Traefik, …) in front and forward the original scheme/host.
 ### Build-from-source example (repo default)
 
 `docker-compose.yml` in the repository root builds the image locally and is the
-reference deployment. It enables the embedded MX edge by default and publishes
-host port 25. If you receive mail only through a webhook provider (Mailgun,
-Cloudflare Email Routing, Resend), set `MX_ENABLE=false` in `.env`; port 25
-then has no listener.
+reference deployment. Host port 25 is commented out by default. For Included
+MX receiving, uncomment `0.0.0.0:25:2525` before running Compose, then select
+Included in the domain's Direct MX settings. Selecting Included in the UI cannot
+publish a Docker port. Webhook-only deployments need no port-25 mapping.
+
+**Upgrading an existing Included-MX deployment:** retain/uncomment that mapping
+before recreating the container with the updated Compose file. Otherwise public
+SMTP receiving stops even though the Included receiver remains configured.
 
 ### Minimal pull-and-run
 

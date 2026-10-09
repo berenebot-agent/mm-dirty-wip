@@ -435,7 +435,7 @@ func (s *Server) sendInviteEmail(w http.ResponseWriter, r *http.Request, p model
 		"<p><a href=\"" + htmlEscape(link) + "\">Choose your password</a></p>" +
 		"<p>This single-use link expires on " + htmlEscape(inv.ExpiresAt.UTC().Format(time.RFC1123)) + ".</p>"
 	if _, err := s.Service.SendSystemMail(r.Context(), p.AccountID, mailer, app.SendInput{To: []string{inv.Email}, Subject: subject, Text: text, HTML: html}); err != nil {
-		http.Error(w, "could not queue invitation: "+err.Error(), 400)
+		s.uiError(w, err, 400)
 		return
 	}
 	s.Service.Store.Audit(r.Context(), inv.AccountID, "invite.sent", inv.Email)

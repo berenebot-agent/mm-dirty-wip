@@ -96,11 +96,13 @@ func (w *OutboxWorker) run() {
 // panic-guarded so a fault in one poison message cannot exit the process (and
 // with it every other inbox); the guard logs and the pass moves on.
 func (w *OutboxWorker) deliverWebhooks() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	h := NewWebhookWorker(w.svc)
 	for i := 0; i < 64 && !w.stopping(); i++ {
+		// Each client gets its own budget; one slow endpoint must not consume
+		// the budget of every subsequent client in the pass.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := h.RunOnce(ctx)
+		cancel()
 		if errors.Is(err, store.ErrNotFound) {
 			return
 		}

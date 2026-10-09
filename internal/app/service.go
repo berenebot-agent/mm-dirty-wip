@@ -1425,13 +1425,10 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	if !s.sendLim.Allow(p.AccountID) {
-		return SendResult{}, ErrRateLimited
-	}
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err
 	}
-	return s.send(ctx, p.AccountID, in, idem)
+	return s.sendWithLimit(ctx, p.AccountID, in, idem, true)
 }
 
 // SendSystemMail enqueues outbound installation mail (currently account
@@ -1450,6 +1447,10 @@ func (s *Service) SendSystemMail(ctx context.Context, accountID, inboxID string,
 // calls it after validating the token and approver; mailbox ownership was
 // already established by the send request itself.
 func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem string) (result SendResult, err error) {
+	return s.sendWithLimit(ctx, accountID, in, idem, false)
+}
+
+func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendInput, idem string, limited bool) (result SendResult, err error) {
 	if idem != "" {
 		// Atomically claim the idempotency key before doing any work so two
 		// concurrent requests with the same key cannot both enqueue.
@@ -1483,6 +1484,9 @@ func (s *Service) send(ctx context.Context, accountID string, in SendInput, idem
 				_ = s.Store.IdempotencyRelease(relCtx, accountID, idem)
 			}
 		}()
+	}
+	if limited && !s.sendLim.Allow(accountID) {
+		return SendResult{}, ErrRateLimited
 	}
 	inbox, err := s.Store.GetInboxInternal(ctx, accountID, in.InboxID)
 	if err != nil {
@@ -1680,9 +1684,6 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
-	if !s.sendLim.Allow(p.AccountID) {
-		return SendResult{}, ErrRateLimited
-	}
 	if in.InboxID == "" {
 		in.InboxID = d.InboxID
 	}
@@ -1754,7 +1755,7 @@ func (s *Service) sendDraftCore(ctx context.Context, accountID string, d model.D
 		paths = append(paths, a.RawPath)
 	}
 	in.DraftID = d.ID
-	res, err := s.send(ctx, accountID, in, idem)
+	res, err := s.sendWithLimit(ctx, accountID, in, idem, true)
 	if err != nil {
 		return SendResult{}, err
 	}

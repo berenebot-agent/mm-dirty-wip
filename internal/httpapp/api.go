@@ -810,7 +810,7 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "thread not found")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "inbox_id": msgs[0].InboxID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": msgs})
+	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "inbox_id": msgs[0].InboxID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": sanitizedMessages(msgs)})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	msgs, err := s.Service.Store.ListMessages(r.Context(), principal(r), store.MessageFilter{ThreadID: r.PathValue("id"), Limit: 200})
@@ -818,7 +818,7 @@ func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, msgs)
+	writeJSON(w, 200, sanitizedMessages(msgs))
 }
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	hasAttachment, ok := boolQuery(w, r, "has_attachment")
@@ -929,7 +929,7 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		res.Message = m
 		res.ProviderMessageID = m.ProviderMessageID
 	}
-	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
+	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": sanitizedMessage(res.Message)})
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -963,6 +963,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		res.Message = dm
 		res.ProviderMessageID = dm.ProviderMessageID
 	}
+	res.Message = sanitizedMessage(res.Message)
 	writeJSON(w, 201, res)
 }
 
@@ -1073,7 +1074,7 @@ func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p mode
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": res.Message})
+		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": sanitizedMessage(res.Message)})
 	case "request-send":
 		d, err := s.Service.RequestSend(r.Context(), p, draftID, external)
 		if err != nil {
@@ -1197,7 +1198,7 @@ func (s *Server) apiDraftApprove(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": res.Message})
+	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": sanitizedMessage(res.Message)})
 }
 
 // apiDraftReject rejects a pending request with optional feedback. Requires
@@ -1341,7 +1342,7 @@ func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, v)
+	writeJSON(w, 200, sanitizedMessages(v))
 }
 
 func (s *Server) apiOutboxRetry(w http.ResponseWriter, r *http.Request) {
@@ -2255,7 +2256,7 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 	// Bound the total request body before any transport reads it. The
 	// transport itself applies a tighter per-message cap; this is a hard
 	// ceiling that also covers multipart overhead and form fields.
-	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes*2+1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes*3+1<<20)
 	select {
 	case s.inboundSem <- struct{}{}:
 		defer func() { <-s.inboundSem }()
@@ -2327,6 +2328,8 @@ func isTerminalInboundError(err error) bool {
 		"multipart without boundary",
 		"too many multipart parts",
 		"too many form fields",
+		"too many envelope recipients",
+		"invalid urlencoded form",
 		"duplicate field",
 		"multiple body-mime parts",
 		"form field too large",

@@ -905,7 +905,7 @@ DELETE /v1/admin/hermes/{id}
 
 `POST /v1/admin/hermes/enroll` takes `{"inbox_id","name"}`, issues the relay
 credentials directly, returns `201` with the `gateway_id`, `secret`,
-`delivery_key`, `connector_url` and a ready-to-paste `env` block, and is the API
+`connector_url` and a ready-to-paste `env` block, and is the API
 equivalent of the Create key dialog. There is no enrollment-token step: a
 one-time code can only be minted for the OpenClaw kind (see §14). `GET` lists the account's relay
 connections. `PUT /v1/admin/hermes/{id}` takes `{"role"}` and sets the
@@ -929,7 +929,7 @@ DELETE /v1/admin/openclaw/{id}
 ```
 
 `POST /v1/admin/openclaw/enroll` takes `{"inbox_id","name"}` and returns the
-minted `gateway_id`, `secret`, `delivery_key`, `connector_url` and `kind` once.
+minted `gateway_id`, `secret`, `connector_url` and `kind` once.
 `POST /v1/admin/openclaw/setup-code` takes the same body and returns a
 single-use `code`, `expires_in`, the `setup_url` and a ready-to-paste
 `command`; the OpenClaw host redeems the code at `POST /relay/enroll`, which

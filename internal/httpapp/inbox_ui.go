@@ -153,6 +153,14 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 		ComposeNote:    note,
 		ComposeFlash:   tok,
 	}
+	if f.Input.InboxID == "" && strings.HasPrefix(f.Action, "/ui/messages/") {
+		parts := strings.Split(f.Action, "/")
+		if len(parts) >= 4 {
+			if m, err := s.Service.Store.GetMessage(r.Context(), p, parts[3]); err == nil {
+				f.Input.InboxID = m.InboxID
+			}
+		}
+	}
 	if f.Input.InboxID != "" {
 		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, f.Input.InboxID); err == nil {
 			data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, f.Input.FromAddress)
@@ -1033,7 +1041,7 @@ func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.P
 // renderComposeError redirects back to the compose form (Post/Redirect/Get)
 // with the failed input held in a flash, so refresh cannot re-send.
 func (s *Server) renderComposeError(w http.ResponseWriter, r *http.Request, title, formURL, action, cancel string, in app.SendInput, err error) {
-	f := composeFlash{Title: title, Action: action, Cancel: cancel, Err: err.Error(), Input: in}
+	f := composeFlash{Title: title, Action: action, Cancel: cancel, Err: safeErrorMessage(err, "Could not send the message. Please try again."), Input: in}
 	dest := formURL
 	if tok := s.flashes.put(f, composeFlashSize(f)); tok != "" {
 		dest += "?_flash=" + tok

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -1079,7 +1080,7 @@ func (r *Receiver) spawn(c *connection, fn func()) bool {
 func (r *Receiver) recoverJob(scope string) {
 	if rec := recover(); rec != nil {
 		if r.log != nil {
-			r.log.Error("dialmx receiver job panic recovered", "scope", scope, "panic", rec)
+			r.log.Error("dialmx receiver job panic recovered", "scope", scope, "type", fmt.Sprintf("%T", rec))
 		}
 	}
 }

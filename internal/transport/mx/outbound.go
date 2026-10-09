@@ -197,6 +197,8 @@ func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, re
 		return err
 	}
 	defer conn.Close()
+	stopCancellation := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancellation()
 	// A per-command deadline that each phase refreshes. It is cleared before the
 	// body upload so large messages are not killed by a total-transaction timer.
 	setPhaseDeadline := func() { _ = conn.SetDeadline(time.Now().Add(smtpPhaseTimeout)) }

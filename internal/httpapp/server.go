@@ -684,7 +684,7 @@ func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
 		redirectLogin(w, r)
 		return
 	}
-	if next, tok := s.preserveComposeOnExpiry(r); next != "" {
+	if next, tok := s.preserveComposeOnExpiry(w, r); next != "" {
 		dest := "/login?next=" + url.QueryEscape(next)
 		if tok != "" {
 			dest += "&_flash=" + url.QueryEscape(tok)
@@ -703,7 +703,7 @@ func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
 // fields in a compose flash so they survive the login round-trip. It returns the
 // post-login GET path and the flash token (both empty when the request is not a
 // compose form or the body cannot be read).
-func (s *Server) preserveComposeOnExpiry(r *http.Request) (next, token string) {
+func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request) (next, token string) {
 	path := r.URL.Path
 	var title, cancel string
 	switch {
@@ -721,18 +721,33 @@ func (s *Server) preserveComposeOnExpiry(r *http.Request) (next, token string) {
 	default:
 		return "", ""
 	}
-	if err := r.ParseMultipartForm(4 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes+1<<20)
+	if err := r.ParseMultipartForm(4 << 20); err != nil && !errors.Is(err, http.ErrNotMultipart) {
 		// The body could not be read; still route back to the form with the
 		// notice rather than losing the destination.
 		return next, ""
 	}
 	in := app.SendInput{
+		InboxID:     r.PathValue("id"),
 		FromAddress: strings.TrimSpace(r.Form.Get("sender")),
 		To:          formAddresses(r, "to"),
 		CC:          formAddresses(r, "cc"),
 		BCC:         formAddresses(r, "bcc"),
 		Subject:     strings.TrimSpace(r.Form.Get("subject")),
 		Text:        r.Form.Get("text"),
+	}
+	if atts, err := s.formAttachments(r); err == nil {
+		in.Attachments = atts
+	} else {
+		return next, ""
+	}
+	if strings.HasPrefix(path, "/ui/messages/") {
+		in.InboxID = ""
+	}
+	if v, ok := s.flashes.peek(r.Form.Get("_flash")); ok {
+		if old, ok := v.(composeFlash); ok {
+			in.Attachments = append(in.Attachments, old.Input.Attachments...)
+		}
 	}
 	f := composeFlash{Title: title, Action: path, Cancel: cancel, Input: in}
 	return next, s.flashes.put(f, composeFlashSize(f))
@@ -891,7 +906,7 @@ func isInternalStoreError(err error) bool {
 		return true
 	}
 	for _, prefix := range []string{"sqlite error", "sqlite:", "sqlite "} {
-		if strings.HasPrefix(err.Error(), prefix) {
+		if strings.Contains(err.Error(), prefix) {
 			return true
 		}
 	}

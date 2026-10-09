@@ -50,6 +50,7 @@ func (v *Verifier) Verify(ctx context.Context, raw io.ReadSeeker, peerIP net.IP,
 
 	if v.cfg.VerifySPF {
 		out.SPF = v.verifySPF(ctx, peerIP, helo, mailFrom)
+		out.SPF.Aligned = strings.EqualFold(out.SPF.Result, "pass") && DomainsAlign(fromDomain, out.SPF.Domain, false)
 	}
 	if v.cfg.VerifyDKIM {
 		out.DKIM = v.verifyDKIM(ctx, raw, fromDomain, lookupTXT)
@@ -177,6 +178,11 @@ func classifyDKIMErr(err error) string {
 // SPF/DKIM alignment.
 func (v *Verifier) verifyDMARC(ctx context.Context, fromDomain string, spfEv *mxwire.SPFEvidence, dkimEvs []mxwire.DKIMEvidence, lookupTXT func(string) ([]string, error)) *mxwire.DMARCEvidence {
 	fromDomain = strings.ToLower(strings.TrimSpace(fromDomain))
+	// A missing policy leaves relaxed alignment evidence usable. A discovered
+	// policy replaces these flags with its strict/relaxed modes below.
+	if spfEv != nil {
+		spfEv.Aligned = strings.EqualFold(spfEv.Result, "pass") && DomainsAlign(fromDomain, spfEv.Domain, false)
+	}
 	if fromDomain == "" {
 		return &mxwire.DMARCEvidence{Result: "none", Reason: "no from domain"}
 	}

@@ -66,3 +66,47 @@ func TestSendRateLimitCoversDraftPath(t *testing.T) {
 		t.Fatalf("draft send = %v, want ErrRateLimited", err)
 	}
 }
+
+func TestIdempotentReplayDoesNotConsumeSendAllowance(t *testing.T) {
+	svc, u, box := rateLimitedService(t, 1)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	in := app.SendInput{InboxID: box.ID, To: []string{"a@b.test"}, Subject: "hi", Text: "body"}
+	first, err := svc.Send(context.Background(), p, in, "same-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := svc.Send(context.Background(), p, in, "same-request")
+	if err != nil || replay.Message.ID != first.Message.ID {
+		t.Fatalf("replay was rate limited or duplicated: %v", err)
+	}
+	if _, err := svc.Send(context.Background(), p, in, "new-request"); !errors.Is(err, app.ErrRateLimited) {
+		t.Fatalf("new request bypassed limit: %v", err)
+	}
+}
+
+func TestExternalApprovalRateLimitKeepsRequestPending(t *testing.T) {
+	svc, u, box := rateLimitedService(t, 1)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, "owner@example.net"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: box.ID, To: []string{"a@b.test"}, Subject: "hi", Text: "body"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err = svc.RequestSend(ctx, p, d.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"a@b.test"}, Subject: "other", Text: "body"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApproveExternal(ctx, u.AccountID, box.ID, d.SendRequest.ID, "owner@example.net", ""); !errors.Is(err, app.ErrRateLimited) {
+		t.Fatalf("external approval bypassed limit: %v", err)
+	}
+	request, err := svc.Store.GetSendRequestInternal(ctx, u.AccountID, d.SendRequest.ID)
+	if err != nil || request.Status != model.SendRequestPending {
+		t.Fatalf("rate-limited approval consumed request: %v %+v", err, request)
+	}
+}

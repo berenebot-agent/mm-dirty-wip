@@ -6,6 +6,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Fixed — release follow-up
+
+- SMTP and Direct MX DATA waits observe cancellation; slow webhook attempts
+  have independent budgets and durable retry outcomes.
+- Session-expiry login restores compose text, sender and uploads across sign-in
+  methods, including after a failed password attempt. Expired-session upload
+  parsing is size-bounded.
+- Mailgun URL-encoded MIME streams to disk, and Resend rejects recipient
+  overflow before signature-secret lookup instead of silently dropping recipients.
+- SPF alignment remains available without a DMARC policy. Email-approved sends
+  count toward account limits; idempotent replays do not.
+- Provider errors use fixed actionable diagnostics without raw response text.
+  UI flash errors are redacted; panic diagnostics contain types rather than values.
+- Thread, outbox and send responses use sanitized HTML while preserving CID
+  attachment references. Passkey partial-failure warnings remain visible.
+- Receiver URL uniqueness is case-insensitive (migration 050); migration FK
+  restoration failures discard the connection and fail startup.
+- Deployment and connector instructions reflect explicit port-25 publication
+  and removal of the unused delivery key.
+
 ### Changed
 
 - Outbound destination policy: `ALLOW_PRIVATE_OUTBOUND` now defaults to `true`,

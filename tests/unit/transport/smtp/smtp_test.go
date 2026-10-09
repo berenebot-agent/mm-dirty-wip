@@ -191,3 +191,54 @@ func TestOutboundAdapterRequirePublicAndRawMIME(t *testing.T) {
 		t.Fatalf("require-public not applied: %v", err)
 	}
 }
+
+func TestCancellationUnblocksFinalDATAReply(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		r := bufio.NewReader(c)
+		fmt.Fprint(c, "220 test ESMTP\r\n")
+		data := false
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if data {
+				// Deliberately withhold the final DATA verdict.
+				continue
+			}
+			if strings.HasPrefix(line, "DATA") {
+				fmt.Fprint(c, "354 go\r\n")
+				data = true
+			} else {
+				fmt.Fprint(c, "250 ok\r\n")
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- smtp.Send(ctx, smtp.Config{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, Security: "plain"}, smtp.SendRequest{From: "a@b.test", To: []string{"c@d.test"}, Raw: []byte("Subject: hi\r\n\r\nbody\r\n")}, false)
+	}()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("stalled DATA unexpectedly succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("context cancellation did not unblock DATA")
+	}
+	<-done
+}

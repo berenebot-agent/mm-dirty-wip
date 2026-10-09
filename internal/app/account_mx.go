@@ -112,6 +112,11 @@ func (s *Service) SaveAccountMXReceiver(ctx context.Context, p model.Principal, 
 		return AccountMXReceiver{}, store.ErrForbidden
 	}
 	receiverURL := strings.TrimRight(strings.TrimSpace(in.URL), "/")
+	if u, err := url.Parse(receiverURL); err == nil {
+		u.Scheme = strings.ToLower(u.Scheme)
+		u.Host = strings.ToLower(u.Host)
+		receiverURL = u.String()
+	}
 	if receiverURL == "" {
 		return AccountMXReceiver{}, fmt.Errorf("%w: a Remote MX receiver requires a URL", ErrAccountMXInvalidInput)
 	}

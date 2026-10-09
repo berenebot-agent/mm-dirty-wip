@@ -96,6 +96,10 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 			last = err
 			continue
 		}
+		// DialContext only governs establishment; cancellation must also unblock
+		// DATA writes and the final reply on the established socket.
+		rawConn := conn
+		stopCancellation := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
 		// A per-command deadline, refreshed before each phase. It is cleared
 		// before the body upload so a large message is not killed by a
 		// total-transaction timer (which could report failure after the remote
@@ -108,12 +112,17 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 		}
 		cl, err := smtpstd.NewClient(conn, c.Host)
 		if err != nil {
+			stopCancellation()
 			conn.Close()
-			last = err
+			last = classifySMTPError(err)
+			if transport.IsPermanent(last) {
+				return last
+			}
 			continue
 		}
 		ok := false
 		func() {
+			defer stopCancellation()
 			defer cl.Close()
 			if sec == "starttls" {
 				if okExt, _ := cl.Extension("STARTTLS"); !okExt {
@@ -139,8 +148,8 @@ func Send(ctx context.Context, c Config, m SendRequest, requirePublic bool) erro
 				last = classifySMTPError(err)
 				return
 			}
-			setPhaseDeadline()
 			for _, rcpt := range m.To {
+				setPhaseDeadline()
 				if err := cl.Rcpt(rcpt); err != nil {
 					last = classifySMTPError(err)
 					return

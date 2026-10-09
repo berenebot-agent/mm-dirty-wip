@@ -150,6 +150,23 @@ func TestReceiveURLEncodedPercentEncodedWithinLimit(t *testing.T) {
 	}
 }
 
+func TestURLEncodedStreamsLargeMIMEAndCountsRepeatedFields(t *testing.T) {
+	var tr mailgun.Transport
+	ts := fmtInt(time.Now().Unix())
+	raw := "From: b@test\r\n\r\n" + strings.Repeat("=", 2<<20)
+	form := url.Values{"timestamp": {ts}, "token": {"tok"}, "signature": {signature("key", ts, "tok")}, "recipient": {"a@example.com"}, "body-mime": {raw}}
+	r := httptest.NewRequest("POST", "/", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if _, _, err := tr.Receive(context.Background(), r, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", int64(len(raw))); err != nil {
+		t.Fatal(err)
+	}
+	r = httptest.NewRequest("POST", "/", strings.NewReader(strings.Repeat("ignored=x&", 65)))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if _, _, err := tr.Receive(context.Background(), r, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", 4096); err == nil || !strings.Contains(err.Error(), "too many form fields") {
+		t.Fatalf("repeated-field bound: %v", err)
+	}
+}
+
 func TestReceiveRejectsBadSignature(t *testing.T) {
 	var tr mailgun.Transport
 	req := multipartRequest(t, "wrong", "tok", "a@example.com", "body", nil)

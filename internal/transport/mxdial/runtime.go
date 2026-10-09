@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -1705,6 +1706,7 @@ func (s *session) resolve(f mxwire.Frame) error {
 			// temporary failure so the sender retries.
 			defer func() {
 				if rec := recover(); rec != nil {
+					slog.Error("mxdial backend panic recovered", "operation", "resolve", "type", fmt.Sprintf("%T", rec))
 					res = mxwire.ResolveResponse{MachineCode: mxwire.CodeTempFail}
 				}
 			}()
@@ -2005,6 +2007,7 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 			// temporary failure so the sender retries.
 			defer func() {
 				if rec := recover(); rec != nil {
+					slog.Error("mxdial backend panic recovered", "operation", "ingest", "type", fmt.Sprintf("%T", rec))
 					response = mxwire.IngestResponse{MachineCode: mxwire.CodeTempFail}
 				}
 			}()

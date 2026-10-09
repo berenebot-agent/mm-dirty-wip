@@ -5,6 +5,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,8 @@ func TestExpiredSessionComposePreserved(t *testing.T) {
 	} {
 		_ = mw.WriteField(k, v)
 	}
+	attachment, _ := mw.CreateFormFile("attachments", "kept.txt")
+	attachment.Write([]byte("attachment bytes"))
 	mw.Close()
 
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/send", &buf)
@@ -53,11 +56,46 @@ func TestExpiredSessionComposePreserved(t *testing.T) {
 	if !strings.Contains(loginBody, "session expired") {
 		t.Fatalf("login page missing the expiry notice")
 	}
-	if !strings.Contains(loginBody, `name="next" value="/ui/inboxes/`+box.ID+`/compose"`) {
+	if !strings.Contains(loginBody, `name="next" value="/ui/inboxes/`+box.ID+`/compose?_flash=`) {
 		t.Fatalf("login page missing the next hidden field: %s", loginBody)
 	}
+	// Sign in through the real handler and verify restoration, not merely the
+	// intermediate redirect. A failed attempt must keep the resume destination.
+	start := strings.Index(loginBody, `name="next" value="`) + len(`name="next" value="`)
+	end := strings.Index(loginBody[start:], `"`)
+	next := loginBody[start : start+end]
+	csrfCookie := loginRR.Result().Cookies()[0]
+	post := func(password string) *httptest.ResponseRecorder {
+		form := url.Values{"email": {u.Email}, "password": {password}, "_csrf": {csrfCookie.Value}, "next": {next}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(csrfCookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	failed := post("wrong password")
+	if !strings.Contains(failed.Header().Get("Location"), "next=") {
+		t.Fatal("failed login lost resume destination")
+	}
+	// Fixture password is shared by the HTTP tests.
 	_ = svc
-	_ = u
+	signed := post("correct horse battery staple")
+	if signed.Header().Get("Location") != next {
+		t.Fatalf("login destination: %q", signed.Header().Get("Location"))
+	}
+	resume := httptest.NewRequest("GET", next, nil)
+	for _, c := range signed.Result().Cookies() {
+		resume.AddCookie(c)
+	}
+	restored := httptest.NewRecorder()
+	h.ServeHTTP(restored, resume)
+	if !strings.Contains(restored.Body.String(), "the body that must survive") {
+		t.Fatal("compose body was lost after sign-in")
+	}
+	if !strings.Contains(restored.Body.String(), "kept.txt") {
+		t.Fatal("uploaded attachment lost during sign-in")
+	}
 }
 
 // TestExpiredSessionNonComposeGetsNotice proves a non-compose POST with no

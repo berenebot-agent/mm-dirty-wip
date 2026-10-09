@@ -14,10 +14,10 @@ func TestProviderErrorTruncatesAndStripsBody(t *testing.T) {
 	body := "line1\r\nline2\t" + strings.Repeat("A", 4096) + "\x00secret-after-nul"
 	err := transport.ProviderError("mailgun", "500 Internal Server Error", []byte(body))
 	msg := err.Error()
-	if !strings.HasPrefix(msg, "mailgun returned 500 Internal Server Error: ") {
+	if !strings.HasPrefix(msg, "mailgun returned HTTP 500: ") {
 		t.Fatalf("prefix: %q", msg)
 	}
-	snippet := strings.TrimPrefix(msg, "mailgun returned 500 Internal Server Error: ")
+	snippet := strings.TrimPrefix(msg, "mailgun returned HTTP 500: ")
 	if len(snippet) > 512 {
 		t.Fatalf("snippet not truncated: %d bytes", len(snippet))
 	}
@@ -27,7 +27,7 @@ func TestProviderErrorTruncatesAndStripsBody(t *testing.T) {
 	if strings.ContainsRune(snippet, 0) {
 		t.Fatalf("snippet retains NUL")
 	}
-	if !strings.Contains(snippet, "line1") || !strings.Contains(snippet, "line2") {
-		t.Fatalf("snippet lost the start of the body: %q", snippet)
+	if strings.Contains(snippet, "line1") || strings.Contains(snippet, "secret") || !strings.Contains(snippet, "temporarily unavailable") {
+		t.Fatalf("unsafe or unhelpful diagnostic: %q", snippet)
 	}
 }

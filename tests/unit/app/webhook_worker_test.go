@@ -300,3 +300,38 @@ func TestWebhookWorkerDeliveryLogRecordsSuccess(t *testing.T) {
 		t.Fatalf("delivered log entry %#v", entries[0])
 	}
 }
+
+func TestCancelledWebhookAttemptPersistsBackoff(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	svc.Config.WebhookRetryWindow = time.Hour
+	ctx := context.Background()
+	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
+	enc, _ := svc.EncryptSecret([]byte("s"))
+	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "slow", "https://hooks.example.test/x", "notify", "signature", enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	if err := svc.Store.UpdateWebhookClient(ctx, u.AccountID, cl.ID, "slow", srv.URL, "notify", "signature"); err != nil {
+		t.Fatal(err)
+	}
+	w := app.NewWebhookWorker(svc)
+	w.SetHTTPClient(srv.Client())
+	attempt, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	if err := w.RunOnce(attempt); err != nil {
+		t.Fatalf("cancelled attempt did not persist outcome: %v", err)
+	}
+	entries, err := svc.Store.ClientDeliveryLog(ctx, u.AccountID, cl.ID, 10, 1<<62)
+	if err != nil || len(entries) != 1 || entries[0].Status != "pending" || entries[0].LastError == "" {
+		t.Fatalf("missing durable backoff: %v %+v", err, entries)
+	}
+}
