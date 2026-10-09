@@ -437,13 +437,21 @@ func (s *Store) AdminResetPassword(ctx context.Context, userID, newPassword stri
 // the operator `admin revoke-api-keys` recovery command, kept separate from a
 // password reset so machine integrations are only torn down on request.
 func (s *Store) RevokeAPIKeysForAccount(ctx context.Context, accountID string) (int64, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
 	now := nowText()
-	res, err := s.write.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE account_id=? AND type='api_key' AND revoked_at IS NULL`, now, accountID)
+	res, err := tx.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE account_id=? AND type='api_key' AND revoked_at IS NULL`, now, accountID)
 	if err != nil {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
-	if _, err = s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, now, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE account_id=? AND revoked_at IS NULL`, now, accountID); err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
 	return n, nil
@@ -728,7 +736,12 @@ func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIK
 	return out, rows.Err()
 }
 func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE id=? AND account_id=? AND type='api_key'`, nowText(), keyID, accountID)
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE clients SET revoked_at=? WHERE id=? AND account_id=? AND type='api_key'`, nowText(), keyID, accountID)
 	if err != nil {
 		return err
 	}
@@ -736,8 +749,10 @@ func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error
 	if n == 0 {
 		return ErrNotFound
 	}
-	_, err = s.write.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND account_id=?`, nowText(), keyID, accountID)
-	return err
+	if _, err = tx.ExecContext(ctx, `UPDATE api_keys SET revoked_at=? WHERE id=? AND account_id=?`, nowText(), keyID, accountID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RotateAPIKey issues a new secret for an existing key while keeping its id,

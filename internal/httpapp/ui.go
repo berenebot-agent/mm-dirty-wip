@@ -215,7 +215,8 @@ func dnsLight(v domainDNSView) string {
 func (s *Server) render(w http.ResponseWriter, r *http.Request, body string, data any) {
 	t, err := template.New("page").Funcs(s.templateFuncs(requestTZ(r))).Parse(pageTemplate + `{{define "mx-editor"}}` + mxReceiverSection + `{{end}}{{define "body"}}` + body + `{{end}}`)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.Log.Error("template parse failed", "error", err)
+		http.Error(w, "could not render page", 500)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -1218,6 +1219,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 <label>Bearer key{{if $r.KeyConfigured}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label>
 <input name="rx_bearer_key" type="password" autocomplete="off" placeholder="{{if $r.KeyConfigured}}unchanged{{else}}the receiver's DIALMX_CORE_KEY{{end}}">
 <label class="inherit-option"><input type="checkbox" name="rx_allow_private" value="1"{{if $r.AllowPrivate}} checked{{end}}> <span>Allow a private / LAN receiver (loopback or RFC1918 destination)</span></label>
+<p class="muted small">Only honoured when the operator allows private outbound (<code>ALLOW_PRIVATE_OUTBOUND=true</code>, the default).</p>
 <label>Private CA bundle (PEM, optional)</label>
 <textarea name="rx_ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{$r.CA}}</textarea>
 <div class="dialog-actions"><button class="secondary" type="submit">Save receiver</button></div>

@@ -185,7 +185,15 @@ func runMigration(ctx context.Context, conn *sql.Conn, m migration) error {
 		if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
 			return err
 		}
-		defer func() { _, _ = conn.ExecContext(context.Background(), "PRAGMA foreign_keys=ON") }()
+		defer func() {
+			if _, err := conn.ExecContext(context.Background(), "PRAGMA foreign_keys=ON"); err != nil {
+				// foreign_keys is per-connection and the pooled writer keeps a
+				// single connection, so leaving this off would silently disable
+				// cascades for the process lifetime. Close it instead: the pool
+				// opens a fresh connection whose pragmas the driver re-applies.
+				_ = conn.Close()
+			}
+		}()
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {

@@ -167,13 +167,17 @@ func (rt *remoteMXRuntime) applyAccount(accountID string, settings app.AccountMX
 		return
 	}
 	cfg := mxdial.Config{
-		DataDir:                  rt.svc.Config.DataDir,
-		MaxMessageBytes:          rt.svc.Config.MaxMessageBytes,
-		MaxTransactions:          rt.svc.Config.InboundConcurrency,
-		ReceiverURL:              settings.URL,
-		CoreKey:                  settings.BearerKey,
-		TLSConfig:                tlsCfg,
-		AllowPrivateDestinations: settings.AllowPrivate,
+		DataDir:         rt.svc.Config.DataDir,
+		MaxMessageBytes: rt.svc.Config.MaxMessageBytes,
+		MaxTransactions: rt.svc.Config.InboundConcurrency,
+		ReceiverURL:     settings.URL,
+		CoreKey:         settings.BearerKey,
+		TLSConfig:       tlsCfg,
+		// The account may opt into a private/LAN receiver, but the operator's
+		// global policy wins: when outbound is confined to the public internet
+		// (RequirePublicOutbound), the tenant cannot re-enable private
+		// destinations on their own.
+		AllowPrivateDestinations: settings.AllowPrivate && !rt.svc.Config.RequirePublicOutbound(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

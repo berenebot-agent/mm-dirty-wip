@@ -34,7 +34,7 @@ func linkifyText(s string) template.HTML {
 		b.WriteString(html.EscapeString(s[last:start]))
 		href := match
 		if !strings.Contains(href, "://") && !strings.HasPrefix(strings.ToLower(href), "mailto:") {
-			href = "http://" + href
+			href = "https://" + href
 		}
 		b.WriteString(`<a href="`)
 		b.WriteString(html.EscapeString(href))

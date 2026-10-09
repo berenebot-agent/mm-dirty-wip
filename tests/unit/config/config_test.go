@@ -88,23 +88,23 @@ func TestListenAddrMustDifferFromInbound(t *testing.T) {
 	}
 }
 
-func TestRequirePublicOutboundByDefault(t *testing.T) {
+func TestAllowPrivateOutboundByDefault(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("ALLOW_PRIVATE_OUTBOUND", "")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.RequirePublicOutbound() {
-		t.Fatal("self-hosted must require public outbound by default")
+	if cfg.RequirePublicOutbound() {
+		t.Fatal("self-hosted must allow private outbound by default")
 	}
-	t.Setenv("ALLOW_PRIVATE_OUTBOUND", "true")
+	t.Setenv("ALLOW_PRIVATE_OUTBOUND", "false")
 	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.RequirePublicOutbound() {
-		t.Fatal("opt-out must disable the requirement")
+	if !cfg.RequirePublicOutbound() {
+		t.Fatal("opting in to the public-only guard must enforce it")
 	}
 }
 

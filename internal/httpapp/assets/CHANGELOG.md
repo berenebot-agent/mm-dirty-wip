@@ -8,6 +8,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Outbound destination policy: `ALLOW_PRIVATE_OUTBOUND` now defaults to `true`,
+  so a self-hosted instance may send through a private gateway, local relay or
+  LAN MX receiver without extra configuration. A hosted operator that must
+  confine outbound traffic to the public internet sets
+  `ALLOW_PRIVATE_OUTBOUND=false`; that global policy now also governs the
+  per-account Remote MX receiver, so a tenant's `allow_private` opt-in is
+  honoured only when the operator allows private outbound (D086, amends D028).
 - Dial MX / Antler MX setup: the published MX and `_mailmoose-mx` TXT checks now
   resolve DNS live on every refresh (bounded by a four-second timeout) and are no
   longer cached in the core. Editing a TXT record is reflected on the next poll or
@@ -24,6 +31,26 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Inbound dedup: the duplicate probe now compares the same normalized
+  envelope recipient that is stored, so a re-delivered webhook with different
+  address casing is recognised as a duplicate instead of failing the insert.
+- API events: `/v1/events` and `/v1/events/stream` now reject a malformed
+  `after` cursor with 400 instead of silently treating it as "from the
+  beginning" and replaying the account's whole event history.
+- Bulk actions taken in the Spam folder now return to the Spam view instead of
+  the Inbox.
+- API key revocation (single-key and account-wide) now updates the legacy and
+  current tables in one transaction, so a crash can no longer leave them
+  disagreeing.
+- Domain/inbox purge now also removes the inbox's relay/webhook client rows and
+  enroll tokens, matching domain purge, instead of orphaning them.
+- Delivery-log joins are now account-scoped, so a delivery attempt can only
+  render its own account's message/workflow fields.
+- Cursors, attachment listing, and per-message read-state updates are now
+  account-guarded at the query, not only by the prior lookup.
+- Linkified bare `www.` hosts now default to `https://` instead of `http://`.
+- Migration no longer leaves the pooled connection with foreign keys disabled if
+  the post-migration re-enable fails, which could have silently skipped cascades.
 - Dial MX / Antler MX status: an unreachable receiver no longer shows as a
   yellow "waiting" connector. The core fills the configured `smtp_hostname` when
   a receiver it cannot reach advertises none, so the connector row resolves to

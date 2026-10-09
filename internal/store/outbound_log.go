@@ -216,8 +216,8 @@ func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, tar
 	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.external_alias_id,l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,'')
 		FROM outbound_delivery_log l
-		LEFT JOIN messages m ON m.id=l.message_id
-		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id
+		LEFT JOIN messages m ON m.id=l.message_id AND m.account_id=l.account_id
+		LEFT JOIN outbound_workflow w ON w.id=l.workflow_id AND w.account_id=l.account_id
 		WHERE l.account_id=? AND l.` + column + `=?`
 	args := []any{accountID, targetID}
 	if beforeID > 0 {

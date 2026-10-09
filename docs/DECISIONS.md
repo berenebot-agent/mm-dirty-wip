@@ -437,24 +437,34 @@ inbound check.
 **Complexity:** One column, one backfill, a store setter, an API field and a UI
 checkbox; no new dependency or runtime service.
 
-## D028 — Public-routable outbound destinations by default
+## D028 — Public-routable outbound destinations
 
-**Decision:** Every outbound transport (HTTP provider clients and generic SMTP)
-must resolve its destination to a public-routable address before connecting.
-An operator can opt out with `ALLOW_PRIVATE_OUTBOUND=true` for a private gateway
-or local relay. Provider HTTP API bases must also be HTTPS
-and must not name a loopback, private or link-local IP literal when enforcement
-is on. The shared `netutil` client validates inside `DialContext` (so DNS cannot
-rebind between validation and connection), refuses redirects, and bypasses the
-proxy environment while enforcement is active; enforcement off restores the
-default transport and proxy behaviour.
+**Decision:** Every outbound transport (HTTP provider clients, generic SMTP,
+Direct MX, and the per-account Remote MX receiver) can be held to a
+public-routable destination policy. The operator controls this globally with
+`ALLOW_PRIVATE_OUTBOUND`; because self-hosting is the primary model the guard is
+**off by default** (`ALLOW_PRIVATE_OUTBOUND=true`), so private gateways, local
+relays and LAN receivers work out of the box. A hosted operator sets
+`ALLOW_PRIVATE_OUTBOUND=false` to confine every outbound connection to the public
+internet, and that global policy also governs the per-account Remote MX receiver
+so a tenant cannot re-enable private destinations on their own. When enforcement
+is on, provider HTTP API bases must also be HTTPS and must not name a loopback,
+private or link-local IP literal. The shared `netutil` client validates inside
+`DialContext` (so DNS cannot rebind between validation and connection), refuses
+redirects, and bypasses the proxy environment while enforcement is active;
+enforcement off restores the default transport and proxy behaviour.
 
-**Reason:** The previous guard was gated behind the hosted-mode flag, so the
-default deployment skipped it and an account Administrator could point a
-provider's `api_base` at loopback, RFC1918 or the cloud metadata address and
-read the upstream response through the delivery log. The control belongs on by
-default; the operator should decide to weaken it. Turning
-the proxy off while enforcing closes the proxy escape hatch.
+**Reason:** The original default was public-only, on the grounds that a hosted
+multi-tenant service must not let an account point a provider `api_base` at
+loopback, RFC1918 or the cloud metadata address and read the response through the
+delivery log. That control is still available and must be used in hosted mode;
+but for the self-hosted deployment that is the project's primary model, blocking
+private destinations by default broke legitimate private gateways, local relays
+and LAN receivers while offering no protection against the operator's own
+network. The guard therefore becomes an explicit operator choice, and the
+per-account Remote MX `allow_private` flag is effective only when the operator
+permits private outbound. See D083 (superseding the default) for the change
+record.
 
 **Complexity:** One config flag, a shared `netutil` gate, and adapter wiring; no
 new dependency or runtime service.
@@ -2665,6 +2675,40 @@ refused. Deployments that prefer deployment-time credentials are unaffected.
   through the existing `SyncSystemAdmin` path.
 - `unconfiguredBody` is replaced by `setupBody`; the startup log now points at
   the setup page as well as the environment variables.
+
+## D086 — Private outbound is allowed by default (amends D028)
+
+**Context:** D028 held outbound transports to public-routable destinations by
+default, with `ALLOW_PRIVATE_OUTBOUND=true` as an operator opt-out. The
+per-account Remote MX receiver (D084) added a second, tenant-controlled
+`allow_private` flag (`internal/app/account_mx.go`) that fed
+`AllowPrivateDestinations` directly into the dialer
+(`cmd/server/remotemxruntime.go`), independently of the global policy. An
+account Administrator could therefore point a receiver at loopback, RFC1918 or
+the cloud metadata address even when the operator had enabled the guard — the
+tenant-controlled bypass defeats the operator's SSRF control.
+
+**Decision:** Self-hosting is the primary deployment model, so the public-routable
+guard is **off by default**: `ALLOW_PRIVATE_OUTBOUND` defaults to `true`, and
+private gateways, local relays and LAN receivers work without configuration. The
+guard remains a single global operator switch. A hosted operator sets
+`ALLOW_PRIVATE_OUTBOUND=false`, which confines every outbound transport to
+public-routable destinations **and** governs the per-account Remote MX receiver:
+the `allow_private` flag is honoured only when the operator allows private
+outbound. When the operator forbids it, an account save with `allow_private` set
+is rejected/held to the public policy, and the runtime dialer passes
+`AllowPrivateDestinations: settings.AllowPrivate && !RequirePublicOutbound()`.
+No per-tenant flag can re-enable private destinations.
+
+**Reason:** The public-only default protected the operator's own network from the
+operator's own configuration while breaking legitimate self-hosted topologies;
+that is the wrong default for a self-host-first project. Hosted deployments still
+need the guard and can enable it with one variable, and the SSRF-relevant fix —
+that the operator's policy, not a tenant checkbox, decides private reachability —
+is enforced in both the save path and the dialer.
+
+**Complexity:** One default flip and one boolean conjunction; no new dependency,
+service, or storage.
 
 ## Future extension register
 

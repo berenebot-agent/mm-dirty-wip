@@ -110,7 +110,7 @@ func (s *Service) SaveAccountMXReceiver(ctx context.Context, p model.Principal, 
 		return AccountMXReceiver{}, fmt.Errorf("%w: a Remote MX receiver requires a URL", ErrAccountMXInvalidInput)
 	}
 	allowPrivate := in.AllowPrivate
-	if err := validateAccountMXReceiverURL(receiverURL, allowPrivate); err != nil {
+	if err := validateAccountMXReceiverURL(receiverURL, allowPrivate, s.Config.RequirePublicOutbound()); err != nil {
 		return AccountMXReceiver{}, err
 	}
 	blob := accountMXStoredConfig{CA: strings.TrimSpace(in.CA), AllowPrivate: allowPrivate}
@@ -225,12 +225,17 @@ func (s *Service) decryptAccountMXStoredConfig(m store.AccountMXReceiver) (accou
 
 // validateAccountMXReceiverURL accepts an HTTP or HTTPS origin. When the
 // receiver is not marked private, the destination is held to the public-only
-// policy (netutil's enforcement, when active), matching the installation Remote
-// receiver. A private opt-in permits a loopback/LAN destination.
-func validateAccountMXReceiverURL(raw string, allowPrivate bool) error {
+// policy, matching the installation Remote receiver. A private opt-in permits a
+// loopback/LAN destination, but only when the operator's global policy allows
+// private outbound (requirePublic=false); when the operator confines outbound to
+// the public internet, an account cannot re-enable private destinations.
+func validateAccountMXReceiverURL(raw string, allowPrivate, requirePublic bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return fmt.Errorf("%w: receiver URL must be an HTTP or HTTPS origin", ErrAccountMXInvalidInput)
+	}
+	if requirePublic {
+		allowPrivate = false
 	}
 	if allowPrivate {
 		return nil

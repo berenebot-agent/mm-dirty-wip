@@ -778,6 +778,8 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		base += "/sent"
 	case "trash":
 		base += "/trash"
+	case "spam":
+		base += "/spam"
 	}
 	http.Redirect(w, r, base+"?notice="+url.QueryEscape(notice), 303)
 }

@@ -93,9 +93,12 @@ func TestAccountMXReceiverGlobalUniqueness(t *testing.T) {
 }
 
 // TestAccountMXReceiverURLPolicy proves a public receiver must be https and
-// public-routable, while a private opt-in permits an http/LAN receiver.
+// public-routable, while a private opt-in permits an http/LAN receiver only when
+// the operator allows private outbound.
 func TestAccountMXReceiverURLPolicy(t *testing.T) {
-	svc, u, _ := newMXServiceWithOutboundPolicy(t, false)
+	// Operator allows private outbound: the public policy still rejects private
+	// hosts unless the account explicitly opts in.
+	svc, u, _ := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 
 	for _, bad := range []string{"http://mx.example.test", "https://127.0.0.1:8443", "https://10.0.0.5:8443"} {
@@ -104,7 +107,26 @@ func TestAccountMXReceiverURLPolicy(t *testing.T) {
 		}
 	}
 	if _, err := svc.SaveAccountMXReceiver(ctx, adminP(u), app.AccountMXReceiverInput{URL: "http://10.0.0.5:8443", BearerKey: "k", AllowPrivate: true}); err != nil {
-		t.Fatalf("private save: %v", err)
+		t.Fatalf("private save with operator opt-in: %v", err)
+	}
+}
+
+// TestAccountMXReceiverOperatorPolicyWins proves an account cannot re-enable
+// private destinations when the operator confines outbound to the public
+// internet: the per-account allow_private opt-in is ignored and the save is held
+// to the public-only policy.
+func TestAccountMXReceiverOperatorPolicyWins(t *testing.T) {
+	svc, u, _ := newMXServiceWithOutboundPolicy(t, false)
+	ctx := context.Background()
+
+	for _, bad := range []string{"http://10.0.0.5:8443", "https://127.0.0.1:8443"} {
+		if _, err := svc.SaveAccountMXReceiver(ctx, adminP(u), app.AccountMXReceiverInput{URL: bad, BearerKey: "k", AllowPrivate: true}); !errors.Is(err, app.ErrAccountMXInvalidInput) {
+			t.Fatalf("private save %q under public-only policy = %v, want ErrAccountMXInvalidInput", bad, err)
+		}
+	}
+	// A public HTTPS origin still saves fine.
+	if _, err := svc.SaveAccountMXReceiver(ctx, adminP(u), app.AccountMXReceiverInput{URL: "https://mx.example.test", BearerKey: "k"}); err != nil {
+		t.Fatalf("public save: %v", err)
 	}
 }
 
