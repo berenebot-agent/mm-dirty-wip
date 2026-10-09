@@ -195,6 +195,87 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	}
 }
 
+// TestRelayFutureAckDoesNotSkipEvents proves a gateway that acknowledges a
+// buffer id ahead of the event actually delivered cannot advance the durable
+// cursor over the events in between: the cursor moves only to the delivered
+// event, and the skipped event is still replayed.
+func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
+	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-future-ack", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ev1, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "future-1", RFCMessageID: "<f1@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Future one", Text: "one", RawPath: "messages/f1.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ev2, _, err := st.CommitInbound(ctx, store.InboundRecord{Inbox: box, Provider: "mailgun", ProviderDeliveryID: "future-2", RFCMessageID: "<f2@test>", From: model.Address{Address: "alice@outside.test"}, To: []string{box.Address}, EnvelopeTo: []string{box.Address}, Subject: "Future two", Text: "two", RawPath: "messages/f2.eml", SizeBytes: 4, ReceivedAt: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := hermesrelay.New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/relay"
+	client := dialRawWS(t, wsURL, makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if inbound["bufferId"] != ev1.Cursor {
+		t.Fatalf("first event %#v", inbound)
+	}
+	// Ack a future buffer id (ev2) while ev1 is the event actually delivered.
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	// The second event must still be delivered: the future ack must not have
+	// skipped it.
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatal(err)
+	}
+	if inbound["bufferId"] != ev2.Cursor {
+		t.Fatalf("second event after a future ack %#v", inbound)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev2.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	updated, err := st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastAckEventID != ev2.ID {
+		t.Fatalf("final cursor = %d, want %d", updated.LastAckEventID, ev2.ID)
+	}
+}
+
 // A disconnected relay must replay buffered events in order on reconnect.
 func TestRelayDisconnectReconnectReplay(t *testing.T) {
 	ctx := context.Background()

@@ -114,6 +114,42 @@ func TestReceiveURLEncoded(t *testing.T) {
 	}
 }
 
+// TestReceiveURLEncodedRejectsOversizeBody proves the urlencoded path bounds the
+// raw body before parsing it, so an unauthenticated caller cannot stream an
+// arbitrarily large (or amplified) body at the server.
+func TestReceiveURLEncodedRejectsOversizeBody(t *testing.T) {
+	var tr mailgun.Transport
+	ts := fmtInt(time.Now().Unix())
+	huge := strings.Repeat("A", 64*1024)
+	form := url.Values{
+		"timestamp": {ts}, "token": {"tok"}, "signature": {signature("key", ts, "tok")},
+		"sender": {"b@test"}, "recipient": {"a@example.com"}, "body-mime": {huge},
+	}
+	r := httptest.NewRequest("POST", "/", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if _, _, err := tr.Receive(context.Background(), r, fakeResolver{key: "key"}, t.TempDir()+"/m.eml", 4096); err == nil {
+		t.Fatal("oversize urlencoded body accepted")
+	}
+}
+
+// TestReceiveURLEncodedPercentEncodedWithinLimit proves a message whose MIME
+// needs percent-encoding is still accepted up to the decoded MIME limit.
+func TestReceiveURLEncodedPercentEncodedWithinLimit(t *testing.T) {
+	var tr mailgun.Transport
+	ts := fmtInt(time.Now().Unix())
+	raw := "From: b@test\r\nTo: a@example.com\r\n\r\n" + strings.Repeat("a b\n", 200)
+	form := url.Values{
+		"timestamp": {ts}, "token": {"tok"}, "signature": {signature("key", ts, "tok")},
+		"sender": {"b@test"}, "recipient": {"a@example.com"}, "body-mime": {raw},
+	}
+	r := httptest.NewRequest("POST", "/", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	path := t.TempDir() + "/m.eml"
+	if _, _, err := tr.Receive(context.Background(), r, fakeResolver{key: "key"}, path, int64(len(raw))+64); err != nil {
+		t.Fatalf("legitimate percent-encoded body rejected: %v", err)
+	}
+}
+
 func TestReceiveRejectsBadSignature(t *testing.T) {
 	var tr mailgun.Transport
 	req := multipartRequest(t, "wrong", "tok", "a@example.com", "body", nil)

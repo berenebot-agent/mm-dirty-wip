@@ -31,6 +31,22 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Outbound send rate limit: the per-account limit is now enforced centrally in
+  the send service, so it also applies to the reply, draft-send, UI and relay
+  paths instead of only the `/v1/send` endpoint; the limit is no longer
+  bypassable by choosing a different send route.
+- Relay acknowledgements: a gateway that acknowledges a buffer id ahead of the
+  event actually delivered can no longer advance the durable cursor over the
+  events in between (silent mail loss); the cursor advances only to the event
+  delivered.
+- Mailgun urlencoded webhook: the raw body is now bounded and read without a
+  second full copy, so an unauthenticated caller cannot force the amplified
+  peak allocation; the accepted size still allows the worst-case
+  percent-encoding of a full-size message.
+- MX approval authentication: SPF alignment is now recorded on the evidence, and
+  when a DMARC policy is published it is authoritative — an aligned SPF/DKIM
+  pass that the policy rejects (for example a strict `adkim=s` From domain with
+  only a relaxed DKIM pass) no longer authenticates the sender.
 - Inbound dedup: the duplicate probe now compares the same normalized
   envelope recipient that is stored, so a re-delivered webhook with different
   address casing is recognised as a duplicate instead of failing the insert.

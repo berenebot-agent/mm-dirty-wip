@@ -56,6 +56,17 @@ func (v *Verifier) Verify(ctx context.Context, raw io.ReadSeeker, peerIP net.IP,
 	}
 	if v.cfg.VerifyDMARC {
 		out.DMARC = v.verifyDMARC(ctx, fromDomain, out.SPF, out.DKIM, lookupTXT)
+	} else {
+		// Without DMARC evidence the alignment mode is unknown; fall back to
+		// relaxed alignment so the per-mechanism flags are still meaningful.
+		if out.SPF != nil {
+			out.SPF.Aligned = strings.EqualFold(out.SPF.Result, "pass") && DomainsAlign(fromDomain, out.SPF.Domain, false)
+		}
+		for i := range out.DKIM {
+			if strings.EqualFold(out.DKIM[i].Result, "pass") {
+				out.DKIM[i].Aligned = DomainsAlign(fromDomain, out.DKIM[i].Domain, false)
+			}
+		}
 	}
 	return out
 }
@@ -187,10 +198,22 @@ func (v *Verifier) verifyDMARC(ctx context.Context, fromDomain string, spfEv *mx
 	}
 	ev.Policy = string(rec.Policy)
 	strict := rec.SPFAlignment == dmarc.AlignmentStrict
-	spfAligned := spfEv != nil && strings.EqualFold(spfEv.Result, "pass") && DomainsAlign(fromDomain, spfEv.Domain, strict)
+	// Stamp the discovered alignment mode back onto the SPF/DKIM evidence so a
+	// consumer can rely on the per-mechanism Aligned flag rather than
+	// re-deriving alignment (and so a strict-DMARC From domain is honoured even
+	// on the fallback path when DMARC itself is unavailable).
+	if spfEv != nil {
+		spfEv.Aligned = strings.EqualFold(spfEv.Result, "pass") && DomainsAlign(fromDomain, spfEv.Domain, strict)
+	}
+	for i := range dkimEvs {
+		if strings.EqualFold(dkimEvs[i].Result, "pass") {
+			dkimEvs[i].Aligned = DomainsAlign(fromDomain, dkimEvs[i].Domain, rec.DKIMAlignment == dmarc.AlignmentStrict)
+		}
+	}
+	spfAligned := spfEv != nil && spfEv.Aligned
 	dkimAligned := false
 	for _, d := range dkimEvs {
-		if strings.EqualFold(d.Result, "pass") && DomainsAlign(fromDomain, d.Domain, rec.DKIMAlignment == dmarc.AlignmentStrict) {
+		if strings.EqualFold(d.Result, "pass") && d.Aligned {
 			dkimAligned = true
 			break
 		}

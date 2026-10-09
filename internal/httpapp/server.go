@@ -76,7 +76,6 @@ type Server struct {
 	Log             *slog.Logger
 	loginLimiter    *limiter
 	keyLoginLimiter *limiter
-	sendLimiter     *limiter
 	unroutedLim     *limiter
 	passwordLimiter *limiter
 	registerLimiter *limiter
@@ -122,7 +121,6 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		keyLoginLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		sendLimiter:          newLimiter(svc.Config.SendLimitPerMinute, time.Minute),
 		unroutedLim:          newLimiter(1, time.Minute),
 		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		registerLimiter:      newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
@@ -799,6 +797,8 @@ func mapStoreError(w http.ResponseWriter, err error) {
 		writeError(w, 400, err.Error())
 	case errors.Is(err, app.ErrReplyFromSpam), errors.Is(err, store.ErrExternalAliasDeleted):
 		writeError(w, 409, err.Error())
+	case errors.Is(err, app.ErrRateLimited):
+		writeError(w, 429, err.Error())
 	case isInternalStoreError(err):
 		// A storage-engine or filesystem fault must not leak its raw text
 		// (schema, query state, on-disk paths) to the client. Record it and

@@ -292,8 +292,12 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				default:
 				}
 			case "inbound_ack":
+				// Forward the acknowledgement to the delivery loop, which is the
+				// single owner of the durable cursor advance. The reader must not
+				// write the cursor itself: a gateway that acks a buffer id ahead
+				// of the event actually delivered would otherwise skip every
+				// event in between.
 				if id := store.ParseCursor(f.BufferID); id > 0 {
-					_ = s.Store.AckHermesEventLogged(ctx, h.ID, id, 1)
 					select {
 					case ackCh <- id:
 					default:
@@ -372,8 +376,13 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 			for !acked {
 				select {
 				case id := <-ackCh:
+					// An acknowledgement at or beyond the event just sent means
+					// that event is acknowledged, but the durable cursor advances
+					// only to the event actually delivered. A gateway that
+					// (buggily or maliciously) acks a future buffer id must not
+					// cause the events in between to be skipped.
 					if id >= ev.ID {
-						after = id
+						after = ev.ID
 						if m, mErr := s.Store.ClientDeliveryLog(ctx, h.AccountID, h.ID, 1, ev.ID+1); mErr == nil && len(m) == 1 {
 							_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, m[0].Attempts)
 						} else {
