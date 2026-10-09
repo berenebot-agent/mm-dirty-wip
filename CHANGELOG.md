@@ -44,6 +44,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   domain no longer denies registration of a core's other domains. The refusal
   is a distinct `domain_cooldown` reason that the core surfaces as the amber
   "waiting to retry" state rather than red "rejected" (D091).
+- Antler MX setup wizard: finishing no longer bounces back to the receivers step
+  when no receiver is authorized at that moment, which could happen while a DNS
+  record was still catching up even though the receivers showed green. Once the
+  operator is past the receiver step, Finish saves and opens the status view,
+  which reports the receiver authorizing/reconnecting until it reconnects —
+  matching the key-rotation and DNS-repair flows.
 
 ### Changed
 
