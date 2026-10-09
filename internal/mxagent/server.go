@@ -563,11 +563,13 @@ func (s *session) Data(r io.Reader) error {
 	s.logDataStaging(txID, "staged", "size", size, "digest", digest, "duration_ms", durationMs(time.Since(stageStart)))
 
 	fromDomain := FromHeaderDomain(raw)
+	fromAddress := FromHeaderAddress(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), s.srv.cfg.DataTimeout)
 	defer cancel()
 	verifyStart := time.Now()
 	auth := s.srv.verify.Verify(ctx, bytes.NewReader(raw), s.peerIP, s.helo, s.from, fromDomain)
 	s.logAuthEvidence(txID, auth, time.Since(verifyStart))
+	s.logFromHeader(txID, fromAddress, s.from, fromDomain)
 
 	recipients := make([]string, 0, len(s.rcpts))
 	for _, rcpt := range s.rcpts {
@@ -696,6 +698,29 @@ func (s *session) logAuthEvidence(txID string, auth mxwire.AuthResults, elapsed 
 		"dmarc_enabled", s.srv.cfg.VerifyDMARC,
 		"auth_results", auth,
 		"duration_ms", durationMs(elapsed),
+	)
+}
+
+// logFromHeader records the two addresses a downstream reader needs to tell
+// "who really sent this" from "what the sending service claimed":
+//
+//   - from_address   the addr-spec from the message's own RFC5322.From header
+//   - supplied_from  the MAIL FROM the sending service handed over, which for
+//     bulk senders is a bounce/return-path address rather than the From a
+//     recipient sees
+//
+// It deliberately logs the header ADDRESS only. The display name and Reply-To
+// are not recorded: they carry personal data (a display name is frequently a
+// person's name) and the two addresses answer the routing question on their
+// own. Values are header-controlled, which is why they live on this line
+// rather than on any SMTP-decision line.
+func (s *session) logFromHeader(txID, fromAddress, suppliedFrom, fromDomain string) {
+	s.srv.log.Info("mx from header",
+		AttrConnectionID, s.connID,
+		AttrTransactionID, txID,
+		"from_address", fromAddress,
+		"supplied_from", suppliedFrom,
+		"from_domain", fromDomain,
 	)
 }
 
@@ -892,10 +917,11 @@ func ipString(ip net.IP) string {
 	return ip.String()
 }
 
-// FromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
-// message's own From, which is exactly what DMARC is evaluated against; it is
-// never used as an authenticated identity.
-func FromHeaderDomain(raw []byte) string {
+// headerValue returns the unfolded value of the first occurrence of the named
+// header, or "" when it is absent. Same bounded scan as before: header block
+// only, CRLF and LF line endings, continuation lines unfolded so a wrapped
+// value is read whole.
+func headerValue(raw []byte, name string) string {
 	// Bounded scan of the header block only.
 	idx := bytes.Index(raw, []byte("\r\n\r\n"))
 	if idx < 0 {
@@ -905,19 +931,54 @@ func FromHeaderDomain(raw []byte) string {
 	if idx >= 0 {
 		headers = raw[:idx]
 	}
-	// Unfold continuation lines so a wrapped From: header is parsed whole.
+	// Unfold continuation lines so a wrapped header is parsed whole.
 	headers = bytes.ReplaceAll(headers, []byte("\r\n"), []byte("\n"))
 	headers = bytes.ReplaceAll(headers, []byte("\n "), []byte(" "))
-	headers = bytes.ReplaceAll(headers, []byte("\n\t"), []byte(" "))
+	headers = bytes.ReplaceAll(headers, []byte("\n	"), []byte(" "))
+	prefix := []byte(name + ":")
 	for _, line := range bytes.Split(headers, []byte("\n")) {
 		l := bytes.TrimSpace(line)
-		if len(l) < 5 || !bytes.EqualFold(l[:5], []byte("From:")) {
+		if len(l) < len(prefix) || !bytes.EqualFold(l[:len(prefix)], prefix) {
 			continue
 		}
-		v := string(bytes.TrimSpace(l[5:]))
-		return addressDomain(v)
+		return string(bytes.TrimSpace(l[len(prefix):]))
 	}
 	return ""
+}
+
+// FromHeaderDomain extracts the RFC5322.From domain for DMARC. It is the
+// message's own From, which is exactly what DMARC is evaluated against; it is
+// never used as an authenticated identity.
+func FromHeaderDomain(raw []byte) string {
+	return addressDomain(headerValue(raw, "From"))
+}
+
+// FromHeaderAddress extracts the addr-spec from the message's own RFC5322.From
+// header, or "" when it cannot be parsed. This is the "real" sender as a human
+// reads it; the separate MAIL FROM value is what the sending service supplied,
+// and the two differ for bulk senders that use a bounce address.
+func FromHeaderAddress(raw []byte) string {
+	return addressFrom(headerValue(raw, "From"))
+}
+
+// addressFrom returns the addr-spec of a parsed address header value, or "".
+func addressFrom(v string) string {
+	if addr, err := mail.ParseAddress(v); err == nil {
+		return addr.Address
+	}
+	// Fall back to the same bounded heuristic addressDomain uses, so a From
+	// that net/mail rejects still yields the address where one is visible.
+	v = strings.TrimSpace(v)
+	if lt, gt := strings.LastIndex(v, "<"), strings.LastIndex(v, ">"); lt >= 0 && gt > lt {
+		v = v[lt+1 : gt]
+	}
+	// A value with no @ is not an addr-spec; report nothing rather than
+	// logging a fragment of a malformed header.
+	v = strings.TrimSpace(v)
+	if !strings.Contains(v, "@") {
+		return ""
+	}
+	return v
 }
 
 // addressDomain extracts the domain from a From header value. It prefers

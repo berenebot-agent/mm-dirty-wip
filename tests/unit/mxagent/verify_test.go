@@ -79,6 +79,28 @@ func TestFromHeaderDomain(t *testing.T) {
 	}
 }
 
+func TestFromHeaderAddress(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		// The real case this was added for: a display name in front of the address.
+		{"From: Hermes Agentbox <hermes_agentbox@agent.xiat.net>\r\n\r\nbody", "hermes_agentbox@agent.xiat.net"},
+		{"From: sender@example.com\r\n\r\nbody", "sender@example.com"},
+		{"From: \"Cowboy, Yee-Haw\" <hello@example.com>\r\n\r\nbody", "hello@example.com"},
+		{"From: Sender <\r\n\tsender@outside.test>\r\n\r\nbody", "sender@outside.test"},
+		// No From header: empty, never a panic.
+		{"To: x@y\r\n\r\nno from", ""},
+		// Malformed: empty rather than an error, so the log line is still emitted.
+		{"From: <<<>>>\r\n\r\nbody", ""},
+	}
+	for _, tc := range cases {
+		if got := mxagent.FromHeaderAddress([]byte(tc.raw)); got != tc.want {
+			t.Fatalf("FromHeaderAddress(%q)=%q want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
 func TestStageMessageBounds(t *testing.T) {
 	raw := strings.Repeat("A", 1000)
 	buf, size, digest, err := mxagent.StageMessage(strings.NewReader(raw), 2000, 5_000_000_000)
