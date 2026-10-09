@@ -524,9 +524,19 @@
     });
   }
 
+  // accessResultDone, when set, overrides the Done button's navigation so an
+  // embedded flow (the Clients & Access tab) can return to its own view.
+  var accessResultDone = null;
+
   if (doneBtn) {
     doneBtn.addEventListener('click', function () {
+      var cb = accessResultDone;
+      accessResultDone = null;
       dlg.close();
+      if (cb) {
+        cb();
+        return;
+      }
       if (returnInboxID) {
         window.location.href = '/?inbox=' + encodeURIComponent(returnInboxID) + '&inbox_tab=connectors';
       } else {
@@ -534,6 +544,20 @@
       }
     });
   }
+
+  // mailmooseShowKeyResult renders a one-time secret in the shared key dialog,
+  // matching the Add/Edit client flow. onDone, when supplied, runs when the
+  // user dismisses the result (used by the Clients & Access tab).
+  window.mailmooseShowKeyResult = function (data, onDone) {
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+    accessResultDone = typeof onDone === 'function' ? onDone : null;
+    showResult(data);
+    if (!dlg.open) {
+      dlg.showModal();
+    }
+  };
 
   if (rotateBtn) {
     rotateBtn.addEventListener('click', function () {
@@ -624,6 +648,11 @@
     btn.addEventListener('click', function () {
       openEdit(btn);
     });
+  });
+  // A dismissed result dialog drops any pending embedded-flow callback so it
+  // cannot leak into a later normal Add/Edit client flow.
+  dlg.addEventListener('close', function () {
+    accessResultDone = null;
   });
   syncScopeButtons();
 })();
@@ -2012,6 +2041,17 @@ function clearUrlParams(names) {
     return String(s == null ? '' : s);
   }
 
+  // accessAttr HTML-escapes a value for safe interpolation into innerHTML
+  // (e.g. the option list built as a string).
+  function accessAttr(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // accessReload returns to the server render of this inbox on the access tab.
   function accessReload(notice) {
     var dest = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
@@ -2050,7 +2090,12 @@ function clearUrlParams(names) {
       }
       accessReload('');
     }).catch(function (err) {
-      window.alert(err.message || 'Could not update access');
+      var message = err.message || 'Could not update access';
+      if (dlg && dlg.classList.contains('inbox-settings--subview') && accessAddBody) {
+        accessAddError(message);
+      } else {
+        window.alert(message);
+      }
     });
   }
 
@@ -2254,7 +2299,7 @@ function clearUrlParams(names) {
       var wrap = document.createElement('div');
       if (window.__accessMembers && window.__accessMembers.length) {
         var opts = accessAvailableUsers().map(function (m) {
-          return '<option value="' + accessEsc(m.id) + '">' + accessEsc(m.email) + '</option>';
+          return '<option value="' + accessAttr(m.id) + '">' + accessAttr(m.email) + '</option>';
         }).join('');
         wrap.innerHTML = '<label>Existing account member</label><div class="row"><select id="access-user-select">' + opts + '</select><button type="button" class="secondary btn-narrow" id="access-user-save">Add</button></div>' +
           '<p class="muted small">They become Owner of this inbox.</p>';
@@ -2278,7 +2323,7 @@ function clearUrlParams(names) {
       accessAddBody.querySelector('#access-invite-save').addEventListener('click', function () {
         var email = (accessAddBody.querySelector('#access-invite-email').value || '').trim();
         if (!email) {
-          window.alert('Enter an email address to invite.');
+          accessAddError('Enter an email address to invite.');
           return;
         }
         accessPost('/ui/inboxes/' + encodeURIComponent(editInboxID) + '/access/invites', [['email', email]]);
@@ -2288,7 +2333,8 @@ function clearUrlParams(names) {
   }
 
   // accessCreateKey posts the new-key form; on success the returned secret is
-  // shown in a one-time dialog before returning to the account page.
+  // shown in the shared key dialog's result view (matching the Clients card),
+  // then Done returns to this inbox's Clients & Access tab.
   function accessCreateKey(name, role) {
     if (typeof window.fetch !== 'function') {
       return;
@@ -2316,12 +2362,32 @@ function clearUrlParams(names) {
       }
       return res.json();
     }).then(function (data) {
-      dlg.close();
-      window.alert((data.notice || 'API key created') + '\n\n' + (data.label || '') + '\n\n' + (data.secret || ''));
-      window.location.href = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
+      if (typeof window.mailmooseShowKeyResult === 'function') {
+        window.mailmooseShowKeyResult(data, function () {
+          window.location.href = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
+        });
+      } else {
+        window.location.href = '/?inbox=' + encodeURIComponent(editInboxID) + '&inbox_tab=access';
+      }
     }).catch(function (err) {
-      window.alert(err.message || 'Could not create client');
+      accessAddError(err.message || 'Could not create client');
     });
+  }
+
+  // accessAddError shows an inline error in the add sub-view rather than a
+  // browser alert.
+  function accessAddError(message) {
+    if (!accessAddBody) {
+      return;
+    }
+    var box = accessAddBody.querySelector('.access-add-error');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'error access-add-error';
+      accessAddBody.insertBefore(box, accessAddBody.firstChild);
+    }
+    box.textContent = message;
+    box.hidden = false;
   }
 
   if (accessAddKey) {
@@ -2658,6 +2724,13 @@ function bindInboxSettingsShell(dlg) {
       inboxSave.hidden = name === 'access';
       inboxSave.textContent = 'Save';
       inboxSave.setAttribute('form', name === 'connectors' ? 'inbox-connectors-form' : 'inbox-edit-form');
+    }
+    // With no Save on the Clients & Access tab, the remaining secondary button
+    // closes the dialog; label it accordingly rather than "Cancel" (there is
+    // nothing staged to discard).
+    var inboxCancel = dlg.querySelector('#inbox-edit-cancel');
+    if (inboxCancel) {
+      inboxCancel.textContent = name === 'access' ? 'Close' : 'Cancel';
     }
   }
 
