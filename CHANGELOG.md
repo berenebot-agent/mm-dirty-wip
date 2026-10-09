@@ -62,6 +62,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- First-run setup: a fresh instance with no users now serves a `/setup` page
+  where the first visitor creates the system administrator and is signed in. It
+  is a one-shot claim — the route self-disables once any user exists — guarded
+  by the pre-auth CSRF token, a same-origin check and a per-source rate limit.
+  `ADMIN_EMAIL` / `ADMIN_PASSWORD` still pre-create the administrator at startup
+  if you prefer deployment-time credentials. Supersedes the "no HTTP path to
+  claim the instance" clause of D055 (see D085).
+- Feedback: the signed-in header has a Feedback button that opens a panel
+  linking to the project mailbox at mailmoose@hgolabs.com.
 - Dashboard: each Dial MX / Antler MX domain in the Domains table now shows one
   aggregate connector light. Green when at least one receiver holds a current
   authorization, so inbound mail will be accepted; red otherwise. It answers
