@@ -3644,7 +3644,13 @@ function hideInboxSubview(dlg) {
         });
       }).then(function (result) {
         if (isRegister) {
-          setStatus(statusEl, (result && result.password_only) ? 'Passkey added; password sign-in disabled. Reloading…' : 'Passkey added. Reloading…', false);
+          var msg = 'Passkey added. Reloading…';
+          if (result && result.password_only) {
+            msg = 'Passkey added; password sign-in disabled. Reloading…';
+          } else if (result && result.warning) {
+            msg = result.warning + ' Reloading…';
+          }
+          setStatus(statusEl, msg, false);
           window.location.reload();
         } else {
           window.location.href = (result && result.redirect) || '/';

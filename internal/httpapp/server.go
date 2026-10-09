@@ -658,12 +658,12 @@ func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("mmm_session")
 		if err != nil {
-			redirectLogin(w, r)
+			s.expiredSession(w, r)
 			return
 		}
 		p, cval, err := s.Service.Store.SessionPrincipal(r.Context(), c.Value)
 		if err != nil {
-			redirectLogin(w, r)
+			s.expiredSession(w, r)
 			return
 		}
 		ctx := context.WithValue(r.Context(), principalKey, p)
@@ -671,6 +671,71 @@ func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 		ctx = withTimezone(ctx, p)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// expiredSession handles a request whose session is missing or expired. For a
+// safe method it redirects to the login page. For a state-changing POST it also
+// preserves the submitted content when it is a compose/reply/forward form, so a
+// long message typed just as the session lapsed is not lost, and carries a
+// post-login `next` back to that form. Every other POST gets a plain
+// "session expired" notice.
+func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		redirectLogin(w, r)
+		return
+	}
+	if next, tok := s.preserveComposeOnExpiry(r); next != "" {
+		dest := "/login?next=" + url.QueryEscape(next)
+		if tok != "" {
+			dest += "&_flash=" + url.QueryEscape(tok)
+		}
+		http.Redirect(w, r, dest, http.StatusSeeOther)
+		return
+	}
+	dest := "/login"
+	if tok := s.flashes.put(authFlash{Title: "Log In", Error: "Your session expired. Please sign in and try again."}, 96); tok != "" {
+		dest += "?_flash=" + url.QueryEscape(tok)
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// preserveComposeOnExpiry recognizes a compose/reply/forward POST and stores its
+// fields in a compose flash so they survive the login round-trip. It returns the
+// post-login GET path and the flash token (both empty when the request is not a
+// compose form or the body cannot be read).
+func (s *Server) preserveComposeOnExpiry(r *http.Request) (next, token string) {
+	path := r.URL.Path
+	var title, cancel string
+	switch {
+	case strings.HasSuffix(path, "/send") && strings.Contains(path, "/ui/inboxes/"):
+		// POST /ui/inboxes/{id}/send -> GET /ui/inboxes/{id}/compose
+		next = strings.TrimSuffix(path, "/send") + "/compose"
+		title = "New message"
+		cancel = strings.TrimSuffix(path, "/send")
+	case strings.HasSuffix(path, "/reply"):
+		next, title, cancel = path, "Reply", strings.TrimSuffix(path, "/reply")
+	case strings.HasSuffix(path, "/reply-all"):
+		next, title, cancel = path, "Reply all", strings.TrimSuffix(path, "/reply-all")
+	case strings.HasSuffix(path, "/forward"):
+		next, title, cancel = path, "Forward", strings.TrimSuffix(path, "/forward")
+	default:
+		return "", ""
+	}
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		// The body could not be read; still route back to the form with the
+		// notice rather than losing the destination.
+		return next, ""
+	}
+	in := app.SendInput{
+		FromAddress: strings.TrimSpace(r.Form.Get("sender")),
+		To:          formAddresses(r, "to"),
+		CC:          formAddresses(r, "cc"),
+		BCC:         formAddresses(r, "bcc"),
+		Subject:     strings.TrimSpace(r.Form.Get("subject")),
+		Text:        r.Form.Get("text"),
+	}
+	f := composeFlash{Title: title, Action: path, Cancel: cancel, Input: in}
+	return next, s.flashes.put(f, composeFlashSize(f))
 }
 func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
