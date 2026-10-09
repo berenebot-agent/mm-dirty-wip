@@ -36,6 +36,7 @@ import (
 	"github.com/dellarb/mailmoose/dialmx/control"
 	"github.com/dellarb/mailmoose/dialmx/receiver"
 	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
+	"github.com/dellarb/mailmoose/internal/dnsfallback"
 	"github.com/dellarb/mailmoose/internal/mxagent"
 )
 
@@ -45,6 +46,19 @@ var buildVersion = "dev"
 func main() {
 	log := receiver.NewLogger(dialmx.LevelFromEnv(), os.Stderr)
 	slog.SetDefault(log)
+
+	// Install ordered resolver failover before any DNS is performed, so SPF/
+	// DKIM/DMARC verification, the _mailmoose-mx TXT proof and any outbound TLS
+	// session recover when the host's configured DNS servers fail. A nil list
+	// (including "off") leaves native DNS untouched. The value is forwarded by
+	// the core to the embedded child and read from the environment standalone.
+	if servers, err := dnsfallback.ParseServers(os.Getenv("MAILMOOSE_DNS_FALLBACK_SERVERS")); err != nil {
+		log.Error("invalid MAILMOOSE_DNS_FALLBACK_SERVERS", "error", err)
+		os.Exit(2)
+	} else if len(servers) > 0 {
+		net.DefaultResolver = dnsfallback.New(servers)
+		log.Info("DNS fallback configured", "servers", servers)
+	}
 
 	// The included receiver is spawned by the core in standby with an inherited
 	// private control channel. When those descriptors are present, run the

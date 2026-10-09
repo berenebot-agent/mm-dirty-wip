@@ -219,6 +219,7 @@ Edge service (`mailmoose-mx`):
 | `MX_MAX_RECIPIENTS` / `MX_MAX_CONNECTIONS` | `100` / `256` | Recipients per transaction and concurrent connections. |
 | `MX_READ_TIMEOUT_SECONDS` / `MX_WRITE_TIMEOUT_SECONDS` / `MX_DATA_TIMEOUT_SECONDS` | `60` / `60` / `300` | Command, write and DATA read timeouts. |
 | `MX_DNS_RESOLVER` / `MX_DNS_TIMEOUT_SECONDS` | system / `10` | Optional resolver `host:port` for SPF/DKIM/DMARC. |
+| `MAILMOOSE_DNS_FALLBACK_SERVERS` | Cloudflare then Google | Ordered resolver failover for the core and the edge. The host's nameservers are tried first, then these public resolvers, only when an exchange fails; valid answers (including NXDOMAIN) are authoritative. Comma-separated IPs (optional `IP:port`); `off` disables. |
 | `MX_HEALTH_ADDR` | empty | Optional listener for `/healthz` and `/readyz`. |
 
 Per-domain settings — enforcement mode (moderate/hard), catch-all — live in the
