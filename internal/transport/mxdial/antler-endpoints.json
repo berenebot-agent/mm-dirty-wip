@@ -11,7 +11,7 @@
       "id": "antler-2",
       "session_url": "https://antler2.hgolabs.com",
       "smtp_hostname": "antler2.hgolabs.com",
-      "mx_priority": 20
+      "mx_priority": 10
     }
   ]
 }
