@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -11,6 +12,33 @@ import (
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
 )
+
+// TestOutboundSentLogsProviderLabel pins the "outbound sent" log attribute to
+// the human provider name (the transport's description) rather than the raw
+// registry id, mirroring the inbound "provider" attribute.
+func TestOutboundSentLogsProviderLabel(t *testing.T) {
+	svc, u, d, box := testService(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+
+	var calls atomic.Int32
+	api := providerServer(t, "<brevo>", &calls)
+	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Hi", Text: "hello"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := newLogSink()
+	svc.Log = slog.New(sink)
+	if err = svc.Deliver(ctx, u.AccountID, res.Message.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := sink.values("provider")
+	if len(got) != 1 || got[0] != "Brevo API" {
+		t.Fatalf("provider log attrs = %q, want [Brevo API]", got)
+	}
+}
 
 func providerServer(t *testing.T, id string, calls *atomic.Int32) *httptest.Server {
 	t.Helper()

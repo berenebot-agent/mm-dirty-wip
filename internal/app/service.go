@@ -108,6 +108,18 @@ func providerSourceLabel(provider string) string {
 	return provider
 }
 
+// outboundProviderLabel returns the human label for an outbound provider. It
+// prefers the registered transport's short description and falls back to the
+// provider name so a log line always shows something usable.
+func outboundProviderLabel(provider string) string {
+	if t, ok := transport.LookupOutbound(provider); ok {
+		if d := strings.TrimSpace(t.Description()); d != "" {
+			return d
+		}
+	}
+	return provider
+}
+
 // auditUnrouted records a rejected unknown-recipient delivery. Coalescing is
 // keyed on the receiving domain rather than the full recipient, so random local
 // parts on a MailMoose-controlled domain cannot each produce an audit row; the
@@ -411,7 +423,7 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 		_ = os.Remove(final)
 		return m, true, nil
 	}
-	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", provider)
+	s.Log.Info("inbound received", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", msg.Source)
 	s.Hub.Publish(ev)
 	return m, false, nil
 }
@@ -1914,7 +1926,7 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 		}
 		return err
 	}
-	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To)
+	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", outboundProviderLabel(sending.Provider))
 	for _, ev := range events {
 		s.Hub.Publish(ev)
 	}
@@ -2083,7 +2095,7 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if err != nil {
 		return err
 	}
-	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To)
+	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To, "provider", outboundProviderLabel(sending.Provider))
 	for _, ev := range events {
 		s.Hub.Publish(ev)
 	}
