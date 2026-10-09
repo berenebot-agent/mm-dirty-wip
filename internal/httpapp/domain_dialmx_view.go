@@ -126,38 +126,44 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 }
 
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic
-// light shown on the dashboard. Inbound mail is delivered as long as one
-// receiver holds a current authorization, so the light is green when any
-// receiver is ready and unexpired, red when every receiver has settled into a
-// failure, and amber (pending) while at least one receiver is still working —
-// connecting, deferred, or waiting for its first status. Amber is the honest
-// "not yet" state at startup and during a reconnect: a red light would cry
-// failure while the core is still authorizing. The light answers the one
-// question an operator needs at a glance — will mail arrive? — rather than
-// enumerating each receiver; the receiving dialog carries the per-connector
-// detail. light is a "dns-light" token ("ok", "amber" or "danger") and title is
-// the human explanation for its tooltip.
-func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title string) {
+// light shown on the dashboard. It is binary: green when at least one connector
+// row is fully green, red otherwise. A connector row is fully green only when
+// its session is authorized and unexpired AND — when the domain has an MX check
+// — its SMTP hostname is published in the domain's MX records. Inbound mail is
+// delivered as long as one receiver both holds a current authorization and is
+// actually pointed at by MX, so a receiver that is connected but not routed
+// (mxChecked true, hostname not in mxMatched) does not count. mxChecked is false
+// for a custom-service domain with no MX check, in which case routing is not
+// locally verifiable and the row is judged on the connection alone.
+//
+// A receiver that has disconnected, been rejected, or become unreachable is not
+// green: green means mail will arrive now, and a reconnecting receiver is not
+// yet delivering. The receiving dialog carries the per-connector detail. light
+// is a "dns-light" token ("ok" or "danger") and title is the human explanation
+// for its tooltip.
+func dialMXHealth(statuses []mxdialStatusView, mxChecked bool, mxMatched []string, now time.Time) (light, title string) {
+	matched := make(map[string]bool, len(mxMatched))
+	for _, host := range mxMatched {
+		matched[strings.ToLower(host)] = true
+	}
 	ready := 0
-	pending := 0
+	connected := 0
 	for _, st := range statuses {
-		switch {
-		case st.State == mxdial.StatusActive && (st.ExpiresAt == nil || st.ExpiresAt.After(now)):
+		if st.State != mxdial.StatusActive || (st.ExpiresAt != nil && !st.ExpiresAt.After(now)) {
+			continue
+		}
+		connected++
+		if !mxChecked || matched[strings.ToLower(st.SMTPHostname)] {
 			ready++
-		case st.State == mxdial.StatusConnecting, st.State == mxdial.StatusDeferred, st.State == mxdial.StatusDisconnected, st.State == "":
-			pending++
 		}
 	}
 	if ready > 0 {
 		return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
 	}
-	if pending > 0 {
-		return "amber", "Inbound connectors are still connecting — not ready yet"
+	if connected > 0 {
+		return "danger", "Inbound connectors are connected but not routed by MX — publish the shown MX records so mail can arrive"
 	}
-	if len(statuses) == 0 {
-		return "amber", "Waiting for inbound connector status"
-	}
-	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver reconnects"
+	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver connects and its MX is published"
 }
 
 // boundStatusReason truncates a receiver-supplied reason so an unexpectedly
