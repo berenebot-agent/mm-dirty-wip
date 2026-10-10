@@ -726,9 +726,9 @@ func TestRemoteFilteredScanReachesDeepMatch(t *testing.T) {
 
 // ensure unused imports stay referenced while the file grows.
 
-// TestStandaloneUIAddAndBanner proves the dashboard renders the two inbox buttons
-// and the standalone setup dialog, and that a standalone mailbox page shows the
-// setup banner and the folder management UI.
+// TestStandaloneUIAddAndBanner proves the dashboard renders the Add inbox
+// chooser (with the standalone choice) and the standalone setup form, and that a
+// standalone mailbox page shows the setup banner and the folder management UI.
 func TestStandaloneUIAddAndBanner(t *testing.T) {
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	// The dashboard needs an admin session.
@@ -741,7 +741,7 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 		t.Fatalf("dashboard %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"add-standalone-inbox", "standalone-dialog", "Standalone inbox", "IMAP host"} {
+	for _, want := range []string{`id="add-inbox"`, "data-inbox-choose", "Domain inbox", "Standalone inbox", "inbox-add-standalone-form", "IMAP host"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
