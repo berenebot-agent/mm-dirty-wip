@@ -3008,6 +3008,8 @@ existing durable events and hub rather than adding a new mechanism.
   receiver hostnames, so a burst of snapshot calls does not each run a fresh
   lookup while a key rotation or receiving change still misses the cache. The
   setup dialog's own checks stay live and uncached (the D-check invariant).
+  *(Superseded by D095: the receiver now reports routing in its own status, so the
+  aggregate light is a pure in-memory read and this cache was removed.)*
 - **Receiver-health push.** `mxdial.Manager` gains a `SetStatusObserver` hook
   fired only on an actual status-row or single-mode connection change; the app
   wires it to publish a transient `mx.health_changed` hub event (never written to
@@ -3073,6 +3075,72 @@ matches the stated priority that live updates are a background refresh, not a
 screen the user is watching. Reusing the page's own sub-templates (rather than a
 second renderer or a client-side template) keeps the live list and the rendered
 list from drifting.
+
+## D095 — Dial MX receiver owns MX-routing verification (gate 2), replacing the core's separate MX cross-check
+
+**Requirement:** The setup traffic lights checked published DNS MX/TXT (core side)
+*and* per-receiver authentication (receiver side) as two independent checks, then
+the dashboard light combined them. This split verdict meant a single receiver
+could be shown "ready" while the core's MX check said it was not routed, and the
+operator had two sources of truth to reconcile. The receiver is the only party
+that can authoritatively say "I am a delivery target for this domain".
+
+**Decision (2026-10-10):** A shared-mode Dial MX receiver (Antler MX and custom
+Dial MX) verifies routing itself and reports it on its own status light, so each
+receiver is one traffic light and the core no longer independently decides
+routing. The authorization proof becomes two ordered gates:
+
+- **Gate 1 — authority.** The existing `_mailmoose-mx` TXT Ed25519 proof. A
+  failure is `rejected` with the historical key reasons.
+- **Gate 2 — routing.** The receiver resolves the domain's MX records (a new
+  `Config.LookupMX`, fresh per proof, bounded by the existing DNS worker pool)
+  and requires its own `SMTP.Hostname` among them (lower-cased, trailing dot
+  trimmed — the same rule the core's check uses). Failure is `rejected` with a
+  new bounded reason `not_mx`. Gate 2 runs at every proof, initial and renewal:
+  a genuine `not_mx` at renewal revokes the binding fail-closed, and the core
+  settles on `rejected`/`not_mx` (the renewal path deliberately does not send the
+  generic `DomainRevoked` notice, which would overwrite the verdict with
+  `unavailable`). A transient MX **resolver error** is deferrable
+  (`dns_unavailable`): it never revokes a live binding, so a DNS blip cannot drop
+  a correctly-routed receiver.
+- **Scope.** Shared mode only. Single-mode Direct MX / Remote MX (bearer, no
+  per-domain `DomainAuth`) is unchanged.
+
+Consequences on the core side:
+
+- `dialMXHealth` (the dashboard aggregate light) is now purely status-driven:
+  green when any receiver row is `ready`+unexpired. The receiver's `ready` already
+  implies both gates, so the core's MX cross-check and the `lightCache` (which
+  existed only to make that per-domain MX lookup cheap on the hot snapshot path)
+  are removed. `domainInboundLight` is now an in-memory read.
+- The core-computed `dns[]` MX/TXT checks are **kept**, but only as the receiving
+  dialog's local verification feed: the remediation block shows the failing record
+  with a copy button and flips it green as DNS propagates. They are no longer a
+  second routing verdict. The standalone DNS validation rows and the "Fix DNS
+  records" wizard step are removed; the fix is inline on the status screen.
+- The receiving dialog's per-receiver table collapses from
+  `Connector | Connection status | MX status` to `Connector | Status` (one light).
+- No protocol version bump and no capability negotiation: `AuthResult.Reason` is
+  already a free string, and the Antler fleet is upgraded in place, so an old
+  receiver's `ready` cannot be mistaken for a routed one by a new core only if the
+  fleet is not mixed — the fleet is upgraded together.
+
+**Reason:** Two independent routing verdicts that can disagree are worse than one
+authoritative one; the receiver is the only party positioned to make the routing
+call. Folding it into the auth proof gives a single status per receiver and a
+single aggregate light, and turns "is the record published yet?" into a local
+propagation check for the operator rather than a competing decision.
+
+**Resource budget:** One extra DNS lookup per proof (initial + each renewal) per
+domain, sharing the receiver's existing bounded DNS worker pool; no core-side
+lookup on the snapshot hot path (a net reduction there). No new dependency,
+service, or schema change; one new reason token.
+
+**Complexity:** A `LookupMX` config field and small helper on the receiver, a
+gate-2 block in `verifyProof`, a `notify`-suppressed revoke path, a `not_mx` case
+in the core's `authReason`, a status-driven `dialMXHealth`, deletion of the light
+cache, an inline remediation block and removal of the wizard repair step, plus
+docs.
 
 ## Future extension register
 

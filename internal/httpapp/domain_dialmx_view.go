@@ -127,43 +127,29 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic
 // light shown on the dashboard. It is binary: green when at least one connector
-// row is fully green, red otherwise. A connector row is fully green only when
-// its session is authorized and unexpired AND — when the domain has an MX check
-// — its SMTP hostname is published in the domain's MX records. Inbound mail is
-// delivered as long as one receiver both holds a current authorization and is
-// actually pointed at by MX, so a receiver that is connected but not routed
-// (mxChecked true, hostname not in mxMatched) does not count. mxChecked is false
-// for a custom-service domain with no MX check, in which case routing is not
-// locally verifiable and the row is judged on the connection alone.
+// row is fully green, red otherwise. A receiver reports "ready" only after it has
+// proved BOTH domain authority (its _mailmoose-mx TXT key) and routing (its own
+// SMTP hostname is published in the domain's MX records), so a ready row already
+// means mail will be delivered and the aggregate needs no separate MX check. A
+// receiver that is not routed reports rejected/not_mx and is not green.
 //
 // A receiver that has disconnected, been rejected, or become unreachable is not
 // green: green means mail will arrive now, and a reconnecting receiver is not
 // yet delivering. The receiving dialog carries the per-connector detail. light
 // is a "dns-light" token ("ok" or "danger") and title is the human explanation
 // for its tooltip.
-func dialMXHealth(statuses []mxdialStatusView, mxChecked bool, mxMatched []string, now time.Time) (light, title string) {
-	matched := make(map[string]bool, len(mxMatched))
-	for _, host := range mxMatched {
-		matched[strings.ToLower(host)] = true
-	}
+func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title string) {
 	ready := 0
-	connected := 0
 	for _, st := range statuses {
 		if st.State != mxdial.StatusActive || (st.ExpiresAt != nil && !st.ExpiresAt.After(now)) {
 			continue
 		}
-		connected++
-		if !mxChecked || matched[strings.ToLower(st.SMTPHostname)] {
-			ready++
-		}
+		ready++
 	}
 	if ready > 0 {
 		return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
 	}
-	if connected > 0 {
-		return "danger", "Inbound connectors are connected but not routed by MX — publish the shown MX records so mail can arrive"
-	}
-	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver connects and its MX is published"
+	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver authorizes and your MX points at it"
 }
 
 // boundStatusReason truncates a receiver-supplied reason so an unexpectedly

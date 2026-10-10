@@ -129,8 +129,11 @@ Antler MX is the hosted shared relay: select **Receiving → Antler MX (Free SMT
 Relay - no port forwards required)**, enter a **contact email**, and save. The
 core dials out to the hosted receivers; no inbound port, receiver container or
 DNS credential is needed on your side. The dialog shows the exact MX records and
-the `_mailmoose-mx.<domain>` TXT record to publish, plus live traffic lights for
-each published record and each receiver's authentication. The contact email is
+the `_mailmoose-mx.<domain>` TXT record to publish, plus a live traffic light per
+receiver: a receiver reports ready only once it has proved both your domain's TXT
+authority and that it is named in your MX records. When a record still needs
+publishing, the dialog shows the fix inline (with a copy button) and flips it
+green as DNS propagates. The contact email is
 usage metadata for the service operator and is not tied to your account; it can
 be the same address for every domain. Antler MX can coexist with Direct MX and
 webhook domains.

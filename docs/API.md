@@ -762,10 +762,13 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
 `webhook_url`. A configured Dial MX slot additionally returns `key_id`,
 `public_key`, `txt_record`, and the live setup picture:
 
-- `status[]` — per-receiver authentication state learned over the core's
-  outbound session: `receiver_url`, `state` (`ready`, `rejected`, `connecting`,
-  `unavailable`, …), bounded `reason`, advertised `smtp_hostname` and
-  `expires_at`. For an Antler MX setup an unreachable receiver reports no
+- `status[]` — per-receiver state learned over the core's outbound session:
+  `receiver_url`, `state` (`ready`, `rejected`, `connecting`, `unavailable`, …),
+  bounded `reason`, advertised `smtp_hostname` and `expires_at`. A receiver is
+  `ready` only once it has proved both domain authority (its `_mailmoose-mx` TXT
+  key) and routing (its own SMTP hostname is published in the domain's MX
+  records). A receiver that is authorized but not routed reports
+  `rejected`/`not_mx`. For an Antler MX setup an unreachable receiver reports no
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
   connector.
@@ -775,10 +778,12 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   four-second timeout); nothing is cached in the core, so a record change is
   reflected on the next read. A resolver failure is reported as a check state,
   never an API error. For an MX check `matched` lists the expected receiver
-  hostnames actually published and is what the per-connector lights read; the
-  check is `ok` once at least one expected hostname is published (the receiver
-  set is redundancy), and `mismatch` only when MX records exist but none belongs
-  to a receiver. The TXT check remains exact.
+  hostnames actually published; the check is `ok` once at least one expected
+  hostname is published (the receiver set is redundancy), and `mismatch` only
+  when MX records exist but none belongs to a receiver. The TXT check remains
+  exact. These checks are the local "has the record propagated yet?" feed behind
+  the receiving dialog's remediation block; routing itself is the receiver's
+  `status[]` verdict, not a second core-side decision.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
   custom service, the TXT record only.

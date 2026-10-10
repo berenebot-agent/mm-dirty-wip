@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
@@ -125,20 +124,12 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 }
 
 // domainInboundLight computes a domain's aggregate inbound traffic light. It
-// reads the in-memory receiver statuses and runs the same published-MX check
-// the rendered dashboard uses, so the live light and the freshly rendered one
-// agree. It returns an empty light for a domain that does not receive by Dial
-// MX (those have no dashboard light) or when no manager is wired. A
-// rotated-away key's authorization is excluded so a stale row cannot present as
-// current readiness.
-//
-// The published-MX lookup is the only costly step, so the whole result is cached
-// briefly (lightCacheTTL). The cache key folds in the key and receiver hostnames
-// the light depends on, so a key rotation or a receiving-configuration change
-// misses the cache instead of serving a stale light. This keeps a burst of
-// snapshot calls (a reconnect, several tabs, a flapping receiver) from each
-// running a fresh lookup per domain. The setup dialog's own checks do not use
-// this cache and remain live.
+// reads the in-memory receiver statuses only: a receiver reports ready only
+// after proving both domain authority and MX routing, so no published-MX lookup
+// is needed and the read is cheap enough to compute on every snapshot. It
+// returns an empty light for a domain that does not receive by Dial MX (those
+// have no dashboard light) or when no manager is wired. A rotated-away key's
+// authorization is excluded so a stale row cannot present as current readiness.
 func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, domainName, receivingProvider string) (string, string) {
 	if normalizeDomainProvider(receivingProvider) != "dialmx" || s.Service.DialMX == nil {
 		return "", ""
@@ -146,19 +137,6 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 	keyID := ""
 	if cred, err := s.Service.Store.GetDialMXCredential(ctx, accountID, domainID); err == nil {
 		keyID = cred.KeyID
-	}
-	var mxExpected []dialMXMXInstruction
-	if cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx"); err == nil {
-		if values, derr := s.Service.DecryptDomainReceivingConfig(cfg); derr == nil {
-			for _, r := range app.AntlerReceiversFromConfig(values) {
-				mxExpected = append(mxExpected, dialMXMXInstruction{Hostname: r.SMTPHostname, Priority: r.MXPriority})
-			}
-		}
-	}
-	cacheKey := domainID + "\x00" + keyID + "\x00" + formatMXExpected(mxExpected)
-	now := time.Now()
-	if light, title, ok := s.lightCacheGet(cacheKey, now); ok {
-		return light, title
 	}
 	statuses := s.Service.DialMX.Status(domainName)
 	views := make([]mxdialStatusView, 0, len(statuses))
@@ -173,41 +151,5 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		}
 		views = append(views, v)
 	}
-	mxChecked := false
-	var mxMatched []string
-	if len(mxExpected) > 0 {
-		mxChecked = true
-		mxMatched = s.dns.checkMX(domainName, mxExpected).Matched
-	}
-	light, title := dialMXHealth(views, mxChecked, mxMatched, now)
-	s.lightCachePut(cacheKey, light, title, now.Add(lightCacheTTL))
-	return light, title
-}
-
-// lightCacheTTL bounds how long a live dashboard light is reused. It is far
-// below the reconnect cadence a single tab produces, so a real change is still
-// seen within one snapshot while a burst collapses onto one lookup per domain.
-const lightCacheTTL = 10 * time.Second
-
-func (s *Server) lightCacheGet(key string, now time.Time) (string, string, bool) {
-	s.lightMu.Lock()
-	defer s.lightMu.Unlock()
-	e, ok := s.lightCache[key]
-	if !ok || now.After(e.expires) {
-		return "", "", false
-	}
-	return e.light, e.title, true
-}
-
-func (s *Server) lightCachePut(key, light, title string, expires time.Time) {
-	s.lightMu.Lock()
-	defer s.lightMu.Unlock()
-	if s.lightCache == nil {
-		s.lightCache = map[string]lightCacheEntry{}
-	}
-	if len(s.lightCache) >= 512 {
-		delete(s.lightCache, key)
-		return
-	}
-	s.lightCache[key] = lightCacheEntry{light: light, title: title, expires: expires}
+	return dialMXHealth(views, time.Now())
 }

@@ -119,7 +119,10 @@ SMTP hostname; it has no per-domain key. Configure **Dial MX** per domain under
 the shown `_mailmoose-mx.<domain>` TXT record and the domain's MX record. The
 signing key is generated per exact domain and stored encrypted. Subdomains can
 inherit receiver URLs and enforcement but always have their own key and TXT
-proof. Other domains may continue using local/remote MX or webhook providers.
+proof. The receiver proves both the TXT authority and that it is named in the
+domain's MX before it reports ready, so each receiver shows one status light and
+any missing record is fixed inline in the dialog. Other domains may continue
+using local/remote MX or webhook providers.
 
 Full setup, the session protocol, and known limitations are in
 [docs/DIALMX.md](DIALMX.md).
