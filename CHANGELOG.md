@@ -54,6 +54,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed — release follow-up
 
+- The Dial MX / Antler MX receiving dialog no longer opens with every connector
+  showing a "Pending" light when the dashboard already shows green. The live
+  per-receiver statuses the dashboard light is computed from are embedded on the
+  receiving form, so the status table opens already matching the light that was
+  clicked, then reconciles on the immediate check.
 - Outbound provider HTTP requests use a configurable overall timeout
   (`OUTBOUND_HTTP_TIMEOUT_SECONDS`, default 300s) instead of a hard-coded 30s, so
   large attachment batches no longer fail with a client timeout while awaiting
