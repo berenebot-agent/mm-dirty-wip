@@ -257,6 +257,11 @@ func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p 
 	// Only touch the non-secret remote description when the caller actually
 	// supplies a non-secret field. A secrets-only configure call must not require
 	// (or blank) the host.
+	oldHost, oldUser, oldNS := "", "", inbox.Namespace
+	if inbox.Remote != nil {
+		oldHost = inbox.Remote.Host
+		oldUser = inbox.Remote.Username
+	}
 	if hasRemoteNonSecretFields(in) {
 		if _, err := m.Service.Store.UpdateStandaloneRemote(ctx, p.AccountID, inboxID, in); err != nil {
 			return model.Inbox{}, mapStoreError(err)
@@ -284,7 +289,26 @@ func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p 
 	if err := m.Service.Store.SaveRemoteCredentials(ctx, p.AccountID, inboxID, encIMAP, encSMTP, store.ConfigVersion{Revision: existing.Revision}); err != nil {
 		return model.Inbox{}, mapStoreError(err)
 	}
-	return m.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID)
+	updated, err := m.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxID)
+	if err != nil {
+		return model.Inbox{}, mapStoreError(err)
+	}
+	// A rebind to a different mailbox (host, login, or sync root) invalidates every
+	// cached remote locator: a UID from the old mailbox may coincide with an
+	// unrelated message in the new one. Drop the cached index, cursors, arrivals
+	// and auto-actions so the next read re-indexes from scratch instead of
+	// associating old labels/threads/actions with the new mailbox.
+	newHost, newUser := "", ""
+	if updated.Remote != nil {
+		newHost = updated.Remote.Host
+		newUser = updated.Remote.Username
+	}
+	if newHost != oldHost || newUser != oldUser || updated.Namespace != oldNS {
+		if rerr := m.Service.Store.ResetRemoteInboxState(ctx, p.AccountID, inboxID); rerr != nil {
+			m.Service.Log.Warn("reset remote state on rebind", "inbox_id", inboxID, "error", rerr)
+		}
+	}
+	return updated, nil
 }
 
 // hasRemoteNonSecretFields reports whether a remote update supplies any non-secret

@@ -1525,6 +1525,33 @@ func TestRemoteReplyAndForwardResolve(t *testing.T) {
 	}
 }
 
+// TestRemoteRebindResetsCachedState proves that pointing a standalone inbox at a
+// different mailbox drops the cached remote index, so old locators/labels are not
+// associated with the new mailbox.
+func TestRemoteRebindResetsCachedState(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <rb@remote>\r\n\r\nb", "<rb@remote>", "s")
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, err := svc.Store.ListRemoteMessages(ctx, u.AccountID, box.ID, "INBOX"); err != nil || len(msgs) == 0 {
+		t.Fatalf("expected cached remote messages, got %d err=%v", len(msgs), err)
+	}
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+	if _, err := rm.ConfigureStandaloneRemote(ctx, p, box.ID, store.StandaloneRemoteUpdate{
+		Host: "imap.other.example", Port: 993, Username: "other@example.test", Security: model.RemoteSecurityTLS,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, err := svc.Store.ListRemoteMessages(ctx, u.AccountID, box.ID, "INBOX"); err != nil || len(msgs) != 0 {
+		t.Fatalf("rebind did not reset cached messages: %d err=%v", len(msgs), err)
+	}
+}
+
 // ---- helpers ----
 
 func remoteIDForUID(t *testing.T, rm *app.RemoteMailboxService, u model.User, box model.Inbox, uid uint32) string {

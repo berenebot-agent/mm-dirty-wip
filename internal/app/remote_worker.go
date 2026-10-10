@@ -595,9 +595,16 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	if len(newUIDs) > remoteArrivalPageLimit {
 		newUIDs = newUIDs[:remoteArrivalPageLimit]
 	}
-	headers, _, herr := sess.ListHeaders(ctx, folder, newUIDs, len(newUIDs))
+	headers, liveValidity, herr := sess.ListHeaders(ctx, folder, newUIDs, len(newUIDs))
 	if herr != nil {
 		w.log.Debug("remote detection headers", "inbox_id", inbox.ID, "error", herr)
+		return
+	}
+	// A UIDVALIDITY change between the SEARCH and the FETCH means the UIDs no
+	// longer name the messages the search found; do not record arrivals under a
+	// stale generation. The cursor is left unadvanced so the next pass re-baselines.
+	if liveValidity != 0 && liveValidity != validity {
+		w.log.Debug("remote detection generation changed mid-pass", "inbox_id", inbox.ID, "want", validity, "live", liveValidity)
 		return
 	}
 	byUID := map[uint32]imap.MessageHeader{}
