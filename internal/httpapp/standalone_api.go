@@ -1013,8 +1013,9 @@ func openFile(path string) (io.ReadCloser, error) {
 // authoringResponse is the per-inbox assistant authoring configuration, secret-
 // free. Mode is snapshotted onto each request at creation, so changing it never
 // affects an in-flight request. A standalone inbox defaults to remote_draft
-// (hand off to its connected Drafts folder); a domain inbox defaults to
-// mailmoose_approval. The approver is meaningful only for mailmoose_approval, so
+// (hand off to its connected Drafts folder); a domain inbox is preset to
+// mailmoose_approval — remote_draft is a standalone-only mode and is rejected
+// for a domain inbox. The approver is meaningful only for mailmoose_approval, so
 // approver_enabled tracks the EFFECTIVE mode (a standalone inbox switched to
 // mailmoose_approval enables it; a domain inbox switched to remote_draft disables
 // it). The notify override is optional and defaults to the connected address.
@@ -1064,7 +1065,8 @@ func (s *Server) apiInboxAuthoringGet(w http.ResponseWriter, r *http.Request) {
 // apiInboxAuthoringSet updates an inbox's authoring mode and/or notify override.
 // It requires Owner. The mode is validated and snapshotted onto each request at
 // creation, so an in-flight request is never changed. An empty mode clears the
-// override so it follows the inbox kind default.
+// override so it follows the inbox kind default. A domain inbox cannot be set
+// to remote_draft (remote_draft is a standalone-only mode); the store rejects it.
 func (s *Server) apiInboxAuthoringSet(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")

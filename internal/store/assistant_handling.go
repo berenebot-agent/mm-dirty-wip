@@ -84,15 +84,21 @@ func (s *Store) connectedAddress(ctx context.Context, accountID, inboxID string)
 }
 
 // SetInboxAuthoringMode sets the per-inbox authoring mode. An empty mode clears
-// the override so the effective mode follows the inbox kind default. It requires
-// Owner on the inbox (or account admin).
+// the override so the effective mode follows the inbox kind default. A domain
+// inbox cannot be set to remote_draft: a handoff requires a connected remote
+// Drafts folder, so the mode is preset to the kind default rather than offered.
+// It requires Owner on the inbox (or account admin).
 func (s *Store) SetInboxAuthoringMode(ctx context.Context, p model.Principal, inboxID, mode string) error {
 	if !p.CanOwn(inboxID) {
 		return ErrForbidden
 	}
 	mode = strings.TrimSpace(mode)
-	if mode != "" && !model.ValidAuthoringMode(mode) {
-		return fmt.Errorf("unknown authoring mode %q", mode)
+	kind, _, _, err := s.inboxAuthoring(ctx, p.AccountID, inboxID)
+	if err != nil {
+		return err
+	}
+	if mode != "" && !model.AuthoringModeAllowedForKind(kind, mode) {
+		return fmt.Errorf("authoring mode %q is not available for a %s inbox", mode, kind)
 	}
 	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET authoring_mode=? WHERE id=? AND account_id=?`, mode, inboxID, p.AccountID)
 	if err != nil {

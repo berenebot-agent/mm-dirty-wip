@@ -3,6 +3,7 @@ package httpapp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1433,8 +1434,9 @@ func TestRemoteErrorIs503Not404(t *testing.T) {
 	}
 }
 
-// TestAuthoringModeFlipPreservesSnapshot proves flipping an inbox to remote_draft
-// and clearing the approver does not alter an existing send request's snapshot.
+// TestAuthoringModeFlipPreservesSnapshot proves changing an inbox's authoring
+// settings and clearing the approver does not alter an existing send request's
+// snapshot.
 func TestAuthoringModeFlipPreservesSnapshot(t *testing.T) {
 	svc, _, u, _, _, _, _, _ := mergeFixture(t)
 	// Use the domain inbox: mailmoose_approval with an approver.
@@ -1461,8 +1463,9 @@ func TestAuthoringModeFlipPreservesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Flip to remote_draft and clear the notify override.
-	if err := svc.Store.SetInboxAuthoringMode(ctx, p, domainBox.ID, model.AuthoringRemoteDraft); err != nil {
+	// Pin the mode explicitly (a domain inbox cannot be flipped to remote_draft)
+	// and clear the notify override.
+	if err := svc.Store.SetInboxAuthoringMode(ctx, p, domainBox.ID, model.AuthoringMailMooseApproval); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.Store.SetInboxNotifyAddress(ctx, p, domainBox.ID, ""); err != nil {
@@ -2022,8 +2025,8 @@ func TestRemoteSearchAttachmentFilteredPaginationNoGap(t *testing.T) {
 
 // TestAuthoringApproverEnabledByEffectiveMode proves approver_enabled tracks the
 // effective mode: a standalone inbox switched to mailmoose_approval reports it
-// enabled (with standalone true), and a domain inbox switched to remote_draft
-// reports it disabled.
+// enabled (with standalone true), and a domain inbox cannot be set to
+// remote_draft at all (the mode is preset to mailmoose_approval).
 func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
@@ -2058,13 +2061,23 @@ func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 	if dm["approver_enabled"] != true || dm["standalone"] != false {
 		t.Fatalf("domain default %+v", dm)
 	}
-	// Switch domain to remote_draft: approver disabled.
-	if err := svc.Store.SetInboxAuthoringMode(context.Background(), p, domainBox.ID, model.AuthoringRemoteDraft); err != nil {
-		t.Fatal(err)
+	// The API rejects remote_draft for a domain inbox, and the effective mode
+	// stays the approval preset.
+	put := func(mode string) int {
+		body := fmt.Sprintf(`{"mode":%q}`, mode)
+		req := httptest.NewRequest("PUT", "/v1/inboxes/"+domainBox.ID+"/authoring", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	if code := put(model.AuthoringRemoteDraft); code != 400 {
+		t.Fatalf("domain remote_draft put = %d, want 400", code)
 	}
 	dm = get(domainBox.ID)
-	if dm["approver_enabled"] != false {
-		t.Fatalf("domain remote_draft %+v", dm)
+	if dm["mode"] != model.AuthoringMailMooseApproval || dm["approver_enabled"] != true {
+		t.Fatalf("domain after rejected put %+v", dm)
 	}
 }
 
@@ -2078,6 +2091,10 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 		"approverInput.disabled = !approval",
 		"data.standalone ? 'Approvals' : 'Approver'",
 		"effective === 'mailmoose_approval'",
+		// A domain inbox is preset to MailMoose approval: the handoff controls
+		// are hidden, never offered.
+		"authStandalone = !!data.standalone",
+		"controls.hidden = !authStandalone",
 	} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("app.js missing %q", want)

@@ -1445,7 +1445,7 @@ def build_parser():
     )
     add_table(p)
     p.add_argument("--inbox", metavar="ID", help="inbox id")
-    p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft")
+    p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft (standalone inboxes only)")
     p.add_argument("--notify", metavar="ADDR", help="notification address override")
 
     p = command(

@@ -1819,7 +1819,46 @@ function clearUrlParams(names) {
   var authoringDefault = document.getElementById('inbox-authoring-default');
   var authoringStates = document.getElementById('inbox-authoring-states');
   var authDefaultMode = 'mailmoose_approval';
+  // The current inbox is standalone (remote) or not. A domain inbox is preset to
+  // MailMoose approval: the mode selector and notify override are handoff
+  // concepts, so they are hidden rather than offered.
+  var authStandalone = false;
   function syncAuthoringControls() {
+    if (!authStandalone) {
+      // Domain inbox: preset to MailMoose approval. Only the approver field
+      // remains; the selector and notify override are hidden.
+      var approverInputD = document.getElementById('inbox-edit-approver-email');
+      var approverNoteD = document.getElementById('inbox-approver-note');
+      if (approverInputD) {
+        approverInputD.disabled = false;
+      }
+      if (approverNoteD) {
+        approverNoteD.hidden = false;
+      }
+      var descD = document.getElementById('inbox-authoring-desc');
+      if (descD) {
+        descD.textContent = 'Approvals for this inbox use the MailMoose approval workflow: a request to send keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).';
+      }
+      var controls = document.getElementById('inbox-authoring-controls');
+      if (controls) {
+        controls.hidden = true;
+      }
+      var notifyLabel = document.getElementById('inbox-authoring-notify-label');
+      if (notifyLabel) {
+        notifyLabel.hidden = true;
+      }
+      if (authoringNotify) {
+        authoringNotify.hidden = true;
+      }
+      var notifyNote = document.getElementById('inbox-authoring-notify-note');
+      if (notifyNote) {
+        notifyNote.hidden = true;
+      }
+      if (authoringStates) {
+        authoringStates.hidden = true;
+      }
+      return;
+    }
     // Effective mode: the explicit selection, else the kind default.
     var effective = (authoringMode && authoringMode.value) ? authoringMode.value : authDefaultMode;
     var approval = effective === 'mailmoose_approval';
@@ -1846,11 +1885,35 @@ function clearUrlParams(names) {
     if (data.default_mode) {
       authDefaultMode = data.default_mode;
     }
+    authStandalone = !!data.standalone;
+    var desc = document.getElementById('inbox-authoring-desc');
+    var controls = document.getElementById('inbox-authoring-controls');
+    var notifyLabel = document.getElementById('inbox-authoring-notify-label');
+    var notifyNote = document.getElementById('inbox-authoring-notify-note');
     if (authoringMode) {
       authoringMode.value = data.mode || '';
     }
     if (authoringNotify) {
       authoringNotify.value = data.notify_address || '';
+    }
+    if (desc) {
+      desc.textContent = authStandalone
+        ? 'How this inbox handles a request to send. MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email). Remote draft hands the draft off one-way to the connected remote Drafts folder and never sends it; publication and notification are tracked separately.'
+        : 'Approvals for this inbox use the MailMoose approval workflow: a request to send keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).';
+    }
+    if (controls) {
+      // The mode selector exists only for a standalone inbox; a domain inbox is
+      // preset to MailMoose approval.
+      controls.hidden = !authStandalone;
+    }
+    if (notifyLabel) {
+      notifyLabel.hidden = !authStandalone;
+    }
+    if (authoringNotify) {
+      authoringNotify.hidden = !authStandalone;
+    }
+    if (notifyNote) {
+      notifyNote.hidden = !authStandalone;
     }
     if (authoringDefault) {
       var def = data.default_mode === 'remote_draft' ? 'Remote draft handoff' : 'MailMoose approval';

@@ -73,6 +73,44 @@ func TestAuthoringModeDefaultsByKind(t *testing.T) {
 	}
 }
 
+// TestAuthoringModeDomainPresetApproval proves remote_draft is a standalone-only
+// mode: a domain inbox rejects it on write, and a legacy domain row stored as
+// remote_draft normalizes back to the kind default on read.
+func TestAuthoringModeDomainPresetApproval(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	domain := b[0]
+	own := owner(domain, u.AccountID)
+
+	if err := s.SetInboxAuthoringMode(ctx, own, domain.ID, model.AuthoringRemoteDraft); err == nil {
+		t.Fatal("domain inbox accepted remote_draft")
+	}
+	ds, err := s.GetInboxAuthoringSettings(ctx, own, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ds.Mode != model.AuthoringMailMooseApproval {
+		t.Fatalf("domain mode after rejected set=%q", ds.Mode)
+	}
+	// A domain inbox can still be pinned explicitly to the approval workflow.
+	if err := s.SetInboxAuthoringMode(ctx, own, domain.ID, model.AuthoringMailMooseApproval); err != nil {
+		t.Fatal(err)
+	}
+	// A legacy domain row stored as remote_draft normalizes on read.
+	db := rawDB(t, s.Path())
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE inboxes SET authoring_mode=? WHERE id=?`, model.AuthoringRemoteDraft, domain.ID); err != nil {
+		t.Fatal(err)
+	}
+	ds, err = s.GetInboxAuthoringSettings(ctx, own, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ds.Mode != model.AuthoringMailMooseApproval {
+		t.Fatalf("legacy domain remote_draft did not normalize: %q", ds.Mode)
+	}
+}
+
 func TestCreateAssistantHandlingFreezesAndSettles(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)

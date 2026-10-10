@@ -286,7 +286,7 @@ var schemas = map[string]any{
 		"created":   boolean("Whether the folder was created by this call."),
 	}, "role", "mapped"),
 	"AuthoringSettings": obj(map[string]any{
-		"mode":              str("Effective authoring mode: mailmoose_approval or remote_draft."),
+		"mode":              str("Effective authoring mode: mailmoose_approval or remote_draft. A domain inbox is always mailmoose_approval."),
 		"default_mode":      str("The kind default mode."),
 		"notify_address":    str("Effective notification address."),
 		"notify_overridden": boolean("Whether an explicit per-inbox notify address is set."),
@@ -295,7 +295,7 @@ var schemas = map[string]any{
 		"standalone":        boolean("Whether the inbox is a standalone (remote) mailbox."),
 	}, "mode", "default_mode"),
 	"AuthoringSettingsPut": obj(map[string]any{
-		"mode":           str("mailmoose_approval or remote_draft; empty clears to the kind default."),
+		"mode":           str("mailmoose_approval or remote_draft; empty clears to the kind default. remote_draft is a standalone-only mode and is rejected for a domain inbox."),
 		"notify_address": str("Notification address; empty clears the override to the connected address."),
 	}),
 	"Handoff": obj(map[string]any{

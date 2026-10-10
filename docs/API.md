@@ -252,7 +252,9 @@ PUT /v1/inboxes/{id}/authoring
   approval token or the frozen content hash.
 - `GET`/`PUT /authoring` read/write the assistant authoring mode
   (`mailmoose_approval` or `remote_draft`) and the notify override. A standalone
-  inbox defaults to `remote_draft`; the mode is snapshotted onto each request.
+  inbox defaults to `remote_draft`; a domain inbox is **preset** to
+  `mailmoose_approval` — `remote_draft` is a standalone-only mode and is
+  rejected (`400`) for a domain inbox. The mode is snapshotted onto each request.
   The read also reports `standalone` and `approver_enabled` (true exactly when the
   effective mode is `mailmoose_approval`).
 

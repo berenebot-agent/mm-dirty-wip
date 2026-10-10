@@ -4,9 +4,11 @@ import "time"
 
 // Per-inbox authoring modes. A standalone inbox defaults to RemoteDraft: requests
 // to send are handed off one-way to the connected remote server's Drafts folder
-// and are never sent by MailMoose. A domain inbox (and any inbox whose operator
-// opts in) uses MailMooseApproval: the current in-product approval workflow, with
-// UI/API decisions and tokenized email approval.
+// and are never sent by MailMoose. A domain inbox uses MailMooseApproval: the
+// in-product approval workflow, with UI/API decisions and tokenized email
+// approval. RemoteDraft is a standalone-inbox concept — it requires a connected
+// remote Drafts folder — so it is preset (not selectable) for a domain inbox and
+// rejected when stored on one.
 //
 // The mode is snapshotted onto each request at creation, so flipping the inbox
 // setting never changes an in-flight request.
@@ -17,9 +19,9 @@ const (
 	AuthoringRemoteDraft = "remote_draft"
 )
 
-// DefaultAuthoringMode returns the authoring mode an inbox kind defaults to when
-// no explicit per-inbox override is set: a standalone inbox hands off to its
-// connected remote Drafts, a domain inbox uses the MailMoose approval workflow.
+// DefaultAuthoringMode returns the authoring mode an inbox kind defaults to:
+// a standalone inbox hands off to its connected remote Drafts, a domain inbox
+// uses the MailMoose approval workflow.
 func DefaultAuthoringMode(kind string) string {
 	if kind == InboxKindStandalone {
 		return AuthoringRemoteDraft
@@ -32,10 +34,23 @@ func ValidAuthoringMode(mode string) bool {
 	return mode == AuthoringMailMooseApproval || mode == AuthoringRemoteDraft
 }
 
+// AuthoringModeAllowedForKind reports whether a mode may be stored on an inbox
+// of the given kind. RemoteDraft is meaningful only for a standalone inbox (a
+// domain inbox has no connected remote Drafts folder), so a domain inbox is
+// preset to MailMooseApproval rather than offering the selector.
+func AuthoringModeAllowedForKind(kind, mode string) bool {
+	if kind != InboxKindStandalone && mode == AuthoringRemoteDraft {
+		return false
+	}
+	return ValidAuthoringMode(mode)
+}
+
 // NormalizeAuthoringMode returns the effective authoring mode for an inbox,
-// defaulting from the inbox kind when the stored value is empty or unknown.
+// defaulting from the inbox kind when the stored value is empty, unknown, or
+// not allowed for the kind (a legacy domain row stored as remote_draft reads as
+// the kind default), so the kind invariant holds on read as well as on write.
 func NormalizeAuthoringMode(kind, stored string) string {
-	if ValidAuthoringMode(stored) {
+	if AuthoringModeAllowedForKind(kind, stored) {
 		return stored
 	}
 	return DefaultAuthoringMode(kind)
