@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/emersion/go-imap/v2"
@@ -157,9 +158,11 @@ type Adapter struct {
 
 	sink *notifySink
 
-	mu       sync.Mutex
-	selected string // currently selected folder, "" when none
-	caps     Capabilities
+	mu                sync.Mutex
+	selected          string // currently selected folder, "" when none
+	readOnlySelection *imap.SelectData
+	stopCancellation  func() bool
+	caps              Capabilities
 }
 
 // NewFromClient adopts an existing, authenticated IMAP client. It performs the
@@ -183,7 +186,14 @@ func Dial(ctx context.Context, cfg Config) (*Adapter, error) {
 		return nil, err
 	}
 	a := &Adapter{cfg: cfg.Normalize(), conn: conn, sink: sink}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	a.stopCancellation = stop
 	a.caps = a.readCapabilities()
+	if err := ctx.Err(); err != nil {
+		stop()
+		_ = conn.Close()
+		return nil, wrapErr(err)
+	}
 	return a, nil
 }
 
@@ -193,10 +203,15 @@ func (a *Adapter) Close() error {
 	conn := a.conn
 	a.conn = nil
 	a.selected = ""
+	if a.stopCancellation != nil {
+		a.stopCancellation()
+	}
 	a.mu.Unlock()
 	if conn == nil {
 		return nil
 	}
+	deadline := time.AfterFunc(2*time.Second, func() { _ = conn.Close() })
+	defer deadline.Stop()
 	_ = conn.Logout().Wait()
 	return conn.Close()
 }

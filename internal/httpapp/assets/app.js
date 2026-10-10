@@ -4874,6 +4874,23 @@ function hideInboxSubview(dlg) {
       return;
     }
     if (data.page === 'inbox') {
+      var sync = document.querySelector('[data-sync-status]');
+      if (!sync && data.remote) {
+        sync = el('div', 'load-status');
+        sync.setAttribute('data-sync-status', '');
+        sync.setAttribute('role', 'status');
+        var host = document.querySelector('.mailcontent');
+        if (host) { host.insertBefore(sync, host.firstChild); }
+      }
+      if (sync) {
+        sync.hidden = !data.remote_syncing && data.remote_status !== 'error';
+        sync.classList.toggle('pending', !!data.remote_syncing);
+        sync.textContent = data.remote_syncing ? 'Syncing messages… Cached mail remains available.' : 'Mail sync failed. Retry by refreshing the remote connector.';
+        sync.setAttribute('aria-busy', data.remote_syncing ? 'true' : 'false');
+      }
+      if (data.remote_syncing) {
+        window.setTimeout(schedule, 1500);
+      }
       setSidebarCount('inbox', data.unread || 0, true);
       setSidebarCount('drafts', data.drafts || 0, false);
       setSidebarCount('outbox', data.outbox || 0, false);
@@ -4929,6 +4946,11 @@ function hideInboxSubview(dlg) {
     if (activeLabel) {
       u += '&label=' + encodeURIComponent(activeLabel);
     }
+    if (folder === 'folder') {
+      u += '&folder_id=' + encodeURIComponent(new URL(window.location.href).searchParams.get('folder') || '');
+    }
+    var before = new URL(window.location.href).searchParams.get('before');
+    if (before) { u += '&before=' + encodeURIComponent(before); }
     return u;
   }
 
@@ -4998,12 +5020,19 @@ function hideInboxSubview(dlg) {
     }
     // The requests card lives only on the inbox folder; the list exists on every
     // folder view. Fetch only what the current page can show.
-    var wantList = folder === 'inbox' || folder === 'sent' || folder === 'spam' || folder === 'trash' || folder === 'label';
+    var wantList = folder === 'inbox' || folder === 'sent' || folder === 'spam' || folder === 'trash' || folder === 'label' || folder === 'folder';
     var wantRequests = folder === 'inbox';
     if (!wantList && !wantRequests) {
       return;
     }
     listInFlight = true;
+    var feedback = el('div', 'load-status pending', 'Updating messages…');
+    feedback.setAttribute('role', 'status');
+    feedback.setAttribute('aria-busy', 'true');
+    var feedbackTimer = window.setTimeout(function () {
+      var host = listHost();
+      if (host) { host.insertBefore(feedback, host.firstChild); }
+    }, 200);
     var jobs = [];
     if (wantList) {
       jobs.push(fetchFragment(liveURL('list'), '[data-live-list]').then(swapFragment));
@@ -5027,8 +5056,18 @@ function hideInboxSubview(dlg) {
       }));
     }
     Promise.all(jobs).catch(function () {
-      // Best-effort: a failed fragment fetch leaves the current list in place.
+      feedback.classList.remove('pending');
+      feedback.textContent = 'Could not update messages. ';
+      feedback.setAttribute('aria-busy', 'false');
+      var retry = el('button', 'secondary', 'Retry');
+      retry.type = 'button';
+      retry.onclick = function () { feedback.remove(); reconcileLists(); };
+      feedback.appendChild(retry);
+      var host = listHost();
+      if (host && !feedback.parentNode) { host.insertBefore(feedback, host.firstChild); }
     }).then(function () {
+      window.clearTimeout(feedbackTimer);
+      if (feedback.classList.contains('pending')) { feedback.remove(); }
       listInFlight = false;
     });
   }
@@ -5211,3 +5250,45 @@ function hideInboxSubview(dlg) {
   connect();
   refresh();
 })();
+(function () {
+  'use strict';
+  var style = document.createElement('style');
+  style.textContent = '.load-status{padding:10px 14px;background:#eef4ff;color:#174ea6;border-radius:6px;margin:8px 0}.load-status[hidden]{display:none}.load-status.pending:before{content:"";display:inline-block;width:16px;height:16px;border:2px solid #b8c9e8;border-top-color:#174ea6;border-radius:50%;margin-right:10px;vertical-align:middle;animation:mail-load-spin .8s linear infinite}.navigation-load{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;box-shadow:0 2px 12px #0003}@keyframes mail-load-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.load-status.pending:before{animation:none}}';
+  document.head.appendChild(style);
+  var notice;
+  var watchdog;
+  function loading(text) {
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'load-status pending navigation-load';
+      notice.setAttribute('role', 'status');
+      document.body.appendChild(notice);
+    }
+    notice.hidden = false;
+    notice.classList.add('pending');
+    notice.setAttribute('aria-busy', 'true');
+    notice.textContent = text;
+    window.clearTimeout(watchdog);
+    watchdog = window.setTimeout(function () {
+      notice.classList.remove('pending');
+      notice.setAttribute('aria-busy', 'false');
+      notice.textContent = 'Still waiting for the server. You can retry or cancel navigation.';
+    }, 60000);
+  }
+  document.addEventListener('click', function (event) {
+    var link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.hasAttribute('download') || (link.target && link.target !== '_self')) { return; }
+    var url = new URL(link.href, window.location.href);
+    if (url.origin !== window.location.origin || (url.pathname === window.location.pathname && url.search === window.location.search)) { return; }
+    loading(url.pathname.indexOf('/ui/messages/') === 0 ? 'Loading message…' : 'Loading…');
+  });
+  document.addEventListener('submit', function (event) {
+    window.setTimeout(function () {
+      if (!event.defaultPrevented && !event.target.target) { loading('Loading…'); }
+    }, 0);
+  });
+  window.addEventListener('pageshow', function () {
+    window.clearTimeout(watchdog);
+    if (notice) { notice.hidden = true; }
+  });
+}());

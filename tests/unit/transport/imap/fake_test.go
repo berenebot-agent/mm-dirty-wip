@@ -34,6 +34,9 @@ type sessionOverrides struct {
 	fixedUIDValidity uint32
 	appendNoUID      bool
 	deleteNonEmpty   bool
+	selectStarted    chan struct{}
+	selectRelease    chan struct{}
+	selectCount      int
 }
 
 type serverConfig struct {
@@ -202,6 +205,17 @@ func (s *wrappedSession) Namespace() (*imap.NamespaceData, error) {
 }
 
 func (s *wrappedSession) Select(name string, options *imap.SelectOptions) (*imap.SelectData, error) {
+	s.fs.mu.Lock()
+	s.fs.overrides.selectCount++
+	started, release := s.fs.overrides.selectStarted, s.fs.overrides.selectRelease
+	s.fs.mu.Unlock()
+	if started != nil {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+	}
 	data, err := s.UserSession.Select(name, options)
 	if err != nil {
 		return nil, err

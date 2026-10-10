@@ -162,8 +162,8 @@ type remoteThreadResponse struct {
 // ---- Folders ----
 
 // apiInboxFolders lists an inbox's folders (domain or standalone) in hierarchical
-// order. A standalone inbox additionally reconciles its remote folder tree on
-// demand so the first call after setup returns the live folders.
+// order from the cached tree. Initial discovery is scheduled in the background;
+// POST /remote/refresh is the explicit blocking synchronization operation.
 func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
@@ -172,22 +172,16 @@ func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mb.routed {
+		completeness := model.CompletenessComplete
 		if mb.remoteConfigured() {
-			if _, rerr := mb.remote.ReconcileRemote(r.Context(), p.AccountID, mb.inbox.ID); rerr != nil {
-				// A connection failure still returns whatever folder tree is
-				// cached, with the failure recorded in errors, so a client can
-				// render the last-known structure rather than nothing.
-				folders, lerr := s.Service.Store.ListFolders(r.Context(), p.AccountID, mb.inbox.ID)
-				if lerr != nil {
-					mapStoreError(w, lerr)
-					return
-				}
-				out := make([]folderListResponse, 0, len(folders))
-				for _, f := range folders {
-					out = append(out, folderResponse(f))
-				}
-				writeJSON(w, 200, newEnvelope(out, "", model.CompletenessUnknown, []model.InboxFailure{model.NewInboxFailure(mb.inbox.ID, rerr)}))
+			status, serr := s.Service.Store.GetRemoteIndexStatus(r.Context(), p.AccountID, mb.inbox.ID)
+			if serr != nil {
+				mapStoreError(w, serr)
 				return
+			}
+			if status.Status != store.RemoteIndexComplete {
+				completeness = model.CompletenessPartial
+				mb.remote.ScheduleRefresh(p.AccountID, mb.inbox.ID)
 			}
 		}
 		folders, err := s.Service.Store.ListFolders(r.Context(), p.AccountID, mb.inbox.ID)
@@ -199,7 +193,7 @@ func (s *Server) apiInboxFolders(w http.ResponseWriter, r *http.Request) {
 		for _, f := range folders {
 			out = append(out, folderResponse(f))
 		}
-		writeJSON(w, 200, newEnvelope(out, "", model.CompletenessComplete, nil))
+		writeJSON(w, 200, newEnvelope(out, "", completeness, nil))
 		return
 	}
 	// A domain inbox uses the local folder tree. Seed the protected system

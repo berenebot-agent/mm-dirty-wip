@@ -290,7 +290,7 @@ func sortFolders(folders []RemoteFolder, delim rune) {
 }
 
 // EnsureFolderExists reports whether path exists in the current scope by
-// selecting it (EXAMINE, read-only) and immediately unselecting. It returns the
+// selecting it (EXAMINE, read-only). It returns the
 // selected UIDVALIDITY so the caller can re-scope a locator.
 func (a *Adapter) EnsureFolderExists(ctx context.Context, path string) (uint32, error) {
 	var uidValidity uint32
@@ -302,7 +302,8 @@ func (a *Adapter) EnsureFolderExists(ctx context.Context, path string) (uint32, 
 }
 
 // withExamine holds the adapter lock, selects path read-only, runs fn with the
-// SELECT data and unselects. Holding the lock for the whole operation keeps the
+// SELECT data, retaining read-only selection for subsequent commands in this
+// session. Holding the lock for the whole operation keeps the
 // selection race-free: no other adapter operation can change the selected folder
 // between the UIDVALIDITY check and the command that depends on it.
 func (a *Adapter) withExamine(ctx context.Context, path string, fn func(*imap.SelectData) error) error {
@@ -311,15 +312,23 @@ func (a *Adapter) withExamine(ctx context.Context, path string, fn func(*imap.Se
 	if a.conn == nil {
 		return wrapErr(ErrNotConnected)
 	}
+	if err := ctx.Err(); err != nil {
+		return wrapErr(err)
+	}
+	conn := a.conn
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	if a.selected == path && a.readOnlySelection != nil {
+		return fn(a.readOnlySelection)
+	}
 	data, err := a.conn.Select(path, &imap.SelectOptions{ReadOnly: true}).Wait()
 	if err != nil {
 		a.selected = ""
 		return wrapErr(err)
 	}
-	a.selected = ""
-	err = fn(data)
-	a.selected = ""
-	return err
+	a.selected = path
+	a.readOnlySelection = data
+	return fn(data)
 }
 
 // withSelectRW is withExamine for a read-write selection used by mutation
@@ -327,9 +336,16 @@ func (a *Adapter) withExamine(ctx context.Context, path string, fn func(*imap.Se
 func (a *Adapter) withSelectRW(ctx context.Context, path string, fn func(*imap.SelectData) error) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.readOnlySelection = nil
 	if a.conn == nil {
 		return wrapErr(ErrNotConnected)
 	}
+	if err := ctx.Err(); err != nil {
+		return wrapErr(err)
+	}
+	conn := a.conn
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	data, err := a.conn.Select(path, nil).Wait()
 	if err != nil {
 		a.selected = ""

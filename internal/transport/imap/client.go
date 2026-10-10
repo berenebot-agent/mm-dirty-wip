@@ -63,6 +63,8 @@ func connect(ctx context.Context, cfg Config, sink *notifySink) (*imapclient.Cli
 		return nil, wrapErr(err)
 	}
 
+	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stop()
 	if err := authenticate(client, n.Username, n.Password); err != nil {
 		_ = client.Close()
 		return nil, err
