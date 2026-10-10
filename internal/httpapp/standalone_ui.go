@@ -481,37 +481,93 @@ func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p mod
 	return false
 }
 
-// renderRemoteMessage renders one resolved remote message.
+// renderRemoteMessage renders one resolved remote message through the shared
+// reader, so a standalone inbox's message exposes exactly the same actions and
+// metadata as a local one. The body is fetched live by the browser (RemoteBody),
+// so the shell renders immediately from cached metadata and opening a message
+// never blocks on the IMAP server.
 func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, view app.RemoteMessageView) {
 	m := remoteMessageToModel(view, &model.Folder{ID: "", Path: view.FolderPath})
 	m.Direction = "inbound"
+	// A remote message's Trash/Spam state is its remote role folder, not a local
+	// flag. Set DeletedAt so the reader offers Restore/Delete-forever instead of
+	// Reply/Trash, matching the local reader.
+	folder := "inbox"
+	if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash); ok && f.Path == view.FolderPath {
+		now := time.Now()
+		m.DeletedAt = &now
+		folder = "trash"
+	} else if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSpam); ok && f.Path == view.FolderPath {
+		folder = "spam"
+	} else if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSent); ok && f.Path == view.FolderPath {
+		folder = "sent"
+	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
+	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
+	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
+	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
+	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
+	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
 	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
+	// The conversation thread is read from the cached remote index only: opening
+	// a message must never block on IMAP. A thread with no cached ancestors is
+	// simply not shown.
+	var thread []model.Message
+	if view.ThreadKey != "" {
+		if recs, terr := s.Service.Store.ListRemoteThreadMessages(r.Context(), p.AccountID, box.ID, view.ThreadKey); terr == nil {
+			for _, rec := range recs {
+				v := s.remoteMailbox().ViewOf(rec)
+				thread = append(thread, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+			}
+		}
+	}
 	title := view.Subject
 	if title == "" {
 		title = "(no subject)"
 	}
 	data := pageData{
-		Title:                  title,
-		Page:                   "inbox",
-		Principal:              p,
-		CSRF:                   csrf(r),
-		Account:                acc,
-		Message:                &m,
-		MessageHasRemoteImages: htmlsanitize.HasRemoteImages(m.HTML),
-		Inbox:                  &box,
-		Folder:                 "inbox",
-		Folders:                folderSidebar,
-		UnreadCount:            unread[box.ID],
-		Notice:                 r.URL.Query().Get("notice"),
+		Title:          title,
+		Page:           "inbox",
+		Principal:      p,
+		CSRF:           csrf(r),
+		Account:        acc,
+		Message:        &m,
+		Inbox:          &box,
+		Folder:         folder,
+		Folders:        folderSidebar,
+		Labels:         inboxLabels,
+		LabelUnread:    labelUnread,
+		UnreadCount:    unread[box.ID],
+		SpamCount:      spamCount,
+		TrashCount:     trashCount,
+		DraftCount:     draftCount,
+		OutboxCount:    outboxCount,
+		ThreadMessages: thread,
+		RemoteBody:     true,
+		RemoteBodyURL:  "/ui/messages/" + view.ID + "/body",
+		RemoteHTMLURL:  "/ui/messages/" + view.ID + "/html",
+		RemoteReadURL:  "/ui/messages/" + view.ID + "/read",
+		Notice:         r.URL.Query().Get("notice"),
 	}
 	s.applyStandaloneMailbox(r, p, box, &data)
-	s.render(w, r, remoteMessageBody, data)
+	s.render(w, r, messageBody, data)
+}
+
+// remoteAttachmentView is one attachment of a remote message, addressed by its
+// MIME part path so the download can stream the part live from the server.
+type remoteAttachmentView struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	PartPath    string `json:"part_path"`
 }
 
 // uiRemoteMessageBody fetches only the live body, after the cached reader shell
-// has rendered. Read-state changes remain on the existing CSRF-protected POST.
+// has rendered. The same transient fetch also yields the message's attachment
+// list (parsed from the raw MIME), so the reader can offer downloads without a
+// second fetch. Read-state changes remain on the existing CSRF-protected POST.
 func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
@@ -521,25 +577,33 @@ func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mb := mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
-	text, html, err := s.hydrateRemoteBody(r.Context(), p, mb, id)
-	if err != nil {
+	path, _, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, box.ID, id)
+	if ferr != nil {
 		http.Error(w, "Message body is unavailable. Please retry.", http.StatusServiceUnavailable)
 		return
 	}
+	defer mb.remote.CleanupRemoteRaw(path)
+	parsed, perr := mailparse.ParseFile(path)
+	if perr != nil {
+		http.Error(w, "Message body is unavailable. Please retry.", http.StatusServiceUnavailable)
+		return
+	}
+	atts := make([]remoteAttachmentView, 0, len(parsed.Attachments))
+	for _, a := range parsed.Attachments {
+		if a.PartPath == "" {
+			continue
+		}
+		atts = append(atts, remoteAttachmentView{Filename: a.Filename, ContentType: a.ContentType, Size: a.Size, PartPath: a.PartPath})
+	}
+	html := htmlsanitize.Sanitize(parsed.HTML)
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"text": text, "html": htmlsanitize.StripRemoteImages(html), "remote_images": htmlsanitize.HasRemoteImages(html)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"text":          parsed.Text,
+		"html":          htmlsanitize.StripRemoteImages(html),
+		"remote_images": htmlsanitize.HasRemoteImages(html),
+		"attachments":   atts,
+	})
 }
-
-// remoteMessageBody is the remote message reader. It mirrors the local reader but
-// renders cached metadata and a pending body placeholder. It reuses the shared sidebar.
-const remoteMessageBody = `<div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
-{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext. <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}
-<section class="card mail-reader"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions"><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button></form></div></div>
-<div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{mailDate .Message.CreatedAt}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p></div>
-{{if .Message.Labels}}<div class="labelbar"><b>Labels:</b>{{range .Message.Labels}}<form class="labelpill" method="post" action="/ui/messages/{{$.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="remove"><input type="hidden" name="label" value="{{.}}"><span>{{.}}</span><button class="labelx" title="Remove label" aria-label="Remove label">×</button></form>{{end}}</div>{{end}}
-<hr><div data-remote-body data-body-url="/ui/messages/{{.Message.ID}}/body" data-html-url="/ui/messages/{{.Message.ID}}/html" data-read-url="/ui/messages/{{.Message.ID}}/read" data-csrf="{{.CSRF}}" data-unread="{{if not .Message.Read}}1{{end}}"><div class="load-status pending" role="status" aria-busy="true">Loading message body…</div><noscript>Enable JavaScript to load the message body, or <a href="/ui/messages/{{.Message.ID}}/html">open its HTML body</a>.</noscript></div>
-</section></div></div>`
 
 // remoteMessageSetRead toggles the read flag of a standalone inbox's cached remote
 // message and mirrors it to the live server. It returns false when id is not a
@@ -771,31 +835,33 @@ func (s *Server) remoteMessageHTML(w http.ResponseWriter, r *http.Request, p mod
 	return false
 }
 
-// remoteMessageAttachment serves one MIME part of a standalone inbox's remote
-// message as a secure download: Content-Disposition: attachment and nosniff, the
-// same guarantees the local attachment route gives. The part is addressed
-// structurally by its MIME part path (?part=1.2). It returns false when id is not
-// a cached remote message.
-func (s *Server) remoteMessageAttachment(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
-	part := parsePartPath(r.URL.Query().Get("part"))
-	if len(part) == 0 {
-		return false
+// uiRemoteMessageAttachment serves one MIME part of a standalone inbox's remote
+// message over the session UI. The part is a path segment (an IMAP MIME part path
+// such as "1.2"), matching the reader's attachment links. It answers 404 for a
+// non-remote or unknown id.
+func (s *Server) uiRemoteMessageAttachment(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	part := r.PathValue("part")
+	if len(parsePartPath(part)) == 0 {
+		http.Error(w, "invalid part path", http.StatusBadRequest)
+		return
 	}
 	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
 	if err != nil {
-		return false
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
 	}
 	for _, box := range boxes {
 		if !p.CanRead(box.ID) && !p.Admin {
 			continue
 		}
-		if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id); gerr != nil {
+		if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, r.PathValue("id")); gerr != nil {
 			continue
 		}
-		att, ferr := s.remoteMailbox().FetchRemoteAttachment(r.Context(), p, box.ID, id, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
+		att, ferr := s.remoteMailbox().FetchRemoteAttachment(r.Context(), p, box.ID, r.PathValue("id"), parsePartPath(part), r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
 		if ferr != nil {
-			http.Error(w, "attachment unavailable", 503)
-			return true
+			http.Error(w, "attachment unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		defer s.remoteMailbox().CleanupRemoteRaw(att.Path)
 		name := att.Filename
@@ -807,14 +873,14 @@ func (s *Server) remoteMessageAttachment(w http.ResponseWriter, r *http.Request,
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		f, oerr := os.Open(att.Path)
 		if oerr != nil {
-			http.Error(w, "attachment unavailable", 500)
-			return true
+			http.Error(w, "attachment unavailable", http.StatusInternalServerError)
+			return
 		}
 		defer f.Close()
 		_, _ = io.Copy(w, f)
-		return true
+		return
 	}
-	return false
+	http.Error(w, "message not found", http.StatusNotFound)
 }
 
 // buildMoveTargets returns the selectable folders a bulk move can target: every

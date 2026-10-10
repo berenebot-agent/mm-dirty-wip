@@ -3348,6 +3348,7 @@ function hideInboxSubview(dlg) {
       if (!response.ok) { throw new Error('body unavailable'); }
       return response.json();
     }).then(function (body) {
+      host.replaceChildren();
       if (body.html) {
         var frame = document.createElement('iframe');
         frame.className = 'mailframe';
@@ -3356,9 +3357,8 @@ function hideInboxSubview(dlg) {
         frame.setAttribute('title', 'Message body');
         frame.setAttribute('data-mailframe', '');
         frame.hidden = true;
-        frame.onload = function () { status.remove(); frame.hidden = false; markRead(); };
+        frame.onload = function () { frame.hidden = false; markRead(); };
         frame.srcdoc = '<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; style-src &#39;unsafe-inline&#39;; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">' + body.html;
-        host.appendChild(frame);
         if (body.remote_images) {
           var banner = document.createElement('div');
           banner.className = 'banner warn';
@@ -3373,14 +3373,48 @@ function hideInboxSubview(dlg) {
             banner.remove();
           };
           banner.appendChild(show);
-          host.insertBefore(banner, frame);
+          host.appendChild(banner);
+        }
+        host.appendChild(frame);
+        if (body.text) {
+          var fallback = document.createElement('details');
+          var summary = document.createElement('summary');
+          summary.textContent = 'Plain text';
+          var pt = document.createElement('div');
+          pt.className = 'msgbody';
+          pt.textContent = body.text;
+          fallback.appendChild(summary);
+          fallback.appendChild(pt);
+          host.appendChild(fallback);
         }
       } else {
         var text = document.createElement('div');
         text.className = 'msgbody';
         text.textContent = body.text || '(Empty message body)';
-        host.replaceChildren(text);
+        host.appendChild(text);
         markRead();
+      }
+      if (body.attachments && body.attachments.length) {
+        var heading = document.createElement('h3');
+        heading.textContent = 'Attachments';
+        var list = document.createElement('ul');
+        list.className = 'attachments';
+        body.attachments.forEach(function (a) {
+          var item = document.createElement('li');
+          var link = document.createElement('a');
+          link.href = host.dataset.attachUrl.replace('{part}', encodeURIComponent(a.part_path)) + '?filename=' + encodeURIComponent(a.filename || 'attachment') + '&content_type=' + encodeURIComponent(a.content_type || '');
+          link.textContent = a.filename || 'attachment';
+          item.appendChild(link);
+          if (a.size) {
+            var size = document.createElement('span');
+            size.className = 'muted';
+            size.textContent = ' · ' + a.size + ' B';
+            item.appendChild(size);
+          }
+          list.appendChild(item);
+        });
+        host.appendChild(heading);
+        host.appendChild(list);
       }
     }).catch(function () {
       host.replaceChildren(status);

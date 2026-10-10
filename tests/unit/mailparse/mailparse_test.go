@@ -38,6 +38,36 @@ func TestParseAndExtractAttachment(t *testing.T) {
 		t.Fatalf("%q", b.String())
 	}
 }
+
+// TestParseRecordsAttachmentPartPath proves each attachment carries its IMAP
+// MIME part path (1-based child indices), including a nested multipart, so a
+// remote message's attachment can be addressed structurally.
+func TestParseRecordsAttachmentPartPath(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: Alice <alice@example.net>", "Subject: Nested", "Message-ID: <nested@test>", "MIME-Version: 1.0",
+		"Content-Type: multipart/mixed; boundary=outer", "",
+		"--outer", "Content-Type: multipart/alternative; boundary=inner", "",
+		"--inner", "Content-Type: text/plain", "", "text body",
+		"--inner", "Content-Type: text/html", "", "<p>html</p>",
+		"--inner--",
+		"--outer", "Content-Type: application/pdf; name=doc.pdf", "Content-Disposition: attachment; filename=doc.pdf", "", "PDFDATA",
+		"--outer--", ""}, "\r\n")
+	path := t.TempDir() + "/nested.eml"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := mailparse.ParseFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Attachments) != 1 {
+		t.Fatalf("attachments %+v", p.Attachments)
+	}
+	if got := p.Attachments[0].PartPath; got != "2" {
+		t.Fatalf("part path %q, want %q", got, "2")
+	}
+}
+
 func TestBuildMessageAttachmentRoundTrip(t *testing.T) {
 	raw, err := mailparse.BuildMessage(mailparse.Address{Name: "Hermes", Address: "hermes@example.com"}, []string{"friend@example.net"}, []string{"cc@example.net"}, []string{"bcc@example.net"}, "Report", "See attached", "", "<m1@example.com>", "", nil, time.Now(), []mailparse.Attachment{{Filename: "report.txt", ContentType: "text/plain", Content: []byte("hello attachment")}})
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/config"
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
+	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
@@ -61,6 +62,9 @@ func standaloneFixture(t *testing.T) (*app.Service, http.Handler, model.User, mo
 	fake := newFakeIMAP()
 	fake.folders["Archive"] = 100
 	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	// Wire the remote integration the way cmd/server does at startup, so the
+	// service can resolve a remote reply/forward source and a standalone send.
+	rm.InstallRemoteBridges()
 	// Store secrets through the real configure path.
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
 	if _, err := rm.ConfigureStandaloneRemote(context.Background(), p, standalone.ID, store.StandaloneRemoteUpdate{IMAPPassword: "imap-pw"}); err != nil {
@@ -219,6 +223,14 @@ func fakeMessageHeader(m *fakeIMAPMsg) imap.MessageHeader {
 	h := imap.MessageHeader{FolderPath: m.folder, UIDValidity: m.uidValidity, UID: m.uid, MessageID: m.messageID, Subject: m.subject, From: m.from, InternalDate: fakMsgDate(m), Size: int64(len(m.raw))}
 	if strings.Contains(strings.ToLower(m.raw), "content-disposition: attachment") {
 		h.HasAttach = true
+	}
+	// Parse the thread/recipient headers from the raw message so remote thread
+	// grouping and reply recipients can be exercised deterministically.
+	if parsed, err := mailparse.ParseBytes([]byte(m.raw)); err == nil {
+		h.InReplyTo = parsed.InReplyTo
+		h.References = parsed.References
+		h.To = parsed.To
+		h.CC = parsed.CC
 	}
 	return h
 }
@@ -919,13 +931,20 @@ func TestRemoteMessageReadSameSanitizedBackend(t *testing.T) {
 	if !strings.Contains(body, "hi") {
 		t.Fatalf("remote HTML lost benign content: %s", rr.Body.String())
 	}
-	// The reader page renders the standalone banner and the sanitized body.
+	// The reader page renders the standalone banner and the shared action bar:
+	// Reply, Reply all, Forward and Trash, exactly as a local message does.
 	req = httptest.NewRequest("GET", "/ui/messages/"+id, nil)
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 200 || !strings.Contains(strings.ToLower(rr.Body.String()), "remote server") {
-		t.Fatalf("remote reader %d: %s", rr.Code, rr.Body.String())
+	page := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(strings.ToLower(page), "remote server") {
+		t.Fatalf("remote reader %d: %s", rr.Code, page)
+	}
+	for _, want := range []string{"/reply", "/reply-all", "/forward", "/delete", "data-remote-body"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("remote reader missing %q: %s", want, page)
+		}
 	}
 }
 
@@ -1025,6 +1044,169 @@ func TestRemoteMessageAttachmentSecurity(t *testing.T) {
 	}
 	if !strings.HasPrefix(rr.Header().Get("Content-Disposition"), "attachment;") || rr.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("unsafe attachment headers %#v", rr.Header())
+	}
+}
+
+// TestRemoteReaderAttachmentsAndThread proves the unified reader surfaces a
+// remote message's attachments (addressed by MIME part path) and its cached
+// conversation thread, and that the UI attachment route streams the part live
+// with a secure download disposition.
+func TestRemoteReaderAttachmentsAndThread(t *testing.T) {
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	raw := "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Thread 2\r\nMessage-ID: <t2@remote>\r\nIn-Reply-To: <t1@remote>\r\nReferences: <t1@remote>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nsecond\r\n--b\r\nContent-Type: application/pdf; name=report.pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\nPDFDATA\r\n--b--"
+	fake.add("INBOX", raw, "<t2@remote>", "Thread 2")
+	fake.add("INBOX", "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Thread 1\r\nMessage-ID: <t1@remote>\r\n\r\nfirst", "<t1@remote>", "Thread 1")
+
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages", key); rr.Code != 200 {
+		t.Fatalf("seed reconcile %d: %s", rr.Code, rr.Body.String())
+	}
+	msgs, err := svc.Store.ListRemoteMessagesFiltered(context.Background(), u.AccountID, standalone.ID, store.RemoteMessageFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id, threadKey string
+	for _, m := range msgs {
+		if m.Subject == "Thread 2" {
+			id, threadKey = m.ID, m.ThreadKey
+		}
+	}
+	if id == "" {
+		t.Fatalf("message not cached: %+v", msgs)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	// The lazy body carries the attachment list with a part path.
+	req := httptest.NewRequest("GET", "/ui/messages/"+id+"/body", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("body %d: %s", rr.Code, rr.Body.String())
+	}
+	var body struct {
+		Attachments []struct {
+			Filename string `json:"filename"`
+			PartPath string `json:"part_path"`
+		} `json:"attachments"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Attachments) != 1 || body.Attachments[0].Filename != "report.pdf" || body.Attachments[0].PartPath == "" {
+		t.Fatalf("attachment list %+v", body.Attachments)
+	}
+	partPath := body.Attachments[0].PartPath
+
+	// The UI attachment route downloads the part live with a secure disposition.
+	req = httptest.NewRequest("GET", "/ui/messages/"+id+"/attachments/"+partPath+"?filename=report.pdf", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "PDFDATA") {
+		t.Fatalf("ui attachment %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.HasPrefix(rr.Header().Get("Content-Disposition"), "attachment;") || rr.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("unsafe ui attachment headers %#v", rr.Header())
+	}
+
+	// The reader renders the conversation thread.
+	req = httptest.NewRequest("GET", "/ui/messages/"+id, nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	page := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(page, "Conversation") || !strings.Contains(page, "Thread 1") {
+		t.Fatalf("remote reader missing thread (%q): %s", threadKey, page)
+	}
+}
+
+// TestRemoteReaderTrashState proves a remote message sitting in the inbox's
+// Trash-role folder renders the Restore/Delete-forever actions (its remote
+// folder is its trash state), not Reply/Trash.
+func TestRemoteReaderTrashState(t *testing.T) {
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	fake.folders["Trash"] = 100
+	fake.add("INBOX", "From: a@b.test\r\nSubject: Trashy\r\nMessage-ID: <trashy@remote>\r\n\r\nbody", "<trashy@remote>", "Trashy")
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages", key); rr.Code != 200 {
+		t.Fatalf("seed reconcile %d: %s", rr.Code, rr.Body.String())
+	}
+	msgs, err := svc.Store.ListRemoteMessagesFiltered(context.Background(), u.AccountID, standalone.ID, store.RemoteMessageFilter{})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("cache: %v %v", msgs, err)
+	}
+	id := msgs[0].ID
+	cookie, csrf := uiSession(t, svc, u.ID)
+	post := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", path, strings.NewReader("_csrf="+csrf))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := post("/ui/messages/" + id + "/delete"); rr.Code != 303 {
+		t.Fatalf("delete %d: %s", rr.Code, rr.Body.String())
+	}
+	req := httptest.NewRequest("GET", "/ui/messages/"+id, nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	page := rr.Body.String()
+	if rr.Code != 200 || !strings.Contains(page, "/restore") || !strings.Contains(page, "/purge") {
+		t.Fatalf("trashed remote reader missing restore/purge: %s", page)
+	}
+}
+
+// TestRemoteReplyForwardSubmit proves a reply and a forward to a standalone
+// inbox's cached remote message resolve through the POST handler (previously a
+// spurious 404) and enqueue a local outbound message. With no remote SMTP bound
+// the send is queued and held, which is the correct no-provider outcome.
+func TestRemoteReplyForwardSubmit(t *testing.T) {
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	fake.add("INBOX", "From: sender@outside.test\r\nTo: agent@remote.test\r\nSubject: Original\r\nMessage-ID: <orig@remote>\r\n\r\noriginal body", "<orig@remote>", "Original")
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages", key); rr.Code != 200 {
+		t.Fatalf("seed reconcile %d: %s", rr.Code, rr.Body.String())
+	}
+	msgs, err := svc.Store.ListRemoteMessagesFiltered(context.Background(), u.AccountID, standalone.ID, store.RemoteMessageFilter{})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("cache: %v %v", msgs, err)
+	}
+	id := msgs[0].ID
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	submit := func(path, to, subject, text string) *httptest.ResponseRecorder {
+		body, ctype := multipartBody(t, map[string]string{"to": to, "subject": subject, "text": text}, "", "")
+		req := httptest.NewRequest("POST", path+"?_csrf="+csrf, body)
+		req.Header.Set("Content-Type", ctype)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := submit("/ui/messages/"+id+"/reply", "sender@outside.test", "Re: Original", "my reply"); rr.Code != 303 {
+		t.Fatalf("remote reply %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := submit("/ui/messages/"+id+"/forward", "elsewhere@example.net", "Fwd: Original", "fyi"); rr.Code != 303 {
+		t.Fatalf("remote forward %d: %s", rr.Code, rr.Body.String())
+	}
+	outbound, err := svc.Store.ListMessages(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: standalone.ID, Direction: "outbound", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply, fwd bool
+	for _, m := range outbound {
+		if m.Subject == "Re: Original" {
+			reply = true
+		}
+		if m.Subject == "Fwd: Original" && strings.Contains(m.Text, "original body") {
+			fwd = true
+		}
+	}
+	if !reply || !fwd {
+		t.Fatalf("remote reply/forward not enqueued: %+v", outbound)
 	}
 }
 
