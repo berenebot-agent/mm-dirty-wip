@@ -124,6 +124,76 @@ func TestSaveSendingConfigRequeuesPending(t *testing.T) {
 	t.Fatalf("pending messages not delivered after config save; calls=%d", calls.Load())
 }
 
+// TestOutboxWorkerWakeDeliversImmediately verifies the wake-on-enqueue path:
+// the poll period is set far longer than the test, so a message enqueued after
+// the worker is running can only be delivered through Wake, never the ticker.
+func TestOutboxWorkerWakeDeliversImmediately(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	var calls atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messageId":"<woken-out>"}`)
+	}))
+	defer api.Close()
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+	w := app.NewOutboxWorker(svc, nil)
+	w.SetPeriod(time.Hour)
+	// Wake before Start is safe: it never blocks, and buffered requests coalesce.
+	for i := 0; i < 100; i++ {
+		w.Wake()
+	}
+	svc.OutboxWaker = w
+	w.Start()
+	defer w.Stop()
+	res, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Wake", Text: "hi"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		m, err := svc.Store.GetMessageByID(ctx, u.AccountID, res.Message.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Status == "sent" {
+			if m.ProviderMessageID != "<woken-out>" {
+				t.Fatalf("provider id %q", m.ProviderMessageID)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("wake did not deliver; calls=%d", calls.Load())
+}
+
+// countingWaker records Wake calls so the send path's wake seam can be
+// asserted without a live worker.
+type countingWaker struct {
+	calls atomic.Int32
+}
+
+func (c *countingWaker) Wake() { c.calls.Add(1) }
+
+// TestSendWakesOutbox verifies an enqueued send requests an immediate delivery
+// pass through the OutboxWaker seam.
+func TestSendWakesOutbox(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": "http://127.0.0.1:1"})
+	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
+	var waker countingWaker
+	svc.OutboxWaker = &waker
+	if _, err := svc.Send(ctx, p, app.SendInput{InboxID: box.ID, To: []string{"friend@example.net"}, Subject: "Seam", Text: "hi"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if n := waker.calls.Load(); n != 1 {
+		t.Fatalf("wake calls=%d, want 1", n)
+	}
+}
+
 func TestDraftSendFlow(t *testing.T) {
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()

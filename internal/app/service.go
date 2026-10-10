@@ -88,8 +88,13 @@ type Service struct {
 	// receivers. cmd/server sets it before serving; when nil (tests) settings
 	// persist and reconcile on the next start and no live state is reported.
 	RemoteMXRuntime AccountMXReceiverRuntime
-	Log             *slog.Logger
-	EncryptionKey   []byte
+	// OutboxWaker is the outbox worker's wake surface. cmd/server sets it after
+	// constructing the worker; when nil (tests, or a wiring that delivers only on
+	// the periodic poll) a send simply enqueues and delivery waits for the next
+	// tick. Wake requests an immediate delivery pass and never blocks.
+	OutboxWaker   OutboxWaker
+	Log           *slog.Logger
+	EncryptionKey []byte
 	// HandoffPublisher publishes a RemoteDraft handoff to a standalone inbox's
 	// connected remote server (append to Drafts + verify). InstallRemoteBridges
 	// installs the production publisher at startup; when nil, a handoff is created
@@ -126,6 +131,21 @@ type Service struct {
 // satisfied by *mxdial.AntlerResolver and stubbed in tests.
 type AntlerEndpointResolver interface {
 	Receivers(ctx context.Context) ([]mxdial.AntlerReceiver, error)
+}
+
+// OutboxWaker is the outbox worker's wake surface. It is satisfied by
+// *OutboxWorker and stubbed in tests.
+type OutboxWaker interface {
+	Wake()
+}
+
+// wakeOutbox nudges the attached outbox worker, if any, after a successful
+// enqueue so delivery starts immediately instead of waiting for the next poll
+// tick. It never blocks.
+func (s *Service) wakeOutbox() {
+	if s.OutboxWaker != nil {
+		s.OutboxWaker.Wake()
+	}
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
@@ -1730,6 +1750,9 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	if draftEvent.Type != "" {
 		s.Hub.Publish(draftEvent)
 	}
+	// The message is durably queued: request an immediate delivery pass so a
+	// fresh send does not wait for the worker's next poll tick.
+	s.wakeOutbox()
 	result = SendResult{Message: m}
 	return result, nil
 }
