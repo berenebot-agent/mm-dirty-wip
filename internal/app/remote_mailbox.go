@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
@@ -83,12 +84,72 @@ type RemoteMailboxService struct {
 	Service *Service
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
-	dial RemoteDialer
+	dial           RemoteDialer
+	refreshMu      sync.Mutex
+	refreshing     map[string]bool
+	refreshContext context.Context
+	refreshCancel  context.CancelFunc
+	refreshWG      sync.WaitGroup
+	refreshSlots   chan struct{}
+	reconciling    map[string]*remoteReconcileCall
+}
+
+type remoteReconcileCall struct {
+	done   chan struct{}
+	status store.RemoteIndexStatus
+	err    error
 }
 
 // NewRemoteMailboxService builds the remote surface over the app service.
 func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
-	return &RemoteMailboxService{Service: s, dial: defaultRemoteDialer}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &RemoteMailboxService{Service: s, dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
+}
+
+// ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs
+// to the application, not the HTTP request that asked for it.
+func (m *RemoteMailboxService) ScheduleRefresh(accountID, inboxID string) {
+	key := accountID + ":" + inboxID
+	m.refreshMu.Lock()
+	if m.refreshContext.Err() != nil || m.refreshing[key] {
+		m.refreshMu.Unlock()
+		return
+	}
+	m.refreshing[key] = true
+	m.refreshWG.Add(1)
+	m.refreshMu.Unlock()
+	go func() {
+		defer m.refreshWG.Done()
+		defer func() {
+			m.refreshMu.Lock()
+			delete(m.refreshing, key)
+			m.refreshMu.Unlock()
+		}()
+		select {
+		case m.refreshSlots <- struct{}{}:
+			defer func() { <-m.refreshSlots }()
+		case <-m.refreshContext.Done():
+			return
+		}
+		ctx, cancel := context.WithTimeout(m.refreshContext, 2*time.Minute)
+		defer cancel()
+		_, _ = m.ReconcileRemote(ctx, accountID, inboxID)
+	}()
+}
+
+// Stop cancels and drains background index work before the store closes.
+func (m *RemoteMailboxService) Stop() {
+	m.refreshMu.Lock()
+	m.refreshCancel()
+	m.refreshMu.Unlock()
+	m.refreshWG.Wait()
+}
+
+// Refreshing reports process-owned index work for UI loading feedback.
+func (m *RemoteMailboxService) Refreshing(accountID, inboxID string) bool {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	return m.refreshing[accountID+":"+inboxID]
 }
 
 // defaultRemoteDialer dials a live IMAP session.

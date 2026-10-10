@@ -49,6 +49,7 @@ func (a *Adapter) CreateFolder(ctx context.Context, path string) error {
 
 // RenameFolder renames oldPath to newPath.
 func (a *Adapter) RenameFolder(ctx context.Context, oldPath, newPath string) error {
+	a.clearSelected()
 	oldPath = strings.TrimSpace(oldPath)
 	newPath = strings.TrimSpace(newPath)
 	if oldPath == "" || newPath == "" {
@@ -68,6 +69,7 @@ func (a *Adapter) RenameFolder(ctx context.Context, oldPath, newPath string) err
 // recursively deletes children. When the server refuses because the folder is
 // non-empty the returned error wraps ErrFolderNotEmpty.
 func (a *Adapter) DeleteFolder(ctx context.Context, path string) error {
+	a.clearSelected()
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return fmt.Errorf("imap: a folder path is required")
@@ -293,6 +295,7 @@ type AppendResult struct {
 // itself succeeded; if the command's outcome cannot be determined it returns an
 // ambiguous error instead, so the caller reconciles rather than retries blindly.
 func (a *Adapter) AppendReader(ctx context.Context, folder string, r io.Reader, size int64, flags []string, date time.Time) (AppendResult, error) {
+	a.clearSelected()
 	folder = strings.TrimSpace(folder)
 	if folder == "" {
 		return AppendResult{}, fmt.Errorf("imap: a folder is required")

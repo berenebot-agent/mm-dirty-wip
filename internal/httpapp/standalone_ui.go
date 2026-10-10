@@ -372,7 +372,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 // message shape.
 func (s *Server) folderMessages(r *http.Request, p model.Principal, box model.Inbox, folder *model.Folder, before string) ([]model.Message, error) {
 	if box.Kind == model.InboxKindStandalone {
-		res, err := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, folder.Path, inboxPageSize+1, before)
+		res, err := s.remoteMailbox().ListRemoteMessagesCached(r.Context(), p, box.ID, folder.Path, inboxPageSize+1, before)
 		if err != nil {
 			return nil, err
 		}

@@ -114,7 +114,30 @@ const remoteUIDSetCap = 500000
 // The result reports whether the whole scope was enumerated; an interrupted pass,
 // a folder whose backfill has not yet reached the bottom, or a provider error
 // leaves the status partial, so a caller can report completeness honestly.
-func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, inboxID string) (store.RemoteIndexStatus, error) {
+func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, inboxID string) (result store.RemoteIndexStatus, resultErr error) {
+	key := accountID + ":" + inboxID
+	m.refreshMu.Lock()
+	if call, ok := m.reconciling[key]; ok {
+		m.refreshMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return store.RemoteIndexStatus{}, ctx.Err()
+		case <-call.done:
+			return call.status, call.err
+		}
+	}
+	call := &remoteReconcileCall{done: make(chan struct{})}
+	m.reconciling[key] = call
+	m.refreshMu.Unlock()
+	defer func() {
+		m.refreshMu.Lock()
+		delete(m.reconciling, key)
+		call.status, call.err = result, resultErr
+		close(call.done)
+		m.refreshMu.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	sess, resolved, err := m.open(ctx, accountID, inboxID)
 	if err != nil {
 		_ = m.Service.Store.SetRemoteIndexStatus(context.WithoutCancel(ctx), accountID, inboxID, store.RemoteIndexError, "could not open the remote connection")
@@ -400,6 +423,16 @@ type RemoteListResult struct {
 // always against a trustworthy index. scope is the folder path; the caller has
 // already enforced that the folder is within the inbox's selected root scope.
 func (m *RemoteMailboxService) ListRemoteMessages(ctx context.Context, p model.Principal, inboxID, folderPath string, limit int, before string) (RemoteListResult, error) {
+	return m.listRemoteMessages(ctx, p, inboxID, folderPath, limit, before, false)
+}
+
+// ListRemoteMessagesCached serves UI navigation without waiting for initial IMAP
+// indexing. API clients retain their initial-index bootstrap behaviour.
+func (m *RemoteMailboxService) ListRemoteMessagesCached(ctx context.Context, p model.Principal, inboxID, folderPath string, limit int, before string) (RemoteListResult, error) {
+	return m.listRemoteMessages(ctx, p, inboxID, folderPath, limit, before, true)
+}
+
+func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.Principal, inboxID, folderPath string, limit int, before string, cachedOnly bool) (RemoteListResult, error) {
 	inbox, err := m.authorizeRead(ctx, p, inboxID)
 	if err != nil {
 		return RemoteListResult{}, err
@@ -411,10 +444,8 @@ func (m *RemoteMailboxService) ListRemoteMessages(ctx context.Context, p model.P
 			folderPath = model.NamespaceINBOX
 		}
 	}
-	// On-demand reconcile first, so a folder that has not yet been admitted into
-	// the inbox's scope-correct tree is indexed before the scope check. Discovery
-	// excludes shared/other namespaces, so an out-of-scope folder is never
-	// admitted and the check below still rejects it.
+	// Bootstrap API reads on first use; UI reads schedule the same work and return
+	// the cache immediately. Discovery still enforces the personal namespace.
 	reconciled := false
 	status, serr := m.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, inboxID)
 	if serr != nil {
@@ -425,17 +456,22 @@ func (m *RemoteMailboxService) ListRemoteMessages(ctx context.Context, p model.P
 		return RemoteListResult{}, mapStoreError(verr)
 	}
 	if !known || indexedAt.IsZero() || status.Status == store.RemoteIndexNeverStarted {
-		if _, rerr := m.ReconcileRemote(ctx, p.AccountID, inboxID); rerr != nil {
-			return RemoteListResult{}, rerr
+		if cachedOnly {
+			m.ScheduleRefresh(p.AccountID, inboxID)
+		} else {
+			status, err = m.ReconcileRemote(ctx, p.AccountID, inboxID)
+			if err != nil {
+				return RemoteListResult{}, err
+			}
+			reconciled = true
+			validity, indexedAt, known, _ = m.Service.Store.RemoteFolderValidity(ctx, p.AccountID, inboxID, folderPath)
 		}
-		reconciled = true
-		validity, _, _, _ = m.Service.Store.RemoteFolderValidity(ctx, p.AccountID, inboxID, folderPath)
 	} else if bf, berr := m.Service.Store.GetRemoteFolderBackfill(ctx, p.AccountID, inboxID, folderPath); berr == nil && !bf.Complete {
 		// The folder's backfill has not reached the bottom. Advance it one bounded
 		// batch on demand (the UI paging through older mail drives this), so old
 		// mail beyond the first batch is never permanently hidden.
-		if _, rerr := m.ReconcileRemote(ctx, p.AccountID, inboxID); rerr == nil {
-			reconciled = true
+		if before != "" {
+			m.ScheduleRefresh(p.AccountID, inboxID)
 		}
 	}
 	// Enforce that the folder is within the inbox's selected root scope after the
@@ -449,6 +485,9 @@ func (m *RemoteMailboxService) ListRemoteMessages(ctx context.Context, p model.P
 		return RemoteListResult{}, mapStoreError(err)
 	}
 	out := RemoteListResult{UIDValidity: validity, Reconciled: reconciled, Completeness: model.CompletenessComplete}
+	if !known || indexedAt.IsZero() || status.Status != store.RemoteIndexComplete {
+		out.Completeness = model.CompletenessPartial
+	}
 	if limit > 0 && len(msgs) == limit {
 		// Another page may exist. The cursor is the metadata id of the last
 		// returned message, which the Before filter resolves to that row's

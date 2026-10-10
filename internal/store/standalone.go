@@ -549,7 +549,24 @@ func (s *Store) ListFolders(ctx context.Context, accountID, inboxID string) ([]m
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	counts, err := s.CountRemoteFolderMessages(ctx, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].Origin == "remote" {
+			out[i].MessageCount, out[i].UnreadCount = 0, 0
+		}
+		if count, ok := counts[out[i].Path]; ok {
+			out[i].MessageCount = int64(count[0])
+			out[i].UnreadCount = int64(count[1])
+		}
+	}
+	return out, nil
 }
 
 // GetFolder resolves one folder by its path.

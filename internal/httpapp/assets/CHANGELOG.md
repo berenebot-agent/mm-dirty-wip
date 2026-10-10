@@ -6,6 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Performance
+
+- Standalone folder navigation reads cached messages immediately. Folder API
+  listings return the cached tree and indexed counts without waiting for IMAP;
+  initial discovery and progressive backfill run in coalesced background work.
+  API message/thread reads retain first-use indexing and explicit remote refresh
+  still waits for synchronization. Loading spinners identify navigation and
+  background sync; read-only IMAP selection is reused within a session, and
+  polling-client cancellation no longer interrupts durable arrival persistence.
+
 ### Added
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
@@ -114,6 +124,13 @@ standalone, and whether the approver is enabled for the effective mode. See
 
 ### Fixed — release follow-up
 
+- Deleting, restoring, purging or marking spam on a **standalone** inbox's
+  message from the session UI no longer fails with "message not found". A
+  standalone inbox's messages are cached remote metadata, not local rows, so the
+  `/ui/messages/{id}/delete|restore|purge|spam` actions now resolve an opaque
+  remote id to its owning inbox and drive the live remote folder (Trash, Inbox or
+  Spam role) — matching the per-row actions the bulk bar and REST API already
+  used. A genuinely unknown id still answers 404.
 - The Dial MX / Antler MX receiving dialog no longer opens with every connector
   showing a "Pending" light when the dashboard already shows green. The live
   per-receiver statuses the dashboard light is computed from are embedded on the

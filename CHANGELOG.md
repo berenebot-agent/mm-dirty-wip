@@ -6,6 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Performance
+
+- Standalone folder navigation reads cached messages immediately. Folder API
+  listings return the cached tree and indexed counts without waiting for IMAP;
+  initial discovery and progressive backfill run in coalesced background work.
+  API message/thread reads retain first-use indexing and explicit remote refresh
+  still waits for synchronization. Loading spinners identify navigation and
+  background sync; read-only IMAP selection is reused within a session, and
+  polling-client cancellation no longer interrupts durable arrival persistence.
+
 ### Added
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or

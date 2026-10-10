@@ -57,6 +57,7 @@ func standaloneFixture(t *testing.T) (*app.Service, http.Handler, model.User, mo
 		t.Fatal(err)
 	}
 	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
 	fake := newFakeIMAP()
 	fake.folders["Archive"] = 100
 	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
@@ -437,12 +438,24 @@ func apiGet(t *testing.T, h http.Handler, path, key string) *httptest.ResponseRe
 	return rr
 }
 
+func refreshRemote(t *testing.T, h http.Handler, inboxID, key string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/v1/inboxes/"+inboxID+"/remote/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("refresh: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 // TestCommonFoldersEnvelopeBothKinds proves the folder listing is one endpoint
 // for a domain inbox and a standalone inbox, returns the shared envelope, and
 // that the standalone tree is reconciled from the live server.
 func TestCommonFoldersEnvelopeBothKinds(t *testing.T) {
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
+	refreshRemote(t, h, standalone.ID, key)
 
 	for _, box := range []model.Inbox{domainBox, standalone} {
 		rr := apiGet(t, h, "/v1/inboxes/"+box.ID+"/folders", key)
@@ -468,6 +481,43 @@ func TestCommonFoldersEnvelopeBothKinds(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "Archive") {
 		t.Fatalf("standalone folders missing remote Archive: %s", rr.Body.String())
 	}
+}
+
+func TestCachedFoldersDoNotDialAndReturnIndexedCounts(t *testing.T) {
+	svc, h, u, _, box, fake := standaloneFixture(t)
+	key := adminKey(t, svc, u)
+	fake.add("INBOX", "body", "<counts@test>", "Cached")
+	refreshRemote(t, h, box.ID, key)
+	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		t.Error("folder listing dialled IMAP")
+		return nil, fmt.Errorf("unexpected dial")
+	})
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	rr := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/folders", key)
+	if rr.Code != 200 {
+		t.Fatalf("folders: %d %s", rr.Code, rr.Body.String())
+	}
+	var env struct {
+		Items []struct {
+			Path  string `json:"path"`
+			Count int    `json:"message_count"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range env.Items {
+		if f.Path == "INBOX" {
+			if f.Count != 1 {
+				t.Fatalf("count = %d", f.Count)
+			}
+			return
+		}
+	}
+	t.Fatal("cached INBOX missing")
 }
 
 // TestCommonMessagesEnvelopeAndRemoteRead proves the standalone message listing
@@ -518,14 +568,14 @@ func TestCommonMessagesEnvelopeAndRemoteRead(t *testing.T) {
 	}
 }
 
-// TestCommonRemotePartialFailure proves a remote failure is reported in the
-// errors field of the shared envelope with completeness unknown and the endpoint
-// still returning 200, so one failing mailbox never fails a whole listing.
+// TestCommonRemotePartialFailure proves an uninitialized folder cache returns
+// immediately with partial completeness even when the background dial fails.
 func TestCommonRemotePartialFailure(t *testing.T) {
 	svc := newIsolatedService(t)
 	u := createAdmin(t, svc)
 	standalone := createStandalone(t, svc, u)
 	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
 	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
 		return nil, model.NewMailboxError(model.ErrKindUnavailable, "server unreachable", true, nil)
 	})
@@ -553,14 +603,11 @@ func TestCommonRemotePartialFailure(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Completeness != string(model.CompletenessUnknown) {
-		t.Fatalf("completeness = %q want unknown", env.Completeness)
+	if env.Completeness != string(model.CompletenessPartial) {
+		t.Fatalf("completeness = %q want partial", env.Completeness)
 	}
-	if len(env.Errors) != 1 || env.Errors[0].Code != model.ErrKindUnavailable {
+	if len(env.Errors) != 0 {
 		t.Fatalf("errors = %+v", env.Errors)
-	}
-	if !strings.Contains(rr.Body.String(), "server unreachable") {
-		t.Fatalf("failure message missing from envelope: %s", rr.Body.String())
 	}
 }
 
@@ -805,6 +852,7 @@ func TestFolderViewBothKinds(t *testing.T) {
 	fake.folders["Archive"] = 100
 	fake.add("Archive", "From: a@b.test\r\nSubject: Archived\r\nMessage-ID: <arc@remote>\r\n\r\nbody", "<arc@remote>", "Archived")
 	key := adminKey(t, svc, u)
+	refreshRemote(t, h, standalone.ID, key)
 	rr = apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/folders", key)
 	if rr.Code != 200 {
 		t.Fatalf("reconcile folders %d", rr.Code)
@@ -1228,6 +1276,7 @@ func TestAuthoringUISavePersists(t *testing.T) {
 func TestRemoteRoleMappingDetectAndCreate(t *testing.T) {
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
+	refreshRemote(t, h, standalone.ID, key)
 	// The fake server already has a Sent folder; detect it, no invention.
 	rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/folders", key)
 	if rr.Code != 200 {
