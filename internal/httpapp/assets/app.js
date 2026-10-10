@@ -3185,7 +3185,7 @@ function hideInboxSubview(dlg) {
     var close = dlg.querySelector('[data-close-dialog]');
     if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
-    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0, rotating = false, repairing = false, fixKind = '';
+    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0, rotating = false;
     var state = null, savedEmail = null, timer = null;
     var wizard = document.createElement('section');
     wizard.className = 'antler-wizard';
@@ -3223,10 +3223,6 @@ function hideInboxSubview(dlg) {
     var check = wizard.querySelector('.antler-check');
     var note = wizard.querySelector('.antler-check-note');
     var error = wizard.querySelector('.antler-error');
-    // Fix lives beside Check now, right-aligned, and acts on the current issue.
-    var fix = document.createElement('button');
-    fix.type = 'button'; fix.className = 'secondary antler-fix'; fix.hidden = true;
-    checksRow.appendChild(fix);
     // Back is part of the dialog's bottom navigation, not the upper form.
     var footer = save.closest('.dialog-actions');
     var back = document.createElement('button');
@@ -3264,6 +3260,7 @@ function hideInboxSubview(dlg) {
     }
     function receiverLabel(status) {
       if (isReady(status)) { return 'Ready to receive'; }
+      if (status.reason === 'not_mx') { return 'Not in MX'; }
       return {
         connecting: 'Authorizing',
         disconnected: 'Reconnecting',
@@ -3272,6 +3269,46 @@ function hideInboxSubview(dlg) {
         unreachable: 'Receiver unreachable',
         deferred: 'Waiting to retry'
       }[status.state] || 'Waiting';
+    }
+    // remediationLine renders one failing record to publish on the same status
+    // screen: the prompt, the record name/value, and a copy button. The live
+    // Check now / auto-poll flips the row once DNS propagates, so no wizard jump.
+    function remediationLine(prompt, name, value) {
+      var box = document.createElement('div');
+      var p = document.createElement('p');
+      p.textContent = prompt;
+      box.appendChild(p);
+      var pre = document.createElement('pre');
+      pre.className = 'dialmx-txt';
+      pre.textContent = name + '\n' + value;
+      box.appendChild(pre);
+      var copy = document.createElement('button');
+      copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
+      copy.addEventListener('click', function () {
+        if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
+        navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+      });
+      box.appendChild(copy);
+      return box;
+    }
+    // remediationBlock builds the inline fix list for the failing receivers, or an
+    // empty node when nothing needs publishing. not_mx is a missing MX record;
+    // key_unavailable / authentication_failed are a missing or wrong TXT record.
+    function remediationBlock(data, instructions, mxName) {
+      var needMX = (data.status || []).some(function (s) { return s.reason === 'not_mx'; });
+      var needTXT = (data.status || []).some(function (s) { return s.reason === 'key_unavailable' || s.reason === 'authentication_failed'; });
+      var block = document.createElement('div');
+      if (!needMX && !needTXT) { return block; }
+      block.className = 'antler-dns-remediation';
+      if (needTXT && instructions.txt_value) {
+        block.appendChild(remediationLine('Domain not authorized — publish this TXT record:', instructions.txt_name, instructions.txt_value));
+      }
+      if (needMX) {
+        (instructions.mx || []).forEach(function (mx) {
+          block.appendChild(remediationLine('Not an MX receiver for this domain — publish this MX record:', mxName, String(mx.priority) + ' ' + mx.hostname));
+        });
+      }
+      return block;
     }
     // The saved status view draws its full connector table before the first
     // poll returns, so the dialog no longer opens half-empty and fills later.
@@ -3302,7 +3339,7 @@ function hideInboxSubview(dlg) {
       var table = document.createElement('table');
       table.className = 'antler-dns-table antler-status-table';
       var head = document.createElement('tr');
-      ['Connector', 'Connection status', 'MX status'].forEach(function (title) {
+      ['Connector', 'Status'].forEach(function (title) {
         var th = document.createElement('th');
         th.textContent = title;
         head.appendChild(th);
@@ -3316,26 +3353,18 @@ function hideInboxSubview(dlg) {
           connector.textContent = mx.hostname;
           tr.appendChild(connector);
           skeletonCell(tr, 'Pending');
-          skeletonCell(tr, 'Pending');
           tbody.appendChild(tr);
         });
       } else {
         var waiting = document.createElement('tr');
         var cell = document.createElement('td');
-        cell.colSpan = 3;
+        cell.colSpan = 2;
         cell.textContent = 'No connectors configured';
         waiting.appendChild(cell);
         tbody.appendChild(waiting);
       }
       table.appendChild(tbody);
       records.appendChild(table);
-      var auth = document.createElement('div');
-      auth.className = 'antler-domain-auth';
-      var title = document.createElement('strong');
-      title.textContent = 'Domain authentication — TXT record';
-      auth.appendChild(title);
-      auth.appendChild(skeletonLight('Pending'));
-      records.appendChild(auth);
     }
     function render(data) {
       state = data;
@@ -3359,29 +3388,10 @@ function hideInboxSubview(dlg) {
         span.title = (entry && entry.reason) || '';
         return { span: span, text: text };
       }
-      // One receiver's MX record is valid whenever that receiver's hostname is
-      // among the published MX records, independent of the other receivers. The
-      // aggregate MX check is "ok" once any one is published, so a secondary
-      // receiver that is not pointed at must not paint every row red.
-      function mxLightFor(mx, entry) {
-        var span = document.createElement('span');
-        var text = document.createElement('span');
-        var matched = (entry && entry.matched ? entry.matched : []).map(function (host) { return String(host).toLowerCase(); });
-        var mine = String(mx.hostname).toLowerCase();
-        if (matched.indexOf(mine) !== -1) {
-          span.className = 'antler-light green';
-          text.textContent = 'Published';
-        } else {
-          span.className = 'antler-light amber';
-          text.textContent = !entry || entry.state === 'pending' ? 'Pending' : 'Not published';
-        }
-        span.title = (entry && entry.reason) || '';
-        return { span: span, text: text };
-      }
       var table = document.createElement('table');
       table.className = 'antler-dns-table ' + (statusMode ? 'antler-status-table' : 'antler-record-table');
       var head = document.createElement('tr');
-      (statusMode ? ['Connector', 'Connection status', 'MX status'] : ['Name', 'Type', 'Priority', 'Value', 'Status', '']).forEach(function (title) {
+      (statusMode ? ['Connector', 'Status'] : ['Name', 'Type', 'Priority', 'Value', 'Status', '']).forEach(function (title) {
         var th = document.createElement('th');
         th.textContent = title;
         head.appendChild(th);
@@ -3396,7 +3406,7 @@ function hideInboxSubview(dlg) {
         return td;
       }
       if (!statusMode) {
-        function recordRow(name, type, priority, value, entry, mxHost) {
+        function recordRow(name, type, priority, value, entry) {
           var tr = document.createElement('tr');
           tr.dataset.dnsKind = type.toLowerCase();
           [name, type, priority, value].forEach(function (text, index) {
@@ -3406,7 +3416,7 @@ function hideInboxSubview(dlg) {
             if (index === 3) { td.className = 'antler-value'; }
             tr.appendChild(td);
           });
-          statusCell(tr, mxHost ? mxLightFor({ hostname: mxHost }, entry) : lightFor(entry));
+          statusCell(tr, lightFor(entry));
           var action = document.createElement('td');
           var copy = document.createElement('button');
           copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
@@ -3416,61 +3426,43 @@ function hideInboxSubview(dlg) {
           });
           action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
         }
-        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx, mx.hostname); });
+        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
         if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
       } else {
-        (instructions.mx || []).forEach(function (mx) {
+        // The status view has one light per receiver: the receiver now proves
+        // both domain authority (TXT) and routing (its own hostname in the
+        // domain's MX), so its single state carries the whole verdict.
+        (data.status || []).forEach(function (status) {
           var tr = document.createElement('tr');
           var connector = document.createElement('td');
-          connector.textContent = mx.hostname;
+          connector.textContent = status.smtp_hostname || status.receiver_url;
           tr.appendChild(connector);
-          var connection = (data.status || []).filter(function (status) {
-            return status.smtp_hostname === mx.hostname;
-          })[0];
-          var connectionLight = connection ? {
-            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + receiverLightClass(connection) }),
+          var light = {
+            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + receiverLightClass(status) }),
             text: document.createElement('span')
-          } : lightFor(null);
-          connectionLight.text.textContent = connection ? receiverLabel(connection) : 'Waiting';
-          if (connection && connection.reason) { connectionLight.text.title = connection.reason; }
-          statusCell(tr, connectionLight);
-          statusCell(tr, mxLightFor(mx, dnsByKind.mx));
+          };
+          light.text.textContent = receiverLabel(status);
+          if (status.reason) { light.text.title = status.reason; }
+          statusCell(tr, light);
           tbody.appendChild(tr);
         });
-        if (!(instructions.mx || []).length) {
+        if (!(data.status || []).length) {
           var waiting = document.createElement('tr');
           var waitingCell = document.createElement('td');
-          waitingCell.colSpan = 3;
+          waitingCell.colSpan = 2;
           waitingCell.textContent = 'No connectors configured';
           waiting.appendChild(waitingCell);
           tbody.appendChild(waiting);
         }
       }
       table.appendChild(tbody);
-      var txtEntry = dnsByKind.txt;
-      var auth = document.createElement('div');
-      auth.className = 'antler-domain-auth';
-      var authTitle = document.createElement('strong');
-      authTitle.textContent = 'Domain authentication — TXT record';
-      auth.appendChild(authTitle);
-      var authStatus = document.createElement('span');
-      var txtLight = lightFor(txtEntry);
-      authStatus.appendChild(txtLight.span);
-      authStatus.appendChild(txtLight.text);
-      auth.appendChild(authStatus);
       records.appendChild(table);
-      if (statusMode) { records.appendChild(auth); }
-      // Fix is only offered for a DNS record the operator must correct. A
-      // receiver that is connecting, reconnecting or waiting for capacity needs
-      // no action: the relay reconnects on its own, and the status table already
-      // shows it as in progress, so there is nothing to fix.
-      fix.hidden = true;
+      // Only failing records get a remediation line, on this same screen: the
+      // record to publish with a copy button, and the live Check now / auto-poll
+      // flips it once DNS propagates. Reasons that resolve on their own
+      // (connecting, deferred, unreachable) show status only, with no action.
       if (statusMode) {
-        // A partial MX set is healthy: the aggregate check is "ok" once any one
-        // receiver's MX is published, so the MX prompt only appears when no
-        // connector has any MX (the check is pending or mismatched).
-        var dnsIssue = !txtEntry || txtEntry.state !== 'ok' ? 'txt' : (instructions.mx || []).length && (!dnsByKind.mx || dnsByKind.mx.state !== 'ok') ? 'mx' : '';
-        if (dnsIssue) { fixKind = dnsIssue; fix.textContent = 'Fix DNS records'; fix.hidden = false; }
+        records.appendChild(remediationBlock(data, instructions, mxName));
       }
       var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
       (data.status || []).forEach(function (status) {
@@ -3482,13 +3474,16 @@ function hideInboxSubview(dlg) {
         receivers.appendChild(row);
       });
       if (!(data.status || []).length) { receivers.textContent = 'Waiting for receiver status…'; }
+      // The receivers step of the new-setup wizard carries the same inline
+      // remediation, so an operator completing setup can publish the MX record
+      // they need without leaving the step.
+      receivers.appendChild(remediationBlock(data, instructions, mxName));
       update();
     }
     function update() {
       var enabled = active();
       dlg.classList.toggle('antler-dialog', enabled);
-      if (rotate) { rotate.querySelector('button').disabled = busy || rotating || repairing; }
-      fix.disabled = busy;
+      if (rotate) { rotate.querySelector('button').disabled = busy || rotating; }
       provider.disabled = busy;
       service.disabled = busy || provider.value !== 'dialmx';
       provider.hidden = enabled && entered;
@@ -3519,11 +3514,11 @@ function hideInboxSubview(dlg) {
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
       wizard.querySelector('.antler-progress').hidden = statusMode;
-      wizard.querySelector('.antler-progress').textContent = repairing ? 'Fix DNS records' : rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
-      wizard.querySelector('[data-antler-step="1"] h3').textContent = repairing ? 'Fix your ' + fixKind.toUpperCase() + ' record' : rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
-      wizard.querySelector('[data-antler-step="1"] > p').textContent = repairing ? 'Update this record at your DNS provider, then choose Done. The core re-checks automatically once DNS propagates.' : rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
+      wizard.querySelector('.antler-progress').textContent = rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
+      wizard.querySelector('[data-antler-step="1"] h3').textContent = rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
+      wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
       // The saved-status view replaces the separate receiver panel with a
-      // combined connection, MX, and domain-authentication status table.
+      // per-receiver status table and an inline remediation block.
       panels.forEach(function (panel, index) {
         panel.hidden = statusMode ? (index === 2 || index === 3 || index === 4 || (index === 0 && custom)) : index !== step;
       });
@@ -3535,13 +3530,13 @@ function hideInboxSubview(dlg) {
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
       if (statusMode) { wizard.querySelector('[data-antler-step="1"] > p').hidden = true; }
-      // Repair can always return to status; rotation's new-TXT step cannot go
-      // back to the pre-rotation state, but its receiver step can.
+      // Rotation's new-TXT step cannot go back to the pre-rotation state, but
+      // its receiver step can.
       back.hidden = statusMode || (step === 0 && !entered) || (rotating && step === 1);
       back.disabled = busy;
       wizard.querySelector('.antler-checks').hidden = !statusMode && step !== 1 && step !== 2;
       save.hidden = statusMode && (custom || !emailDirty());
-      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : repairing ? 'Done' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
+      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save email' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
       if (state) { ready = (state.status || []).some(isReady); }
       // Only the receivers step requires a ready receiver to advance. Key
       // rotation and the enforcement-step Finish are never readiness-gated: the
@@ -3567,11 +3562,6 @@ function hideInboxSubview(dlg) {
       });
     }
     check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
-    fix.addEventListener('click', function () {
-      if (busy) { return; }
-      repairing = true; statusMode = false; entered = true; step = 1;
-      fail(''); render(state); nextCheck = Date.now();
-    });
     email.addEventListener('input', update);
     if (rotate) {
       rotate.addEventListener('submit', function (event) {
@@ -3594,7 +3584,6 @@ function hideInboxSubview(dlg) {
       });
     }
     back.addEventListener('click', function () {
-      if (repairing) { repairing = false; statusMode = true; render(state); fail(''); return; }
       if (step === 0) { entered = false; }
       else if (step === 4) { step = 0; }
       else if (step === 1 && custom) { step = 4; }
@@ -3605,14 +3594,6 @@ function hideInboxSubview(dlg) {
       if (!active()) { return; }
       event.preventDefault();
       if (busy || (!statusMode && !rotating && step === 2 && !ready)) { return; }
-      // Repair is a single DNS step: Done re-checks and returns to the status view.
-      if (repairing) {
-        busy = true; update();
-        api('GET').then(function (data) {
-          repairing = false; statusMode = true; render(data); fail('');
-        }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
-        return;
-      }
       // Rotation finishes regardless of readiness; the receiver re-authorizes on
       // its own and the status view reports it as in progress.
       if (rotating && step === 2) {

@@ -72,9 +72,10 @@ const (
 // Config is the standalone receiver configuration. The SMTP edge settings
 // (hostname, message/staging/connection bounds, verification toggles, DNS
 // resolver and timeouts) live in the embedded mxagent.Config so the receiver
-// and the SMTP edge share one operator surface. TXT lookup is the receiver's
-// own DNS call for the _mailmoose-mx proof; when nil the system resolver is
-// used.
+// and the SMTP edge share one operator surface. TXT and MX lookups are the
+// receiver's own DNS calls — the TXT proof of domain authority and the MX check
+// that this receiver is actually routed for the domain; when nil the system
+// resolver is used.
 type Config struct {
 	// Mode selects single-core bearer authentication or shared DNS authentication.
 	Mode    string
@@ -85,6 +86,12 @@ type Config struct {
 	// authority. It is separate from mxagent's resolver because the proof is a
 	// receiver concern, not an email-verification one.
 	LookupTXT func(context.Context, string) ([]string, error)
+
+	// LookupMX resolves the domain's published MX records for the routing gate:
+	// a receiver authorizes a domain only when its own SMTP hostname is among
+	// them. It is separate from LookupTXT because routing and authority are
+	// distinct checks.
+	LookupMX func(context.Context, string) ([]*net.MX, error)
 
 	// MaxDomainsPerConnection bounds distinct domains admitted on one session.
 	MaxDomainsPerConnection int
@@ -252,6 +259,15 @@ func (c *Config) applyDefaults() {
 				return (&net.Dialer{Timeout: s.DNSTimeout}).DialContext(ctx, network, s.DNSResolver)
 			}}
 			c.LookupTXT = resolver.LookupTXT
+		}
+	}
+	if c.LookupMX == nil {
+		c.LookupMX = net.DefaultResolver.LookupMX
+		if s.DNSResolver != "" {
+			resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{Timeout: s.DNSTimeout}).DialContext(ctx, network, s.DNSResolver)
+			}}
+			c.LookupMX = resolver.LookupMX
 		}
 	}
 }
@@ -1433,6 +1449,42 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "challenge_expired", time.Time{}, trace)
 		return
 	}
+	// Routing gate: authority is proven, but this receiver only accepts the
+	// domain when its own SMTP hostname is published in the domain's MX. A
+	// resolver failure here is transient and deferrable — it must not revoke a
+	// healthy binding — so only a successful lookup that omits this receiver is
+	// the not_mx verdict. Checked at every proof so a repointed MX takes effect
+	// at the next renewal.
+	mxCtx, mxCancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
+	mxs, mxErr := r.lookupMX(mxCtx, x.Domain)
+	mxCancel()
+	r.logProof(c, "mx_lookup", x.Domain, x.KeyID, resultWord(mxErr == nil), boundedReason(mxErr), time.Since(started))
+	trace.add("mx_lookup", resultWord(mxErr == nil), boundedReason(mxErr))
+	if mxErr != nil {
+		if issued.binding != nil {
+			// Leave the existing grant untouched; the next renewal tick retries.
+			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "dns_unavailable", time.Since(started))
+			trace.add("renewal", "deferred", "dns_unavailable")
+			r.logDomainAuth(c, "renewal", x.Domain, x.KeyID, "deferred", "dns_unavailable", trace.String(), time.Since(started))
+			return
+		}
+		r.failDomain(c, x.Domain)
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, "dns_unavailable", time.Time{}, trace)
+		return
+	}
+	if !routedForDomain(mxs, r.cfg.SMTP.Hostname) {
+		r.failDomain(c, x.Domain)
+		r.logProof(c, "mx_routing", x.Domain, x.KeyID, "rejected", reasonNotMX, time.Since(started))
+		trace.add("mx_routing", "rejected", reasonNotMX)
+		if issued.binding != nil {
+			// Genuinely not routed: fail the binding closed, but do not send a
+			// DomainRevoked notice — the AuthResult below is the authoritative
+			// rejected/not_mx verdict and a notice would overwrite it.
+			r.revokeNotify(issued.binding, reasonNotMX, false)
+		}
+		_ = r.authReply(c, ch, "rejected", x.Domain, x.KeyID, false, reasonNotMX, time.Time{}, trace)
+		return
+	}
 	if issued.binding != nil {
 		// Renewal: only the exact binding identity may be extended. The grant
 		// is capped at AuthLifetime from now (never extended past a cached
@@ -1658,6 +1710,14 @@ func (r *Receiver) revalidateConn(c *connection) {
 // revoke marks a binding unusable. It sends a revocation notice only when the
 // binding was the registry authority; a replaced binding is retired silently.
 func (r *Receiver) revoke(b *binding, why string) {
+	r.revokeNotify(b, why, true)
+}
+
+// revokeNotify drops a binding and optionally tells the core it is gone. The
+// renewal gate-2 failure calls it with notify=false: the AuthResult already
+// carries the authoritative rejected/not_mx verdict, and a DomainRevoked notice
+// would overwrite it on the core with a generic "unavailable".
+func (r *Receiver) revokeNotify(b *binding, why string, notify bool) {
 	r.mu.Lock()
 	if b.state == bindRevoked {
 		r.mu.Unlock()
@@ -1681,7 +1741,7 @@ func (r *Receiver) revoke(b *binding, why string) {
 	keyID := b.keyID
 	wasActive := active
 	r.mu.Unlock()
-	if wasActive {
+	if wasActive && notify {
 		_ = r.send(c, mxwire.FrameDomainRevoked, 0, ch, mxwire.DomainNotice{Domain: domain, Reason: why})
 	}
 	r.statProofs.Add(1)
@@ -1790,6 +1850,11 @@ func (r *Receiver) release(c *connection, p *pending) {
 const (
 	reasonDomainCooldown = "domain_cooldown"
 	reasonSourceLimit    = "source_limit"
+	// reasonNotMX is the routing-gate verdict: the TXT proof succeeded, but the
+	// domain's published MX records do not name this receiver, so it is not a
+	// delivery target. It is distinct from an authentication failure so the
+	// operator can tell a wrong-routing setup from a wrong-key one.
+	reasonNotMX = "not_mx"
 )
 
 // failDomain arms the failure cooldown for one domain on the source IP that
@@ -1863,6 +1928,36 @@ func (r *Receiver) lookupTXT(ctx context.Context, d string) ([]string, error) {
 		return nil, ctx.Err()
 	}
 	return r.cfg.LookupTXT(ctx, "_mailmoose-mx."+d)
+}
+
+// lookupMX resolves the domain's published MX records with the same bounded
+// worker pool as the TXT proof, so an authentication burst cannot turn into
+// unbounded resolver work.
+func (r *Receiver) lookupMX(ctx context.Context, d string) ([]*net.MX, error) {
+	select {
+	case r.dnsSem <- struct{}{}:
+		defer func() { <-r.dnsSem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return r.cfg.LookupMX(ctx, d)
+}
+
+// routedForDomain reports whether this receiver's own SMTP hostname is among the
+// domain's published MX hosts. The comparison lower-cases and trims the trailing
+// dot, matching the core's published-record check, so the two agree on what
+// "routed here" means.
+func routedForDomain(records []*net.MX, hostname string) bool {
+	want := strings.ToLower(strings.TrimSuffix(hostname, "."))
+	if want == "" {
+		return false
+	}
+	for _, mx := range records {
+		if strings.ToLower(strings.TrimSuffix(mx.Host, ".")) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // Stop marks the receiver stopping so readiness fails and new sessions are

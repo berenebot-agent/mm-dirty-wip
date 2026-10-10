@@ -1655,6 +1655,11 @@ func authReason(reason string) string {
 		return "key_unavailable"
 	case "domain_limit":
 		return "domain_limit"
+	case "not_mx":
+		// The receiver proved domain authority but is not named in the
+		// domain's MX records, so it is not a delivery target. It is a routing
+		// verdict, distinct from an authentication failure.
+		return "not_mx"
 	default:
 		return "authentication_failed"
 	}
