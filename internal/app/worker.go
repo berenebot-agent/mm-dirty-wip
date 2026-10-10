@@ -34,6 +34,7 @@ type OutboxWorker struct {
 	log    *slog.Logger
 	stop   chan struct{}
 	done   chan struct{}
+	wake   chan struct{}
 	period time.Duration
 	owner  string
 	// sendConcurrency is the number of sender goroutines per delivery pass. It
@@ -55,7 +56,7 @@ func NewOutboxWorker(svc *Service, log *slog.Logger) *OutboxWorker {
 	if concurrency > maxSendConcurrency {
 		concurrency = maxSendConcurrency
 	}
-	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), period: 5 * time.Second, owner: idgen.New("wrk"), sendConcurrency: concurrency}
+	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), wake: make(chan struct{}, 1), period: 5 * time.Second, owner: idgen.New("wrk"), sendConcurrency: concurrency}
 }
 
 // Start launches the worker loop. It returns immediately.
@@ -65,6 +66,17 @@ func (w *OutboxWorker) Start() {
 
 // SetPeriod overrides the poll interval (used by tests).
 func (w *OutboxWorker) SetPeriod(d time.Duration) { w.period = d }
+
+// Wake requests an immediate delivery pass without waiting for the next poll
+// tick. It is safe to call before Start or concurrently from any goroutine; the
+// capacity-one channel coalesces bursts into at most one queued request (and
+// never blocks a caller). The periodic poll remains the backstop.
+func (w *OutboxWorker) Wake() {
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
 
 // Stop signals the worker to stop promptly. The delivery loops observe the
 // signal between messages (not only after a full backlog), so shutdown is fast
@@ -102,6 +114,11 @@ func (w *OutboxWorker) run() {
 		select {
 		case <-w.stop:
 			return
+		case <-w.wake:
+			w.deliver()
+			if i%maintenanceEvery == 0 {
+				w.maintain()
+			}
 		case <-ticker.C:
 			w.deliver()
 			if i%maintenanceEvery == 0 {

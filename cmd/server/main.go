@@ -133,6 +133,10 @@ func main() {
 	remoteMXrt := startRemoteMXRuntime(svc, log)
 	ensureSystemAdmin(svc, log)
 	worker := app.NewOutboxWorker(svc, log)
+	// A send nudges the worker for an immediate delivery pass; the periodic
+	// poll remains the backstop. Wire before serving so no request can enqueue
+	// before the wake surface exists.
+	svc.OutboxWaker = worker
 	worker.Start()
 	defer worker.Stop()
 	// The remote (standalone IMAP) runtime: install the handoff/sender/forwarder
