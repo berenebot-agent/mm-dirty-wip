@@ -147,7 +147,7 @@ flowchart LR
     end
 
     subgraph Inbound["Inbound transports"]
-        WG["Mailgun / Cloudflare / Resend\nHTTPS webhooks"]
+        WG["Mailgun / Cloudflare / Resend /\nSendGrid / Postmark HTTPS webhooks"]
         MX["MX receiver :25\nSPF · DKIM · DMARC\n(single bearer / shared DNS, no /data)"]
     end
 
@@ -251,7 +251,7 @@ fastest way to shape it is to use it and tell us what's missing.
 
 | Doc | Contents |
 |---|---|
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Inbound (Mailgun, Cloudflare, Resend, MX) and outbound (Mailgun, Brevo, Resend, SMTP) setup |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Inbound (Mailgun, Cloudflare, Resend, SendGrid, Postmark, MX) and outbound (Mailgun, Brevo, Resend, SMTP) setup |
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Inbox-level connectors: Hermes Relay, OpenClaw, webhooks and API keys |
 | [docs/SELFHOSTING.md](docs/SELFHOSTING.md) | First-run admin, reverse proxy, MX modes and tuning, hardening, backup, upgrades |
 | [docs/MX.md](docs/MX.md) | Direct-SMTP edge: wire contract, auth policy, spam and retry semantics |
