@@ -1367,7 +1367,8 @@ function aliasNameByAddress(list) {
   if (!dlg) {
     return;
   }
-  var form = dlg.querySelector('form');
+  var form = document.getElementById('inbox-add-form');
+  var standaloneForm = document.getElementById('inbox-add-standalone-form');
   var addQuotaValue = document.getElementById('inbox-add-quota-value');
   var addQuotaUnit = document.getElementById('inbox-add-quota-unit');
   var addQuotaUnlimited = document.getElementById('inbox-add-quota-unlimited');
@@ -1438,7 +1439,12 @@ function aliasNameByAddress(list) {
   var add = document.getElementById('add-inbox');
   if (add) {
     add.addEventListener('click', function () {
-      form.reset();
+      if (form) {
+        form.reset();
+      }
+      if (standaloneForm) {
+        standaloneForm.reset();
+      }
       editor.reset();
       refreshAddRequireAuth();
       aliasEditor.reset();
@@ -1456,38 +1462,6 @@ function aliasNameByAddress(list) {
     });
   }
   bindInboxSettingsShell(dlg);
-})();
-
-// Standalone-inbox setup dialog, opened from the dashboard's "Standalone inbox"
-// button. The remote server is an optional IMAP/SMTP binding; a blank host
-// creates the inbox and the connector is configured later.
-(function () {
-  var dlg = document.getElementById('standalone-dialog');
-  if (!dlg) {
-    return;
-  }
-  var open = document.getElementById('add-standalone-inbox');
-  if (open) {
-    open.addEventListener('click', function () {
-      var form = dlg.querySelector('form');
-      if (form) {
-        form.reset();
-      }
-      dlg.showModal();
-    });
-  }
-  var cancel = dlg.querySelector('.standalone-cancel');
-  if (cancel) {
-    cancel.addEventListener('click', function () {
-      dlg.close();
-    });
-  }
-  var close = dlg.querySelector('.standalone-close');
-  if (close) {
-    close.addEventListener('click', function () {
-      dlg.close();
-    });
-  }
 })();
 
 (function () {
@@ -2980,6 +2954,22 @@ function bindInboxSettingsShell(dlg) {
     return;
   }
   var tabs = bar.querySelectorAll('[data-inbox-tab]');
+  var chooser = dlg.querySelector('[data-inbox-choose]');
+  var backBtn = dlg.querySelector('#inbox-back');
+  var addSubmit = dlg.querySelector('#inbox-add-submit');
+
+  // The Add dialog carries a type chooser and two flows (domain, standalone)
+  // sharing one shell. Each tab/panel is tagged with its flow; the Edit dialog
+  // is untagged and behaves exactly as before.
+  function modeFor(name) {
+    if (name === 'choose') {
+      return 'choose';
+    }
+    if (name.indexOf('sa-') === 0) {
+      return 'standalone';
+    }
+    return 'domain';
+  }
 
   function activate(name) {
     // Leaving a panel always drops back out of any sub-view.
@@ -2987,14 +2977,32 @@ function bindInboxSettingsShell(dlg) {
     dlg.querySelectorAll('.inbox-subview.active').forEach(function (v) {
       v.classList.remove('active');
     });
+    var mode = modeFor(name);
     tabs.forEach(function (t) {
-      var on = t.getAttribute('data-inbox-tab') === name;
+      var visible = mode !== 'choose' && (t.getAttribute('data-inbox-mode') || 'domain') === mode;
+      t.hidden = !visible;
+      var on = visible && t.getAttribute('data-inbox-tab') === name;
       t.classList.toggle('active', on);
       t.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     dlg.querySelectorAll('[data-inbox-panel]').forEach(function (p) {
       p.hidden = p.getAttribute('data-inbox-panel') !== name;
     });
+    if (chooser) {
+      if (backBtn) {
+        backBtn.hidden = mode === 'choose';
+      }
+      if (addSubmit) {
+        addSubmit.hidden = mode === 'choose';
+        if (mode === 'standalone') {
+          addSubmit.textContent = 'Add standalone inbox';
+          addSubmit.setAttribute('form', 'inbox-add-standalone-form');
+        } else if (mode === 'domain') {
+          addSubmit.textContent = 'Add Inbox';
+          addSubmit.setAttribute('form', 'inbox-add-form');
+        }
+      }
+    }
     var inboxSave = dlg.querySelector('#inbox-edit-save');
     if (inboxSave) {
       // Save is always shown; the click handler (bound once) submits the single
@@ -3013,7 +3021,24 @@ function bindInboxSettingsShell(dlg) {
     });
   });
 
+  if (chooser) {
+    dlg.querySelectorAll('[data-inbox-choose] [data-choose]').forEach(function (tile) {
+      tile.addEventListener('click', function () {
+        activate(tile.getAttribute('data-choose') === 'standalone' ? 'sa-basic' : 'basic');
+      });
+    });
+    if (backBtn) {
+      backBtn.addEventListener('click', function () {
+        activate('choose');
+      });
+    }
+  }
+
   dlg._resetTabs = function () {
+    if (chooser) {
+      activate('choose');
+      return;
+    }
     if (tabs.length) {
       activate(tabs[0].getAttribute('data-inbox-tab'));
     }
