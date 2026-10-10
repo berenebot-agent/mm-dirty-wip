@@ -929,6 +929,75 @@ func TestRemoteMessageReadSameSanitizedBackend(t *testing.T) {
 	}
 }
 
+func TestRemoteReaderShellUsesCacheAndBodyCanRetry(t *testing.T) {
+	svc, h, u, _, box, fake := standaloneFixture(t)
+	fake.add("INBOX", "From: remote@test\r\nSubject: Fast shell\r\nContent-Type: text/html\r\n\r\n<p>Live body</p><script>bad()</script><img src=\"https://tracker.test/pixel\">", "<shell@test>", "Fast shell")
+	key := adminKey(t, svc, u)
+	refreshRemote(t, h, box.ID, key)
+	msgs, err := svc.Store.ListRemoteMessagesFiltered(context.Background(), u.AccountID, box.ID, store.RemoteMessageFilter{})
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("cache: %v %v", msgs, err)
+	}
+	id := msgs[0].ID
+	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
+	dials := 0
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		dials++
+		return nil, fmt.Errorf("offline")
+	})
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h = srv.Handler()
+	cookie, _ := uiSession(t, svc, u.ID)
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	rr := get("/ui/messages/" + id)
+	if rr.Code != 200 || dials != 0 || !strings.Contains(rr.Body.String(), "Fast shell") || !strings.Contains(rr.Body.String(), "Loading message body") {
+		t.Fatalf("shell blocked or missing metadata/spinner: code=%d dials=%d body=%s", rr.Code, dials, rr.Body.String())
+	}
+	rr = get("/ui/messages/" + id + "/body")
+	if rr.Code != 503 {
+		t.Fatalf("body failure: %d %s", rr.Code, rr.Body.String())
+	}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	rr = get("/ui/messages/" + id + "/body")
+	var body struct {
+		HTML         string `json:"html"`
+		RemoteImages bool   `json:"remote_images"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil || rr.Code != 200 {
+		t.Fatalf("retry: %d %s %v", rr.Code, rr.Body.String(), err)
+	}
+	if !strings.Contains(body.HTML, "Live body") || strings.Contains(body.HTML, "<script") || strings.Contains(body.HTML, "tracker.test") || !body.RemoteImages {
+		t.Fatalf("unsafe or incomplete body: %+v", body)
+	}
+	if rr.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("body cached")
+	}
+	rec, err := svc.Store.GetRemoteMessage(context.Background(), u.AccountID, box.ID, id)
+	if err != nil || rec.Read {
+		t.Fatalf("GET unexpectedly changed read state: %+v %v", rec, err)
+	}
+	if rr := get("/ui/messages/missing/body"); rr.Code != 404 {
+		t.Fatalf("missing body: %d", rr.Code)
+	}
+	// A different account's authenticated session cannot fetch the body.
+	other, err := svc.Store.CreateAccountAndAdmin(context.Background(), "Other", "other@test", "correct horse battery staple", svc.Config.DefaultQuotaBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ = uiSession(t, svc, other.ID)
+	if rr := get("/ui/messages/" + id + "/body"); rr.Code != 404 {
+		t.Fatalf("cross-account body: %d", rr.Code)
+	}
+}
+
 // TestRemoteMessageAttachmentSecurity proves a remote attachment downloads with
 // Content-Disposition: attachment and nosniff.
 func TestRemoteMessageAttachmentSecurity(t *testing.T) {
@@ -2142,15 +2211,21 @@ func TestRemoteMessageGETBodyFetchFailureIs503(t *testing.T) {
 	if rr.Code != 503 {
 		t.Fatalf("single GET with unreachable body fetch = %d, want 503: %s", rr.Code, rr.Body.String())
 	}
-	// The UI reader must not render cached metadata as the body either: the
-	// unreachable connector is surfaced (503), never a silent metadata page.
+	// The UI shell renders metadata immediately; the separate body fetch fails.
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/ui/messages/"+id, nil)
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), "Loading message body") {
+		t.Fatalf("UI reader shell = %d, want pending body", rr.Code)
+	}
+	req = httptest.NewRequest("GET", "/ui/messages/"+id+"/body", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
 	if rr.Code != 503 {
-		t.Fatalf("UI reader with unreachable body fetch = %d, want 503", rr.Code)
+		t.Fatalf("UI body with unreachable connector = %d, want 503", rr.Code)
 	}
 }
 

@@ -451,10 +451,8 @@ const folderBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displ
 {{template "live-list-card" .}}</div></div>`
 
 // remoteMessagePage renders one standalone (remote) message in the common
-// message reader. The remote body is fetched live, parsed, and its HTML passed
-// through the same sanitizer the local reader uses; the transient raw file is
-// removed afterwards. The message is marked seen on the server only when the
-// viewer opens it (never on a header list). It returns false when id is not a
+// message reader using cached metadata. The browser fetches the sanitized body
+// separately and posts the read-state change after loading. It returns false when id is not a
 // cached remote message of a standalone inbox, so the caller can fall back to the
 // local path.
 func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
@@ -469,10 +467,14 @@ func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p mod
 		if !p.CanRead(box.ID) && !p.Admin {
 			continue
 		}
-		view, gerr := s.remoteMailbox().GetRemoteMessage(r.Context(), p, box.ID, id)
+		rec, gerr := s.Service.Store.GetRemoteMessageWithLabels(r.Context(), p.AccountID, box.ID, id)
 		if gerr != nil {
 			continue
 		}
+		if !s.remoteMailbox().InScope(p.AccountID, box.ID, rec.FolderPath) {
+			continue
+		}
+		view := s.remoteMailbox().ViewOf(rec)
 		s.renderRemoteMessage(w, r, p, box, view)
 		return true
 	}
@@ -481,24 +483,7 @@ func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p mod
 
 // renderRemoteMessage renders one resolved remote message.
 func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, view app.RemoteMessageView) {
-	// Fetch the body live and parse it for display. There is no offline
-	// fallback: a fetch failure is surfaced (the common GET answers 503) rather
-	// than rendering the cached header as if it were the message body.
-	mb := mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
-	text, html, ferr := s.hydrateRemoteBody(r.Context(), p, mb, view.ID)
-	if ferr != nil {
-		s.uiError(w, ferr, 503)
-		return
-	}
-	// Mark seen on the server now that the viewer has opened it.
-	if !view.Read {
-		if updated, uerr := s.remoteMailbox().SetRemoteRead(r.Context(), p, box.ID, view.ID, true); uerr == nil {
-			view = updated
-		}
-	}
 	m := remoteMessageToModel(view, &model.Folder{ID: "", Path: view.FolderPath})
-	m.Text = text
-	m.HTML = html
 	m.Direction = "inbound"
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
@@ -525,16 +510,35 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 	s.render(w, r, remoteMessageBody, data)
 }
 
+// uiRemoteMessageBody fetches only the live body, after the cached reader shell
+// has rendered. Read-state changes remain on the existing CSRF-protected POST.
+func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		http.Error(w, "message not found", http.StatusNotFound)
+		return
+	}
+	mb := mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
+	text, html, err := s.hydrateRemoteBody(r.Context(), p, mb, id)
+	if err != nil {
+		http.Error(w, "Message body is unavailable. Please retry.", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"text": text, "html": htmlsanitize.StripRemoteImages(html), "remote_images": htmlsanitize.HasRemoteImages(html)})
+}
+
 // remoteMessageBody is the remote message reader. It mirrors the local reader but
-// points the reply/compose links at the standalone inbox and renders the sanitized
-// body from the live fetch. It reuses the shared sidebar.
+// renders cached metadata and a pending body placeholder. It reuses the shared sidebar.
 const remoteMessageBody = `<div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext. <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}
 <section class="card mail-reader"><div class="msghead"><h1>{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1><div class="actions"><form method="post" action="/ui/messages/{{.Message.ID}}/read"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="read" value="0"><button class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button></form></div></div>
-<div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p></div>
+<div class="msgmeta"><p class="muted"><b>From:</b> {{if .Message.From.Name}}{{.Message.From.Name}} &lt;{{.Message.From.Address}}&gt;{{else}}{{.Message.From.Address}}{{end}}<br><b>To:</b> {{join .Message.To ", "}}{{if .Message.CC}}<br><b>Cc:</b> {{join .Message.CC ", "}}{{end}}<br><b>Date:</b> {{mailDate .Message.CreatedAt}}{{if .Inbox}} · <b>Mailbox:</b> {{.Inbox.Address}}{{end}}</p></div>
 {{if .Message.Labels}}<div class="labelbar"><b>Labels:</b>{{range .Message.Labels}}<form class="labelpill" method="post" action="/ui/messages/{{$.Message.ID}}/labels"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="remove"><input type="hidden" name="label" value="{{.}}"><span>{{.}}</span><button class="labelx" title="Remove label" aria-label="Remove label">×</button></form>{{end}}</div>{{end}}
-<hr>{{if .Message.HTML}}<iframe class="mailframe" sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" loading="lazy" srcdoc="{{.Message.HTML}}" data-mailframe></iframe>{{else}}<div class="msgbody">{{linkify .Message.Text}}</div>{{end}}
+<hr><div data-remote-body data-body-url="/ui/messages/{{.Message.ID}}/body" data-html-url="/ui/messages/{{.Message.ID}}/html" data-read-url="/ui/messages/{{.Message.ID}}/read" data-csrf="{{.CSRF}}" data-unread="{{if not .Message.Read}}1{{end}}"><div class="load-status pending" role="status" aria-busy="true">Loading message body…</div><noscript>Enable JavaScript to load the message body, or <a href="/ui/messages/{{.Message.ID}}/html">open its HTML body</a>.</noscript></div>
 </section></div></div>`
 
 // remoteMessageSetRead toggles the read flag of a standalone inbox's cached remote

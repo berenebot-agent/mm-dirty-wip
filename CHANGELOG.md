@@ -8,6 +8,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Performance
 
+- Opening a standalone message immediately renders cached metadata with a body
+  spinner. The sanitized live body loads separately, with retry feedback on
+  failure; remote images remain hidden by default.
+
 - Standalone folder navigation reads cached messages immediately. Folder API
   listings return the cached tree and indexed counts without waiting for IMAP;
   initial discovery and progressive backfill run in coalesced background work.

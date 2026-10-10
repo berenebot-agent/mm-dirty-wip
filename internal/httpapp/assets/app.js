@@ -3323,6 +3323,85 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  var host = document.querySelector('[data-remote-body]');
+  if (!host) { return; }
+  var active = false;
+  function markRead() {
+    if (host.dataset.unread !== '1') { return; }
+    var form = new URLSearchParams({ _csrf: host.dataset.csrf, read: '1' });
+    fetch(host.dataset.readUrl, { method: 'POST', credentials: 'same-origin', body: form }).catch(function () {});
+    host.dataset.unread = '';
+  }
+  function load() {
+    if (active) { return; }
+    active = true;
+    host.replaceChildren();
+    var status = document.createElement('div');
+    status.className = 'load-status pending';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-busy', 'true');
+    status.textContent = 'Loading message body…';
+    host.appendChild(status);
+    var controller = new AbortController();
+    var timeout = window.setTimeout(function () { controller.abort(); }, 60000);
+    fetch(host.dataset.bodyUrl, { credentials: 'same-origin', signal: controller.signal }).then(function (response) {
+      if (!response.ok) { throw new Error('body unavailable'); }
+      return response.json();
+    }).then(function (body) {
+      if (body.html) {
+        var frame = document.createElement('iframe');
+        frame.className = 'mailframe';
+        frame.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox');
+        frame.setAttribute('referrerpolicy', 'no-referrer');
+        frame.setAttribute('title', 'Message body');
+        frame.setAttribute('data-mailframe', '');
+        frame.hidden = true;
+        frame.onload = function () { status.remove(); frame.hidden = false; markRead(); };
+        frame.srcdoc = '<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; style-src &#39;unsafe-inline&#39;; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">' + body.html;
+        host.appendChild(frame);
+        if (body.remote_images) {
+          var banner = document.createElement('div');
+          banner.className = 'banner warn';
+          banner.textContent = 'Remote images are hidden to prevent read-tracking. ';
+          var show = document.createElement('button');
+          show.type = 'button';
+          show.className = 'secondary btn-sm';
+          show.textContent = 'Show images';
+          show.onclick = function () {
+            frame.removeAttribute('srcdoc');
+            frame.src = host.dataset.htmlUrl + '?remote=1';
+            banner.remove();
+          };
+          banner.appendChild(show);
+          host.insertBefore(banner, frame);
+        }
+      } else {
+        var text = document.createElement('div');
+        text.className = 'msgbody';
+        text.textContent = body.text || '(Empty message body)';
+        host.replaceChildren(text);
+        markRead();
+      }
+    }).catch(function () {
+      host.replaceChildren(status);
+      status.classList.remove('pending');
+      status.setAttribute('aria-busy', 'false');
+      status.textContent = 'Could not load the message body. ';
+      var retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'secondary';
+      retry.textContent = 'Retry';
+      retry.onclick = load;
+      status.appendChild(retry);
+    }).finally(function () {
+      window.clearTimeout(timeout);
+      active = false;
+    });
+  }
+  load();
+})();
+
+(function () {
   var btn = document.getElementById('cf-copy');
   if (!btn) {
     return;
