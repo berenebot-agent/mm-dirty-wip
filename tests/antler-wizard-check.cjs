@@ -40,12 +40,15 @@ class Element {
   }
 }
 async function check(mode = 'hosted') {
-  let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [];
+  let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [], copied = [];
   let mxList = mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }];
+  // The status view exercises per-receiver remediation, so give it two connectors
+  // to prove only the failing receiver's MX record is ever prompted.
+  if (mode === 'status') { mxList = [{ hostname: 'mx.example.com', priority: 10 }, { hostname: 'mx2.example.com', priority: 20 }]; }
   const dlg = new Element(); dlg.open = true;
   // The live per-receiver status seeded on the status form, so the dialog opens
   // already matching the dashboard light instead of flashing "Pending".
-  const seeded = mode === 'status' ? [{ state: 'ready', smtp_hostname: 'mx.example.com' }] : [];
+  const seeded = mode === 'status' ? [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'ready', smtp_hostname: 'mx2.example.com' }] : [];
   const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.dataset.antlerConnectors = JSON.stringify(mxList); form.dataset.antlerStatus = JSON.stringify(seeded); form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
   const group = new Element();
@@ -73,7 +76,7 @@ async function check(mode = 'hosted') {
   const created = [];
   vm.runInNewContext(source.slice(start, end), {
     document: { querySelectorAll: () => [form], createElement: tag => { const el = new Element(tag.toUpperCase()); created.push(el); return el; }, createTextNode: text => ({ textContent: text }) },
-    Date: Clock, navigator: {}, window: { setInterval(fn) { tick = fn; return 1; }, clearInterval() {}, addEventListener() {}, location: { assign(url) { redirect = url; } } },
+    Date: Clock, navigator: { clipboard: { writeText: text => { copied.push(text); return Promise.resolve(); } } }, window: { setInterval(fn) { tick = fn; return 1; }, clearInterval() {}, addEventListener() {}, location: { assign(url) { redirect = url; } } },
     fetch(url, options) { requests.push({ url, options }); if (options.method !== 'GET') saved = JSON.parse(options.body); if (failRotation && saved && options.method === 'PUT' && saved.regenerate_secret) return Promise.reject(new Error('network error')); return Promise.resolve({ ok: true, json: () => Promise.resolve(response()) }); }
   });
   const wizard = group.children.at(-1);
@@ -178,6 +181,52 @@ async function check(mode = 'hosted') {
     now += 20000; tick(); await flush();
     assert.match(connLightClass(0), /amber/, 'a connector with no status is amber pending');
     assert.equal(connLabel(0), 'Pending');
+    // The inline remediation separates the record's name and value into their own
+    // labelled rows with their own copy buttons, so neither part has to be picked
+    // apart from a combined block.
+    const remediation = () => wizard.nodes['.antler-records'].children.find(el => el.className === 'antler-dns-remediation') || new Element('DIV');
+    const remediationRows = () => remediation().children.flatMap(box => (box.children || []).filter(el => el.className === 'dns-remediation-row'));
+    statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }];
+    now += 20000; tick(); await flush();
+    let rows = remediationRows();
+    assert.equal(rows.length, 2, 'a TXT fix shows a name row and a value row');
+    assert.equal(rows[0].children[0].textContent, 'Record name');
+    assert.equal(rows[0].children[1].textContent, '_mailmoose-mx.example.com');
+    assert.equal(rows[1].children[0].textContent, 'Record value');
+    assert.equal(rows[1].children[1].textContent, 'public-key');
+    assert.ok(rows.every(row => row.children[2].textContent === 'Copy'), 'each row carries its own copy button');
+    rows[1].children[2].events.click(); await flush();
+    assert.deepEqual(copied, ['public-key'], 'the value copy button copies only the value');
+    rows[0].children[2].events.click(); await flush();
+    assert.deepEqual(copied, ['public-key', '_mailmoose-mx.example.com'], 'the name copy button copies only the name');
+    // When only one of two receivers fails MX routing, prompt for that record
+    // alone rather than telling the operator to republish every MX record. The
+    // flag names the failing receiver and the row spells out its type, priority
+    // and value.
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'rejected', reason: 'not_mx', smtp_hostname: 'mx2.example.com' }];
+    now += 20000; tick(); await flush();
+    let mxText = collect(remediation());
+    assert.match(mxText, /mx2\.example\.com is not listed as an MX receiver/, 'the flag names the failing receiver');
+    assert.doesNotMatch(mxText, /mx\.example\.com/, 'the healthy MX record is not prompted');
+    let mxRows = remediationRows();
+    assert.equal(mxRows.length, 4, 'an MX fix shows name, type, priority and value rows');
+    assert.deepEqual(mxRows.map(row => row.children[0].textContent), ['Record name', 'Record type', 'Priority', 'Record value']);
+    assert.equal(mxRows[1].children[1].textContent, 'MX');
+    assert.equal(mxRows[2].children[1].textContent, '20');
+    assert.equal(mxRows[3].children[1].textContent, 'mx2.example.com');
+    // The type is informational, so it carries no copy button; the copyable
+    // fields each do.
+    assert.equal(mxRows[1].children[2], undefined, 'the record type row is not copyable');
+    assert.ok(mxRows.filter((row, i) => i !== 1).every(row => row.children[2].textContent === 'Copy'), 'the copyable MX rows each carry a copy button');
+    // Both a missing TXT and a failing MX ask for both records.
+    statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }, { state: 'rejected', reason: 'not_mx', smtp_hostname: 'mx2.example.com' }];
+    now += 20000; tick(); await flush();
+    assert.match(collect(remediation()), /Domain not authorized/, 'the TXT fix is shown alongside the MX fix');
+    assert.match(collect(remediation()), /is not listed as an MX receiver/, 'the MX fix is shown alongside the TXT fix');
+    // A fully healthy domain shows no remediation block at all.
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'ready', smtp_hostname: 'mx2.example.com' }];
+    now += 20000; tick(); await flush();
+    assert.equal(remediationRows().length, 0, 'a healthy domain has no remediation rows');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);
