@@ -197,21 +197,6 @@ chosen address's own domain (`messages.sending_domain_id`, falling back to the
 inbox domain). A per-inbox `default_sender` preselects it, and each alias may
 carry its own sender display name (falling back to the inbox name).
 
-An inbox may also carry **external sending aliases** (`external_aliases`):
-addresses on domains MailMoose does not manage, used only as outbound From
-identities. They never participate in inbound resolution — the inbound
-precedence above is unchanged. Each external alias owns its own sending
-connector, selected by immutable id: a send records
-`messages.sending_external_alias_id` (and a reviewed draft records
-`drafts.from_external_alias_id`) so deleting and recreating an alias with the
-same address cannot rebind a queued message or an approved draft. External
-aliases are created and edited one at a time through the admin API, never as a
-replace-set, so an inbox save cannot drop a connector. A send whose alias has no
-connector is held pending (not failed) and is requeued when the connector is
-saved; a send whose alias was deleted fails permanently with a missing-alias
-error rather than falling back to a domain connector. External aliases are an
-Admin-only capability.
-
 Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 
 ## 5. Persistence
@@ -233,7 +218,6 @@ sessions
 domains
 inboxes
 inbox_aliases
-external_aliases
 messages
 message_recipients
 threads
@@ -414,28 +398,11 @@ domain owns at most one optional configuration of each kind; the encrypted bytes
 belong to that domain alone. The same external API key may still be entered on
 more than one domain, producing independent stored copies.
 
-An external sending alias additionally owns one optional sending connector
-stored on its own row. It is validated, encrypted and rotated through the same
-provider schema and CAS/revision path as a domain config, but is keyed by the
-alias's immutable id rather than a domain. External aliases are an Admin-only,
-self-hosted capability; managed domains remain the primary connector model and
-are unaffected.
-
-Encrypt with authenticated encryption using `APP_ENCRYPTION_KEY` supplied through environment/config. Treat this key as a root secret and document separate backup/recovery alongside `/data`. A migration copies existing shared credential bytes into per-domain configs without re-keying, so this key must survive the upgrade.
-
 ## 10. Web UI
 
 Prefer server-rendered Go templates plus HTMX/vanilla JavaScript, or another comparably small embedded frontend.
 
 Production serves UI assets from the Go binary using `embed`.
-
-External sending aliases are managed from the inbox Aliases tab, which lists
-managed and external aliases separately. A per-alias page
-(`/ui/inboxes/{id}/external-aliases/{aliasID}`) holds the sender name, the
-connector editor (reusing the domain provider-editor markup and secret
-retention) and the alias's outbound activity, mirroring the domain delivery log.
-State-changing UI routes are session + CSRF and Admin-only; the equivalent
-bearer endpoints live under `/v1/admin/inboxes/{id}/external-aliases`.
 
 ## 11. Dependency policy
 

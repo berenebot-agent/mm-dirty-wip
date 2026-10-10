@@ -179,26 +179,10 @@ func (s *Server) renderComposeFlash(w http.ResponseWriter, r *http.Request, p mo
 	s.render(w, r, composeBody, data)
 }
 
-// externalSenderFor returns the external sending alias the inbox's
-// default_sender names, or false when the default is the primary or a managed
-// alias (both resolve through a domain connector).
-func externalSenderFor(box model.Inbox) (model.ExternalAlias, bool) {
-	if strings.TrimSpace(box.DefaultSender) == "" {
-		return model.ExternalAlias{}, false
-	}
-	for _, a := range box.ExternalAliases {
-		if strings.EqualFold(a.Address, box.DefaultSender) {
-			return a, true
-		}
-	}
-	return model.ExternalAlias{}, false
-}
-
 // composeFromOptions returns the selectable From addresses for an inbox
-// (primary first, then managed aliases, then external sending aliases) and the
-// one to preselect: the requested address when present, otherwise the inbox
-// default, otherwise the primary. A label shows "Name <address>" when the
-// inbox or alias has a display name.
+// (primary first, then managed aliases) and the one to preselect: the requested
+// address when present, otherwise the inbox default, otherwise the primary. A
+// label shows "Name <address>" when the inbox or alias has a display name.
 func composeFromOptions(box model.Inbox, requested string) ([]fromOption, string) {
 	label := func(addr, name string) string {
 		if name != "" {
@@ -209,9 +193,6 @@ func composeFromOptions(box model.Inbox, requested string) ([]fromOption, string
 	options := []fromOption{{Address: box.Address, Label: label(box.Address, box.DisplayName)}}
 	for _, addr := range box.Aliases {
 		options = append(options, fromOption{Address: addr, Label: label(addr, box.AliasNames[addr])})
-	}
-	for _, a := range box.ExternalAliases {
-		options = append(options, fromOption{Address: a.Address, Label: label(a.Address, a.DisplayName)})
 	}
 	selected := strings.TrimSpace(requested)
 	if selected == "" {
@@ -658,24 +639,13 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, id)
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, id)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	// Sending readiness follows the selected/default sender's connector: an
-	// external sending alias is ready only when its own connector is set,
-	// otherwise the inbox domain's sending config applies.
+	// Sending readiness follows the inbox domain's sending config.
 	outboundReady := true
 	pausedExternal := false
 	pausedAddress := ""
 	pausedURL := ""
-	if a, ok := externalSenderFor(box); ok {
-		outboundReady = a.Configured
-		if !a.Configured {
-			pausedExternal = true
-			pausedAddress = a.Address
-			pausedURL = externalAliasConfigureURL(a.ID)
-		}
-	} else {
-		_, outErr := s.Service.Store.ResolveDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
-		outboundReady = outErr == nil
-	}
+	_, outErr := s.Service.Store.ResolveDomainSendingConfig(r.Context(), p.AccountID, box.DomainID)
+	outboundReady = outErr == nil
 	recvDomain, inErr := s.Service.Store.GetDomain(r.Context(), p.AccountID, box.DomainID)
 	var sendRequests []SendRequestRow
 	if folder == "inbox" {

@@ -122,7 +122,7 @@ func TestRenderOpenAPIResponses(t *testing.T) {
 func TestRenderOpenAPIPathParameters(t *testing.T) {
 	routes := []apispec.Route{
 		{Method: "GET", Path: "/v1/messages/{id}", Summary: "Get a message", Group: "Messages"},
-		{Method: "GET", Path: "/v1/admin/inboxes/{id}/external-aliases/{aliasID}", Summary: "List aliases", Group: "Admin: external aliases"},
+		{Method: "GET", Path: "/v1/admin/inboxes/{id}/sending/{connectorID}", Summary: "Get a sending connector", Group: "Admin: sending"},
 	}
 	doc := apispec.RenderOpenAPI("https://mail.example.test", routes)
 	paths := doc["paths"].(map[string]any)

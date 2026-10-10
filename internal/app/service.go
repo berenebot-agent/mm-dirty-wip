@@ -958,21 +958,11 @@ func validateDialMXReceiverURLs(raw string) ([]string, error) {
 }
 
 func (s *Service) DecryptDomainSendingConfig(c store.DomainSendingConfig) (map[string]any, error) {
-	return s.decryptConfig(sendingConfigAAD(c.AccountID, c.DomainID, c.ExternalAliasID), c.EncryptedConfig)
+	return s.decryptConfig(configAAD(c.AccountID, c.DomainID), c.EncryptedConfig)
 }
 
 func (s *Service) DecryptDomainReceivingConfig(c store.DomainReceivingConfig) (map[string]any, error) {
 	return s.decryptConfig(configAAD(c.AccountID, c.DomainID), c.EncryptedConfig)
-}
-
-// sendingConfigAAD is the AAD scope for a sending configuration, which is keyed
-// by domain or, for an external sending alias, by the alias id. The two are
-// distinct so an alias config cannot be swapped with a domain config.
-func sendingConfigAAD(accountID, domainID, externalAliasID string) string {
-	if externalAliasID != "" {
-		return configAAD(accountID, "alias:"+externalAliasID)
-	}
-	return configAAD(accountID, domainID)
 }
 
 // getSendingConfig distinguishes "domain has no sending config" (ErrNoProvider)
@@ -1283,7 +1273,7 @@ func (s *Service) EncryptSecretAAD(aad string, plaintext []byte) (string, error)
 
 // configAAD is the additional-authenticated-data binding for an encrypted
 // provider/connector configuration blob: its owning account and the scoped row
-// (a domain id or an external-alias id).
+// (a domain id).
 func configAAD(accountID, scopeID string) string {
 	return "cfg:" + accountID + ":" + scopeID
 }
@@ -1404,21 +1394,17 @@ type SendInput struct {
 	// domain, which may differ from the inbox's. FromName optionally overrides
 	// the alias/inbox display name (used when resending a frozen draft). Neither
 	// is accepted from API JSON; handlers map their own fields onto them.
-	FromAddress string `json:"-"`
-	FromName    string `json:"-"`
-	// FromExternalAliasID, when set from a frozen draft, pins the send to an
-	// external alias by immutable id rather than re-resolving FromAddress, so a
-	// deleted-then-recreated alias cannot rebind. Never accepted from API JSON.
-	FromExternalAliasID string           `json:"-"`
-	To                  []string         `json:"to,omitempty"`
-	CC                  []string         `json:"cc,omitempty"`
-	BCC                 []string         `json:"bcc,omitempty"`
-	Subject             string           `json:"subject"`
-	Text                string           `json:"text"`
-	HTML                string           `json:"html,omitempty"`
-	ReplyToMessageID    string           `json:"reply_to_message_id,omitempty"`
-	ForwardOfMessageID  string           `json:"forward_of_message_id,omitempty"`
-	Attachments         []SendAttachment `json:"attachments,omitempty"`
+	FromAddress        string           `json:"-"`
+	FromName           string           `json:"-"`
+	To                 []string         `json:"to,omitempty"`
+	CC                 []string         `json:"cc,omitempty"`
+	BCC                []string         `json:"bcc,omitempty"`
+	Subject            string           `json:"subject"`
+	Text               string           `json:"text"`
+	HTML               string           `json:"html,omitempty"`
+	ReplyToMessageID   string           `json:"reply_to_message_id,omitempty"`
+	ForwardOfMessageID string           `json:"forward_of_message_id,omitempty"`
+	Attachments        []SendAttachment `json:"attachments,omitempty"`
 	// DraftID, when set, consumes the draft in the same transaction that
 	// enqueues the message. It is never accepted from API JSON.
 	DraftID string `json:"-"`
@@ -1542,15 +1528,11 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	// alias on another domain of the account, in which case that domain's
 	// sending configuration and DKIM identity are used, and the alias's own
 	// display name is used unless the caller supplied one (a frozen draft).
-	// A frozen external-alias id pins the sender; otherwise the requested
-	// address is resolved (falling back to the inbox primary for an empty one).
+	// The requested address is resolved (falling back to the inbox primary for
+	// an empty one).
 	var from model.Address
 	var sendingTarget store.SendingTarget
-	if in.FromExternalAliasID != "" {
-		from, sendingTarget, err = s.Store.ResolveSendingTargetByID(ctx, accountID, inbox.ID, in.FromExternalAliasID)
-	} else {
-		from, sendingTarget, err = s.Store.ResolveSendingTarget(ctx, accountID, inbox.ID, in.FromAddress)
-	}
+	from, sendingTarget, err = s.Store.ResolveSendingTarget(ctx, accountID, inbox.ID, in.FromAddress)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -1654,9 +1636,6 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 			return SendResult{}, cfgErr
 		}
 		queuedReason = "no outbound provider configured for this domain"
-		if sendingTarget.ExternalAliasID != "" {
-			queuedReason = "no sending connector configured for this external alias"
-		}
 	}
 	if cfgErr == nil {
 		if outboundProvider, ok := transport.LookupOutbound(sending.Provider); ok {
@@ -1706,7 +1685,7 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	for i, attachment := range attachments {
 		metadata = append(metadata, store.AttachmentInput{Filename: attachment.Filename, ContentType: attachment.ContentType, Size: int64(len(attachment.Content)), PartIndex: i + 1})
 	}
-	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: from, SendingDomainID: sendingTarget.DomainID, SendingExternalAliasID: sendingTarget.ExternalAliasID, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, ClientLabel: in.ClientLabel, ClientID: in.ClientID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
+	m, draftEvent, err := s.Store.CommitOutbound(ctx, store.OutboundRecord{Inbox: inbox, Provider: sending.Provider, RFCMessageID: msgID, InReplyTo: inReply, References: refs, From: from, SendingDomainID: sendingTarget.DomainID, To: to, CC: cc, BCC: bcc, Subject: subject, Text: in.Text, HTML: html, RawPath: filepath.ToSlash(rel), SizeBytes: int64(len(raw)), ThreadID: threadID, IdemKey: idem, LastError: queuedReason, DraftID: in.DraftID, ClientLabel: in.ClientLabel, ClientID: in.ClientID, Attachments: metadata, SendRequestID: in.SendRequestID, DecisionActor: in.DecisionActor, DecisionActorID: in.DecisionActorID, DecisionMethod: in.DecisionMethod, DecisionFeedback: in.DecisionFeedback})
 	if err != nil {
 		_ = os.Remove(path)
 		return SendResult{}, err
@@ -1736,15 +1715,9 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	if in.InboxID != d.InboxID {
 		return SendResult{}, store.ErrForbidden
 	}
-	// The draft remembers its chosen sender. A frozen external-alias id is
-	// carried through whenever the caller did not change the sender, so deletion
-	// and recreation of an alias with the same address cannot silently rebind a
-	// reviewed draft. A genuinely different requested sender re-resolves.
-	if in.FromExternalAliasID == "" && d.FromExternalAliasID != "" {
-		if strings.TrimSpace(in.FromAddress) == "" || strings.EqualFold(strings.TrimSpace(in.FromAddress), d.FromAddress) {
-			in.FromExternalAliasID = d.FromExternalAliasID
-		}
-	}
+	// The draft remembers its chosen managed sender. A caller that requested a
+	// genuinely different address re-resolves; an empty request keeps the draft's
+	// sender.
 	if in.FromAddress == "" {
 		in.FromAddress = d.FromAddress
 		in.FromName = d.FromName
@@ -1978,7 +1951,7 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 	// (a client timeout that may follow a provider-accepted request) is also
 	// terminal: retrying a provider without an idempotency key could deliver
 	// twice.
-	if transport.IsPermanent(err) || transport.AsAmbiguous(err) || errors.Is(err, store.ErrExternalAliasDeleted) {
+	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
 		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider)
 		if ferr != nil {
 			return ferr

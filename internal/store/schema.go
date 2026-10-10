@@ -1473,3 +1473,144 @@ ALTER TABLE inbound_delivery_log ADD COLUMN source TEXT NOT NULL DEFAULT '';
 ALTER TABLE blocked_messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
 ALTER TABLE inbound_control_messages ADD COLUMN source TEXT NOT NULL DEFAULT '';
 `
+
+// migration052 adds the shared standalone-mailbox foundation on top of the
+// domain-only inbox model. It is deliberately additive and non-destructive:
+//
+//   - inboxes gains kind ('domain' or 'standalone'), an owned address, a selected
+//     sync namespace/root, and the non-secret description of an optional remote
+//     IMAP/SMTP binding. Every existing row keeps kind='domain' and its
+//     domain-derived address, so domain behaviour is unchanged.
+//   - inbox_remote_credentials holds the encrypted IMAP (and optional SMTP)
+//     secrets keyed by inbox id, so credentials never live on a readable row.
+//   - inbox_folders stores the custom hierarchical folder tree of a standalone
+//     inbox (and, later, a folder view over a domain inbox's aliases).
+//   - inbox_remote_messages stores header/thread metadata for remote messages
+//     whose bodies and attachments stay live on the remote server (no archive).
+//
+// domain_id is intentionally left NOT NULL for now; standalone rows carry the
+// empty string and a self-contained address. A later migration may relax that
+// constraint once the remote read path ships; doing it here would require a full
+// table rebuild for no V1 benefit.
+const migration052 = `
+CREATE TABLE inboxes_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  domain_id TEXT REFERENCES domains(id) ON DELETE CASCADE,
+  local_part TEXT NOT NULL COLLATE NOCASE,
+  address TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  kind TEXT NOT NULL DEFAULT 'domain',
+  namespace TEXT NOT NULL DEFAULT '',
+  allowed_senders_json TEXT NOT NULL DEFAULT '[]',
+  sender_restricted INTEGER NOT NULL DEFAULT 0,
+  require_authenticated INTEGER NOT NULL DEFAULT 0,
+  approver_email TEXT NOT NULL DEFAULT '',
+  default_sender TEXT NOT NULL DEFAULT '',
+  trash_retention_days INTEGER,
+  storage_quota_bytes INTEGER,
+  storage_used_bytes INTEGER,
+  auto_mark_read_on_delivery INTEGER NOT NULL DEFAULT 0,
+  auto_trash_after_delivery_hours INTEGER,
+  delivery_trigger TEXT NOT NULL DEFAULT 'all' CHECK(delivery_trigger IN ('any','all')),
+  remote_host TEXT NOT NULL DEFAULT '',
+  remote_port INTEGER NOT NULL DEFAULT 0,
+  remote_username TEXT NOT NULL DEFAULT '',
+  remote_security TEXT NOT NULL DEFAULT '',
+  smtp_host TEXT NOT NULL DEFAULT '',
+  smtp_port INTEGER NOT NULL DEFAULT 0,
+  smtp_username TEXT NOT NULL DEFAULT '',
+  smtp_security TEXT NOT NULL DEFAULT '',
+  remote_configured INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(domain_id, local_part)
+);
+
+INSERT INTO inboxes_new(id,account_id,domain_id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,require_authenticated,approver_email,default_sender,trash_retention_days,storage_quota_bytes,storage_used_bytes,auto_mark_read_on_delivery,auto_trash_after_delivery_hours,delivery_trigger,created_at)
+  SELECT id,account_id,domain_id,local_part,display_name,enabled,allowed_senders_json,sender_restricted,require_authenticated,approver_email,default_sender,trash_retention_days,storage_quota_bytes,storage_used_bytes,auto_mark_read_on_delivery,auto_trash_after_delivery_hours,delivery_trigger,created_at FROM inboxes;
+
+DROP TABLE inboxes;
+ALTER TABLE inboxes_new RENAME TO inboxes;
+
+CREATE INDEX idx_inboxes_account ON inboxes(account_id);
+CREATE UNIQUE INDEX idx_inboxes_id_account ON inboxes(id,account_id);
+
+CREATE TABLE inbox_remote_credentials (
+  inbox_id TEXT PRIMARY KEY REFERENCES inboxes(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  encrypted_imap TEXT NOT NULL DEFAULT '',
+  encrypted_smtp TEXT NOT NULL DEFAULT '',
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_inbox_remote_credentials_account ON inbox_remote_credentials(account_id);
+
+CREATE TABLE inbox_folders (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  parent_path TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'folder',
+  selectable INTEGER NOT NULL DEFAULT 1,
+  remote_uid_validity INTEGER NOT NULL DEFAULT 0,
+  message_count INTEGER NOT NULL DEFAULT 0,
+  unread_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(inbox_id, path)
+);
+CREATE INDEX idx_inbox_folders_inbox ON inbox_folders(inbox_id, path);
+
+CREATE TABLE inbox_remote_messages (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  inbox_id TEXT NOT NULL REFERENCES inboxes(id) ON DELETE CASCADE,
+  folder_path TEXT NOT NULL,
+  remote_uid_validity INTEGER NOT NULL DEFAULT 0,
+  remote_uid INTEGER NOT NULL DEFAULT 0,
+  rfc_message_id TEXT NOT NULL DEFAULT '',
+  in_reply_to TEXT NOT NULL DEFAULT '',
+  references_json TEXT NOT NULL DEFAULT '[]',
+  thread_key TEXT NOT NULL DEFAULT '',
+  from_name TEXT NOT NULL DEFAULT '',
+  from_address TEXT NOT NULL DEFAULT '',
+  to_json TEXT NOT NULL DEFAULT '[]',
+  cc_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  snippet TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  has_attachments INTEGER NOT NULL DEFAULT 0,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  is_flagged INTEGER NOT NULL DEFAULT 0,
+  received_at TEXT,
+  sent_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(inbox_id, folder_path, remote_uid_validity, remote_uid)
+);
+CREATE INDEX idx_inbox_remote_messages_inbox ON inbox_remote_messages(inbox_id, received_at DESC);
+CREATE INDEX idx_inbox_remote_messages_thread ON inbox_remote_messages(inbox_id, thread_key);
+CREATE INDEX idx_inbox_remote_messages_rfc ON inbox_remote_messages(account_id, inbox_id, rfc_message_id);
+
+-- pending_file_cleanup is the durable post-commit file-retirement queue. A
+-- migration (or any future bulk operation) that removes rows referencing stored
+-- raw MIME must never unlink files inside its transaction: a rollback would
+-- leave the rows pointing at missing files. Instead it records each relative
+-- path here, commits, and a startup sweep (store.sweepPendingFileCleanup)
+-- unlinks the files and clears the queue. rel_path is relative to the data
+-- directory; created_at bounds retention if a sweep is interrupted.
+CREATE TABLE pending_file_cleanup (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rel_path TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- A standalone inbox has no managed domain, so its address must be unique in its
+-- account. The partial index leaves every domain inbox (address='') untouched.
+CREATE UNIQUE INDEX idx_inboxes_standalone_address
+  ON inboxes(account_id, address COLLATE NOCASE) WHERE kind='standalone' AND address<>'';
+`
