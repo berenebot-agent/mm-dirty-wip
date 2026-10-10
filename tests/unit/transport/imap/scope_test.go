@@ -57,6 +57,31 @@ func TestRootScopeNonEmptyPrefixBounds(t *testing.T) {
 	}
 }
 
+// TestRootScopeExcludesTerminatedPrefixes proves a namespace descriptor whose
+// prefix already ends with the delimiter (for example "Shared/" or
+// "Other Users.") is still excluded, even when it uses a different delimiter
+// style to the session and the personal prefix is empty. This is the case a
+// naive delimiter-child check misses.
+func TestRootScopeExcludesTerminatedPrefixes(t *testing.T) {
+	scope := imapadapter.RootScope{
+		Root:            "",
+		Delimiter:       '/',
+		Personal:        true,
+		INBOXInScope:    true,
+		ExcludePrefixes: []string{"Shared/", "Other Users/", "Other Users."},
+	}
+	for _, p := range []string{"INBOX", "Sent", "Archive", "Custom/Sub"} {
+		if !scope.InScope(p) {
+			t.Fatalf("personal folder %q wrongly out of scope", p)
+		}
+	}
+	for _, p := range []string{"Shared", "Shared/team", "Shared/team/INBOX", "Other Users/bob", "Other Users.bob", "Other Users.bob.INBOX"} {
+		if scope.InScope(p) {
+			t.Fatalf("terminated shared prefix wrongly admitted %q", p)
+		}
+	}
+}
+
 // TestRootScopeConservativeStrictRoot proves that without a discovered personal
 // namespace the scope is conservative: only the explicit root and its children,
 // never the whole login.

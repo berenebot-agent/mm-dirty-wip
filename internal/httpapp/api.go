@@ -766,16 +766,32 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			}
 			return out, cursor, nil, nil
 		}
+		// Local store path. Apply the keyset cursor and fetch one extra row when
+		// the page size allows, so a full page proves there is more. The store
+		// clamps to PageSizeMaxList, so at the maximum page size we fall back to
+		// treating a full page as "more".
+		if limit <= 0 || limit > limits.PageSizeMaxList {
+			limit = limits.PageSizeDefault
+		}
+		f.Before = before
+		f.Limit = limit
+		if limit < limits.PageSizeMaxList {
+			f.Limit = limit + 1
+		}
 		msgs, lerr := s.Service.Store.ListMessages(ctx, p, f)
 		if lerr != nil {
 			return nil, "", nil, normalizeMailboxStoreError(lerr)
 		}
-		cursor := ""
-		if limit > 0 && len(msgs) > limit {
+		more := false
+		if len(msgs) > limit {
 			msgs = msgs[:limit]
-			if len(msgs) > 0 {
-				cursor = msgs[len(msgs)-1].ID
-			}
+			more = true
+		} else if f.Limit == limit && len(msgs) == limit {
+			more = true
+		}
+		cursor := ""
+		if more && len(msgs) > 0 {
+			cursor = msgs[len(msgs)-1].ID
 		}
 		return sanitizedMessages(msgs), cursor, nil, nil
 	}
@@ -928,8 +944,8 @@ func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
 
 // apiMessagePurge permanently erases a trashed message and unlinks its file. A
 // standalone inbox's message is expunged on the remote server with a UID-targeted
-// expunge; it requires Owner and only acts on a message already in the Trash-role
-// folder.
+// expunge. It requires Assistant or Owner (the store/app enforce this) and only
+// acts on a message already in the Trash-role folder.
 func (s *Server) apiMessagePurge(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {

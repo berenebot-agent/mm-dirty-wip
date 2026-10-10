@@ -491,6 +491,15 @@ func (m *RemoteMailboxService) DeleteRemoteFolder(ctx context.Context, p model.P
 		return err
 	}
 	defer sess.Close()
+	// Live emptiness check: a server may delete a populated folder, so before
+	// issuing DELETE confirm directly against the provider that the folder holds
+	// no messages. The cached check above can be stale (mail added since the last
+	// reconcile); this closes that gap. A child-folder check stays best-effort
+	// (the cached check plus the server's own non-empty refusal); the message
+	// check is the one that would otherwise silently destroy mail.
+	if res, serr := sess.Search(ctx, target.Path, imap.SearchQuery{NewestFirst: true, Limit: 1}); serr == nil && len(res.UIDs) > 0 {
+		return model.NewMailboxError(model.ErrKindConflict, "folder still contains messages and is not empty", false, store.ErrFolderNotEmpty)
+	}
 	if err := sess.DeleteFolder(ctx, target.Path); err != nil {
 		if errors.Is(err, imap.ErrFolderNotEmpty) {
 			return model.NewMailboxError(model.ErrKindConflict, "folder is not empty", false, store.ErrFolderNotEmpty)

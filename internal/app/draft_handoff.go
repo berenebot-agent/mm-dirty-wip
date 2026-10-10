@@ -111,7 +111,7 @@ func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d m
 	// Freeze the exact bytes that will be appended. The handoff header and the
 	// Message-ID travel with the frozen copy, so the remote draft is correlatable
 	// and the handoff's own notification can be excluded from future detection.
-	raw, err := s.buildHandoffMIME(inbox, d, atts, messageID, handoffID)
+	raw, err := s.buildHandoffMIME(ctx, inbox, d, atts, messageID, handoffID)
 	if err != nil {
 		return model.Draft{}, err
 	}
@@ -379,8 +379,9 @@ func (s *Service) handoffPath() string {
 
 // buildHandoffMIME renders the frozen raw MIME for a handoff, with the handoff
 // correlation header as the first header line. Attachments are embedded so the
-// frozen copy is self-contained.
-func (s *Service) buildHandoffMIME(inbox model.Inbox, d model.Draft, atts []model.DraftAttachment, messageID, handoffID string) ([]byte, error) {
+// frozen copy is self-contained. It uses the draft builder so Bcc recipients and
+// reply headers travel with the stored draft (a draft has no MailMoose envelope).
+func (s *Service) buildHandoffMIME(ctx context.Context, inbox model.Inbox, d model.Draft, atts []model.DraftAttachment, messageID, handoffID string) ([]byte, error) {
 	parts := make([]mailparse.Attachment, 0, len(atts))
 	for i, a := range atts {
 		ap, perr := safepath.Join(s.Config.DataDir, a.RawPath)
@@ -405,7 +406,24 @@ func (s *Service) buildHandoffMIME(inbox model.Inbox, d model.Draft, atts []mode
 			from.Name = d.FromName
 		}
 	}
-	raw, err := mailparse.BuildMessage(mailparse.Address{Name: from.Name, Address: from.Address}, d.To, d.CC, d.BCC, d.Subject, d.Text, d.HTML, messageID, "", nil, time.Now().UTC(), parts)
+	// Resolve the reply source, when there is one, so the stored draft carries a
+	// valid In-Reply-To/References and a human sending it replies in-thread. A
+	// missing/unresolvable source omits the headers rather than failing the
+	// handoff.
+	inReply := ""
+	var refs []string
+	if strings.TrimSpace(d.ReplyToMessageID) != "" {
+		if src, rerr := s.resolveSendSource(ctx, inbox.AccountID, d.InboxID, d.ReplyToMessageID); rerr == nil {
+			inReply = ensureMessageID(src.RFCMessageID)
+			for _, r := range src.References {
+				refs = append(refs, ensureMessageID(r))
+			}
+			if inReply != "" {
+				refs = appendUnique(refs, inReply)
+			}
+		}
+	}
+	raw, err := mailparse.BuildDraftMessage(mailparse.Address{Name: from.Name, Address: from.Address}, d.To, d.CC, d.BCC, d.Subject, d.Text, d.HTML, messageID, inReply, refs, time.Now().UTC(), parts)
 	if err != nil {
 		return nil, err
 	}
