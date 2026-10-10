@@ -112,7 +112,10 @@ func (r *dialMXRecords) lookup(domain string) []string {
 func dialMXReceiver(t *testing.T, records *dialMXRecords) (*receiver.Receiver, *httptest.Server, *tls.Config) {
 	t.Helper()
 	lookup := func(_ context.Context, q string) ([]string, error) {
-		return records.lookup(strings.TrimPrefix(q, "_mailmoose-mx.")), nil
+		// Proofs query absolute names (trailing dot); the map is keyed on the
+		// bare domain, so normalise the root label away before looking up.
+		name := strings.TrimSuffix(strings.TrimPrefix(q, "_mailmoose-mx."), ".")
+		return records.lookup(name), nil
 	}
 	r := receiver.New(receiver.Config{
 		Mode:      "shared",
