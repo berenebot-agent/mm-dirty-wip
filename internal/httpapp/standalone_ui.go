@@ -154,27 +154,13 @@ func (s *Server) uiCreateStandalone(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?inbox="+box.ID+"&notice="+url.QueryEscape("Standalone inbox created"), 303)
 }
 
-// uiInboxRemoteSave saves a standalone inbox's remote connector from the inbox
-// settings dialog. It requires Owner. Like every other configure path it runs a
-// live authentication test first: a connector that cannot sign in is never
-// persisted as active. A blank secret keeps the stored value; a blank SMTP host
-// disables outbound.
-func (s *Server) uiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	inboxID := r.PathValue("id")
-	if !p.CanOwn(inboxID) && !p.Admin {
-		http.Error(w, "forbidden", 403)
-		return
-	}
-	if r.Method == http.MethodPost {
-		if err := r.ParseForm(); err != nil {
-			s.uiError(w, err, 400)
-			return
-		}
-	}
+// remoteUpdateFromForm builds a standalone remote update from an inbox settings
+// form. A blank secret keeps the stored value; a blank SMTP host disables
+// outbound. The field names match the edit dialog's Identity-tab controls.
+func remoteUpdateFromForm(r *http.Request) store.StandaloneRemoteUpdate {
 	port, _ := parseIntForm(r.Form.Get("remote_port"))
 	smtpPort, _ := parseIntForm(r.Form.Get("smtp_port"))
-	in := store.StandaloneRemoteUpdate{
+	return store.StandaloneRemoteUpdate{
 		Host:         r.Form.Get("remote_host"),
 		Port:         port,
 		Username:     r.Form.Get("remote_username"),
@@ -188,29 +174,42 @@ func (s *Server) uiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 		IMAPPassword: r.Form.Get("imap_password"),
 		SMTPPassword: r.Form.Get("smtp_password"),
 	}
-	if !hasFormRemoteNonSecret(in) && strings.TrimSpace(in.IMAPPassword) == "" && strings.TrimSpace(in.SMTPPassword) == "" {
-		http.Redirect(w, r, "/?inbox="+inboxID+"&notice="+url.QueryEscape("No changes to save"), 303)
-		return
-	}
-	// A connector must authenticate before it is saved as active.
-	if verr := s.verifyRemoteUpdate(r.Context(), p, inboxID, in); verr != nil {
-		http.Redirect(w, r, "/?inbox="+inboxID+"&error="+url.QueryEscape("IMAP connection failed: "+safeErrorMessage(verr, "the connector could not sign in")), 303)
-		return
-	}
-	if _, err := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, inboxID, in); err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	// Reopen the settings dialog on the tab the save came from.
-	tab := r.Form.Get("inbox_tab")
-	if !remoteSaveTabs[tab] {
-		tab = "remote-imap"
-	}
-	http.Redirect(w, r, "/?inbox="+inboxID+"&inbox_tab="+tab+"&notice="+url.QueryEscape("Remote connector saved"), 303)
 }
 
-// remoteSaveTabs are the settings-dialog sections a remote save may return to.
-var remoteSaveTabs = map[string]bool{"remote-imap": true, "remote-smtp": true}
+// standaloneRemoteChanged reports whether a submitted remote update would change
+// the stored binding: any non-secret field differs, the namespace changes, a new
+// secret is supplied, or outbound SMTP is being turned off. It gates the live
+// authentication test so a plain identity save never re-dials the connector.
+func standaloneRemoteChanged(box model.Inbox, in store.StandaloneRemoteUpdate) bool {
+	if strings.TrimSpace(in.IMAPPassword) != "" || strings.TrimSpace(in.SMTPPassword) != "" {
+		return true
+	}
+	var cur model.RemoteConnection
+	if box.Remote != nil {
+		cur = *box.Remote
+	}
+	var curSMTP model.RemoteSMTP
+	if cur.SMTP != nil {
+		curSMTP = *cur.SMTP
+	}
+	if strings.TrimSpace(in.Host) != strings.TrimSpace(cur.Host) ||
+		in.Port != cur.Port ||
+		strings.TrimSpace(in.Username) != strings.TrimSpace(cur.Username) ||
+		strings.TrimSpace(in.Security) != strings.TrimSpace(cur.Security) ||
+		strings.TrimSpace(in.Namespace) != strings.TrimSpace(box.Namespace) {
+		return true
+	}
+	if in.ClearSMTP && cur.SMTP != nil {
+		return true
+	}
+	if strings.TrimSpace(in.SMTPHost) != strings.TrimSpace(curSMTP.Host) ||
+		in.SMTPPort != curSMTP.Port ||
+		strings.TrimSpace(in.SMTPUsername) != strings.TrimSpace(curSMTP.Username) ||
+		strings.TrimSpace(in.SMTPSecurity) != strings.TrimSpace(curSMTP.Security) {
+		return true
+	}
+	return false
+}
 
 // hasFormRemoteNonSecret reports whether a submitted remote form carries any
 // non-secret field, so a secrets-only save does not require the host.
