@@ -43,7 +43,10 @@ async function check(mode = 'hosted') {
   let now = 100000, tick, requests = [], statuses = [], saved, redirect, failRotation = false, dns = [];
   let mxList = mode === 'custom' ? [] : [{ hostname: 'mx.example.com', priority: 10 }];
   const dlg = new Element(); dlg.open = true;
-  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.dataset.antlerConnectors = JSON.stringify(mxList); form.closest = () => dlg;
+  // The live per-receiver status seeded on the status form, so the dialog opens
+  // already matching the dashboard light instead of flashing "Pending".
+  const seeded = mode === 'status' ? [{ state: 'ready', smtp_hostname: 'mx.example.com' }] : [];
+  const form = new Element('FORM'); form.dataset.antlerDomain = 'domain-1'; form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com'; if (mode === 'subdomain') form.dataset.antlerParent = 'example.com'; form.dataset.antlerConnectors = JSON.stringify(mxList); form.dataset.antlerStatus = JSON.stringify(seeded); form.closest = () => dlg;
   const provider = new Element('SELECT'); provider.value = 'dialmx';
   const group = new Element();
   const service = new Element('SELECT'); service.value = 'antler'; service.previousElementSibling = new Element('LABEL');
@@ -84,11 +87,13 @@ async function check(mode = 'hosted') {
   if (mode === 'status') {
     // Opening the saved status view checks immediately rather than waiting for
     // the first poll tick, and lays out the complete table from the embedded
-    // connector names so nothing appears half-loaded.
+    // connector names and live statuses, so it opens already matching the
+    // dashboard light rather than flashing "Pending".
     assert.equal(requests.filter(r => r.options.method === 'GET').length, 1, 'status opens with an immediate check');
-    assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/, 'status skeleton is laid out before the first poll returns');
-    assert.match(collect(wizard.nodes['.antler-records']), /mx\.example\.com/, 'skeleton rows carry the connector names');
-    assert.match(collect(wizard.nodes['.antler-records']), /Pending/, 'skeleton value cells start pending');
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Status/, 'status table is laid out before the first poll returns');
+    assert.match(collect(wizard.nodes['.antler-records']), /mx\.example\.com/, 'rows carry the connector names');
+    assert.match(collect(wizard.nodes['.antler-records']), /Ready to receive/, 'a seeded live status paints its real light on open');
+    assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Pending/, 'a seeded connector is never shown pending');
     assert.ok(wizard.nodes['.antler-records'].classList.contains('antler-checking'), 'pending skeleton animates while the first check is in flight');
     await flush();
     assert.equal(wizard.nodes['.antler-records'].classList.contains('antler-checking'), false, 'pending animation stops once the check returns');
@@ -133,76 +138,46 @@ async function check(mode = 'hosted') {
     statuses = [{ state: 'disconnected' }];
     await submit();
     assert.equal(save.textContent, 'Save email', 'Finish returns to status without waiting for a receiver');
-    assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Status/);
     assert.doesNotMatch(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
     assert.equal(requests.filter(r => r.options.method === 'PUT').length, 1, 'Finish does not rewrite config or rotate again');
     dlg.open = false; now += 20000;
     const closedCount = requests.length; tick(); await flush(); assert.equal(requests.length, closedCount);
     dlg.open = true; tick(); await flush();
-    assert.match(collect(wizard.nodes['.antler-records']), /Antler|TXT/, 'reopening refreshes status and DNS');
-    for (const kind of ['mx', 'txt']) {
-      dns = [{ kind: kind, state: 'mismatch' }, { kind: kind === 'mx' ? 'txt' : 'mx', state: 'ok' }];
-      now += 20000; tick(); await flush();
-      const writesBefore = requests.filter(r => r.options.method !== 'GET').length;
-      const fix = wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix')[0];
-      assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').length, 1);
-      assert.ok(fix, 'DNS status has a targeted Fix button');
-      assert.equal(fix.hidden, false);
-      assert.equal(fix.textContent, 'Fix DNS records');
-      fix.events.click();
-      assert.equal(wizard.panels[1].hidden, false, 'Fix opens the DNS record step');
-      assert.equal(wizard.panels[2].hidden, true, 'Fix never opens the receiver step');
-      assert.equal(wizard.nodes['[data-antler-step="1"] h3'].textContent, 'Fix your ' + kind.toUpperCase() + ' record');
-      assert.match(collect(wizard.nodes['.antler-records']), /Name Type Priority Value Status/);
-      assert.equal(save.textContent, 'Done', 'repair offers Done, not a readiness-gated Finish');
-      assert.equal(save.disabled, false, 'repair Done is never blocked on readiness');
-      await submit();
-      assert.equal(save.textContent, 'Save email', 'Done returns to status');
-      assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
-      assert.equal(requests.filter(r => r.options.method !== 'GET').length, writesBefore, 'Fix never rotates or rewrites configuration');
-      dns = []; now += 20000; tick(); await flush();
-    }
-    // With every record published but a receiver still reconnecting there is
-    // nothing to fix: no Fix button is shown, so the operator cannot be led into
-    // a step they cannot act on.
-    dns = [{ kind: 'mx', state: 'ok' }, { kind: 'txt', state: 'ok' }];
-    statuses = [{ state: 'disconnected' }]; now += 20000; tick(); await flush();
-    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'waiting on a receiver shows no Fix');
-    statuses = [{ state: 'ready' }]; now += 20000; tick(); await flush();
-    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'healthy status has no Fix');
-    // A partial MX set: one receiver's MX published, the other's not. The
-    // aggregate check is ok and each row lights on its own hostname, so the
-    // missing secondary receiver never paints the whole setup red or prompts a
-    // Fix.
-    mxList = [{ hostname: 'mx.example.com', priority: 10 }, { hostname: 'mx2.example.com', priority: 20 }];
-    dns = [{ kind: 'mx', state: 'ok', matched: ['mx.example.com'] }, { kind: 'txt', state: 'ok' }];
-    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }, { state: 'ready', smtp_hostname: 'mx2.example.com' }];
-    now += 20000; tick(); await flush();
-    const tbody = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1];
-    const mxLightClass = i => tbody.children[i].children[2].children[0].className;
-    assert.match(mxLightClass(0), /green/, 'published receiver MX is green');
-    assert.match(mxLightClass(1), /amber/, 'unpublished receiver MX is not painted red');
-    assert.equal(wizard.nodes['.antler-checks'].children.filter(el => el.className === 'secondary antler-fix').filter(el => !el.hidden).length, 0, 'partial MX set is healthy: no Fix');
-    // A receiver the core cannot reach is a fact, not "in progress": its
-    // connector row must paint red and name the failure. The server fills the
-    // configured smtp_hostname even when the unreachable receiver advertised
-    // none, so the row still resolves to its status instead of a bare amber
-    // "Waiting".
+    assert.match(collect(wizard.nodes['.antler-records']), /Connector Status/, 'reopening refreshes the connector status table');
+    // The saved status view is one light per receiver: its single state carries
+    // both the domain-authority and MX-routing verdicts (D095), so the table is
+    // two columns and each row lights on its own connector.
+    const statusTableEl = () => wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE');
     const connLightClass = i => {
-      const row = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1].children[i];
+      const row = statusTableEl().children[1].children[i];
       return row.children[1].children[0].className;
     };
     const connLabel = i => {
-      const row = wizard.nodes['.antler-records'].children.find(el => el.tagName === 'TABLE').children[1].children[i];
+      const row = statusTableEl().children[1].children[i];
       return row.children[1].children[1].textContent;
     };
+    // A ready receiver paints green and names the state.
+    statuses = [{ state: 'ready', smtp_hostname: 'mx.example.com' }];
+    now += 20000; tick(); await flush();
+    assert.match(connLightClass(0), /green/, 'a ready connector is green');
+    assert.equal(connLabel(0), 'Ready to receive');
+    // A receiver the core cannot reach is a fact, not "in progress": its row must
+    // paint red and name the failure. The server fills the configured
+    // smtp_hostname even when the unreachable receiver advertised none, so the
+    // row still resolves to its status instead of a bare amber "Waiting".
     statuses = [{ state: 'unreachable', smtp_hostname: 'mx.example.com', reason: 'unreachable' }];
     now += 20000; tick(); await flush();
     assert.match(connLightClass(0), /red/, 'an unreachable connector is red, not amber');
     assert.equal(connLabel(0), 'Receiver unreachable');
-    statuses = [{ state: 'disconnected', smtp_hostname: 'mx2.example.com' }];
+    statuses = [{ state: 'disconnected', smtp_hostname: 'mx.example.com' }];
     now += 20000; tick(); await flush();
-    assert.match(connLightClass(1), /red/, 'a disconnected connector is red, not amber');
+    assert.match(connLightClass(0), /red/, 'a disconnected connector is red, not amber');
+    // A connector with no live status yet reads amber "Pending".
+    statuses = [];
+    now += 20000; tick(); await flush();
+    assert.match(connLightClass(0), /amber/, 'a connector with no status is amber pending');
+    assert.equal(connLabel(0), 'Pending');
     failRotation = true;
     rotate.events.submit({ defaultPrevented: false, preventDefault() {} }); await flush();
     assert.match(wizard.nodes['.antler-error'].textContent, /key may already have changed/);
@@ -278,7 +253,7 @@ async function check(mode = 'hosted') {
   assert.equal(saved.config.enforcement, 'hard');
   assert.equal(redirect, undefined);
   assert.equal(save.textContent, 'Save email', 'Finish returns to status without waiting for a receiver');
-  assert.match(collect(wizard.nodes['.antler-records']), /Connector Connection status MX status/);
+  assert.match(collect(wizard.nodes['.antler-records']), /Connector Status/);
   assert.equal(wizard.panels[2].hidden, true, 'initial Finish returns to status');
   assert.equal(requests.filter(r => r.options.method === 'PUT').length, finishPuts + 1, 'Finish saves the config once and never rotates again');
   dlg.open = false; now += 20000;

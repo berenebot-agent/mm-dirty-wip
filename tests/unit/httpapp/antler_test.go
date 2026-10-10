@@ -186,20 +186,23 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 			t.Fatalf("setup panel missing %q", want)
 		}
 	}
-	// The status view draws its connector skeleton from the set embedded on the
-	// form, so the rendered attribute must exist and name a connector hostname
-	// (html/template escapes it for attribute context).
-	attr := `data-antler-connectors=`
-	i := strings.Index(page.Body.String(), attr)
-	if i < 0 {
-		t.Fatalf("receiving form missing %s attribute", attr)
-	}
-	attrVal := page.Body.String()[i:]
-	if end := strings.IndexByte(attrVal, '>'); end >= 0 {
-		attrVal = attrVal[:end]
-	}
-	if !strings.Contains(attrVal, "antler1.example.test") {
-		t.Fatalf("connector skeleton data missing receiver hostname: %q", attrVal)
+	// The status view draws its connector table from the set embedded on the
+	// form, so the rendered attributes must exist and name a connector hostname
+	// (html/template escapes them for attribute context). The live per-receiver
+	// statuses are embedded too, so the dialog opens already matching the
+	// dashboard light rather than flashing "Pending".
+	for _, attr := range []string{`data-antler-connectors=`, `data-antler-status=`} {
+		i := strings.Index(page.Body.String(), attr)
+		if i < 0 {
+			t.Fatalf("receiving form missing %s attribute", attr)
+		}
+		attrVal := page.Body.String()[i:]
+		if end := strings.IndexByte(attrVal, '>'); end >= 0 {
+			attrVal = attrVal[:end]
+		}
+		if !strings.Contains(attrVal, "antler1.example.test") {
+			t.Fatalf("%s data missing receiver hostname: %q", attr, attrVal)
+		}
 	}
 }
 

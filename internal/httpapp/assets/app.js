@@ -3192,10 +3192,13 @@ function hideInboxSubview(dlg) {
     var statusMode = !!oldSetup && provider.value === 'dialmx';
     var entered = statusMode;
     var custom = service.value === 'custom';
-    // The saved status view draws its connector skeleton from the names embedded
-    // on the form, so it opens complete and the first poll only fills values.
+    // The saved status view draws its connector table from the names and live
+    // statuses embedded on the form, so it opens complete and already matching
+    // the dashboard light it was opened from; the first poll then reconciles it.
     var connectors = [];
     try { connectors = JSON.parse(form.dataset.antlerConnectors || '[]') || []; } catch (err) { connectors = []; }
+    var initialStatuses = [];
+    try { initialStatuses = JSON.parse(form.dataset.antlerStatus || '[]') || []; } catch (err) { initialStatuses = []; }
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
@@ -3338,32 +3341,60 @@ function hideInboxSubview(dlg) {
       }
       return block;
     }
-    // The saved status view draws its full connector table before the first
-    // poll returns, so the dialog no longer opens half-empty and fills later.
-    // The connector names are the only thing not known from live status, so they
-    // are embedded on the form (data-antler-connectors); every value cell starts
-    // pending and is filled by the first render. While a check is in flight the
-    // amber pending dots animate (see .antler-checking), which also covers every
-    // wizard step's own pending rows.
-    function skeletonLight(text) {
-      var wrap = document.createElement('span');
+    // pendingCell is one status-table cell for a connector with no live status
+    // yet: an amber dot and a "Pending" label, shaped like a live status cell so
+    // the two are indistinguishable to a reader. While a check is in flight the
+    // amber dots animate (see .antler-checking).
+    function pendingCell(parent) {
+      var td = document.createElement('td');
       var dot = document.createElement('span');
       dot.className = 'antler-light amber';
       var label = document.createElement('span');
-      label.textContent = text;
-      wrap.appendChild(dot);
-      wrap.appendChild(label);
-      return wrap;
-    }
-    function skeletonCell(parent, text) {
-      var td = document.createElement('td');
-      td.appendChild(skeletonLight(text));
+      label.textContent = 'Pending';
+      td.appendChild(dot);
+      td.appendChild(label);
       parent.appendChild(td);
       return td;
     }
-    function renderSkeleton(connectors) {
-      var records = wizard.querySelector('.antler-records');
-      records.replaceChildren();
+    // statusRow appends one connector's row: its name, then a live status cell
+    // when a status is supplied or an amber "Pending" cell when none is. A live
+    // cell reads plain text, matching the table's textContent shape.
+    function statusRow(tbody, name, status) {
+      var tr = document.createElement('tr');
+      var connector = document.createElement('td');
+      connector.textContent = name;
+      tr.appendChild(connector);
+      if (status) {
+        var td = document.createElement('td');
+        var dot = document.createElement('span');
+        dot.className = 'antler-light ' + receiverLightClass(status);
+        var label = document.createElement('span');
+        label.textContent = receiverLabel(status);
+        if (status.reason) { label.title = status.reason; }
+        td.appendChild(dot);
+        td.appendChild(label);
+        tr.appendChild(td);
+      } else {
+        pendingCell(tr);
+      }
+      tbody.appendChild(tr);
+    }
+    // statusTable builds the saved-status connector table. Each row is named by a
+    // connector hostname and its status light is filled from the live status set
+    // when one matches: seeded on open from the embedded data-antler-status, then
+    // refreshed on every poll. A connector with no live status yet reads amber
+    // "Pending". The connector names are the only thing not known from live
+    // status, so they come from data-antler-connectors; a status with no matching
+    // connector (a custom-service receiver_url, which has no embedded MX list) is
+    // appended so it is never dropped.
+    function statusTable(connectors, statuses) {
+      var byHost = {};
+      var byURL = {};
+      (statuses || []).forEach(function (status) {
+        if (status.smtp_hostname) { byHost[status.smtp_hostname] = status; }
+        if (status.receiver_url) { byURL[status.receiver_url] = status; }
+      });
+      var used = [];
       var table = document.createElement('table');
       table.className = 'antler-dns-table antler-status-table';
       var head = document.createElement('tr');
@@ -3374,16 +3405,16 @@ function hideInboxSubview(dlg) {
       });
       var thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
       var tbody = document.createElement('tbody');
-      if (connectors.length) {
-        connectors.forEach(function (mx) {
-          var tr = document.createElement('tr');
-          var connector = document.createElement('td');
-          connector.textContent = mx.hostname;
-          tr.appendChild(connector);
-          skeletonCell(tr, 'Pending');
-          tbody.appendChild(tr);
-        });
-      } else {
+      (connectors || []).forEach(function (mx) {
+        var status = byHost[mx.hostname] || byURL[mx.session_url];
+        if (status) { used.push(status); }
+        statusRow(tbody, mx.hostname, status);
+      });
+      (statuses || []).forEach(function (status) {
+        if (used.indexOf(status) !== -1) { return; }
+        statusRow(tbody, status.smtp_hostname || status.receiver_url, status);
+      });
+      if (!tbody.children.length) {
         var waiting = document.createElement('tr');
         var cell = document.createElement('td');
         cell.colSpan = 2;
@@ -3392,7 +3423,26 @@ function hideInboxSubview(dlg) {
         tbody.appendChild(waiting);
       }
       table.appendChild(tbody);
-      records.appendChild(table);
+      return table;
+    }
+    function renderSkeleton(connectors) {
+      var records = wizard.querySelector('.antler-records');
+      records.replaceChildren();
+      records.appendChild(statusTable(connectors, initialStatuses));
+    }
+    // renderReceivers fills the wizard's own receivers step (used while setting
+    // up, not the saved status view) from the live status set.
+    function renderReceivers(statuses) {
+      var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
+      (statuses || []).forEach(function (status) {
+        var row = document.createElement('p');
+        row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + receiverLabel(status) + (status.reason ? ' · ' + status.reason : '');
+        var light = document.createElement('span');
+        light.className = 'antler-light ' + receiverLightClass(status);
+        row.prepend(light);
+        receivers.appendChild(row);
+      });
+      if (!(statuses || []).length) { receivers.textContent = 'Waiting for receiver status…'; }
     }
     function render(data) {
       state = data;
@@ -3408,6 +3458,19 @@ function hideInboxSubview(dlg) {
       var mxName = subdomain ? domainName : '@';
       var dnsByKind = {};
       (data.dns || []).forEach(function (entry) { dnsByKind[entry.kind] = entry; });
+      // The status view has one light per receiver: the receiver proves both
+      // domain authority (TXT) and routing (its own hostname in the domain's
+      // MX), so its single state carries the whole verdict. The table is built
+      // by statusTable from the connector set embedded on the form, so it opens
+      // complete and matches the dashboard light, then reconciles on each poll.
+      // A connector the poll did not report keeps its "Pending" row.
+      if (statusMode) {
+        records.appendChild(statusTable(connectors, data.status));
+        records.appendChild(remediationBlock(data, instructions, mxName));
+        renderReceivers(data.status);
+        update();
+        return;
+      }
       function lightFor(entry) {
         var span = document.createElement('span');
         span.className = 'antler-light ' + (!entry || entry.state === 'pending' ? 'amber' : entry.state === 'ok' ? 'green' : 'red');
@@ -3417,9 +3480,9 @@ function hideInboxSubview(dlg) {
         return { span: span, text: text };
       }
       var table = document.createElement('table');
-      table.className = 'antler-dns-table ' + (statusMode ? 'antler-status-table' : 'antler-record-table');
+      table.className = 'antler-dns-table antler-record-table';
       var head = document.createElement('tr');
-      (statusMode ? ['Connector', 'Status'] : ['Name', 'Type', 'Priority', 'Value', 'Status', '']).forEach(function (title) {
+      ['Name', 'Type', 'Priority', 'Value', 'Status', ''].forEach(function (title) {
         var th = document.createElement('th');
         th.textContent = title;
         head.appendChild(th);
@@ -3433,79 +3496,35 @@ function hideInboxSubview(dlg) {
         parent.appendChild(td);
         return td;
       }
-      if (!statusMode) {
-        function recordRow(name, type, priority, value, entry) {
-          var tr = document.createElement('tr');
-          tr.dataset.dnsKind = type.toLowerCase();
-          [name, type, priority, value].forEach(function (text, index) {
-            var td = document.createElement('td');
-            td.textContent = text;
-            if (index === 0) { td.className = 'antler-name'; }
-            if (index === 3) { td.className = 'antler-value'; }
-            tr.appendChild(td);
-          });
-          statusCell(tr, lightFor(entry));
-          var action = document.createElement('td');
-          var copy = document.createElement('button');
-          copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
-          copy.addEventListener('click', function () {
-            if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
-            navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
-          });
-          action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
-        }
-        (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
-        if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
-      } else {
-        // The status view has one light per receiver: the receiver now proves
-        // both domain authority (TXT) and routing (its own hostname in the
-        // domain's MX), so its single state carries the whole verdict.
-        (data.status || []).forEach(function (status) {
-          var tr = document.createElement('tr');
-          var connector = document.createElement('td');
-          connector.textContent = status.smtp_hostname || status.receiver_url;
-          tr.appendChild(connector);
-          var light = {
-            span: Object.assign(document.createElement('span'), { className: 'antler-light ' + receiverLightClass(status) }),
-            text: document.createElement('span')
-          };
-          light.text.textContent = receiverLabel(status);
-          if (status.reason) { light.text.title = status.reason; }
-          statusCell(tr, light);
-          tbody.appendChild(tr);
+      function recordRow(name, type, priority, value, entry) {
+        var tr = document.createElement('tr');
+        tr.dataset.dnsKind = type.toLowerCase();
+        [name, type, priority, value].forEach(function (text, index) {
+          var td = document.createElement('td');
+          td.textContent = text;
+          if (index === 0) { td.className = 'antler-name'; }
+          if (index === 3) { td.className = 'antler-value'; }
+          tr.appendChild(td);
         });
-        if (!(data.status || []).length) {
-          var waiting = document.createElement('tr');
-          var waitingCell = document.createElement('td');
-          waitingCell.colSpan = 2;
-          waitingCell.textContent = 'No connectors configured';
-          waiting.appendChild(waitingCell);
-          tbody.appendChild(waiting);
-        }
+        statusCell(tr, lightFor(entry));
+        var action = document.createElement('td');
+        var copy = document.createElement('button');
+        copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
+        copy.addEventListener('click', function () {
+          if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
+          navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+        });
+        action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
       }
+      (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, dnsByKind.mx); });
+      if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, dnsByKind.txt); }
       table.appendChild(tbody);
       records.appendChild(table);
-      // Only failing records get a remediation line, on this same screen: the
-      // record to publish with a copy button, and the live Check now / auto-poll
-      // flips it once DNS propagates. Reasons that resolve on their own
-      // (connecting, deferred, unreachable) show status only, with no action.
-      if (statusMode) {
-        records.appendChild(remediationBlock(data, instructions, mxName));
-      }
-      var receivers = wizard.querySelector('.antler-receivers'); receivers.replaceChildren();
-      (data.status || []).forEach(function (status) {
-        var row = document.createElement('p');
-        row.textContent = (status.smtp_hostname || status.receiver_url) + ' — ' + receiverLabel(status) + (status.reason ? ' · ' + status.reason : '');
-        var light = document.createElement('span');
-        light.className = 'antler-light ' + receiverLightClass(status);
-        row.prepend(light);
-        receivers.appendChild(row);
-      });
-      if (!(data.status || []).length) { receivers.textContent = 'Waiting for receiver status…'; }
+      renderReceivers(data.status);
       // The receivers step of the new-setup wizard carries the same inline
       // remediation, so an operator completing setup can publish the MX record
       // they need without leaving the step.
-      receivers.appendChild(remediationBlock(data, instructions, mxName));
+      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data, instructions, mxName));
       update();
     }
     function update() {
