@@ -155,7 +155,10 @@ func (s *Server) uiCreateStandalone(w http.ResponseWriter, r *http.Request) {
 }
 
 // uiInboxRemoteSave saves a standalone inbox's remote connector from the inbox
-// settings dialog. It requires Owner.
+// settings dialog. It requires Owner. Like every other configure path it runs a
+// live authentication test first: a connector that cannot sign in is never
+// persisted as active. A blank secret keeps the stored value; a blank SMTP host
+// disables outbound.
 func (s *Server) uiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	inboxID := r.PathValue("id")
@@ -180,7 +183,7 @@ func (s *Server) uiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 		SMTPPort:     smtpPort,
 		SMTPUsername: r.Form.Get("smtp_username"),
 		SMTPSecurity: r.Form.Get("smtp_security"),
-		ClearSMTP:    r.Form.Get("smtp_enabled") != "1",
+		ClearSMTP:    strings.TrimSpace(r.Form.Get("smtp_host")) == "",
 		Namespace:    r.Form.Get("namespace"),
 		IMAPPassword: r.Form.Get("imap_password"),
 		SMTPPassword: r.Form.Get("smtp_password"),
@@ -189,12 +192,25 @@ func (s *Server) uiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?inbox="+inboxID+"&notice="+url.QueryEscape("No changes to save"), 303)
 		return
 	}
+	// A connector must authenticate before it is saved as active.
+	if verr := s.verifyRemoteUpdate(r.Context(), p, inboxID, in); verr != nil {
+		http.Redirect(w, r, "/?inbox="+inboxID+"&error="+url.QueryEscape("IMAP connection failed: "+safeErrorMessage(verr, "the connector could not sign in")), 303)
+		return
+	}
 	if _, err := s.remoteMailbox().ConfigureStandaloneRemote(r.Context(), p, inboxID, in); err != nil {
 		s.uiError(w, err, 400)
 		return
 	}
-	http.Redirect(w, r, "/?inbox="+inboxID+"&notice="+url.QueryEscape("Remote connector saved"), 303)
+	// Reopen the settings dialog on the tab the save came from.
+	tab := r.Form.Get("inbox_tab")
+	if !remoteSaveTabs[tab] {
+		tab = "remote-imap"
+	}
+	http.Redirect(w, r, "/?inbox="+inboxID+"&inbox_tab="+tab+"&notice="+url.QueryEscape("Remote connector saved"), 303)
 }
+
+// remoteSaveTabs are the settings-dialog sections a remote save may return to.
+var remoteSaveTabs = map[string]bool{"remote-imap": true, "remote-smtp": true}
 
 // hasFormRemoteNonSecret reports whether a submitted remote form carries any
 // non-secret field, so a secrets-only save does not require the host.
@@ -760,6 +776,29 @@ func (s *Server) authoringSettingsByInbox(ctx context.Context, boxes []model.Inb
 			"standalone":       box.Kind == model.InboxKindStandalone,
 		}
 		b, merr := json.Marshal(payload)
+		if merr != nil {
+			continue
+		}
+		out[box.ID] = string(b)
+	}
+	return out
+}
+
+// inboxRemoteConfigByInbox embeds each standalone inbox's secret-free remote
+// connector view on its edit button, so the settings dialog's Remote IMAP /
+// Outbound SMTP tabs can populate from durable state. Domain inboxes have no
+// entry.
+func (s *Server) inboxRemoteConfigByInbox(ctx context.Context, p model.Principal, boxes []model.Inbox) map[string]string {
+	out := make(map[string]string)
+	for _, box := range boxes {
+		if box.Kind != model.InboxKindStandalone {
+			continue
+		}
+		view, err := s.remoteConfigView(ctx, p, box.ID)
+		if err != nil {
+			continue
+		}
+		b, merr := json.Marshal(view)
 		if merr != nil {
 			continue
 		}
