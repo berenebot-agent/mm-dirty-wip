@@ -14,6 +14,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +25,11 @@ type Attachment struct {
 	Content                          []byte
 	Size                             int64
 	PartIndex                        int
+	// PartPath is the IMAP-style MIME part path ("1.2") of this attachment,
+	// when the message was parsed as MIME. It addresses the same part for a
+	// structural BODY.PEEK[path] fetch, so a remote message's attachment can be
+	// streamed without the body being archived. Empty when unknown.
+	PartPath string
 }
 type Parsed struct {
 	RFCMessageID, InReplyTo string
@@ -170,6 +176,10 @@ type partInfo struct {
 	Media, Filename, ContentID, Transfer string
 	Params                               map[string]string
 	IsAttachment                         bool
+	// PartPath is the IMAP-style MIME part path of this leaf (1-based child
+	// indices from the root, e.g. [1,2]); empty for a non-multipart top-level
+	// leaf. It is set by the walker and ignored by callers that do not need it.
+	PartPath []int
 }
 
 type walker struct {
@@ -178,6 +188,7 @@ type walker struct {
 	parts    int
 	maxDepth int
 	maxParts int
+	path     []int
 }
 
 // walkMIME performs one bounded traversal of a MIME entity. Container parts are
@@ -214,6 +225,10 @@ func (w *walker) walk(h textproto.MIMEHeader, r io.Reader) error {
 			return fmt.Errorf("multipart without boundary")
 		}
 		mr := multipart.NewReader(r, boundary)
+		// Children of a multipart are numbered from 1 within the enclosing path,
+		// matching the IMAP BODY[section] part path so an extracted attachment's
+		// path can be reused verbatim in a BODY.PEEK[path] fetch.
+		child := 0
 		for {
 			part, err := mr.NextPart()
 			if err == io.EOF {
@@ -222,11 +237,14 @@ func (w *walker) walk(h textproto.MIMEHeader, r io.Reader) error {
 			if err != nil {
 				return err
 			}
-			if err = w.walk(part.Header, part); err != nil {
-				part.Close()
+			child++
+			w.path = append(w.path, child)
+			err = w.walk(part.Header, part)
+			w.path = w.path[:len(w.path)-1]
+			part.Close()
+			if err != nil {
 				return err
 			}
-			part.Close()
 		}
 		return nil
 	}
@@ -235,12 +253,19 @@ func (w *walker) walk(h textproto.MIMEHeader, r io.Reader) error {
 	if filename == "" {
 		filename = params["name"]
 	}
+	// A leaf directly under the message (no enclosing multipart) is body section
+	// 1 in IMAP, so give it that path; multipart children already carry theirs.
+	path := append([]int(nil), w.path...)
+	if len(path) == 0 {
+		path = []int{1}
+	}
 	info := partInfo{
 		Media:     media,
 		Params:    params,
 		Filename:  filename,
 		ContentID: strings.Trim(h.Get("Content-Id"), "<> "),
 		Transfer:  h.Get("Content-Transfer-Encoding"),
+		PartPath:  path,
 		IsAttachment: strings.EqualFold(disp, "attachment") || filename != "" ||
 			(!strings.HasPrefix(strings.ToLower(media), "text/") && media != "message/rfc822"),
 	}
@@ -261,7 +286,7 @@ func (s *parseState) collect(info partInfo, r io.Reader) error {
 		if err != nil {
 			return err
 		}
-		s.attachments = append(s.attachments, Attachment{Filename: safeFilename(info.Filename, s.nextAttachment, info.Media), ContentType: info.Media, ContentID: info.ContentID, Size: n, PartIndex: s.nextAttachment})
+		s.attachments = append(s.attachments, Attachment{Filename: safeFilename(info.Filename, s.nextAttachment, info.Media), ContentType: info.Media, ContentID: info.ContentID, Size: n, PartIndex: s.nextAttachment, PartPath: partPathString(info.PartPath)})
 		return nil
 	}
 	body, err := io.ReadAll(io.LimitReader(r, 10<<20))
@@ -392,9 +417,21 @@ func ExtractAllAttachments(path string, fn func(Attachment, io.Reader) error, li
 			return nil
 		}
 		target++
-		meta := Attachment{Filename: safeFilename(info.Filename, target, info.Media), ContentType: info.Media, ContentID: info.ContentID, PartIndex: target}
+		meta := Attachment{Filename: safeFilename(info.Filename, target, info.Media), ContentType: info.Media, ContentID: info.ContentID, PartIndex: target, PartPath: partPathString(info.PartPath)}
 		return fn(meta, decodeTransfer(info.Transfer, r))
 	}, resolveLimits(limits))
+}
+
+// partPathString renders a MIME part path as the dotted IMAP form ("1.2").
+func partPathString(path []int) string {
+	if len(path) == 0 {
+		return ""
+	}
+	parts := make([]string, len(path))
+	for i, n := range path {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ".")
 }
 
 // HasControlChars reports whether s contains a CR, LF, or another C0/DEL
