@@ -247,7 +247,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/rename", s.withSession(s.withCSRF(s.uiInboxFolderRename)))
 	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/delete", s.withSession(s.withCSRF(s.uiInboxFolderDelete)))
 	// Standalone remote connector setup.
-	m.HandleFunc("POST /ui/inboxes/{id}/remote", s.withSession(s.withCSRF(s.uiInboxRemoteSave)))
 	m.HandleFunc("GET /ui/inboxes/{id}/remote", s.withSession(s.uiInboxRemoteSettings))
 	m.HandleFunc("POST /ui/inboxes/{id}/remote/settings", s.withSession(s.withCSRF(s.uiInboxRemoteSettingsSave)))
 	m.HandleFunc("POST /ui/inboxes/{id}/remote/roles/{role}", s.withSession(s.withCSRF(s.uiInboxRemoteRoleCreate)))
