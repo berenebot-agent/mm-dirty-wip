@@ -79,6 +79,14 @@ Resend also works as a sending provider (see below).
 
 ## Inbound: SendGrid
 
+> **Not currently offered.** The connector is implemented and unit-tested, but
+> it has **not been verified against the real provider** — Twilio declined to
+> activate a SendGrid account for testing (compliance refusal, ticket
+> `#29899115`). SendGrid is therefore **removed from the receiving provider
+> menu** until an end-to-end test passes. The setup below is retained as the
+> path to verifying it; see [docs/SENDGRID.md](SENDGRID.md) for how to
+> re-enable it.
+
 Inbound can be received via Twilio SendGrid Inbound Parse. SendGrid POSTs the raw MIME in a signed `multipart/form-data` payload. Full setup is in [docs/SENDGRID.md](SENDGRID.md).
 
 The webhook URL to register in SendGrid is:

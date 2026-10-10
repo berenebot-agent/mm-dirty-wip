@@ -43,7 +43,13 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/postmark"
 	_ "github.com/dellarb/mailmoose/internal/transport/remotemx"
 	_ "github.com/dellarb/mailmoose/internal/transport/resend"
-	_ "github.com/dellarb/mailmoose/internal/transport/sendgrid"
+	// SendGrid is deliberately NOT registered: its inbound connector is complete
+	// and unit-tested, but the provider account could not be obtained for
+	// end-to-end verification (Twilio compliance refused activation), so it is
+	// hidden from the receiving provider menus until it can be tested. The
+	// adapter and its tests are untouched — re-enable by uncommenting this
+	// import and restoring "sendgrid" in the provider-order test's want list.
+	// _ "github.com/dellarb/mailmoose/internal/transport/sendgrid"
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
