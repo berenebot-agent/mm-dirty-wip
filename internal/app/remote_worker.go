@@ -646,14 +646,24 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 // for ordinary notifiable mail, persists the durable remote event (which the
 // existing webhook and Hermes workers consume on demand) and publishes it to the
 // hub so SSE/long-poll wake. Proactive delivery is never triggered by an ordinary
-// live read.
+// live read. Classification fails closed: an arrival that cannot be conclusively
+// classified is left pending and never published as ordinary mail.
 func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) {
 	// Pending-email-approval detection must happen before any proactive delivery:
 	// an approval control message is consumed through the shared remote-control
 	// handler (token + From validated there) and is never forwarded.
-	control, err := w.classifyArrival(ctx, inbox, arrival)
+	control, retry, err := w.classifyArrival(ctx, inbox, arrival)
 	if err != nil {
 		w.log.Warn("remote arrival classify", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", err)
+	}
+	if retry {
+		// Leave the arrival pending for a later pass; do not publish it as ordinary
+		// mail. Bound the retries so a permanently unreadable body cannot pin the
+		// queue forever.
+		if arrival.Attempts >= maxArrivalClassifyAttempts {
+			w.settle(ctx, inbox, arrival, store.RemoteArrivalFailed, "control classification did not complete")
+		}
+		return
 	}
 	if control {
 		w.settle(ctx, inbox, arrival, store.RemoteArrivalSkipped, "approval control mail")
@@ -747,48 +757,58 @@ func (w *RemoteWorker) isHandoffNotification(ctx context.Context, inbox model.In
 // looks like a control subject/reply, it is forced through the shared remote
 // control handler. A handoff's own notification (carrying the handoff header) is
 // excluded and is never a control. Ordinary mail is classified false.
-func (w *RemoteWorker) classifyArrival(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (bool, error) {
+//
+// It fails closed. When it cannot conclusively classify the message (the body
+// could not be fetched or parsed, or the control handler had a transient error) it
+// returns retry=true with control possibly set: the caller must NOT publish the
+// message as ordinary mail and must leave the arrival pending for a later pass.
+// This guarantees a control message whose body fetch failed is never forwarded to
+// an agent, and a genuine approval is retried rather than dropped.
+func (w *RemoteWorker) classifyArrival(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (control bool, retry bool, err error) {
 	subject := strings.TrimSpace(arrival.Subject)
-	// A handoff's own notification/echo carries the handoff correlation header; it
-	// is never an approval control message. Cheap subject/reply classification is
-	// done first so an ordinary message never triggers a live body fetch.
-	if !looksLikeControl(subject) {
+	controlSubject := looksLikeControl(subject)
+	if !controlSubject {
 		// A reply-form control message can only be recognised from the body, which
 		// requires a live fetch. Only do that when the inbox actually has an
 		// outstanding approval request: otherwise the body fetch is pure waste.
 		if !w.inboxHasPendingApproval(ctx, inbox) {
-			return false, nil
+			return false, false, nil
 		}
 	}
 	raw, ok := w.fetchArrivalRaw(ctx, inbox, arrival)
 	if !ok {
-		// The body could not be fetched: treat as ordinary mail and let the normal
-		// proactive path proceed. A control message that is mis-delivered once is
-		// still protected by the token/approver check in the control handler.
-		return false, nil
+		// The body could not be read. A control subject is definitely control mail
+		// that must not be forwarded; for a non-control subject we cannot prove the
+		// message is ordinary. Defer either way.
+		return controlSubject, true, nil
 	}
 	parsed, perr := mailparse.ParseBytes(raw, w.svc.mimeLimits())
 	if perr != nil {
-		return false, nil
+		return controlSubject, true, nil
 	}
 	if !looksLikeControl(parsed.Subject) && !looksLikeControlReply(parsed) {
-		return false, nil
+		return false, false, nil
 	}
 	if HasHandoffHeader(raw) {
-		return false, nil
+		return false, false, nil
 	}
 	// Force detection of a pending email approval: the shared handler validates
 	// the live token and the nominated approver From address before acting, and
 	// consumes the control mail so it never becomes a message. A consumed control
 	// message returns transport.ErrInboundIgnored, which is success, not failure.
-	if err := w.svc.HandleRemoteApprovalControl(ctx, inbox, parsed, raw); err != nil {
-		if errors.Is(err, transport.ErrInboundIgnored) {
-			return true, nil
+	if herr := w.svc.HandleRemoteApprovalControl(ctx, inbox, parsed, raw); herr != nil {
+		if errors.Is(herr, transport.ErrInboundIgnored) {
+			return true, false, nil
 		}
-		return false, fmt.Errorf("remote approval control: %w", err)
+		return true, true, fmt.Errorf("remote approval control: %w", herr)
 	}
-	return true, nil
+	return true, false, nil
 }
+
+// maxArrivalClassifyAttempts bounds how many times a pending arrival is retried
+// for control classification before it is terminally failed, so a permanently
+// unreadable body cannot pin the pending queue forever.
+const maxArrivalClassifyAttempts = 8
 
 // fetchArrivalRaw fetches an arrival's raw MIME to a transient temp file and reads
 // it back. It never marks the message seen (BODY.PEEK). The temp file is removed.
@@ -841,22 +861,19 @@ func (w *RemoteWorker) drainRemoteArrivals() {
 	}
 }
 
-// recoverArrival persists the durable event for a claimed (crash-recovered)
-// arrival and settles it, without re-running control classification a second time
-// (the arrival's Control bit was recorded at detection).
+// recoverArrival re-drives a claimed (crash-recovered) arrival through the same
+// classification path a fresh arrival takes, so recovery cannot bypass the
+// control-mail, handoff-exclusion or allow-list checks. It resolves the owning
+// inbox and delegates to onNewArrival.
 func (w *RemoteWorker) recoverArrival(ctx context.Context, arrival store.RemoteArrival) {
-	ev, emitted, err := w.svc.Store.RecordRemoteArrivalEvent(ctx, arrival.AccountID, arrival.InboxID, arrival)
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, arrival.InboxID)
 	if err != nil {
-		w.log.Error("remote arrival event (recover)", "arrival", arrival.ID, "error", err)
+		// The inbox is gone: nothing can be delivered. Settle terminally so the
+		// arrival does not pin the drain.
+		w.settle(ctx, model.Inbox{AccountID: arrival.AccountID, ID: arrival.InboxID}, arrival, store.RemoteArrivalFailed, "inbox unavailable")
 		return
 	}
-	if emitted {
-		w.svc.Hub.Publish(ev)
-	}
-	if err := w.svc.Store.SettleRemoteArrival(ctx, arrival.AccountID, arrival.ID, store.RemoteArrivalDelivered, ""); err != nil && !errors.Is(err, store.ErrConflict) {
-		w.log.Warn("remote arrival settle (recover)", "arrival", arrival.ID, "error", err)
-	}
-	w.ensureRemoteAction(ctx, arrival)
+	w.onNewArrival(ctx, inbox, arrival)
 }
 
 // reconcileRemoteActions applies the delayed auto-trash action for every remote
