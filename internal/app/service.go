@@ -394,6 +394,11 @@ func (s *Service) deliverStaged(ctx context.Context, provider string, msg transp
 		if err != nil {
 			return model.Message{}, false, err
 		}
+		// A blocked delivery is still a terminal per-message outcome and is
+		// logged at INFO (every retry, like the delivered path) so the container
+		// stream shows why a message never reached the inbox: the block leaves
+		// no message row, event or relay delivery to observe otherwise.
+		s.Log.Info("inbound blocked", "message_id", bm.ID, "from", bm.From.Address, "to", bm.To, "provider", msg.Source, "reason", blockReason)
 		return model.Message{ID: bm.ID, InboxID: bm.InboxID, Direction: "inbound", From: bm.From, To: bm.To, Subject: bm.Subject, SizeBytes: bm.SizeBytes, ReceivedAt: bm.ReceivedAt, CreatedAt: bm.CreatedAt, Blocked: true}, dup, nil
 	}
 	final := s.messagePath()

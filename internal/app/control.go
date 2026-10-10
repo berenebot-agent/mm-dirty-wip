@@ -282,6 +282,11 @@ func (s *Service) handleControlMessage(ctx context.Context, provider string, msg
 	subject := ""
 	record := func(requestID, action, outcome, reason string) {
 		_, _ = s.Store.RecordControlMessage(ctx, storeControlRecord(msg, inbox, parsed, requestID, action, outcome, reason, subject))
+		// Consumed control mail never becomes a message row, event or relay
+		// delivery, so this INFO line is the only terminal record of it on the
+		// container stream. Every outcome (approve/reject/invalid/error) is
+		// logged, mirroring the delivered and blocked paths.
+		s.Log.Info("inbound control mail", "from", parsed.From.Address, "to", msg.Recipient, "provider", msg.Source, "action", action, "outcome", outcome, "reason", reason, "request_id", requestID)
 	}
 	if !ok {
 		s.Store.Audit(ctx, inbox.AccountID, provider+".control_invalid", "malformed approval control subject")

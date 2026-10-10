@@ -66,6 +66,7 @@ func TestMXSourceLabelPerFamily(t *testing.T) {
 type logSink struct {
 	mu    sync.Mutex
 	attrs map[string][]string
+	msgs  []string
 }
 
 func newLogSink() *logSink { return &logSink{attrs: map[string][]string{}} }
@@ -74,6 +75,7 @@ func (h *logSink) Enabled(context.Context, slog.Level) bool { return true }
 func (h *logSink) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
 	r.Attrs(func(a slog.Attr) bool {
 		h.attrs[a.Key] = append(h.attrs[a.Key], a.Value.String())
 		return true
@@ -87,6 +89,13 @@ func (h *logSink) values(key string) []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.attrs[key]...)
+}
+
+// messages returns the rendered slog record messages in arrival order.
+func (h *logSink) messages() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.msgs...)
 }
 
 // TestMXIngestLogsReceivingSourceAsProvider pins the "inbound received" log
