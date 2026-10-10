@@ -8,6 +8,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- The Drafts folder now has the same checkbox selector and bulk bar as the other
+  folders, so drafts can be deleted in bulk. Every mailbox folder (and Drafts)
+  also gains a Gmail-style **select all N** escape hatch: checking the header box
+  on a paginated folder offers to widen the selection to every matching item, and
+  the bulk action then runs against the whole folder rather than just the page.
+  The folder set is re-derived on the server from the folder and label, so the
+  operation covers exactly what the banner promised, and a destructive bulk action
+  over the whole folder names the full count in its confirmation. The Drafts list
+  is now keyset-paginated like the other folders.
 - SendGrid and Postmark can now receive mail (D096). Both deliver full raw MIME
   into the existing inbound pipeline, so no sending adapter is added. **SendGrid**
   verifies the Inbound Parse ECDSA webhook signature with the domain's public key
@@ -136,6 +145,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - SMTP edge logging: `mx auth verification completed` is folded into
   `mx auth evidence` as its `duration_ms`, and that single record is now INFO, so
   each message logs one auth line rather than two.
+- Inbound log coverage: mail rejected by an inbox's allowed-senders or
+  authenticated-sender rule, and approval control mail consumed to drive a send
+  decision, now each emit one terminal INFO line (`inbound blocked`,
+  `inbound control mail`) on the container stream. Neither outcome leaves a
+  message row, event or relay delivery, so previously a blocked or control
+  message produced no record at all; both are logged on every retry.
 
 ### Changed
 
