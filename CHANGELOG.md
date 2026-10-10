@@ -145,6 +145,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - SMTP edge logging: `mx auth verification completed` is folded into
   `mx auth evidence` as its `duration_ms`, and that single record is now INFO, so
   each message logs one auth line rather than two.
+- Inbound log coverage: mail rejected by an inbox's allowed-senders or
+  authenticated-sender rule, and approval control mail consumed to drive a send
+  decision, now each emit one terminal INFO line (`inbound blocked`,
+  `inbound control mail`) on the container stream. Neither outcome leaves a
+  message row, event or relay delivery, so previously a blocked or control
+  message produced no record at all; both are logged on every retry.
 
 ### Changed
 
