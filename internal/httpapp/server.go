@@ -97,6 +97,11 @@ type Server struct {
 	// dns performs the live published-record checks behind the Dial MX setup
 	// traffic lights. It is never on a save path and never fails a request.
 	dns *dnsChecker
+	// remoteMailboxSvc is the shared remote-mailbox surface the HTTP layer
+	// dispatches a standalone inbox's operations to. It is built lazily over
+	// the app Service on first use, or installed by cmd/server / a test.
+	remoteMailboxSvc *app.RemoteMailboxService
+	remoteOnce       sync.Once
 }
 
 type ctxKey int
@@ -235,7 +240,19 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/clients/{id}/log", s.withSession(s.clientDeliveries))
 	m.HandleFunc("POST /ui/domains/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteDomain)))
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
+	m.HandleFunc("POST /ui/inboxes/standalone", s.withSession(s.withCSRF(s.uiCreateStandalone)))
 	m.HandleFunc("POST /ui/inboxes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateInbox)))
+	// Common folder management for both inbox kinds (session + CSRF).
+	m.HandleFunc("POST /ui/inboxes/{id}/folders", s.withSession(s.withCSRF(s.uiInboxFolderCreate)))
+	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/rename", s.withSession(s.withCSRF(s.uiInboxFolderRename)))
+	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/delete", s.withSession(s.withCSRF(s.uiInboxFolderDelete)))
+	// Standalone remote connector setup.
+	m.HandleFunc("POST /ui/inboxes/{id}/remote", s.withSession(s.withCSRF(s.uiInboxRemoteSave)))
+	m.HandleFunc("GET /ui/inboxes/{id}/remote", s.withSession(s.uiInboxRemoteSettings))
+	m.HandleFunc("POST /ui/inboxes/{id}/remote/settings", s.withSession(s.withCSRF(s.uiInboxRemoteSettingsSave)))
+	m.HandleFunc("POST /ui/inboxes/{id}/remote/roles/{role}", s.withSession(s.withCSRF(s.uiInboxRemoteRoleCreate)))
+	// Approvals (authoring) settings: the type selector and notify override.
+	m.HandleFunc("POST /ui/inboxes/{id}/authoring", s.withSession(s.withCSRF(s.uiInboxAuthoringSave)))
 	m.HandleFunc("POST /ui/inboxes/{id}/auto-actions", s.withSession(s.withCSRF(s.uiInboxAutoActions)))
 	m.HandleFunc("POST /ui/inboxes/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteInbox)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/keys", s.withSession(s.withCSRF(s.uiInboxAccessCreateKey)))
@@ -258,6 +275,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/webhooks/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteWebhook)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
+	m.HandleFunc("GET /ui/inboxes/{id}/folder", s.withSession(s.folderMailboxView))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
 	m.HandleFunc("GET /ui/inboxes/{id}/spam", s.withSession(s.uiSpam))
 	m.HandleFunc("GET /ui/inboxes/{id}/trash", s.withSession(s.uiTrash))
@@ -272,6 +290,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/approve", s.withSession(s.withCSRF(s.uiDraftApprove)))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/reject", s.withSession(s.withCSRF(s.uiDraftReject)))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/cancel-send-request", s.withSession(s.withCSRF(s.uiDraftCancelSendRequest)))
+	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/cancel-handoff", s.withSession(s.withCSRF(s.uiDraftCancelHandoff)))
+	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/retry-handoff", s.withSession(s.withCSRF(s.uiDraftRetryHandoff)))
 	m.HandleFunc("GET /ui/inboxes/{id}/outbox", s.withSession(s.uiOutbox))
 	m.HandleFunc("POST /ui/inboxes/{id}/outbox/{msgId}/retry", s.withSession(s.withCSRF(s.uiOutboxRetry)))
 	m.HandleFunc("POST /ui/inboxes/{id}/outbox/{msgId}/delete", s.withSession(s.withCSRF(s.uiOutboxDelete)))
@@ -363,6 +383,27 @@ var v1Routes = []apiRoute{
 	{"PATCH /v1/inboxes/{id}", (*Server).apiInbox},
 	{"DELETE /v1/inboxes/{id}", (*Server).apiInbox},
 	{"POST /v1/inboxes/{id}/trash/empty", (*Server).apiInboxTrashEmpty},
+	// Common mailbox surface (domain and standalone through one dispatch).
+	{"GET /v1/inboxes/{id}/folders", (*Server).apiInboxFolders},
+	{"POST /v1/inboxes/{id}/folders", (*Server).apiInboxFoldersWrite},
+	{"PATCH /v1/inboxes/{id}/folders/{folderId}", (*Server).apiInboxFolderItem},
+	{"DELETE /v1/inboxes/{id}/folders/{folderId}", (*Server).apiInboxFolderItem},
+	{"GET /v1/inboxes/{id}/messages", (*Server).apiInboxMessages},
+	{"GET /v1/inboxes/{id}/messages/{messageId}", (*Server).apiInboxMessage},
+	{"GET /v1/inboxes/{id}/messages/{messageId}/content", (*Server).apiInboxMessageContent},
+	{"GET /v1/inboxes/{id}/messages/{messageId}/attachments/{part}", (*Server).apiInboxMessageAttachment},
+	{"GET /v1/inboxes/{id}/threads", (*Server).apiInboxThreads},
+	{"GET /v1/inboxes/{id}/threads/{threadId}", (*Server).apiInboxThread},
+	{"GET /v1/inboxes/{id}/search", (*Server).apiInboxSearch},
+	{"GET /v1/inboxes/{id}/labels", (*Server).apiInboxLabels},
+	{"GET /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteGet},
+	{"PUT /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteSave},
+	{"POST /v1/inboxes/{id}/remote/test", (*Server).apiInboxRemoteTest},
+	{"POST /v1/inboxes/{id}/remote/refresh", (*Server).apiInboxRemoteRefresh},
+	{"POST /v1/inboxes/{id}/remote/roles/{role}", (*Server).apiInboxRemoteRole},
+	{"GET /v1/inboxes/{id}/authoring", (*Server).apiInboxAuthoringGet},
+	{"PUT /v1/inboxes/{id}/authoring", (*Server).apiInboxAuthoringSet},
+	{"GET /v1/inboxes/{id}/handoffs", (*Server).apiInboxHandoffs},
 	// openagent.email terminology compatibility.
 	{"GET /v1/identities", (*Server).apiIdentities},
 	{"POST /v1/identities", (*Server).apiIdentities},
@@ -378,6 +419,8 @@ var v1Routes = []apiRoute{
 	{"POST /v1/messages/{id}/restore", (*Server).apiMessageRestore},
 	{"DELETE /v1/messages/{id}/purge", (*Server).apiMessagePurge},
 	{"GET /v1/messages/{id}/attachments", (*Server).apiMessageAttachments},
+	{"GET /v1/messages/{id}/attachments/{part}", (*Server).apiMessageAttachmentPart},
+	{"GET /v1/messages/{id}/content", (*Server).apiMessageContent},
 	{"POST /v1/messages/{id}/reply", (*Server).apiReply},
 	{"GET /v1/attachments/{id}", (*Server).apiAttachment},
 	{"GET /v1/threads", (*Server).apiThreads},

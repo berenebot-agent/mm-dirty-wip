@@ -154,6 +154,15 @@ type Inbox struct {
 	// RemoteConfigured reports whether encrypted remote credentials are present
 	// for a standalone inbox.
 	RemoteConfigured bool `json:"remote_configured,omitempty"`
+	// RemoteSentCopyEnabled, for a standalone inbox, controls whether a sent
+	// message is copied into the inbox's remote Sent folder. It defaults to true;
+	// it can be turned off when the provider already files sent mail (for example
+	// Gmail), so a duplicate Sent copy is not created.
+	RemoteSentCopyEnabled bool `json:"remote_sent_copy_enabled"`
+	// RemoteSentCopyFolder is an optional explicit destination folder path for
+	// the sent copy. Empty means "resolve the inbox's Sent-role folder at copy
+	// time", so a renamed Sent folder still resolves correctly.
+	RemoteSentCopyFolder string `json:"remote_sent_copy_folder,omitempty"`
 	// Capabilities is the declared mailbox capability surface. Populated on
 	// retrieval; it lets workflow code branch on capability instead of kind.
 	Capabilities   *Capabilities `json:"capabilities,omitempty"`
@@ -405,7 +414,20 @@ type Message struct {
 	Labels         []string `json:"labels,omitempty"`
 	HasAttachments bool     `json:"has_attachments"`
 	SizeBytes      int64    `json:"size_bytes"`
-	RawPath        string   `json:"-"`
+	// MailboxID is the folder a message currently belongs to within its inbox.
+	// It is empty (and serialized as absent) for a message in the inbox's system
+	// Inbox: the default is implicit so that mail that predates the folder model
+	// and mail delivered by adapters that do not name a folder keep behaving as
+	// before. A non-empty MailboxID names an inbox_folders row (a custom folder
+	// such as "Archive/2026", or a folder carrying a system role such as Sent,
+	// Trash or Spam). Membership is single-valued: a message is in exactly one
+	// folder. Labels are independent free-text metadata and are never a folder.
+	MailboxID string `json:"mailbox_id,omitempty"`
+	// FolderPath is the human-readable path of MailboxID, populated on read
+	// surfaces for display. It is not persisted on the message row; it is
+	// resolved from the folder table. It is empty when MailboxID is empty.
+	FolderPath string `json:"folder_path,omitempty"`
+	RawPath    string `json:"-"`
 	// Outbox state. Status is one of "pending", "sent" or "failed".
 	Status    string `json:"status,omitempty"`
 	Attempts  int    `json:"attempts,omitempty"`
@@ -574,6 +596,13 @@ const (
 	EventMessagePurged   = "message.purged"
 )
 
+// EventMessageFolderChanged reports a message's single-folder membership change.
+// It carries the old and new inbox_folders ids (empty for the implicit system
+// Inbox) and the new folder path for display. A message moved into a custom or
+// archive folder leaves the Inbox view (which shows only the system Inbox
+// bucket); labels are unaffected.
+const EventMessageFolderChanged = "message.folder_changed"
+
 type Draft struct {
 	ID               string `json:"id"`
 	InboxID          string `json:"inbox_id"`
@@ -596,6 +625,13 @@ type Draft struct {
 	// SendRequest is the active or most recent workflow request, populated on
 	// retrieval; it is not stored on the draft row.
 	SendRequest *DraftSendRequest `json:"send_request,omitempty"`
+	// Handoff is the active or most recent RemoteDraft handoff record, populated
+	// on retrieval; it is not stored on the draft row. It carries the immutable
+	// handoff id and the independent publication and notification state
+	// machines, so a caller that requested a remote-draft handoff can act on the
+	// outcome (pending/published/ambiguous/failed) rather than only seeing the
+	// frozen draft.
+	Handoff *AssistantHandlingRequest `json:"handoff,omitempty"`
 	// Attachments is the draft's attachment metadata, populated on retrieval;
 	// it is not stored on the draft row.
 	Attachments []DraftAttachment `json:"attachments,omitempty"`

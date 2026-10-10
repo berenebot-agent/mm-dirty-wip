@@ -83,6 +83,7 @@ Open `BASE_URL`, sign in with the system administrator credentials, and add your
 
 - Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - Connect an **agent or service to an inbox** (Hermes Relay, OpenClaw, webhook, API key) → [docs/CONNECTORS.md](docs/CONNECTORS.md)
+- Add a **standalone inbox** that reads and sends through an existing mailbox over IMAP/SMTP, alongside your managed-domain inboxes → inbox settings (**Add standalone inbox**), or [docs/MAILBOX_SERVICE_CONTRACT.md](docs/MAILBOX_SERVICE_CONTRACT.md)
 - Direct-SMTP (MX) on port 25 — publish `25:2525` explicitly for Included MX, then select it under **Domain → Receiving → Direct MX**. Hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
 
@@ -131,7 +132,7 @@ Then in the UI, set **Admin → MX receiver** to Remote, enter `http://mailmoose
 
 ## Key Features
 
-- **Give every agent its own identity.** Inboxes are lightweight database rows — spin up per-role, per-project, or per-task addresses instantly, with aliases, catch-all routing, and API keys scoped to exactly the mailboxes each agent should touch (`read` / `assistant` / `owner`).
+- **Give every agent its own identity.** Inboxes are lightweight database rows — spin up per-role, per-project, or per-task addresses instantly, with aliases, catch-all routing, and API keys scoped to exactly the mailboxes each agent should touch (`read` / `assistant` / `owner`). A **standalone** inbox can instead connect to an existing mailbox you already own over IMAP/SMTP, so MailMoose fronts a mailbox it does not host.
 - **Never miss a message, never process one twice.** Every event is a durable SQLite row with a cursor; agents reconnect after a crash and replay the backlog, and inbound webhooks are deduplicated on the provider's authenticated delivery token.
 - **Ship mail through providers you already trust.** Bring your own Mailgun, Brevo, Resend, or SMTP credentials — configured per domain, encrypted at rest, with the full delivery log visible for every attempt.
 - **Own the whole stack without operating it.** One Go binary, one SQLite database, raw MIME on disk under `./data` — backup is copying one directory plus one key.
@@ -253,6 +254,7 @@ fastest way to shape it is to use it and tell us what's missing.
 |---|---|
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | Inbound (Mailgun, Cloudflare, Resend, SendGrid, Postmark, MX) and outbound (Mailgun, Brevo, Resend, SMTP) setup |
 | [docs/CONNECTORS.md](docs/CONNECTORS.md) | Inbox-level connectors: Hermes Relay, OpenClaw, webhooks and API keys |
+| [docs/MAILBOX_SERVICE_CONTRACT.md](docs/MAILBOX_SERVICE_CONTRACT.md) | Standalone (remote IMAP/SMTP) mailboxes, folders/roles, the common local/remote mailbox boundary, and its honest index limits |
 | [docs/SELFHOSTING.md](docs/SELFHOSTING.md) | First-run admin, reverse proxy, MX modes and tuning, hardening, backup, upgrades |
 | [docs/MX.md](docs/MX.md) | Direct-SMTP edge: wire contract, auth policy, spam and retry semantics |
 | [docs/API-REFERENCE.md](docs/API-REFERENCE.md) | Generated REST API reference |

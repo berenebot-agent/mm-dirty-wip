@@ -122,6 +122,33 @@ authenticates the caller; it says nothing about whether a value the caller
 asserts is true. A new provider is attested only if its verified signature or
 secret covers the sender value the adapter reports.
 
+### Standalone-inbox approval relies on the token plus the message From address
+
+**Status:** accepted risk (decision `D097`; consistent with `D058`/`D059`).
+
+A standalone inbox has no provider-signed inbound envelope. When an assistant
+submits a draft for approval on a standalone inbox set to **MailMoose
+approvals**, the approval email is delivered back through the inbox's own
+connected mailbox and returned to MailMoose over a path whose envelope sender is
+not attested. The approval decision therefore matches the **message `From`
+address** directly against the nominated approver
+(`Service.HandleRemoteApprovalControl` in `internal/app/control.go`), together
+with the 128-bit single-use approval token.
+
+The consequence is the same class of exposure as `D058`/`D059`: a caller who can
+place mail in the connected mailbox can assert the approver's `From` address.
+Exploitation still requires the 128-bit single-use token, so the practical bar
+is high, and the approver identity is server-fixed (the attacker can only force
+a decision on the specific draft whose token they hold).
+
+**Why it is retained:** a standalone inbox cannot fail closed on envelope
+attestation without losing email approvals entirely on that path, and the
+mailbox credentials already gate who can place mail in the connected inbox.
+
+**Eventual fix (out of scope until then):** the same provenance flag or local
+DKIM verification proposed for `D058`/`D059`. Revisit only alongside an explicit
+decision to change approval behaviour.
+
 ## Supported versions
 
 MailMoose is at V1. Only the latest release and the current `main`

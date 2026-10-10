@@ -148,19 +148,26 @@ func (s *Store) GetWorkflowInternal(ctx context.Context, accountID, id string) (
 	return w, err
 }
 
-// DomainSendingConfigForWorkflow resolves the sending configuration for the
-// domain of a workflow job's inbox. A missing job or foreign account is
-// ErrNotFound; a job whose domain has no config is ErrNoProvider.
+// DomainSendingConfigForWorkflow resolves the sending configuration for a
+// workflow job's inbox. A domain inbox uses its managed domain (with
+// inheritance); a standalone inbox uses its own remote SMTP binding, so a
+// standalone notification is queued and held for a missing provider rather than
+// attributed to a non-existent domain. A missing job or foreign account is
+// ErrNotFound; an inbox whose binding has no provider is ErrNoProvider.
 func (s *Store) DomainSendingConfigForWorkflow(ctx context.Context, accountID, workflowID string) (DomainSendingConfig, error) {
-	var domainID string
-	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id FROM outbound_workflow w JOIN inboxes i ON i.id=w.inbox_id WHERE w.id=? AND w.account_id=?`, workflowID, accountID).Scan(&domainID)
+	var domainID sql.NullString
+	var inboxID, kind string
+	err := s.read.QueryRowContext(ctx, `SELECT i.domain_id,i.id,COALESCE(i.kind,'domain') FROM outbound_workflow w JOIN inboxes i ON i.id=w.inbox_id WHERE w.id=? AND w.account_id=?`, workflowID, accountID).Scan(&domainID, &inboxID, &kind)
 	if err == sql.ErrNoRows {
 		return DomainSendingConfig{}, ErrNotFound
 	}
 	if err != nil {
 		return DomainSendingConfig{}, err
 	}
-	return s.ResolveDomainSendingConfig(ctx, accountID, domainID)
+	if kind == model.InboxKindStandalone || !domainID.Valid || domainID.String == "" {
+		return s.SendingConfigForTarget(ctx, accountID, inboxID, SendingTarget{InboxID: inboxID})
+	}
+	return s.ResolveDomainSendingConfig(ctx, accountID, domainID.String)
 }
 
 // ClaimNextWorkflow atomically claims the next due pending workflow job. It

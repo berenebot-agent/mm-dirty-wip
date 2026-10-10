@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
@@ -349,5 +350,58 @@ func TestStandaloneRequiresStandalone(t *testing.T) {
 	}
 	if err := st.SaveRemoteCredentials(ctx, acct, in.ID, "x", "", store.ConfigVersion{}); err != store.ErrStandaloneRequired {
 		t.Fatalf("SaveRemoteCredentials on domain inbox err = %v", err)
+	}
+}
+
+// TestStandaloneOutboundOutcomeNoDomain proves MarkSent and MarkFailed handle a
+// standalone inbox, which has no managed domain (sending_domain_id and domain_id
+// are both NULL). The outcome must persist with an empty delivery-log domain
+// rather than failing on a NULL->string scan.
+func TestStandaloneOutboundOutcomeNoDomain(t *testing.T) {
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{
+		Address: "agent@remote.example",
+		Remote:  &model.RemoteConnection{Host: "imap.remote.example", Username: "agent@remote.example"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(delivery string) model.Message {
+		msg, _, err := st.CommitOutbound(ctx, store.OutboundRecord{
+			Inbox: in, Provider: "smtp", RFCMessageID: "<" + delivery + "@remote>",
+			From: model.Address{Address: in.Address}, To: []string{"x@outside.test"},
+			Subject: "Outbound", Text: "body", RawPath: "messages/test.eml", SizeBytes: 8,
+		})
+		if err != nil {
+			t.Fatalf("commit outbound: %v", err)
+		}
+		return msg
+	}
+
+	// Success path.
+	sent := commit("sent-1")
+	if _, _, err := st.MarkSent(ctx, acct, sent.ID, "<provider-1>", "smtp"); err != nil {
+		t.Fatalf("MarkSent on a standalone message: %v", err)
+	}
+	after, err := st.GetMessageByID(ctx, acct, sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "sent" {
+		t.Fatalf("status = %q want sent", after.Status)
+	}
+
+	// Failure path.
+	failed := commit("failed-1")
+	if _, _, err := st.MarkFailed(ctx, acct, failed.ID, "transient", time.Now().UTC(), 5, "smtp"); err != nil {
+		t.Fatalf("MarkFailed on a standalone message: %v", err)
+	}
+	after, err = st.GetMessageByID(ctx, acct, failed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "pending" {
+		t.Fatalf("status = %q want pending (retry)", after.Status)
 	}
 }

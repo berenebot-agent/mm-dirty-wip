@@ -354,12 +354,32 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				if !errors.Is(err, store.ErrNotFound) {
 					return err
 				}
-				// The message was deleted between the event and delivery, so
-				// there is nothing to replay. Advance the durable cursor past
-				// it; otherwise every reconnect re-reads the same stale event
-				// and drops the socket in a tight loop.
-				_ = s.Store.AckHermesEvent(ctx, h.ID, ev.ID)
-				after = ev.ID
+				// The entity is not a locally-persisted message. A remote arrival
+				// (a standalone inbox's detected new mail) has no local message
+				// row, so resolve it as a remote arrival and deliver a remote-aware
+				// event. A remote arrival that is a control message or was skipped
+				// is not actionable: advance the cursor past it.
+				arrival, aerr := s.Store.GetRemoteArrival(ctx, h.AccountID, ev.EntityID)
+				if aerr != nil {
+					if !errors.Is(aerr, store.ErrNotFound) {
+						return aerr
+					}
+					// The message was deleted between the event and delivery, so
+					// there is nothing to replay. Advance the durable cursor past
+					// it; otherwise every reconnect re-reads the same stale event
+					// and drops the socket in a tight loop.
+					_ = s.Store.AckHermesEvent(ctx, h.ID, ev.ID)
+					after = ev.ID
+					continue
+				}
+				if arrival.Control || arrival.DeliveryState == store.RemoteArrivalSkipped || arrival.InboxID != h.InboxID {
+					_ = s.Store.AckHermesEvent(ctx, h.ID, ev.ID)
+					after = ev.ID
+					continue
+				}
+				if derr := s.deliverRemote(ctx, h, wr, ev, arrival, &after, ackCh, errCh); derr != nil {
+					return derr
+				}
 				continue
 			}
 			// A message that is currently Spam is not delivered as an actionable
@@ -428,6 +448,61 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				return err
 			}
 		}
+	}
+}
+
+// deliverRemote delivers one remote-arrival event to the gateway with the same
+// acknowledge/cursor protocol as a local message: the durable cursor only advances
+// after the gateway acknowledges, and the delivery log records the attempt. The
+// event is remote-aware and carries no body (the gateway fetches content through
+// the canonical API using the remote locator).
+func (s *Server) deliverRemote(ctx context.Context, h store.HermesConnection, wr *socketWriter, ev model.Event, arrival store.RemoteArrival, after *int64, ackCh <-chan int64, errCh <-chan error) error {
+	_ = s.Store.RecordHermesDeliveryPending(ctx, h.ID, ev.ID)
+	if err := wr.JSON(map[string]any{"type": "inbound", "event": remoteMessageEvent(arrival), "bufferId": ev.Cursor}); err != nil {
+		_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
+		return err
+	}
+	s.Log.Info("relay inbound remote", "gateway_id", h.GatewayID, "cursor", ev.Cursor, "message_id", arrival.ID, "from", arrival.FromAddress, "inbox_id", arrival.InboxID)
+	acked := false
+	for !acked {
+		select {
+		case id := <-ackCh:
+			if id >= ev.ID {
+				*after = ev.ID
+				_ = s.Store.RecordHermesDeliveryAcknowledged(ctx, h.ID, ev.ID, 1)
+				s.Log.Info("relay acked remote", "gateway_id", h.GatewayID, "cursor", ev.Cursor)
+				acked = true
+			}
+		case err := <-errCh:
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay socket closed before acknowledgement")
+			return err
+		case <-ctx.Done():
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay connection closed before acknowledgement")
+			return ctx.Err()
+		case <-time.After(60 * time.Second):
+			_ = s.Store.RecordHermesDeliveryFailed(ctx, h.ID, ev.ID, "relay acknowledgement timeout")
+			return errors.New("relay acknowledgement timeout")
+		}
+	}
+	return nil
+}
+
+// remoteMessageEvent projects a detected remote arrival onto the gateway event
+// shape. It mirrors messageEvent but carries the remote locator instead of an
+// archived body, so the gateway fetches the message live through the canonical
+// API and never receives a stale archived copy.
+func remoteMessageEvent(a store.RemoteArrival) map[string]any {
+	name := a.FromName
+	if name == "" {
+		name = a.FromAddress
+	}
+	display := fmt.Sprintf("From: %s\nSubject: %s\n\n(remote message; fetch it via the API)", a.FromAddress, a.Subject)
+	return map[string]any{
+		"text": display, "message_type": "text", "user_id": a.FromAddress, "user_name": name, "message_id": a.ID,
+		"source":                map[string]any{"platform": "email", "chat_id": a.RFCMessageID, "chat_type": "thread", "chat_name": a.Subject, "user_id": a.FromAddress, "user_name": name, "thread_id": a.RFCMessageID, "chat_topic": nil, "message_id": a.ID},
+		"metadata":              map[string]any{"email_message_id": a.ID, "inbox_id": a.InboxID, "thread_id": a.RFCMessageID, "from": a.FromAddress, "subject": a.Subject, "remote": true, "remote_uid": a.UID, "uid_validity": a.UIDValidity, "folder_path": a.FolderPath, "rfc_message_id": a.RFCMessageID, "is_spam": false},
+		"provenance":            map[string]any{"source": "email", "trust": "external_untrusted", "authenticated_sender": false},
+		"allow_gateway_control": false,
 	}
 }
 

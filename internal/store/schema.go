@@ -1614,3 +1614,77 @@ CREATE TABLE pending_file_cleanup (
 CREATE UNIQUE INDEX idx_inboxes_standalone_address
   ON inboxes(account_id, address COLLATE NOCASE) WHERE kind='standalone' AND address<>'';
 `
+
+// migration054 adds the local/domain custom-folder model. It is additive and
+// non-destructive and reuses the inbox_folders table introduced for standalone
+// mailboxes in migration 052, now as the single folder table for BOTH inbox
+// kinds:
+//
+//   - messages.mailbox_id names the folder a message currently belongs to. It is
+//     NULL for a message in the system Inbox (the implicit default), so every
+//     pre-existing row and every adapter that does not name a folder keep their
+//     current behaviour. A non-empty value is the inbox_folders.id of a custom
+//     folder or a folder carrying a system role (Sent, Trash, Spam, Archive,
+//     Drafts, Outbox). Membership is single-valued.
+//   - inbox_folders gains is_system: 1 marks a seeded system-role folder whose
+//     role cannot be arbitrarily renamed or deleted. Local folders are seeded
+//     lazily per inbox by EnsureSystemFolders.
+//   - inbox_folders gains origin ('local' or 'remote'): a 'local' folder is owned
+//     by the account (created through FolderCRUD, seeded, or system) and is never
+//     pruned by a remote reconcile; a 'remote' folder mirrors a provider folder
+//     and is owned by UpsertFolders, which reconciles the remote subset only.
+//   - inbox_folders gains remote_metadata_json: opaque adapter bookkeeping
+//     (for example a remote UIDVALIDITY per folder). The store persists it as
+//     text and never interprets it; the remote adapter owns its contents, and
+//     remote folder mutations are routed in the application layer rather than
+//     silently mutating provider-backed rows through the store.
+//
+// Indexes keep the folder-filtered list/count/search paths off a table scan.
+const migration054 = `
+ALTER TABLE messages ADD COLUMN mailbox_id TEXT REFERENCES inbox_folders(id) ON DELETE SET NULL;
+ALTER TABLE inbox_folders ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inbox_folders ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE inbox_folders ADD COLUMN remote_metadata_json TEXT NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_messages_mailbox ON messages(account_id, inbox_id, mailbox_id);
+CREATE INDEX IF NOT EXISTS idx_inbox_folders_role ON inbox_folders(inbox_id, role);
+`
+
+// migration058 makes a folder-role mapping explicit and durable, makes the
+// standalone sent-copy behaviour configurable, records the handoff notification
+// Message-ID, and adds the per-folder backfill cursor that lets a remote folder
+// larger than one reconcile batch be indexed in full over successive passes. It
+// is additive and non-destructive.
+//
+// - inbox_folders.role_locked: 1 marks a role the operator mapped explicitly to a
+// folder (which may be an arbitrarily-named existing folder). A remote reconcile
+// must never overwrite a locked role by re-inferring it from the folder name, so
+// an explicit "this folder is Trash" survives every later sync. It is 0 for every
+// name-inferred role, which stays free to follow the server's naming.
+// - inboxes.remote_sent_copy_enabled: whether a sent message from a standalone
+// inbox is copied into its remote Sent folder. It defaults to 1 (on) and can be
+// turned off when the provider already files sent mail (for example Gmail), so a
+// duplicate Sent copy is not created.
+// - inboxes.remote_sent_copy_folder: an optional explicit destination folder path
+// for the sent copy. Empty means "resolve the inbox's Sent-role folder at copy
+// time", so a renamed Sent folder still resolves correctly.
+// - inbox_folders.backfill_before_uid: the per-folder backfill high-water for the
+// current remote_uid_validity generation. Every UID strictly greater than it has
+// been indexed; 0 means no backfill has run. A reconcile refreshes the newest
+// window and advances this downward by one bounded batch, so backfill eventually
+// covers the whole folder instead of permanently truncating at a page limit.
+// - inbox_folders.backfill_complete: 1 once the downward backfill has reached the
+// bottom of the folder for the current generation, so completeness can be
+// reported honestly. It resets to 0 when the folder's UIDVALIDITY changes.
+// - assistant_handling_requests.notification_message_id records the RFC5322
+// Message-ID of the handoff NOTIFICATION email (distinct from the frozen draft's
+// message_id). A handoff notification delivered back into the connected inbox is
+// then excluded from remote detection by a durable Message-ID lookup rather than
+// a live body fetch, so the exclusion survives restarts and costs nothing.
+const migration058 = `
+ALTER TABLE inbox_folders ADD COLUMN role_locked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inbox_folders ADD COLUMN backfill_before_uid INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inbox_folders ADD COLUMN backfill_complete INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE inboxes ADD COLUMN remote_sent_copy_enabled INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE inboxes ADD COLUMN remote_sent_copy_folder TEXT NOT NULL DEFAULT '';
+ALTER TABLE assistant_handling_requests ADD COLUMN notification_message_id TEXT NOT NULL DEFAULT '';
+`

@@ -62,6 +62,17 @@ listeners run in the same process and share the same store. Webhook routes remai
 available on the main listener. `DEDICATED_RECEIVER_URL` controls generated
 receiver URLs and falls back to `BASE_URL`; the latter remains the UI/API origin.
 
+An inbox has a `kind`: `domain` (the classic managed-domain mailbox) or
+`standalone`. A standalone inbox owns an address independent of any managed
+domain and is reached through an optional per-inbox remote IMAP/SMTP connector
+(decision `D097`). Both kinds are first-class mailboxes with folders, labels,
+threads, events and API keys; only their transport differs. A standalone inbox's
+message and thread **metadata** is cached locally while bodies and attachments
+stay live on the provider and are never archived. The common mailbox boundary is
+`internal/app`'s `MailboxRouter`/`RemoteMailboxService` plus
+`internal/httpapp/mailbox_access.go`; see
+[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
+
 ## 2. Suggested Go packages
 
 ```text
@@ -85,6 +96,7 @@ receiver URLs and falls back to `BASE_URL`; the latter remains the UI/API origin
       /cloudflare
       /resend
       /smtp
+      /imap
       /mx
 
   /integrations
@@ -99,6 +111,9 @@ receiver URLs and falls back to `BASE_URL`; the latter remains the UI/API origin
 ```
 
 Packages should follow capability boundaries rather than generic framework layers.
+The remote IMAP/SMTP adapter lives entirely in `/internal/transport/imap` and
+`/internal/transport/smtp`; `/internal/app` maps the shared mailbox model onto it
+and never speaks IMAP itself.
 
 ## 3. Canonical inbound boundary
 
@@ -195,7 +210,9 @@ Aliases are also sendable identities: a send or reply may choose the primary or
 any alias as its From address, and the outbound provider is resolved from the
 chosen address's own domain (`messages.sending_domain_id`, falling back to the
 inbox domain). A per-inbox `default_sender` preselects it, and each alias may
-carry its own sender display name (falling back to the inbox name).
+carry its own sender display name (falling back to the inbox name). Managed
+aliases belong to **domain** inboxes; a standalone inbox has no managed aliases
+and sends only as its own connected address.
 
 Unknown recipients resolve to the domain catch-all inbox when configured. Otherwise return `406` and create a minimal audit entry. Missing receiving configuration, unknown domains, and bad authentication return a uniform `401`.
 
@@ -218,6 +235,16 @@ sessions
 domains
 inboxes
 inbox_aliases
+inbox_folders
+inbox_remote_credentials
+inbox_remote_messages
+inbox_remote_labels
+inbox_remote_cursors
+inbox_remote_arrivals
+inbox_remote_notifications
+inbox_remote_actions
+remote_sent_copies
+assistant_handling_requests
 messages
 message_recipients
 threads
@@ -237,7 +264,15 @@ hermes_connections
 audit_log
 settings
 system_settings
+pending_file_cleanup
 ```
+
+`inbox_folders` is the single folder tree for **both** inbox kinds; a message's
+folder membership is `messages.mailbox_id` (`NULL` = the implicit system Inbox).
+A standalone inbox's `inbox_remote_*` tables hold cached header/thread metadata,
+labels, the durable detection cursor and the durable arrival/notification action
+state; no message body is ever stored. Encrypted remote credentials live in
+`inbox_remote_credentials` under `APP_ENCRYPTION_KEY`.
 
 A domain owns at most one row in `domain_sending_configs` and at most one in
 `domain_receiving_configs`, each holding encrypted provider configuration keyed
@@ -339,6 +374,26 @@ Each adapter receives decrypted provider-specific configuration and may expose a
 
 Generic SMTP validates resolved destinations as public-routable addresses before connecting and applies bounded connect/read/write timeouts. The same public-routable check guards every HTTP provider client and is available to operators via `ALLOW_PRIVATE_OUTBOUND`; because self-hosting is the primary model the check is **off by default** (private gateways, local relays and LAN receivers are allowed), and a hosted operator confines outbound traffic by setting `ALLOW_PRIVATE_OUTBOUND=false`.
 
+A **standalone** inbox does not send through a managed domain. Its outbound is
+its own optional remote SMTP binding, resolved through the generic SMTP adapter
+with the same destination policy. When the binding is absent, a send is queued
+and held (`ErrNoProvider`) rather than attributed to a domain that does not
+exist. After a send commits, a separate durable job copies the message into the
+inbox's remote Sent folder (toggle-able and independently retried; it never
+re-sends, and it owns an independent frozen copy of the raw MIME so a purge of
+the outbound message cannot strand a pending copy). A RemoteDraft handoff is a
+distinct, token-free path handled by the outbox worker — see
+[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) §3.
+
+Account-wide listings that span the local store and several remote inboxes are
+merged into one globally date-sorted stream by
+`internal/httpapp/mailbox_merge.go`; the opaque cursor carries each source's own
+progress plus the last item's global stable key, so resuming never duplicates or
+skips an item. The remote index is built **progressively** (a persisted per-folder
+backfill cursor), so an ordinary large folder reaches `complete` over successive
+passes; only a folder whose complete UID set exceeds the 500k snapshot ceiling
+stays `partial` and un-pruned.
+
 ### Optional MX receiving edge
 
 An operator may enable direct-SMTP ingress. The `mailmoose-mx` edge (same
@@ -415,6 +470,12 @@ A runtime dependency should contribute a clear capability such as:
 
 Keep dependency surfaces narrow and actively maintained.
 
+The optional standalone remote mailbox uses the approved IMAP client
+`github.com/emersion/go-imap/v2` and MIME primitives
+`github.com/emersion/go-message` (decision `D097`); both are confined to
+`internal/transport/imap`. Attribution is in
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
 ## 12. Resource behaviour
 
 ### Connections
@@ -444,6 +505,12 @@ Use in-process goroutines for lightweight maintenance such as:
 - delivered-mail auto-trash (per-inbox auto-actions)
 - temporary file cleanup
 - optional outbound retry processing
+
+The outbox worker also drives workflow mail, webhook retries, RemoteDraft
+handoff publication and the remote Sent-copy queue. A dedicated in-process
+remote watcher holds one bounded connection per configured standalone inbox
+(IDLE, with a polling fallback) and records durable arrivals; a blocking IDLE on
+one inbox therefore never starves the others.
 
 Persist any work that must survive restart before execution.
 

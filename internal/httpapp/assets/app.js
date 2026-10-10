@@ -166,7 +166,11 @@
     if (scope === 'all') {
       return rolesRadios();
     }
-    var group = matrix.querySelector('tbody[data-domain="' + scope + '"]');
+    var group = matrix.querySelector('tbody[data-domain="' + scope + '"]') ||
+      matrix.querySelector('tbody[data-standalone]');
+    if (scope === 'standalone') {
+      group = matrix.querySelector('tbody[data-standalone]');
+    }
     return group ? group.querySelectorAll('input[type=radio][name^=role_]') : [];
   }
 
@@ -1454,6 +1458,38 @@ function aliasNameByAddress(list) {
   bindInboxSettingsShell(dlg);
 })();
 
+// Standalone-inbox setup dialog, opened from the dashboard's "Standalone inbox"
+// button. The remote server is an optional IMAP/SMTP binding; a blank host
+// creates the inbox and the connector is configured later.
+(function () {
+  var dlg = document.getElementById('standalone-dialog');
+  if (!dlg) {
+    return;
+  }
+  var open = document.getElementById('add-standalone-inbox');
+  if (open) {
+    open.addEventListener('click', function () {
+      var form = dlg.querySelector('form');
+      if (form) {
+        form.reset();
+      }
+      dlg.showModal();
+    });
+  }
+  var cancel = dlg.querySelector('.standalone-cancel');
+  if (cancel) {
+    cancel.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+  var close = dlg.querySelector('.standalone-close');
+  if (close) {
+    close.addEventListener('click', function () {
+      dlg.close();
+    });
+  }
+})();
+
 (function () {
   var dlg = document.getElementById('add-domain-dialog');
   if (!dlg) {
@@ -1802,6 +1838,62 @@ function clearUrlParams(names) {
   var deleteBtn = document.getElementById('inbox-edit-delete');
   var address = document.getElementById('inbox-edit-address');
   var display = form.querySelector('[name=display]');
+  // Approvals tab: the authoring mode selector and notify override, saved through
+  // the authoring endpoint when the dialog is saved.
+  var authoringMode = document.getElementById('inbox-authoring-mode');
+  var authoringNotify = document.getElementById('inbox-authoring-notify');
+  var authoringDefault = document.getElementById('inbox-authoring-default');
+  var authoringStates = document.getElementById('inbox-authoring-states');
+  var authDefaultMode = 'mailmoose_approval';
+  function syncAuthoringControls() {
+    // Effective mode: the explicit selection, else the kind default.
+    var effective = (authoringMode && authoringMode.value) ? authoringMode.value : authDefaultMode;
+    var approval = effective === 'mailmoose_approval';
+    var approverInput = document.getElementById('inbox-edit-approver-email');
+    var approverNote = document.getElementById('inbox-approver-note');
+    if (approverInput) {
+      approverInput.disabled = !approval;
+    }
+    if (approverNote) {
+      approverNote.hidden = !approval;
+    }
+    if (authoringStates) {
+      // The handoff state panel is only meaningful for the remote-draft mode.
+      authoringStates.hidden = approval;
+    }
+  }
+  function applyAuthoring(json) {
+    var data = {};
+    try {
+      data = JSON.parse(json) || {};
+    } catch (e) {
+      data = {};
+    }
+    if (data.default_mode) {
+      authDefaultMode = data.default_mode;
+    }
+    if (authoringMode) {
+      authoringMode.value = data.mode || '';
+    }
+    if (authoringNotify) {
+      authoringNotify.value = data.notify_address || '';
+    }
+    if (authoringDefault) {
+      var def = data.default_mode === 'remote_draft' ? 'Remote draft handoff' : 'MailMoose approval';
+      authoringDefault.textContent = 'Default for this inbox kind: ' + def + '.';
+    }
+    // The tab is "Approvals" for a standalone inbox; the approver field is
+    // enabled by the EFFECTIVE mode, so switching to remote_draft disables the
+    // approver and a remote job never shows approval controls.
+    var tab = document.querySelector('[data-inbox-tab="approver"]');
+    if (tab) {
+      tab.textContent = data.standalone ? 'Approvals' : 'Approver';
+    }
+    syncAuthoringControls();
+  }
+  if (authoringMode) {
+    authoringMode.addEventListener('change', syncAuthoringControls);
+  }
   var usage = document.getElementById('inbox-edit-usage');
   var trashOverride = document.getElementById('inbox-trash-retention-override');
   var trashSection = document.getElementById('inbox-trash-retention-section');
@@ -2626,6 +2718,7 @@ function clearUrlParams(names) {
       // A freshly opened inbox starts with no staged access changes.
       stagedKeyRoles = {};
       syncStagedKeyRoles();
+      applyAuthoring(btn.dataset.authoring || '{}');
       if (connectorAdd) {
         connectorAdd.setAttribute('data-inbox', editInboxID);
       }
@@ -4602,6 +4695,16 @@ function hideInboxSubview(dlg) {
       setSidebarCount('outbox', data.outbox || 0, false);
       setSidebarCount('spam', data.spam || 0, false);
       setSidebarCount('trash', data.trash || 0, false);
+      // A standalone inbox's counts come from the cached remote index; mark the
+      // unread badge stale unless the index is complete so a live count is never
+      // presented as current when it may be behind the server.
+      var unreadLink = document.querySelector('[data-sidebar] a.folder[data-folder="inbox"]');
+      var unreadBadge = unreadLink ? unreadLink.querySelector('[data-count="unread"]') : null;
+      if (unreadBadge && data.remote) {
+        var stale = data.remote_status && data.remote_status !== 'complete';
+        unreadBadge.classList.toggle('stale', !!stale);
+        unreadBadge.setAttribute('title', stale ? 'Counts may be behind: the remote index is not complete.' : '');
+      }
       var labels = data.labels || {};
       document.querySelectorAll('[data-sidebar] a.folder[data-folder="label"]').forEach(function (link) {
         var name = link.getAttribute('data-label');

@@ -401,3 +401,97 @@ func storeControlRecord(msg transport.InboundMessage, inbox model.Inbox, parsed 
 		Subject:            subject,
 	}
 }
+
+// HasHandoffHeader reports whether a raw RFC5322 message carries the RemoteDraft
+// handoff correlation header. Such mail is a handoff's own notification (or the
+// frozen handoff draft echoed back), never an approval control message, so the
+// remote-detection path excludes it before dispatching.
+func HasHandoffHeader(raw []byte) bool {
+	return rawHasHeader(raw, model.HandoffHeader)
+}
+
+// rawHasHeader reports whether raw MIME begins (in its header block) with the
+// named header. It scans only the header block for a case-insensitive
+// "<name>:" line prefix, so a header value that merely mentions the name inside a
+// body does not match.
+func rawHasHeader(raw []byte, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name)) + ":"
+	// Header block ends at the first blank line.
+	block := raw
+	for i := 0; i+1 < len(raw); i++ {
+		if (raw[i] == '\n' && raw[i+1] == '\n') || (i+3 < len(raw) && raw[i] == '\r' && raw[i+1] == '\n' && raw[i+2] == '\r' && raw[i+3] == '\n') {
+			block = raw[:i]
+			break
+		}
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(block), "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.ToLower(line), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// HandleRemoteApprovalControl is the public entry point the remote-detection path
+// calls for a standalone inbox whose mail may be an approval control message. It
+// is deliberately separate from the domain/inbound handler because a standalone
+// inbox has no provider-attested envelope sender: matching is on the exact
+// nominated approver From address in the message itself, explicitly accepted as
+// the standalone approval identity, and no envelope sender is fabricated.
+//
+// raw is the full staged RFC5322 message; it is used only to exclude a handoff's
+// own notification by its correlation header, never to derive the sender. The
+// message is expected to have been resolved to inbox already.
+func (s *Service) HandleRemoteApprovalControl(ctx context.Context, inbox model.Inbox, parsed mailparse.Parsed, raw []byte) error {
+	if HasHandoffHeader(raw) {
+		// A handoff notification (or the frozen handoff draft) is consumed without
+		// delivery so it never becomes mailbox content and is never mistaken for an
+		// approval.
+		return transport.ErrInboundIgnored
+	}
+	dir, ok := parseControlSubject(parsed.Subject)
+	if !ok {
+		dir, ok = parseControlReply(parsed)
+	}
+	if !ok {
+		return transport.ErrInboundIgnored
+	}
+	hash := hashApprovalToken(dir.token)
+	r, err := s.Store.FindPendingSendRequestByToken(ctx, inbox.AccountID, inbox.ID, hash)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return transport.ErrInboundIgnored
+		}
+		return fmt.Errorf("approval token lookup failed: %w", err)
+	}
+	if r.TokenExpiresAt != nil && time.Now().UTC().After(*r.TokenExpiresAt) {
+		return transport.ErrInboundIgnored
+	}
+	// A standalone inbox has no authenticated envelope, so the message From
+	// address is matched directly against the nominated approver. This is the
+	// explicitly accepted standalone identity; no envelope value is invented.
+	approver := strings.ToLower(strings.TrimSpace(r.ApproverEmail))
+	if canonicalSender(parsed.From.Address) != approver {
+		return transport.ErrInboundIgnored
+	}
+	feedback := extractFeedback(parsed)
+	if dir.reply && strings.TrimSpace(feedback) == "" {
+		feedback = replyFeedback(replyNewText(replyBody(parsed)), dir.action)
+	}
+	if dir.action == "approve" {
+		if _, err := s.ApproveExternal(ctx, inbox.AccountID, inbox.ID, r.ID, parsed.From.Address, feedback); err != nil {
+			if isTerminalControlError(err) {
+				return transport.ErrInboundIgnored
+			}
+			return fmt.Errorf("standalone approval could not be processed: %w", err)
+		}
+		return transport.ErrInboundIgnored
+	}
+	if err := s.RejectExternal(ctx, inbox.AccountID, inbox.ID, r.ID, parsed.From.Address, feedback); err != nil {
+		if isTerminalControlError(err) {
+			return transport.ErrInboundIgnored
+		}
+		return fmt.Errorf("standalone rejection could not be processed: %w", err)
+	}
+	return transport.ErrInboundIgnored
+}

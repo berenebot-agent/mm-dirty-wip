@@ -75,6 +75,18 @@ func ParseFile(path string, limits ...Limits) (Parsed, error) {
 	}
 	return parseMessage(msg, resolveLimits(limits))
 }
+
+// ParseBytes parses an in-memory RFC5322 message. It is the byte-slice analogue of
+// ParseFile, used by paths that hold a bounded transient body in memory (for
+// example classifying one remote arrival that was fetched to a bounded buffer)
+// rather than a file on disk.
+func ParseBytes(raw []byte, limits ...Limits) (Parsed, error) {
+	msg, err := mail.ReadMessage(bufio.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		return Parsed{}, err
+	}
+	return parseMessage(msg, resolveLimits(limits))
+}
 func parseMessage(msg *mail.Message, limits Limits) (Parsed, error) {
 	var p Parsed
 	p.Subject = decodeHeader(msg.Header.Get("Subject"))

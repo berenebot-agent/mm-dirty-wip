@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/apispec"
@@ -155,12 +157,44 @@ func (s *Server) apiInboxes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var in struct {
+			Kind        string `json:"kind"`
 			DomainID    string `json:"domain_id"`
 			LocalPart   string `json:"local_part"`
 			Localpart   string `json:"localpart"`
 			DisplayName string `json:"display_name"`
+			// Standalone fields (kind="standalone").
+			Address   string `json:"address"`
+			Namespace string `json:"namespace"`
+			Remote    *struct {
+				Host     string `json:"host"`
+				Port     int    `json:"port"`
+				Username string `json:"username"`
+				Security string `json:"security"`
+				SMTPHost string `json:"smtp_host"`
+				SMTPPort int    `json:"smtp_port"`
+				SMTPUser string `json:"smtp_username"`
+				SMTPSec  string `json:"smtp_security"`
+			} `json:"remote"`
 		}
 		if !decodeJSON(w, r, &in) {
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(in.Kind), model.InboxKindStandalone) {
+			var remote *model.RemoteConnection
+			if in.Remote != nil && strings.TrimSpace(in.Remote.Host) != "" {
+				remote = &model.RemoteConnection{Host: in.Remote.Host, Port: in.Remote.Port, Username: in.Remote.Username, Security: in.Remote.Security}
+				if strings.TrimSpace(in.Remote.SMTPHost) != "" {
+					remote.SMTP = &model.RemoteSMTP{Host: in.Remote.SMTPHost, Port: in.Remote.SMTPPort, Username: in.Remote.SMTPUser, Security: in.Remote.SMTPSec}
+				}
+			}
+			box, err := s.Service.Store.CreateStandaloneInbox(r.Context(), p.AccountID, store.StandaloneCreate{
+				DisplayName: in.DisplayName, Address: in.Address, Namespace: in.Namespace, Remote: remote,
+			})
+			if err != nil {
+				mapStoreError(w, err)
+				return
+			}
+			writeJSON(w, 201, box)
 			return
 		}
 		local := in.LocalPart
@@ -588,9 +622,14 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		f.InboxID = b.ID
 	}
-	items, err := s.Service.Store.ListMessages(r.Context(), p, f)
+	// The common listing is the unified envelope {items,next_cursor,completeness,
+	// errors}, spanning the local store and, when the caller scopes to no single
+	// inbox, every authorized standalone inbox via the remote index.
+	folder := strings.TrimSpace(r.URL.Query().Get("folder"))
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	items, cursor, failures, err := s.listMessagesUnified(r.Context(), p, f, folder, before, limit)
 	if err != nil {
-		mapStoreError(w, err)
+		mapMailboxError(w, err)
 		return
 	}
 	if compatAddress != "" {
@@ -601,16 +640,139 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	writeJSON(w, 200, sanitizedMessages(items))
+	writeJSON(w, 200, newEnvelope(items, cursor, model.CompletenessComplete, failures))
+}
+
+// listMessagesUnified returns the account-wide common message listing: local
+// messages from the store plus, when no single inbox is scoped, cached remote
+// messages from every authorized standalone inbox (reconciling on demand and
+// recording per-inbox failures rather than failing the whole request). A scoped
+// standalone inbox reads its remote index; a scoped domain inbox reads the store.
+// remoteFilterScanPage is the minimum raw page pulled from the remote metadata
+// source while filtering in-memory, so a page dominated by non-matching rows
+// still makes progress without a round-trip per row.
+const remoteFilterScanPage = 50
+
+// remoteFilterScanMaxPages bounds the on-demand scan of the remote metadata
+// index while applying filters the source cannot express, so a filter that
+// matches little cannot walk an unbounded index in one request.
+const remoteFilterScanMaxPages = 20
+
+func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f store.MessageFilter, folder, before string, limit int) ([]model.Message, string, []model.InboxFailure, error) {
+	// A single-inbox scope routes wholly to that inbox's backend.
+	if f.InboxID != "" {
+		mb, err := s.resolveMailbox(ctx, p, f.InboxID)
+		if err != nil {
+			return nil, "", nil, err
+		}
+		if mb.routed {
+			s.demandDetection(ctx, []mailboxBackend{mb})
+			// A local-only filter maps to the matching remote role folder so it is
+			// honored rather than ignored: trashed -> Trash, spam -> Spam,
+			// direction=outbound -> Sent.
+			scopeFolder := folder
+			if f.Trashed {
+				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleTrash); ok {
+					scopeFolder = rf.Path
+				}
+			} else if f.SpamOnly {
+				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSpam); ok {
+					scopeFolder = rf.Path
+				}
+			} else if f.Direction == "outbound" {
+				if rf, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, model.FolderRoleSent); ok {
+					scopeFolder = rf.Path
+				}
+			}
+			// Apply the remaining common filters in-memory: the remote list
+			// cannot express from/to/unread/has_attachment/label, so they are
+			// never ignored. Trashed/spam/direction are already resolved to the
+			// right folder above and are not re-applied here.
+			applyFilter := f
+			applyFilter.Trashed = false
+			applyFilter.SpamOnly = false
+			applyFilter.Direction = ""
+			// A bounded scan: the remote metadata source cannot express the
+			// residual filters, so a raw window of limit+1 may yield fewer than
+			// limit matches. Keep pulling the next raw page (resuming from the
+			// last raw item) until limit+1 matches are collected or the source is
+			// exhausted — never stop at the first short filtered page, which would
+			// silently hide matching mail that simply followed non-matching rows.
+			out := make([]model.Message, 0, limit+1)
+			scanBefore := before
+			more := false
+			for page := 0; page < remoteFilterScanMaxPages; page++ {
+				rawLimit := limit + 1
+				if rawLimit < remoteFilterScanPage {
+					rawLimit = remoteFilterScanPage
+				}
+				res, rerr := mb.remote.ListRemoteMessages(ctx, p, mb.inbox.ID, scopeFolder, rawLimit, scanBefore)
+				if rerr != nil {
+					// A remote failure is reported as an unavailable inbox; the
+					// caller surfaces it with the common classification (503),
+					// never a misleading empty 200 or a 404.
+					return nil, "", nil, rerr
+				}
+				for _, v := range res.Items {
+					m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
+					if !matchMessageFilter(m, applyFilter) {
+						continue
+					}
+					out = append(out, m)
+					if len(out) > limit {
+						break
+					}
+				}
+				if len(out) > limit {
+					out = out[:limit]
+					more = true
+					break
+				}
+				// The raw page was short: the source is exhausted, so there is
+				// nothing older to scan.
+				if len(res.Items) < rawLimit {
+					break
+				}
+				if res.NextCursor == "" || res.NextCursor == scanBefore {
+					break
+				}
+				scanBefore = res.NextCursor
+			}
+			cursor := ""
+			if more && len(out) > 0 {
+				cursor = out[len(out)-1].ID
+			}
+			return out, cursor, nil, nil
+		}
+		msgs, lerr := s.Service.Store.ListMessages(ctx, p, f)
+		if lerr != nil {
+			return nil, "", nil, normalizeMailboxStoreError(lerr)
+		}
+		cursor := ""
+		if limit > 0 && len(msgs) > limit {
+			msgs = msgs[:limit]
+			if len(msgs) > 0 {
+				cursor = msgs[len(msgs)-1].ID
+			}
+		}
+		return sanitizedMessages(msgs), cursor, nil, nil
+	}
+	// Account-wide: one globally date-sorted stream across the local store and
+	// every authorized remote inbox, resumed through one opaque cursor.
+	cur, ok := decodeCursorOrLegacy(before)
+	if !ok {
+		return nil, "", nil, model.NewMailboxError(model.ErrKindInvalid, "invalid cursor", false, nil)
+	}
+	return s.mergeMessages(ctx, p, f, folder, cur, limit)
 }
 func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
 	switch r.Method {
 	case http.MethodGet:
-		m, err := s.Service.Store.GetMessage(r.Context(), p, id)
+		m, mb, remote, err := s.resolveMessageAny(r.Context(), p, id)
 		if err != nil {
-			mapStoreError(w, err)
+			mapMailboxError(w, err)
 			return
 		}
 		if addr := strings.TrimSpace(r.URL.Query().Get("address")); addr != "" {
@@ -622,6 +784,22 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 200, openAgentMessage(m))
 			return
 		}
+		if remote {
+			// A remote message is served as the common read envelope; a live
+			// header refresh happens through the app surface and never marks it
+			// seen. The body is fetched live and parsed here (never archived) so the
+			// common GET returns the same text/html a local message read does. There
+			// is no offline fallback: a fetch failure is a 503 (connector
+			// unreachable), never cached metadata presented as the body.
+			text, html, herr := s.hydrateRemoteBody(r.Context(), p, mb, m.ID)
+			if herr != nil {
+				mapMailboxError(w, herr)
+				return
+			}
+			m.Text, m.HTML = text, html
+			writeJSON(w, 200, sanitizedMessage(m))
+			return
+		}
 		writeJSON(w, 200, sanitizedMessage(m))
 	case http.MethodPatch:
 		var in struct {
@@ -630,6 +808,12 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			Spam   *bool     `json:"spam"`
 		}
 		if !decodeJSON(w, r, &in) {
+			return
+		}
+		// A standalone inbox's message is cached remote metadata; a state change
+		// routes to the live server (read/flag) or the local label store.
+		if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
+			s.patchRemoteMessage(w, r, p, mb, id, in.Read, in.Labels)
 			return
 		}
 		if in.Read != nil {
@@ -668,7 +852,16 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, sanitizedMessage(m))
 	case http.MethodDelete:
 		// Delete moves the message to Trash (recoverable); use the purge route
-		// to erase it permanently.
+		// to erase it permanently. A standalone inbox's message is moved to its
+		// remote Trash folder instead.
+		if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
+			if derr := s.trashRemoteMessage(r.Context(), p, mb, id); derr != nil {
+				mapMailboxError(w, derr)
+				return
+			}
+			w.WriteHeader(204)
+			return
+		}
 		_, ev, err := s.Service.Store.TrashMessage(r.Context(), p, id)
 		if err != nil {
 			mapStoreError(w, err)
@@ -685,6 +878,20 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 // apiMessageRestore returns a trashed message to the mailbox.
 func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	// A standalone inbox's message restores by moving it back to the remote Inbox.
+	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
+		if err := s.moveRemoteToRole(r.Context(), p, mb, r.PathValue("id"), model.FolderRoleInbox); err != nil {
+			mapMailboxError(w, err)
+			return
+		}
+		updated, uerr := s.resolveRemoteMessage(r.Context(), p, mb, r.PathValue("id"))
+		if uerr != nil {
+			mapMailboxError(w, uerr)
+			return
+		}
+		writeJSON(w, 200, sanitizedMessage(updated))
+		return
+	}
 	m, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
@@ -697,9 +904,20 @@ func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, sanitizedMessage(m))
 }
 
-// apiMessagePurge permanently erases a trashed message and unlinks its file.
+// apiMessagePurge permanently erases a trashed message and unlinks its file. A
+// standalone inbox's message is expunged on the remote server with a UID-targeted
+// expunge; it requires Owner and only acts on a message already in the Trash-role
+// folder.
 func (s *Server) apiMessagePurge(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
+	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
+		if err := mb.remote.PurgeRemoteMessage(r.Context(), p, mb.inbox.ID, r.PathValue("id")); err != nil {
+			mapMailboxError(w, err)
+			return
+		}
+		w.WriteHeader(204)
+		return
+	}
 	path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
@@ -764,13 +982,92 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"id": m.ID, "seen": seen})
 }
 func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Service.Store.ListAttachments(r.Context(), principal(r), r.PathValue("id"))
+	p := principal(r)
+	// A remote message's parts are not cached (only its header is), so the
+	// attachment list is empty and the parts are downloaded structurally from
+	// /v1/messages/{id}/attachments/{part}.
+	if _, _, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
+		writeJSON(w, 200, []model.Attachment{})
+		return
+	}
+	items, err := s.Service.Store.ListAttachments(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
 	writeJSON(w, 200, items)
 }
+
+// apiMessageContent streams a message's raw RFC5322 MIME. A local message reads
+// its stored raw file; a standalone message streams the body live and never
+// archives it.
+func (s *Server) apiMessageContent(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	if m, _, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && !remote {
+		path, perr := s.dataPath(m.RawPath)
+		if perr != nil {
+			writeError(w, 500, "internal error")
+			return
+		}
+		w.Header().Set("Content-Type", "message/rfc822")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": safeRawFilename(m.RFCMessageID)}))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeFile(w, r, path)
+		return
+	}
+	_, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id)
+	if rerr != nil {
+		mapMailboxError(w, rerr)
+		return
+	}
+	if remote {
+		s.remoteMessageContent(w, r, p, mb, id)
+		return
+	}
+	writeError(w, 404, "not found")
+}
+
+// apiMessageAttachmentPart downloads one MIME part of a message by its part path.
+// A local message resolves the part by index; a standalone message fetches the
+// part live. Always a secure attachment download.
+func (s *Server) apiMessageAttachmentPart(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	id := r.PathValue("id")
+	if !parsePartOK(r.PathValue("part")) {
+		writeError(w, 400, "invalid part")
+		return
+	}
+	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
+		part := parsePartPath(r.PathValue("part"))
+		att, ferr := mb.remote.FetchRemoteAttachment(r.Context(), p, mb.inbox.ID, id, part, r.URL.Query().Get("filename"), r.URL.Query().Get("content_type"))
+		if ferr != nil {
+			mapMailboxError(w, ferr)
+			return
+		}
+		defer mb.remote.CleanupRemoteRaw(att.Path)
+		name := att.Filename
+		if name == "" {
+			name = "attachment"
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		f, oerr := os.Open(att.Path)
+		if oerr != nil {
+			writeError(w, 500, "internal error")
+			return
+		}
+		defer f.Close()
+		_, _ = io.Copy(w, f)
+		return
+	}
+	writeError(w, 404, "not found")
+}
+
+// parsePartOK reports whether a raw part path is a valid dotted numeric path.
+func parsePartOK(raw string) bool { return len(parsePartPath(raw)) > 0 }
+
 func (s *Server) apiAttachment(w http.ResponseWriter, r *http.Request) {
 	a, m, err := s.Service.Store.GetAttachment(r.Context(), principal(r), r.PathValue("id"))
 	if err != nil {
@@ -796,36 +1093,89 @@ func (s *Server) apiThreads(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.Service.Store.ListThreads(r.Context(), principal(r), r.URL.Query().Get("inbox"), limit)
-	if err != nil {
-		mapStoreError(w, err)
+	p := principal(r)
+	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
+	if inbox == "" {
+		// Account-wide: one globally date-sorted thread stream across the local
+		// store and every authorized remote inbox, resumed through one cursor.
+		cur, cok := decodeCursorOrLegacy(r.URL.Query().Get("before"))
+		if !cok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		items, cursor, failures, err := s.mergeThreads(r.Context(), p, r.URL.Query().Get("folder"), cur, limit)
+		if err != nil {
+			mapMailboxError(w, err)
+			return
+		}
+		writeJSON(w, 200, newEnvelope(items, cursor, model.CompletenessComplete, failures))
 		return
 	}
-	writeJSON(w, 200, items)
+	// Scoped to one inbox: a standalone inbox reads its remote thread index.
+	mb, err := s.resolveMailbox(r.Context(), p, inbox)
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	if mb.routed {
+		s.demandDetection(r.Context(), []mailboxBackend{mb})
+		threads, rerr := mb.remote.ListRemoteThreads(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, "")
+		if rerr != nil {
+			mapMailboxError(w, rerr)
+			return
+		}
+		items := make([]model.Thread, 0, len(threads))
+		for _, t := range threads {
+			items = append(items, model.Thread{ID: t.Key, InboxID: t.InboxID, Subject: t.Subject, MessageCount: t.MessageCount, LastMessageAt: t.LastMessageAt})
+		}
+		writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
+		return
+	}
+	items, lerr := s.Service.Store.ListThreads(r.Context(), p, inbox, limit)
+	if lerr != nil {
+		mapStoreError(w, lerr)
+		return
+	}
+	writeJSON(w, 200, newEnvelope(items, "", model.CompletenessComplete, nil))
 }
 func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	msgs, err := s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{ThreadID: r.PathValue("id"), Limit: 200})
+	key, inboxID, msgs, remote, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"))
 	if err != nil {
-		mapStoreError(w, err)
+		if isRemoteMiss(err) {
+			writeError(w, 404, "thread not found")
+			return
+		}
+		mapMailboxError(w, err)
 		return
 	}
 	if len(msgs) == 0 {
 		writeError(w, 404, "thread not found")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": r.PathValue("id"), "inbox_id": msgs[0].InboxID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": sanitizedMessages(msgs)})
+	subject := msgs[len(msgs)-1].Subject
+	_ = remote
+	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "messages": msgs})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
-	msgs, err := s.Service.Store.ListMessages(r.Context(), principal(r), store.MessageFilter{ThreadID: r.PathValue("id"), Limit: 200})
+	p := principal(r)
+	_, _, msgs, _, err := s.resolveThreadAny(r.Context(), p, r.PathValue("id"), r.URL.Query().Get("inbox"))
 	if err != nil {
-		mapStoreError(w, err)
+		if isRemoteMiss(err) {
+			writeError(w, 404, "thread not found")
+			return
+		}
+		mapMailboxError(w, err)
 		return
 	}
-	writeJSON(w, 200, sanitizedMessages(msgs))
+	writeJSON(w, 200, msgs)
 }
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	hasAttachment, ok := boolQuery(w, r, "has_attachment")
+	if !ok {
+		return
+	}
+	unread, ok := boolQuery(w, r, "unread")
 	if !ok {
 		return
 	}
@@ -833,20 +1183,84 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := s.Service.Store.SearchMessagesFiltered(r.Context(), principal(r), r.URL.Query().Get("q"), store.MessageFilter{
-		InboxID:       r.URL.Query().Get("inbox"),
-		From:          r.URL.Query().Get("from"),
-		To:            r.URL.Query().Get("to"),
-		Before:        r.URL.Query().Get("before"),
-		Labels:        r.URL.Query()["label"],
-		HasAttachment: hasAttachment,
-		Limit:         limit,
-	})
-	if err != nil {
-		mapStoreError(w, err)
+	p := principal(r)
+	q := r.URL.Query().Get("q")
+	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	subject := r.URL.Query().Get("subject")
+	label := firstQuery(r, "label")
+	folder := r.URL.Query().Get("folder")
+	cur, cok := decodeCursorOrLegacy(r.URL.Query().Get("before"))
+	if !cok {
+		writeError(w, 400, "invalid cursor")
 		return
 	}
-	writeJSON(w, 200, sanitizedMessages(items))
+	// Scoped to a domain inbox: local FTS5 only.
+	if inbox != "" {
+		mb, merr := s.resolveMailbox(r.Context(), p, inbox)
+		if merr != nil {
+			mapMailboxError(w, merr)
+			return
+		}
+		if !mb.routed {
+			items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, store.MessageFilter{
+				InboxID:       inbox,
+				From:          from,
+				To:            to,
+				Unread:        unread,
+				HasAttachment: hasAttachment,
+				Labels:        labelList(label),
+				Before:        cur.sourceCursor("local"),
+				Limit:         limit + 1,
+			})
+			if lerr != nil {
+				mapStoreError(w, lerr)
+				return
+			}
+			cursor := ""
+			if limit > 0 && len(items) > limit {
+				items = items[:limit]
+				if len(items) > 0 {
+					cursor = items[len(items)-1].ID
+				}
+			}
+			writeJSON(w, 200, newEnvelope(sanitizedMessages(items), cursor, model.CompletenessComplete, nil))
+			return
+		}
+		s.demandDetection(r.Context(), []mailboxBackend{mb})
+		res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, app.RemoteSearchQuery{
+			FolderPath: folder, From: from, To: to, Subject: subject, Text: q, Unread: unread, Label: label, Limit: limit,
+		})
+		if rerr != nil {
+			mapMailboxError(w, rerr)
+			return
+		}
+		var items []model.Message
+		for _, v := range res.Items {
+			if hasAttachment != nil && v.HasAttach != *hasAttachment {
+				continue
+			}
+			items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+		}
+		writeJSON(w, 200, newEnvelope(items, "", res.Completeness, nil))
+		return
+	}
+	// Account-wide merged search.
+	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, q, folder, from, to, subject, label, unread, hasAttachment, cur, limit)
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	writeJSON(w, 200, newEnvelope(items, cursor, completeness, failures))
+}
+
+// labelList returns a single-element label slice or nil.
+func labelList(label string) []string {
+	if strings.TrimSpace(label) == "" {
+		return nil
+	}
+	return []string{label}
 }
 
 func (s *Server) apiLabels(w http.ResponseWriter, r *http.Request) {
@@ -1431,12 +1845,48 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A client polling for events is active demand: drive an on-demand remote
+	// detection pass for the scoped inbox (or every authorized standalone inbox)
+	// so a new arrival is durably recorded before this read. Detection never
+	// mutates read state.
+	s.demandEventDetection(r)
 	v, err := s.Service.Store.ListEvents(r.Context(), principal(r), after, r.URL.Query().Get("inbox"), limit)
 	if err != nil {
 		mapStoreError(w, err)
 		return
 	}
 	writeJSON(w, 200, v)
+}
+
+// demandEventDetection drives an on-demand remote detection pass for the inboxes
+// an event read/wait/stream is scoped to (or every authorized standalone inbox for
+// an account-wide read). It is the demand side of demand-based fan-out and is a
+// no-op when no detection surface is installed.
+func (s *Server) demandEventDetection(r *http.Request) {
+	s.demandEventDetectionCtx(r.Context(), r)
+}
+
+// demandEventDetectionCtx drives detection with an explicit context so a stream
+// can run it in the background under its own timeout without blocking the
+// response.
+func (s *Server) demandEventDetectionCtx(ctx context.Context, r *http.Request) {
+	if s.Service.RemoteDetection == nil {
+		return
+	}
+	p := principal(r)
+	if inbox := strings.TrimSpace(r.URL.Query().Get("inbox")); inbox != "" {
+		mb, err := s.resolveMailbox(ctx, p, inbox)
+		if err != nil {
+			return
+		}
+		s.demandDetection(ctx, []mailboxBackend{mb})
+		return
+	}
+	boxes, err := s.readableInboxes(ctx, p)
+	if err != nil {
+		return
+	}
+	s.demandDetection(ctx, boxes)
 }
 func (s *Server) waitEvents(r *http.Request, after int64, inbox string, timeout time.Duration) ([]model.Event, error) {
 	p := principal(r)
@@ -1480,6 +1930,9 @@ func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.waitLimiter.release(waitKey)
+	// Active demand: detect remote arrivals for the scoped inbox (or all
+	// authorized standalone inboxes) before draining, without mutating read state.
+	s.demandEventDetection(r)
 	// With no cursor, wait for events after the current head so the call blocks
 	// for new events instead of replaying history. An explicit cursor keeps the
 	// documented drain semantics (return anything already after it).
@@ -1558,6 +2011,24 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, 
 		return
 	}
 	inbox := r.URL.Query().Get("inbox")
+	// Active demand: while a client is connected, drive on-demand remote detection
+	// on a bounded, non-blocking cadence so a new arrival is detected without
+	// waiting for the keepalive. Detection runs in the background with its own
+	// timeout, so a slow or unreachable remote inbox never blocks this SSE
+	// response or another tenant's stream.
+	var detecting int32
+	detect := func() {
+		if !atomic.CompareAndSwapInt32(&detecting, 0, 1) {
+			return
+		}
+		go func() {
+			defer atomic.StoreInt32(&detecting, 0)
+			dctx, dcancel := context.WithTimeout(ctx, 20*time.Second)
+			defer dcancel()
+			s.demandEventDetectionCtx(dctx, r)
+		}()
+	}
+	detect()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1591,6 +2062,10 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, 
 		}
 		return nil
 	}
+	// Ongoing active detection: triggered on a short tick independent of the
+	// keepalive, and bounded so it never blocks the stream.
+	detectTick := time.NewTicker(5 * time.Second)
+	defer detectTick.Stop()
 	for {
 		items, err := s.Service.Store.ListEvents(ctx, p, after, inbox, 500)
 		if err != nil {
@@ -1616,6 +2091,8 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, 
 			fmt.Fprint(bw, ": keepalive\n\n")
 			_ = bw.Flush()
 			fl.Flush()
+		case <-detectTick.C:
+			detect()
 		case <-ctx.Done():
 			return
 		}
@@ -1716,6 +2193,13 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 	if timeoutSec > 600 {
 		timeoutSec = 600
 	}
+	// Active demand: detect remote arrivals for the scoped inbox (or every
+	// authorized standalone inbox) before waiting, without mutating read state.
+	rq := r.Clone(r.Context())
+	if u := rq.URL.Query(); inboxID != "" {
+		u.Set("inbox", inboxID)
+	}
+	s.demandEventDetection(rq)
 	deadline := time.NewTimer(time.Duration(timeoutSec) * time.Second)
 	defer deadline.Stop()
 	_, ch, cancel := s.Service.Hub.Subscribe(16)

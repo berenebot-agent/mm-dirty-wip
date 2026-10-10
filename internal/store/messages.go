@@ -321,10 +321,12 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var read int
 	var has, internal, spam int
 	var authResults, envelopeFrom, envelopeRecipient, deliveriesJSON string
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON)
+	var mailboxID sql.NullString
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON, &mailboxID, &m.FolderPath)
 	if err != nil {
 		return m, err
 	}
+	m.MailboxID = mailboxID.String
 	m.EnvelopeFrom = envelopeFrom
 	m.EnvelopeRecipient = envelopeRecipient
 	m.Internal = internal != 0
@@ -374,7 +376,7 @@ func decodeMessageDeliveries(raw string) []model.MessageDelivery {
 	return out
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]')`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]'),m.mailbox_id,COALESCE((SELECT f.path FROM inbox_folders f WHERE f.id=m.mailbox_id),'')`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))
@@ -429,8 +431,28 @@ type MessageFilter struct {
 	// Trashed selects the Trash view: only messages with deleted_at set. The
 	// default (false) excludes trashed messages from ordinary reads.
 	Trashed bool
-	Before  string
-	Limit   int
+	// MailboxID restricts results to one folder within the inbox. An empty value
+	// (with FolderScoped false) matches any folder, preserving the pre-folder
+	// behaviour for callers that do not select a folder explicitly. The system
+	// Inbox is addressable either as the empty string (the implicit default) or
+	// by its own folder id; both name the same set.
+	MailboxID string
+	// FolderScoped, when true, restricts results to exactly MailboxID. This is
+	// how a named folder view (a custom folder, Sent, Trash, Spam, Archive) and
+	// the Inbox view that excludes messages moved into other folders are
+	// expressed: MailboxID="" scoped means the implicit system Inbox. When false
+	// (the default), MailboxID is an optional extra restriction and an empty
+	// value matches every folder, so existing unfiled reads keep their meaning.
+	FolderScoped bool
+	// InboxRole, when set, restricts the Inbox view to messages that are in the
+	// system Inbox bucket: mailbox_id IS NULL (unfiled default) or names a folder
+	// whose role equals InboxRole. It is the filter the mailbox Inbox tab sets so
+	// messages the assistant moved to a custom or archive folder no longer appear
+	// there, while mail filed into an explicit Inbox-role folder still does. It is
+	// only meaningful with FolderScoped=true and an empty MailboxID.
+	InboxRole string
+	Before    string
+	Limit     int
 }
 
 // messageFilterWhere builds the shared WHERE predicate (beginning with " AND ")
@@ -445,6 +467,8 @@ func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f Mes
 	var args []any
 	q += trashClause("m", f.Trashed)
 	q += spamClause("m", f.SpamOnly, f.IncludeSpam)
+	q += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
+	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return "", nil, ErrForbidden
@@ -1279,10 +1303,18 @@ func (s *Store) GetAttachment(ctx context.Context, p model.Principal, id string)
 // excludes them and the thread is dropped when it has no visible message);
 // hidden Spam must not bump normal thread ordering or choose a visible subject.
 func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID string, limit int) ([]model.Thread, error) {
+	return s.ListThreadsBefore(ctx, p, inboxID, limit, "")
+}
+
+// ListThreadsBefore is ListThreads with a keyset cursor: beforeID, when
+// non-empty, returns threads strictly after that thread's
+// (last_message_at, id) ordering tuple, so a merged account-wide listing can
+// resume one source without losing a thread that sorts below a global key.
+func (s *Store) ListThreadsBefore(ctx context.Context, p model.Principal, inboxID string, limit int, beforeID string) ([]model.Thread, error) {
 	if inboxID != "" && !p.CanRead(inboxID) {
 		return nil, ErrForbidden
 	}
-	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),t.updated_at FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
+	q := `SELECT t.id,t.inbox_id,t.subject,count(m.id),MAX(m.created_at) FROM threads t LEFT JOIN messages m ON m.thread_id=t.id AND m.internal=0 AND m.is_spam=0 AND m.deleted_at IS NULL WHERE t.account_id=?`
 	args := []any{p.AccountID}
 	if inboxID != "" {
 		q += ` AND t.inbox_id=?`
@@ -1297,10 +1329,21 @@ func (s *Store) ListThreads(ctx context.Context, p model.Principal, inboxID stri
 			args = append(args, id)
 		}
 	}
-	q += ` GROUP BY t.id HAVING count(m.id) > 0 ORDER BY MAX(m.created_at) DESC LIMIT ?`
+	q += ` GROUP BY t.id HAVING count(m.id) > 0`
+	if strings.TrimSpace(beforeID) != "" {
+		var last sql.NullString
+		if cerr := s.read.QueryRowContext(ctx, `SELECT MAX(created_at) FROM messages WHERE thread_id=?`, beforeID).Scan(&last); cerr != nil {
+			return nil, cerr
+		}
+		cur := last.String
+		q += ` HAVING (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND t.id < ?))`
+		args = append(args, cur, cur, beforeID)
+	}
+	q += ` ORDER BY MAX(m.created_at) DESC, t.id DESC`
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
+	q += ` LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -1351,6 +1394,52 @@ func spamClause(alias string, spamOnly, includeSpam bool) string {
 	default:
 		return " AND " + prefix + "is_spam=0"
 	}
+}
+
+// folderClause returns the SQL fragment that applies folder (single-membership)
+// visibility to a message query. alias is the messages table alias.
+//
+// A message belongs to exactly one folder, recorded in messages.mailbox_id. The
+// system Inbox is the implicit default: mailbox_id is NULL for mail that has
+// never been filed, and an explicit Inbox folder row names the same bucket via
+// its role. This clause therefore treats NULL and the Inbox role as one bucket
+// when role is supplied.
+//
+//   - scoped with id="": the implicit Inbox only (mailbox_id IS NULL).
+//   - scoped with id set: exactly that folder id.
+//   - unscoped with id="": no restriction (every folder), the pre-folder default.
+//   - unscoped with id set: mailbox_id = id (an extra restriction on any read).
+//
+// role, when non-empty and id empty and scoped, widens the implicit Inbox bucket
+// to include any folder carrying that role: the Inbox view uses it so mail filed
+// into an explicit Inbox-role folder is still shown there.
+func folderClause(alias, id, role string, scoped bool) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	if id != "" {
+		return " AND " + prefix + "mailbox_id=?"
+	}
+	if scoped {
+		if role != "" {
+			return " AND (" + prefix + "mailbox_id IS NULL OR " + prefix + "mailbox_id IN (SELECT f.id FROM inbox_folders f WHERE f.inbox_id=" + prefix + "inbox_id AND f.role=?))"
+		}
+		return " AND " + prefix + "mailbox_id IS NULL"
+	}
+	return ""
+}
+
+// folderArgs returns the bound arguments (if any) that folderClause expects, so
+// the predicate and its parameters can never drift apart. They follow folderClause.
+func folderArgs(id, role string, scoped bool) []any {
+	if id != "" {
+		return []any{id}
+	}
+	if scoped && role != "" {
+		return []any{role}
+	}
+	return nil
 }
 
 // ErrInvalidSearchQuery reports a search query that cannot be expressed to the
@@ -1512,6 +1601,8 @@ func (s *Store) SearchMessagesFiltered(ctx context.Context, p model.Principal, q
 	args := []any{match, p.AccountID}
 	sqlq += trashClause("m", f.Trashed)
 	sqlq += spamClause("m", f.SpamOnly, f.IncludeSpam)
+	sqlq += folderClause("m", f.MailboxID, f.InboxRole, f.FolderScoped)
+	args = append(args, folderArgs(f.MailboxID, f.InboxRole, f.FolderScoped)...)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
 			return nil, ErrForbidden

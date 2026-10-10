@@ -122,10 +122,19 @@ func equalTokenHash(a, b string) bool {
 }
 
 // RequestSend records an assistant's request that a draft be authorized and
-// sent, freezing the draft. When the inbox has a configured approver, the
-// approval-request email is queued in the same transaction that creates the
-// request; the explicit external flag is therefore optional and only forces an
-// error when the inbox has no approver.
+// sent, freezing the draft. The inbox's authoring mode decides what happens:
+//
+//   - MailMooseApproval (a domain inbox's default): the in-product approval
+//     workflow. When the inbox has a configured approver the approval-request
+//     email is queued in the same transaction that creates the request; the
+//     explicit external flag is therefore optional and only forces an error when
+//     the inbox has no approver.
+//   - RemoteDraft (a standalone inbox's default): a one-way handoff that places
+//     the frozen draft in the inbox's connected remote Drafts folder. MailMoose
+//     never sends it.
+//
+// The mode is read once here and snapshotted onto the request, so a later inbox
+// setting change never affects an in-flight request.
 func (s *Service) RequestSend(ctx context.Context, p model.Principal, draftID string, external bool) (model.Draft, error) {
 	d, err := s.Store.GetDraft(ctx, p, draftID)
 	if err != nil {
@@ -137,6 +146,20 @@ func (s *Service) RequestSend(ctx context.Context, p model.Principal, draftID st
 	inbox, err := s.Store.GetInboxInternal(ctx, p.AccountID, d.InboxID)
 	if err != nil {
 		return model.Draft{}, err
+	}
+	settings, err := s.Store.GetInboxAuthoringSettingsInternal(ctx, p.AccountID, d.InboxID)
+	if err != nil {
+		return model.Draft{}, err
+	}
+	// A RemoteDraft inbox hands the draft off one-way. The explicit external flag
+	// is a MailMooseApproval intent and does not force a handoff, so an operator
+	// who explicitly asks for external approval on a handoff inbox gets an error
+	// rather than a silent mode switch.
+	if settings.Mode == model.AuthoringRemoteDraft {
+		if external {
+			return model.Draft{}, fmt.Errorf("%w: this inbox hands drafts off to remote Drafts", store.ErrHandoffUnsupported)
+		}
+		return s.requestRemoteDraft(ctx, p, d)
 	}
 	// A configured approver makes a request external automatically. The flag
 	// remains accepted for compatibility and to make the intent explicit.
@@ -242,7 +265,7 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, path)
 
-	sending, cfgErr := s.Store.ResolveDomainSendingConfig(ctx, p.AccountID, inbox.DomainID)
+	sending, cfgErr := s.sendingConfigForInbox(ctx, p.AccountID, inbox)
 	provider := ""
 	queuedReason := ""
 	if cfgErr != nil {
@@ -250,7 +273,7 @@ func (s *Service) requestExternalSend(ctx context.Context, p model.Principal, d 
 			_ = os.Remove(path)
 			return model.Draft{}, cfgErr
 		}
-		queuedReason = "no outbound provider configured for this domain"
+		queuedReason = noProviderReason(inbox)
 	} else {
 		provider = sending.Provider
 	}
@@ -460,4 +483,26 @@ func domainOf(address string) string {
 		return address[i+1:]
 	}
 	return address
+}
+
+// sendingConfigForInbox resolves the sending configuration that carries an inbox's
+// workflow/system mail. A domain inbox uses its managed domain's configuration
+// (with inheritance); a standalone inbox uses its own remote SMTP binding
+// (installed by InstallRemoteBridges). When the standalone inbox has no SMTP
+// binding the store returns ErrNoProvider and the notification is queued and held.
+// It never resolves a standalone inbox against a non-existent domain.
+func (s *Service) sendingConfigForInbox(ctx context.Context, accountID string, inbox model.Inbox) (store.DomainSendingConfig, error) {
+	if inbox.Kind == model.InboxKindStandalone || inbox.DomainID == "" {
+		return s.Store.SendingConfigForTarget(ctx, accountID, inbox.ID, store.SendingTarget{InboxID: inbox.ID})
+	}
+	return s.Store.SendingConfigForTarget(ctx, accountID, inbox.ID, store.SendingTarget{DomainID: inbox.DomainID})
+}
+
+// noProviderReason is the queued state description for workflow mail whose inbox
+// has no usable sending provider yet.
+func noProviderReason(inbox model.Inbox) string {
+	if inbox.Kind == model.InboxKindStandalone || inbox.DomainID == "" {
+		return "no outbound provider configured for this inbox"
+	}
+	return "no outbound provider configured for this domain"
 }

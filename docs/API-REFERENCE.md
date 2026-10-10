@@ -22,6 +22,31 @@ Generated from `internal/apispec`; do not edit by hand.
 | DELETE | /v1/inboxes/{id} | Delete an inbox (Admin) | admin |
 | POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Owner) | owner |
 
+## Mailbox
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/inboxes/{id}/folders | List an inbox's folders (common) | read |
+| POST | /v1/inboxes/{id}/folders | Create a folder (Assistant/Owner) | assistant |
+| PATCH | /v1/inboxes/{id}/folders/{folderId} | Rename a folder (Assistant/Owner) | assistant |
+| DELETE | /v1/inboxes/{id}/folders/{folderId} | Delete a folder (Assistant/Owner) | assistant |
+| GET | /v1/inboxes/{id}/messages | List an inbox's messages (common envelope) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId} | Get a message (common) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId}/content | Download a message's raw MIME (common) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId}/attachments/{part} | Download one message attachment (common) | read |
+| GET | /v1/inboxes/{id}/threads | List an inbox's threads (common envelope) | read |
+| GET | /v1/inboxes/{id}/threads/{threadId} | Get a thread (common) | read |
+| GET | /v1/inboxes/{id}/search | Search an inbox (common envelope) | read |
+| GET | /v1/inboxes/{id}/labels | List an inbox's labels (common envelope) | read |
+| GET | /v1/inboxes/{id}/remote | Get a standalone inbox's remote configuration | read |
+| PUT | /v1/inboxes/{id}/remote | Configure a standalone inbox's remote connector (Owner/Admin) | owner |
+| POST | /v1/inboxes/{id}/remote/test | Test a standalone inbox's remote connector | read |
+| POST | /v1/inboxes/{id}/remote/refresh | Reconcile a standalone inbox against its server (Assistant/Owner) | assistant |
+| POST | /v1/inboxes/{id}/remote/roles/{role} | Map or create a standalone inbox's special folder role (Assistant/Owner) | assistant |
+| GET | /v1/inboxes/{id}/authoring | Get an inbox's assistant authoring settings | read |
+| PUT | /v1/inboxes/{id}/authoring | Set an inbox's assistant authoring settings (Owner/Admin) | owner |
+| GET | /v1/inboxes/{id}/handoffs | List an inbox's RemoteDraft handoff history | read |
+
 ## Identities
 
 | Method | Path | Summary | Role |
@@ -49,6 +74,8 @@ Generated from `internal/apispec`; do not edit by hand.
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
 | GET | /v1/messages/{id}/attachments | List message attachments | read |
+| GET | /v1/messages/{id}/attachments/{part} | Download one message attachment by MIME part path | read |
+| GET | /v1/messages/{id}/content | Download a message's raw MIME | read |
 | GET | /v1/attachments/{id} | Download an attachment | read |
 
 ## Threads

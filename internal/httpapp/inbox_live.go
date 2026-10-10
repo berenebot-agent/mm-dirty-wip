@@ -114,11 +114,16 @@ func mailboxFilter(id, folder, label string) (f store.MessageFilter, basePath st
 }
 
 // buildMessageList runs the same query the mailbox renderer does for a folder
-// and optional label. before is the keyset cursor (empty for the first page).
+// and optional label. before is the keyset cursor (empty for the first page). For
+// a standalone inbox it reads the cached remote index (reconciling on demand),
+// so the mailbox Inbox/Sent/Spam/Trash views show remote mail through the same UI.
 func (s *Server) buildMessageList(r *http.Request, p model.Principal, id, folder, label, before string) (msgs []model.Message, hasMore bool, cursor, pagerURL string, err error) {
 	f, basePath, ok := mailboxFilter(id, folder, label)
 	if !ok {
 		return nil, false, "", "", store.ErrInvalidSearchQuery
+	}
+	if box, gerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id); gerr == nil && box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
+		return s.buildRemoteMessageList(r, p, box, folder, before)
 	}
 	f.Before = before
 	f.Limit = inboxPageSize + 1
@@ -139,6 +144,60 @@ func (s *Server) buildMessageList(r *http.Request, p model.Principal, id, folder
 		} else {
 			pagerURL = basePath + "?before=" + url.QueryEscape(cursor)
 		}
+	}
+	return msgs, hasMore, cursor, pagerURL, nil
+}
+
+// buildRemoteMessageList renders a standalone inbox's remote folder listing onto
+// the common message list shape. folder selects the local view role ("inbox",
+// "sent", "spam", "trash", "label"); the corresponding remote folder path comes
+// from the inbox's role mapping, falling back to the selected namespace root for
+// the Inbox. A label filter intersects with local label metadata.
+func (s *Server) buildRemoteMessageList(r *http.Request, p model.Principal, box model.Inbox, folder, before string) (msgs []model.Message, hasMore bool, cursor, pagerURL string, err error) {
+	root := strings.TrimSpace(box.Namespace)
+	if root == "" {
+		root = model.NamespaceINBOX
+	}
+	path := root
+	basePath := "/ui/inboxes/" + box.ID
+	switch folder {
+	case "sent":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSent); ok {
+			path = f.Path
+		}
+		basePath += "/sent"
+	case "spam":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSpam); ok {
+			path = f.Path
+		}
+		basePath += "/spam"
+	case "trash":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash); ok {
+			path = f.Path
+		}
+		basePath += "/trash"
+	case "inbox":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleInbox); ok {
+			path = f.Path
+		}
+	}
+	s.demandDetection(r.Context(), []mailboxBackend{{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}})
+	res, rerr := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, path, inboxPageSize+1, before)
+	if rerr != nil {
+		return nil, false, "", "", rerr
+	}
+	for _, v := range res.Items {
+		msgs = append(msgs, remoteMessageToModel(v, &model.Folder{Path: path}))
+	}
+	hasMore = len(msgs) > inboxPageSize
+	if hasMore {
+		msgs = msgs[:inboxPageSize]
+	}
+	if len(msgs) > 0 {
+		cursor = msgs[len(msgs)-1].ID
+	}
+	if cursor != "" {
+		pagerURL = basePath + "?before=" + url.QueryEscape(cursor)
 	}
 	return msgs, hasMore, cursor, pagerURL, nil
 }

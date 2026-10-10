@@ -68,6 +68,7 @@ func (s *Store) GetDraft(ctx context.Context, p model.Principal, id string) (mod
 		return model.Draft{}, ErrForbidden
 	}
 	d.SendRequest, _ = s.latestSendRequestForDraft(ctx, p.AccountID, id)
+	d.Handoff, _ = s.LatestAssistantHandlingForDraft(ctx, p.AccountID, id)
 	d.Attachments, _ = s.ListDraftAttachmentsInternal(ctx, p.AccountID, id)
 	return d, nil
 }

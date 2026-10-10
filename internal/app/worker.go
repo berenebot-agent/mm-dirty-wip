@@ -140,9 +140,19 @@ func (w *OutboxWorker) deliver() {
 		{"deliverDue", w.deliverDue},
 		{"deliverWorkflowDue", w.deliverWorkflowDue},
 		{"deliverWebhooks", w.deliverWebhooks},
+		{"publishHandoffs", w.publishHandoffs},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
 	}
+}
+
+// publishHandoffs publishes queued RemoteDraft handoffs through the injected
+// HandoffPublisher. When no publisher is installed it is a no-op and handoffs
+// stay queued rather than being failed.
+func (w *OutboxWorker) publishHandoffs() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	w.svc.PublishHandoffs(ctx)
 }
 
 // maintain runs the infrequent maintenance sweeps: approval expiry, terminal
@@ -158,8 +168,38 @@ func (w *OutboxWorker) maintain() {
 		{"sweepClientDeliveryLog", w.sweepClientDeliveryLog},
 		{"trashDeliveredMail", w.trashDeliveredMail},
 		{"purgeExpiredTrash", w.purgeExpiredTrash},
+		{"sweepRemoteTerminal", w.sweepRemoteTerminal},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
+	}
+}
+
+// remoteTerminalRetention bounds how long a terminal remote sent-copy job and a
+// terminal remote arrival are retained before their rows (and the copy's frozen
+// raw MIME) are removed. It matches the workflow/client-log 30-day floor.
+const remoteTerminalRetention = 30 * 24 * time.Hour
+
+// sweepRemoteTerminal reclaims the durable remote state machines: it deletes
+// terminal remote sent-copy jobs (unlinking each job's own frozen raw MIME) and
+// terminal remote arrivals (and their action rows) past the retention window.
+// Without this the remote_sent_copies / inbox_remote_arrivals tables and the
+// frozen sentshare files would grow without bound.
+func (w *OutboxWorker) sweepRemoteTerminal() {
+	cutoff := time.Now().UTC().Add(-remoteTerminalRetention)
+	paths, err := w.svc.Store.SweepRemoteSentCopies(context.Background(), cutoff)
+	if err != nil {
+		w.log.Error("remote sent-copy sweep", "error", err)
+	} else {
+		for _, p := range paths {
+			if path, perr := safepath.Join(w.svc.Config.DataDir, p); perr == nil {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	if n, aerr := w.svc.Store.SweepRemoteArrivalRetention(context.Background(), cutoff); aerr != nil {
+		w.log.Error("remote arrival sweep", "error", aerr)
+	} else if n > 0 {
+		w.log.Info("swept remote arrivals", "count", n)
 	}
 }
 

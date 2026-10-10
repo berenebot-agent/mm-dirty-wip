@@ -135,7 +135,17 @@ func main() {
 	worker := app.NewOutboxWorker(svc, log)
 	worker.Start()
 	defer worker.Stop()
+	// The remote (standalone IMAP) runtime: install the handoff/sender/forwarder
+	// bridges once, then start the watcher that detects new arrivals in each
+	// standalone inbox. The shared RemoteMailboxService is installed onto the HTTP
+	// layer so a standalone inbox's reads and the watcher share one surface.
+	remoteMailbox := app.NewRemoteMailboxService(svc)
+	remoteMailbox.InstallRemoteBridges()
+	remoteWorker := app.NewRemoteWorker(svc, remoteMailbox, log)
+	remoteWorker.Start()
+	svc.RemoteDetection = remoteWorker
 	h := httpapp.New(svc, log)
+	h.SetRemoteMailbox(remoteMailbox)
 
 	type listener struct {
 		name string
@@ -212,6 +222,10 @@ func main() {
 	}()
 	<-stop
 	dialCancel()
+	// Stop the remote watcher first so no new remote connection is opened while
+	// the rest of the process drains. It cancels each watcher's context and waits
+	// for the goroutines to finish, so no connection or goroutine is leaked.
+	remoteWorker.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	for _, l := range listeners {

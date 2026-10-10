@@ -20,22 +20,26 @@ func p(name, typ string, required bool, desc string) Param {
 }
 
 var (
-	qLimit    = p("limit", "integer", false, "Maximum items to return; the store clamps to the advertised page-size ceiling.")
-	qBefore   = p("before", "string", false, "Opaque keyset cursor; return items older than this.")
-	qInbox    = p("inbox", "string", false, "Scope results to one inbox id.")
-	qLabel    = p("label", "array", false, "Repeatable; a message must carry every listed label.")
-	qFrom     = p("from", "string", false, "Match the RFC5322 From address.")
-	qTo       = p("to", "string", false, "Match a recipient address.")
-	qUnread   = p("unread", "boolean", false, "Filter by read state.")
-	qHasAtt   = p("has_attachment", "boolean", false, "Only messages with attachments.")
-	qSpam     = p("spam", "boolean", false, "List only messages classified as spam.")
-	qInclSpam = p("include_spam", "boolean", false, "Include spam alongside ordinary mail.")
-	qAfter    = p("after", "string", false, "Durable event cursor (evt_...); return events after it.")
-	qTimeout  = p("timeout", "integer", false, "Seconds to wait; the server caps this value.")
-	qWait     = p("wait", "boolean", false, "Block until delivery completes instead of returning as soon as queued.")
-	qActive   = p("active", "boolean", false, "Only outstanding send requests.")
-	qAddress  = p("address", "string", false, "openagent.email compatibility alias for inbox.")
-	qQ        = p("q", "string", true, "FTS5 query string.")
+	qLimit       = p("limit", "integer", false, "Maximum items to return; the store clamps to the advertised page-size ceiling.")
+	qBefore      = p("before", "string", false, "Opaque keyset cursor; return items older than this.")
+	qInbox       = p("inbox", "string", false, "Scope results to one inbox id.")
+	qLabel       = p("label", "array", false, "Repeatable; a message must carry every listed label.")
+	qFrom        = p("from", "string", false, "Match the RFC5322 From address.")
+	qTo          = p("to", "string", false, "Match a recipient address.")
+	qUnread      = p("unread", "boolean", false, "Filter by read state.")
+	qHasAtt      = p("has_attachment", "boolean", false, "Only messages with attachments.")
+	qSpam        = p("spam", "boolean", false, "List only messages classified as spam.")
+	qInclSpam    = p("include_spam", "boolean", false, "Include spam alongside ordinary mail.")
+	qAfter       = p("after", "string", false, "Durable event cursor (evt_...); return events after it.")
+	qTimeout     = p("timeout", "integer", false, "Seconds to wait; the server caps this value.")
+	qWait        = p("wait", "boolean", false, "Block until delivery completes instead of returning as soon as queued.")
+	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
+	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
+	qQ           = p("q", "string", true, "FTS5 query string.")
+	qFolder      = p("folder", "string", false, "Scope to one folder (a folder path for a standalone inbox, a folder id for a domain inbox).")
+	qSubject     = p("subject", "string", false, "Match the subject line.")
+	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
+	qContentType = p("content_type", "string", false, "IANA media type to advertise for a remote attachment download.")
 )
 
 var routeIOByKey = map[string]routeIO{
@@ -50,14 +54,36 @@ var routeIOByKey = map[string]routeIO{
 	"PATCH /v1/inboxes/{id}":  {Request: "InboxPatch", Response: "Inbox"},
 	"DELETE /v1/inboxes/{id}": {},
 
+	// Common mailbox surface.
+	"GET /v1/inboxes/{id}/folders":                                 {Response: "FolderList", Query: []Param{}},
+	"POST /v1/inboxes/{id}/folders":                                {Request: "FolderCreate", Response: "Folder"},
+	"PATCH /v1/inboxes/{id}/folders/{folderId}":                    {Request: "FolderRename", Response: "Folder"},
+	"DELETE /v1/inboxes/{id}/folders/{folderId}":                   {},
+	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qFrom, qTo, qLimit}},
+	"GET /v1/inboxes/{id}/messages/{messageId}":                    {Response: "Message"},
+	"GET /v1/inboxes/{id}/messages/{messageId}/content":            {},
+	"GET /v1/inboxes/{id}/messages/{messageId}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
+	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qLimit}},
+	"GET /v1/inboxes/{id}/threads/{threadId}":                      {Response: "ThreadDetail"},
+	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qLabel, qLimit}},
+	"GET /v1/inboxes/{id}/labels":                                  {Response: "LabelList"},
+	"GET /v1/inboxes/{id}/remote":                                  {Response: "RemoteConfig"},
+	"PUT /v1/inboxes/{id}/remote":                                  {Request: "RemoteConfigPut", Response: "Inbox"},
+	"POST /v1/inboxes/{id}/remote/test":                            {Request: "RemoteConfigTest", Response: "RemoteTestResult"},
+	"POST /v1/inboxes/{id}/remote/refresh":                         {Response: "RemoteRefreshResult"},
+	"POST /v1/inboxes/{id}/remote/roles/{role}":                    {Request: "RemoteRoleMap", Response: "RemoteRoleResult"},
+	"GET /v1/inboxes/{id}/authoring":                               {Response: "AuthoringSettings"},
+	"PUT /v1/inboxes/{id}/authoring":                               {Request: "AuthoringSettingsPut", Response: "AuthoringSettings"},
+	"GET /v1/inboxes/{id}/handoffs":                                {Response: "HandoffList", Query: []Param{qLimit}},
+
 	// Identities (openagent.email compatibility).
 	"GET /v1/identities":              {Response: "IdentityList"},
 	"POST /v1/identities":             {Request: "IdentityCreate", Response: "IdentityCreated"},
 	"DELETE /v1/identities/{address}": {Response: "Deleted"},
 
 	// Messages.
-	"GET /v1/messages": {Response: "MessageList", Query: []Param{
-		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qSpam, qInclSpam, qBefore, qLimit, qAddress,
+	"GET /v1/messages": {Response: "MessageEnvelope", Query: []Param{
+		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qSpam, qInclSpam, qBefore, qLimit, qAddress, qFolder,
 	}},
 	"GET /v1/messages/wait": {Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
@@ -71,17 +97,19 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/messages/{id}/seen": {Request: "SeenBody", Response: "SeenResult"},
 
 	// Attachments.
-	"GET /v1/messages/{id}/attachments": {Response: "AttachmentList"},
-	"GET /v1/attachments/{id}":          {},
+	"GET /v1/messages/{id}/attachments":        {Response: "AttachmentList"},
+	"GET /v1/messages/{id}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
+	"GET /v1/messages/{id}/content":            {},
+	"GET /v1/attachments/{id}":                 {},
 
 	// Threads.
-	"GET /v1/threads":               {Response: "ThreadList", Query: []Param{qInbox, qLimit}},
+	"GET /v1/threads":               {Response: "ThreadEnvelope", Query: []Param{qInbox, qLimit, qFolder, qBefore}},
 	"GET /v1/threads/{id}":          {Response: "ThreadDetail"},
 	"GET /v1/threads/{id}/messages": {Response: "MessageList"},
 
 	// Search.
-	"GET /v1/search": {Response: "MessageList", Query: []Param{
-		qQ, qInbox, qLabel, qFrom, qTo, qHasAtt, qBefore, qLimit,
+	"GET /v1/search": {Response: "MessageEnvelope", Query: []Param{
+		qQ, qInbox, qLabel, qFrom, qTo, qSubject, qUnread, qHasAtt, qBefore, qLimit, qFolder,
 	}},
 
 	// Labels.

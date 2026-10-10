@@ -276,3 +276,27 @@ database. It:
 There is no full database wipe. Back up `/data` and `APP_ENCRYPTION_KEY` before
 running the new binary. If startup reports a partially applied schema, restore
 from backup and retry rather than deleting the database.
+
+### This release: standalone mailboxes and external-alias removal
+
+This release adds migrations **052–058** (the standalone mailbox foundation and
+the shared folder/remote model; see
+[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md)) and **removes
+external sending aliases** (migration 053). Both are additive/non-destructive
+except the deliberate alias removal:
+
+- Standalone mailboxes are new; no existing inbox changes kind. A standalone
+  inbox connects to an existing mailbox over IMAP/SMTP and is configured per
+  inbox (its connector secrets are encrypted and require `APP_ENCRYPTION_KEY`,
+  which is unchanged). Remote message metadata is cached in new tables; no
+  message body is archived.
+- External sending aliases (send-only identities on domains MailMoose does not
+  manage) are deleted with no compatibility shim. Migration 053 discards their
+  unsent drafts, attachments and queued sends/jobs and refunds the account and
+  inbox storage counters, keeps sent history and its `from_address` attribution,
+  removes orphaned threads, and preserves ordinary mail and managed-domain
+  aliases. Raw files are retired after the migration commits via a durable
+  cleanup queue.
+
+No manual database edit is required. Back up `/data` and `APP_ENCRYPTION_KEY`
+before upgrading, as above.

@@ -111,6 +111,15 @@ commands:
   threads          GET  /v1/threads                list threads
   thread           GET  /v1/threads/{id}           thread detail (+ --messages)
   labels           GET  /v1/labels                 distinct labels in use
+  folders          GET  /v1/inboxes/{id}/folders   list an inbox's folders (common)
+  folder-add       POST /v1/inboxes/{id}/folders   create a folder
+  folder-rename    PATCH /v1/inboxes/{id}/folders/{folderId}
+  folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
+  remote           GET  /v1/inboxes/{id}/remote    standalone inbox remote config
+  remote-test      POST /v1/inboxes/{id}/remote/test  test the remote connector
+  authoring        GET/PUT /v1/inboxes/{id}/authoring  authoring settings
+  handoffs         GET  /v1/inboxes/{id}/handoffs   handoff history
+  remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                   send (Owner)
   reply            POST /v1/messages/{id}/reply   reply (Owner)
   mark-read        PATCH  /v1/messages/{id}        set read=true
@@ -550,6 +559,55 @@ def label_columns():
     ]
 
 
+def folder_columns():
+    return [
+        ("id", "id"),
+        ("path", "path"),
+        ("name", "name"),
+        ("role", "role"),
+        ("messages", "message_count"),
+        ("unread", "unread_count"),
+    ]
+
+
+def remote_columns():
+    return [
+        ("host", "host"),
+        ("port", "port"),
+        ("username", "username"),
+        ("security", "security"),
+        ("smtp_host", "smtp_host"),
+        ("namespace", "namespace"),
+        ("configured", "configured"),
+        ("imap_password_set", "imap_password_set"),
+        ("smtp_password_set", "smtp_password_set"),
+        ("missing_roles", lambda row: ", ".join(row.get("missing_roles") or [])),
+    ]
+
+
+def handoff_columns():
+    return [
+        ("id", "id"),
+        ("draft", "draft_id"),
+        ("publication", "publication"),
+        ("notification", "notification_status"),
+        ("remote_folder", "remote_folder"),
+        ("error", "last_error"),
+        ("requested", "requested_at"),
+    ]
+
+
+def authoring_columns():
+    return [
+        ("mode", "mode"),
+        ("default_mode", "default_mode"),
+        ("notify_address", "notify_address"),
+        ("notify_overridden", "notify_overridden"),
+        ("approver_enabled", "approver_enabled"),
+        ("approver_email", "approver_email"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Argument helpers
 # ---------------------------------------------------------------------------
@@ -712,10 +770,14 @@ def cmd_search(client, args):
     params = {
         "q": args.query,
         "inbox": client.inbox,
+        "folder": args.folder,
         "label": split_values(args.label),
         "from": args.from_,
         "to": args.to,
+        "subject": args.subject,
+        "unread": "true" if args.unread else None,
         "has_attachment": "true" if args.has_attachment else None,
+        "before": args.before,
         "limit": args.limit,
     }
     response = client.request("GET", "/v1/search", params=params)
@@ -724,7 +786,7 @@ def cmd_search(client, args):
 
 
 def cmd_threads(client, args):
-    params = {"inbox": client.inbox, "limit": args.limit}
+    params = {"inbox": client.inbox, "folder": args.folder, "before": args.before, "limit": args.limit}
     response = client.request("GET", "/v1/threads", params=params)
     emit(response.data, args.table, thread_columns())
     return EXIT_OK
@@ -742,6 +804,124 @@ def cmd_thread(client, args):
 def cmd_labels(client, args):
     response = client.request("GET", "/v1/labels")
     emit(response.data, args.table, label_columns())
+    return EXIT_OK
+
+
+def cmd_folders(client, args):
+    """List an inbox's folders (common for domain and standalone inboxes)."""
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    response = client.request("GET", "/v1/inboxes/%s/folders" % inbox)
+    emit(response.data, args.table, folder_columns())
+    return EXIT_OK
+
+
+def cmd_folder_add(client, args):
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    data = {"path": args.path}
+    if args.name:
+        data["name"] = args.name
+    response = client.request("POST", "/v1/inboxes/%s/folders" % inbox, body=data)
+    emit(response.data, args.table, folder_columns())
+    return EXIT_OK
+
+
+def cmd_folder_rename(client, args):
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    response = client.request(
+        "PATCH",
+        "/v1/inboxes/%s/folders/%s" % (inbox, args.folder_id),
+        body={"name": args.name},
+    )
+    emit(response.data, args.table, folder_columns())
+    return EXIT_OK
+
+
+def cmd_folder_delete(client, args):
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    client.request("DELETE", "/v1/inboxes/%s/folders/%s" % (inbox, args.folder_id))
+    sys.stdout.write("folder deleted\n")
+    return EXIT_OK
+
+
+def cmd_remote(client, args):
+    """Show a standalone inbox's remote (IMAP/SMTP) configuration, secret-free."""
+    response = client.request("GET", "/v1/inboxes/%s/remote" % args.inbox)
+    emit(response.data, args.table, remote_columns())
+    return EXIT_OK
+
+
+def cmd_remote_test(client, args):
+    """Test a standalone inbox's remote connector using the stored credentials."""
+    data = {}
+    if args.host:
+        data["host"] = args.host
+    if args.username:
+        data["username"] = args.username
+    if args.imap_password:
+        data["imap_password"] = args.imap_password
+    response = client.request(
+        "POST", "/v1/inboxes/%s/remote/test" % args.inbox, body=data
+    )
+    emit(response.data, args.table)
+    return EXIT_OK
+
+
+def cmd_remote_role(client, args):
+    """Map or create a standalone inbox's special folder role."""
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    body = {}
+    if args.folder_id:
+        body["folder_id"] = args.folder_id
+    if args.create:
+        body["create"] = True
+    if args.path:
+        body["path"] = args.path
+    response = client.request(
+        "POST", "/v1/inboxes/%s/remote/roles/%s" % (inbox, args.role), body=body
+    )
+    emit(response.data, args.table)
+    return EXIT_OK
+
+
+def cmd_handoffs(client, args):
+    """List a standalone inbox's RemoteDraft handoff history."""
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    response = client.request(
+        "GET", "/v1/inboxes/%s/handoffs" % inbox, params={"limit": args.limit}
+    )
+    emit(response.data, args.table, handoff_columns())
+    return EXIT_OK
+
+
+def cmd_authoring(client, args):
+    """Get a standalone or domain inbox's assistant authoring settings."""
+    inbox = args.inbox or client.inbox
+    if not inbox:
+        raise UsageError("an inbox is required (--inbox or the MMM_INBOX env var)")
+    if args.mode is not None or args.notify is not None:
+        body = {}
+        if args.mode is not None:
+            body["mode"] = args.mode
+        if args.notify is not None:
+            body["notify_address"] = args.notify
+        response = client.request(
+            "PUT", "/v1/inboxes/%s/authoring" % inbox, body=body
+        )
+    else:
+        response = client.request("GET", "/v1/inboxes/%s/authoring" % inbox)
+    emit(response.data, args.table, authoring_columns())
     return EXIT_OK
 
 
@@ -1153,6 +1333,10 @@ def build_parser():
     )
     p.add_argument("--from", dest="from_", metavar="ADDR", help="filter by sender address")
     p.add_argument("--to", metavar="ADDR", help="filter by recipient address")
+    p.add_argument("--subject", metavar="TEXT", help="match the subject line")
+    p.add_argument("--unread", action="store_true", help="only unread messages")
+    p.add_argument("--before", metavar="CURSOR", help="opaque cursor from the previous page")
+    p.add_argument("--folder", metavar="FOLDER", help="scope to a folder")
     p.add_argument(
         "--has-attachment", action="store_true", help="only messages with attachments"
     )
@@ -1160,6 +1344,8 @@ def build_parser():
 
     p = command("threads", "GET /v1/threads - list threads.", cmd_threads)
     add_inbox(p)
+    p.add_argument("--folder", metavar="FOLDER", help="scope to a folder")
+    p.add_argument("--before", metavar="CURSOR", help="opaque cursor from the previous page")
     add_limit(p)
 
     p = command(
@@ -1175,6 +1361,92 @@ def build_parser():
     )
 
     command("labels", "GET /v1/labels - distinct labels currently in use.", cmd_labels)
+
+    # Common mailbox surface: folders and the standalone remote connector. These
+    # endpoints dispatch on the inbox kind, so they work for a domain inbox and a
+    # standalone inbox alike.
+    p = command("folders", "GET /v1/inboxes/{id}/folders - list an inbox's folders.", cmd_folders)
+    add_inbox(p)
+
+    p = command(
+        "folder-add",
+        "POST /v1/inboxes/{id}/folders - create a folder (Assistant/Owner).",
+        cmd_folder_add,
+    )
+    add_inbox(p)
+    p.add_argument("path", metavar="PATH", help="folder path, e.g. Archive/2026")
+    p.add_argument("--name", metavar="NAME", help="display name of the final segment")
+
+    p = command(
+        "folder-rename",
+        "PATCH /v1/inboxes/{id}/folders/{folderId} - rename a folder (Assistant/Owner).",
+        cmd_folder_rename,
+    )
+    add_inbox(p)
+    p.add_argument("folder_id", metavar="FOLDER_ID", help="folder id")
+    p.add_argument("name", metavar="NAME", help="new display name")
+
+    p = command(
+        "folder-delete",
+        "DELETE /v1/inboxes/{id}/folders/{folderId} - delete an empty folder (Assistant/Owner).",
+        cmd_folder_delete,
+    )
+    add_inbox(p)
+    p.add_argument("folder_id", metavar="FOLDER_ID", help="folder id")
+
+    p = command(
+        "remote",
+        "GET /v1/inboxes/{id}/remote - show a standalone inbox's remote config (secret-free).",
+        cmd_remote,
+    )
+    add_table(p)
+    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    p = command(
+        "remote-test",
+        "POST /v1/inboxes/{id}/remote/test - test a standalone inbox's remote connector.",
+        cmd_remote_test,
+    )
+    add_table(p)
+    p.add_argument("--inbox", metavar="ID", required=True, help="standalone inbox id")
+    p.add_argument("--host", metavar="HOST", help="override the IMAP host to test")
+    p.add_argument("--username", metavar="USER", help="override the IMAP username")
+    p.add_argument(
+        "--imap-password",
+        dest="imap_password",
+        metavar="PW",
+        help="override the IMAP password (blank uses the stored one)",
+    )
+
+    p = command(
+        "remote-role",
+        "POST /v1/inboxes/{id}/remote/roles/{role} - map or create a special folder role.",
+        cmd_remote_role,
+    )
+    add_table(p)
+    p.add_argument("role", metavar="ROLE", help="inbox, sent, drafts, trash or spam")
+    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    p.add_argument("--folder-id", dest="folder_id", metavar="ID", help="map this existing folder to the role")
+    p.add_argument("--create", action="store_true", help="create the conventional folder when none is mapped")
+    p.add_argument("--path", metavar="NAME", help="explicit conventional folder name to create")
+
+    p = command(
+        "handoffs",
+        "GET /v1/inboxes/{id}/handoffs - RemoteDraft handoff history.",
+        cmd_handoffs,
+    )
+    add_table(p)
+    p.add_argument("--inbox", metavar="ID", help="standalone inbox id")
+    add_limit(p)
+
+    p = command(
+        "authoring",
+        "GET/PUT /v1/inboxes/{id}/authoring - assistant authoring settings.",
+        cmd_authoring,
+    )
+    add_table(p)
+    p.add_argument("--inbox", metavar="ID", help="inbox id")
+    p.add_argument("--mode", metavar="MODE", help="mailmoose_approval or remote_draft")
+    p.add_argument("--notify", metavar="ADDR", help="notification address override")
 
     p = command(
         "send",

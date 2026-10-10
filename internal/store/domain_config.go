@@ -247,15 +247,20 @@ func (s *Store) DeleteDomainReceivingConfig(ctx context.Context, accountID, doma
 // messages enqueued before that column existed. A missing message or foreign
 // account is ErrNotFound; a message whose domain has no config is ErrNoProvider.
 func (s *Store) DomainSendingConfigForMessage(ctx context.Context, accountID, messageID string) (DomainSendingConfig, error) {
-	var domainID string
-	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainID)
+	var domainNull sql.NullString
+	err := s.read.QueryRowContext(ctx, `SELECT COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&domainNull)
 	if err == sql.ErrNoRows {
 		return DomainSendingConfig{}, ErrNotFound
 	}
 	if err != nil {
 		return DomainSendingConfig{}, err
 	}
-	return s.ResolveDomainSendingConfig(ctx, accountID, domainID)
+	// A standalone inbox has no managed domain; its sending config is resolved
+	// through the inbox resolver, not a domain, so an absent domain is ErrNoProvider.
+	if domainNull.String == "" {
+		return DomainSendingConfig{}, ErrNoProvider
+	}
+	return s.ResolveDomainSendingConfig(ctx, accountID, domainNull.String)
 }
 
 // LastSentByDomain returns the most recent successful send time for each domain

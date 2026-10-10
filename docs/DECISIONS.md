@@ -3239,6 +3239,31 @@ deletion of the external-alias surface across store/app/httpapp/apispec. See
 `docs/MAILBOX_SERVICE_CONTRACT.md` for the frozen per-type/per-method ownership
 that the next waves implement against.
 
+**Status update (implementation complete):** The adapter wave has landed and the
+remote service is no longer a scaffold. `internal/transport/imap` implements the
+IMAP4rev2 client (folders, headers, live raw/body-part fetch, flags, move,
+UID-targeted expunge, append, IDLE/poll), `RemoteMailboxService` implements the
+live read/mutation surface, a dedicated `RemoteWorker` watches each standalone
+inbox for durable arrivals, and the two authoring modes plus the notify default
+and the separate publication/notification/Sent-copy state machines are
+implemented. The standalone REST/UI (create/list/get, folder management, remote
+config, role mapping) is implemented. Migrations `054`–`058` add the shared
+folder tree, the remote index, the authoring/handoff record, the remote event
+surface and the sent-copy/role-lock columns. Account-wide listings merge the
+local store and remote inboxes into one globally ordered stream.
+
+Remote indexing is **progressive**: each pass refreshes the newest window and
+advances a persisted per-folder backfill cursor by one bounded batch, so an
+ordinary large folder reaches `complete` over successive passes — the 2000-message
+batch is a per-pass bound, not a permanent cap. The honest hard ceiling is the
+**500k-UID snapshot limit** (`remoteUIDSetCap`): a folder whose complete UID set
+exceeds it is indexed newest-window-only, prune is skipped, and it stays
+`partial`, never falsely `complete`. The scope is the server's personal namespace
+as discovered by `NAMESPACE` (`Other`/`Shared` always excluded); when `NAMESPACE`
+is unsupported the scope is deliberately conservative (the explicit root,
+default `INBOX`, and its children). See `docs/MAILBOX_SERVICE_CONTRACT.md`
+§1/§3/§5.
+
 ## Future extension register
 
 - additional inbound transport adapters

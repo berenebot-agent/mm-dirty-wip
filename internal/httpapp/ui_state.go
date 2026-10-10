@@ -111,7 +111,7 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 	if labels == nil {
 		labels = map[string]int{}
 	}
-	writeJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"page":   "inbox",
 		"inbox":  id,
 		"unread": unread[id],
@@ -120,7 +120,24 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 		"spam":   spam,
 		"trash":  trash,
 		"labels": labels,
-	})
+	}
+	// A standalone inbox's counts come from the cached remote metadata index,
+	// which the reconcile refreshes. Report staleness so a live snapshot never
+	// presents a stale unread count as current: remote_status is the last index
+	// state and remote_indexed_at is when it was last built (zero if never).
+	box, gerr := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id)
+	if gerr == nil && box.Kind == model.InboxKindStandalone {
+		out["remote"] = true
+		if status, serr := s.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, id); serr == nil {
+			out["remote_status"] = status.Status
+			if !status.IndexedAt.IsZero() {
+				out["remote_indexed_at"] = status.IndexedAt
+			}
+		} else {
+			out["remote_status"] = ""
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 // domainInboundLight computes a domain's aggregate inbound traffic light. It

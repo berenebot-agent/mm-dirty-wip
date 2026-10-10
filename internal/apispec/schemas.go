@@ -82,6 +82,22 @@ func stringMap(desc string) map[string]any {
 	return m
 }
 
+// commonEnvelopeSchema builds the shared paginated listing envelope whose items
+// are the named component. Every common mailbox listing returns this shape so a
+// client parses one pagination contract for every mailbox kind.
+func commonEnvelopeSchema(itemName, desc string) map[string]any {
+	m := obj(map[string]any{
+		"items":        arrayOf(itemName, "This page's items."),
+		"next_cursor":  str("Opaque keyset cursor for the following page; empty on the last page."),
+		"completeness": str("Whether the source could enumerate the whole result set: complete, partial or unknown. Orthogonal to pagination."),
+		"errors":       arrayOf("InboxFailure", "Per-inbox failures when a listing spans more than one inbox."),
+	}, "items", "completeness")
+	if desc != "" {
+		m["description"] = desc
+	}
+	return m
+}
+
 // Schemas returns the components.schemas map for the OpenAPI document.
 func Schemas() map[string]any {
 	s := map[string]any{}
@@ -160,6 +176,8 @@ var schemas = map[string]any{
 		"labels":              stringList("Free-text labels. Each is trimmed, at most 64 characters, and may not contain control characters, '/' or '\\'."),
 		"has_attachments":     boolean("Whether the message has attachments."),
 		"size_bytes":          integer("Stored raw size in bytes."),
+		"mailbox_id":          str("Folder the message belongs to within its inbox; empty for the implicit system Inbox."),
+		"folder_path":         str("Human-readable path of mailbox_id, populated on read."),
 		"status":              str("Outbox status: pending, sent or failed. In an outbox listing, sending is true while a delivery attempt is in flight."),
 		"attempts":            integer("Delivery attempts."),
 		"last_error":          str("Last delivery error."),
@@ -170,6 +188,146 @@ var schemas = map[string]any{
 	"AttachmentList": arrayOf("Attachment", "Message attachments."),
 	"LabelList":      stringList("Distinct labels in use."),
 	"IdentityList":   obj(map[string]any{"identities": arrayOf("Identity", "Accessible identities.")}, "identities"),
+
+	"InboxFailure": obj(map[string]any{
+		"inbox_id":  str("Inbox id the failure relates to."),
+		"code":      str("Stable, transport-independent classification (the MailboxError kind vocabulary)."),
+		"message":   str("Short, safe description; never a raw provider or store error."),
+		"retryable": boolean("Whether retrying the same operation may succeed without operator intervention."),
+	}, "inbox_id", "code"),
+	"Folder": obj(map[string]any{
+		"id":            str("Folder id."),
+		"inbox_id":      str("Owning inbox id."),
+		"path":          str("Full hierarchical path; the stable opaque locator."),
+		"name":          str("Display name of the final path segment."),
+		"parent_path":   str("Parent folder path; empty for a top-level folder."),
+		"role":          str("Well-known role: folder, inbox, sent, drafts, trash, spam, archive, outbox or label."),
+		"message_count": integer("Messages in the folder."),
+		"unread_count":  integer("Unread messages in the folder."),
+		"selectable":    boolean("Whether the folder may be chosen as a sync target or move destination."),
+		"is_system":     boolean("Whether the folder is a seeded, protected system folder."),
+		"created_at":    ts("Creation time."),
+		"updated_at":    ts("Last update time."),
+	}, "id", "inbox_id", "path", "name", "role", "selectable"),
+	"FolderCreate": obj(map[string]any{
+		"path": str("Slash-separated folder path; required."),
+		"name": str("Display name of the final segment; defaults from path."),
+	}, "path"),
+	"FolderRename":    obj(map[string]any{"name": str("New display name.")}, "name"),
+	"FolderList":      commonEnvelopeSchema("Folder", "Folder tree in hierarchical order."),
+	"MessageEnvelope": commonEnvelopeSchema("Message", "Message page."),
+	"ThreadEnvelope":  commonEnvelopeSchema("Thread", "Thread page."),
+	"RemoteConfig": obj(map[string]any{
+		"host":              str("IMAP server hostname."),
+		"port":              integer("IMAP port."),
+		"username":          str("IMAP login identity."),
+		"security":          str("Transport security: tls (default), starttls or plain."),
+		"namespace":         str("Selected root folder the inbox syncs; defaults to INBOX."),
+		"smtp_host":         str("Optional outbound SMTP host."),
+		"smtp_port":         integer("Optional outbound SMTP port."),
+		"smtp_username":     str("Optional outbound SMTP login identity."),
+		"smtp_security":     str("Optional outbound SMTP transport security."),
+		"imap_password_set": boolean("Whether an IMAP password is stored; the secret is never returned."),
+		"smtp_password_set": boolean("Whether an SMTP password is stored; the secret is never returned."),
+		"configured":        boolean("Whether the connector has a stored IMAP credential and host."),
+		"capabilities":      Ref("Capabilities"),
+		"missing_roles":     stringList("Special folder roles not yet mapped, so a client can prompt an explicit select-or-create."),
+		"sent_copy_enabled": boolean("Whether a sent message is copied into the remote Sent folder."),
+		"sent_copy_folder":  str("Optional explicit destination folder for the sent copy."),
+	}),
+	"RemoteConfigPut": obj(map[string]any{
+		"host":              str("IMAP host."),
+		"port":              integer("IMAP port."),
+		"username":          str("IMAP username."),
+		"security":          str("tls, starttls or plain."),
+		"smtp_host":         str("Optional SMTP host."),
+		"smtp_port":         integer("Optional SMTP port."),
+		"smtp_username":     str("Optional SMTP username."),
+		"smtp_security":     str("Optional SMTP security."),
+		"clear_smtp":        boolean("Remove the outbound SMTP binding entirely."),
+		"namespace":         str("Selected root folder; defaults to INBOX."),
+		"imap_password":     str("IMAP password; blank retains the stored value."),
+		"smtp_password":     str("SMTP password; blank retains the stored value."),
+		"sent_copy_enabled": boolean("Copy a sent message into the remote Sent folder."),
+		"sent_copy_folder":  str("Optional explicit destination folder for the sent copy."),
+	}),
+	"RemoteConfigTest": obj(map[string]any{
+		"host":          str("IMAP host to test; blank uses the stored binding."),
+		"port":          integer("IMAP port."),
+		"username":      str("IMAP username."),
+		"security":      str("tls, starttls or plain."),
+		"smtp_host":     str("Optional SMTP host."),
+		"smtp_port":     integer("Optional SMTP port."),
+		"smtp_username": str("Optional SMTP username."),
+		"smtp_security": str("Optional SMTP security."),
+		"namespace":     str("Selected root folder."),
+		"imap_password": str("IMAP password; blank uses the stored value."),
+	}),
+	"RemoteTestResult": obj(map[string]any{
+		"ok":             boolean("Whether the connector authenticated and resolved a folder scope."),
+		"root":           str("The resolved root folder."),
+		"delimiter":      str("The server's hierarchy delimiter."),
+		"personal":       boolean("Whether the root is the personal namespace."),
+		"inbox_in_scope": boolean("Whether the INBOX is within the selected scope."),
+	}, "ok"),
+	"RemoteRefreshResult": obj(map[string]any{
+		"status":     str("Index completeness after the reconcile: complete, partial, error or never_started."),
+		"indexed_at": ts("When the reconcile completed."),
+	}, "status"),
+	"RemoteRoleMap": obj(map[string]any{
+		"create": boolean("Create the conventional folder for the role when none exists."),
+		"path":   str("An explicit folder name to create; must conventionally map to the role."),
+	}),
+	"RemoteRoleResult": obj(map[string]any{
+		"role":      str("The special folder role."),
+		"mapped":    boolean("Whether a folder now carries the role."),
+		"path":      str("The folder path carrying the role."),
+		"folder_id": str("The folder id carrying the role."),
+		"created":   boolean("Whether the folder was created by this call."),
+	}, "role", "mapped"),
+	"AuthoringSettings": obj(map[string]any{
+		"mode":              str("Effective authoring mode: mailmoose_approval or remote_draft."),
+		"default_mode":      str("The kind default mode."),
+		"notify_address":    str("Effective notification address."),
+		"notify_overridden": boolean("Whether an explicit per-inbox notify address is set."),
+		"approver_enabled":  boolean("Whether the approver is enabled, based on the effective mode (mailmoose_approval)."),
+		"approver_email":    str("Nominated external approval address."),
+		"standalone":        boolean("Whether the inbox is a standalone (remote) mailbox."),
+	}, "mode", "default_mode"),
+	"AuthoringSettingsPut": obj(map[string]any{
+		"mode":           str("mailmoose_approval or remote_draft; empty clears to the kind default."),
+		"notify_address": str("Notification address; empty clears the override to the connected address."),
+	}),
+	"Handoff": obj(map[string]any{
+		"id":                  str("Handoff record id."),
+		"inbox_id":            str("Owning inbox id."),
+		"draft_id":            str("The source draft id (the local draft may have been cleaned up after publication)."),
+		"mode":                str("Authoring mode snapshotted at request time (mailmoose_approval or remote_draft)."),
+		"handoff_id":          str("Stable non-secret correlation id placed in the handoff header, exposed so a client can correlate it."),
+		"message_id":          str("RFC5322 Message-ID assigned to the frozen draft."),
+		"remote_folder":       str("Remote folder the draft was appended to."),
+		"publication":         str("Publication state: pending, published, ambiguous or failed. Independent of notification and the Sent-copy."),
+		"remote_uid":          integer("Appended message UID when the server reported one, else zero."),
+		"notification_status": str("Notification state: none, queued, sent or failed. Independent of publication."),
+		"attempts":            integer("Append attempts."),
+		"last_error":          str("Bounded, safe failure reason."),
+		"requested_at":        ts("When the handoff was requested."),
+		"published_at":        ts("When the handoff was confirmed published."),
+		"created_at":          ts("Creation time."),
+		"updated_at":          ts("Last update time."),
+	}, "id", "inbox_id", "draft_id", "mode", "publication"),
+	"HandoffList": commonEnvelopeSchema("Handoff", "RemoteDraft handoffs, newest first."),
+	"Capabilities": obj(map[string]any{
+		"folders":              boolean("Whether the mailbox exposes named folders."),
+		"hierarchical_folders": boolean("Whether folder names may nest."),
+		"move":                 boolean("Whether messages can be moved between folders."),
+		"labels":               boolean("Whether the mailbox has free-text labels independent of folders."),
+		"search":               boolean("Whether the server or local index supports search."),
+		"drafts":               boolean("Whether the mailbox holds a server-side Drafts concept."),
+		"outbound":             boolean("Whether the mailbox can send mail itself."),
+		"realtime":             boolean("Whether the mailbox pushes change notifications."),
+		"sync":                 boolean("Whether the mailbox is backed by a synchronised remote server."),
+	}),
 
 	"Inbox": obj(map[string]any{
 		"id":                              str("Inbox id."),
@@ -193,10 +351,23 @@ var schemas = map[string]any{
 	}),
 	"InboxList": arrayOf("Inbox", "Accessible inboxes."),
 	"InboxCreate": obj(map[string]any{
-		"domain_id":    str("Owning domain id."),
-		"local_part":   str("Local part."),
+		"kind":         str("Inbox kind: domain (default) or standalone."),
+		"domain_id":    str("Owning domain id (domain kind)."),
+		"local_part":   str("Local part (domain kind)."),
 		"localpart":    str("openagent.email compatibility alias for local_part."),
 		"display_name": str("Display name."),
+		"address":      str("Full self-contained address (standalone kind)."),
+		"namespace":    str("Selected remote root folder to sync (standalone kind); defaults to INBOX."),
+		"remote": obj(map[string]any{
+			"host":          str("IMAP host."),
+			"port":          integer("IMAP port."),
+			"username":      str("IMAP username."),
+			"security":      str("tls (default), starttls or plain."),
+			"smtp_host":     str("Optional SMTP host."),
+			"smtp_port":     integer("Optional SMTP port."),
+			"smtp_username": str("Optional SMTP username."),
+			"smtp_security": str("Optional SMTP security."),
+		}),
 	}),
 	"InboxPatch": obj(map[string]any{
 		"display_name":                    str("Display name."),
@@ -353,6 +524,7 @@ var schemas = map[string]any{
 		"html":                str("HTML body."),
 		"status":              str("draft, pending_approval or rejected."),
 		"send_request":        Ref("SendRequest"),
+		"handoff":             Ref("Handoff"),
 		"attachments":         arrayOf("DraftAttachment", "Draft attachments."),
 		"created_at":          ts("Creation time."),
 		"updated_at":          ts("Last update time."),

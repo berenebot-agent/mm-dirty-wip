@@ -42,12 +42,14 @@ func TestAPIMessageTrashLifecycle(t *testing.T) {
 	}
 	// Visible via the trashed filter.
 	rr := do("GET", "/v1/messages?inbox="+box.ID+"&trashed=true", "")
-	var trashed []model.Message
-	if err = json.Unmarshal(rr.Body.Bytes(), &trashed); err != nil {
+	var env struct {
+		Items []model.Message `json:"items"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if len(trashed) != 1 || trashed[0].ID != m.ID || trashed[0].DeletedAt == nil {
-		t.Fatalf("trashed list %#v", trashed)
+	if len(env.Items) != 1 || env.Items[0].ID != m.ID || env.Items[0].DeletedAt == nil {
+		t.Fatalf("trashed list %#v", env.Items)
 	}
 
 	// Restore returns it.
