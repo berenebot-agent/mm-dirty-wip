@@ -314,9 +314,11 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
 
 	// Live UI updates: a session-authenticated durable event stream plus a
-	// small role-scoped snapshot the browser reconciles against.
+	// small role-scoped snapshot the browser reconciles against, and a mailbox
+	// list fragment the browser swaps in place.
 	m.HandleFunc("GET /ui/events/stream", s.withSession(s.uiEventsStream))
 	m.HandleFunc("GET /ui/state", s.withSession(s.uiState))
+	m.HandleFunc("GET /ui/inboxes/{id}/live", s.withSession(s.uiInboxLive))
 
 	// Discovery.
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)

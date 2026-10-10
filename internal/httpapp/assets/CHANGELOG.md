@@ -16,6 +16,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   event, and a receiver status change is pushed as a transient `mx.health_changed`
   notification, so one tab (or an agent) keeps every other tab current. The tab
   closes the stream after 60 seconds hidden and reopens it on focus.
+- The inbox message list and the draft send-requests card refresh in place as
+  events arrive, so new mail and approvals appear without a reload. This is a
+  deliberately conservative background refresh: counts and badges always update,
+  but the list itself is only swapped when you are at the top of the page with
+  nothing selected, no dialog open and no field focused, so it never jumps under
+  you while reading or composing. An unchanged list is left untouched (D094).
 - Inbox settings gain a **Clients & Access** tab (account Admin only) listing the
   API keys and mailbox users with access to that inbox, plus its pending
   invitations. An Admin can create a new inbox-scoped API key, grant an existing

@@ -3032,19 +3032,47 @@ light is actually requested (on status change) keeps the hot path DNS-free.
 nothing on pages without the markers; no per-event goroutines (the hub fan-out
 is already non-blocking); the light check reads in-memory statuses, runs its
 bounded MX lookup only when a light is requested, and reuses the short-TTL
-cache across a burst.
+cache across a burst. In Phase 2 a list fragment is fetched only when the safety
+gate passes, and an unchanged list is not written to the DOM at all.
 
 **Complexity:** A shared SSE handler with `Last-Event-ID` support, one store
 method returning an event, one snapshot handler, a store domain-name lookup, an
 observer hook on `mxdial.Manager`, two body-attribute markers, and one client
-IIFE. No new dependency, service or schema change; one new durable event type
-and one transient event type.
+IIFE. Phase 2 adds one session-scoped fragment route, two named sub-templates
+shared by the page and the fragment, and the client-side swap gate. No new
+dependency, service or schema change; one new durable event type and one
+transient event type.
 
-**Phase 2 (not in this decision):** live row insertion/removal in the message
-lists and the draft-approval card, so the list itself updates without a reload.
-The notification plumbing here already carries every relevant event; the work is
-the client-side list reconciliation (preserving checked ids, scroll and focus)
-plus fragment endpoints.
+**Phase 2 (2026-10-10):** live row insertion/removal for the mailbox lists and
+the draft-approval card.
+
+- `GET /ui/inboxes/{id}/live?part=list|requests&folder=..&label=..[&before=]`
+  returns one server-rendered fragment: the message-list card or the
+  send-requests card. It is session-scoped, bounded to the first page (a live
+  swap only ever touches the top of a list), rejects an unrecognised folder or a
+  requests request on a non-inbox folder, and renders through the **same** named
+  sub-templates (`live-list-card`, `live-requests-card`) the full page uses — a
+  test asserts the fragment is byte-identical to the page's section, so they
+  cannot drift.
+- The client swaps a fragment **only under a strict safety gate**: the tab is
+  visible, the window is at the top of the page, no message is checked, no
+  dialog is open and no field has focus. The gate is re-checked after the async
+  fetch. If any condition fails the list is left untouched and simply catches up
+  on the next natural load — the screen never jumps under a reader, and a swap
+  never disturbs a selection, an open form or a scrolled position.
+- An unchanged list is not replaced: a structural signature (row ids and
+  read/status classes, the pager link, the empty-state) is compared and an
+  identical tree is left in place. Sidebar/dashboard **counts still update on
+  every event** regardless of the gate, so a number on the left moves even while
+  the reader is scrolled down or composing — the intended "transparent" update.
+
+**Reason (Phase 2):** The event plumbing from Phase 1 already carries every
+relevant change; the remaining work is purely how the list is reconciled. Doing
+it conservatively — counts always, list only when the user could not notice —
+matches the stated priority that live updates are a background refresh, not a
+screen the user is watching. Reusing the page's own sub-templates (rather than a
+second renderer or a client-side template) keeps the live list and the rendered
+list from drifting.
 
 ## Future extension register
 
