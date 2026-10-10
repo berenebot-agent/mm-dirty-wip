@@ -139,41 +139,6 @@ names for the supplied addresses are set. An empty name clears it (the sender
 falls back to the inbox `display_name`). The response includes `alias_names`
 for aliases that have a name.
 
-### External sending aliases (self-hosted, Admin)
-
-An inbox may also carry **external sending aliases**: full addresses on domains
-MailMoose does not manage, usable only as outbound From identities. They never
-receive mail and are managed per-alias (not as a replace-set), so an inbox save
-cannot drop one or its connector. Inbox responses include a read-only
-`external_aliases` array (ids, addresses, display names, provider and
-`configured` status; never credentials).
-
-```http
-GET    /v1/admin/inboxes/{id}/external-aliases
-POST   /v1/admin/inboxes/{id}/external-aliases
-PATCH  /v1/admin/inboxes/{id}/external-aliases/{aliasID}
-DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}
-GET    /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending
-PUT    /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending
-DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending
-GET    /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries
-```
-
-- `POST` body: `{"address":"agent@gmail.com","display_name":"Agent"}`. The
-  address must be a full `local@domain`, must not be the inbox primary or a
-  managed alias/inbox in the account, and is **immutable** after creation.
-- `PATCH` body: `{"display_name":"..."}` only.
-- `/sending` mirrors the domain sending-config contract (`provider`, `config`,
-  CAS via revision, blank same-provider secret retention, `DELETE` clears the
-  connector). Saving a connector requeues only that alias's pending sends.
-- `/sending/deliveries` returns that alias's outbound attempts (same shape as
-  the domain delivery log).
-- All of these require an Admin principal.
-
-`default_sender` may name an external alias; a send from it uses that alias's
-connector, and a message whose alias is later deleted fails with a clear error
-rather than falling back to a domain connector.
-
 ## 4. Messages
 
 ```http

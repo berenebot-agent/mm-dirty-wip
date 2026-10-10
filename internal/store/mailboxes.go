@@ -547,10 +547,71 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	if err != nil {
 		return model.Inbox{}, err
 	}
-	return model.Inbox{ID: id, AccountID: accountID, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, DeliveryTrigger: DeliveryTriggerDefault, CreatedAt: parseTime(now)}, nil
+	return model.Inbox{ID: id, AccountID: accountID, Kind: model.InboxKindDomain, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, DeliveryTrigger: DeliveryTriggerDefault, CreatedAt: parseTime(now)}, nil
 }
+
+// fullInboxSelectCols is the projection every full-inbox read shares. It uses
+// the domain name only for a domain inbox; a standalone inbox carries its own
+// address, so the domain join is a LEFT JOIN and d.name may be NULL.
+const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured`
+
+// scanFullInbox reads one row projected by fullInboxSelectCols. It resolves the
+// address and remote description and never queries further tables. storageKnown
+// reports whether the storage_used_bytes counter is populated (a NULL counter
+// means the inbox predates migration 047 and must be recomputed on read).
+func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, error) {
+	var i model.Inbox
+	var domain, allowed, created, ns, rhost, ruser, rsec, shost, suser, ssec string
+	var enabled, restricted, requireAuth, autoMarkRead, remoteConfigured int
+	var rport, sport int
+	var domainID sql.NullString
+	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
+	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured); err != nil {
+		return model.Inbox{}, false, err
+	}
+	i.DomainID = domainID.String
+	if i.Kind == model.InboxKindStandalone {
+		if i.Address == "" && domain != "" && i.LocalPart != "" {
+			i.Address = i.LocalPart + "@" + domain
+		}
+	} else {
+		i.Address = i.LocalPart + "@" + domain
+	}
+	i.Enabled = enabled != 0
+	i.AllowedSenders = decodeStrings(allowed)
+	i.SenderRestricted = restricted != 0
+	i.RequireAuthenticated = requireAuth != 0
+	i.AutoMarkReadOnDelivery = autoMarkRead != 0
+	i.Namespace = ns
+	i.RemoteConfigured = remoteConfigured != 0
+	if rhost != "" || ruser != "" || rport != 0 {
+		rc := &model.RemoteConnection{Host: rhost, Port: rport, Username: ruser, Security: rsec}
+		if shost != "" || suser != "" || sport != 0 {
+			rc.SMTP = &model.RemoteSMTP{Host: shost, Port: sport, Username: suser, Security: ssec}
+		}
+		i.Remote = rc
+	}
+	if trashRetention.Valid {
+		days := int(trashRetention.Int64)
+		i.TrashRetentionDays = &days
+	}
+	if storageQuota.Valid {
+		quota := storageQuota.Int64
+		i.StorageQuotaBytes = &quota
+	}
+	if storageUsed.Valid {
+		i.StorageUsedBytes = storageUsed.Int64
+	}
+	if autoTrashHours.Valid {
+		hours := int(autoTrashHours.Int64)
+		i.AutoTrashAfterDeliveryHours = &hours
+	}
+	i.CreatedAt = parseTime(created)
+	return i, storageUsed.Valid, nil
+}
+
 func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inbox, error) {
-	q := `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
+	q := `SELECT ` + fullInboxSelectCols + ` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.account_id=?`
 	args := []any{p.AccountID}
 	if !p.Admin {
 		ids := principalInboxIDs(p)
@@ -562,7 +623,9 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 			args = append(args, id)
 		}
 	}
-	q += ` ORDER BY d.name,i.local_part`
+	// Standalone inboxes have no managed domain; sort them after the domain
+	// inboxes, then by address.
+	q += ` ORDER BY (i.kind='standalone'), d.name, i.address, i.local_part`
 	rows, err := s.read.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -571,36 +634,13 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 	out := []model.Inbox{}
 	inboxInitialized := map[string]bool{}
 	for rows.Next() {
-		var i model.Inbox
-		var domain, allowed, created string
-		var enabled, restricted, requireAuth, autoMarkRead int
-		var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
-		if err = rows.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed); err != nil {
-			return nil, err
+		i, storageKnown, scanErr := scanFullInbox(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		i.Address = i.LocalPart + "@" + domain
-		i.Enabled = enabled != 0
-		i.AllowedSenders = decodeStrings(allowed)
-		i.SenderRestricted = restricted != 0
-		i.RequireAuthenticated = requireAuth != 0
-		i.AutoMarkReadOnDelivery = autoMarkRead != 0
-		if trashRetention.Valid {
-			days := int(trashRetention.Int64)
-			i.TrashRetentionDays = &days
-		}
-		if storageQuota.Valid {
-			quota := storageQuota.Int64
-			i.StorageQuotaBytes = &quota
-		}
-		if storageUsed.Valid {
-			i.StorageUsedBytes = storageUsed.Int64
+		if storageKnown {
 			inboxInitialized[i.ID] = true
 		}
-		if autoTrashHours.Valid {
-			hours := int(autoTrashHours.Int64)
-			i.AutoTrashAfterDeliveryHours = &hours
-		}
-		i.CreatedAt = parseTime(created)
 		out = append(out, i)
 	}
 	if err = rows.Err(); err != nil {
@@ -624,12 +664,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		if aerr != nil {
 			return nil, aerr
 		}
-		external, eerr := s.ListExternalAliases(ctx, p.AccountID)
-		if eerr != nil {
-			return nil, eerr
-		}
 		for i := range out {
-			out[i].ExternalAliases = external[out[i].ID]
 			out[i].Aliases = aliasAddresses(aliases[out[i].ID])
 			out[i].AliasNames = aliasNames(aliases[out[i].ID])
 		}
@@ -668,34 +703,14 @@ func (s *Store) GetInbox(ctx context.Context, p model.Principal, id string) (mod
 	return s.GetInboxInternal(ctx, p.AccountID, id)
 }
 func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (model.Inbox, error) {
-	var i model.Inbox
-	var domain, allowed, created string
-	var enabled, restricted, requireAuth, autoMarkRead int
-	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
-	err := s.read.QueryRowContext(ctx, `SELECT i.id,i.account_id,i.domain_id,i.local_part,d.name,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID).Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed)
+	i, storageKnown, err := scanFullInbox(s.read.QueryRowContext(ctx, `SELECT `+fullInboxSelectCols+` FROM inboxes i LEFT JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, id, accountID))
 	if err == sql.ErrNoRows {
 		return i, ErrNotFound
 	}
 	if err != nil {
 		return i, err
 	}
-	i.Address = i.LocalPart + "@" + domain
-	i.Enabled = enabled != 0
-	i.AllowedSenders = decodeStrings(allowed)
-	i.SenderRestricted = restricted != 0
-	i.RequireAuthenticated = requireAuth != 0
-	i.AutoMarkReadOnDelivery = autoMarkRead != 0
-	if trashRetention.Valid {
-		days := int(trashRetention.Int64)
-		i.TrashRetentionDays = &days
-	}
-	if storageQuota.Valid {
-		quota := storageQuota.Int64
-		i.StorageQuotaBytes = &quota
-	}
-	if storageUsed.Valid {
-		i.StorageUsedBytes = storageUsed.Int64
-	} else {
+	if !storageKnown {
 		// A pre-migration inbox: show live usage without persisting.
 		used, uerr := s.recomputeInboxStorage(ctx, accountID, id)
 		if uerr != nil {
@@ -703,11 +718,6 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 		}
 		i.StorageUsedBytes = used
 	}
-	if autoTrashHours.Valid {
-		hours := int(autoTrashHours.Int64)
-		i.AutoTrashAfterDeliveryHours = &hours
-	}
-	i.CreatedAt = parseTime(created)
 	rows, err := s.read.QueryContext(ctx, `SELECT a.local_part,d.name,a.display_name FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id WHERE a.inbox_id=? AND a.account_id=? ORDER BY d.name,a.local_part`, id, accountID)
 	if err != nil {
 		return i, err
@@ -731,11 +741,6 @@ func (s *Store) GetInboxInternal(ctx context.Context, accountID, id string) (mod
 		return i, err
 	}
 	rows.Close()
-	external, err := s.ListExternalAliasesForInbox(ctx, accountID, id)
-	if err != nil {
-		return i, err
-	}
-	i.ExternalAliases = external
 	return i, nil
 }
 func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display string, enabled *bool) error {
@@ -1013,10 +1018,6 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_aliases WHERE account_id=? AND inbox_id=?`, accountID, inboxID); err != nil {
 		return err
 	}
-	var externalCount int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_aliases WHERE inbox_id=?`, inboxID).Scan(&externalCount); err != nil {
-		return err
-	}
 	seen := map[string]bool{}
 	for _, in := range aliases {
 		local := normalizeLocal(in.LocalPart)
@@ -1050,13 +1051,7 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 		if collision != 0 {
 			return fmt.Errorf("alias %s@%s is already in use", local, domainName)
 		}
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM external_aliases WHERE inbox_id=? AND address=?`, inboxID, local+"@"+domainName).Scan(&collision); err != nil {
-			return err
-		}
-		if collision != 0 {
-			return fmt.Errorf("address already exists as an external alias")
-		}
-		if len(seen)+externalCount > maxInboxAliases {
+		if len(seen) > maxInboxAliases {
 			return fmt.Errorf("too many aliases")
 		}
 		displayName, err := NormalizeAliasDisplayName(in.DisplayName)
@@ -1094,47 +1089,10 @@ type senderQueryer interface {
 }
 
 // resolveSenderQuery maps a requested sender address to its canonical From
-// identity (display name plus address) and the id of the domain whose sending
-// configuration must be used. An empty request, or one matching the inbox
-// primary address, resolves to the primary and the inbox's own domain, using
-// the inbox display name. Any other address must match one of the inbox's
-// managed aliases (its own domain and display name) or external aliases (who
-// carry their own sending connector). A request that is neither is ErrForbidden.
+// identity and the id of the domain whose sending configuration must be used.
 func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, string, error) {
 	from, target, err := resolveSendingTargetQuery(ctx, q, accountID, inboxID, requested)
 	return from, target.DomainID, err
-}
-
-// resolveSendingTargetQuery is resolveSenderQuery generalized to return the
-// full sending target: a managed domain id, or the immutable id of an external
-// sending alias. Exactly one of the two is set.
-func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, SendingTarget, error) {
-	var primaryName, primary, domainID string
-	if err := q.QueryRowContext(ctx, `SELECT i.display_name,i.local_part||'@'||d.name,i.domain_id FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=? AND i.account_id=?`, inboxID, accountID).Scan(&primaryName, &primary, &domainID); err != nil {
-		if err == sql.ErrNoRows {
-			return model.Address{}, SendingTarget{}, ErrNotFound
-		}
-		return model.Address{}, SendingTarget{}, err
-	}
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	if requested == "" || requested == strings.ToLower(primary) {
-		return model.Address{Name: primaryName, Address: primary}, SendingTarget{DomainID: domainID}, nil
-	}
-	var alias, aliasDomainID, aliasName, externalID string
-	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id,COALESCE(NULLIF(a.display_name,''),i.display_name) FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id JOIN inboxes i ON i.id=a.inbox_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID, &aliasName)
-	if err == sql.ErrNoRows {
-		err = q.QueryRowContext(ctx, `SELECT e.address,COALESCE(NULLIF(e.display_name,''),i.display_name),e.id FROM external_aliases e JOIN inboxes i ON i.id=e.inbox_id AND i.account_id=e.account_id WHERE e.account_id=? AND e.inbox_id=? AND e.address=?`, accountID, inboxID, requested).Scan(&alias, &aliasName, &externalID)
-		if err == sql.ErrNoRows {
-			return model.Address{}, SendingTarget{}, fmt.Errorf("%w: %w", ErrForbidden, ErrSenderNotAllowed)
-		}
-	}
-	if err != nil {
-		return model.Address{}, SendingTarget{}, err
-	}
-	if externalID != "" {
-		return model.Address{Name: aliasName, Address: alias}, SendingTarget{ExternalAliasID: externalID}, nil
-	}
-	return model.Address{Name: aliasName, Address: alias}, SendingTarget{DomainID: aliasDomainID}, nil
 }
 
 // SetInboxDefaultSender sets the address compose/reply preselects as From. It
@@ -1336,6 +1294,7 @@ func scanResolvedInbox(sc interface {
 	if err := sc.Scan(&i.ID, &i.AccountID, &i.DomainID, &i.LocalPart, &domain, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &created); err != nil {
 		return model.Inbox{}, err
 	}
+	i.Kind = model.InboxKindDomain
 	i.Address = i.LocalPart + "@" + domain
 	i.Enabled = enabled != 0
 	i.AllowedSenders = decodeStrings(allowed)

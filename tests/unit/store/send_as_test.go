@@ -38,7 +38,7 @@ func TestResolveSendingTarget(t *testing.T) {
 	// inbox name/domain.
 	for _, requested := range []string{"", box.Address, strings.ToUpper(box.Address)} {
 		from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, requested)
-		if err != nil || from.Address != box.Address || from.Name != "Acme" || target.DomainID != d.ID || target.ExternalAliasID != "" {
+		if err != nil || from.Address != box.Address || from.Name != "Acme" || target.DomainID != d.ID {
 			t.Fatalf("primary %q -> %+v target=%+v err=%v", requested, from, target, err)
 		}
 	}

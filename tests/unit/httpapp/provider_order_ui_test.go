@@ -52,20 +52,29 @@ func indexOf(list []string, want string) int {
 
 // TestReceivingProviderOrder pins the receiving dropdown order: Antler MX,
 // Direct MX and Remote MX lead in that fixed order, and every other provider
-// follows alphabetically by display label.
+// follows alphabetically by display label. SendGrid is intentionally absent:
+// its adapter is complete and unit-tested but deliberately hidden until it can
+// be verified against the real provider (see internal/app/service.go); the
+// direct adapter fixture test in tests/unit/transport/sendgrid keeps covering it
+// independently of registration.
 func TestReceivingProviderOrder(t *testing.T) {
 	svc, h, u, domain, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	order := providerOptionOrder(t, body)
 
-	want := []string{"dialmx", "mx", "remotemx", "cloudflare", "mailgun", "postmark", "resend", "sendgrid"}
+	want := []string{"dialmx", "mx", "remotemx", "cloudflare", "mailgun", "postmark", "resend"}
 	if len(order) != len(want) {
 		t.Fatalf("receiving provider count = %d %v, want %d %v", len(order), order, len(want), want)
 	}
 	for i, provider := range want {
 		if order[i] != provider {
 			t.Fatalf("receiving provider order = %v, want %v", order, want)
+		}
+	}
+	for _, provider := range order {
+		if provider == "sendgrid" {
+			t.Fatal("SendGrid must stay hidden from the receiving provider menu until it can be tested")
 		}
 	}
 }

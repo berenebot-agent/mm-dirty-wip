@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dellarb/mailmoose/internal/transport"
 )
 
 // sgKeypair returns a fresh ECDSA key and its base64 SubjectPublicKeyInfo.
@@ -62,6 +64,14 @@ func sgRequest(t *testing.T, priv *ecdsa.PrivateKey, recipient, raw string) *htt
 func TestSendGridInboundEndToEnd(t *testing.T) {
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
+	// SendGrid's adapter is complete and unit-tested, but it is deliberately
+	// unregistered until it can be verified against the real provider (see
+	// internal/app/service.go). This end-to-end contract runs only once the
+	// provider is registered again; while hidden, the adapter fixture test in
+	// tests/unit/transport/sendgrid covers the wire format independently.
+	if _, ok := transport.LookupInbound("sendgrid"); !ok {
+		t.Skip("SendGrid inbound provider is intentionally unregistered; see tests/unit/transport/sendgrid for the direct adapter test")
+	}
 	priv, pub := sgKeypair(t)
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, dom.ID, "sendgrid", map[string]any{"public_key": pub}, false); err != nil {
 		t.Fatal(err)
