@@ -105,3 +105,57 @@ func TestGate2ResolverErrorIsDeferrable(t *testing.T) {
 		t.Fatalf("resolver error = %+v, want rejected dns_unavailable", a)
 	}
 }
+
+// TestGate2NoMXRecordIsNotMX proves a domain whose MX records have been removed
+// fails the routing gate closed rather than deferring. A resolver reports "no
+// MX published" as a not-found error, not as an empty record set, so keying the
+// verdict on a successful lookup alone would leave the binding deferred forever
+// and the traffic light green after the record was deleted.
+func TestGate2NoMXRecordIsNotMX(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	txt := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
+	mx := func(context.Context, string) ([]*net.MX, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "example.test", IsNotFound: true}
+	}
+	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: txt, LookupMX: mx})
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: client, ForceAttemptHTTP2: true}}
+	s := newRawSession(t, hc, srv.URL)
+	defer s.close()
+
+	a := authOnce(t, s, priv, 1, "example.test")
+	if a.Accepted || a.Reason != "not_mx" {
+		t.Fatalf("missing MX = %+v, want rejected not_mx", a)
+	}
+}
+
+// TestProofLookupsQueryAbsoluteNames proves both proofs ask for fully qualified
+// names. A relative name is expanded through the resolver's search list, and a
+// search-suffix failure then masks a clean NODATA as IsTemporary — which is
+// what turns "the MX record was deleted" into an eternal dns_unavailable defer.
+func TestProofLookupsQueryAbsoluteNames(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var txtName, mxName string
+	txt := func(_ context.Context, name string) ([]string, error) {
+		txtName = name
+		return []string{mxwire.DomainTXT("key1", pub)}, nil
+	}
+	mx := func(_ context.Context, name string) ([]*net.MX, error) {
+		mxName = name
+		return []*net.MX{{Host: "mx.test."}}, nil
+	}
+	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: txt, LookupMX: mx})
+	hc := &http.Client{Transport: &http.Transport{TLSClientConfig: client, ForceAttemptHTTP2: true}}
+	s := newRawSession(t, hc, srv.URL)
+	defer s.close()
+
+	a := authOnce(t, s, priv, 1, "example.test")
+	if !a.Accepted {
+		t.Fatalf("auth = %+v, want accepted", a)
+	}
+	if want := "_mailmoose-mx.example.test."; txtName != want {
+		t.Errorf("TXT lookup queried %q, want %q", txtName, want)
+	}
+	if want := "example.test."; mxName != want {
+		t.Errorf("MX lookup queried %q, want %q", mxName, want)
+	}
+}
