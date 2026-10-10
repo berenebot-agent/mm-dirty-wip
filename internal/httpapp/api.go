@@ -2419,6 +2419,11 @@ func isTerminalInboundError(err error) bool {
 		"empty message",
 		"too many mime parts",
 		"mime nesting too deep",
+		"invalid envelope json",
+		"multiple raw email parts",
+		"raw email missing",
+		"invalid raw email",
+		"invalid webhook json",
 	} {
 		if strings.HasPrefix(msg, prefix) {
 			return true

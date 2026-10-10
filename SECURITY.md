@@ -55,14 +55,14 @@ Accepted risks are design decisions that are deliberately retained. They are
 **not** vulnerabilities to report — a finding matching one of these will be
 closed as accepted, so please check here before spending effort on one.
 
-### The Mailgun and Cloudflare inbound envelope senders are not provider-attested
+### The Mailgun, Cloudflare and Postmark inbound envelope senders are not provider-attested
 
 **Status:** accepted risk — decision `D058` in `docs/DECISIONS.md`.
 
-Two inbound providers pass an envelope sender that the request's authentication
+Three inbound providers pass an envelope sender that the request's authentication
 does not cover, and the approval workflow uses that value as the message's
 envelope sender. The approval decision requires the envelope sender to equal the
-nominated approver, so on both providers a caller who holds the transport
+nominated approver, so on these providers a caller who holds the transport
 credential can assert the approver address:
 
 - **Mailgun** — the webhook HMAC covers only `timestamp + token`
@@ -72,15 +72,23 @@ credential can assert the approver address:
   `X-MailMoose-Envelope-From` request header
   (`internal/transport/cloudflare/inbound.go`); the shared per-domain bearer
   authenticates the **caller**, not the **value** the caller asserts.
+- **Postmark** — the envelope sender is read from the JSON `From` field
+  (`internal/transport/postmark/inbound.go`); HTTP Basic authentication
+  authenticates the caller holding the generated credentials, not the value it
+  asserts. Postmark does not sign inbound webhooks.
 
-The consequence on either provider is that a caller holding valid transport
-credentials — Mailgun signing material, or the domain's Cloudflare receiving
-secret — can set the approver address and obtain an approval. Exploitation also
-requires the 128-bit single-use approval token, so the practical bar is high.
+The consequence on these providers is that a caller holding valid transport
+credentials — Mailgun signing material, the domain's Cloudflare receiving
+secret, or the domain's Postmark Basic-auth credentials — can set the approver
+address and obtain an approval. Exploitation also requires the 128-bit single-use
+approval token, so the practical bar is high.
 
 **Not affected:** the **Resend** adapter takes its envelope sender from the
-Svix-signed webhook payload, so the signature covers the value the adapter
-reports. It is genuinely attested.
+Svix-signed webhook payload, and the **SendGrid** adapter takes it from the
+`envelope` field of the ECDSA-signed raw body
+(`internal/transport/sendgrid/inbound.go`). On both, the verified signature
+covers the value the adapter reports, so the envelope sender is genuinely
+attested.
 
 **Why it is retained:** failing closed on an unattested envelope sender breaks
 email-based draft approvals for the providers that pass one through, which are

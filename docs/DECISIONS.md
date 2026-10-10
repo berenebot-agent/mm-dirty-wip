@@ -3142,6 +3142,41 @@ in the core's `authReason`, a status-driven `dialMXHealth`, deletion of the ligh
 cache, an inline remediation block and removal of the wizard repair step, plus
 docs.
 
+## D096 — SendGrid and Postmark inbound connectors
+
+**Requirement:** Add SendGrid and Postmark as receiving providers on top of the
+existing inbound pipeline, without adding outbound adapters (sending stays on the
+configured sending provider).
+
+**Decision (2026-10-10):** Two new `transport.InboundTransport` adapters, no
+changes to the core ingest path:
+
+- **SendGrid** verifies the Inbound Parse ECDSA webhook signature over
+  `sha256(timestamp || raw body)` using the domain's configured public key,
+  stages the whole body to disk, resolves the domain from the signed `envelope`
+  field, then extracts the raw MIME `email` part after verification. The envelope
+  sender is signature-attested.
+- **Postmark** authenticates with HTTP Basic credentials that MailMoose generates
+  per domain (reusing the existing generated-secret plumbing), then extracts the
+  JSON `RawEmail` value byte-for-byte (bypassing Go string conversion so binary
+  MIME survives) and stages it as the raw MIME. Postmark does not sign inbound
+  webhooks, so the envelope sender is not attested.
+
+**Reason:** Both providers deliver full raw MIME, so they reuse the shared
+streaming/parse/commit core exactly as Mailgun, Cloudflare and Resend do. No new
+dependency is required (stdlib `crypto/ecdsa`, `crypto/x509`, `mime/multipart`).
+`RawEmail` is required rather than synthesising MIME from Postmark's structured
+fields, which would add an untested MIME-builder surface.
+
+**Consequences:** Postmark's envelope sender joins Mailgun and Cloudflare in the
+D058/D059 accepted-risk note in `SECURITY.md`; SendGrid is attested like Resend.
+A generic one-time credential flash (not only the Cloudflare Worker code) is now
+used to show generated Basic-auth credentials once.
+
+**Complexity:** Two adapters, two blank imports, new terminal-error prefixes, setup
+steps for each provider, a generic credential flash, and tests. No schema,
+dependency, or core-path change.
+
 ## Future extension register
 
 - additional inbound transport adapters
