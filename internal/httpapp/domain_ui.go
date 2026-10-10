@@ -145,6 +145,23 @@ type domainWorkerFlash struct {
 	WebhookURL string
 }
 
+// domainCredentialFlash carries a provider's freshly generated receiving
+// credentials (for example Postmark's HTTP Basic-auth username and password)
+// from the POST that generated them to the domain page. Like the Worker flash it
+// is bound to the account, user, domain, config id and revision so a stale or
+// foreign flash can never be displayed.
+type domainCredentialFlash struct {
+	AccountID    string
+	UserID       string
+	DomainID     string
+	ConfigID     string
+	Revision     int64
+	Title        string
+	Instructions string
+	WebhookURL   string
+	Secret       string
+}
+
 // domainNoticeFlash carries a user-safe validation error from a failed save
 // back to the domain page (Post/Redirect/Get). It is bound to the account, user
 // and domain so a stale or foreign flash can neither be shown nor consumed. It
@@ -403,6 +420,10 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
 		return
 	}
+	if user, pass := generated["username"], generated["password"]; user != "" && pass != "" {
+		s.flashDomainCredential(w, r, p, d.ID, saved, provider, user, pass)
+		return
+	}
 	s.domainNotice(w, r, "Receiving configuration saved")
 }
 
@@ -504,6 +525,10 @@ func (s *Server) uiDomainReceivingRegenerate(w http.ResponseWriter, r *http.Requ
 	}
 	if secret := generated["webhook_secret"]; secret != "" {
 		s.flashDomainWorker(w, r, p, d.ID, saved, secret)
+		return
+	}
+	if user, pass := generated["username"], generated["password"]; user != "" && pass != "" {
+		s.flashDomainCredential(w, r, p, d.ID, saved, cfg.Provider, user, pass)
 		return
 	}
 	s.domainNotice(w, r, "Receiving secret regenerated")
@@ -664,6 +689,40 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 	}
 	dest := "/?domain=" + url.PathEscape(domainID)
 	if tok := s.flashes.put(f, len(code)+128); tok != "" {
+		dest += "&_flash=" + tok
+	}
+	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// flashDomainCredential stores a freshly generated receiving credential (for
+// example Postmark's HTTP Basic-auth username/password) and redirects to the
+// domain page, where it is shown once. Only generated values are plaintext.
+func (s *Server) flashDomainCredential(w http.ResponseWriter, r *http.Request, p model.Principal, domainID string, cfg store.DomainReceivingConfig, provider, user, pass string) {
+	base := s.Service.Config.ReceiverURL()
+	webhookURL := strings.TrimRight(base, "/") + "/internal/ingest/" + provider
+	basicURL := webhookURL
+	if u, err := url.Parse(webhookURL); err == nil {
+		u.User = url.UserPassword(user, pass)
+		basicURL = u.String()
+	}
+	title, instructions := "Webhook credentials", "Paste this URL into the provider's webhook field. It contains the generated Basic-auth credentials and is shown only once."
+	if provider == "postmark" {
+		title = "Postmark webhook credentials"
+		instructions = "Paste this URL into the Inbound Message Stream's webhook field. It contains the generated Basic-auth credentials and is shown only once."
+	}
+	f := domainCredentialFlash{
+		AccountID:    p.AccountID,
+		UserID:       p.UserID,
+		DomainID:     domainID,
+		ConfigID:     cfg.ID,
+		Revision:     cfg.Revision,
+		Title:        title,
+		Instructions: instructions,
+		WebhookURL:   basicURL,
+		Secret:       user + ":" + pass,
+	}
+	dest := "/?domain=" + url.PathEscape(domainID)
+	if tok := s.flashes.put(f, len(basicURL)+len(f.Secret)+256); tok != "" {
 		dest += "&_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -853,6 +912,22 @@ func domainReceivingSteps(provider string) []string {
 		return []string{
 			"In Mailgun, add this URL as the inbound route for raw MIME delivery.",
 			"Paste the HTTP webhook signing key below, then save.",
+		}
+	case "sendgrid":
+		return []string{
+			"Point the receiving domain's MX record at mx.sendgrid.net (priority 10).",
+			"In SendGrid, open Settings, Inbound Parse, and click Add Host & URL.",
+			"Set the receiving domain and paste the webhook URL shown here.",
+			"Tick POST the raw, full MIME message.",
+			"Create a webhook security policy with signature verification, attach it to this parse setting, and copy the public key it returns.",
+			"Paste the public key below, then save.",
+		}
+	case "postmark":
+		return []string{
+			"Point the receiving domain's MX record at inbound.postmarkapp.com (priority 10).",
+			"In Postmark, open your Server's Inbound Message Stream settings and enable Include raw email content in JSON payload.",
+			"Save this form to generate the webhook username and password and to reveal the Basic-auth webhook URL.",
+			"Paste the shown URL (which contains the credentials) into the Stream's webhook field, then save.",
 		}
 	case "dialmx":
 		return []string{

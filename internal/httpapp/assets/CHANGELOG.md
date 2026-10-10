@@ -8,6 +8,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- SendGrid and Postmark can now receive mail (D096). Both deliver full raw MIME
+  into the existing inbound pipeline, so no sending adapter is added. **SendGrid**
+  verifies the Inbound Parse ECDSA webhook signature with the domain's public key
+  before staging the raw `email` part; its envelope sender is signature-attested.
+  **Postmark** is protected by HTTP Basic credentials MailMoose generates per
+  domain and shows once as a ready-to-paste webhook URL, and it preserves binary
+  `RawEmail` content byte-for-byte. Configure either under **Receiving** on the
+  domain page; setup guides are in `docs/SENDGRID.md` and `docs/POSTMARK.md`.
+  Postmark's unattested envelope sender is added to the accepted-risk note in
+  `SECURITY.md`.
 - Dial MX / Antler MX receiving now shows one status light per receiver. Each
   receiver proves both your domain's `_mailmoose-mx` TXT authority and that it is
   named in your MX records, so a receiver that is authorized but not routed

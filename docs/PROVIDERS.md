@@ -77,6 +77,39 @@ https://your-host.example/internal/ingest/resend
 
 Resend also works as a sending provider (see below).
 
+## Inbound: SendGrid
+
+Inbound can be received via Twilio SendGrid Inbound Parse. SendGrid POSTs the raw MIME in a signed `multipart/form-data` payload. Full setup is in [docs/SENDGRID.md](SENDGRID.md).
+
+The webhook URL to register in SendGrid is:
+
+```text
+https://your-host.example/internal/ingest/sendgrid
+```
+
+1. Point the receiving domain's MX record at `mx.sendgrid.net` (priority 10).
+2. In SendGrid, open **Settings → Inbound Parse** and add a host: set the receiving domain and paste the webhook URL above, and tick **POST the raw, full MIME message**.
+3. Create a webhook **security policy** with signature verification, attach it to the parse setting, and copy the returned **public key**.
+4. On the dashboard, click **Receiving** for that domain, choose **SendGrid**, paste the public key, and save.
+
+Unlike Mailgun and Cloudflare, SendGrid's ECDSA signature covers the raw body (including the SMTP envelope), so its envelope sender is **provider-attested**.
+
+## Inbound: Postmark
+
+Inbound can be received via Postmark. Postmark POSTs the message as JSON (including the raw MIME) to a webhook protected by HTTP Basic authentication. Full setup is in [docs/POSTMARK.md](POSTMARK.md).
+
+The webhook URL to register in Postmark is:
+
+```text
+https://<generated-user>:<generated-password>@your-host.example/internal/ingest/postmark
+```
+
+1. Point the receiving domain's MX record at `inbound.postmarkapp.com` (priority 10).
+2. In Postmark, enable **Include raw email content in JSON payload** on the Server's Inbound Message Stream.
+3. On the dashboard, click **Receiving** for that domain and choose **Postmark**. MailMoose generates the Basic-auth username and password and shows the ready-to-paste webhook URL once; copy it into the stream's webhook field.
+
+Postmark does not sign inbound webhooks, so the `From` envelope sender is **not provider-attested** (see [SECURITY.md](../SECURITY.md)).
+
 ## Inbound: Direct MX
 
 Instead of a webhook provider you can receive mail straight on port 25 with the
@@ -263,6 +296,8 @@ when enabled. Keep `BASE_URL` set to the UI origin for passkeys. Example URLs:
 https://inbound.example.com/internal/ingest/mailgun/raw-mime
 https://inbound.example.com/internal/ingest/cloudflare
 https://inbound.example.com/internal/ingest/resend
+https://inbound.example.com/internal/ingest/sendgrid
+https://inbound.example.com/internal/ingest/postmark
 ```
 
 The ingest routes remain available on the main listener for backward

@@ -769,6 +769,8 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 	for _, tc := range []struct{ provider, suffix string }{
 		{"mailgun", "/internal/ingest/mailgun/raw-mime"},
 		{"resend", "/internal/ingest/resend"},
+		{"sendgrid", "/internal/ingest/sendgrid"},
+		{"postmark", "/internal/ingest/postmark"},
 	} {
 		group := providerGroupHTML(t, dlg, tc.provider)
 		if got := webhookURL(group); !strings.HasSuffix(got, tc.suffix) {

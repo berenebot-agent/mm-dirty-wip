@@ -40,8 +40,10 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/mx"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	_ "github.com/dellarb/mailmoose/internal/transport/postmark"
 	_ "github.com/dellarb/mailmoose/internal/transport/remotemx"
 	_ "github.com/dellarb/mailmoose/internal/transport/resend"
+	_ "github.com/dellarb/mailmoose/internal/transport/sendgrid"
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 

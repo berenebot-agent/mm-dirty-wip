@@ -59,7 +59,7 @@ func TestReceivingProviderOrder(t *testing.T) {
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)
 	order := providerOptionOrder(t, body)
 
-	want := []string{"dialmx", "mx", "remotemx", "cloudflare", "mailgun", "resend"}
+	want := []string{"dialmx", "mx", "remotemx", "cloudflare", "mailgun", "postmark", "resend", "sendgrid"}
 	if len(order) != len(want) {
 		t.Fatalf("receiving provider count = %d %v, want %d %v", len(order), order, len(want), want)
 	}

@@ -364,8 +364,12 @@ protocol-significant) using its signed webhook fields. The Cloudflare Worker
 streams raw MIME to `/internal/ingest/cloudflare` with bearer authentication
 and envelope headers. Resend posts a Svix-signed metadata webhook to
 `/internal/ingest/resend`; the adapter verifies the signature and then fetches
-the raw MIME from the Resend API using the account key. In all cases the adapter
-authenticates before MIME is parsed or persisted.
+the raw MIME from the Resend API using the account key. SendGrid posts the raw
+MIME in a signed `multipart/form-data` payload to `/internal/ingest/sendgrid`,
+verified with the domain's ECDSA public key. Postmark posts a JSON webhook to
+`/internal/ingest/postmark` including the raw MIME, authenticated with generated
+HTTP Basic credentials. In all cases the adapter authenticates before MIME is
+parsed or persisted.
 
 Delivery identity is scoped to the account, provider, canonical original
 envelope recipient, and provider delivery id, so retries are deduplicated even
