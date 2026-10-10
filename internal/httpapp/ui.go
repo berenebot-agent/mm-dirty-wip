@@ -53,6 +53,11 @@ type dialMXSetupView struct {
 	// skeleton immediately, before the first status poll returns. It carries no
 	// live state and no secret.
 	ConnectorsJSON string
+	// StatusesJSON is the secret-free live per-receiver status set embedded on the
+	// receiving form, so the status wizard's connector table opens already
+	// matching the dashboard light it was opened from rather than flashing an
+	// amber "Pending" until the first status poll returns. It carries no secret.
+	StatusesJSON string
 	// Light is the aggregate traffic light for the domain's receiving setup
 	// ("ok" or "danger"), and LightTitle its tooltip. It is green only when at
 	// least one receiver is both authorized and published in the domain's MX
@@ -144,6 +149,23 @@ func dialMXConnectorsJSON(mx []dialMXMXInstruction) string {
 		return "[]"
 	}
 	b, err := json.Marshal(mx)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// dialMXStatusesJSON marshals the setup's live per-receiver statuses to the
+// secret-free JSON embedded on the receiving form. The status wizard reads it to
+// paint each connector's real light on open, before the first status poll
+// returns, so the dialog agrees with the dashboard light that opened it.
+// html/template escapes the result in attribute context, so the browser decodes
+// it back to valid JSON.
+func dialMXStatusesJSON(statuses []mxdialStatusView) string {
+	if len(statuses) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(statuses)
 	if err != nil {
 		return "[]"
 	}
@@ -1600,7 +1622,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 .antler-record-table th:nth-child(6){width:14%!important}
 .antler-record-table button{padding:4px 8px;font-size:12px;white-space:normal}
 </style>
-<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}"{{end}}>
+<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}" data-antler-status="{{.StatusesJSON}}"{{end}}>
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <label>Provider</label>
 <select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainReceivingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{if .SelectLabel}}{{.SelectLabel}}{{else}}{{.ProviderLabel}}{{end}}</option>{{end}}</select>
@@ -1750,6 +1772,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			setup.Statuses = s.dialMXStatuses(d.Name)
 		}
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
+		setup.StatusesJSON = dialMXStatusesJSON(setup.Statuses)
 		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, time.Now())
 		dialMXSetup[d.ID] = setup
 	}
