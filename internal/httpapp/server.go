@@ -270,6 +270,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}/label", s.withSession(s.uiLabel))
 	m.HandleFunc("POST /ui/inboxes/{id}/trash/empty", s.withSession(s.withCSRF(s.uiInboxTrashEmpty)))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts", s.withSession(s.uiDrafts))
+	m.HandleFunc("POST /ui/inboxes/{id}/drafts/bulk", s.withSession(s.withCSRF(s.uiDraftsBulk)))
 	m.HandleFunc("GET /ui/inboxes/{id}/drafts/{draftId}/edit", s.withSession(s.uiDraftEdit))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/save", s.withSession(s.withCSRF(s.uiDraftSave)))
 	m.HandleFunc("POST /ui/inboxes/{id}/drafts/{draftId}/delete", s.withSession(s.withCSRF(s.uiDraftDelete)))

@@ -1611,35 +1611,143 @@ function aliasNameByAddress(list) {
   });
 })();
 
+// Select-all with a Gmail-style "select all N" escape hatch. The header box
+// selects the rows on the current page; when the folder holds more than a page
+// (data-total on the banner exceeds the visible rows) the banner offers to widen
+// the selection to every matching item. Widening sets scope=all on the bulk
+// form, so the server re-derives the set itself rather than trusting a long id
+// list; "Clear selection" resets it to the page scope and unchecks everything.
 (function () {
-  var form = document.getElementById('bulk-form');
+  var form = document.getElementById('bulk-form') || document.getElementById('drafts-bulk-form');
   if (!form) {
     return;
   }
+  var formId = form.id;
   var all = document.getElementById('select-all');
-  var boxes = document.querySelectorAll('input[name=ids][form=bulk-form]');
-  function refreshAll() {
-    if (!all) {
-      return;
-    }
+  var boxes = document.querySelectorAll('input[name=ids][form=' + formId + ']');
+  var banner = document.querySelector('[data-select-banner]');
+  var scopeInput = form.querySelector('input[name=scope]');
+  var pageSpan = banner ? banner.querySelector('[data-select-page]') : null;
+  var allSpan = banner ? banner.querySelector('[data-select-all-span]') : null;
+  var pageCount = banner ? banner.querySelector('[data-page-count]') : null;
+  var total = banner ? parseInt(banner.getAttribute('data-total'), 10) || 0 : 0;
+  var totalSpans = banner ? banner.querySelectorAll('[data-total-count]') : [];
+  totalSpans.forEach(function (el) {
+    el.textContent = String(total);
+  });
+
+  function checkedCount() {
     var n = 0;
     boxes.forEach(function (box) {
       if (box.checked) {
         n++;
       }
     });
-    all.checked = n > 0 && n === boxes.length;
-    all.indeterminate = n > 0 && n < boxes.length;
+    return n;
   }
+
+  function setScope(scope) {
+    if (scopeInput) {
+      scopeInput.value = scope;
+    }
+  }
+
+  function refreshAll() {
+    var n = checkedCount();
+    if (all) {
+      all.checked = n > 0 && n === boxes.length;
+      all.indeterminate = n > 0 && n < boxes.length;
+    }
+    if (!banner) {
+      return;
+    }
+    var allScope = scopeInput && scopeInput.value === 'all';
+    var fullPage = n > 0 && n === boxes.length;
+    if (allScope) {
+      banner.hidden = false;
+      if (pageSpan) pageSpan.hidden = true;
+      if (allSpan) allSpan.hidden = false;
+      return;
+    }
+    // Offer "select all N" only when the header box is checked on a full page
+    // and the folder actually holds more than the page shows.
+    var offerAll = fullPage && total > boxes.length;
+    banner.hidden = !offerAll;
+    if (pageSpan) pageSpan.hidden = !offerAll;
+    if (allSpan) allSpan.hidden = true;
+    if (pageCount) pageCount.textContent = String(boxes.length);
+  }
+
   if (all) {
     all.addEventListener('change', function () {
+      if (all.checked) {
+        setScope('page');
+      }
       boxes.forEach(function (box) {
         box.checked = all.checked;
       });
+      refreshAll();
     });
   }
   boxes.forEach(function (box) {
-    box.addEventListener('change', refreshAll);
+    box.addEventListener('change', function () {
+      if (!box.checked) {
+        setScope('page');
+      }
+      refreshAll();
+    });
+  });
+
+  if (banner) {
+    var allLink = banner.querySelector('[data-select-all-link]');
+    if (allLink) {
+      allLink.addEventListener('click', function () {
+        boxes.forEach(function (box) {
+          box.checked = true;
+        });
+        setScope('all');
+        refreshAll();
+      });
+    }
+    var clearLink = banner.querySelector('[data-clear-selection]');
+    if (clearLink) {
+      clearLink.addEventListener('click', function () {
+        boxes.forEach(function (box) {
+          box.checked = false;
+        });
+        if (all) {
+          all.checked = false;
+          all.indeterminate = false;
+        }
+        setScope('page');
+        refreshAll();
+      });
+    }
+  }
+})();
+
+// A bulk action widened to the whole folder ("select all N") names the full
+// count in its confirmation, so deleting every matching message can never be
+// fired off as a single anonymous click. Page-scoped bulk actions are left to
+// their own data-confirm (if any).
+(function () {
+  document.querySelectorAll('form.bulkbar button[data-confirm-all]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      var form = btn.form;
+      var scope = form ? form.querySelector('input[name=scope]') : null;
+      if (!scope || scope.value !== 'all') {
+        return;
+      }
+      var banner = document.querySelector('[data-select-banner]');
+      var n = banner ? banner.getAttribute('data-total') : '';
+      var msg = btn.getAttribute('data-confirm-all');
+      if (n) {
+        msg = msg.replace('?', ' all ' + n + '?');
+      }
+      if (!window.confirm(msg)) {
+        e.preventDefault();
+      }
+    });
   });
 })();
 

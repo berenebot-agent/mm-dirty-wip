@@ -186,8 +186,10 @@ func TestUIInboxShowsLabelPills(t *testing.T) {
 	if !strings.Contains(body, `class="labelpill"`) || !strings.Contains(body, "Work") {
 		t.Fatalf("inbox missing label pill: %s", body)
 	}
-	// Labeling lives on the message view only: no toolbar label controls.
-	if strings.Contains(body, `name="label"`) || strings.Contains(body, "Add label") || strings.Contains(body, `class="labelbar"`) {
+	// Labeling lives on the message view only: no toolbar label controls. (The
+	// bulk-scope form carries a hidden `label` field naming the active label, not
+	// a labeling control, so match the visible add-label affordances instead.)
+	if strings.Contains(body, "Add label") || strings.Contains(body, `class="labelbar"`) || strings.Contains(body, `class="labeladd"`) {
 		t.Fatalf("inbox should not offer bulk labeling: %s", body)
 	}
 }
