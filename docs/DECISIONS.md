@@ -2968,6 +2968,84 @@ field with validation, a per-attempt timeout helper, and a provider-conditional
 read in `Deliver`/`DeliverWorkflow`. No new dependency, service, schema change or
 claim-protocol change.
 
+## D094 — Live web-UI updates: session SSE stream, state snapshot, and read-state events
+
+**Requirement:** The web UI only reflected changes on a manual refresh, so unread
+badges, the dashboard pending-send counts, the inbox lists and the Dial MX
+traffic lights went stale while a tab stayed open — even though the durable
+event log, the SSE stream and the in-process hub already existed for agents.
+
+**Decision (2026-10-10):** The browser UI subscribes to a session-authenticated
+SSE stream and reconciles against a small server-computed snapshot, reusing the
+existing durable events and hub rather than adding a new mechanism.
+
+- **Session stream.** `GET /ui/events/stream` shares `eventsStream` with
+  `/v1/events/stream` and is authenticated by `withSession`, so it is scoped by
+  the session principal exactly as the pages are and is cancelled by
+  `Hub.RegisterScope` on logout/rotation/rescope. `streamCursor` now honors the
+  standard `Last-Event-ID` header a reconnecting `EventSource` sends (so a
+  reconnect resumes without replaying history); a stream with no cursor and no
+  header seeds from the account's current head. A transient hub event is marked
+  explicitly by a new `Event.Transient` flag (never inferred from a zero cursor)
+  and is delivered with an `event:`/`data:` frame and **no** `id:` line, so it
+  cannot reset the client's resume position and a durable event can never be
+  mistaken for one.
+- **Read-state events.** `message.read`/`unread` changes now commit a durable
+  `message.state_changed` event (old/new) in `UpdateMessageState`, so a mark-read
+  in one tab or by an agent updates counts in another. It is a normal message
+  event and is neither relayed over Hermes nor sent to webhooks. The
+  auto-mark-read-on-delivery sweep does **not** emit it (that path is a delivery
+  side effect, not a user action needing a live count refresh; the periodic
+  snapshot covers it).
+- **Snapshot endpoint.** `GET /ui/state?page=dashboard|inbox[&inbox=]` returns
+  only what can change live — per-inbox unread/pending counts, the per-domain
+  inbound traffic light, and the inbox folder/label badges — computed from the
+  existing aggregate queries and the **in-memory** receiver statuses. It enforces
+  the same Read role as the pages (and 404s an unknown inbox even for an account
+  Admin, whose `CanRead` is true for any id). It is `Cache-Control: no-store`.
+  The published-MX lookup behind a dashboard light is the only costly step, so
+  the computed light is cached briefly (10s), keyed on the domain id, key id and
+  receiver hostnames, so a burst of snapshot calls does not each run a fresh
+  lookup while a key rotation or receiving change still misses the cache. The
+  setup dialog's own checks stay live and uncached (the D-check invariant).
+- **Receiver-health push.** `mxdial.Manager` gains a `SetStatusObserver` hook
+  fired only on an actual status-row or single-mode connection change; the app
+  wires it to publish a transient `mx.health_changed` hub event (never written to
+  the events table) scoped to the domain's owning account(s), so a traffic-light
+  change is pushed immediately instead of waiting for a poll.
+- **Client.** One `EventSource` per visible tab; events are coalesced with a
+  trailing debounce into a single-flight `fetch('/ui/state')`; the tab closes the
+  stream after 60s hidden and reopens (with an immediate snapshot) on focus. The
+  static, content-hashed `app.js` discovers its page from `data-page`/`data-inbox`
+  body attributes and updates badges/cells/lights in place (no re-render, no
+  dependency). Live **row insertion/removal** in the message list is out of scope
+  for this decision and remains a follow-up.
+
+**Reason:** The durable event log is already the single realtime truth, so the
+UI should consume it rather than reinvent polling. Deriving counts from the
+server on each burst (instead of incrementing client-side) stays correct under
+replayed events, bulk operations and concurrent agent activity, and keeps the
+static JS free of model knowledge. Doing the traffic-light MX check only when a
+light is actually requested (on status change) keeps the hot path DNS-free.
+
+**Resource budget:** One stream and one coalesced request per visible tab;
+nothing on pages without the markers; no per-event goroutines (the hub fan-out
+is already non-blocking); the light check reads in-memory statuses, runs its
+bounded MX lookup only when a light is requested, and reuses the short-TTL
+cache across a burst.
+
+**Complexity:** A shared SSE handler with `Last-Event-ID` support, one store
+method returning an event, one snapshot handler, a store domain-name lookup, an
+observer hook on `mxdial.Manager`, two body-attribute markers, and one client
+IIFE. No new dependency, service or schema change; one new durable event type
+and one transient event type.
+
+**Phase 2 (not in this decision):** live row insertion/removal in the message
+lists and the draft-approval card, so the list itself updates without a reload.
+The notification plumbing here already carries every relevant event; the work is
+the client-side list reconciliation (preserving checked ids, scroll and focus)
+plus fragment endpoints.
+
 ## Future extension register
 
 - additional inbound transport adapters

@@ -47,18 +47,18 @@ func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 	if !strings.Contains(body, `class="secondary btn-sm cell-edit domain-provider-edit open-domain-dialog"`) {
 		t.Fatalf("dashboard missing the Dial MX receiving provider button:\n%s", body)
 	}
-	if !strings.Contains(body, `<span class="dns-light danger" title="No inbound connector is ready`) {
+	if !strings.Contains(body, `<span class="dns-light danger" data-receiving-light title="No inbound connector is ready`) {
 		t.Fatalf("dashboard missing the Dial MX connector light:\n%s", body)
 	}
 	// Count only the in-button lights, which carry the receiving data-kind
 	// attribute; the receiving dialog's DNS list also uses dns-light and must
 	// not be counted.
-	if strings.Count(body, `data-kind="receiving"><span class="dns-light`) != 1 {
+	if strings.Count(body, `data-kind="receiving" data-receiving-button><span class="dns-light`) != 1 {
 		t.Fatalf("connector light must render once, for the Dial MX domain only")
 	}
 	// The light sits inside the receiving provider button, ahead of its label,
 	// rather than outside it.
-	if !strings.Contains(body, `data-kind="receiving"><span class="dns-light danger"`) {
+	if !strings.Contains(body, `data-kind="receiving" data-receiving-button><span class="dns-light danger"`) {
 		t.Fatalf("connector light must be inside the receiving button")
 	}
 }

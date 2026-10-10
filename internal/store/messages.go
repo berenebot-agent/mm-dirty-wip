@@ -596,18 +596,40 @@ func (s *Store) MessageSizesByInbox(ctx context.Context, p model.Principal) (map
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read *bool) error {
+// UpdateMessageState sets a message's read flag. It requires Assistant or Owner
+// on the message's inbox. A change to the read flag commits a
+// message.state_changed event returning the old/new state so the UI can update
+// unread counts live; an unchanged or nil read is a no-op returning no event.
+func (s *Store) UpdateMessageState(ctx context.Context, p model.Principal, id string, read *bool) (*model.Event, error) {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !p.CanAssist(m.InboxID) {
-		return ErrForbidden
+		return nil, ErrForbidden
 	}
-	if read != nil {
-		_, err = s.write.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=? AND account_id=?`, boolInt(*read), id, p.AccountID)
+	if read == nil || m.Read == *read {
+		return nil, nil
 	}
-	return err
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET is_read=? WHERE id=? AND account_id=?`, boolInt(*read), id, p.AccountID); err != nil {
+		return nil, err
+	}
+	ev, err := insertEventTx(ctx, tx, p.AccountID, m.InboxID, model.EventMessageStateChanged, id, map[string]any{
+		"message_id": id, "inbox_id": m.InboxID, "thread_id": m.ThreadID,
+		"old": m.Read, "new": *read, "read": *read,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &ev, nil
 }
 
 // ReplaceMessageLabels sets the exact label set on a message. It requires

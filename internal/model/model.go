@@ -471,6 +471,12 @@ type Event struct {
 	EntityID  string         `json:"entity_id,omitempty"`
 	Payload   map[string]any `json:"payload,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
+	// Transient marks an event that is delivered only to live in-process
+	// subscribers (the hub) and is never written to the events table: it has no
+	// durable cursor and is not part of the account's event history. The SSE
+	// stream uses this flag — never the zero cursor — to decide how to frame a
+	// notification, so a durable event can never be mistaken for a transient one.
+	Transient bool `json:"-"`
 }
 
 // Draft workflow states stored on drafts.status.
@@ -541,6 +547,18 @@ const (
 // Durable message event types.
 const EventMessageLabelsChanged = "message.labels_changed"
 const EventMessageSpamChanged = "message.spam_state_changed"
+
+// EventMessageStateChanged is emitted when a message's read/unread state is
+// changed, so the web UI can update unread counts and list styling live. It
+// carries no assistant-scoped payload and is not relayed over Hermes or
+// delivered to webhooks.
+const EventMessageStateChanged = "message.state_changed"
+
+// EventMXHealthChanged is a transient, non-persisted notification that a
+// domain's receiver-status light may have changed. It is published only to the
+// in-process hub (never written to the events table), so it carries no durable
+// cursor and is not part of the account's event history.
+const EventMXHealthChanged = "mx.health_changed"
 
 // Trash lifecycle event types. A trashed message is hidden but retained;
 // restored returns it to the mailbox; purged erases it permanently (removing

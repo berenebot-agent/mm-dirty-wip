@@ -6,11 +6,48 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
 func (s *Service) DialMXBackend() mxdial.Backend { return dialMXBackend{service: s} }
+
+// InstallDialMXStatusObserver wires the shared dial manager's receiver-status
+// changes into the in-process hub so a live web UI can refresh a domain's
+// inbound traffic light on the instant its readiness changes, rather than
+// waiting for the next poll. The notification is transient: it is published
+// straight to the hub and never written to the durable events table, so it
+// carries no cursor and does not enter the account's event history. A domain
+// name is mapped to its owning account(s) at notification time; a lookup error
+// simply drops the notification (the periodic poll remains the backstop).
+func (s *Service) InstallDialMXStatusObserver() {
+	if s.DialMX == nil {
+		return
+	}
+	s.DialMX.SetStatusObserver(func(domain, receiverURL string) {
+		if domain == "" {
+			// Single-mode connection row (the installation's private receiver);
+			// it is not a per-account domain and has no dashboard light.
+			return
+		}
+		owners, err := s.Store.AccountsForDomainName(context.Background(), domain)
+		if err != nil {
+			return
+		}
+		for accountID, domainID := range owners {
+			s.Hub.Publish(model.Event{
+				Type:      model.EventMXHealthChanged,
+				AccountID: accountID,
+				Transient: true,
+				Payload: map[string]any{
+					"domain_id":    domainID,
+					"receiver_url": receiverURL,
+				},
+			})
+		}
+	})
+}
 
 func (s *Service) PrivateMXBackend() mxdial.Backend {
 	return dialMXBackend{service: s, private: true}
