@@ -274,6 +274,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/webhooks/{id}/toggle", s.withSession(s.withCSRF(s.uiToggleWebhook)))
 	m.HandleFunc("POST /ui/webhooks/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteWebhook)))
 	m.HandleFunc("GET /ui/messages/{id}", s.withSession(s.uiMessage))
+	m.HandleFunc("GET /ui/messages/{id}/body", s.withSession(s.uiRemoteMessageBody))
 	m.HandleFunc("GET /ui/inboxes/{id}", s.withSession(s.uiInbox))
 	m.HandleFunc("GET /ui/inboxes/{id}/folder", s.withSession(s.folderMailboxView))
 	m.HandleFunc("GET /ui/inboxes/{id}/sent", s.withSession(s.uiSent))
