@@ -3177,6 +3177,68 @@ used to show generated Basic-auth credentials once.
 steps for each provider, a generic credential flash, and tests. No schema,
 dependency, or core-path change.
 
+## D097 — Standalone mailboxes and the common mailbox service boundary
+
+**Requirement:** Support first-class standalone mailboxes with an address
+independent of any managed domain, reached through an optional remote
+IMAP/SMTP binding, alongside the existing domain mailboxes, without forking the
+mailbox/thread/event/API model. Remove the external sending-alias feature as a
+clean break.
+
+**Decision (2026-10-10):**
+
+- **Inbox kinds.** `inboxes.kind` is `domain` or `standalone`, set once at
+  creation and immutable. A domain inbox keeps the existing domain-centric
+  routing, aliases and sending model. A standalone inbox owns a self-contained
+  address (`inboxes.address`), carries no managed domain (`domain_id` is now
+  nullable), and is reached through a per-inbox remote connector.
+- **One common service boundary.** `internal/app.MailboxRouter` resolves an
+  inbox to a backend (`BackendLocal` for domain, `BackendRemote` for
+  standalone) and a declared `model.Capabilities` surface, so workflow/API code
+  branches on capability, never on a transport type. `StandaloneMailboxService`
+  is the create/list/get + folder/remote-metadata application surface.
+- **Shared public model.** `model.Folder` (custom hierarchical folders with a
+  role), `model.RemoteLocator` (UIDVALIDITY/UID, the routing address for a
+  remote message), `model.ListEnvelope[T]` (items + opaque `next_cursor` +
+  `completeness`), and `model.MailboxError` (a stable error vocabulary) are the
+  frozen contract for the subsequent local, remote and workflow waves.
+- **Remote messages hold metadata only.** `inbox_remote_messages` caches
+  header/thread metadata; bodies and attachments stay live on the remote
+  server and are never archived. Threads stay scoped to account + inbox.
+- **Encrypted credentials.** `inbox_remote_credentials` holds the encrypted
+  IMAP (and optional SMTP) secrets under `APP_ENCRYPTION_KEY`. TLS is mandatory;
+  plaintext is never offered and there is no automatic cleartext fallback.
+- **External aliases removed.** The `external_aliases` feature (store, model,
+  service, HTTP, UI, spec) is deleted. Migration 053 drops the table and the
+  three attribution columns and discards external-alias-specific unsent drafts,
+  attachments, queued sends and jobs, refunding the account and inbox storage
+  counters; it keeps sent history and its delivery-log rows and `from_address`
+  attribution, removes orphaned threads, and preserves managed aliases and
+  ordinary mail. Raw files are retired after the transaction commits via the
+  durable `pending_file_cleanup` queue, never inside it. There is no
+  compatibility shim.
+
+**Reason:** A standalone mailbox is a mailbox like any other; only its transport
+differs. A single capability-driven boundary keeps the canonical
+mailbox/event model intact and confines provider-specific code to a remote
+adapter that a later wave adds. External sending aliases sent from addresses the
+account does not control, which complicated identity, approval and credential
+handling for a capability the standalone remote connector now covers directly.
+
+**Resource budget:** One additive migration and three small tables plus a
+durable file-cleanup queue; one process, one container, no new runtime service
+and no new dependency in this wave. The IMAP adapter (approved
+`github.com/emersion/go-imap/v2` and `github.com/emersion/go-message`) is
+deferred to the adapter wave.
+
+**Complexity:** Model types (including an explicit plaintext security mode that
+a deployment policy may refuse), one migration rebuild of `inboxes`, the router
+plus a `MailboxBackend` interface and its local/remote scaffolds, standalone
+store CRUD, a removal migration with post-commit file retirement, and the
+deletion of the external-alias surface across store/app/httpapp/apispec. See
+`docs/MAILBOX_SERVICE_CONTRACT.md` for the frozen per-type/per-method ownership
+that the next waves implement against.
+
 ## Future extension register
 
 - additional inbound transport adapters

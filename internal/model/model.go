@@ -126,17 +126,38 @@ type Domain struct {
 func (d Domain) IsSubdomain() bool { return d.ParentDomainID != "" }
 
 type Inbox struct {
-	ID             string   `json:"id"`
-	AccountID      string   `json:"account_id"`
-	DomainID       string   `json:"domain_id"`
-	LocalPart      string   `json:"local_part"`
-	Address        string   `json:"address"`
-	DisplayName    string   `json:"display_name"`
-	Enabled        bool     `json:"enabled"`
-	AllowedSenders []string `json:"allowed_senders,omitempty"`
-	// ExternalAliases is the inbox's send-only external aliases, populated on
-	// retrieval. It is exposed to Admin readers only and never carries secrets.
-	ExternalAliases []ExternalAlias `json:"external_aliases,omitempty"`
+	ID        string `json:"id"`
+	AccountID string `json:"account_id"`
+	// Kind is InboxKindDomain (a mailbox on a managed domain) or
+	// InboxKindStandalone (an independent mailbox with its own address and an
+	// optional remote IMAP/SMTP binding). It is set once at creation and is
+	// immutable.
+	Kind string `json:"kind"`
+	// DomainID is the managed domain of a domain inbox. It is empty for a
+	// standalone inbox, whose address is self-contained in Address.
+	DomainID string `json:"domain_id,omitempty"`
+	// LocalPart is the local part of a domain inbox's address. It is empty for a
+	// standalone inbox.
+	LocalPart string `json:"local_part,omitempty"`
+	// Address is the inbox's full primary address: derived from LocalPart and the
+	// domain name for a domain inbox, or the operator-supplied address for a
+	// standalone inbox.
+	Address     string `json:"address"`
+	DisplayName string `json:"display_name"`
+	Enabled     bool   `json:"enabled"`
+	// Namespace is the selected remote namespace/root a standalone inbox syncs
+	// (for example "INBOX" or "ALL"). Empty for a domain inbox.
+	Namespace string `json:"namespace,omitempty"`
+	// Remote describes the standalone inbox's optional remote server binding in
+	// its non-secret parts. It is nil for a domain inbox.
+	Remote *RemoteConnection `json:"remote,omitempty"`
+	// RemoteConfigured reports whether encrypted remote credentials are present
+	// for a standalone inbox.
+	RemoteConfigured bool `json:"remote_configured,omitempty"`
+	// Capabilities is the declared mailbox capability surface. Populated on
+	// retrieval; it lets workflow code branch on capability instead of kind.
+	Capabilities   *Capabilities `json:"capabilities,omitempty"`
+	AllowedSenders []string      `json:"allowed_senders,omitempty"`
 	// SenderRestricted enables the allow-list. When false, any sender is
 	// accepted and AllowedSenders is ignored; when true, only AllowedSenders
 	// (and the approver) are accepted. The allow-list matches the RFC5322.From
@@ -190,22 +211,6 @@ type Inbox struct {
 	// message arrived has delivered). A new inbox carries "all".
 	DeliveryTrigger string    `json:"delivery_trigger,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
-}
-
-// ExternalAlias is a send-only identity: it never participates in inbound
-// routing. This view carries provider metadata and connector status only; the
-// encrypted credentials never leave the store. External aliases are an
-// Admin-only capability.
-type ExternalAlias struct {
-	ID          string    `json:"id"`
-	InboxID     string    `json:"inbox_id"`
-	Address     string    `json:"address"`
-	DisplayName string    `json:"display_name,omitempty"`
-	Provider    string    `json:"provider"`
-	Configured  bool      `json:"configured"`
-	Revision    int64     `json:"revision"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // HasApprover reports whether the inbox has a configured external approver.
@@ -576,19 +581,15 @@ type Draft struct {
 	// FromAddress is the chosen sender (the inbox primary or one of its
 	// aliases). Empty means the inbox primary. It is frozen into the approval
 	// fingerprint and used by the approved send. FromName is the display name
-	// resolved for that sender at draft time. FromExternalAliasID names an
-	// external sending alias by immutable id when the sender is one, so
-	// deleting and recreating an alias with the same address cannot silently
-	// rebind the draft.
-	FromAddress         string   `json:"from_address,omitempty"`
-	FromName            string   `json:"from_name,omitempty"`
-	FromExternalAliasID string   `json:"from_external_alias_id,omitempty"`
-	To                  []string `json:"to"`
-	CC                  []string `json:"cc,omitempty"`
-	BCC                 []string `json:"bcc,omitempty"`
-	Subject             string   `json:"subject"`
-	Text                string   `json:"text"`
-	HTML                string   `json:"html,omitempty"`
+	// resolved for that sender at draft time.
+	FromAddress string   `json:"from_address,omitempty"`
+	FromName    string   `json:"from_name,omitempty"`
+	To          []string `json:"to"`
+	CC          []string `json:"cc,omitempty"`
+	BCC         []string `json:"bcc,omitempty"`
+	Subject     string   `json:"subject"`
+	Text        string   `json:"text"`
+	HTML        string   `json:"html,omitempty"`
 	// Status is one of DraftStatusDraft, DraftStatusPendingApproval or
 	// DraftStatusRejected.
 	Status string `json:"status,omitempty"`

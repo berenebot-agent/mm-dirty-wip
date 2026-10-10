@@ -145,19 +145,6 @@ Generated from `internal/apispec`; do not edit by hand.
 | POST | /v1/admin/keys | Create an API key (Admin) | admin |
 | DELETE | /v1/admin/keys/{id} | Revoke an API key (Admin) | admin |
 
-## Admin: external aliases
-
-| Method | Path | Summary | Role |
-| --- | --- | --- | --- |
-| GET | /v1/admin/inboxes/{id}/external-aliases | List an inbox's external sending aliases (Admin) | admin |
-| POST | /v1/admin/inboxes/{id}/external-aliases | Create an external sending alias (Admin) | admin |
-| PATCH | /v1/admin/inboxes/{id}/external-aliases/{aliasID} | Update an external alias display name (Admin) | admin |
-| DELETE | /v1/admin/inboxes/{id}/external-aliases/{aliasID} | Delete an external alias (Admin) | admin |
-| GET | /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending | Get an external alias's sending connector (Admin) | admin |
-| PUT | /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending | Set an external alias's sending connector (Admin) | admin |
-| DELETE | /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending | Clear an external alias's sending connector (Admin) | admin |
-| GET | /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries | List delivery attempts for an external alias (Admin) | admin |
-
 ## Admin: Hermes
 
 | Method | Path | Summary | Role |

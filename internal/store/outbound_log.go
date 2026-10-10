@@ -14,7 +14,6 @@ import (
 // nullable attribution snapshot (SET NULL when the domain is deleted) and the
 // provider stays as the attempt-time provider snapshot.
 type DeliveryAttempt struct {
-	ExternalAliasID   string    `json:"external_alias_id,omitempty"`
 	ID                int64     `json:"id"`
 	AccountID         string    `json:"-"`
 	DomainID          string    `json:"domain_id,omitempty"`
@@ -93,8 +92,8 @@ func messageExistsTx(ctx context.Context, tx *sql.Tx, accountID, id string) (boo
 // insertDeliveryAttemptTx appends one attempt row and prunes the log within an
 // existing transaction, so the attempt is durable with the message state change.
 func (s *Store) insertDeliveryAttemptTx(ctx context.Context, tx *sql.Tx, accountID, domainID, provider, messageID, status, providerMessageID, errorText string) error {
-	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,external_alias_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label) VALUES(?,?,?,?,COALESCE((SELECT sending_external_alias_id FROM messages WHERE id=? AND account_id=?),''),(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?, ?,COALESCE((SELECT inbox_id FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT from_address FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT to_json FROM messages WHERE id=? AND account_id=?),'[]'),COALESCE((SELECT subject FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT client_label FROM messages WHERE id=? AND account_id=?),''))`,
-		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, messageID, accountID, status, providerMessageID, errorText, nowText(), messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,attempt,status,provider_message_id,error_text,created_at,inbox_id,from_address,to_json,subject,client_label) VALUES(?,?,?,?,(SELECT attempts FROM messages WHERE id=? AND account_id=?),?,?,?,?,COALESCE((SELECT inbox_id FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT from_address FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT to_json FROM messages WHERE id=? AND account_id=?),'[]'),COALESCE((SELECT subject FROM messages WHERE id=? AND account_id=?),''),COALESCE((SELECT client_label FROM messages WHERE id=? AND account_id=?),''))`,
+		accountID, nullString(domainID), provider, nullString(messageID), messageID, accountID, status, providerMessageID, errorText, nowText(), messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID, messageID, accountID); err != nil {
 		return err
 	}
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)
@@ -202,19 +201,12 @@ func (s *Store) ListDomainDeliveryAttempts(ctx context.Context, accountID, domai
 	return s.listDeliveryAttempts(ctx, accountID, "domain_id", domainID, limit, beforeID)
 }
 
-func (s *Store) ListExternalAliasDeliveryAttempts(ctx context.Context, accountID, inboxID, aliasID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
-	if _, err := s.GetExternalAlias(ctx, accountID, inboxID, aliasID); err != nil {
-		return nil, err
-	}
-	return s.listDeliveryAttempts(ctx, accountID, "external_alias_id", aliasID, limit, beforeID)
-}
-
-// column is selected only by the two internal callers above.
+// column is selected only by the internal caller above.
 func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, targetID string, limit int, beforeID int64) ([]DeliveryAttempt, error) {
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
 	}
-	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.external_alias_id,l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
+	q := `SELECT l.id,l.account_id,COALESCE(l.domain_id,''),l.provider,COALESCE(l.message_id,''),COALESCE(l.workflow_id,''),l.attempt,l.status,l.provider_message_id,l.error_text,l.created_at,
 			COALESCE(l.from_address,m.from_address,w.from_address,''),COALESCE(l.to_json,m.to_json,w.to_json,'[]'),COALESCE(l.subject,m.subject,w.subject,'')
 		FROM outbound_delivery_log l
 		LEFT JOIN messages m ON m.id=l.message_id AND m.account_id=l.account_id
@@ -236,7 +228,7 @@ func (s *Store) listDeliveryAttempts(ctx context.Context, accountID, column, tar
 	for rows.Next() {
 		var a DeliveryAttempt
 		var created, to string
-		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.ExternalAliasID, &a.Provider, &a.MessageID, &a.WorkflowID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to, &a.Subject); err != nil {
+		if err = rows.Scan(&a.ID, &a.AccountID, &a.DomainID, &a.Provider, &a.MessageID, &a.WorkflowID, &a.Attempt, &a.Status, &a.ProviderMessageID, &a.ErrorText, &created, &a.FromAddress, &to, &a.Subject); err != nil {
 			return nil, err
 		}
 		a.To = decodeStrings(to)

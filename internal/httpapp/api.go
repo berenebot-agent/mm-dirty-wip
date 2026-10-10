@@ -47,7 +47,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 			"curl":   "/examples/curl",
 		},
 		"bootstrap":    "/v1/bootstrap",
-		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay", "external-aliases"},
+		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"},
 		"limits":       s.discoveryLimits(),
 	})
 }

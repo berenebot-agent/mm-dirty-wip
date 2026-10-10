@@ -355,8 +355,8 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 }
 
 // TestRelayOutboundUsesDefaultSender proves a relay send uses the inbox's
-// configured default sender, including an external sending alias, rather than
-// always the primary address.
+// configured default sender, including a managed alias on another domain,
+// rather than always the primary address.
 func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -375,12 +375,12 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	d, _ := st.CreateDomain(ctx, u.AccountID, "example.com")
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 
-	// The inbox default sender is an external alias.
-	alias, err := st.CreateExternalAlias(ctx, u.AccountID, box.ID, "agent@gmail.com", "Agent")
-	if err != nil {
+	// The inbox default sender is a managed alias on a second domain.
+	d2, _ := st.CreateDomain(ctx, u.AccountID, "other.com")
+	if err := st.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "agent", DisplayName: "Agent"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetInboxDefaultSender(ctx, u.AccountID, box.ID, alias.Address); err != nil {
+	if err := st.SetInboxDefaultSender(ctx, u.AccountID, box.ID, "agent@other.com"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -434,8 +434,8 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sent.From.Address != "agent@gmail.com" || sent.From.Name != "Agent" {
-		t.Fatalf("relay did not use the default external alias: %+v", sent.From)
+	if sent.From.Address != "agent@other.com" || sent.From.Name != "Agent" {
+		t.Fatalf("relay did not use the default managed alias: %+v", sent.From)
 	}
 }
 

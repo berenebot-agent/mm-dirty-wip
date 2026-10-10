@@ -769,7 +769,6 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 	for _, tc := range []struct{ provider, suffix string }{
 		{"mailgun", "/internal/ingest/mailgun/raw-mime"},
 		{"resend", "/internal/ingest/resend"},
-		{"sendgrid", "/internal/ingest/sendgrid"},
 		{"postmark", "/internal/ingest/postmark"},
 	} {
 		group := providerGroupHTML(t, dlg, tc.provider)
@@ -780,6 +779,12 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 		if !strings.Contains(group, `secondary setup-copy`) {
 			t.Fatalf("%s group has no scoped copy button", tc.provider)
 		}
+	}
+	// SendGrid is intentionally hidden from the receiving menu until its adapter
+	// can be verified against the real provider (internal/app/service.go); the
+	// adapter and its fixture test remain in tests/unit/transport/sendgrid.
+	if strings.Contains(dlg, "sendgrid") {
+		t.Fatal("SendGrid group must not be rendered while the provider is hidden")
 	}
 }
 

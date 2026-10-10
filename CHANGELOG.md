@@ -8,6 +8,20 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- **Standalone mailboxes (foundation).** An inbox now has a `kind`
+  (`domain` or `standalone`). A standalone mailbox owns an address independent
+  of any managed domain and may carry an optional remote IMAP/SMTP binding with
+  credentials encrypted under `APP_ENCRYPTION_KEY`. Transport security defaults
+  to TLS; STARTTLS and **plain** are explicit operator choices (a deployment
+  policy layer may refuse plain), and a connector never silently downgrades.
+  The first shared pieces of the common mailbox model land now: a
+  `MailboxRouter` and a `MailboxBackend` interface that route an inbox to a
+  local or remote backend with a declared capability surface, plus public
+  folder (with archive/outbox roles), remote-locator, listing-envelope (opaque
+  cursor, result-set completeness independent of pagination, per-inbox errors)
+  and normalized-error types. Remote message headers and thread metadata are
+  cached locally while bodies and attachments stay live on the server (no
+  archive). See `docs/DECISIONS.md` D097 and `docs/MAILBOX_SERVICE_CONTRACT.md`.
 - The Drafts folder now has the same checkbox selector and bulk bar as the other
   folders, so drafts can be deleted in bulk. Every mailbox folder (and Drafts)
   also gains a Gmail-style **select all N** escape hatch: checking the header box
@@ -185,6 +199,18 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - The encryption-key derivation cache is keyed by a hash of the input and capped,
   so the raw secret is not retained as a map key and the cache cannot grow
   without bound.
+
+### Removed
+
+- **External sending aliases.** The send-only identities on domains MailMoose
+  does not manage are removed entirely: the store table, model, service, HTTP/UI
+  and API specification are deleted, with no compatibility shim. A migration
+  (053) discards their unsent drafts, attachments and queued sends and jobs and
+  refunds the account and inbox storage counters, drops the attribution columns,
+  and removes orphaned threads; sent history and its `from_address` attribution
+  are kept, and managed-domain aliases and ordinary mail are untouched. Raw
+  files are retired after the migration commits via a durable cleanup queue.
+  Sending now resolves only to the inbox primary or a managed alias.
 
 ### Fixed
 

@@ -171,6 +171,22 @@ func migrations(dataDir string) []migration {
 			columnAdded("blocked_messages", "source"),
 			columnAdded("inbound_control_messages", "source"),
 		)},
+		{version: "052", sql: migration052, fkOff: true, detect: allOf(
+			columnAdded("inboxes", "kind"),
+			columnAdded("inboxes", "address"),
+			columnAdded("inboxes", "remote_security"),
+			tableExists("inbox_remote_credentials"),
+			tableExists("inbox_folders"),
+			tableExists("inbox_remote_messages"),
+			tableExists("pending_file_cleanup"),
+			indexExists("idx_inboxes_standalone_address"),
+		)},
+		{version: "053", fkOff: true, run: dropExternalAliasesMigration(), detect: allOf(
+			tableMissing("external_aliases"),
+			columnMissing("messages", "sending_external_alias_id"),
+			columnMissing("drafts", "from_external_alias_id"),
+			columnMissing("outbound_delivery_log", "external_alias_id"),
+		)},
 	}
 }
 

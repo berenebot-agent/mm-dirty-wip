@@ -244,12 +244,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes/{id}/access/users/{userID}/remove", s.withSession(s.withCSRF(s.uiInboxAccessRemoveUser)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/invites", s.withSession(s.withCSRF(s.uiInboxAccessInvite)))
 	m.HandleFunc("POST /ui/inboxes/{id}/access/invites/{inviteID}/revoke", s.withSession(s.withCSRF(s.uiInboxAccessRevokeInvite)))
-	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases", s.withSession(s.withCSRF(s.uiCreateExternalAlias)))
-	m.HandleFunc("GET /ui/inboxes/{id}/external-aliases/{aliasID}", s.withSession(s.uiExternalAlias))
-	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases/{aliasID}/edit", s.withSession(s.withCSRF(s.uiUpdateExternalAlias)))
-	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases/{aliasID}/sending", s.withSession(s.withCSRF(s.uiExternalAliasSending)))
-	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases/{aliasID}/sending/clear", s.withSession(s.withCSRF(s.uiExternalAliasSendingClear)))
-	m.HandleFunc("POST /ui/inboxes/{id}/external-aliases/{aliasID}/delete", s.withSession(s.withCSRF(s.uiDeleteExternalAlias)))
 	m.HandleFunc("POST /ui/keys", s.withSession(s.withCSRF(s.uiCreateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateKey)))
 	m.HandleFunc("POST /ui/keys/{id}/rotate", s.withSession(s.withCSRF(s.uiRotateKey)))
@@ -369,14 +363,6 @@ var v1Routes = []apiRoute{
 	{"PATCH /v1/inboxes/{id}", (*Server).apiInbox},
 	{"DELETE /v1/inboxes/{id}", (*Server).apiInbox},
 	{"POST /v1/inboxes/{id}/trash/empty", (*Server).apiInboxTrashEmpty},
-	{"GET /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
-	{"POST /v1/admin/inboxes/{id}/external-aliases", (*Server).apiExternalAliases},
-	{"PATCH /v1/admin/inboxes/{id}/external-aliases/{aliasID}", (*Server).apiExternalAlias},
-	{"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}", (*Server).apiExternalAlias},
-	{"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
-	{"PUT /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
-	{"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending", (*Server).apiExternalAliasSending},
-	{"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries", (*Server).apiExternalAliasDeliveries},
 	// openagent.email terminology compatibility.
 	{"GET /v1/identities", (*Server).apiIdentities},
 	{"POST /v1/identities", (*Server).apiIdentities},
@@ -885,13 +871,13 @@ func mapStoreError(w http.ResponseWriter, err error) {
 		writeError(w, 409, "conflict")
 	case errors.Is(err, store.ErrQuota):
 		writeError(w, 507, "storage quota exceeded")
-	case errors.Is(err, app.ErrInvalidConfig), errors.Is(err, store.ErrInvalidAlias):
+	case errors.Is(err, app.ErrInvalidConfig):
 		writeError(w, 400, err.Error())
 	case errors.Is(err, store.ErrInvalidSearchQuery):
 		// Bad client input (control bytes in the query), not an engine fault —
 		// answer 400 rather than letting it fall through to the 500 branch.
 		writeError(w, 400, err.Error())
-	case errors.Is(err, app.ErrReplyFromSpam), errors.Is(err, store.ErrExternalAliasDeleted):
+	case errors.Is(err, app.ErrReplyFromSpam):
 		writeError(w, 409, err.Error())
 	case errors.Is(err, app.ErrRateLimited):
 		writeError(w, 429, err.Error())

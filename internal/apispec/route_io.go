@@ -140,16 +140,6 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/admin/keys":        {Request: "KeyCreateBody", Response: "KeyCreated"},
 	"DELETE /v1/admin/keys/{id}": {},
 
-	// Admin: external aliases.
-	"GET /v1/admin/inboxes/{id}/external-aliases":                              {Response: "ExternalAliasList"},
-	"POST /v1/admin/inboxes/{id}/external-aliases":                             {Request: "ExternalAliasCreate", Response: "ExternalAlias"},
-	"PATCH /v1/admin/inboxes/{id}/external-aliases/{aliasID}":                  {Request: "ExternalAliasPatch", Response: "ExternalAlias"},
-	"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}":                 {},
-	"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending":            {Response: "ExternalAliasSending"},
-	"PUT /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending":            {Request: "ExternalAliasSendingPut", Response: "ExternalAlias"},
-	"DELETE /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending":         {},
-	"GET /v1/admin/inboxes/{id}/external-aliases/{aliasID}/sending/deliveries": {Response: "DeliveryAttemptList", Query: []Param{qLimit, qBefore}},
-
 	// Admin: Hermes.
 	"GET /v1/admin/hermes":         {Response: "HermesConnectionList"},
 	"POST /v1/admin/hermes/enroll": {Request: "HermesEnrollBody", Response: "HermesEnrollment"},

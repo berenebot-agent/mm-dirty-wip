@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/safepath"
 	_ "github.com/dellarb/mailmoose/internal/sqlite3driver"
 )
 
@@ -46,7 +47,44 @@ func Open(dataDir string) (*Store, error) {
 		s.Close()
 		return nil, err
 	}
+	// Retire any raw files a migration queued for post-commit unlink. This runs
+	// outside the migration transaction, so a rollback never orphans a live row.
+	s.sweepPendingFileCleanup(context.Background())
 	return s, nil
+}
+
+// sweepPendingFileCleanup unlinks the files recorded in pending_file_cleanup and
+// clears the queue. It is best-effort: a file already gone is fine, and an
+// interrupted sweep simply retries on the next start. It runs after migrations
+// commit, never inside a transaction.
+func (s *Store) sweepPendingFileCleanup(ctx context.Context) {
+	dir := filepath.Dir(s.path)
+	rows, err := s.read.QueryContext(ctx, `SELECT id,rel_path FROM pending_file_cleanup ORDER BY id`)
+	if err != nil {
+		return
+	}
+	type item struct {
+		id   int64
+		path string
+	}
+	var items []item
+	for rows.Next() {
+		var it item
+		if rows.Scan(&it.id, &it.path) != nil {
+			rows.Close()
+			return
+		}
+		items = append(items, it)
+	}
+	rows.Close()
+	for _, it := range items {
+		if p, jerr := safepath.Join(dir, it.path); jerr == nil {
+			_ = os.Remove(p)
+		}
+		if _, derr := s.write.ExecContext(ctx, `DELETE FROM pending_file_cleanup WHERE id=?`, it.id); derr != nil {
+			return
+		}
+	}
 }
 func (s *Store) Close() error { _ = s.read.Close(); return s.write.Close() }
 func (s *Store) Path() string { return s.path }
