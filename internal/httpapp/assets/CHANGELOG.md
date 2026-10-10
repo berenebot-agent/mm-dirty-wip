@@ -8,20 +8,55 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
-- **Standalone mailboxes (foundation).** An inbox now has a `kind`
-  (`domain` or `standalone`). A standalone mailbox owns an address independent
-  of any managed domain and may carry an optional remote IMAP/SMTP binding with
-  credentials encrypted under `APP_ENCRYPTION_KEY`. Transport security defaults
-  to TLS; STARTTLS and **plain** are explicit operator choices (a deployment
-  policy layer may refuse plain), and a connector never silently downgrades.
-  The first shared pieces of the common mailbox model land now: a
-  `MailboxRouter` and a `MailboxBackend` interface that route an inbox to a
-  local or remote backend with a declared capability surface, plus public
+- **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
+  `standalone`). A standalone mailbox owns an address independent of any managed
+  domain and connects to an existing mailbox through a per-inbox remote IMAP
+  (and optional SMTP) connector, with credentials encrypted under
+  `APP_ENCRYPTION_KEY`. Transport security defaults to TLS; STARTTLS and
+  **plain** are explicit operator choices (warned in the UI), and a connector
+  never silently downgrades. Message/thread **metadata** is cached locally while
+  bodies and attachments are fetched live and never archived. A standalone inbox
+  is a first-class mailbox: it has the same folder tree (with role mapping that
+  a reconcile never resets), labels, threads, search, replayable events, API
+  keys and the same `/v1/inboxes/{id}/…` common surface as a domain inbox,
+  dispatched through one local/remote boundary. Its own remote SMTP binding
+  carries outbound send, and a durable job copies sent mail into its remote Sent
+  folder (toggle-able, independently retried, never a re-send, and owning an
+  independent frozen copy of the raw MIME). The common mailbox model adds public
   folder (with archive/outbox roles), remote-locator, listing-envelope (opaque
   cursor, result-set completeness independent of pagination, per-inbox errors)
-  and normalized-error types. Remote message headers and thread metadata are
-  cached locally while bodies and attachments stay live on the server (no
-  archive). See `docs/DECISIONS.md` D097 and `docs/MAILBOX_SERVICE_CONTRACT.md`.
+  and normalized-error types. Remote indexing is **progressive** via a persisted
+  per-folder backfill cursor, so an ordinary large folder reaches `complete` over
+  successive passes (the 2000-message batch is a per-pass bound, not a cap); the
+  one hard limit is the **500k-UID snapshot ceiling**, above which a folder is
+  indexed newest-window-only, un-pruned and reported `partial`, never falsely
+  complete. Account-wide listings merge the local store and remote inboxes into
+  one globally ordered stream. See `docs/DECISIONS.md` D097 and
+  `docs/MAILBOX_SERVICE_CONTRACT.md`.
+- **Assistant authoring modes.** A request to send a draft is resolved per the
+  inbox's authoring mode, snapshotted onto each request. **MailMoose approvals**
+  (the domain-inbox default) is the existing in-product approval workflow with
+  tokenized email approval. **Remote draft handoff** (the standalone-inbox
+  default) places the frozen draft one-way in the connected mailbox's remote
+  Drafts folder for a human to send from their own client; MailMoose never sends
+it, and a token-free notification tells the human it is waiting. Publication,
+notification and the Sent-copy advance as separate state machines, and an
+unverifiable remote append is reported ambiguous rather than retried blindly.
+A handoff notification (and the frozen handoff draft echoed back) is excluded
+from remote detection by a durable correlation lookup. Handoffs are inspectable
+through `GET /v1/inboxes/{id}/handoffs` (terminal records retained after the
+local draft is cleaned up) and can be explicitly cancelled while still pending
+or explicitly re-requested; an ambiguous append is never retried automatically.
+The authoring settings report the effective mode, whether the inbox is
+standalone, and whether the approver is enabled for the effective mode. See
+`docs/MAILBOX_SERVICE_CONTRACT.md`.
+- **A common folder tree and labels for every inbox.** Both inbox kinds now use
+  one hierarchical folder model with well-known roles (Inbox, Sent, Drafts,
+  Archive, Outbox, Spam, Trash) and a single-folder message membership
+  (`message.folder_changed` event). A role can be mapped to an arbitrarily-named
+  provider folder and is persisted so a later sync never re-infers it. Folders
+  are managed through the common API and UI; labels remain free-text metadata,
+  distinct from folders.
 - The Drafts folder now has the same checkbox selector and bulk bar as the other
   folders, so drafts can be deleted in bulk. Every mailbox folder (and Drafts)
   also gains a Gmail-style **select all N** escape hatch: checking the header box

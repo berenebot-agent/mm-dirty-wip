@@ -58,7 +58,7 @@ const (
 // Labels section listing the inbox's labels one level in. It relies on
 // .Inbox, .Folder, .ActiveLabel, .Labels and the count fields being populated
 // on pageData.
-const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a></aside>`
+const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Folders}}{{range .Folders}}<a class="folder{{if eq $.ActiveFolderID .ID}} active{{end}}" data-folder="folder" href="/ui/inboxes/{{$.Inbox.ID}}/folder?folder={{.ID | querystring}}">{{.Name}}{{if .Count}} <span class="count">{{.Count}}</span>{{end}}</a>{{end}}{{end}}{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a><details class="navfolders"><summary>Manage folders</summary><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/folders" class="folder-create"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="path" placeholder="New folder" aria-label="New folder path" required><button class="btn-sm">Create</button></form>{{range .Folders}}<span class="folder-manage" data-folder-id="{{.ID}}"><span class="labelname">{{.Name}}</span><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/folders/{{.ID}}/rename"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input name="name" value="{{.Name}}" aria-label="Rename folder"><button class="btn-sm">Rename</button></form><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/folders/{{.ID}}/delete" data-confirm="Delete this folder? It must be empty."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete folder" aria-label="Delete folder">` + iconTrash + `</button></form></span>{{end}}</details></aside>`
 
 // selectBanner is the Gmail-style two-state "select all" bar. Its two spans are
 // toggled by app.js: the first (after checking the header box on a paginated
@@ -73,8 +73,8 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 <div class="inboxbar">{{if eq .Folder "trash"}}<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/trash/empty" data-confirm="Permanently delete all messages in Trash? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Empty trash</button></form>{{end}}<form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}"><input type="hidden" name="label" value="{{.ActiveLabel}}"><input type="hidden" name="scope" value="page">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}{{if eq .Folder "trash"}}<button name="action" value="restore" class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button><button name="action" value="purge" class="secondary icon-btn danger" data-confirm-all="Delete all selected messages permanently? This cannot be undone." title="Delete forever" aria-label="Delete forever">` + iconDeleteFore + `</button>{{else}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{end}}</form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
-{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
+{{if .StandaloneMode}}{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
+{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}
 {{template "live-requests-card" .}}
 {{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`
@@ -98,7 +98,7 @@ const draftsBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displ
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{template "select-banner" .}}
-<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section></div></div>`
+<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{with index $.HandoffByDraft .ID}}{{template "handoff-badge" .}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section>{{template "handoff-history" .}}</div></div>`
 
 const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div>
@@ -264,28 +264,72 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
+	handoffs, _ := s.Service.Store.ListAssistantHandlingForInbox(r.Context(), p, box.ID, 50)
+	handoffByDraft := make(map[string]model.AssistantHandlingRequest, len(handoffs))
+	for _, h := range handoffs {
+		if _, ok := handoffByDraft[h.DraftID]; !ok {
+			handoffByDraft[h.DraftID] = h
+		}
+	}
 	s.renderMail(w, r, draftsBody, pageData{
-		Title:       box.Address + " · Drafts",
-		Page:        "inbox",
-		Principal:   p,
-		CSRF:        csrf(r),
-		Account:     acc,
-		Inbox:       &box,
-		Drafts:      drafts,
-		Folder:      "drafts",
-		HasMore:     hasMore,
-		Before:      cursor,
-		PagerURL:    pagerURL,
-		TotalCount:  draftCount,
-		Labels:      inboxLabels,
-		LabelUnread: labelUnread,
-		UnreadCount: unread[box.ID],
-		SpamCount:   spamCount,
-		TrashCount:  trashCount,
-		DraftCount:  draftCount,
-		OutboxCount: outboxCount,
-		Notice:      r.URL.Query().Get("notice"),
+		Title:          box.Address + " · Drafts",
+		Page:           "inbox",
+		Principal:      p,
+		CSRF:           csrf(r),
+		Account:        acc,
+		Inbox:          &box,
+		Drafts:         drafts,
+		Handoffs:       handoffs,
+		HandoffByDraft: handoffByDraft,
+		Folder:         "drafts",
+		HasMore:        hasMore,
+		Before:         cursor,
+		PagerURL:       pagerURL,
+		TotalCount:     draftCount,
+		Labels:         inboxLabels,
+		LabelUnread:    labelUnread,
+		UnreadCount:    unread[box.ID],
+		SpamCount:      spamCount,
+		TrashCount:     trashCount,
+		DraftCount:     draftCount,
+		OutboxCount:    outboxCount,
+		Folders:        s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
+		Notice:         r.URL.Query().Get("notice"),
 	})
+}
+
+// uiDraftCancelHandoff withdraws an outstanding (pending) RemoteDraft handoff and
+// returns the draft to editable. It requires Assistant/Owner.
+func (s *Server) uiDraftCancelHandoff(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	if _, _, err := s.Service.Store.CancelHandoff(r.Context(), p, r.PathValue("draftId")); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice="+url.QueryEscape("Handoff cancelled"), 303)
+}
+
+// uiDraftRetryHandoff re-requests a RemoteDraft handoff for a draft whose previous
+// handoff reached a terminal state (failed/cancelled). It routes through the
+// inbox's effective authoring mode, so it only produces a handoff when the inbox
+// is in remote_draft mode.
+func (s *Server) uiDraftRetryHandoff(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	if _, err := s.Service.RequestSend(r.Context(), p, r.PathValue("draftId"), false); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice="+url.QueryEscape("Handoff re-requested"), 303)
 }
 
 func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +379,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 		TrashCount:  trashCount,
 		DraftCount:  draftCount,
 		OutboxCount: outboxCount,
+		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
 		Notice:      r.URL.Query().Get("notice"),
 	})
 }
@@ -639,6 +684,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, id)
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, id)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
+	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
 	// Sending readiness follows the inbox domain's sending config.
 	outboundReady := true
 	pausedExternal := false
@@ -651,7 +697,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	if folder == "inbox" {
 		sendRequests, _ = s.buildSendRequests(r, p, id)
 	}
-	s.renderMail(w, r, inboxBody, pageData{
+	data := pageData{
 		Title:                      box.Address,
 		Page:                       "inbox",
 		Principal:                  p,
@@ -663,6 +709,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		HasMore:                    hasMore,
 		Before:                     cursor,
 		Folder:                     folder,
+		Folders:                    folderSidebar,
 		PagerURL:                   pagerURL,
 		TotalCount:                 totalCount,
 		Labels:                     inboxLabels,
@@ -681,7 +728,25 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		DomainSendingSettingsURL:   "/?domain=" + url.PathEscape(box.DomainID) + "&kind=sending",
 		DomainReceivingSettingsURL: "/?domain=" + url.PathEscape(box.DomainID) + "&kind=receiving",
 		Notice:                     r.URL.Query().Get("notice"),
-	})
+	}
+	s.applyStandaloneMailbox(r, p, box, &data)
+	s.renderMail(w, r, inboxBody, data)
+}
+
+// applyStandaloneMailbox decorates a mailbox page's data with the standalone
+// (remote) connection state, so the mailbox page can show a setup/plain warning
+// without the handler branching on the inbox kind per template.
+func (s *Server) applyStandaloneMailbox(r *http.Request, p model.Principal, box model.Inbox, data *pageData) {
+	if box.Kind != model.InboxKindStandalone {
+		return
+	}
+	data.StandaloneMode = true
+	data.StandaloneConfigured = box.RemoteConfigured && box.Remote != nil
+	data.StandalonePlain = box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain
+	data.RemoteConnectorURL = "/ui/inboxes/" + box.ID + "/remote"
+	if view, verr := s.remoteConfigView(r.Context(), p, box.ID); verr == nil {
+		data.RemoteConfig = view
+	}
 }
 
 func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
@@ -693,9 +758,17 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 	}
 	action := r.Form.Get("action")
 	switch action {
-	case "read", "unread", "delete", "restore", "purge":
+	case "read", "unread", "delete", "restore", "purge", "move":
 	default:
 		http.Error(w, "unknown action", 400)
+		return
+	}
+	// A standalone inbox's messages are cached remote metadata; the bulk action
+	// routes to the live server (flags/move) or the local label store, and the
+	// "all N" set is re-derived from the folder's remote index — never from a
+	// client-supplied id list that could name another inbox.
+	if box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
+		s.uiBulkRemote(w, r, p, box, action)
 		return
 	}
 	ids := r.Form["ids"]
@@ -732,6 +805,121 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 			count++
 		}
 	}
+	s.redirectBulkResult(w, r, box, action, count)
+}
+
+// uiBulkRemote applies a bulk action to a standalone inbox's remote messages.
+// The explicit-id list is verified to belong to this inbox's remote index; the
+// "all N" set is re-derived from the folder's cached remote index. A per-message
+// failure is counted out rather than aborting the batch.
+func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, action string) {
+	if action == "purge" {
+		if !p.CanOwn(box.ID) && !p.Admin {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+	} else if !p.CanAssist(box.ID) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	folder := r.Form.Get("folder")
+	rolePath := s.remoteFolderPathForView(r, p, box, folder)
+	var ids []string
+	if r.Form.Get("scope") == "all" {
+		res, err := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, rolePath, remoteBulkMax, "")
+		if err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+		for _, v := range res.Items {
+			ids = append(ids, v.ID)
+		}
+	} else {
+		for _, id := range r.Form["ids"] {
+			// Verify the id is in this inbox's remote index before acting, so a
+			// crafted id from another inbox is never touched.
+			if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id); gerr == nil {
+				ids = append(ids, id)
+			}
+		}
+	}
+	count := 0
+	for _, id := range ids {
+		if s.bulkRemoteMessageAction(r, p, box, id, action, r.Form.Get("dest")) {
+			count++
+		}
+	}
+	s.redirectBulkResult(w, r, box, action, count)
+}
+
+// remoteBulkMax bounds an "all N" remote bulk enumeration.
+const remoteBulkMax = 5000
+
+// remoteFolderPathForView maps a mailbox view folder to its remote folder path.
+func (s *Server) remoteFolderPathForView(r *http.Request, p model.Principal, box model.Inbox, folder string) string {
+	root := strings.TrimSpace(box.Namespace)
+	if root == "" {
+		root = model.NamespaceINBOX
+	}
+	switch folder {
+	case "sent":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSent); ok {
+			return f.Path
+		}
+	case "spam":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleSpam); ok {
+			return f.Path
+		}
+	case "trash":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash); ok {
+			return f.Path
+		}
+	case "inbox":
+		if f, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleInbox); ok {
+			return f.Path
+		}
+	}
+	return root
+}
+
+// bulkRemoteMessageAction applies one bulk action to one remote message.
+func (s *Server) bulkRemoteMessageAction(r *http.Request, p model.Principal, box model.Inbox, id, action, dest string) bool {
+	ctx := r.Context()
+	switch action {
+	case "read", "unread":
+		read := action == "read"
+		if _, err := s.remoteMailbox().SetRemoteRead(ctx, p, box.ID, id, read); err == nil {
+			return true
+		}
+	case "delete":
+		if err := s.trashRemoteMessage(ctx, p, mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}, id); err == nil {
+			return true
+		}
+	case "restore":
+		if err := s.moveRemoteToRole(ctx, p, mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}, id, model.FolderRoleInbox); err == nil {
+			return true
+		}
+	case "move":
+		if strings.TrimSpace(dest) == "" {
+			return false
+		}
+		if _, err := s.remoteMailbox().MoveRemoteMessage(ctx, p, box.ID, id, dest); err == nil {
+			return true
+		}
+	case "purge":
+		// Permanent erasure is a remote expunge and requires Owner.
+		if !p.CanOwn(box.ID) && !p.Admin {
+			return false
+		}
+		if err := s.remoteMailbox().PurgeRemoteMessage(ctx, p, box.ID, id); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// redirectBulkResult redirects to the mailbox folder after a bulk action.
+func (s *Server) redirectBulkResult(w http.ResponseWriter, r *http.Request, box model.Inbox, action string, count int) {
 	notice := fmt.Sprintf("%d message", count)
 	if count != 1 {
 		notice += "s"
@@ -747,6 +935,8 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		notice += " restored"
 	case "purge":
 		notice += " deleted permanently"
+	case "move":
+		notice += " moved"
 	}
 	base := "/ui/inboxes/" + box.ID
 	switch r.Form.Get("folder") {
@@ -938,6 +1128,11 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 	}
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox message resolves through the remote reader so the
+		// compose/reply form can be built from its cached metadata.
+		if s.composeRemoteMessage(w, r, p, kind, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1156,6 +1351,11 @@ func (s *Server) uiMessageLabels(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox message resolves its labels through the remote
+		// metadata cache (labels are local metadata on both kinds).
+		if s.remoteMessageSetLabels(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1194,6 +1394,10 @@ func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox message id resolves through the remote reader.
+		if s.remoteMessageSetRead(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1333,6 +1537,11 @@ func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
 	// the message can view its sanitized HTML, not only account Admins.
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox message renders its sanitized HTML from the live
+		// remote body, through the same sanitizer the local reader uses.
+		if s.remoteMessageHTML(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1473,3 +1682,15 @@ func rewriteCIDs(body string, atts []model.Attachment) string {
 	}
 	return body
 }
+
+// handoffBadge renders a draft's latest RemoteDraft handoff state on the drafts
+// list so a handoff draft is never shown as a plain (or approval) draft. It shows
+// the publication state and, independently, an unavailable/failed notification.
+const handoffBadge = `{{define "handoff-badge"}}{{if eq .Publication "published"}}<span class="draft-status sent">Handoff published</span> {{else if eq .Publication "ambiguous"}}<span class="draft-status rejected">Handoff ambiguous</span> {{else if eq .Publication "failed"}}{{if eq .LastError "cancelled"}}<span class="draft-status rejected">Handoff cancelled</span> {{else}}<span class="draft-status rejected">Handoff failed</span> {{end}}{{else}}<span class="draft-status pending">Handoff pending</span> {{end}}{{end}}`
+
+// handoffHistory is the RemoteDraft handoff history panel. It is independent of
+// the local draft: a published handoff's local draft is cleaned up, but the
+// terminal record (with its publication and notification state) is retained. A
+// pending handoff can be cancelled; a terminal (failed/cancelled) one can be
+// re-requested. It never offers approval controls for a remote job.
+const handoffHistory = `{{define "handoff-history"}}{{if .Handoffs}}<section class="card" data-live-list><div class="card-head"><h2>Draft handoffs</h2></div><p class="muted small">One-way handoffs of drafts to this inbox's connected remote Drafts folder. Publication and notification are tracked separately; the record is kept after the local draft is cleaned up.</p><div class="mailheader"><span></span><span></span><span>Subject</span><span>Publication</span><span>Notification</span><span>Requested</span><span></span></div><div class="mailrows">{{range .Handoffs}}<div class="mailrow"><span class="mailcheck"></span><span class="maildot"></span><span class="mailsubject">{{if eq .Publication "published"}}<span class="draft-status sent">Published</span> {{else if eq .Publication "ambiguous"}}<span class="draft-status rejected">Ambiguous</span> {{else if eq .Publication "failed"}}{{if eq .LastError "cancelled"}}<span class="draft-status rejected">Cancelled</span> {{else}}<span class="draft-status rejected">Failed</span> {{end}}{{else}}<span class="draft-status pending">Pending</span> {{end}}{{if .MessageID}}<span class="muted small">{{.MessageID}}</span>{{end}}{{if .RemoteFolder}} <span class="muted small">→ {{.RemoteFolder}}</span>{{end}}{{if .LastError}} <span class="muted small">— {{.LastError}}</span>{{end}}</span><span>{{if eq .NotificationStatus "sent"}}<span class="pill">sent</span>{{else if eq .NotificationStatus "queued"}}<span class="pill amber">queued</span>{{else if eq .NotificationStatus "failed"}}<span class="pill danger">notification failed</span>{{else}}<span class="muted small">notification unavailable</span>{{end}}</span><span class="maildate">{{mailDate .RequestedAt}}</span><span class="mailaction">{{if eq .Publication "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/cancel-handoff" data-confirm="Withdraw this handoff? The remote draft is not removed."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Cancel</button></form>{{else if eq .Publication "failed"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/retry-handoff" data-confirm="Re-request the handoff for this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Retry</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}{{end}}`

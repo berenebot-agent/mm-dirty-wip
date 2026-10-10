@@ -53,6 +53,23 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
+// RemoteMessageResolver resolves a remote (standalone) message as a reply or
+// forward source for a send that originates in the common mailbox boundary. A
+// remote message's body lives only on the server, so a forward fetches and parses
+// it transiently; the returned Text/attachments are used to build the outbound
+// message and are never archived.
+type RemoteMessageResolver interface {
+	// ResolveRemoteReply resolves a remote message's header metadata as a
+	// model.Message suitable for a reply (its ThreadKey, Message-ID, References
+	// and From/To). It returns ok=false when the id is not a remote message of the
+	// account.
+	ResolveRemoteReply(ctx context.Context, accountID, id string) (model.Message, bool, error)
+	// ResolveRemoteForward resolves a remote message for a forward, fetching and
+	// parsing its body transiently so Text/HTML and attachments can be carried.
+	// It returns ok=false when the id is not a remote message of the account.
+	ResolveRemoteForward(ctx context.Context, accountID, id string) (model.Message, []SendAttachment, bool, error)
+}
+
 type Service struct {
 	Config config.Config
 	Store  *store.Store
@@ -73,6 +90,30 @@ type Service struct {
 	RemoteMXRuntime AccountMXReceiverRuntime
 	Log             *slog.Logger
 	EncryptionKey   []byte
+	// HandoffPublisher publishes a RemoteDraft handoff to a standalone inbox's
+	// connected remote server (append to Drafts + verify). InstallRemoteBridges
+	// installs the production publisher at startup; when nil, a handoff is created
+	// and queued but its publication is held until a publisher is injected, and the
+	// notification still reports that publication is unavailable rather than
+	// failing the request. It is never a global: one bridge per Service.
+	HandoffPublisher HandoffPublisher
+	// RemoteForwarder fetches a detected remote arrival's raw MIME for the
+	// demand-based webhook/Hermes forward. It is installed once at startup by
+	// cmd/server (the remote bridge), so the webhook and relay workers can forward
+	// a remote message without speaking IMAP. It is never a global: one bridge per
+	// Service.
+	RemoteForwarder RemoteForwarder
+	// RemoteDetection drives an on-demand remote-arrival detection pass for an
+	// inbox and reports its pending approvals. cmd/server installs the process
+	// RemoteWorker; when nil (tests, or a deployment that wires no watcher) the
+	// HTTP agent's on-demand poll reports that remote detection is unavailable.
+	// It is never a global: one controller per Service.
+	RemoteDetection RemoteDetection
+	// RemoteMessages resolves a remote (standalone) message for a reply/forward
+	// source when it is not a locally-persisted message. cmd/server installs the
+	// remote bridge; when nil a reply/forward to a remote message is not
+	// resolvable and the send is refused as not found. It is never a global.
+	RemoteMessages RemoteMessageResolver
 	// encryptionKeys holds the primary key first and any legacy derivation
 	// after it, so decrypting pre-upgrade ciphertext still works.
 	encryptionKeys  [][]byte
@@ -1556,9 +1597,9 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	}
 	subject := strings.TrimSpace(in.Subject)
 	if in.ReplyToMessageID != "" {
-		target, err := s.Store.GetMessageByID(ctx, accountID, in.ReplyToMessageID)
-		if err != nil {
-			return SendResult{}, err
+		target, rerr := s.resolveSendSource(ctx, accountID, inbox.ID, in.ReplyToMessageID)
+		if rerr != nil {
+			return SendResult{}, rerr
 		}
 		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
@@ -1586,9 +1627,9 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 		}
 	}
 	if in.ForwardOfMessageID != "" {
-		target, err := s.Store.GetMessageByID(ctx, accountID, in.ForwardOfMessageID)
-		if err != nil {
-			return SendResult{}, err
+		target, carried, rerr := s.resolveSendSourceForward(ctx, accountID, inbox.ID, in.ForwardOfMessageID)
+		if rerr != nil {
+			return SendResult{}, rerr
 		}
 		if target.InboxID != inbox.ID || target.Internal {
 			return SendResult{}, store.ErrForbidden
@@ -1605,10 +1646,6 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 			in.Text = forwardPrefix(target)
 		} else {
 			in.Text = strings.TrimRight(in.Text, "\n") + "\n\n" + forwardPrefix(target)
-		}
-		carried, err := s.forwardAttachments(ctx, accountID, target)
-		if err != nil {
-			return SendResult{}, err
 		}
 		in.Attachments = append(in.Attachments, carried...)
 	}
@@ -1919,7 +1956,75 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	for _, ev := range events {
 		s.Hub.Publish(ev)
 	}
+	// A standalone inbox copies the sent message into its own remote Sent folder.
+	// The copy is a separate durable job: it never re-runs this SMTP submission, and
+	// a copy failure is confined to the copy job (MarkSent has already committed).
+	s.enqueueSentCopyIfStandalone(ctx, m)
 	return nil
+}
+
+// enqueueSentCopyIfStandalone queues a durable copy of a just-sent message into a
+// standalone inbox's remote Sent folder. It is a no-op for a domain inbox, whose
+// Sent view is local. The copy job is idempotent per RFC Message-ID, so a retried
+// send path never queues a duplicate copy.
+func (s *Service) enqueueSentCopyIfStandalone(ctx context.Context, m model.Message) {
+	inbox, err := s.Store.GetInboxInternal(ctx, m.AccountID, m.InboxID)
+	if err != nil || inbox.Kind != model.InboxKindStandalone {
+		return
+	}
+	// An operator can disable the remote Sent copy (for example Gmail already
+	// files sent mail), so no duplicate is created.
+	if !inbox.RemoteSentCopyEnabled {
+		return
+	}
+	if strings.TrimSpace(m.RawPath) == "" {
+		return
+	}
+	// Freeze an independent copy of the raw MIME for the copy job. The queue is
+	// durable and independently retried, while the outbound message's own raw
+	// file is unlinked when the message is purged; referencing that path would
+	// make a pending/ambiguous copy unverifiable if the user trashes and purges
+	// the sent message first. The copy owns its bytes for its whole lifetime.
+	frozenRel, ferr := s.freezeSentCopyRaw(ctx, m.AccountID, m.RawPath)
+	if ferr != nil {
+		s.Log.Warn("freeze remote sent-copy raw", "message_id", m.ID, "inbox_id", m.InboxID, "error", ferr)
+		return
+	}
+	if _, _, err := s.Store.EnqueueUniqueRemoteSentCopy(ctx, m.AccountID, m.InboxID, store.RemoteSentCopyInput{
+		MessageID:    m.ID,
+		FolderPath:   inbox.RemoteSentCopyFolder,
+		RFCMessageID: m.RFCMessageID,
+		MessageIDHdr: m.RFCMessageID,
+		RawPath:      frozenRel,
+		SizeBytes:    m.SizeBytes,
+	}); err != nil {
+		s.Log.Warn("enqueue remote sent-copy", "message_id", m.ID, "inbox_id", m.InboxID, "error", err)
+	}
+}
+
+// freezeSentCopyRaw copies a message's raw MIME into a dedicated sent-copy tree
+// so the copy job's bytes are independent of the outbound message's own raw file
+// (which is unlinked when the message is purged). It returns the data-dir-relative
+// path of the frozen copy.
+func (s *Service) freezeSentCopyRaw(ctx context.Context, accountID, rawRel string) (string, error) {
+	src, err := s.dataPath(rawRel)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	id := idgen.New("raw")
+	path := filepath.Join(s.Config.DataDir, "sentshare", id[4:6], id[6:8], id+".eml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
+	rel, _ := filepath.Rel(s.Config.DataDir, path)
+	return filepath.ToSlash(rel), nil
 }
 
 // failMessagePanic records a delivery panic as a failed attempt so a poison
@@ -2339,6 +2444,58 @@ func forwardPrefix(m model.Message) string {
 	b.WriteString(m.Text)
 	return b.String()
 }
+
+// resolveSendSource resolves a reply source: the locally-persisted message when
+// it exists, else — when a remote resolver is installed — the remote message with
+// the same id. A remote message has no local row, so without the resolver a reply
+// to it would be reported not found.
+func (s *Service) resolveSendSource(ctx context.Context, accountID, inboxID, messageID string) (model.Message, error) {
+	target, err := s.Store.GetMessageByID(ctx, accountID, messageID)
+	if err == nil {
+		return target, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return model.Message{}, err
+	}
+	if s.RemoteMessages != nil {
+		m, ok, rerr := s.RemoteMessages.ResolveRemoteReply(ctx, accountID, messageID)
+		if rerr != nil {
+			return model.Message{}, rerr
+		}
+		if ok {
+			return m, nil
+		}
+	}
+	return model.Message{}, store.ErrNotFound
+}
+
+// resolveSendSourceForward resolves a forward source and any attachments to
+// carry. A local message's attachments are extracted from its stored raw MIME; a
+// remote message's are extracted from a transient live fetch.
+func (s *Service) resolveSendSourceForward(ctx context.Context, accountID, inboxID, messageID string) (model.Message, []SendAttachment, error) {
+	target, err := s.Store.GetMessageByID(ctx, accountID, messageID)
+	if err == nil {
+		carried, aerr := s.forwardAttachments(ctx, accountID, target)
+		if aerr != nil {
+			return model.Message{}, nil, aerr
+		}
+		return target, carried, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return model.Message{}, nil, err
+	}
+	if s.RemoteMessages != nil {
+		m, carried, ok, rerr := s.RemoteMessages.ResolveRemoteForward(ctx, accountID, messageID)
+		if rerr != nil {
+			return model.Message{}, nil, rerr
+		}
+		if ok {
+			return m, carried, nil
+		}
+	}
+	return model.Message{}, nil, store.ErrNotFound
+}
+
 func (s *Service) forwardAttachments(ctx context.Context, accountID string, m model.Message) ([]SendAttachment, error) {
 	meta, err := s.Store.ListAttachmentsInternal(ctx, accountID, m.ID)
 	if err != nil {

@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
+	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/emersion/go-smtp v0.25.0
 	github.com/go-webauthn/webauthn v0.18.2
@@ -14,6 +15,7 @@ require (
 
 require (
 	github.com/aymerick/douceur v0.2.0 // indirect
+	github.com/emersion/go-message v0.18.2 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

@@ -20,6 +20,10 @@ type Store struct {
 	write *sql.DB
 	read  *sql.DB
 	path  string
+	// standaloneSender resolves a standalone inbox's own sending configuration
+	// (its remote SMTP binding). It is set once at startup; when nil, a standalone
+	// send resolves to ErrNoProvider and is queued and held.
+	standaloneSender StandaloneSenderResolver
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -182,6 +186,12 @@ func nullableTime(v sql.NullString) *time.Time {
 	}
 	t := parseTime(v.String)
 	return &t
+}
+func nullTimePtr(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return timeText(*t)
 }
 func boolInt(v bool) int {
 	if v {

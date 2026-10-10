@@ -111,13 +111,33 @@ Create, disable, rename, and manage inbox identities quickly.
 
 Support optional catch-all routing while preserving the original envelope recipient.
 
-Give an inbox aliases: alternate addresses that deliver to it and can be chosen
-as the From address when sending. An alias may be on any domain the account
-owns, so an inbox can send and receive at several addresses across domains; a
-send-as-alias uses the alias domain's own sending configuration. An alias may
-carry its own sender display name, falling back to the inbox name. An inbox has
-an optional default sender that preselects the From address; when unset, sends
-use the inbox's primary address.
+An inbox has a `kind`: a **domain** inbox (the classic managed-domain mailbox,
+optional aliases and catch-all) or a **standalone** inbox that owns an address
+independent of any managed domain and is reached through an optional per-inbox
+remote IMAP/SMTP connector. Both kinds are first-class mailboxes: they share the
+folder, label, thread, event and API-key model and differ only in transport. A
+standalone inbox's message and thread **metadata** is cached locally while
+bodies and attachments stay on the provider and are never archived. The remote
+connector is configured per inbox; transport security defaults to TLS, STARTTLS
+and **plain** are explicit operator choices, and a connector never downgrades at
+runtime. A standalone inbox may carry an optional outbound SMTP binding and a
+switch controlling whether sent mail is copied into its remote Sent folder.
+
+Every inbox — both kinds — has a single hierarchical **folder** tree with
+well-known **roles** (Inbox, Sent, Drafts, Archive, Outbox, Spam, Trash) plus
+custom folders. A message belongs to exactly one folder; labels remain free-text
+message metadata independent of folders. Folder roles may be mapped to
+arbitrarily-named provider folders and are persisted so a later sync never
+resets them.
+
+Give a **domain** inbox aliases: alternate addresses that deliver to it and can
+be chosen as the From address when sending. An alias may be on any domain the
+account owns, so an inbox can send and receive at several addresses across
+domains; a send-as-alias uses the alias domain's own sending configuration. An
+alias may carry its own sender display name, falling back to the inbox name. An
+inbox has an optional default sender that preselects the From address; when
+unset, sends use the inbox's primary address. A standalone inbox has no managed
+aliases and sends only as its own connected address.
 
 ### Messages and raw MIME
 
@@ -391,6 +411,31 @@ Provider configurations are encrypted at rest. Outbound adapters are registered 
 
 Each domain owns at most one optional sending configuration; there is no account-level connector pool, reusable named credential, or assignment step. A domain with no sending configuration queues mail until one is configured, and a queued send resolves the domain's current configuration when the worker delivers it.
 
+A standalone inbox sends through its own optional remote SMTP binding instead of
+a domain. Without a binding, a send is queued and held rather than attributed to
+a domain that does not exist. A separate durable job then copies the sent
+message into the inbox's remote Sent folder (toggle-able, independently retried,
+and never a second send).
+
+### Assistant authoring modes
+
+How an assistant's request to send a draft is handled is a per-inbox setting,
+snapshotted onto each request at creation:
+
+- **MailMoose approvals** (a domain inbox's default): the in-product approval
+  workflow — an Owner approves/rejects in the UI or via a tokenized approval
+  email; an approved request is then sent through the domain's outbound
+  configuration.
+- **Remote draft handoff** (a standalone inbox's default): a one-way handoff
+  that places the frozen draft in the inbox's connected remote Drafts folder for
+  the human to review and send from their own client. MailMoose never sends it.
+  A handoff notification (no token) tells the human the draft is waiting.
+
+Publication, notification and the Sent-copy are tracked as separate states, so a
+notification failure never blocks publication and a copy failure never re-sends.
+A remote append whose result cannot be verified is reported as ambiguous, never
+retried blindly.
+
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 
 ### Transport extension
@@ -398,6 +443,12 @@ Domain setup documentation covers the provider DNS records required for receivin
 The mailbox core consumes a normalized inbound-message interface plus an explicit authenticated binding, giving additional transports the same inbox and message semantics.
 
 Potential future adapters include direct SMTP/Maddy, SES inbound, and other webhook providers.
+
+A **standalone** inbox reaches its own existing mailbox over a per-inbox remote
+IMAP/SMTP connector: it reads message and thread metadata (bodies are fetched
+live and never archived) and can send through its optional SMTP binding. The IMAP
+protocol code is confined to `internal/transport/imap`; the mailbox core sees
+only the shared local/remote boundary.
 
 ## 7. API direction
 

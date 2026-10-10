@@ -78,12 +78,14 @@ func TestAPIMessagesLabelFilter(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("filter %d %s", rr.Code, rr.Body.String())
 	}
-	var msgs []model.Message
-	if err = json.Unmarshal(rr.Body.Bytes(), &msgs); err != nil {
+	var env struct {
+		Items []model.Message `json:"items"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 1 || msgs[0].ID != both.ID {
-		t.Fatalf("AND filter %#v", msgs)
+	if len(env.Items) != 1 || env.Items[0].ID != both.ID {
+		t.Fatalf("AND filter %#v", env.Items)
 	}
 }
 

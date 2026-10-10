@@ -251,6 +251,105 @@ func (s *Store) SaveRemoteCredentials(ctx context.Context, accountID, inboxID, e
 	return nil
 }
 
+// StandaloneRemoteUpdate is a partial update of a standalone inbox's remote
+// binding. Non-secret fields are whole values (empty means "leave unchanged" for
+// the optional SMTP block and namespace); the secret fields are optional and a
+// blank value retains the stored ciphertext, so an operator can change only the
+// host without re-entering the password.
+type StandaloneRemoteUpdate struct {
+	Host         string
+	Port         int
+	Username     string
+	Security     string
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPSecurity string
+	// ClearSMTP removes the outbound binding entirely when true.
+	ClearSMTP    bool
+	Namespace    string
+	IMAPPassword string
+	SMTPPassword string
+}
+
+// UpdateStandaloneRemote updates the non-secret remote description of a standalone
+// inbox: the IMAP host/port/username/security, the optional SMTP binding, and the
+// selected root namespace. Empty optional fields are retained rather than cleared,
+// so a partial update never blanks a field the operator did not supply. It does not
+// touch the encrypted credentials (see SaveRemoteCredentials) and never changes the
+// inbox kind.
+func (s *Store) UpdateStandaloneRemote(ctx context.Context, accountID, inboxID string, in StandaloneRemoteUpdate) (model.Inbox, error) {
+	inbox, err := s.GetInboxInternal(ctx, accountID, inboxID)
+	if err != nil {
+		return model.Inbox{}, err
+	}
+	if inbox.Kind != model.InboxKindStandalone {
+		return model.Inbox{}, ErrStandaloneRequired
+	}
+	rc := model.RemoteConnection{}
+	if inbox.Remote != nil {
+		rc = *inbox.Remote
+	}
+	if strings.TrimSpace(in.Host) != "" {
+		rc.Host = strings.TrimSpace(in.Host)
+	}
+	if in.Port != 0 {
+		rc.Port = in.Port
+	}
+	if strings.TrimSpace(in.Username) != "" {
+		rc.Username = strings.TrimSpace(in.Username)
+	}
+	if strings.TrimSpace(in.Security) != "" {
+		rc.Security = in.Security
+	}
+	if in.ClearSMTP {
+		rc.SMTP = nil
+	} else if in.SMTPHost != "" || in.SMTPUsername != "" || in.SMTPPort != 0 || in.SMTPSecurity != "" {
+		smtp := model.RemoteSMTP{}
+		if rc.SMTP != nil {
+			smtp = *rc.SMTP
+		}
+		if strings.TrimSpace(in.SMTPHost) != "" {
+			smtp.Host = strings.TrimSpace(in.SMTPHost)
+		}
+		if in.SMTPPort != 0 {
+			smtp.Port = in.SMTPPort
+		}
+		if strings.TrimSpace(in.SMTPUsername) != "" {
+			smtp.Username = strings.TrimSpace(in.SMTPUsername)
+		}
+		if strings.TrimSpace(in.SMTPSecurity) != "" {
+			smtp.Security = in.SMTPSecurity
+		}
+		rc.SMTP = &smtp
+	}
+	namespace := strings.TrimSpace(in.Namespace)
+	if namespace == "" {
+		namespace = inbox.Namespace
+	}
+	if namespace == "" {
+		namespace = model.NamespaceDefault
+	}
+	validated, err := validateRemoteConnection(&rc)
+	if err != nil {
+		return model.Inbox{}, err
+	}
+	if validated == nil {
+		return model.Inbox{}, fmt.Errorf("remote host is required")
+	}
+	var rhost, ruser, rsec, shost, suser, ssec string
+	var rport, sport int
+	rhost, rport, ruser, rsec = validated.Host, validated.Port, validated.Username, validated.Security
+	if validated.SMTP != nil {
+		shost, sport, suser, ssec = validated.SMTP.Host, validated.SMTP.Port, validated.SMTP.Username, validated.SMTP.Security
+	}
+	if _, err = s.write.ExecContext(ctx, `UPDATE inboxes SET namespace=?,remote_host=?,remote_port=?,remote_username=?,remote_security=?,smtp_host=?,smtp_port=?,smtp_username=?,smtp_security=? WHERE id=? AND account_id=?`,
+		namespace, rhost, rport, ruser, rsec, shost, sport, suser, ssec, inboxID, accountID); err != nil {
+		return model.Inbox{}, err
+	}
+	return s.GetInboxInternal(ctx, accountID, inboxID)
+}
+
 // RemoteCredentials is the encrypted credential material of a standalone inbox.
 // It is only ever returned on the internal store surface, never serialized.
 type RemoteCredentials struct {
@@ -293,16 +392,18 @@ func (s *Store) ListStandaloneInboxes(ctx context.Context, accountID string) ([]
 }
 
 // folderColumns is the projection of every inbox folder read.
-const folderColumns = `id,account_id,inbox_id,path,name,parent_path,role,selectable,message_count,unread_count,created_at,updated_at`
+const folderColumns = `id,account_id,inbox_id,path,name,parent_path,role,selectable,is_system,role_locked,origin,message_count,unread_count,created_at,updated_at`
 
 func scanFolder(row interface{ Scan(...any) error }) (model.Folder, error) {
 	var f model.Folder
-	var selectable int
+	var selectable, isSystem, roleLocked int
 	var created, updated string
-	if err := row.Scan(&f.ID, &f.AccountID, &f.InboxID, &f.Path, &f.Name, &f.ParentPath, &f.Role, &selectable, &f.MessageCount, &f.UnreadCount, &created, &updated); err != nil {
+	if err := row.Scan(&f.ID, &f.AccountID, &f.InboxID, &f.Path, &f.Name, &f.ParentPath, &f.Role, &selectable, &isSystem, &roleLocked, &f.Origin, &f.MessageCount, &f.UnreadCount, &created, &updated); err != nil {
 		return f, err
 	}
 	f.Selectable = selectable != 0
+	f.IsSystem = isSystem != 0
+	f.RoleLocked = roleLocked != 0
 	f.CreatedAt, f.UpdatedAt = parseTime(created), parseTime(updated)
 	return f, nil
 }
@@ -383,30 +484,41 @@ func (s *Store) UpsertFolders(ctx context.Context, accountID, inboxID string, fo
 		switch {
 		case err == sql.ErrNoRows:
 			id := idgen.New("fld")
-			if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_folders(id,account_id,inbox_id,path,name,parent_path,role,selectable,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-				id, accountID, inboxID, path, name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), now, now); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_folders(id,account_id,inbox_id,path,name,parent_path,role,selectable,is_system,origin,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+				id, accountID, inboxID, path, name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), 0, "remote", now, now); err != nil {
 				return nil, err
 			}
 		case err != nil:
 			return nil, err
 		default:
-			if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET name=?,parent_path=?,role=?,selectable=?,updated_at=? WHERE id=?`, name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), now, existingID); err != nil {
+			// A remote reconcile updates only folders it owns (origin='remote').
+			// A locally-owned folder (seeded system or custom, origin='local')
+			// that happens to share the path keeps its own name, role and
+			// protection: provider folder names never silently overwrite a
+			// user's folder semantics.
+			// A role the operator locked explicitly (role_locked=1) is never
+			// overwritten by a name-inferred role: an arbitrary remote folder stays
+			// mapped to its chosen role across reconciles.
+			if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET name=?,parent_path=?,role=CASE WHEN role_locked=1 THEN role ELSE ? END,selectable=?,origin='remote',updated_at=? WHERE id=? AND origin='remote'`,
+				name, strings.TrimSpace(f.ParentPath), role, boolInt(f.Selectable), now, existingID); err != nil {
 				return nil, err
 			}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,path FROM inbox_folders WHERE inbox_id=?`, inboxID)
+	rows, err := tx.QueryContext(ctx, `SELECT id,path,origin FROM inbox_folders WHERE inbox_id=?`, inboxID)
 	if err != nil {
 		return nil, err
 	}
 	var toDelete []string
 	for rows.Next() {
-		var id, path string
-		if err = rows.Scan(&id, &path); err != nil {
+		var id, path, origin string
+		if err = rows.Scan(&id, &path, &origin); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		if !keep[path] {
+		// Only prune remote-owned folders: locally-owned folders (system or
+		// custom) are not part of the remote folder set and must survive a sync.
+		if !keep[path] && origin == "remote" {
 			toDelete = append(toDelete, id)
 		}
 	}
@@ -473,10 +585,26 @@ type RemoteMessage struct {
 	HasAttach    bool
 	Read         bool
 	Flagged      bool
-	ReceivedAt   *string
-	SentAt       *string
-	CreatedAt    string
-	UpdatedAt    string
+	Answered     bool
+	Draft        bool
+	// Flags is the raw IMAP flag set as last observed, kept so a caller can
+	// round-trip provider flags without re-fetching the header.
+	Flags      []string
+	ReceivedAt *string
+	SentAt     *string
+	// InternalDate is the server-assigned INTERNALDATE (the message's arrival
+	// time on the server), distinct from the RFC5322 Date header.
+	InternalDate *string
+	// IndexedAt is when this metadata row was last confirmed against the live
+	// server, so a scoped read can decide whether to reconcile.
+	IndexedAt string
+	CreatedAt string
+	UpdatedAt string
+
+	// Labels are this remote message's local, free-text labels. They are loaded
+	// only by the explicit label-aware reads (GetRemoteMessageWithLabels and the
+	// search path); the plain metadata reads leave the slice nil.
+	Labels []string
 }
 
 // RemoteMessageInput is one remote message header to upsert during a sync.
@@ -498,8 +626,12 @@ type RemoteMessageInput struct {
 	HasAttach    bool
 	Read         bool
 	Flagged      bool
+	Answered     bool
+	Draft        bool
+	Flags        []string
 	ReceivedAt   *string
 	SentAt       *string
+	InternalDate *string
 }
 
 // UpsertRemoteMessage records or updates one remote message's header metadata.
@@ -519,22 +651,34 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		return RemoteMessage{}, fmt.Errorf("remote message requires a folder path and uid")
 	}
 	now := nowText()
-	threadKey := strings.TrimSpace(in.ThreadKey)
-	if threadKey == "" {
-		threadKey = in.RFCMessageID
+	// A reply joins the thread already recorded for its parent's Message-ID so a
+	// conversation groups as one thread. The thread_key column is plain text (no
+	// FK), so grouping needs no separate threads row. The key computation and the
+	// post-write merge run in one transaction so the thread graph stays consistent.
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return RemoteMessage{}, err
 	}
+	defer tx.Rollback()
+	threadKey := remoteThreadKeyTx(ctx, tx, inboxID, in)
 	id := idgen.New("rm")
-	_, err := s.write.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,received_at,sent_at,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
 			rfc_message_id=excluded.rfc_message_id,in_reply_to=excluded.in_reply_to,references_json=excluded.references_json,thread_key=excluded.thread_key,
 			from_name=excluded.from_name,from_address=excluded.from_address,to_json=excluded.to_json,cc_json=excluded.cc_json,subject=excluded.subject,
 			snippet=excluded.snippet,size_bytes=excluded.size_bytes,has_attachments=excluded.has_attachments,is_read=excluded.is_read,is_flagged=excluded.is_flagged,
-			received_at=excluded.received_at,sent_at=excluded.sent_at,updated_at=excluded.updated_at`,
+			is_answered=excluded.is_answered,is_draft=excluded.is_draft,flags_json=excluded.flags_json,
+			received_at=excluded.received_at,sent_at=excluded.sent_at,internal_date=excluded.internal_date,indexed_at=excluded.indexed_at,updated_at=excluded.updated_at`,
 		id, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID, in.RFCMessageID, in.InReplyTo, jsonString(in.References), threadKey,
 		in.FromName, in.FromAddress, jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, in.SizeBytes, boolInt(in.HasAttach), boolInt(in.Read), boolInt(in.Flagged),
-		nullStringPtr(in.ReceivedAt), nullStringPtr(in.SentAt), now, now)
-	if err != nil {
+		boolInt(in.Answered), boolInt(in.Draft), jsonString(in.Flags), nullStringPtr(in.ReceivedAt), nullStringPtr(in.SentAt), nullStringPtr(in.InternalDate), now, now, now); err != nil {
+		return RemoteMessage{}, err
+	}
+	if err = mergeRemoteThreadTx(ctx, tx, inboxID, in); err != nil {
+		return RemoteMessage{}, err
+	}
+	if err = tx.Commit(); err != nil {
 		return RemoteMessage{}, err
 	}
 	return s.GetRemoteMessageByUID(ctx, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID)
@@ -549,14 +693,14 @@ func (s *Store) GetRemoteMessage(ctx context.Context, accountID, inboxID, id str
 	return s.scanRemoteMessage(s.read.QueryRowContext(ctx, `SELECT `+remoteMessageColumns+` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, id))
 }
 
-const remoteMessageColumns = `id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,received_at,sent_at,created_at,updated_at`
+const remoteMessageColumns = `id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at`
 
 func (s *Store) scanRemoteMessage(row interface{ Scan(...any) error }) (RemoteMessage, error) {
 	var m RemoteMessage
-	var refs, to, cc string
-	var hasAttach, read, flagged int
-	var received, sent sql.NullString
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.FolderPath, &m.UIDValidity, &m.UID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.ThreadKey, &m.FromName, &m.FromAddress, &to, &cc, &m.Subject, &m.Snippet, &m.SizeBytes, &hasAttach, &read, &flagged, &received, &sent, &m.CreatedAt, &m.UpdatedAt)
+	var refs, to, cc, flags string
+	var hasAttach, read, flagged, answered, draft int
+	var received, sent, internal sql.NullString
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.FolderPath, &m.UIDValidity, &m.UID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.ThreadKey, &m.FromName, &m.FromAddress, &to, &cc, &m.Subject, &m.Snippet, &m.SizeBytes, &hasAttach, &read, &flagged, &answered, &draft, &flags, &received, &sent, &internal, &m.IndexedAt, &m.CreatedAt, &m.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return m, ErrNotFound
 	}
@@ -566,14 +710,20 @@ func (s *Store) scanRemoteMessage(row interface{ Scan(...any) error }) (RemoteMe
 	m.References = decodeStrings(refs)
 	m.To = decodeStrings(to)
 	m.CC = decodeStrings(cc)
+	m.Flags = decodeStrings(flags)
 	m.HasAttach = hasAttach != 0
 	m.Read = read != 0
 	m.Flagged = flagged != 0
+	m.Answered = answered != 0
+	m.Draft = draft != 0
 	if received.Valid {
 		m.ReceivedAt = &received.String
 	}
 	if sent.Valid {
 		m.SentAt = &sent.String
+	}
+	if internal.Valid {
+		m.InternalDate = &internal.String
 	}
 	return m, nil
 }

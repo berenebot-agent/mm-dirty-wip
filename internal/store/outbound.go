@@ -174,14 +174,19 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, nil, err
 	}
 	defer tx.Rollback()
-	var inboxID, threadID, domainID string
+	var inboxID, threadID string
+	var domainNull sql.NullString
 	var internal int
-	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainID, &internal); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainNull, &internal); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
 	}
+	// A standalone inbox has no managed domain, so sending_domain_id and
+	// domain_id are both NULL; the delivery-log row is then keyed on an empty
+	// domain rather than failing the whole send.
+	domainID := domainNull.String
 	now := nowText()
 	// rfc_message_id is the stable Message-ID MailMoose minted at enqueue time;
 	// it is never rewritten, so a message id means the same thing whether the
@@ -244,13 +249,14 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	}
 	defer tx.Rollback()
 	var attempts int
-	var domainID string
-	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainID); err != nil {
+	var domainNull sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
 	}
+	domainID := domainNull.String
 	attempts++
 	status := "pending"
 	next := ""
