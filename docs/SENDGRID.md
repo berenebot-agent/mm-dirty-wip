@@ -1,5 +1,22 @@
 # SendGrid inbound
 
+> **Not currently offered — awaiting end-to-end verification.**
+>
+> The inbound connector below is implemented and its unit tests pass, but it
+> could **not be verified against the real provider**: Twilio declined to
+> activate a SendGrid account for testing (compliance refusal, ticket
+> `#29899115`), and signup is gated behind a Cloudflare Turnstile challenge plus
+> phone verification. SendGrid is therefore **hidden from the receiving
+> provider menu** pending a successful end-to-end test — without a working
+> account there is no way to prove the signed webhook, the `public_key` setup,
+> or delivery in practice.
+>
+> To re-enable: uncomment the `internal/transport/sendgrid` blank import in
+> `internal/app/service.go`, restore `"sendgrid"` to the `want` list in
+> `tests/unit/httpapp/provider_order_ui_test.go`, and remove the `sendgrid`
+> entry from `tests/unit/httpapp/domain_config_ui_test.go`. The steps below
+> remain accurate and are the path to verifying it.
+
 This guide connects Twilio SendGrid Inbound Parse to MailMoose for receiving:
 
 - **Inbound (receive):** SendGrid accepts mail for a receiving domain and POSTs
