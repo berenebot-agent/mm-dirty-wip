@@ -15,9 +15,8 @@ import (
 // list stays current without a page reload and without disturbing scroll or an
 // in-progress form.
 //
-// The fragment is bounded to the first page (`before` is never forwarded): a
-// live swap only ever touches the top of a list the user is at the top of, so
-// re-fetching a deep page would risk replacing content under the reader. The
+// The fragment is bounded to one page; `before` preserves the user's current
+// pagination position when older-history backfill completes. The
 // folder and optional label come from the query the page itself used, so the
 // fragment can only ever describe the same view; an unrecognised folder is
 // rejected rather than guessed.
@@ -56,13 +55,46 @@ func (s *Server) uiInboxLive(w http.ResponseWriter, r *http.Request) {
 		data.SendRequests = requests
 		s.renderFragment(w, r, "live-requests-card", data)
 	case "list":
+		before := strings.TrimSpace(r.URL.Query().Get("before"))
 		switch folder {
-		case "inbox", "sent", "spam", "trash", "label":
+		case "inbox", "sent", "spam", "trash", "label", "folder":
 		default:
 			http.Error(w, "not found", 404)
 			return
 		}
-		msgs, hasMore, cursor, pagerURL, err := s.buildMessageList(r, p, id, folder, label, "")
+		var msgs []model.Message
+		var hasMore bool
+		var cursor, pagerURL string
+		var err error
+		if folder == "folder" {
+			folders, ferr := s.Service.Store.ListFolders(r.Context(), p.AccountID, id)
+			if ferr != nil {
+				s.uiError(w, ferr, 400)
+				return
+			}
+			found := false
+			for i := range folders {
+				if folders[i].ID == r.URL.Query().Get("folder_id") {
+					found = true
+					msgs, err = s.folderMessages(r, p, box, &folders[i], before)
+					hasMore = len(msgs) > inboxPageSize
+					if hasMore {
+						msgs = msgs[:inboxPageSize]
+					}
+					if len(msgs) > 0 {
+						cursor = msgs[len(msgs)-1].ID
+						pagerURL = "/ui/inboxes/" + id + "/folder?folder=" + url.QueryEscape(folders[i].ID) + "&before=" + url.QueryEscape(cursor)
+					}
+					break
+				}
+			}
+			if !found {
+				http.Error(w, "folder not found", 404)
+				return
+			}
+		} else {
+			msgs, hasMore, cursor, pagerURL, err = s.buildMessageList(r, p, id, folder, label, before)
+		}
 		if err != nil {
 			s.uiError(w, err, 400)
 			return
@@ -181,8 +213,7 @@ func (s *Server) buildRemoteMessageList(r *http.Request, p model.Principal, box 
 			path = f.Path
 		}
 	}
-	s.demandDetection(r.Context(), []mailboxBackend{{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}})
-	res, rerr := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, path, inboxPageSize+1, before)
+	res, rerr := s.remoteMailbox().ListRemoteMessagesCached(r.Context(), p, box.ID, path, inboxPageSize+1, before)
 	if rerr != nil {
 		return nil, false, "", "", rerr
 	}

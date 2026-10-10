@@ -88,6 +88,33 @@ func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
 	}
 }
 
+func TestRemoteDetectionSurvivesPollingRequestCancellation(t *testing.T) {
+	svc, box, rm, fake, w := workerEnv(t)
+	inbox, err := svc.Store.GetInboxInternal(context.Background(), box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rm.SetRemoteDialer(func(pass context.Context, _ imap.Config) (app.RemoteSession, error) {
+		cancel() // The polling client disconnects while IMAP work is underway.
+		if err := pass.Err(); err != nil {
+			t.Fatalf("worker inherited request cancellation: %v", err)
+		}
+		return fake, nil
+	})
+	w.DetectInbox(ctx, inbox)
+	cursor, ok, err := svc.Store.GetRemoteCursor(context.Background(), box.AccountID, box.ID, "INBOX")
+	if err != nil || !ok || !cursor.BaselineDone {
+		t.Fatalf("baseline lost after disconnect: %+v %v", cursor, err)
+	}
+	fake.addMessage("INBOX", "body", "<after@test>", "After disconnect")
+	w.DetectInbox(ctx, inbox)
+	cursor, _, err = svc.Store.GetRemoteCursor(context.Background(), box.AccountID, box.ID, "INBOX")
+	if err != nil || cursor.LastUID != 1 {
+		t.Fatalf("arrival cursor lost after disconnect: %+v %v", cursor, err)
+	}
+}
+
 // TestRemoteWorkerLargeFolderBaselineAndDetect proves detection is correct on a
 // folder larger than one search page: the baseline must use the true maximum UID,
 // and a new arrival must still be detected. Under the default ascending search

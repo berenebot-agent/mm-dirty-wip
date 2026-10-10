@@ -90,6 +90,8 @@ type RemoteWorker struct {
 	pollInterval time.Duration
 	// watchBackoff bounds reconnect attempts after a watch/connection failure.
 	watchBackoff time.Duration
+	detectionMu  sync.Mutex
+	detecting    map[string]bool
 }
 
 // Defaults for the remote watcher.
@@ -121,6 +123,7 @@ func NewRemoteWorker(svc *Service, rm *RemoteMailboxService, log *slog.Logger) *
 		maxInboxConnections: defaultRemoteMaxConnections,
 		pollInterval:        defaultRemotePollInterval,
 		watchBackoff:        defaultRemoteWatchBackoff,
+		detecting:           make(map[string]bool),
 	}
 }
 
@@ -188,6 +191,9 @@ func (w *RemoteWorker) run() {
 		want := map[string]model.Inbox{}
 		for _, ib := range inboxes {
 			want[ib.ID] = ib
+			if status, err := w.svc.Store.GetRemoteIndexStatus(context.Background(), ib.AccountID, ib.ID); err == nil && (status.Status != store.RemoteIndexComplete || time.Since(status.IndexedAt) > time.Minute) {
+				w.remote.ScheduleRefresh(ib.AccountID, ib.ID)
+			}
 		}
 		// Stop watchers for inboxes that are gone or disabled.
 		for id, wt := range active {
@@ -396,7 +402,21 @@ func (w *RemoteWorker) DetectInbox(ctx context.Context, inbox model.Inbox) {
 	if inbox.Kind != model.InboxKindStandalone || inbox.AccountID == "" || inbox.ID == "" {
 		return
 	}
-	w.detectInbox(ctx, inbox)
+	// Durable detection belongs to the worker: a polling client disconnect must
+	// not cancel persistence after a successful IMAP fetch. Bound the pass and
+	// still honour process shutdown.
+	pass, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-w.stop:
+			cancel()
+		case <-done:
+		}
+	}()
+	defer close(done)
+	w.detectInbox(pass, inbox)
 }
 
 // PendingRemoteApprovals reports whether an inbox has an outstanding pending email
@@ -493,6 +513,19 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	if w.stopping() {
 		return
 	}
+	key := inbox.AccountID + ":" + inbox.ID
+	w.detectionMu.Lock()
+	if w.detecting[key] {
+		w.detectionMu.Unlock()
+		return
+	}
+	w.detecting[key] = true
+	w.detectionMu.Unlock()
+	defer func() {
+		w.detectionMu.Lock()
+		delete(w.detecting, key)
+		w.detectionMu.Unlock()
+	}()
 	folder := w.inboxFolder(inbox)
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {

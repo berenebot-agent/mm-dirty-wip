@@ -230,6 +230,7 @@ func main() {
 	// the rest of the process drains. It cancels each watcher's context and waits
 	// for the goroutines to finish, so no connection or goroutine is leaked.
 	remoteWorker.Stop()
+	remoteMailbox.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	for _, l := range listeners {

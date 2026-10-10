@@ -128,6 +128,7 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 	box, gerr := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id)
 	if gerr == nil && box.Kind == model.InboxKindStandalone {
 		out["remote"] = true
+		out["remote_syncing"] = s.remoteMailbox().Refreshing(p.AccountID, id)
 		if status, serr := s.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, id); serr == nil {
 			out["remote_status"] = status.Status
 			if !status.IndexedAt.IsZero() {

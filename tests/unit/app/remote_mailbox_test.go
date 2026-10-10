@@ -57,7 +57,69 @@ func remoteTestEnv(t *testing.T) (*app.Service, model.User, model.Inbox, *app.Re
 		t.Fatal(err)
 	}
 	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
 	return svc, u, box, rm
+}
+
+func TestCachedNavigationDoesNotWaitForIMAPAndCoalesces(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	started := make(chan struct{}, 1)
+	rm.SetRemoteDialer(func(ctx context.Context, _ imap.Config) (app.RemoteSession, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	for i := 0; i < 10; i++ {
+		res, err := rm.ListRemoteMessagesCached(context.Background(), p, box.ID, "INBOX", 50, "")
+		if err != nil || res.Completeness != model.CompletenessPartial {
+			t.Fatalf("cached initial navigation: %+v %v", res, err)
+		}
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background refresh did not start")
+	}
+	rm.Stop()
+	select {
+	case <-started:
+		t.Fatal("duplicate refresh dial")
+	default:
+	}
+	_ = svc
+}
+
+func TestCachedPartialFirstPageDoesNotDialAndCountsIndexedRows(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<cache@test>", "Cached")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	if _, err := rm.ReconcileRemote(context.Background(), u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetRemoteIndexStatus(context.Background(), u.AccountID, box.ID, store.RemoteIndexPartial, ""); err != nil {
+		t.Fatal(err)
+	}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		t.Error("cached first page dialled IMAP")
+		return nil, errors.New("unexpected dial")
+	})
+	res, err := rm.ListRemoteMessagesCached(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, "INBOX", 50, "")
+	if err != nil || len(res.Items) != 1 || res.Items[0].Subject != "Cached" {
+		t.Fatalf("cached navigation: %+v %v", res, err)
+	}
+	folders, err := svc.Store.ListFolders(context.Background(), u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range folders {
+		if f.Path == "INBOX" && (f.MessageCount != 1 || f.UnreadCount != 1) {
+			t.Fatalf("cached counts: %+v", f)
+		}
+	}
 }
 
 // configureSecrets stores an IMAP and optional SMTP password for a standalone

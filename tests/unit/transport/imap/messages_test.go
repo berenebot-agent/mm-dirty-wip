@@ -2,6 +2,7 @@ package imap_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -20,6 +21,54 @@ const sampleMessage = "MIME-Version: 1.0\r\n" +
 	"Content-Type: text/plain; charset=utf-8\r\n" +
 	"\r\n" +
 	"This is the body of the message.\r\n"
+
+func TestReadSelectionReusedAcrossSearchAndHeaders(t *testing.T) {
+	fs := newFakeServer(t, serverConfig{})
+	fs.AddMailbox("INBOX")
+	a := dialFake(t, fs, "user@example.com", "secret")
+	seedMessage(t, a, "INBOX", sampleMessage, nil)
+	if _, err := a.Search(testContext(t), "INBOX", imapadapter.SearchQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.ListHeaders(testContext(t), "INBOX", nil, 50); err != nil {
+		t.Fatal(err)
+	}
+	fs.mu.Lock()
+	count := fs.overrides.selectCount
+	fs.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("SELECT commands = %d, want 1", count)
+	}
+}
+
+func TestCancelledSearchInterruptsBlockedSelection(t *testing.T) {
+	fs := newFakeServer(t, serverConfig{})
+	fs.AddMailbox("INBOX")
+	a := dialFake(t, fs, "user@example.com", "secret")
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	fs.mu.Lock()
+	fs.overrides.selectStarted, fs.overrides.selectRelease = started, release
+	fs.mu.Unlock()
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := a.Search(ctx, "INBOX", imapadapter.SearchQuery{}); done <- err }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SELECT did not start")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled command succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled IMAP command remained blocked")
+	}
+}
 
 const multipartMessage = "MIME-Version: 1.0\r\n" +
 	"Message-ID: <attach-456@example.com>\r\n" +
