@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- The web UI updates live without a manual refresh (D094). Open dashboard and
+  inbox pages subscribe to a session-authenticated event stream and refresh the
+  unread/pending-send counts, the inbox folder and label badges, and the Dial MX
+  traffic lights as mail arrives, is read or moved, or as a receiver's readiness
+  changes. Marking a message read/unread now emits a durable `message.state_changed`
+  event, and a receiver status change is pushed as a transient `mx.health_changed`
+  notification, so one tab (or an agent) keeps every other tab current. The tab
+  closes the stream after 60 seconds hidden and reopens it on focus.
 - Inbox settings gain a **Clients & Access** tab (account Admin only) listing the
   API keys and mailbox users with access to that inbox, plus its pending
   invitations. An Admin can create a new inbox-scoped API key, grant an existing

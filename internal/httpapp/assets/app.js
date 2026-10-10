@@ -4264,3 +4264,327 @@ function hideInboxSubview(dlg) {
   }
 
 })();
+
+(function () {
+  // Live updates: keep dashboard counts, inbox badge counts and the inbound
+  // traffic lights current without a manual refresh.
+  //
+  // Resource budget: one EventSource per visible tab, one coalesced snapshot
+  // fetch per burst of events (trailing debounce, single-flight, one queued
+  // re-run), and no work at all while the tab is hidden beyond a cheap idle
+  // connection. On hidden the stream is closed after a short grace period and
+  // reopened on focus, so a forgotten background tab costs no server
+  // connection.
+  var page = document.body ? document.body.getAttribute('data-page') : null;
+  if (page !== 'dashboard' && page !== 'inbox') {
+    return;
+  }
+  var HIDDEN_CLOSE_MS = 60000;
+  var DEBOUNCE_MS = 300;
+  var MAX_RETRY_MS = 30000;
+
+  var snapshotURL = '/ui/state?page=' + encodeURIComponent(page);
+  if (page === 'inbox') {
+    var inboxID = document.body.getAttribute('data-inbox');
+    if (!inboxID) {
+      return;
+    }
+    snapshotURL += '&inbox=' + encodeURIComponent(inboxID);
+  }
+  // The dashboard traffic light needs a server-side published-MX lookup, so it
+  // is requested only when it may have changed: on load, on reconnect, and on a
+  // receiver-health notification — never on an ordinary mail event.
+  var wantLights = page === 'dashboard';
+
+  var source = null;
+  var debounceTimer = null;
+  var hiddenTimer = null;
+  var retryTimer = null;
+  var retryDelay = 1000;
+  var inFlight = null;
+  var pendingRefresh = false;
+  var closedForHidden = false;
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) {
+      node.className = className;
+    }
+    if (text !== undefined) {
+      node.textContent = text;
+    }
+    return node;
+  }
+
+  // setSidebarCount updates a folder's count badge, creating or removing the
+  // element so a badge appears and disappears exactly with its number.
+  function setSidebarCount(folder, value, unread) {
+    var nav = document.querySelector('[data-sidebar]');
+    if (!nav) {
+      return;
+    }
+    var link = nav.querySelector('a.folder[data-folder="' + folder + '"]');
+    if (!link) {
+      return;
+    }
+    var badge = link.querySelector('[data-count]');
+    if (!value) {
+      if (badge) {
+        badge.remove();
+      }
+      return;
+    }
+    if (!badge) {
+      badge = el('span', 'count', String(value));
+      badge.setAttribute('data-count', folder);
+      link.appendChild(document.createTextNode(' '));
+      link.appendChild(badge);
+    } else {
+      badge.textContent = String(value);
+    }
+    badge.classList.toggle('unread', !!unread);
+  }
+
+  // setCountCell swaps a dashboard inbox-table cell between a value pill and the
+  // em dash placeholder, preserving the pending cell's link.
+  function setCountCell(row, cell, value, asPill) {
+    var td = row.querySelector('td[data-cell="' + cell + '"]');
+    if (!td) {
+      return;
+    }
+    if (!value) {
+      td.textContent = '';
+      td.appendChild(el('span', 'muted', '\u2014'));
+      return;
+    }
+    if (asPill) {
+      var a = el('a', 'pill pending-pill', String(value));
+      a.href = '/ui/inboxes/' + row.getAttribute('data-inbox-id') + '/drafts';
+      a.title = 'Drafts awaiting approval to send';
+      td.textContent = '';
+      td.appendChild(a);
+      return;
+    }
+    td.textContent = '';
+    td.appendChild(el('span', 'pill unread-pill', String(value)));
+  }
+
+  function setTrafficLight(row, light, title) {
+    if (!row) {
+      return;
+    }
+    var dot = row.querySelector('[data-receiving-light]');
+    if (!light) {
+      if (dot) {
+        dot.remove();
+      }
+      return;
+    }
+    if (!dot) {
+      var btn = row.querySelector('[data-receiving-button]');
+      if (!btn) {
+        return;
+      }
+      dot = el('span', 'dns-light');
+      dot.setAttribute('data-receiving-light', '');
+      btn.insertBefore(dot, btn.firstChild);
+    }
+    dot.className = 'dns-light ' + light;
+    dot.setAttribute('title', title || '');
+    dot.setAttribute('aria-label', title || '');
+  }
+
+  // labelMatch tolerates the case-insensitive label keys the store returns.
+  function labelMatch(labels, name) {
+    var lower = name.toLowerCase();
+    for (var key in labels) {
+      if (key.toLowerCase() === lower) {
+        return labels[key];
+      }
+    }
+    return 0;
+  }
+
+  function apply(data) {
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+    if (data.page === 'dashboard') {
+      document.querySelectorAll('tbody[data-inbox-rows] tr[data-inbox-id]').forEach(function (row) {
+        var id = row.getAttribute('data-inbox-id');
+        var counts = (data.inboxes && data.inboxes[id]) || {};
+        setCountCell(row, 'unread', counts.unread || 0, false);
+        setCountCell(row, 'pending', counts.pending || 0, true);
+      });
+      if (data.domains) {
+        document.querySelectorAll('tbody[data-domain-rows] tr[data-domain-id]').forEach(function (row) {
+          var info = data.domains[row.getAttribute('data-domain-id')];
+          setTrafficLight(row, info ? info.light : '', info ? info.title : '');
+        });
+      }
+      return;
+    }
+    if (data.page === 'inbox') {
+      setSidebarCount('inbox', data.unread || 0, true);
+      setSidebarCount('drafts', data.drafts || 0, false);
+      setSidebarCount('outbox', data.outbox || 0, false);
+      setSidebarCount('spam', data.spam || 0, false);
+      setSidebarCount('trash', data.trash || 0, false);
+      var labels = data.labels || {};
+      document.querySelectorAll('[data-sidebar] a.folder[data-folder="label"]').forEach(function (link) {
+        var name = link.getAttribute('data-label');
+        var value = name ? (labels[name] || labelMatch(labels, name)) : 0;
+        var badge = link.querySelector('[data-count]');
+        if (!value) {
+          if (badge) {
+            badge.remove();
+          }
+        } else if (badge) {
+          badge.textContent = String(value);
+        } else {
+          badge = el('span', 'count unread', String(value));
+          badge.setAttribute('data-count', 'label');
+          link.appendChild(document.createTextNode(' '));
+          link.appendChild(badge);
+        }
+      });
+    }
+  }
+
+  function refresh() {
+    if (document.hidden) {
+      pendingRefresh = true;
+      return;
+    }
+    if (inFlight) {
+      pendingRefresh = true;
+      return;
+    }
+    var url = snapshotURL;
+    if (wantLights) {
+      url += '&lights=1';
+      wantLights = false;
+    }
+    inFlight = window.fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+    inFlight.then(function (resp) {
+      if (!resp.ok) {
+        throw new Error('snapshot ' + resp.status);
+      }
+      return resp.json();
+    }).then(function (data) {
+      apply(data);
+    }).catch(function () {
+      // A failed snapshot is not fatal: the next event or focus retries.
+    }).then(function () {
+      inFlight = null;
+      if (pendingRefresh) {
+        pendingRefresh = false;
+        refresh();
+      }
+    });
+  }
+
+  function schedule() {
+    if (debounceTimer) {
+      return;
+    }
+    debounceTimer = window.setTimeout(function () {
+      debounceTimer = null;
+      refresh();
+    }, DEBOUNCE_MS);
+  }
+
+  function connect() {
+    if (source || document.hidden) {
+      return;
+    }
+    closedForHidden = false;
+    try {
+      source = new EventSource('/ui/events/stream');
+    } catch (err) {
+      source = null;
+      return;
+    }
+    source.onopen = function () {
+      retryDelay = 1000;
+      // A reconnect may have missed a light change, so re-ask for lights.
+      wantLights = true;
+      refresh();
+    };
+    source.onmessage = schedule;
+    // Named message events (id/event/data) do not fire onmessage; listen for the
+    // durable types the UI cares about, plus the transient receiver-health ping.
+    ['message.received', 'message.sent', 'message.trashed', 'message.restored',
+      'message.purged', 'message.spam_state_changed', 'message.labels_changed',
+      'message.state_changed', 'draft.send_requested', 'draft.send_request_cancelled',
+      'draft.approved', 'draft.rejected', 'draft.sent', 'draft.send_failed'].forEach(function (name) {
+      source.addEventListener(name, schedule);
+    });
+    // A receiver-health change is the one signal that warrants the MX lookup.
+    source.addEventListener('mx.health_changed', function () {
+      wantLights = true;
+      schedule();
+    });
+    source.onerror = function () {
+      if (source) {
+        source.close();
+        source = null;
+      }
+      if (closedForHidden || document.hidden) {
+        return;
+      }
+      // Reconnect manually so we control backoff and catch up with a snapshot.
+      var delay = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
+      retryTimer = window.setTimeout(connect, delay);
+    };
+  }
+
+  function disconnect() {
+    if (retryTimer) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+    if (source) {
+      source.close();
+      source = null;
+    }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      // Keep the connection briefly for a quick tab switch, then drop it so a
+      // background tab holds no server resources.
+      if (hiddenTimer) {
+        window.clearTimeout(hiddenTimer);
+      }
+      hiddenTimer = window.setTimeout(function () {
+        hiddenTimer = null;
+        closedForHidden = true;
+        disconnect();
+      }, HIDDEN_CLOSE_MS);
+      return;
+    }
+    if (hiddenTimer) {
+      window.clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
+    connect();
+    refresh();
+  });
+
+  window.addEventListener('pagehide', function () {
+    disconnect();
+    if (debounceTimer) {
+      window.clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    if (hiddenTimer) {
+      window.clearTimeout(hiddenTimer);
+      hiddenTimer = null;
+    }
+  });
+
+  connect();
+  refresh();
+})();

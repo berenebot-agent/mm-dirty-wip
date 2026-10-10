@@ -70,7 +70,7 @@ func TestUnreadCounts(t *testing.T) {
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("list %v %#v", err, msgs)
 	}
-	if err = s.UpdateMessageState(ctx, p, msgs[0].ID, &read); err != nil {
+	if _, err = s.UpdateMessageState(ctx, p, msgs[0].ID, &read); err != nil {
 		t.Fatal(err)
 	}
 	counts, err := s.UnreadCounts(ctx, p)
