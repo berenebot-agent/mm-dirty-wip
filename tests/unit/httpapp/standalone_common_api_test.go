@@ -2248,3 +2248,150 @@ func TestStandaloneLiveStateStaleness(t *testing.T) {
 		t.Fatalf("standalone live state missing remote_status: %s", rr.Body.String())
 	}
 }
+
+// TestStandaloneEditDialogRemoteTabs proves the dashboard edit dialog for a
+// standalone inbox carries the Remote IMAP / Outbound SMTP tabs and embeds the
+// secret-free remote config, while a domain inbox embeds none.
+func TestStandaloneEditDialogRemoteTabs(t *testing.T) {
+	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	rr := uiGet(t, h, cookie, "/")
+	if rr.Code != 200 {
+		t.Fatalf("dashboard %d", rr.Code)
+	}
+	body := rr.Body.String()
+	dialog := dialogHTML(t, body, "inbox-edit-dialog")
+	for _, want := range []string{
+		`data-inbox-tab="remote-imap"`, `data-inbox-tab="remote-smtp"`,
+		`data-inbox-mode="remote"`, `id="inbox-remote-form"`,
+		`name="remote_host"`, `name="imap_password"`, `name="smtp_host"`,
+	} {
+		if !strings.Contains(dialog, want) {
+			t.Fatalf("edit dialog missing %q", want)
+		}
+	}
+	// The standalone row embeds its secret-free remote config. The edit-inbox
+	// button starts with class then data-*, so search around the class name.
+	row := ""
+	if i := strings.Index(body, `edit-inbox" data-id="`+standalone.ID+`"`); i >= 0 {
+		if j := strings.LastIndex(body[:i], `<button`); j >= 0 {
+			row = body[j : i+1200]
+		}
+	}
+	if row == "" {
+		t.Fatal("standalone edit-inbox row not found")
+	}
+	if !strings.Contains(row, `data-kind="standalone"`) {
+		t.Fatalf("standalone row missing data-kind: %s", row)
+	}
+	if !strings.Contains(row, `&#34;host&#34;:&#34;imap.remote.test&#34;`) {
+		t.Fatalf("standalone row missing remote config JSON: %s", row)
+	}
+	if strings.Contains(row, "imap-pw") {
+		t.Fatal("edit button leaked the IMAP password")
+	}
+	// The domain row embeds no remote config; the shell never shows the remote
+	// tabs for a domain inbox.
+	row = ""
+	if i := strings.Index(body, `edit-inbox" data-id="`+domainBox.ID+`"`); i >= 0 {
+		if j := strings.LastIndex(body[:i], `<button`); j >= 0 {
+			row = body[j : i+1200]
+		}
+	}
+	if row == "" {
+		t.Fatal("domain edit-inbox row not found")
+	}
+	if strings.Contains(row, `data-kind="standalone"`) || strings.Contains(row, `data-remote="{`) {
+		t.Fatalf("domain row carries standalone/remote data: %s", row)
+	}
+}
+
+// TestStandaloneEditRemoteSave proves the settings dialog's remote save updates
+// the connector (blank password keeps the stored secret) and lands back on the
+// dashboard with the inbox and tab to reopen.
+func TestStandaloneEditRemoteSave(t *testing.T) {
+	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{
+		"_csrf":           {csrf},
+		"inbox_tab":       {"remote-imap"},
+		"remote_host":     {"imap.changed.test"},
+		"remote_port":     {"993"},
+		"remote_username": {standalone.Remote.Username},
+		"remote_security": {standalone.Remote.Security},
+		"namespace":       {standalone.Namespace},
+		"imap_password":   {""},
+		"smtp_host":       {""},
+	}
+	rr := uiPost(t, h, cookie, "/ui/inboxes/"+standalone.ID+"/remote", form.Encode())
+	if rr.Code != 303 {
+		t.Fatalf("remote save %d: %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "inbox="+standalone.ID) || !strings.Contains(loc, "inbox_tab=remote-imap") || !strings.Contains(loc, "notice=Remote+connector+saved") {
+		t.Fatalf("redirect %q", loc)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	box, err := svc.Store.GetInboxInternal(context.Background(), p.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.Remote == nil || box.Remote.Host != "imap.changed.test" {
+		t.Fatalf("host not updated: %+v", box.Remote)
+	}
+	// The blank password kept the stored secret.
+	creds, err := svc.Store.GetRemoteCredentials(context.Background(), p.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.EncryptedIMAP == "" {
+		t.Fatal("stored IMAP secret was dropped by a blank-password save")
+	}
+}
+
+// TestStandaloneEditRemoteSaveVerifyGate proves a connector that cannot sign in
+// is never persisted: the save redirects with an error and the stored binding is
+// unchanged.
+func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
+	// Build the stack with a dialer that always fails, so the save's live
+	// sign-in test cannot pass.
+	svc := newIsolatedService(t)
+	u := createAdmin(t, svc)
+	standalone := createStandalone(t, svc, u)
+	rm := app.NewRemoteMailboxService(svc)
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return nil, model.NewMailboxError(model.ErrKindUnavailable, "unreachable", true, nil)
+	})
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+	if _, err := rm.ConfigureStandaloneRemote(context.Background(), p, standalone.ID, store.StandaloneRemoteUpdate{IMAPPassword: "imap-pw"}); err != nil {
+		t.Fatal(err)
+	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{
+		"_csrf":           {csrf},
+		"inbox_tab":       {"remote-smtp"},
+		"remote_host":     {"imap.changed.test"},
+		"remote_username": {standalone.Remote.Username},
+		"remote_security": {standalone.Remote.Security},
+		"imap_password":   {""},
+		"smtp_host":       {""},
+	}
+	rr := uiPost(t, h, cookie, "/ui/inboxes/"+standalone.ID+"/remote", form.Encode())
+	if rr.Code != 303 {
+		t.Fatalf("remote save %d: %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "error=IMAP+connection+failed") || strings.Contains(loc, "notice=") {
+		t.Fatalf("expected error redirect, got %q", loc)
+	}
+	box, err := svc.Store.GetInboxInternal(context.Background(), p.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.Remote == nil || box.Remote.Host != "imap.remote.test" {
+		t.Fatalf("unverified host was persisted: %+v", box.Remote)
+	}
+}

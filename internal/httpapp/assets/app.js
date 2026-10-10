@@ -1997,6 +1997,12 @@ function clearUrlParams(names) {
   form.addEventListener('submit', function () {
     inboxSubmitting = true;
   });
+  var remoteFormEl = document.getElementById('inbox-remote-form');
+  if (remoteFormEl) {
+    remoteFormEl.addEventListener('submit', function () {
+      inboxSubmitting = true;
+    });
+  }
   if (connectorsForm) {
     connectorsForm.addEventListener('submit', function () {
       inboxSubmitting = true;
@@ -2043,6 +2049,12 @@ function clearUrlParams(names) {
       var inConnectorEditor = dlg.classList.contains('inbox-settings--subview') &&
         dlg.querySelector('.inbox-subview.active[data-inbox-subview=connectors]');
       if (inConnectorEditor) {
+        return;
+      }
+      // The remote connector tabs have their own form: a native submit of
+      // inbox-remote-form, not the main edit form.
+      var remoteForm = document.getElementById('inbox-remote-form');
+      if (remoteForm && inboxSaveButton.getAttribute('form') === 'inbox-remote-form') {
         return;
       }
       event.preventDefault();
@@ -2097,6 +2109,74 @@ function clearUrlParams(names) {
     return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
       return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
     });
+  }
+
+  // populateRemoteTabs fills the Remote IMAP / Outbound SMTP panels from the
+  // inbox row's embedded secret-free remote config. Passwords are never shown:
+  // the fields stay blank and only the placeholder reports whether one is
+  // stored. Domain inboxes carry no payload and their remote tabs stay hidden
+  // (the shell also gates them on the dialog's inbox kind).
+  function populateRemoteTabs(btn) {
+    var remoteForm = document.getElementById('inbox-remote-form');
+    if (!remoteForm) {
+      return;
+    }
+    var inboxID = btn.dataset.id || '';
+    remoteForm.action = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/remote';
+    var cfg = {};
+    try {
+      cfg = JSON.parse(btn.dataset.remote || '{}') || {};
+    } catch (e) {
+      cfg = {};
+    }
+    var host = document.getElementById('inbox-remote-host');
+    var port = document.getElementById('inbox-remote-port');
+    var username = document.getElementById('inbox-remote-username');
+    var security = document.getElementById('inbox-remote-security');
+    var namespace = document.getElementById('inbox-remote-namespace');
+    var imapPw = document.getElementById('inbox-remote-imap-pw');
+    var imapPwNote = document.getElementById('inbox-remote-imap-pw-note');
+    var smtpHost = document.getElementById('inbox-remote-smtp-host');
+    var smtpPort = document.getElementById('inbox-remote-smtp-port');
+    var smtpUsername = document.getElementById('inbox-remote-smtp-username');
+    var smtpSecurity = document.getElementById('inbox-remote-smtp-security');
+    var smtpPw = document.getElementById('inbox-remote-smtp-pw');
+    var smtpPwNote = document.getElementById('inbox-remote-smtp-pw-note');
+    var status = document.getElementById('inbox-remote-configured');
+    var settingsLink = document.getElementById('inbox-remote-settings-link');
+    var tabField = document.getElementById('inbox-remote-tab');
+    if (host) host.value = cfg.host || '';
+    if (port) port.value = cfg.port || '';
+    if (username) username.value = cfg.username || '';
+    if (security) security.value = cfg.security || 'tls';
+    if (namespace) namespace.value = cfg.namespace || '';
+    if (imapPw) {
+      imapPw.value = '';
+      imapPw.placeholder = cfg.imap_password_set ? 'unchanged' : 'app password';
+    }
+    if (imapPwNote) {
+      imapPwNote.hidden = !cfg.imap_password_set;
+    }
+    if (smtpHost) smtpHost.value = cfg.smtp_host || '';
+    if (smtpPort) smtpPort.value = cfg.smtp_port || '';
+    if (smtpUsername) smtpUsername.value = cfg.smtp_username || '';
+    if (smtpSecurity) smtpSecurity.value = cfg.smtp_security || 'tls';
+    if (smtpPw) {
+      smtpPw.value = '';
+      smtpPw.placeholder = cfg.smtp_password_set ? 'unchanged' : 'app password';
+    }
+    if (smtpPwNote) {
+      smtpPwNote.hidden = !cfg.smtp_password_set;
+    }
+    if (status) {
+      status.textContent = cfg.configured ? 'Connected — ' + (cfg.host || '') : 'No connector configured.';
+    }
+    if (settingsLink) {
+      settingsLink.setAttribute('href', '/ui/inboxes/' + encodeURIComponent(inboxID) + '/remote');
+    }
+    if (tabField) {
+      tabField.value = '';
+    }
   }
 
   function connectorLabel(c) {
@@ -2726,6 +2806,8 @@ function clearUrlParams(names) {
       }
       display.value = btn.dataset.name || '';
       address.value = btn.dataset.address || '';
+      dlg._inboxKind = btn.dataset.kind || 'domain';
+      populateRemoteTabs(btn);
       editor.setApprover(btn.dataset.approverEmail || '');
       editor.setRestricted(btn.dataset.restricted === '1');
       editor.setRequireAuth(btn.dataset.requireAuth === '1');
@@ -3022,14 +3104,18 @@ function bindInboxSettingsShell(dlg) {
   var addSubmit = dlg.querySelector('#inbox-add-submit');
 
   // The Add dialog carries a type chooser and two flows (domain, standalone)
-  // sharing one shell. Each tab/panel is tagged with its flow; the Edit dialog
-  // is untagged and behaves exactly as before.
+  // sharing one shell. The Edit dialog gains a remote flow (IMAP/SMTP tabs)
+  // that only standalone inboxes show. Each tab/panel is tagged with its flow;
+  // untagged tabs behave exactly as before.
   function modeFor(name) {
     if (name === 'choose') {
       return 'choose';
     }
     if (name.indexOf('sa-') === 0) {
       return 'standalone';
+    }
+    if (name.indexOf('remote-') === 0) {
+      return 'remote';
     }
     return 'domain';
   }
@@ -3042,7 +3128,10 @@ function bindInboxSettingsShell(dlg) {
     });
     var mode = modeFor(name);
     tabs.forEach(function (t) {
-      var visible = mode !== 'choose' && (t.getAttribute('data-inbox-mode') || 'domain') === mode;
+      var tm = t.getAttribute('data-inbox-mode') || 'domain';
+      // Remote tabs exist only on standalone inboxes; a domain inbox must
+      // never see (or be trapped in) that flow.
+      var visible = mode !== 'choose' && tm === mode && !(tm === 'remote' && dlg._inboxKind !== 'standalone');
       t.hidden = !visible;
       var on = visible && t.getAttribute('data-inbox-tab') === name;
       t.classList.toggle('active', on);
@@ -3071,10 +3160,17 @@ function bindInboxSettingsShell(dlg) {
       // Save is always shown; the click handler (bound once) submits the single
       // main inbox-edit form, mirroring the delivery auto-actions and any staged
       // Clients & Access role changes onto it. The connectors tab keeps the
-      // main-form target so a Save there commits auto-actions too.
+      // main-form target so a Save there commits auto-actions too; the remote
+      // tabs target the remote connector form instead.
       inboxSave.hidden = false;
       inboxSave.textContent = 'Save';
-      inboxSave.setAttribute('form', 'inbox-edit-form');
+      inboxSave.setAttribute('form', mode === 'remote' ? 'inbox-remote-form' : 'inbox-edit-form');
+      // A remote save reports the tab it came from so the redirect reopens the
+      // settings dialog there.
+      var remoteTabField = dlg.querySelector('#inbox-remote-tab');
+      if (remoteTabField) {
+        remoteTabField.value = mode === 'remote' ? name : '';
+      }
     }
   }
 
