@@ -85,6 +85,15 @@ func rootTLS(t *testing.T, srv *httptest.Server) *tls.Config {
 	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 }
 
+// routedMX is the default test MX resolver: the domain's MX names this
+// receiver's own hostname, so the gate-2 routing check passes and the proof
+// reaches the binding. Tests that exercise not_mx override this.
+func routedMX(hostname string) func(context.Context, string) ([]*net.MX, error) {
+	return func(context.Context, string) ([]*net.MX, error) {
+		return []*net.MX{{Host: hostname + "."}}, nil
+	}
+}
+
 // newReceiver builds a receiver with the test SMTP edge bounds.
 func newReceiver(t *testing.T, cfg receiver.Config) *receiver.Receiver {
 	t.Helper()
@@ -93,6 +102,9 @@ func newReceiver(t *testing.T, cfg receiver.Config) *receiver.Receiver {
 	}
 	if cfg.SMTP.Hostname == "" {
 		cfg.SMTP.Hostname = "mx.test"
+	}
+	if cfg.LookupMX == nil {
+		cfg.LookupMX = routedMX(cfg.SMTP.Hostname)
 	}
 	if cfg.SMTP.MaxMessageBytes == 0 {
 		cfg.SMTP.MaxMessageBytes = 1 << 20
@@ -328,6 +340,47 @@ func TestFreshReauthThenTXTRemovalRenewsAndRevokes(t *testing.T) {
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
+}
+
+// TestRenewalRepointToNotMXRevokesAsRejected proves the routing gate fails a
+// live binding closed: once the domain's MX no longer names this receiver, the
+// renewal rejects not_mx and the core settles on rejected/not_mx (not the
+// generic unavailable a revocation notice would produce).
+func TestRenewalRepointToNotMXRevokesAsRejected(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	mxHost := "mx.test"
+	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
+	mx := func(context.Context, string) ([]*net.MX, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return []*net.MX{{Host: mxHost + "."}}, nil
+	}
+	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns, LookupMX: mx, RevalidateInterval: 50 * time.Millisecond})
+	be := &backend{domains: []mxdial.Domain{{Name: "example.test", KeyID: "key1", PrivateKey: priv, ReceiverURLs: []string{srv.URL}}}}
+	m := mxdial.New(be, mxdial.Config{DataDir: t.TempDir(), TLSConfig: client, ReconcileInterval: 20 * time.Millisecond, AllowPrivateDestinations: true, AuthRetryInterval: 100 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Run(ctx)
+	ready(t, m, "example.test")
+
+	// MX is repointed away from this receiver.
+	mu.Lock()
+	mxHost = "elsewhere.test"
+	mu.Unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s := m.Status("example.test")
+		if len(s) > 0 && s[0].State == "rejected" {
+			if s[0].Reason != "not_mx" {
+				t.Fatalf("rejected reason = %q, want not_mx", s[0].Reason)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("repointed MX did not fail the binding as rejected/not_mx: %#v", m.Status("example.test"))
 }
 
 // TestReplacementPinnedDataStillDelivers runs the real Delivery path: the old

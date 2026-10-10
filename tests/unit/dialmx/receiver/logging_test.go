@@ -170,6 +170,9 @@ func newLoggedServerLogger(t *testing.T, sink *jsonSink, cfg receiver.Config) (*
 	cfg.SMTP = testSMTP()
 	log := newCaptureLogger(sink)
 	cfg.Mode = "shared"
+	if cfg.LookupMX == nil {
+		cfg.LookupMX = routedMX(cfg.SMTP.Hostname)
+	}
 	r := receiver.New(cfg, log)
 	srv := httptest.NewUnstartedServer(r.Handler())
 	srv.EnableHTTP2 = true
@@ -673,7 +676,7 @@ func TestTransportTrackerLifecycle(t *testing.T) {
 	log := receiver.NewLogger(slog.LevelDebug, sink)
 	tracker := receiver.NewTransportTracker(log)
 
-	r := receiver.New(receiver.Config{Mode: "shared", SMTP: testSMTP()}, log)
+	r := receiver.New(receiver.Config{Mode: "shared", SMTP: testSMTP(), LookupMX: routedMX("mx.test")}, log)
 	certFile, keyFile, pool := selfSignedCA(t)
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {

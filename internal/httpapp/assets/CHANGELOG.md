@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Dial MX / Antler MX receiving now shows one status light per receiver. Each
+  receiver proves both your domain's `_mailmoose-mx` TXT authority and that it is
+  named in your MX records, so a receiver that is authorized but not routed
+  reports **not in MX** instead of a separate DNS check (D095). A missing record
+  is fixed inline in the receiving dialog — the exact record with a copy button,
+  with the live check flipping it green as DNS propagates — instead of a separate
+  repair step. The dashboard's aggregate light is green as soon as any receiver is
+  fully ready.
 - The web UI updates live without a manual refresh (D094). Open dashboard and
   inbox pages subscribe to a session-authenticated event stream and refresh the
   unread/pending-send counts, the inbox folder and label badges, and the Dial MX

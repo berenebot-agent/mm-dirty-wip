@@ -255,6 +255,14 @@ SMTP Relay - no port forwards required)** for a zero-config hosted relay, or
 Dial MX with a **custom** service for operator-run receivers. See
 [DIALMX.md](DIALMX.md).
 
+A shared receiver authorizes a domain in two ordered gates: it verifies the
+domain's `_mailmoose-mx` TXT key (authority), then confirms its own SMTP hostname
+is among the domain's published MX records (routing). Both are re-checked at every
+renewal, so a repointed MX fails the binding closed. A receiver that is
+authorized but not routed reports `rejected`/`not_mx`; a transient MX resolver
+failure is deferrable and never revokes a live binding. The dashboard's aggregate
+light for a domain is green when any receiver is fully ready (both gates passed).
+
 An Antler MX setup stores a per-domain **contact email** and a generated
 **setup id** and sends them as optional registration metadata on `DomainAuth`.
 They are operational metadata for the service operator's usage accounting, never

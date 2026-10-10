@@ -18,25 +18,21 @@ func TestDialMXHealthAggregatesReceiverStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		statuses  []mxdialStatusView
-		mxChecked bool
-		mxMatched []string
 		wantLight string
 	}{
-		{"no receivers", nil, false, nil, "danger"},
-		{"all connecting", []mxdialStatusView{{State: "connecting"}, {State: "connecting"}}, false, nil, "danger"},
-		{"one ready", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "connecting"}}, false, nil, "ok"},
-		{"ready but expired", []mxdialStatusView{{State: "ready", ExpiresAt: &past}}, false, nil, "danger"},
-		{"ready without expiry", []mxdialStatusView{{State: "ready"}}, false, nil, "ok"},
-		{"connecting and failed", []mxdialStatusView{{State: "connecting"}, {State: "unreachable"}}, false, nil, "danger"},
-		{"all failed", []mxdialStatusView{{State: "unreachable"}, {State: "rejected"}}, false, nil, "danger"},
-		{"reconnecting and rejected", []mxdialStatusView{{State: "disconnected"}, {State: "rejected"}}, false, nil, "danger"},
-		{"ready and mx matched", []mxdialStatusView{{State: "ready", SMTPHostname: "mx1.test", ExpiresAt: &future}}, true, []string{"mx1.test"}, "ok"},
-		{"ready but mx unmatched", []mxdialStatusView{{State: "ready", SMTPHostname: "mx1.test", ExpiresAt: &future}}, true, []string{"mx2.test"}, "danger"},
-		{"ready but mx not published", []mxdialStatusView{{State: "ready", SMTPHostname: "mx1.test", ExpiresAt: &future}}, true, nil, "danger"},
-		{"one routed one connecting", []mxdialStatusView{{State: "ready", SMTPHostname: "mx1.test", ExpiresAt: &future}, {State: "connecting"}}, true, []string{"mx1.test"}, "ok"},
+		{"no receivers", nil, "danger"},
+		{"all connecting", []mxdialStatusView{{State: "connecting"}, {State: "connecting"}}, "danger"},
+		{"one ready", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "connecting"}}, "ok"},
+		{"ready but expired", []mxdialStatusView{{State: "ready", ExpiresAt: &past}}, "danger"},
+		{"ready without expiry", []mxdialStatusView{{State: "ready"}}, "ok"},
+		{"connecting and failed", []mxdialStatusView{{State: "connecting"}, {State: "unreachable"}}, "danger"},
+		{"all failed", []mxdialStatusView{{State: "unreachable"}, {State: "rejected"}}, "danger"},
+		{"reconnecting and rejected", []mxdialStatusView{{State: "disconnected"}, {State: "rejected"}}, "danger"},
+		{"not_mx is not ready", []mxdialStatusView{{State: "rejected", Reason: "not_mx", SMTPHostname: "mx1.test"}}, "danger"},
+		{"one ready and one not_mx", []mxdialStatusView{{State: "ready", ExpiresAt: &future}, {State: "rejected", Reason: "not_mx"}}, "ok"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			light, title := dialMXHealth(tc.statuses, tc.mxChecked, tc.mxMatched, now)
+			light, title := dialMXHealth(tc.statuses, now)
 			if light != tc.wantLight {
 				t.Fatalf("light = %q, want %q", light, tc.wantLight)
 			}

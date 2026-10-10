@@ -118,6 +118,10 @@ func dialMXReceiver(t *testing.T, records *dialMXRecords) (*receiver.Receiver, *
 		Mode:      "shared",
 		SMTP:      mxagent.Config{Hostname: "mx.test", MaxMessageBytes: 1 << 20, MaxStagingBytes: 2 << 20, MaxRecipients: 10, MaxConnections: 16, DataTimeout: 5 * time.Second, DNSTimeout: 2 * time.Second},
 		LookupTXT: lookup,
+		// Gate-2 routing: the domain's MX names this receiver's own hostname.
+		LookupMX: func(context.Context, string) ([]*net.MX, error) {
+			return []*net.MX{{Host: "mx.test."}}, nil
+		},
 	}, nil)
 	srv := httptest.NewUnstartedServer(r.Handler())
 	srv.EnableHTTP2 = true

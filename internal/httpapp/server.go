@@ -97,20 +97,6 @@ type Server struct {
 	// dns performs the live published-record checks behind the Dial MX setup
 	// traffic lights. It is never on a save path and never fails a request.
 	dns *dnsChecker
-	// lightCache short-TTL caches the inbound traffic light computed for the
-	// live dashboard snapshot, so a burst of snapshot calls (a reconnect, or
-	// several tabs) does not each run a fresh published-MX lookup per domain.
-	// The setup dialog's explicit checks do not use it and stay live.
-	lightMu    sync.Mutex
-	lightCache map[string]lightCacheEntry
-}
-
-// lightCacheEntry is a cached inbound traffic light for one domain, keyed on the
-// inputs the light depends on so a key rotation or receiving change misses.
-type lightCacheEntry struct {
-	light   string
-	title   string
-	expires time.Time
 }
 
 type ctxKey int

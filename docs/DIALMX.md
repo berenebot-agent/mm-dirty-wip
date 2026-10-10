@@ -301,40 +301,60 @@ and old receivers stay up.
 
 ### Setup traffic lights
 
+The receiver is the single authority on whether a domain will arrive at it. Its
+domain-authorization proof is two ordered gates: **gate 1** proves the core's
+`_mailmoose-mx` TXT key (authority); **gate 2** confirms the receiver's own SMTP
+hostname is among the domain's published MX hosts (routing). Gate 2 runs on every
+proof — the initial authorization and every renewal — so a repointed MX fails the
+binding closed at the next renewal. A failed gate 1 is `rejected` with the
+historical key reasons; a failed gate 2 is `rejected` with reason `not_mx`. A
+transient MX resolver failure is *not* `not_mx`: it is deferrable and never
+revokes a healthy binding, so a DNS blip cannot drop a receiver that is still
+correctly routed.
+
 The domain receiving API returns the live setup picture for a Dial MX domain:
 
-- `status[]` — per-receiver authentication state learned over the core's
-  outbound session (ready, rejected, connecting, …) with a bounded reason and
-  expiry.
+- `status[]` — per-receiver state learned over the core's outbound session
+  (ready, rejected, connecting, …) with a bounded reason and expiry. A receiver
+  is `ready` only once it has passed both gates, so a ready row already means
+  mail will be delivered and no separate core MX check is needed.
 - `dns[]` — best-effort published-record checks: the domain's MX hostnames
   against the expected receivers, and the `_mailmoose-mx` TXT record against the
   domain's exact key. `state` is `ok`, `pending` (not published yet) or
   `mismatch`. The MX check is `ok` as soon as any one expected receiver hostname
-  is published and lists those in `matched` (the per-connector status reads it);
-  an operator who points MX at a single receiver is not failed by the others in
-  the advertised set. It is `mismatch` only when MX records exist but none
-  belongs to a receiver. The TXT check stays exact.
+  is published and lists those in `matched`; an operator who points MX at a
+  single receiver is not failed by the others in the advertised set. It is
+  `mismatch` only when MX records exist but none belongs to a receiver. The TXT
+  check stays exact. These checks are the *local verification feed* for the
+  receiving dialog's remediation block — they answer "has the record propagated
+  yet?" so the operator can watch a fix land — not an independent routing
+  verdict, which is the receiver's.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup.
 
 The checks resolve DNS live on every request, bounded by a four-second timeout,
 and never block a save for longer than that. Nothing is cached in the core, so a
 record change is reflected on the next poll or an explicit "Check now". A green
-light means the record matches, or the receiver holds an active authenticated
-domain binding. Published MX records and receiver authentication are separate
-checks: a domain can authenticate while its MX still points elsewhere, and a
-green receiver session is not a public SMTP-port delivery test.
+light means the record matches; a green receiver light means it holds an active
+binding that passed both gates.
 
-The dashboard's Domains table also shows one aggregate connector light per Dial
-MX domain. It is binary: green when at least one receiver is both authorized and
-its hostname is published in the domain's MX records (so inbound mail will be
-accepted), red otherwise. A receiver that is connected but not routed by MX, and
-a receiver that has disconnected, been rejected, or become unreachable, all show
-red — green means mail will arrive now, not merely that a session exists. It
-answers "will mail arrive?" at a glance; the receiving dialog carries the
-per-connector detail. A receiver the core cannot reach reports no advertised
-hostname, so the status view keeps the configured `smtp_hostname` for it — the
-connector row names the receiver and shows the real failure instead of an
-indeterminate wait.
+The dashboard's Domains table shows one aggregate connector light per Dial MX
+domain. It is binary: green when at least one receiver is `ready`, red otherwise.
+Because ready now implies both authority and routing, the light needs no separate
+MX check; a receiver that is connected but not routed by MX reports `rejected`
+(`not_mx`) and is not green. Green means mail will arrive now, not merely that a
+session exists. It answers "will mail arrive?" at a glance; the receiving dialog
+carries the per-receiver detail.
+
+The receiving dialog renders one light per receiver (Connector | Status) and,
+when something is unhealthy, an inline remediation block: the failing record to
+publish with a copy button, on the same screen, with the live check flipping it
+green once DNS propagates — no jump to a separate repair step. Each receiver that
+is not routed shows red `not in MX`; in a redundant Antler set where MX names only
+some receivers, the unnamed ones show red while the aggregate stays green,
+because a ready sibling will accept mail. A receiver the core cannot reach
+reports no advertised hostname, so the status view keeps the configured
+`smtp_hostname` for it — the row names the receiver and shows the real failure
+instead of an indeterminate wait.
 
 ## 4. DNS authorisation flow
 
@@ -350,8 +370,16 @@ each.
    receiver id, connection id, domain, key id and a fresh 32-byte nonce.
 4. The core signs the challenge transcript with the domain's Ed25519 key and
    returns `ChallengeResponse`. The receiver re-resolves DNS fresh and verifies
-   the signature. On success it installs a binding for `AuthLifetime` (5
-   minutes) and answers `AuthResult`.
+   the signature.
+
+   The receiver then applies the two gates in order. **Gate 1** is the TXT
+   signature just verified. **Gate 2** resolves the domain's MX records and
+   requires this receiver's own `SMTP.Hostname` to be among them. Passing both,
+   it installs a binding for `AuthLifetime` (5 minutes) and answers `AuthResult`
+   accepted. A failed gate 1 answers `rejected` with the key reason
+   (`key_unavailable`, `proof_invalid`, …). A failed gate 2 answers `rejected`
+   with reason `not_mx`; a resolver error at gate 2 is deferrable
+   (`dns_unavailable`) and is not `not_mx`.
 
 Fresh DNS is required at every proof: a proof is only as good as the TXT record
 observed at verification time, so revocation is effective as soon as the
@@ -360,8 +388,11 @@ can delay that observation beyond the 5-minute local binding lifetime; the
 binding itself is never extended past `AuthLifetime` from the last proof.
 
 Bindings are renewed automatically before expiry (nominal `MX_REVALIDATE_SECONDS`,
-default 240 s), so a healthy session keeps its domains registered. A failed
-renewal invalidates the domain fail-closed.
+default 240 s), so a healthy session keeps its domains registered. Gate 2 runs at
+every renewal too: a genuine `not_mx` at renewal revokes the binding fail-closed
+(the core settles on `rejected`/`not_mx`), while a transient resolver error leaves
+the binding intact for the next tick. Any other failed renewal invalidates the
+domain fail-closed.
 
 ## 5. Message flow
 

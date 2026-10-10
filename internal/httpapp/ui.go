@@ -177,6 +177,18 @@ func dialMXReady(st mxdialStatusView) bool { return st.State == mxdial.StatusAct
 // server-rendered panel marks it red rather than as a pending authorization.
 func dialMXUnreachable(st mxdialStatusView) bool { return st.State == mxdial.StatusUnreachable }
 
+// dialMXStatusClass returns a "danger" pill class for a receiver that is a
+// settled failure — rejected (including not_mx), unavailable, or unreachable —
+// and "" for the amber in-progress states, matching the JS dialog.
+func dialMXStatusClass(st mxdialStatusView) string {
+	switch st.State {
+	case mxdial.StatusRejected, mxdial.StatusUnavailable, mxdial.StatusUnreachable:
+		return "danger"
+	default:
+		return ""
+	}
+}
+
 // dialMXStatusLabel renders one receiver row's state for the server-rendered
 // setup panel. It mirrors the wizard's labels so the dialog and the panel never
 // describe the same receiver differently.
@@ -187,6 +199,9 @@ func dialMXStatusLabel(st mxdialStatusView) string {
 	case mxdial.StatusConnecting:
 		return "authorizing"
 	case mxdial.StatusRejected:
+		if st.Reason == "not_mx" {
+			return "not in MX"
+		}
 		return "rejected"
 	case mxdial.StatusUnreachable:
 		return "receiver unreachable"
@@ -290,6 +305,7 @@ func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
 		"deliveryStatus":    deliveryStatus,
 		"dialmxReady":       dialMXReady,
 		"dialmxUnreachable": dialMXUnreachable,
+		"dialmxStatusClass": dialMXStatusClass,
 		"dialmxStatusLabel": dialMXStatusLabel,
 		"dialmxExpiry":      statusExpiry,
 		"dnsLight":          dnsLight,
@@ -1557,7 +1573,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 <div class="inbox-subview" data-inbox-subview="connectors"><div class="inbox-subview-head"><button type="button" class="secondary btn-sm inbox-subview-back">← Back</button><h3>Connector</h3></div><div id="inbox-connector-editor" class="connector-editor"></div></div>` + externalAliasSendingSubview + `</div></div><footer class="inbox-settings-footer"><button type="button" class="secondary danger open-delete-inbox" id="inbox-edit-delete" data-id="" data-address="">Delete Inbox</button><span class="spacer"></span><button type="button" class="secondary" id="inbox-edit-cancel">Cancel</button><button type="submit" form="inbox-edit-form" id="inbox-edit-save">Save</button></footer></dialog>
 {{range .Domains}}{{$d := .}}{{$sel := index $.DomainSendingSelected .ID}}<dialog id="domain-sending-dialog-{{.ID}}" class="domain-dialog"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "sending")}} data-open="1"{{end}}><h2>Sending · {{.Name}}</h2><form id="domain-sending-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/sending" class="cfg-form" autocomplete="off"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><label>Provider</label><select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainSendingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{.ProviderLabel}}</option>{{end}}</select><p class="muted provider-hint"{{if $sel}} hidden{{end}}>Choose a provider to configure sending.</p>{{range index $.DomainSendingEditors $d.ID}}{{$e := .}}<div class="provider-fields provider-box" data-provider="{{.Provider}}"{{if not .Selected}} hidden{{end}}>{{if .Error}}<div class="error">{{.Error}}</div>{{end}}{{if .KeepSecrets}}<p class="muted">Saving {{.ProviderLabel}} updates this domain's sending configuration. Leave a secret blank to keep the current one.</p>{{else}}<p class="muted">Saving {{.ProviderLabel}} replaces this domain's sending configuration. Required secrets must be entered.</p>{{end}}{{range .Fields}}{{if not .Generated}}{{if .Options}}<label>{{.Label}}{{if .Required}} *{{end}}</label><select name="cfg_{{$e.Provider}}_{{.Name}}"{{if not $e.Selected}} disabled{{end}}>{{$f := .}}{{range .Options}}<option value="{{.Value}}"{{if eq .Value (index $e.Values $f.Name)}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else}}<label>{{.Label}}{{if .Required}} *{{end}}{{if and .Secret $e.KeepSecrets}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label><input type="{{.Type}}" name="cfg_{{$e.Provider}}_{{.Name}}" placeholder="{{.Placeholder}}"{{if not $e.Selected}} disabled{{end}}{{if and .Required (or (not .Secret) (not $e.KeepSecrets))}} required{{end}}{{if .Secret}} autocomplete="off"{{else}} value="{{index $e.Values .Name}}"{{end}}>{{end}}{{end}}{{end}}</div>{{end}}</form><div class="dialog-actions">{{if $d.SendingProvider}}<div class="dialog-danger"><form method="post" action="/ui/domains/{{$d.ID}}/sending/clear" data-confirm="Remove sending configuration for this domain? Mail will queue until a provider is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove sending</button></form></div>{{end}}<button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="domain-sending-form-{{$d.ID}}" data-save-provider{{if not $sel}} disabled{{end}}>Save</button></div></dialog>
 {{end}}<style>
-.antler-wizard [hidden]{display:none!important}.antler-progress{font-size:13px;color:#666;border-bottom:1px solid #ddd;padding-bottom:8px}.antler-dns-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}.antler-dns-table th{text-align:left;color:#666;font-weight:600;border-bottom:1px solid #ddd;padding:6px}.antler-dns-table td{vertical-align:top;padding:8px 6px;border-bottom:1px solid #eee;overflow-wrap:anywhere}.antler-dns-table th:nth-child(1),.antler-dns-table td:nth-child(1){width:48%}.antler-dns-table th:nth-child(2),.antler-dns-table td:nth-child(2),.antler-dns-table th:nth-child(3),.antler-dns-table td:nth-child(3){width:26%}.antler-domain-auth{display:grid;grid-template-columns:48% 1fr;align-items:center;gap:12px;padding:10px 6px;border-bottom:1px solid #ddd;font-size:13px}.antler-domain-auth>:last-child{justify-self:center}.antler-dns-remediation{margin:8px 0;padding:8px 10px;background:#fff8e1;border:1px solid #f1d58a;border-radius:4px;overflow-wrap:anywhere}.antler-dns-remediation summary{cursor:pointer;font-weight:600}.antler-dns-remediation p{margin:8px 0;font-size:12px}.antler-dns-remediation button{padding:3px 8px;font-size:12px}.antler-light{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}.antler-light.green{background:#188038}.antler-light.amber{background:#f9ab00}.antler-light.red{background:#b3261e}.antler-checks{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.antler-check-note{font-size:12px}.antler-check-note[aria-busy="true"]:before{content:"";display:inline-block;width:12px;height:12px;border:2px solid #ccc;border-top-color:#1557b0;border-radius:50%;margin-right:8px;animation:antler-spin 1s linear infinite}.antler-checking .antler-light.amber{box-sizing:border-box;background:transparent;border:2px solid rgba(249,171,0,.35);border-top-color:#f9ab00;animation:antler-spin 1s linear infinite}@keyframes antler-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.antler-check-note[aria-busy="true"]:before{animation:none}.antler-checking .antler-light.amber{animation:none;background:#f9ab00;border:0}}
+.antler-wizard [hidden]{display:none!important}.antler-progress{font-size:13px;color:#666;border-bottom:1px solid #ddd;padding-bottom:8px}.antler-dns-table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}.antler-dns-table th{text-align:left;color:#666;font-weight:600;border-bottom:1px solid #ddd;padding:6px}.antler-dns-table td{vertical-align:top;padding:8px 6px;border-bottom:1px solid #eee;overflow-wrap:anywhere}.antler-dns-table th:nth-child(1),.antler-dns-table td:nth-child(1){width:48%}.antler-dns-table th:nth-child(2),.antler-dns-table td:nth-child(2),.antler-dns-table th:nth-child(3),.antler-dns-table td:nth-child(3){width:26%}.antler-dns-remediation{margin:8px 0;padding:8px 10px;background:#fff8e1;border:1px solid #f1d58a;border-radius:4px;overflow-wrap:anywhere}.antler-dns-remediation summary{cursor:pointer;font-weight:600}.antler-dns-remediation p{margin:8px 0;font-size:12px}.antler-dns-remediation button{padding:3px 8px;font-size:12px}.antler-light{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}.antler-light.green{background:#188038}.antler-light.amber{background:#f9ab00}.antler-light.red{background:#b3261e}.antler-checks{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.antler-check-note{font-size:12px}.antler-check-note[aria-busy="true"]:before{content:"";display:inline-block;width:12px;height:12px;border:2px solid #ccc;border-top-color:#1557b0;border-radius:50%;margin-right:8px;animation:antler-spin 1s linear infinite}.antler-checking .antler-light.amber{box-sizing:border-box;background:transparent;border:2px solid rgba(249,171,0,.35);border-top-color:#f9ab00;animation:antler-spin 1s linear infinite}@keyframes antler-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.antler-check-note[aria-busy="true"]:before{animation:none}.antler-checking .antler-light.amber{animation:none;background:#f9ab00;border:0}}
 </style>{{range .Domains}}{{$d := .}}{{$sel := index $.DomainReceivingSelected .ID}}
 <dialog id="domain-receiving-dialog-{{.ID}}" class="domain-dialog"{{if and (eq $d.ID $.DomainOpenID) (eq $.DomainOpenKind "receiving")}} data-open="1"{{end}}>
 <h2>Receiving · {{.Name}}</h2>
@@ -1574,7 +1590,6 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 .antler-record-table th:nth-child(5){width:12%!important}
 .antler-record-table th:nth-child(6){width:14%!important}
 .antler-record-table button{padding:4px 8px;font-size:12px;white-space:normal}
-.antler-fix{margin-left:auto}
 </style>
 <form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}"{{end}}>
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
@@ -1633,7 +1648,7 @@ const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-l
 <pre class="dialmx-txt">{{.TXT}}</pre>
 <p class="muted small">Key ID: <code>{{.KeyID}}</code> · Public key: <code>{{.PublicKey}}</code></p>
 {{if .DNS}}<ul class="dialmx-dns">{{range .DNS}}<li><span class="dns-light {{dnsLight .}}" aria-hidden="true"></span> {{if eq .Kind "mx"}}MX{{else}}TXT{{end}} <code>{{.Name}}</code> — {{if eq .State "ok"}}published and matching{{else if eq .State "mismatch"}}{{.Reason}}{{else}}{{.Reason}}{{end}}{{if .Found}} <span class="muted small">(found: {{join .Found ", "}})</span>{{end}}</li>{{end}}</ul>{{end}}
-{{if .Statuses}}<dl class="dialmx-status">{{range .Statuses}}<dt>{{.ReceiverURL}}</dt><dd>{{if dialmxReady .}}<span class="pill">ready</span>{{if .SMTPHostname}} · point MX at <code>{{.SMTPHostname}}</code>{{end}}{{if dialmxExpiry .}} · rekey in {{dialmxExpiry .}}{{end}}{{else}}<span class="pill {{if dialmxUnreachable .}}danger{{else}}amber{{end}}">{{dialmxStatusLabel .}}</span>{{if .Reason}} · {{.Reason}}{{end}}{{end}}</dd>{{end}}</dl>{{else}}<p class="muted small">No live receiver status yet. Save the configuration, then DNS and receiver authorization are confirmed automatically.</p>{{end}}
+{{if .Statuses}}<dl class="dialmx-status">{{range .Statuses}}<dt>{{.ReceiverURL}}</dt><dd>{{if dialmxReady .}}<span class="pill">ready</span>{{if .SMTPHostname}} · receiving at <code>{{.SMTPHostname}}</code>{{end}}{{if dialmxExpiry .}} · rekey in {{dialmxExpiry .}}{{end}}{{else}}<span class="pill {{dialmxStatusClass .}}">{{dialmxStatusLabel .}}</span>{{if .Reason}} · {{.Reason}}{{end}}{{end}}</dd>{{end}}</dl>{{else}}<p class="muted small">No live receiver status yet. Save the configuration, then authorization and MX routing are confirmed automatically.</p>{{end}}
 <p class="copy-note">After regenerating the key, replace this TXT record too. Authorization is re-established within about five minutes.</p>
 </section>{{end}}
 <div class="dialog-actions">{{if or $d.ReceivingProvider (index $.DialMXSetup $d.ID)}}<div class="dialog-danger">{{if index $.DomainReceivingRegenerate $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="amber">Regenerate secret</button></form>{{end}}{{with index $.DialMXSetup $d.ID}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/regenerate" data-antler-regenerate data-confirm="Regenerate the receiving key for {{$d.Name}}? This invalidates the current key and can interrupt incoming mail until you replace the authorization TXT record in DNS and an Antler receiver reconnects. Your MX records stay the same."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary">Regenerate key</button></form>{{end}}<form method="post" action="/ui/domains/{{$d.ID}}/receiving/clear" data-confirm="Remove receiving configuration for this domain? It will stop accepting mail until a receive path is set."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary danger">Remove receiving</button></form></div>{{end}}<button type="button" class="secondary" data-close-dialog>Cancel</button><button type="submit" form="domain-receiving-form-{{$d.ID}}" data-save-provider{{if not $sel}} disabled{{end}}>Save</button></div>
@@ -1726,16 +1741,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			setup.Statuses = s.dialMXStatuses(d.Name)
 		}
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
-		mxChecked := false
-		var mxMatched []string
-		for _, check := range setup.DNS {
-			if check.Kind == "mx" {
-				mxChecked = true
-				mxMatched = check.Matched
-				break
-			}
-		}
-		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, mxChecked, mxMatched, time.Now())
+		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, time.Now())
 		dialMXSetup[d.ID] = setup
 	}
 	// A root domain may have had an ancestor added after it, so offer "Inherited
