@@ -79,30 +79,50 @@ func (s *Server) uiInboxLive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// mailboxFilter maps a UI folder name and optional label to the store filter
+// and base path shared by the mailbox list, its total count and the bulk-by-
+// scope enumeration, so all three describe exactly the same set. ok is false
+// for an unrecognised folder, which callers turn into a 404 rather than a
+// guessed view.
+func mailboxFilter(id, folder, label string) (f store.MessageFilter, basePath string, ok bool) {
+	f = store.MessageFilter{InboxID: id}
+	basePath = "/ui/inboxes/" + id
+	switch folder {
+	case "inbox":
+		f.Direction = "inbound"
+	case "sent":
+		f.Direction = "outbound"
+		basePath += "/sent"
+	case "spam":
+		f.SpamOnly = true
+		basePath += "/spam"
+	case "trash":
+		f.Trashed = true
+		f.IncludeSpam = true
+		basePath += "/trash"
+	case "label":
+		if label == "" {
+			return f, basePath, false
+		}
+		f.Direction = "inbound"
+		f.Labels = []string{label}
+		basePath += "/label"
+	default:
+		return f, basePath, false
+	}
+	return f, basePath, true
+}
+
 // buildMessageList runs the same query the mailbox renderer does for a folder
 // and optional label. before is the keyset cursor (empty for the first page).
 func (s *Server) buildMessageList(r *http.Request, p model.Principal, id, folder, label, before string) (msgs []model.Message, hasMore bool, cursor, pagerURL string, err error) {
-	direction := "inbound"
-	basePath := "/ui/inboxes/" + id
-	spamOnly := false
-	trashed := false
-	switch folder {
-	case "sent":
-		direction = "outbound"
-		basePath += "/sent"
-	case "spam":
-		spamOnly = true
-		basePath += "/spam"
-	case "trash":
-		trashed = true
-		basePath += "/trash"
+	f, basePath, ok := mailboxFilter(id, folder, label)
+	if !ok {
+		return nil, false, "", "", store.ErrInvalidSearchQuery
 	}
-	var labels []string
-	if label != "" {
-		basePath += "/label"
-		labels = []string{label}
-	}
-	msgs, err = s.Service.Store.ListMessages(r.Context(), p, store.MessageFilter{InboxID: id, Direction: direction, SpamOnly: spamOnly, Trashed: trashed, IncludeSpam: trashed, Labels: labels, Before: before, Limit: inboxPageSize + 1})
+	f.Before = before
+	f.Limit = inboxPageSize + 1
+	msgs, err = s.Service.Store.ListMessages(r.Context(), p, f)
 	if err != nil {
 		return nil, false, "", "", err
 	}

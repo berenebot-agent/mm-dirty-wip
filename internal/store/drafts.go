@@ -161,6 +161,52 @@ func (s *Store) ListDraftsPaged(ctx context.Context, p model.Principal, inboxID,
 	return out, nil
 }
 
+// AllDraftIDs returns the id of every draft in an inbox (or across all
+// accessible inboxes when inboxID is empty), newest first and deliberately
+// uncapped. It backs the drafts bulk action scoped to "all N": ListDraftsPaged
+// clamps to a page size, so using it to enumerate a bulk delete would silently
+// skip drafts beyond the cap. Callers enforce the write role themselves.
+func (s *Store) AllDraftIDs(ctx context.Context, p model.Principal, inboxID string) ([]string, error) {
+	if inboxID != "" && !p.CanAssist(inboxID) {
+		return nil, ErrForbidden
+	}
+	q := `SELECT id FROM drafts WHERE account_id=?`
+	args := []any{p.AccountID}
+	if inboxID != "" {
+		q += ` AND inbox_id=?`
+		args = append(args, inboxID)
+	} else if !p.Admin {
+		ids := []string{}
+		for id, role := range p.MailboxRoles {
+			if role == "assistant" || role == "owner" {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return []string{}, nil
+		}
+		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	q += ` ORDER BY updated_at DESC, id DESC`
+	rows, err := s.read.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // CountDrafts returns the number of drafts in an inbox (or across all
 // accessible inboxes when inboxID is empty).
 func (s *Store) CountDrafts(ctx context.Context, p model.Principal, inboxID string) (int, error) {
