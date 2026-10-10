@@ -31,6 +31,13 @@ import (
 type commonCursor struct {
 	Min  string            `json:"m,omitempty"`
 	From map[string]string `json:"f,omitempty"`
+	// Scan records a per-source scan continuation for a source that examined a
+	// window without returning any match. It lets the next page resume scanning
+	// deeper instead of re-reading the same non-matching window, and lets a match
+	// deeper than one scan window eventually be reached. It is only ever set for
+	// a source with no returned item in the page, so a deeper scan cursor can
+	// never skip an item the merge dropped.
+	Scan map[string]string `json:"s,omitempty"`
 }
 
 // encodeCommonCursor serializes a cursor to an opaque, URL-safe token.
@@ -69,6 +76,14 @@ func (c commonCursor) sourceCursor(source string) string {
 		return ""
 	}
 	return c.From[source]
+}
+
+// scanCursor returns a source's scan-continuation cursor from a decoded cursor.
+func (c commonCursor) scanCursor(source string) string {
+	if c.Scan == nil {
+		return ""
+	}
+	return c.Scan[source]
 }
 
 // stableKey builds the global stable key for a message: its effective timestamp
@@ -138,6 +153,7 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 	if berr != nil {
 		return nil, "", nil, berr
 	}
+	scanCursors := map[string]string{}
 	for _, mb := range boxes {
 		if localOnly || !mb.routed || !mb.remoteConfigured() {
 			continue
@@ -147,11 +163,17 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 		// label, so filter in-memory. Scan raw pages (resuming from the last raw
 		// item) until enough matches are collected or the source is exhausted, so a
 		// window dominated by non-matching rows never yields a short page that
-		// hides matching mail behind it. Non-matching rows consumed by the scan are
-		// skipped; the per-source cursor still advances only to the last *returned*
-		// match (pageMerged), so no matching row can be missed on a later page.
+		// hides matching mail behind it. A source that returns no match records a
+		// scan continuation (scanCursors) so the next page resumes deeper instead
+		// of re-reading the same window and so a match beyond the per-page scan
+		// bound is still reached; a source that returns a match advances only to
+		// that match (pageMerged), so no dropped match is skipped.
 		scanBefore := cur.sourceCursor(mb.inbox.ID)
+		if sc := cur.scanCursor(mb.inbox.ID); sc != "" {
+			scanBefore = sc
+		}
 		collected := 0
+		exhausted := false
 		var rerr error
 		for page := 0; page < remoteFilterScanMaxPages && collected <= limit; page++ {
 			rawLimit := limit + 1
@@ -176,16 +198,21 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 				}
 			}
 			if len(res.Items) < rawLimit || res.NextCursor == "" || res.NextCursor == scanBefore {
+				exhausted = true
 				break
 			}
 			scanBefore = res.NextCursor
 		}
 		if rerr != nil {
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
+		} else if collected == 0 && !exhausted && scanBefore != "" {
+			// No match in the scanned window and more rows remain: carry the scan
+			// position so the next page continues past it.
+			scanCursors[mb.inbox.ID] = scanBefore
 		}
 	}
 
-	items, next := pageMerged(entries, cur.Min, limit)
+	items, next := pageMerged(entries, cur.Min, limit, scanCursors)
 	return items, next, failures, nil
 }
 
@@ -202,7 +229,7 @@ func remoteSourceCursor(v app.RemoteMessageView) string {
 // pageMerged sorts candidates by (time desc, id desc), drops any item not
 // strictly older than the cursor's global key, returns the page, and builds the
 // next cursor from the last returned item plus each source's advanced progress.
-func pageMerged(entries []mergedItem, minKey string, limit int) ([]model.Message, string) {
+func pageMerged(entries []mergedItem, minKey string, limit int, scan map[string]string) ([]model.Message, string) {
 	sort.SliceStable(entries, func(i, j int) bool {
 		if !entries[i].ts.Equal(entries[j].ts) {
 			return entries[i].ts.After(entries[j].ts)
@@ -227,13 +254,28 @@ func pageMerged(entries []mergedItem, minKey string, limit int) ([]model.Message
 		truncated = true
 	}
 	out := make([]model.Message, 0, len(page))
-	next := commonCursor{From: map[string]string{}}
+	// Preserve the incoming global key so a page that returns no items but has a
+	// pending scan continuation still resumes every source strictly after the
+	// last delivered item and never re-delivers one.
+	next := commonCursor{Min: minKey, From: map[string]string{}, Scan: map[string]string{}}
 	for _, e := range page {
 		out = append(out, e.msg)
 		next.Min = e.key
 		next.From[e.source] = e.cursor
 	}
-	if !truncated {
+	for src, c := range scan {
+		if c == "" {
+			continue
+		}
+		// Only a source with no returned item carries a scan cursor; a source
+		// with a returned item resumes from that item so dropped matches are not
+		// skipped.
+		if _, returned := next.From[src]; returned {
+			continue
+		}
+		next.Scan[src] = c
+	}
+	if !truncated && len(next.Scan) == 0 {
 		// The last page: no cursor, so a client stops.
 		return out, ""
 	}
@@ -386,6 +428,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 	if berr != nil {
 		return nil, "", model.CompletenessUnknown, nil, berr
 	}
+	scanCursors := map[string]string{}
 	for _, mb := range boxes {
 		if !mb.routed || !mb.remoteConfigured() {
 			continue
@@ -397,9 +440,16 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		// matches are collected or the source is exhausted — never stop at the
 		// first short filtered window, which would drop older matching mail.
 		// Each item carries its own UID as its native cursor, so a page boundary
-		// resumes strictly after the last *returned* match.
+		// resumes strictly after the last *returned* match. A source that returns
+		// no match carries a scan continuation so the next page continues deeper
+		// instead of re-scanning the same window.
 		scanUID := uint32(0)
 		if raw := strings.TrimSpace(cur.sourceCursor(mb.inbox.ID)); raw != "" {
+			if n, cerr := strconv.ParseUint(raw, 10, 32); cerr == nil {
+				scanUID = uint32(n)
+			}
+		}
+		if raw := strings.TrimSpace(cur.scanCursor(mb.inbox.ID)); raw != "" {
 			if n, cerr := strconv.ParseUint(raw, 10, 32); cerr == nil {
 				scanUID = uint32(n)
 			}
@@ -409,6 +459,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			rawLimit = remoteFilterScanPage
 		}
 		collected := 0
+		exhausted := false
 		var rerr error
 		for scan := 0; scan < remoteFilterScanMaxPages && collected <= limit; scan++ {
 			res, e := mb.remote.SearchRemote(ctx, p, mb.inbox.ID, app.RemoteSearchQuery{
@@ -452,6 +503,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			// The server search is newest-first; NextCursor is the lowest UID it
 			// enumerated. If it did not advance (or was exhausted) stop scanning.
 			if res.NextCursor == 0 || res.NextCursor == scanUID {
+				exhausted = true
 				break
 			}
 			scanUID = res.NextCursor
@@ -459,9 +511,11 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		if rerr != nil {
 			failures = append(failures, model.NewInboxFailure(mb.inbox.ID, rerr))
 			completeness = model.CompletenessPartial
+		} else if collected == 0 && !exhausted && scanUID != 0 {
+			scanCursors[mb.inbox.ID] = strconv.FormatUint(uint64(scanUID), 10)
 		}
 	}
-	items, next := pageMerged(entries, cur.Min, limit)
+	items, next := pageMerged(entries, cur.Min, limit, scanCursors)
 	if next != "" && len(failures) > 0 {
 		completeness = model.CompletenessPartial
 	}

@@ -467,8 +467,11 @@ func (s *Store) settleHandoff(ctx context.Context, accountID, id, state, reason,
 	return &ev, nil
 }
 
-// CancelHandoff withdraws an outstanding handoff that has not yet been published
-// and unfreezes its draft.
+// CancelHandoff withdraws an outstanding handoff that has not been published and
+// unfreezes its draft. It accepts both a Pending handoff (before publication) and
+// an Ambiguous one (the append outcome could not be verified): resolving an
+// ambiguous handoff gives the operator an exit so its frozen draft is not trapped.
+// A published handoff cannot be cancelled.
 func (s *Store) CancelHandoff(ctx context.Context, p model.Principal, draftID string) (model.AssistantHandlingRequest, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -486,7 +489,7 @@ func (s *Store) CancelHandoff(ctx context.Context, p model.Principal, draftID st
 	if err != nil {
 		return model.AssistantHandlingRequest{}, model.Event{}, err
 	}
-	if r.Publication != model.HandoffPending {
+	if r.Publication != model.HandoffPending && r.Publication != model.HandoffAmbiguous {
 		return model.AssistantHandlingRequest{}, model.Event{}, ErrConflict
 	}
 	now := nowText()
@@ -531,6 +534,15 @@ func (s *Store) settleHandoffNotification(ctx context.Context, accountID, id, st
 	r, err := getAssistantHandlingTx(ctx, tx, accountID, id)
 	if err != nil {
 		return nil, err
+	}
+	// Notification is at-most-once from the local outbox: never emit a second
+	// event for a state it is already in, and never regress a delivered
+	// notification back to failed when a duplicate worker pass re-settles it.
+	if r.NotificationStatus == state {
+		return nil, nil
+	}
+	if r.NotificationStatus == model.NotificationSent && state == model.NotificationFailed {
+		return nil, nil
 	}
 	now := nowText()
 	if _, err = tx.ExecContext(ctx, `UPDATE assistant_handling_requests SET notification_status=?,updated_at=? WHERE id=? AND account_id=?`, state, now, id, accountID); err != nil {

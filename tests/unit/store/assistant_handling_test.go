@@ -241,6 +241,37 @@ func TestHandoffNotificationIndependentOfPublication(t *testing.T) {
 	}
 }
 
+func TestHandoffNotificationStateMonotonic(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	asst := assistant(box, u.AccountID)
+	d, _ := s.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"})
+	created, _, err := s.CreateAssistantHandling(ctx, asst, store.AssistantHandlingInsert{
+		DraftID: d.ID, InboxID: box.ID, Mode: model.AuthoringRemoteDraft,
+		ContentHash: "h", HandoffID: "hnd_mono", MessageID: "<mono@remote.example>", RemoteFolder: "Drafts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := s.MarkHandoffNotificationSent(ctx, u.AccountID, created.ID)
+	if err != nil || ev == nil || ev.Type != model.EventDraftHandoffNotificationSent {
+		t.Fatalf("sent ev=%+v err=%v", ev, err)
+	}
+	// A duplicate settle of the same state emits no second event.
+	if again, err := s.MarkHandoffNotificationSent(ctx, u.AccountID, created.ID); err != nil || again != nil {
+		t.Fatalf("duplicate sent ev=%+v err=%v", again, err)
+	}
+	// A later failure cannot regress a delivered notification.
+	if again, err := s.MarkHandoffNotificationFailed(ctx, u.AccountID, created.ID, "late failure"); err != nil || again != nil {
+		t.Fatalf("regress sent->failed ev=%+v err=%v", again, err)
+	}
+	got, _ := s.GetAssistantHandlingInternal(ctx, u.AccountID, created.ID)
+	if got.NotificationStatus != model.NotificationSent {
+		t.Fatalf("notification regressed to %q", got.NotificationStatus)
+	}
+}
+
 func TestHandoffCancelUnfreezes(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
@@ -261,6 +292,37 @@ func TestHandoffCancelUnfreezes(t *testing.T) {
 	got, _ := s.GetDraft(ctx, asst, d.ID)
 	if got.Status != model.DraftStatusDraft {
 		t.Fatalf("draft not unfrozen: %q", got.Status)
+	}
+}
+
+func TestCancelAmbiguousHandoffUnfreezes(t *testing.T) {
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	asst := assistant(box, u.AccountID)
+	d, _ := s.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"})
+	created, _, err := s.CreateAssistantHandling(ctx, asst, store.AssistantHandlingInsert{
+		DraftID: d.ID, InboxID: box.ID, Mode: model.AuthoringRemoteDraft,
+		ContentHash: "h", HandoffID: "hnd_amb_c", MessageID: "<ambc@remote.example>", RemoteFolder: "Drafts",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkHandoffAmbiguous(ctx, u.AccountID, created.ID, "unverifiable"); err != nil {
+		t.Fatal(err)
+	}
+	// An ambiguous handoff can be resolved by the operator so its frozen draft is
+	// not trapped.
+	got, ev, err := s.CancelHandoff(ctx, asst, d.ID)
+	if err != nil || ev.Type != model.EventDraftHandoffCancelled {
+		t.Fatalf("resolve ambiguous r=%+v ev=%+v err=%v", got, ev, err)
+	}
+	if got.Publication != model.HandoffFailed || got.LastError != "cancelled" {
+		t.Fatalf("resolved record=%+v", got)
+	}
+	draft, err := s.GetDraft(ctx, asst, d.ID)
+	if err != nil || draft.Status != model.DraftStatusDraft {
+		t.Fatalf("draft not unfrozen: %+v err=%v", draft, err)
 	}
 }
 

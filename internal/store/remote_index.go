@@ -361,9 +361,17 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 			}
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_uid_validity=?,remote_indexed_at=?,backfill_before_uid=?,backfill_complete=?,updated_at=? WHERE inbox_id=? AND path=?`,
-		uidValidity, now, backfillBefore, boolInt(backfillComplete), now, inboxID, folderPath); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_uid_validity=?,remote_indexed_at=?,backfill_before_uid=?,backfill_complete=?,updated_at=? WHERE inbox_id=? AND path=?`,
+		uidValidity, now, backfillBefore, boolInt(backfillComplete), now, inboxID, folderPath)
+	if err != nil {
 		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// The folder row is absent (for example pruned by a concurrent folder
+		// reconcile between discovery and this batch). Fail rather than commit
+		// orphan message metadata with no owning folder; the caller records the
+		// pass partial and retries after the next folder reconcile.
+		return 0, fmt.Errorf("remote folder %q is not indexed for inbox %s", folderPath, inboxID)
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, err

@@ -508,15 +508,14 @@ func (m *RemoteMailboxService) refreshRemoteHeader(ctx context.Context, accountI
 	h, err := sess.FetchHeader(ctx, loc)
 	if err != nil {
 		var mb *model.MailboxError
-		if errors.As(err, &mb) && mb.Kind == model.ErrKindConflict {
-			// UIDVALIDITY changed: re-resolve by Message-ID. A message with no
-			// Message-ID cannot be re-resolved and is left as cached.
-			if strings.TrimSpace(view.RFCMessageID) != "" {
-				if newLoc, ferr := sess.FindByMessageID(ctx, view.FolderPath, view.RFCMessageID); ferr == nil {
-					if updated, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr == nil {
-						*view = remoteView(updated)
-					}
-					_ = newLoc
+		if errors.As(err, &mb) && mb.Kind == model.ErrKindConflict && strings.TrimSpace(view.RFCMessageID) != "" {
+			// UIDVALIDITY changed: the cached UID no longer names this message.
+			// Re-resolve it by Message-ID and relocate the cached row to the new
+			// locator, preserving its stable id and local labels. A message with
+			// no Message-ID cannot be re-resolved and is left as cached.
+			if newLoc, ferr := sess.FindByMessageID(ctx, view.FolderPath, view.RFCMessageID); ferr == nil {
+				if updated, uerr := m.Service.Store.MoveRemoteMessageMetadata(ctx, accountID, inboxID, view.ID, newLoc.FolderPath, newLoc.UIDValidity, newLoc.UID); uerr == nil {
+					*view = remoteView(updated)
 				}
 			}
 		}

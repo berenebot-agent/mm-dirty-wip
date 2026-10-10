@@ -88,6 +88,36 @@ func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
 	}
 }
 
+// TestRemoteWorkerLargeFolderBaselineAndDetect proves detection is correct on a
+// folder larger than one search page: the baseline must use the true maximum UID,
+// and a new arrival must still be detected. Under the default ascending search
+// order the truncation would return the OLDEST page, so the baseline would sit far
+// below the true maximum and detection would be permanently suppressed.
+func TestRemoteWorkerLargeFolderBaselineAndDetect(t *testing.T) {
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	// More than one search page (MaxSearchResults = 500) of pre-existing mail.
+	for i := 0; i < 600; i++ {
+		fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old@remote>\r\n\r\nbody", "<old@remote>", "old")
+	}
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 0 {
+		t.Fatalf("baseline flooded %d events", len(evs))
+	}
+	// A new arrival after the baseline must be detected exactly once.
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: new\r\nMessage-ID: <new@remote>\r\n\r\nbody", "<new@remote>", "new")
+	w.DetectInbox(ctx, inbox)
+	if evs := drainEvents(ch); len(evs) != 1 {
+		t.Fatalf("new arrival events = %d want 1", len(evs))
+	}
+}
+
 // TestRemoteWorkerNoReadSideEffect proves a detection pass never marks a message
 // seen on the live server.
 func TestRemoteWorkerNoReadSideEffect(t *testing.T) {

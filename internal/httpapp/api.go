@@ -651,12 +651,29 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 // remoteFilterScanPage is the minimum raw page pulled from the remote metadata
 // source while filtering in-memory, so a page dominated by non-matching rows
 // still makes progress without a round-trip per row.
-const remoteFilterScanPage = 50
+var remoteFilterScanPage = 50
 
 // remoteFilterScanMaxPages bounds the on-demand scan of the remote metadata
 // index while applying filters the source cannot express, so a filter that
-// matches little cannot walk an unbounded index in one request.
-const remoteFilterScanMaxPages = 20
+// matches little cannot walk an unbounded index in one request. A scan that stops
+// at this bound carries a continuation cursor so the caller resumes deeper rather
+// than silently omitting matches; the bounds are variables only so a test can
+// exercise that continuation without seeding thousands of rows.
+var remoteFilterScanMaxPages = 20
+
+// SetRemoteScanLimitsForTest overrides the remote filtered-scan page size and
+// max-pages bounds, returning a restore function. It exists so a test can
+// exercise deep-scan pagination deterministically; production never calls it.
+func SetRemoteScanLimitsForTest(page, maxPages int) func() {
+	oldPage, oldMax := remoteFilterScanPage, remoteFilterScanMaxPages
+	if page > 0 {
+		remoteFilterScanPage = page
+	}
+	if maxPages > 0 {
+		remoteFilterScanMaxPages = maxPages
+	}
+	return func() { remoteFilterScanPage, remoteFilterScanMaxPages = oldPage, oldMax }
+}
 
 func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f store.MessageFilter, folder, before string, limit int) ([]model.Message, string, []model.InboxFailure, error) {
 	// A single-inbox scope routes wholly to that inbox's backend.
@@ -701,6 +718,7 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			out := make([]model.Message, 0, limit+1)
 			scanBefore := before
 			more := false
+			exhausted := false
 			for page := 0; page < remoteFilterScanMaxPages; page++ {
 				rawLimit := limit + 1
 				if rawLimit < remoteFilterScanPage {
@@ -728,12 +746,10 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 					more = true
 					break
 				}
-				// The raw page was short: the source is exhausted, so there is
-				// nothing older to scan.
-				if len(res.Items) < rawLimit {
-					break
-				}
-				if res.NextCursor == "" || res.NextCursor == scanBefore {
+				// The raw page was short, or the source could not advance: the
+				// source is exhausted, so there is nothing older to scan.
+				if len(res.Items) < rawLimit || res.NextCursor == "" || res.NextCursor == scanBefore {
+					exhausted = true
 					break
 				}
 				scanBefore = res.NextCursor
@@ -741,6 +757,12 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 			cursor := ""
 			if more && len(out) > 0 {
 				cursor = out[len(out)-1].ID
+			} else if !exhausted && scanBefore != "" {
+				// The scan stopped at the per-request page cap without finding a
+				// match. Resume from where it stopped so a match deeper than one
+				// scan window is not silently omitted; every row between the last
+				// returned item and this point was examined and did not match.
+				cursor = scanBefore
 			}
 			return out, cursor, nil, nil
 		}

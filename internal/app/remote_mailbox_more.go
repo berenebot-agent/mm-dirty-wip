@@ -671,26 +671,28 @@ func (p *RemoteHandoffPublisher) Lookup(ctx context.Context, inboxID, handoffID,
 			return HandoffOutcome{}, normalizeRemoteError(lerr)
 		}
 		if len(locs) == 1 {
-			return HandoffOutcome{Confirmed: true, RemoteUID: locs[0].UID, RemoteFolder: folder.Path}, nil
+			return HandoffOutcome{Confirmed: true, Found: true, RemoteUID: locs[0].UID, RemoteFolder: folder.Path}, nil
 		}
 		if len(locs) > 1 {
-			return HandoffOutcome{RemoteFolder: folder.Path}, nil
+			// More than one match: present but ambiguous, never confirmed.
+			return HandoffOutcome{Found: true, Ambiguous: true, RemoteFolder: folder.Path}, nil
 		}
 	}
 	if strings.TrimSpace(messageID) != "" {
 		loc, lerr := sess.FindByMessageID(ctx, folder.Path, messageID)
 		if lerr == nil {
-			return HandoffOutcome{Confirmed: true, RemoteUID: loc.UID, RemoteFolder: folder.Path}, nil
+			return HandoffOutcome{Confirmed: true, Found: true, RemoteUID: loc.UID, RemoteFolder: folder.Path}, nil
 		}
 		var mb *model.MailboxError
 		if errors.As(lerr, &mb) && mb.Kind == model.ErrKindConflict {
-			// More than one match: ambiguous, not confirmed.
-			return HandoffOutcome{RemoteFolder: folder.Path}, nil
+			// More than one match: present but ambiguous, not confirmed.
+			return HandoffOutcome{Found: true, Ambiguous: true, RemoteFolder: folder.Path}, nil
 		}
 		if !errors.Is(lerr, imap.ErrNotFound) {
 			return HandoffOutcome{}, normalizeRemoteError(lerr)
 		}
 	}
+	// Neither the handoff header nor the Message-ID matched: definitively absent.
 	return HandoffOutcome{RemoteFolder: folder.Path}, nil
 }
 

@@ -115,6 +115,12 @@ type SearchQuery struct {
 	// newest-first search: the next page resumes from the lowest UID already
 	// returned.
 	BeforeUID uint32
+	// AfterUID, when non-zero, restricts the search to UIDs strictly greater
+	// than it (the IMAP range "(AfterUID+1):*"). With the default ascending
+	// ordering it is the forward pagination cursor: a bounded page returns the
+	// OLDEST matching UIDs above the cursor and NextCursor advances past them, so
+	// a new-arrival detector never has to load the whole folder to find them.
+	AfterUID uint32
 	// NewestFirst orders results newest-first (descending UID) and, when the
 	// result set exceeds Limit, truncates from the newest end so a bounded search
 	// returns the most recent matches rather than the oldest. NextCursor then
@@ -233,6 +239,11 @@ func searchCriteria(q SearchQuery) *imap.SearchCriteria {
 	}
 	if q.BeforeUID > 1 {
 		c.UID = append(c.UID, imap.UIDSet{imap.UIDRange{Start: 1, Stop: imap.UID(q.BeforeUID - 1)}})
+	}
+	if q.AfterUID > 0 {
+		// "(AfterUID+1):*" — Stop 0 is the IMAP "*". A bounded ascending search
+		// then returns the oldest matching UIDs above the cursor.
+		c.UID = append(c.UID, imap.UIDSet{imap.UIDRange{Start: imap.UID(q.AfterUID + 1)}})
 	}
 	c.Since = q.Since
 	c.Before = q.Before

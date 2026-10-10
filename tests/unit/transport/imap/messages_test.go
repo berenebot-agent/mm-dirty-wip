@@ -299,6 +299,44 @@ func TestSearchNewestFirstPagination(t *testing.T) {
 	}
 }
 
+func TestSearchAfterUIDAscending(t *testing.T) {
+	fs := newFakeServer(t, serverConfig{})
+	fs.AddMailbox("INBOX")
+	adapter := dialFake(t, fs, "user@example.com", "secret")
+	var uids []uint32
+	for i := 0; i < 5; i++ {
+		loc := seedMessage(t, adapter, "INBOX", sampleMessage, nil)
+		uids = append(uids, loc.UID)
+	}
+	// Strictly after the second UID: the remaining three, ascending. This is the
+	// detector's forward page ("(cursor+1):*"), which must not load the whole
+	// folder and must not return anything at or below the cursor.
+	res, err := adapter.Search(testContext(t), "INBOX", imapadapter.SearchQuery{AfterUID: uids[1], Limit: 100})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res.UIDs) != 3 {
+		t.Fatalf("after-uid = %v, want 3", res.UIDs)
+	}
+	for i := 1; i < len(res.UIDs); i++ {
+		if res.UIDs[i] <= res.UIDs[i-1] {
+			t.Fatalf("after-uid not ascending: %v", res.UIDs)
+		}
+	}
+	if res.UIDs[0] <= uids[1] {
+		t.Fatalf("after-uid included the cursor or older: %v", res.UIDs)
+	}
+	// The newest-first, single-UID form yields the folder maximum, which is the
+	// baseline read the detector uses to avoid the oldest-page truncation.
+	max, err := adapter.Search(testContext(t), "INBOX", imapadapter.SearchQuery{NewestFirst: true, Limit: 1})
+	if err != nil {
+		t.Fatalf("max search: %v", err)
+	}
+	if len(max.UIDs) != 1 || max.UIDs[0] != uids[len(uids)-1] {
+		t.Fatalf("newest-1 = %v, want max %d", max.UIDs, uids[len(uids)-1])
+	}
+}
+
 func TestFindByMessageIDAmbiguous(t *testing.T) {
 	fs := newFakeServer(t, serverConfig{})
 	fs.AddMailbox("INBOX")

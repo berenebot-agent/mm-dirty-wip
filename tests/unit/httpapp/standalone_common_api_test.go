@@ -656,6 +656,74 @@ func TestRemoteTestEndpoint(t *testing.T) {
 	}
 }
 
+// TestRemoteTestRequiresOwner proves the remote test endpoint — which dials a
+// caller-supplied host using the inbox's stored credentials — is not reachable by
+// a merely read-scoped key.
+func TestRemoteTestRequiresOwner(t *testing.T) {
+	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "reader", false, map[string]string{standalone.ID: "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/inboxes/"+standalone.ID+"/remote/test", strings.NewReader(`{"host":"attacker.example","username":"x","imap_password":"y"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 403 {
+		t.Fatalf("read-scoped remote test = %d, want 403: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestRemoteFilteredScanReachesDeepMatch proves a remote listing filtered on a
+// predicate the source cannot express (has_attachment) pages past non-matching
+// rows instead of silently omitting a match that lies deeper than one scan window.
+func TestRemoteFilteredScanReachesDeepMatch(t *testing.T) {
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	restore := httpapp.SetRemoteScanLimitsForTest(2, 1)
+	defer restore()
+	base := time.Now().UTC().Add(-time.Hour)
+	plain := "From: a@b.test\r\nSubject: p\r\nMessage-ID: <p@remote>\r\n\r\nbody"
+	attach := "From: a@b.test\r\nSubject: a\r\nMessage-ID: <a@remote>\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\nContent-Type: text/plain\r\n\r\nbody\r\n--x\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"f.bin\"\r\n\r\nzz\r\n--x--"
+	// Four newer non-matching messages, then the oldest with an attachment.
+	for i := 0; i < 4; i++ {
+		fake.addAt("INBOX", plain, "<p"+strconv.Itoa(i)+"@remote>", "p", base.Add(time.Duration(i+1)*time.Minute))
+	}
+	fake.addAt("INBOX", attach, "<a@remote>", "a", base)
+	key := adminKey(t, svc, u)
+
+	cursor := ""
+	found := false
+	for page := 0; page < 12 && !found; page++ {
+		path := "/v1/messages?inbox=" + standalone.ID + "&has_attachment=true&limit=1"
+		if cursor != "" {
+			path += "&before=" + url.QueryEscape(cursor)
+		}
+		rr := apiGet(t, h, path, key)
+		if rr.Code != 200 {
+			t.Fatalf("page %d status %d: %s", page, rr.Code, rr.Body.String())
+		}
+		var env struct {
+			Items      []map[string]any `json:"items"`
+			NextCursor string           `json:"next_cursor"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if len(env.Items) > 0 {
+			found = true
+			break
+		}
+		cursor = env.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("deep attachment match was never reached by filtered paging")
+	}
+}
+
 // ensure unused imports stay referenced while the file grows.
 
 // TestStandaloneUIAddAndBanner proves the dashboard renders the two inbox buttons
