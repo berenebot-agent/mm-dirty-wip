@@ -1452,15 +1452,23 @@ func (r *Receiver) verifyProof(c *connection, ch uint64, issued challenge, x mxw
 	// Routing gate: authority is proven, but this receiver only accepts the
 	// domain when its own SMTP hostname is published in the domain's MX. A
 	// resolver failure here is transient and deferrable — it must not revoke a
-	// healthy binding — so only a successful lookup that omits this receiver is
+	// healthy binding — so only a definitive answer that omits this receiver is
 	// the not_mx verdict. Checked at every proof so a repointed MX takes effect
 	// at the next renewal.
+	//
+	// "Definitive" covers both shapes a routed-away domain produces: a lookup
+	// that succeeds with MX records naming someone else, and a lookup that
+	// definitively finds no MX at all (NODATA, or NXDOMAIN). The latter arrives
+	// as a not-found error rather than empty records, so it is treated as the
+	// not_mx verdict too — otherwise deleting the record would be deferred
+	// forever and the binding would never fail closed. Only an error that
+	// leaves the question unanswered (timeout, SERVFAIL, refused) defers.
 	mxCtx, mxCancel := context.WithTimeout(c.ctx, r.cfg.AuthTimeout)
 	mxs, mxErr := r.lookupMX(mxCtx, x.Domain)
 	mxCancel()
 	r.logProof(c, "mx_lookup", x.Domain, x.KeyID, resultWord(mxErr == nil), boundedReason(mxErr), time.Since(started))
 	trace.add("mx_lookup", resultWord(mxErr == nil), boundedReason(mxErr))
-	if mxErr != nil {
+	if mxErr != nil && !mxNotFound(mxErr) {
 		if issued.binding != nil {
 			// Leave the existing grant untouched; the next renewal tick retries.
 			r.logProof(c, "renewal", x.Domain, x.KeyID, "deferred", "dns_unavailable", time.Since(started))
@@ -1927,7 +1935,7 @@ func (r *Receiver) lookupTXT(ctx context.Context, d string) ([]string, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return r.cfg.LookupTXT(ctx, "_mailmoose-mx."+d)
+	return r.cfg.LookupTXT(ctx, absoluteName("_mailmoose-mx."+d))
 }
 
 // lookupMX resolves the domain's published MX records with the same bounded
@@ -1940,7 +1948,33 @@ func (r *Receiver) lookupMX(ctx context.Context, d string) ([]*net.MX, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return r.cfg.LookupMX(ctx, d)
+	return r.cfg.LookupMX(ctx, absoluteName(d))
+}
+
+// absoluteName makes a DNS name fully qualified by ensuring the root label.
+//
+// Both proofs must query absolute names. A relative name is subject to the
+// resolver's search list (/etc/resolv.conf `search`), so Go tries the name and
+// then <name>.<suffix> for each entry. When the bare name legitimately has no
+// such record but a search suffix fails, the search-list error is what
+// survives: a clean NODATA becomes IsTemporary ("server misbehaving") instead
+// of IsNotFound. The routing gate would then defer that as dns_unavailable and
+// never revoke a binding whose MX record was removed — the light would stay
+// green. The trailing dot skips search expansion and yields the real answer.
+func absoluteName(d string) string {
+	if d == "" || strings.HasSuffix(d, ".") {
+		return d
+	}
+	return d + "."
+}
+
+// mxNotFound reports whether a lookup error is a definitive "this domain has no
+// such records" answer (NODATA or NXDOMAIN) rather than a lookup that could not
+// be completed. It is the difference between a routing verdict and a transient
+// resolver fault, and only the latter may defer.
+func mxNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
 
 // routedForDomain reports whether this receiver's own SMTP hostname is among the
