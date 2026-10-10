@@ -1054,3 +1054,36 @@ func (s *Store) RemoteLabelsForInbox(ctx context.Context, accountID, inboxID str
 	}
 	return out, rows.Err()
 }
+
+// ResetRemoteInboxState drops every cached remote artefact of a standalone inbox:
+// the header/thread index, local labels, folders, detection cursors, arrivals,
+// notification baselines and auto-action state. It is called when the inbox is
+// rebound to a different mailbox (host, login or sync root), because a UID or
+// Message-ID from the old mailbox may coincide with an unrelated message in the
+// new one. The index status returns to never_started so the next read re-indexes
+// from scratch. Pending outbound jobs are intentionally not touched here.
+func (s *Store) ResetRemoteInboxState(ctx context.Context, accountID, inboxID string) error {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmts := []string{
+		`DELETE FROM inbox_remote_actions WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_remote_arrivals WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_remote_notifications WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_remote_cursors WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`,
+		`DELETE FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote'`,
+	}
+	for _, q := range stmts {
+		if _, err = tx.ExecContext(ctx, q, accountID, inboxID); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET remote_index_status='',remote_index_error='',remote_indexed_at='' WHERE id=? AND account_id=?`, inboxID, accountID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
