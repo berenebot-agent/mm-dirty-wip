@@ -503,20 +503,10 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 
 	// Resolve the live folder and its UIDVALIDITY. A folder outside the inbox
 	// scope is never watched.
-	res, err := sess.Search(ctx, folder, imap.SearchQuery{Limit: imap.MaxSearchResults})
-	if err != nil {
-		w.log.Debug("remote detection search", "inbox_id", inbox.ID, "error", err)
-		return
-	}
 	validity, verr := remoteFolderUIDValidity(ctx, sess, folder)
 	if verr != nil {
 		w.log.Debug("remote detection validity", "inbox_id", inbox.ID, "error", verr)
 		return
-	}
-	uids := sortedUIDs(res.UIDs)
-	maxUID := uint32(0)
-	if len(uids) > 0 {
-		maxUID = uids[len(uids)-1]
 	}
 
 	cursor, ok, cerr := w.svc.Store.GetRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder)
@@ -526,7 +516,20 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	}
 	if !ok || !cursor.BaselineDone || (cursor.UIDValidity != 0 && cursor.UIDValidity != validity) {
 		// First observation (or a UIDVALIDITY reset): establish the notification
-		// and detection baseline to the current maximum UID and emit nothing.
+		// and detection baseline to the current maximum UID and emit nothing. A
+		// bounded, newest-first, single-UID search yields the folder maximum
+		// directly; the default ascending order would be truncated to the OLDEST
+		// page on a folder larger than one page, yielding a baseline far below
+		// the true maximum and permanently suppressing detection.
+		res, serr := sess.Search(ctx, folder, imap.SearchQuery{NewestFirst: true, Limit: 1})
+		if serr != nil {
+			w.log.Debug("remote detection baseline search", "inbox_id", inbox.ID, "error", serr)
+			return
+		}
+		maxUID := uint32(0)
+		if len(res.UIDs) > 0 {
+			maxUID = res.UIDs[0]
+		}
 		if err := w.svc.Store.EstablishRemoteBaseline(ctx, inbox.AccountID, inbox.ID, folder, validity, maxUID); err != nil {
 			w.log.Error("remote baseline establish", "inbox_id", inbox.ID, "error", err)
 			return
@@ -541,13 +544,21 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		return
 	}
 
-	newUIDs := uidsAfter(uids, cursor.LastUID)
+	// Incremental: the oldest new UIDs strictly above the cursor, fetched with an
+	// IMAP-native, bounded "(cursor+1):*" search so a detector never has to load
+	// the whole folder (and never files the wrong UIDs when the folder is larger
+	// than one search page). The cursor only advances to a UID whose arrival rows
+	// are all persisted, so a mid-pass failure re-detects rather than skips.
+	res, err := sess.Search(ctx, folder, imap.SearchQuery{AfterUID: cursor.LastUID, Limit: remoteArrivalPageLimit})
+	if err != nil {
+		w.log.Debug("remote detection search", "inbox_id", inbox.ID, "error", err)
+		return
+	}
+	newUIDs := res.UIDs
 	if len(newUIDs) == 0 {
 		return
 	}
-	// Cap the work per pass: process the lowest remoteArrivalPageLimit new UIDs and
-	// let the next signal catch up the rest. The cursor only advances to a UID
-	// whose arrival rows are all persisted.
+	// Defensive: a session that ignores Limit must not blow the per-pass bound.
 	if len(newUIDs) > remoteArrivalPageLimit {
 		newUIDs = newUIDs[:remoteArrivalPageLimit]
 	}
@@ -829,13 +840,19 @@ func (w *RemoteWorker) reconcileRemoteActions() {
 func (w *RemoteWorker) applyRemoteTrash(ctx context.Context, a store.RemoteAction) {
 	inbox, err := w.svc.Store.GetInboxInternal(ctx, a.AccountID, a.InboxID)
 	if err != nil {
+		// The inbox is gone (or unreadable). Record the reason so the skipped
+		// action is auditable, then mark done so it does not pin the sweep.
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "inbox unavailable for auto-trash")
+		w.log.Warn("remote auto-trash skipped: inbox unavailable", "arrival", a.ArrivalID, "inbox_id", a.InboxID, "error", err)
 		_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
 		return
 	}
 	trash, terr := w.svc.Store.GetSystemFolder(ctx, a.AccountID, a.InboxID, model.FolderRoleTrash)
 	if terr != nil || strings.TrimSpace(trash.Path) == "" {
-		// No remote Trash folder: the action cannot be applied. Mark done so it
-		// does not pin the sweep forever.
+		// No remote Trash folder: the action cannot be applied. Record the
+		// reason, then mark done so it does not pin the sweep forever.
+		_ = w.svc.Store.RecordRemoteActionError(ctx, a.AccountID, a.ArrivalID, "no remote Trash folder mapped for auto-trash")
+		w.log.Warn("remote auto-trash skipped: no Trash folder", "arrival", a.ArrivalID, "inbox_id", a.InboxID)
 		_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
 		return
 	}
@@ -977,30 +994,6 @@ func internalDatePtr(h imap.MessageHeader) *time.Time {
 	}
 	t := h.InternalDate.UTC()
 	return &t
-}
-
-// sortedUIDs returns a copy of uids sorted ascending. The search already returns
-// ascending UIDs; this is defensive.
-func sortedUIDs(uids []uint32) []uint32 {
-	out := make([]uint32, len(uids))
-	copy(out, uids)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
-	return out
-}
-
-// uidsAfter returns the ascending UIDs strictly greater than after.
-func uidsAfter(uids []uint32, after uint32) []uint32 {
-	var out []uint32
-	for _, u := range uids {
-		if u > after {
-			out = append(out, u)
-		}
-	}
-	return out
 }
 
 // limitedBuffer is a small in-memory io.Writer used to read back a transient remote

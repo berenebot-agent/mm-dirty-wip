@@ -182,8 +182,11 @@ type MoveResult struct {
 
 // MoveMessage moves a message from its folder to destFolder, preserving the
 // destination UID when the server returns COPYUID. It validates the source
-// UIDVALIDITY before moving. When the server lacks MOVE, go-imap falls back to
-// COPY + STORE \Deleted + EXPUNGE, which is handled by the library.
+// UIDVALIDITY before moving. When the server lacks MOVE but supports UIDPLUS,
+// go-imap falls back to COPY + STORE \Deleted + UID EXPUNGE, which is handled by
+// the library. When it supports neither, the move is refused: the library's
+// fallback would otherwise issue a blanket EXPUNGE that deletes unrelated
+// \Deleted messages in the folder.
 //
 // The move is not atomic across the source check and the command; a concurrent
 // deletion can make the source vanish, in which case the library reports an
@@ -192,6 +195,14 @@ func (a *Adapter) MoveMessage(ctx context.Context, loc Locator, destFolder strin
 	destFolder = strings.TrimSpace(destFolder)
 	if destFolder == "" {
 		return MoveResult{}, fmt.Errorf("imap: a destination folder is required")
+	}
+	// The library's fallback for a server without MOVE is COPY + STORE \Deleted
+	// + EXPUNGE, and it uses UID EXPUNGE only when UIDPLUS is present; with
+	// neither MOVE nor UIDPLUS it issues a blanket EXPUNGE that would expunge
+	// any other message already flagged \Deleted in the folder. Refuse rather
+	// than risk unrelated data loss.
+	if !a.caps.Move && !a.caps.UIDPlus {
+		return MoveResult{}, Unsupported("moving a message requires MOVE or UIDPLUS; a blanket EXPUNGE is not issued")
 	}
 	res := MoveResult{SourceUID: loc.UID}
 	err := a.withSelectRW(ctx, loc.FolderPath, func(data *imap.SelectData) error {
@@ -242,10 +253,17 @@ func (a *Adapter) ExpungeUIDs(ctx context.Context, folder string, uidValidity ui
 }
 
 // DeleteMessage marks a message \Deleted and expunges it by UID. Both steps are
-// UID-targeted: it never issues a blanket EXPUNGE. It requires UIDPLUS for the
-// expunge; without it the \Deleted flag is set but the expunge is unsupported
-// and reported.
+// UID-targeted: it never issues a blanket EXPUNGE. It requires UIDPLUS (or
+// IMAP4rev2); without it the operation is refused before any flag is set, so a
+// message is never left flagged \Deleted with the caller told the delete failed.
 func (a *Adapter) DeleteMessage(ctx context.Context, loc Locator) error {
+	// Refuse before marking the message \Deleted when the server cannot remove
+	// it by UID: otherwise the message is left flagged \Deleted (hidden by many
+	// clients) while the caller is told the delete failed, so MailMoose and the
+	// provider disagree. A blanket EXPUNGE is never issued.
+	if !a.caps.UIDPlus {
+		return Unsupported("deleting a message requires UIDPLUS or IMAP4rev2; a blanket EXPUNGE is not issued")
+	}
 	if _, err := a.SetFlags(ctx, loc, []string{FlagDeleted}, nil); err != nil {
 		return err
 	}

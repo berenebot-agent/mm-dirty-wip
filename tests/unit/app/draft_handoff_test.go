@@ -18,15 +18,17 @@ import (
 // a lookup then verifies, an unconfirmed append whose lookup also fails
 // (ambiguous), or a terminal failure.
 type fakeHandoff struct {
-	confirmed  bool
-	remoteUID  uint32
-	appendErr  error
-	lookupErr  error
-	lookupHit  bool
-	appends    []fakeAppend
-	lookups    int
-	failAppend bool
-	seenHeader string
+	confirmed       bool
+	remoteUID       uint32
+	appendErr       error
+	lookupErr       error
+	lookupErrOnce   bool
+	lookupHit       bool
+	lookupAmbiguous bool
+	appends         []fakeAppend
+	lookups         int
+	failAppend      bool
+	seenHeader      string
 }
 
 type fakeAppend struct {
@@ -54,11 +56,14 @@ func (f *fakeHandoff) Append(_ context.Context, inboxID string, raw []byte, mess
 
 func (f *fakeHandoff) Lookup(_ context.Context, inboxID, handoffID, messageID string) (app.HandoffOutcome, error) {
 	f.lookups++
-	if f.lookupErr != nil {
+	if f.lookupErr != nil && (!f.lookupErrOnce || f.lookups == 1) {
 		return app.HandoffOutcome{}, f.lookupErr
 	}
 	if f.lookupHit {
-		return app.HandoffOutcome{Confirmed: true, RemoteUID: f.remoteUID, RemoteFolder: "Drafts"}, nil
+		return app.HandoffOutcome{Confirmed: true, Found: true, RemoteUID: f.remoteUID, RemoteFolder: "Drafts"}, nil
+	}
+	if f.lookupAmbiguous {
+		return app.HandoffOutcome{Found: true, Ambiguous: true, RemoteFolder: "Drafts"}, nil
 	}
 	return app.HandoffOutcome{Confirmed: false}, nil
 }
@@ -250,6 +255,40 @@ func TestRemoteDraftHandoffAmbiguousWhenUnverifiable(t *testing.T) {
 	svc.PublishHandoffs(ctx)
 	if len(fake.appends) != 1 {
 		t.Fatalf("ambiguous handoff re-appended: %d appends", len(fake.appends))
+	}
+}
+
+// TestRemoteDraftHandoffTransientVerificationRetries proves a transient lookup
+// failure during verification leaves the handoff pending and is retried by lookup
+// on the next pass (never a blind re-append), rather than being terminalised as
+// ambiguous.
+func TestRemoteDraftHandoffTransientVerificationRetries(t *testing.T) {
+	svc, u, _, _ := testService(t)
+	ctx := context.Background()
+	box := standaloneInbox(t, svc, u.AccountID, "verify@remote.example")
+	asst := assistantPrincipal(u.AccountID, box.ID)
+	d := standaloneDraft(t, svc, u.AccountID, box)
+	if _, err := svc.RequestSend(ctx, asst, d.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	// The append is accepted but unconfirmed; the first verification lookup fails
+	// transiently, and a later lookup finds the draft.
+	fake := &fakeHandoff{confirmed: false, lookupErrOnce: true, lookupErr: errors.New("temporary verification failure"), lookupHit: true, remoteUID: 42}
+	svc.SetHandoffPublisher(fake)
+	svc.PublishHandoffs(ctx)
+	h, _ := svc.Store.LatestAssistantHandlingForDraft(ctx, u.AccountID, d.ID)
+	got, _ := svc.Store.GetAssistantHandlingInternal(ctx, u.AccountID, h.ID)
+	if got.Publication != model.HandoffPending {
+		t.Fatalf("state=%q want pending after transient verification failure", got.Publication)
+	}
+	// The next pass re-verifies by lookup and publishes; it must not append again.
+	svc.PublishHandoffs(ctx)
+	got, _ = svc.Store.GetAssistantHandlingInternal(ctx, u.AccountID, h.ID)
+	if got.Publication != model.HandoffPublished || got.RemoteUID != 42 {
+		t.Fatalf("state=%q uid=%d want published/42", got.Publication, got.RemoteUID)
+	}
+	if len(fake.appends) != 1 {
+		t.Fatalf("appends=%d want 1 (no duplicate draft)", len(fake.appends))
 	}
 }
 
