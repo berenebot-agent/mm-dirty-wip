@@ -1194,7 +1194,12 @@ func (s *Server) uiForwardSend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request, kind string) {
 	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	// resolveMessageAny resolves a local message first and, failing that, a
+	// standalone inbox's cached remote message, so a reply/forward to a remote
+	// message resolves the same id the compose form was built from. The app
+	// service's reply/forward source resolvers then fetch a remote source's
+	// metadata (and body, for a forward) live.
+	m, _, _, err := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "message not found", 404)
 		return

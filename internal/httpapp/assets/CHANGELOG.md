@@ -6,6 +6,19 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A standalone (IMAP) inbox's message now opens in the same reader as any other
+  message, so it exposes Reply, Reply all, Forward, Move to trash (and Restore /
+  Delete forever in its Trash folder) instead of only "Mark unread". A reply or
+  forward to a remote message no longer answers "message not found": the send
+  handler resolves a remote id through the same local/remote boundary as the
+  other message actions. Remote trash/spam state is read from the message's
+  remote role folder. The reader also shows the message's attachments (fetched
+  live by MIME part path with a secure `Content-Disposition: attachment`
+  download) and its conversation thread from the cached remote index, and
+  offers a plain-text alternative when the body has both HTML and text.
+
 ### Performance
 
 - Opening a standalone message immediately renders cached metadata with a body
