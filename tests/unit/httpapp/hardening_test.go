@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,70 @@ func TestRawMIMERouteIsCanonical(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("raw-mime route = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMessagesScopedBeforeCursorPaginates proves the scoped domain-inbox message
+// listing applies its `before` cursor and returns a cursor while more rows exist,
+// so a client can page past the first page. This is the local counterpart of the
+// merged account-wide pagination.
+func TestMessagesScopedBeforeCursorPaginates(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const total = 5
+	for i := 0; i < total; i++ {
+		rec := store.InboundRecord{
+			Inbox: box, Provider: "mailgun",
+			ProviderDeliveryID: fmt.Sprintf("pg-%d", i),
+			RFCMessageID:       fmt.Sprintf("<pg%d@test>", i),
+			From:               model.Address{Address: "a@outside.test"},
+			To:                 []string{box.Address}, EnvelopeTo: []string{box.Address},
+			Subject: fmt.Sprintf("M%d", i), Text: "x",
+			RawPath: fmt.Sprintf("messages/pg%d.eml", i), SizeBytes: 4,
+			ReceivedAt: time.Now().UTC(),
+		}
+		if _, _, _, err := svc.Store.CommitInbound(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type env struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		NextCursor string `json:"next_cursor"`
+	}
+	seen := map[string]bool{}
+	before := ""
+	for page := 0; page < total+2; page++ {
+		u := "/v1/messages?inbox=" + box.ID + "&limit=2"
+		if before != "" {
+			u += "&before=" + url.QueryEscape(before)
+		}
+		rr := apiGet(t, h, u, key)
+		if rr.Code != 200 {
+			t.Fatalf("page %d = %d: %s", page, rr.Code, rr.Body.String())
+		}
+		var e env
+		if err := json.Unmarshal(rr.Body.Bytes(), &e); err != nil {
+			t.Fatal(err)
+		}
+		for _, it := range e.Items {
+			if seen[it.ID] {
+				t.Fatalf("duplicate message %q across pages", it.ID)
+			}
+			seen[it.ID] = true
+		}
+		if e.NextCursor == "" {
+			break
+		}
+		before = e.NextCursor
+	}
+	if len(seen) != total {
+		t.Fatalf("paged %d of %d messages", len(seen), total)
 	}
 }
 

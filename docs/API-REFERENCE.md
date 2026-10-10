@@ -20,7 +20,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes/{id} | Get an inbox | read |
 | PATCH | /v1/inboxes/{id} | Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender, trash_retention_days, storage_quota_bytes, auto_mark_read_on_delivery, auto_trash_after_delivery_hours, delivery_trigger) | owner |
 | DELETE | /v1/inboxes/{id} | Delete an inbox (Admin) | admin |
-| POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Owner) | owner |
+| POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Assistant/Owner) | assistant |
 
 ## Mailbox
 
@@ -66,7 +66,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
 | DELETE | /v1/messages/{id} | Move a message to Trash (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
-| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Owner) | owner |
+| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
 
 ## Attachments

@@ -1351,10 +1351,11 @@ func TestRemoteReconcileBackfillsWholeFolder(t *testing.T) {
 	}
 }
 
-// TestRemotePurgeRequiresOwnerAndTrash proves a permanent remote purge requires
-// Owner and a message that is currently in the Trash-role folder, and uses a
-// UID-targeted delete (never a blanket expunge).
-func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
+// TestRemotePurgeRequiresAssistantAndTrash proves a permanent remote purge
+// requires at least Assistant (Read is refused) and a message that is currently
+// in the Trash-role folder, and uses a UID-targeted delete (never a blanket
+// expunge).
+func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1367,6 +1368,7 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 	}
 	owner := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
 	assistant := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "assistant"}}
+	reader := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "read"}}
 	id := remoteIDForUID(t, rm, u, box, m.uid)
 
 	// A message still in INBOX cannot be permanently purged.
@@ -1377,16 +1379,16 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 	if err := rm.PurgeRemoteMessage(ctx, owner, box.ID, id); !errors.As(err, &mb) || mb.Kind != model.ErrKindConflict {
 		t.Fatalf("non-trash purge err = %v want conflict", err)
 	}
-	// An assistant (not Owner) is refused.
 	if _, err := rm.MoveRemoteMessage(ctx, owner, box.ID, id, "Trash"); err != nil {
 		t.Fatal(err)
 	}
-	if err := rm.PurgeRemoteMessage(ctx, assistant, box.ID, id); err == nil {
-		t.Fatal("non-owner purge succeeded")
+	// A Read principal is refused; Assistant may purge (only sending differs).
+	if err := rm.PurgeRemoteMessage(ctx, reader, box.ID, id); err == nil {
+		t.Fatal("read purge succeeded")
 	}
-	// Owner purges the trashed message with a UID-targeted delete.
-	if err := rm.PurgeRemoteMessage(ctx, owner, box.ID, id); err != nil {
-		t.Fatalf("owner purge: %v", err)
+	// Assistant purges the trashed message with a UID-targeted delete.
+	if err := rm.PurgeRemoteMessage(ctx, assistant, box.ID, id); err != nil {
+		t.Fatalf("assistant purge: %v", err)
 	}
 	if fake.deleteCalled != 1 {
 		t.Fatalf("delete calls = %d want 1", fake.deleteCalled)
@@ -1395,7 +1397,7 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 		t.Fatalf("purged message still cached: %v", err)
 	}
 	// A second purge is an idempotent success.
-	if err := rm.PurgeRemoteMessage(ctx, owner, box.ID, id); err != nil {
+	if err := rm.PurgeRemoteMessage(ctx, assistant, box.ID, id); err != nil {
 		t.Fatalf("idempotent purge: %v", err)
 	}
 }

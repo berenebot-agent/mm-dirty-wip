@@ -724,12 +724,20 @@ func (w *RemoteWorker) isHandoffNotification(ctx context.Context, inbox model.In
 	// The frozen handoff draft's Message-ID is recorded, as is the generated
 	// notification email's Message-ID. Either one coming back is excluded by a
 	// durable lookup, so no live body fetch is needed and the exclusion survives a
-	// restart.
-	if _, err := w.svc.Store.HandoffByMessageID(ctx, inbox.AccountID, id); err == nil {
-		return true
-	}
-	if _, err := w.svc.Store.HandoffByNotificationMessageID(ctx, inbox.AccountID, id); err == nil {
-		return true
+	// restart. An IMAP ENVELOPE strips the angle brackets, while the stored
+	// handoff Message-IDs are bracketed, so test both the wire form and its
+	// bracketed normalization.
+	candidates := []string{id, ensureMessageID(id)}
+	for _, c := range candidates {
+		if c == "" {
+			continue
+		}
+		if _, err := w.svc.Store.HandoffByMessageID(ctx, inbox.AccountID, c); err == nil {
+			return true
+		}
+		if _, err := w.svc.Store.HandoffByNotificationMessageID(ctx, inbox.AccountID, c); err == nil {
+			return true
+		}
 	}
 	return false
 }

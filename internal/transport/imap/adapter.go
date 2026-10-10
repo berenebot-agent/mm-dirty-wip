@@ -61,14 +61,7 @@ func (s RootScope) InScope(path string) bool {
 		return false
 	}
 	for _, ex := range s.ExcludePrefixes {
-		ex = strings.TrimSpace(ex)
-		if ex == "" {
-			continue
-		}
-		if strings.EqualFold(path, ex) {
-			return false
-		}
-		if s.Delimiter != 0 && hasDelimiterPrefix(path, ex, s.Delimiter) {
+		if namespaceCoveredBy(path, strings.TrimSpace(ex), s.Delimiter) {
 			return false
 		}
 	}
@@ -122,6 +115,53 @@ func hasDelimiterPrefix(path, root string, delim rune) bool {
 		return false
 	}
 	return rune(path[len(root)]) == delim
+}
+
+// namespaceCoveredBy reports whether path is the namespace prefix or lies under
+// it. It handles a prefix that is already terminated by its delimiter (for
+// example a server NAMESPACE descriptor reporting "Shared/" or "Other Users.")
+// which a plain delimiter-child check would miss, and it tolerates either the
+// session delimiter or the conventional '/' and '.' separators so a mismatch
+// between the personal and excluded namespace delimiters still isolates them.
+func namespaceCoveredBy(path, prefix string, delim rune) bool {
+	if prefix == "" {
+		return false
+	}
+	if strings.EqualFold(path, prefix) {
+		return true
+	}
+	// A delimiter-terminated prefix also covers the namespace root without its
+	// trailing delimiter ("Shared/" covers "Shared").
+	if trimmed := strings.TrimRight(prefix, "/."); trimmed != "" && strings.EqualFold(path, trimmed) {
+		return true
+	}
+	for _, d := range namespaceDelimiters(delim) {
+		if strings.HasSuffix(prefix, string(d)) {
+			if len(path) > len(prefix) && strings.EqualFold(path[:len(prefix)], prefix) {
+				return true
+			}
+			continue
+		}
+		if hasDelimiterPrefix(path, prefix, d) {
+			return true
+		}
+	}
+	return false
+}
+
+// namespaceDelimiters returns the delimiter to test plus the conventional
+// '/' and '.', de-duplicated.
+func namespaceDelimiters(primary rune) []rune {
+	out := make([]rune, 0, 3)
+	if primary != 0 {
+		out = append(out, primary)
+	}
+	for _, d := range []rune{'/', '.'} {
+		if d != primary {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // Capabilities is the adapter's view of what the connected server supports. It

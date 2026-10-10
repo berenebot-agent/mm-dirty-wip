@@ -425,7 +425,24 @@ func validateHeaderField(name, value string) error {
 	return nil
 }
 
+// BuildMessage renders a transmitted message ready to hand to a provider or an
+// SMTP envelope. Bcc recipients are deliberately NOT written into the MIME:
+// they travel only in the envelope, so recipients never see each other's
+// addresses. Use BuildDraftMessage for content stored as a draft instead.
 func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {
+	return buildMessage(from, to, cc, bcc, subject, text, html, messageID, inReplyTo, refs, date, attachments, false)
+}
+
+// BuildDraftMessage renders a message for storage as a draft (for example a
+// remote-Drafts handoff). Unlike BuildMessage it INCLUDES the Bcc header: a
+// draft is a self-contained message a human or editor later sends from their own
+// client, where no MailMoose envelope exists, so the Bcc recipients must travel
+// with the stored draft. Do NOT use this to transmit mail.
+func BuildDraftMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment) ([]byte, error) {
+	return buildMessage(from, to, cc, bcc, subject, text, html, messageID, inReplyTo, refs, date, attachments, true)
+}
+
+func buildMessage(from Address, to, cc, bcc []string, subject, text, html, messageID, inReplyTo string, refs []string, date time.Time, attachments []Attachment, includeBcc bool) ([]byte, error) {
 	if err := validateHeaderField("from name", from.Name); err != nil {
 		return nil, err
 	}
@@ -463,9 +480,13 @@ func BuildMessage(from Address, to, cc, bcc []string, subject, text, html, messa
 	if len(cc) > 0 {
 		fmt.Fprintf(w, "Cc: %s\r\n", strings.Join(cc, ", "))
 	}
-	// BCC recipients are deliberately NOT written into the generated MIME.
-	// They are carried only in the provider/SMTP envelope so recipients never
-	// see each other's addresses.
+	// BCC recipients are deliberately NOT written into a transmitted message's
+	// MIME: they travel only in the provider/SMTP envelope so recipients never
+	// see each other's addresses. A message stored as a draft (includeBcc) has no
+	// envelope, so its Bcc is written so the draft remains sendable as reviewed.
+	if includeBcc && len(bcc) > 0 {
+		fmt.Fprintf(w, "Bcc: %s\r\n", strings.Join(bcc, ", "))
+	}
 	fmt.Fprintf(w, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
 	fmt.Fprintf(w, "Date: %s\r\n", date.Format(time.RFC1123Z))
 	fmt.Fprintf(w, "Message-ID: %s\r\n", messageID)

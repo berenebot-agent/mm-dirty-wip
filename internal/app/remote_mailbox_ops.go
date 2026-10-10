@@ -818,19 +818,17 @@ func (m *RemoteMailboxService) fetchRemoteAttachmentFor(ctx context.Context, acc
 
 // PurgeRemoteMessage permanently erases a standalone inbox's remote message with
 // a UID-targeted expunge (UID EXPUNGE, never a blanket EXPUNGE) and removes its
-// cached metadata row. It requires Owner on the inbox: permanent erasure is an
-// irreversible provider operation. The message must currently live in a
-// Trash-role folder, so a purge can never erase live mail straight out of the
-// Inbox: the caller must have trashed it first (or the server's Trash folder is
-// the mapped Trash role). When the cached metadata is already gone the purge is
-// a no-op success (idempotent), because the server may have expunged it already.
+// cached metadata row. It requires Assistant or Owner on the inbox (a Read
+// principal is refused): an Assistant may permanently delete a trashed remote
+// message, the same as an Owner. The message must currently live in a Trash-role
+// folder, so a purge can never erase live mail straight out of the Inbox: the
+// caller must have trashed it first (or the server's Trash folder is the mapped
+// Trash role). When the cached metadata is already gone the purge is a no-op
+// success (idempotent), because the server may have expunged it already.
 func (m *RemoteMailboxService) PurgeRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID string) error {
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return err
-	}
-	if !p.CanOwn(inboxID) && !p.Admin {
-		return model.NewMailboxError(model.ErrKindForbidden, "not permitted", false, store.ErrForbidden)
 	}
 	rec, err := m.Service.Store.GetRemoteMessage(ctx, p.AccountID, inboxID, messageID)
 	if err != nil {
@@ -931,26 +929,29 @@ func (m *RemoteMailboxService) ResolveRemoteForward(ctx context.Context, account
 	msg := remoteMessageToModelMessage(rec)
 	path, _, ferr := m.fetchRemoteRawFor(ctx, accountID, rec.InboxID, rec.ID, &rec)
 	if ferr != nil {
-		// Metadata is known; a body fetch failure still allows a metadata-only
-		// forward rather than failing the whole send.
-		return msg, nil, true, nil
+		// A forward carries the original body and attachments. If the live
+		// retrieval fails we must not silently send a degraded (metadata-only)
+		// forward; report the failure so the send is refused.
+		return model.Message{}, nil, true, ferr
 	}
 	defer m.CleanupRemoteRaw(path)
 	parsed, perr := mailparse.ParseFile(path, m.Service.mimeLimits())
 	if perr != nil {
-		return msg, nil, true, nil
+		return model.Message{}, nil, true, model.NewMailboxError(model.ErrKindUnavailable, "the remote message body could not be parsed for forwarding", true, perr)
 	}
 	msg.Text = parsed.Text
 	msg.HTML = parsed.HTML
 	var atts []SendAttachment
-	_ = mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
+	if aerr := mailparse.ExtractAllAttachments(path, func(a mailparse.Attachment, r io.Reader) error {
 		var buf bytes.Buffer
 		if _, cerr := io.Copy(&buf, r); cerr != nil {
 			return cerr
 		}
 		atts = append(atts, SendAttachment{Filename: a.Filename, ContentType: a.ContentType, Content: buf.Bytes()})
 		return nil
-	}, m.Service.mimeLimits())
+	}, m.Service.mimeLimits()); aerr != nil {
+		return model.Message{}, nil, true, model.NewMailboxError(model.ErrKindUnavailable, "the remote message attachments could not be read for forwarding", true, aerr)
+	}
 	return msg, atts, true, nil
 }
 
@@ -962,7 +963,6 @@ func remoteMessageToModelMessage(rec store.RemoteMessage) model.Message {
 		ID:             rec.ID,
 		AccountID:      rec.AccountID,
 		InboxID:        rec.InboxID,
-		ThreadID:       rec.ThreadKey,
 		RFCMessageID:   rec.RFCMessageID,
 		InReplyTo:      rec.InReplyTo,
 		References:     rec.References,
@@ -977,6 +977,12 @@ func remoteMessageToModelMessage(rec store.RemoteMessage) model.Message {
 		FolderPath:     rec.FolderPath,
 		Direction:      "inbound",
 	}
+	// ThreadID is deliberately left empty. A remote thread key is not a local
+	// threads.id, so carrying it into an outbound message would violate the
+	// messages.thread_id foreign key. Leaving it empty makes the enqueue create a
+	// valid local thread for the reply; mapping local and remote conversations to
+	// one shared identity is tracked separately.
+	_ = rec.ThreadKey
 	if rec.ReceivedAt != nil {
 		if t, err := time.Parse(time.RFC3339Nano, *rec.ReceivedAt); err == nil {
 			msg.CreatedAt = t
