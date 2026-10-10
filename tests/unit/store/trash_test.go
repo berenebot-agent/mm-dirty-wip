@@ -99,12 +99,13 @@ func TestTrashRestorePurgeLifecycle(t *testing.T) {
 	}
 }
 
-// TestTrashRequiresAssistantAndPurgeRequiresOwner checks the role gates.
-func TestTrashRequiresAssistantAndPurgeRequiresOwner(t *testing.T) {
+// TestTrashRequiresAssistantAndPurgeRequiresAssistant checks the role gates:
+// trashing and purging both require at least Assistant (Read is refused), since
+// the only difference between Assistant and Owner is sending.
+func TestTrashRequiresAssistantAndPurgeRequiresAssistant(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
-	admin := model.Principal{AccountID: u.AccountID, Admin: true}
 	m, _, _, err := s.CommitInbound(ctx, inbound(box, "trash-2", "<t2@test>", "", nil, "s", "b"))
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +118,14 @@ func TestTrashRequiresAssistantAndPurgeRequiresOwner(t *testing.T) {
 	if _, _, err := s.TrashMessage(ctx, assistant, m.ID); err != nil {
 		t.Fatalf("assistant trash err=%v", err)
 	}
-	if _, _, _, err := s.PurgeMessage(ctx, assistant, m.ID); !errors.Is(err, store.ErrForbidden) {
+	if _, _, _, err := s.PurgeMessage(ctx, read, m.ID); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("read purge err=%v", err)
+	}
+	if _, _, _, err := s.PurgeMessage(ctx, assistant, m.ID); err != nil {
 		t.Fatalf("assistant purge err=%v", err)
 	}
-	if _, _, _, err := s.PurgeMessage(ctx, admin, m.ID); err != nil {
-		t.Fatalf("admin purge err=%v", err)
+	if _, err := s.GetMessageByID(ctx, u.AccountID, m.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("purged message still present: %v", err)
 	}
 }
 

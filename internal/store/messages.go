@@ -929,9 +929,12 @@ func (s *Store) RestoreMessage(ctx context.Context, p model.Principal, id string
 
 // PurgeMessage permanently erases a trashed message: it removes the row, FTS
 // entry and stored bytes, and returns the raw MIME path (and size) so the
-// caller can unlink the file. It requires Owner on the message's inbox. Only a
-// trashed message can be purged; an ordinary message returns ErrConflict and
-// must be trashed first. It returns the durable message.purged event.
+// caller can unlink the file. It requires Assistant or Owner on the message's
+// inbox: an Assistant may permanently delete a trashed message, the same as an
+// Owner (the only difference between the roles is sending). A Read principal is
+// refused. Only a trashed message can be purged; an ordinary message returns
+// ErrConflict and must be trashed first. It returns the durable message.purged
+// event.
 func (s *Store) PurgeMessage(ctx context.Context, p model.Principal, id string) (string, int64, model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -942,7 +945,7 @@ func (s *Store) PurgeMessage(ctx context.Context, p model.Principal, id string) 
 	if err != nil {
 		return "", 0, model.Event{}, err
 	}
-	if !p.CanOwn(m.InboxID) {
+	if !p.CanAssist(m.InboxID) {
 		return "", 0, model.Event{}, ErrForbidden
 	}
 	if m.Internal {
@@ -988,10 +991,12 @@ func purgeMessageTx(ctx context.Context, tx *sql.Tx, accountID string, m model.M
 }
 
 // EmptyTrash permanently purges every trashed message in an inbox and returns
-// the raw MIME paths to unlink. It requires Owner on the inbox. The purge is a
-// single transaction; events are emitted per purged message.
+// the raw MIME paths to unlink. It requires Assistant or Owner on the inbox (a
+// Read principal is refused); the only difference between Assistant and Owner is
+// sending. The purge is a single transaction; events are emitted per purged
+// message.
 func (s *Store) EmptyTrash(ctx context.Context, p model.Principal, inboxID string) ([]string, []model.Event, error) {
-	if !p.CanOwn(inboxID) {
+	if !p.CanAssist(inboxID) {
 		return nil, nil, ErrForbidden
 	}
 	tx, err := s.write.BeginTx(ctx, nil)

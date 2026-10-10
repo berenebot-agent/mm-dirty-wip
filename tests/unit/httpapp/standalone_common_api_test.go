@@ -1735,9 +1735,10 @@ func seedInboundAt(t *testing.T, svc *app.Service, box model.Inbox, delivery, rf
 	return m
 }
 
-// TestRemotePurgeRequiresOwnerAndTrash proves a remote permanent purge is a
-// UID-targeted expunge that requires Owner and only acts on a trashed message.
-func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
+// TestRemotePurgeRequiresAssistantAndTrash proves a remote permanent purge is a
+// UID-targeted expunge that requires at least Assistant (Read is refused) and only
+// acts on a trashed message.
+func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
 	svc := newIsolatedService(t)
 	u := createAdmin(t, svc)
 	box := createStandalone(t, svc, u)
@@ -1769,8 +1770,8 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 		t.Fatalf("no cached remote message: %s", rr.Body.String())
 	}
 	id := env.Items[0].ID
-	// An Assistant-only key cannot purge.
-	_, readKey, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "assistant", false, map[string]string{box.ID: "assistant"})
+	// A Read-only key cannot purge.
+	_, readKey, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "reader", false, map[string]string{box.ID: "read"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1779,17 +1780,21 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 403 {
-		t.Fatalf("assistant purge = %d want 403: %s", rr.Code, rr.Body.String())
+		t.Fatalf("read purge = %d want 403: %s", rr.Code, rr.Body.String())
 	}
-	// Owner purge of a non-trashed message is refused (must be in Trash first).
+	// An Assistant key cannot purge a message that is not in Trash yet.
+	_, asstKey, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "assistant", false, map[string]string{box.ID: "assistant"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	req = httptest.NewRequest("DELETE", "/v1/messages/"+id+"/purge", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Authorization", "Bearer "+asstKey)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 409 {
-		t.Fatalf("purge untrashed = %d want 409: %s", rr.Code, rr.Body.String())
+		t.Fatalf("assistant purge untrashed = %d want 409: %s", rr.Code, rr.Body.String())
 	}
-	// Trash then purge.
+	// Trash it, then an Assistant may purge (only sending differs from Owner).
 	req = httptest.NewRequest("DELETE", "/v1/messages/"+id, nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr = httptest.NewRecorder()
@@ -1798,11 +1803,11 @@ func TestRemotePurgeRequiresOwnerAndTrash(t *testing.T) {
 		t.Fatalf("trash = %d: %s", rr.Code, rr.Body.String())
 	}
 	req = httptest.NewRequest("DELETE", "/v1/messages/"+id+"/purge", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Authorization", "Bearer "+asstKey)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 204 {
-		t.Fatalf("purge = %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("assistant purge = %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

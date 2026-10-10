@@ -784,13 +784,9 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unknown folder", 400)
 			return
 		}
-		// One role check up front: purge needs Owner, everything else Assistant.
-		if action == "purge" {
-			if !p.CanOwn(box.ID) {
-				http.Error(w, "forbidden", 403)
-				return
-			}
-		} else if !p.CanAssist(box.ID) {
+		// Every bulk action here (including purge) requires Assistant; only
+		// sending needs Owner, and none of these actions sends.
+		if !p.CanAssist(box.ID) && !p.Admin {
 			http.Error(w, "forbidden", 403)
 			return
 		}
@@ -814,12 +810,9 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 // "all N" set is re-derived from the folder's cached remote index. A per-message
 // failure is counted out rather than aborting the batch.
 func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, action string) {
-	if action == "purge" {
-		if !p.CanOwn(box.ID) && !p.Admin {
-			http.Error(w, "forbidden", 403)
-			return
-		}
-	} else if !p.CanAssist(box.ID) && !p.Admin {
+	// Every bulk action here (including purge) requires Assistant; only sending
+	// needs Owner, and none of these actions sends.
+	if !p.CanAssist(box.ID) && !p.Admin {
 		http.Error(w, "forbidden", 403)
 		return
 	}
@@ -908,10 +901,8 @@ func (s *Server) bulkRemoteMessageAction(r *http.Request, p model.Principal, box
 			return true
 		}
 	case "purge":
-		// Permanent erasure is a remote expunge and requires Owner.
-		if !p.CanOwn(box.ID) && !p.Admin {
-			return false
-		}
+		// Permanent erasure is a remote expunge; Assistant or Owner may do it
+		// (the only role difference is sending), enforced by the app service.
 		if err := s.remoteMailbox().PurgeRemoteMessage(ctx, p, box.ID, id); err == nil {
 			return true
 		}
@@ -994,6 +985,22 @@ func (s *Server) bulkMessageAction(r *http.Request, p model.Principal, inboxID, 
 		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
 		s.Service.Hub.Publish(ev)
 		return true
+	case "move":
+		// The form submits the destination folder path; resolve it to this
+		// inbox's folder id before moving so a cross-inbox path can never move a
+		// message into another mailbox.
+		dest := strings.TrimSpace(r.Form.Get("dest"))
+		if dest == "" {
+			return false
+		}
+		folder, ferr := s.Service.Store.GetFolderByPath(r.Context(), p.AccountID, inboxID, dest)
+		if ferr != nil {
+			return false
+		}
+		if _, ev, err := s.Service.Store.MoveMessageToFolder(r.Context(), p, m.ID, folder.ID); err == nil {
+			s.publishStateEvent(ev)
+			return true
+		}
 	}
 	return false
 }

@@ -1630,10 +1630,18 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 			return SendResult{}, ErrReplyFromSpam
 		}
 		threadID = target.ThreadID
-		inReply = target.RFCMessageID
+		wantReply := target.RFCMessageID
 		refs = append(refs, target.References...)
 		if target.RFCMessageID != "" {
 			refs = appendUnique(refs, target.RFCMessageID)
+		}
+		// Normalize the reply headers to the wire form (angle brackets). A remote
+		// source's Message-ID/References come from an IMAP ENVELOPE, which strips
+		// the brackets; a local source already carries them. The helper is
+		// idempotent, so both produce a valid In-Reply-To/References header.
+		inReply = ensureMessageID(wantReply)
+		for i := range refs {
+			refs[i] = ensureMessageID(refs[i])
 		}
 		if len(to) == 0 {
 			if target.Direction == "inbound" {
@@ -2425,6 +2433,24 @@ func appendUnique(in []string, v string) []string {
 		}
 	}
 	return append(in, v)
+}
+
+// ensureMessageID returns a Message-ID in wire form, wrapped in angle brackets.
+// It is idempotent so it can be applied to both local ids (already bracketed) and
+// IMAP ENVELOPE ids (brackets stripped by the protocol). An empty value stays
+// empty.
+func ensureMessageID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	if !strings.HasPrefix(id, "<") {
+		id = "<" + id
+	}
+	if !strings.HasSuffix(id, ">") {
+		id = id + ">"
+	}
+	return id
 }
 func ReplySubject(s string) string {
 	s = strings.TrimSpace(s)

@@ -290,8 +290,8 @@ func TestAssistantPermissionsAndCrossInboxIsolation(t *testing.T) {
 }
 
 // TestTrashRestorePreservesFolder proves trashing keeps a message's folder
-// membership and restoring returns it to that same folder, and that only the
-// Owner can permanently purge.
+// membership and restoring returns it to that same folder, and that Assistant or
+// Owner can permanently purge (Read cannot).
 func TestTrashRestorePreservesFolder(t *testing.T) {
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
@@ -322,23 +322,32 @@ func TestTrashRestorePreservesFolder(t *testing.T) {
 	if err != nil || restored.MailboxID != custom.ID || restored.FolderPath != "Later" {
 		t.Fatalf("restored message folder=%q path=%q, want Later", restored.MailboxID, restored.FolderPath)
 	}
-	// Purge is Owner-only.
-	_, rkey, err := s.CreateAPIKey(ctx, u.AccountID, "assist", false, map[string]string{box.ID: "assistant"})
+	// Purge requires Assistant or Owner (the only role difference is sending); a
+	// Read principal is refused.
+	_, akey, err := s.CreateAPIKey(ctx, u.AccountID, "assist", false, map[string]string{box.ID: "assistant"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assist, err := s.APIKeyPrincipal(ctx, rkey)
+	assist, err := s.APIKeyPrincipal(ctx, akey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.TrashMessage(ctx, assist, m.ID); err != nil {
 		t.Fatalf("assistant trash: %v", err)
 	}
-	if _, _, _, err := s.PurgeMessage(ctx, assist, m.ID); !errors.Is(err, store.ErrForbidden) {
-		t.Fatalf("assistant purge err=%v, want ErrForbidden", err)
+	_, rkey, err := s.CreateAPIKey(ctx, u.AccountID, "reader", false, map[string]string{box.ID: "read"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, _, _, err := s.PurgeMessage(ctx, admin, m.ID); err != nil {
-		t.Fatalf("owner purge: %v", err)
+	reader, err := s.APIKeyPrincipal(ctx, rkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.PurgeMessage(ctx, reader, m.ID); !errors.Is(err, store.ErrForbidden) {
+		t.Fatalf("read purge err=%v, want ErrForbidden", err)
+	}
+	if _, _, _, err := s.PurgeMessage(ctx, assist, m.ID); err != nil {
+		t.Fatalf("assistant purge: %v", err)
 	}
 	if _, err := s.GetMessage(ctx, admin, m.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("purged message still readable: %v", err)

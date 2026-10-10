@@ -154,10 +154,13 @@ func (w *OutboxWorker) deliver() {
 		name string
 		fn   func()
 	}{
+		// Handoff publication runs first: a RemoteDraft handoff's "draft ready"
+		// notification (an outbound_workflow job) must never be delivered before
+		// the draft it announces is actually published.
+		{"publishHandoffs", w.publishHandoffs},
 		{"deliverDue", w.deliverDue},
 		{"deliverWorkflowDue", w.deliverWorkflowDue},
 		{"deliverWebhooks", w.deliverWebhooks},
-		{"publishHandoffs", w.publishHandoffs},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
 	}

@@ -263,8 +263,8 @@ from the remote server on each request and are never archived; the attachment
 listing is empty and parts are downloaded structurally by MIME part path. The
 single-message `GET` returns the **live body**, or `503` if the connector is
 unreachable — there is no offline fallback that serves cached metadata as the
-body. A purge (`DELETE /v1/messages/{id}/purge`) requires Owner and only acts on
-a message already in the Trash-role folder.
+body. A purge (`DELETE /v1/messages/{id}/purge`) requires Assistant or Owner and
+only acts on a message already in the Trash-role folder.
 
 ## 4. Messages
 
@@ -307,10 +307,10 @@ Deleting a message (`DELETE /v1/messages/{id}`, Assistant or Owner) moves it to
 Trash rather than erasing it: the message is hidden from lists, search, threads
 and unread counts, but its raw MIME, attachments and storage accounting are
 retained. `POST /v1/messages/{id}/restore` (Assistant or Owner) returns it to
-the mailbox. `DELETE /v1/messages/{id}/purge` (Owner) erases a trashed message
-permanently and unlinks its raw file; a message must be trashed first, otherwise
-the call answers `409`. `POST /v1/inboxes/{id}/trash/empty` (Owner) purges every
-trashed message in an inbox.
+the mailbox. `DELETE /v1/messages/{id}/purge` (Assistant or Owner) erases a
+trashed message permanently and unlinks its raw file; a message must be trashed
+first, otherwise the call answers `409`. `POST /v1/inboxes/{id}/trash/empty`
+(Assistant or Owner) purges every trashed message in an inbox.
 
 Each account has a `trash_retention_days` preference (default 0; `0` keeps
 trashed mail until it is emptied by hand, a positive value purges it after that

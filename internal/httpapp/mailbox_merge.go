@@ -212,7 +212,7 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 		}
 	}
 
-	items, next := pageMerged(entries, cur.Min, limit, scanCursors)
+	items, next := pageMerged(entries, cur, limit, scanCursors)
 	return items, next, failures, nil
 }
 
@@ -228,8 +228,11 @@ func remoteSourceCursor(v app.RemoteMessageView) string {
 
 // pageMerged sorts candidates by (time desc, id desc), drops any item not
 // strictly older than the cursor's global key, returns the page, and builds the
-// next cursor from the last returned item plus each source's advanced progress.
-func pageMerged(entries []mergedItem, minKey string, limit int, scan map[string]string) ([]model.Message, string) {
+// next cursor. Incoming per-source progress is preserved so a source that
+// contributed nothing to this page is not reset to its newest window on the next
+// request (which would drop its older items after the global-key filter).
+func pageMerged(entries []mergedItem, cur commonCursor, limit int, scan map[string]string) ([]model.Message, string) {
+	minKey := cur.Min
 	sort.SliceStable(entries, func(i, j int) bool {
 		if !entries[i].ts.Equal(entries[j].ts) {
 			return entries[i].ts.After(entries[j].ts)
@@ -254,25 +257,29 @@ func pageMerged(entries []mergedItem, minKey string, limit int, scan map[string]
 		truncated = true
 	}
 	out := make([]model.Message, 0, len(page))
-	// Preserve the incoming global key so a page that returns no items but has a
-	// pending scan continuation still resumes every source strictly after the
-	// last delivered item and never re-delivers one.
+	// Seed the next cursor with the incoming per-source progress, then advance
+	// only the sources that actually contributed an item to this page. A source
+	// that returned nothing keeps its prior position (or stays unstarted), so the
+	// next request resumes it where it left off rather than from the newest item.
 	next := commonCursor{Min: minKey, From: map[string]string{}, Scan: map[string]string{}}
+	for src, c := range cur.From {
+		if c != "" {
+			next.From[src] = c
+		}
+	}
+	advanced := map[string]bool{}
 	for _, e := range page {
 		out = append(out, e.msg)
 		next.Min = e.key
 		next.From[e.source] = e.cursor
+		advanced[e.source] = true
 	}
 	for src, c := range scan {
-		if c == "" {
+		if c == "" || advanced[src] {
 			continue
 		}
-		// Only a source with no returned item carries a scan cursor; a source
-		// with a returned item resumes from that item so dropped matches are not
-		// skipped.
-		if _, returned := next.From[src]; returned {
-			continue
-		}
+		// Only a source with no returned item carries a scan continuation, so it
+		// resumes deeper instead of re-reading the same non-matching window.
 		next.Scan[src] = c
 	}
 	if !truncated && len(next.Scan) == 0 {
@@ -376,7 +383,14 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 		truncated = true
 	}
 	out := make([]model.Thread, 0, len(page))
-	next := commonCursor{From: map[string]string{}}
+	// Preserve incoming per-source progress so a source that contributed no
+	// thread to this page resumes where it left off rather than from the top.
+	next := commonCursor{Min: cur.Min, From: map[string]string{}}
+	for src, c := range cur.From {
+		if c != "" {
+			next.From[src] = c
+		}
+	}
 	for _, e := range page {
 		out = append(out, e.th)
 		next.Min = e.key
@@ -515,7 +529,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			scanCursors[mb.inbox.ID] = strconv.FormatUint(uint64(scanUID), 10)
 		}
 	}
-	items, next := pageMerged(entries, cur.Min, limit, scanCursors)
+	items, next := pageMerged(entries, cur, limit, scanCursors)
 	if next != "" && len(failures) > 0 {
 		completeness = model.CompletenessPartial
 	}
