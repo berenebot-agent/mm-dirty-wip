@@ -908,17 +908,23 @@ func (s *Server) apiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rm := s.remoteMailbox()
-	inbox, err := rm.ConfigureStandaloneRemote(r.Context(), p, inboxID, update)
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
+	// Apply the sent-copy toggle before the primary connector binding. Both write
+	// the same inbox row and there is no cross-setting transaction, so applying
+	// the smaller, standalone-only setting first means a rejected sent-copy
+	// toggle cannot leave a freshly changed primary connector in place. The
+	// binding is verified above, so its own failure here is an unexpected store
+	// or encryption error.
 	if in.SentCopyEnabled != nil || strings.TrimSpace(in.SentCopyFolder) != "" {
-		folder := inbox.RemoteSentCopyFolder
+		current, cerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, inboxID)
+		if cerr != nil {
+			mapStoreError(w, cerr)
+			return
+		}
+		folder := current.RemoteSentCopyFolder
 		if strings.TrimSpace(in.SentCopyFolder) != "" {
 			folder = in.SentCopyFolder
 		}
-		enabled := inbox.RemoteSentCopyEnabled
+		enabled := current.RemoteSentCopyEnabled
 		if in.SentCopyEnabled != nil {
 			enabled = *in.SentCopyEnabled
 		}
@@ -926,6 +932,11 @@ func (s *Server) apiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
+	}
+	inbox, err := rm.ConfigureStandaloneRemote(r.Context(), p, inboxID, update)
+	if err != nil {
+		mapMailboxError(w, err)
+		return
 	}
 	writeJSON(w, 200, inbox)
 }
@@ -936,7 +947,11 @@ func (s *Server) apiInboxRemoteSave(w http.ResponseWriter, r *http.Request) {
 func (s *Server) apiInboxRemoteTest(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	inboxID := r.PathValue("id")
-	if !p.CanRead(inboxID) && !p.Admin {
+	// Testing a connector dials a caller-supplied host with the inbox's stored
+	// credentials, so it is an Owner/Admin capability, not a read. A merely
+	// Read-scoped caller must not be able to make the server open outbound
+	// connections or hand a stored secret to an attacker-chosen host.
+	if !p.CanOwn(inboxID) && !p.Admin {
 		writeError(w, 403, "forbidden")
 		return
 	}

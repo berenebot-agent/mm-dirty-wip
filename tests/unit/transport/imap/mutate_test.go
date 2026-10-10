@@ -189,6 +189,34 @@ func TestExpungeUnsupportedWithoutUIDPlus(t *testing.T) {
 	}
 }
 
+func TestMoveRefusedWithoutMoveOrUIDPlus(t *testing.T) {
+	// A server with neither MOVE nor UIDPLUS would otherwise make go-imap's
+	// COPY fallback issue a blanket EXPUNGE (deleting unrelated \Deleted mail).
+	// The adapter must refuse the move rather than risk that.
+	fs := newFakeServer(t, serverConfig{caps: imap.CapSet{imap.CapIMAP4rev1: {}}})
+	fs.AddMailbox("INBOX")
+	fs.AddMailbox("Archive")
+	adapter := dialFake(t, fs, "user@example.com", "secret")
+
+	_, err := adapter.MoveMessage(testContext(t), imapadapter.Locator{FolderPath: "INBOX", UID: 1}, "Archive")
+	if !errors.Is(err, imapadapter.ErrUnsupported) {
+		t.Fatalf("error = %v, want ErrUnsupported", err)
+	}
+}
+
+func TestDeleteMessageRefusedWithoutUIDPlus(t *testing.T) {
+	// Without UIDPLUS, DeleteMessage must refuse before flagging \Deleted so the
+	// message is not left hidden-but-present while the caller is told it failed.
+	fs := newFakeServer(t, serverConfig{caps: imap.CapSet{imap.CapIMAP4rev1: {}}})
+	fs.AddMailbox("INBOX")
+	adapter := dialFake(t, fs, "user@example.com", "secret")
+
+	err := adapter.DeleteMessage(testContext(t), imapadapter.Locator{FolderPath: "INBOX", UID: 1})
+	if !errors.Is(err, imapadapter.ErrUnsupported) {
+		t.Fatalf("error = %v, want ErrUnsupported", err)
+	}
+}
+
 func TestDeleteMessageUIDTargeted(t *testing.T) {
 	fs := newFakeServer(t, serverConfig{})
 	fs.AddMailbox("INBOX")

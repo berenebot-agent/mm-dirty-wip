@@ -267,20 +267,23 @@ partial or windowed view never deletes cached mail.
   the local draft has been cleaned up. The handoff events
   (`draft.handoff_requested`/`_published`/`_ambiguous`/`_failed`/`_cancelled`/
   `_notification_sent`/`_notification_failed`) carry the same non-secret fields.
-- **Cancel and retry are explicit, bounded, and never automatic.** Only a
-  **pending** handoff can be **cancelled** (`Store.CancelHandoff` / the UI
-  cancel action): it becomes `failed` with `last_error="cancelled"`, the draft
-  returns to editable, and a `draft.handoff_cancelled` event is emitted; an
-  already-`published` or `ambiguous` handoff cannot be cancelled (`409`). A
+- **Cancel and retry are explicit, bounded, and never automatic.** A **pending**
+  or **ambiguous** handoff can be **resolved** (`Store.CancelHandoff` / the UI
+  action): it becomes `failed` with `last_error="cancelled"`, the draft returns
+  to editable, and a `draft.handoff_cancelled` event is emitted. Allowing an
+  ambiguous handoff to be resolved gives the operator an exit so its frozen draft
+  is not trapped. An already-`published` handoff cannot be cancelled (`409`). A
   **retry** (UI `retry-handoff`) is a deliberate **re-request** that routes
   through the inbox's effective authoring mode (`RequestSend`), so it only
   produces a new handoff while the inbox is in `remote_draft` mode; it never
   re-appends blindly. In particular, an `ambiguous` append — one whose outcome
-  could not be verified — is **never automatically retried**: the record is
-  terminal and the human must choose to re-request. Transient append errors are
-  retried only within the bounded `maxHandoffAppendAttempts` budget, and a retry
-  of a missing frozen file verifies by lookup instead of re-appending different
-  bytes.
+  could not be verified — is **never automatically retried**; the human resolves
+  or re-requests it. A **transient verification failure** (a lookup error after
+  an unconfirmed append) is *not* terminal: the handoff stays pending and the next
+  pass re-verifies by lookup (never a blind re-append), bounded by
+  `maxHandoffAppendAttempts`. A definitive not-found with no other copy is
+  ambiguous; more than one remote match is ambiguous. A retry of a missing frozen
+  file verifies by lookup instead of re-appending different bytes.
 - **Effective-mode controls.** `GET /v1/inboxes/{id}/authoring` reports the
   effective `mode`, the kind `default_mode`, the notify override, whether the
   inbox `standalone`, and `approver_enabled` — which is true exactly when the
@@ -292,6 +295,11 @@ partial or windowed view never deletes cached mail.
   bounded polling fallback), records exactly one durable arrival per genuinely
   new message, and emits a durable event before any fan-out. The first pass
   establishes a baseline without emitting, so enabling the watcher never floods.
+  Both reads are bounded and correct on a folder larger than one search page: the
+  baseline reads the true maximum UID with a newest-first single-UID search, and
+  each incremental pass fetches the oldest new UIDs with an IMAP-native
+  `(cursor+1):*` search (`SearchQuery.AfterUID`), never the whole folder and never
+  the oldest page in place of the newest.
 - **Event entity ids for remote mail are the arrival id, and the canonical read
   resolves it.** A remote arrival event's `entity_id` is the durable arrival id,
   which is deliberately distinct from the cached-metadata id (detection is
@@ -326,14 +334,18 @@ partial or windowed view never deletes cached mail.
   timestamp. The per-source key is the message/thread **id** (not a timestamp),
   because a timestamp is not unique and would drop same-second siblings on the
   next page. A source failure is recorded per-inbox and never fails the page.
-- **Search continues correctly under local filtering.** Because the remote search
-  cannot express every local filter (notably `has_attachment`), the merge pulls
-  successive raw remote search pages until enough matches are collected or the
-  source is exhausted, resuming the server search from each returned item's own
-  UID cursor (`SearchRemoteResult.NextCursor` carried in the common cursor). It
-  never stops at the first filtered-out window, so older matching mail is not
-  hidden behind a page of non-matches. Completeness is `partial` whenever a
-  remote source participates or a failure occurs.
+- **Search and filtered lists continue correctly under local filtering.**
+  Because the remote source cannot express every local filter (notably
+  `has_attachment`), the merge and the scoped remote list pull successive raw
+  pages until enough matches are collected or the source is exhausted, resuming
+  from each returned item's own native cursor (`SearchRemoteResult.NextCursor`
+  for search; the metadata id for a list). They never stop at the first
+  filtered-out window, so older matching mail is not hidden behind a page of
+  non-matches. When a bounded scan reaches its per-request page cap without
+  finding a match, it carries a **scan continuation** (`commonCursor.Scan`, or the
+  returned `next_cursor` for the scoped list) so the next request resumes deeper
+  instead of silently omitting a match beyond the cap. Completeness is `partial`
+  whenever a remote source participates or a failure occurs.
 - Routes are registered in `internal/httpapp/server.go`; the API reference is a
   generated artifact (`make docs`) and `tests/unit/apispec` guards its counts.
   The external-alias UI/API/routes/schemas are removed with no compatibility

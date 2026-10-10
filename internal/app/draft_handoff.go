@@ -24,6 +24,14 @@ import (
 type HandoffOutcome struct {
 	// Confirmed reports that the appended draft was located on the remote server.
 	Confirmed bool
+	// Found reports that at least one remote match exists. It distinguishes a
+	// definitive "not present" (Found=false, Confirmed=false) from "present but
+	// ambiguous" (Found=true, Confirmed=false, Ambiguous=true), which the retry
+	// decision depends on.
+	Found bool
+	// Ambiguous reports more than one remote match. A retry must not append when
+	// Ambiguous is set: a second copy could be created.
+	Ambiguous bool
 	// RemoteUID is the appended message's UID when the server reported one, else
 	// zero.
 	RemoteUID uint32
@@ -205,6 +213,28 @@ func (s *Service) publishOneHandoff(ctx context.Context, r model.AssistantHandli
 		s.verifyHandoffByLookup(ctx, acct, r, inbox)
 		return
 	}
+	// A prior pass may already have appended this handoff (the append succeeded
+	// but its APPENDUID/reply was lost). Verify by lookup before a second append
+	// so a retry after a transient verification failure cannot create a duplicate
+	// draft. r.Attempts > 1 means this handoff has been claimed at least once
+	// before this pass.
+	if r.Attempts > 1 {
+		outcome, lerr := s.HandoffPublisher.Lookup(ctx, inbox.ID, r.HandoffID, r.MessageID)
+		switch {
+		case lerr != nil:
+			// Verification is temporarily impossible: stay pending and re-verify
+			// on the next pass, bounded by the append-attempt budget.
+			s.deferHandoffRetry(ctx, acct, r)
+			return
+		case outcome.Confirmed:
+			s.settleHandoffPublished(ctx, acct, r, outcome)
+			return
+		case outcome.Ambiguous:
+			s.markHandoffAmbiguous(ctx, acct, r, "more than one remote draft matched this handoff")
+			return
+		}
+		// Definitively not present: fall through and append.
+	}
 	outcome, err := s.HandoffPublisher.Append(ctx, inbox.ID, raw, r.MessageID, r.HandoffID)
 	if err != nil {
 		s.settleHandoffError(ctx, acct, r, err)
@@ -238,14 +268,50 @@ func (s *Service) accountForHandoff(ctx context.Context, r model.AssistantHandli
 // records Published when exactly one match is found and Ambiguous otherwise.
 func (s *Service) verifyHandoffByLookup(ctx context.Context, accountID string, r model.AssistantHandlingRequest, inbox model.Inbox) {
 	outcome, err := s.HandoffPublisher.Lookup(ctx, inbox.ID, r.HandoffID, r.MessageID)
-	if err != nil || !outcome.Confirmed {
-		reason := "append result could not be verified on the remote server"
-		if ev, ferr := s.Store.MarkHandoffAmbiguous(ctx, accountID, r.ID, reason); ferr == nil {
-			s.publishEventPtr(ev)
-		}
+	if err != nil {
+		// A transient lookup failure is not a definitive outcome: leave the
+		// handoff pending so it is retried by lookup (never a blind re-append),
+		// bounded by the append-attempt budget.
+		s.deferHandoffRetry(ctx, accountID, r)
 		return
 	}
-	s.settleHandoffPublished(ctx, accountID, r, outcome)
+	if outcome.Confirmed {
+		s.settleHandoffPublished(ctx, accountID, r, outcome)
+		return
+	}
+	if outcome.Ambiguous {
+		s.markHandoffAmbiguous(ctx, accountID, r, "more than one remote draft matched this handoff")
+		return
+	}
+	// The append command was accepted but the draft cannot be located and no
+	// other copy exists. Recording ambiguous (rather than re-appending) avoids
+	// duplicating a draft that may exist but is not yet searchable.
+	s.markHandoffAmbiguous(ctx, accountID, r, "append result could not be verified on the remote server")
+}
+
+// deferHandoffRetry leaves a handoff pending after a non-definitive verification
+// failure, so the next pass re-verifies by lookup and never re-appends blindly.
+// After the bounded attempt budget it becomes terminally ambiguous.
+func (s *Service) deferHandoffRetry(ctx context.Context, accountID string, r model.AssistantHandlingRequest) {
+	if r.Attempts >= maxHandoffAppendAttempts {
+		s.markHandoffAmbiguous(ctx, accountID, r, "handoff verification did not complete within the retry budget")
+		return
+	}
+	if err := s.Store.RecordHandoffAppendAttempt(ctx, accountID, r.ID, "handoff verification pending"); err != nil {
+		s.Log.Warn("record handoff verification attempt", "handoff_id", r.HandoffID, "error", err)
+	}
+}
+
+// markHandoffAmbiguous records the explicit ambiguous publication state and
+// publishes its event. An ambiguous handoff is never automatically re-appended;
+// the operator can resolve it (see CancelHandoff).
+func (s *Service) markHandoffAmbiguous(ctx context.Context, accountID string, r model.AssistantHandlingRequest, reason string) {
+	ev, err := s.Store.MarkHandoffAmbiguous(ctx, accountID, r.ID, reason)
+	if err != nil {
+		s.Log.Warn("mark handoff ambiguous", "handoff_id", r.HandoffID, "error", err)
+		return
+	}
+	s.publishEventPtr(ev)
 }
 
 // settleHandoffPublished records a confirmed publication, then queues the local

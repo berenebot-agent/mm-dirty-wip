@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -242,9 +243,51 @@ func (f *fakeRemoteServer) Search(_ context.Context, folder string, q imap.Searc
 		if q.Subject != "" && !strings.Contains(strings.ToLower(m.subject), strings.ToLower(q.Subject)) {
 			continue
 		}
+		if q.AfterUID > 0 && m.uid <= q.AfterUID {
+			continue
+		}
+		if q.BeforeUID > 0 && m.uid >= q.BeforeUID {
+			continue
+		}
 		uids = append(uids, m.uid)
 	}
-	return imap.SearchResult{UIDs: uids, Completeness: imap.CompletenessComplete}, nil
+	sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
+	// Mirror the adapter's truncation semantics so a detector that relies on the
+	// server applying AfterUID/BeforeUID/NewestFirst/Limit is exercised faithfully.
+	res := imap.SearchResult{Completeness: imap.CompletenessComplete}
+	if q.NoLimit {
+		if uids == nil {
+			uids = []uint32{}
+		}
+		res.UIDs = uids
+		return res, nil
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 500
+	}
+	if len(uids) > limit {
+		if q.NewestFirst {
+			uids = uids[len(uids)-limit:]
+			res.NextCursor = uids[0]
+		} else {
+			res.NextCursor = uids[limit]
+			uids = uids[:limit]
+		}
+		res.Completeness = imap.CompletenessPartial
+	} else if q.NewestFirst && len(uids) == limit {
+		res.NextCursor = uids[0]
+	}
+	if q.NewestFirst {
+		for i, j := 0, len(uids)-1; i < j; i, j = i+1, j-1 {
+			uids[i], uids[j] = uids[j], uids[i]
+		}
+	}
+	if uids == nil {
+		uids = []uint32{}
+	}
+	res.UIDs = uids
+	return res, nil
 }
 
 func (f *fakeRemoteServer) FetchRawMIME(_ context.Context, loc imap.Locator, w io.Writer) error {
@@ -629,6 +672,53 @@ func TestRemoteUIDValidityChangeNoWrongFetch(t *testing.T) {
 	defer rm.CleanupRemoteRaw(path)
 	if size <= 0 || !rawContains(t, path, "new body") {
 		t.Fatalf("stale body served")
+	}
+}
+
+// TestRemoteGetMessageReresolveOnValidityChange proves a read whose cached UID
+// became stale (UIDVALIDITY changed) is re-resolved by Message-ID and the cached
+// row is relocated to the new generation, rather than silently serving the stale
+// locator.
+func TestRemoteGetMessageReresolveOnValidityChange(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	installFake(t, rm, fake)
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: Hello\r\nMessage-ID: <m1@remote>\r\n\r\nbody", "<m1@remote>", "Hello")
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := svc.Store.ListRemoteMessages(ctx, u.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("seeded messages = %d want 1", len(msgs))
+	}
+	id := msgs[0].ID
+	// The server resets UIDVALIDITY but no reconcile runs, so the cached row's UID
+	// is stale.
+	fake.mu.Lock()
+	fake.folders["INBOX"] = 200
+	fake.messages[0].uidValidity = 200
+	fake.mu.Unlock()
+
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
+	view, err := rm.GetRemoteMessage(ctx, p, box.ID, id)
+	if err != nil {
+		t.Fatalf("GetRemoteMessage: %v", err)
+	}
+	if view.UIDValidity != 200 {
+		t.Fatalf("read did not re-resolve the stale UID: validity=%d", view.UIDValidity)
+	}
+	// The relocation is durable under the same stable id.
+	stored, err := svc.Store.GetRemoteMessage(ctx, u.AccountID, box.ID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.UIDValidity != 200 {
+		t.Fatalf("stored UIDVALIDITY = %d want 200", stored.UIDValidity)
 	}
 }
 
