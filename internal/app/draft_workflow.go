@@ -124,11 +124,11 @@ func equalTokenHash(a, b string) bool {
 // RequestSend records an assistant's request that a draft be authorized and
 // sent, freezing the draft. The inbox's authoring mode decides what happens:
 //
-//   - MailMooseApproval (a domain inbox's default): the in-product approval
-//     workflow. When the inbox has a configured approver the approval-request
-//     email is queued in the same transaction that creates the request; the
-//     explicit external flag is therefore optional and only forces an error when
-//     the inbox has no approver.
+//   - MailMooseApproval (a domain inbox's preset and default): the in-product
+//     approval workflow. When the inbox has a configured approver the
+//     approval-request email is queued in the same transaction that creates the
+//     request; the explicit external flag is therefore optional and only forces
+//     an error when the inbox has no approver.
 //   - RemoteDraft (a standalone inbox's default): a one-way handoff that places
 //     the frozen draft in the inbox's connected remote Drafts folder. MailMoose
 //     never sends it.
