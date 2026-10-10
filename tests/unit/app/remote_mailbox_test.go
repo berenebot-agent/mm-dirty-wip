@@ -169,6 +169,9 @@ type fakeRemoteServer struct {
 	// succeeds but reports no COPYUID (DestinationUID 0), forcing the caller to
 	// re-resolve by Message-ID.
 	moveNoUID bool
+	// fetchFail, keyed by UID, makes FetchRawMIME fail for that message so a test
+	// can exercise the fail-closed classification path.
+	fetchFail map[uint32]error
 }
 
 func newFakeRemoteServer() *fakeRemoteServer {
@@ -353,6 +356,12 @@ func (f *fakeRemoteServer) Search(_ context.Context, folder string, q imap.Searc
 }
 
 func (f *fakeRemoteServer) FetchRawMIME(_ context.Context, loc imap.Locator, w io.Writer) error {
+	f.mu.Lock()
+	fail := f.fetchFail[loc.UID]
+	f.mu.Unlock()
+	if fail != nil {
+		return fail
+	}
 	return f.fetchRaw(loc, w)
 }
 

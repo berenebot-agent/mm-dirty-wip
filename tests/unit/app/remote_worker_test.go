@@ -297,6 +297,44 @@ func TestRemoteWorkerControlForcesApproval(t *testing.T) {
 	}
 }
 
+// TestRemoteWorkerControlFetchFailureFailsClosed proves a control-subject arrival
+// whose body cannot be fetched is never published as an ordinary remote event and
+// remains pending for a retry.
+func TestRemoteWorkerControlFetchFailureFailsClosed(t *testing.T) {
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	req := seedPendingApproval(t, svc, box)
+	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	w.DetectInbox(ctx, inbox) // baseline
+	// A control-subject message whose body fetch will fail.
+	raw := "From: " + req.ApproverEmail + "\r\nTo: " + box.Address + "\r\nSubject: [GH-APPROVE:" + req.Token + "]\r\nMessage-ID: <ctrlfail@remote>\r\n\r\nApprove"
+	m := fake.addMessage("INBOX", raw, "<ctrlfail@remote>", "[GH-APPROVE]")
+	fake.mu.Lock()
+	if fake.fetchFail == nil {
+		fake.fetchFail = map[uint32]error{}
+	}
+	fake.fetchFail[m.uid] = errors.New("temporary fetch failure")
+	fake.mu.Unlock()
+	ch, cancel := collectEvents(svc)
+	defer cancel()
+	w.DetectInbox(ctx, inbox)
+	for _, e := range drainEvents(ch) {
+		if e.Type == store.EventRemoteMessageReceived {
+			t.Fatalf("control mail whose body fetch failed was forwarded: %s", e.EntityID)
+		}
+	}
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+	if err != nil || len(arrivals) != 1 {
+		t.Fatalf("arrivals=%d err=%v", len(arrivals), err)
+	}
+	if arrivals[0].DeliveryState != store.RemoteArrivalPending {
+		t.Fatalf("arrival state=%q want pending", arrivals[0].DeliveryState)
+	}
+	if n, _ := svc.Store.CountPendingSendRequests(ctx, box.AccountID, box.ID); n != 1 {
+		t.Fatalf("approval unexpectedly consumed: n=%d", n)
+	}
+}
+
 // TestRemoteWorkerACKMarkReadAndAutoTrash proves the ACK mark-read sets \Seen and
 // the delayed auto-trash moves the message, with retry on failure.
 func TestRemoteWorkerACKMarkReadAndAutoTrash(t *testing.T) {
