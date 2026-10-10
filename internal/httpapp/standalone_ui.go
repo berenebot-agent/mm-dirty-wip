@@ -224,42 +224,6 @@ func parseIntForm(raw string) (int, bool) {
 	return n, true
 }
 
-// standaloneDialogs is appended to the dashboard body: the standalone-inbox
-// setup dialog. The remote binding is optional at creation; the connector can be
-// configured later from the inbox settings. Gmail/Microsoft OAuth is a documented
-// roadmap item, so those options are shown disabled with a note rather than
-// silently hidden.
-const standaloneDialogs = `
-<dialog id="standalone-dialog" class="inbox-settings"><div class="inbox-settings-head"><h2>Add standalone inbox</h2><button type="button" class="secondary icon-btn standalone-close" aria-label="Close"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></div>
-<form method="post" action="/ui/inboxes/standalone" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}">
-<div class="inbox-settings-body"><div class="inbox-settings-panels">
-<section class="dialog-panel" role="tabpanel">
-<h3 class="section-head">Identity</h3>
-<label>Email address</label><input name="address" placeholder="agent@example.com" required>
-<label>Display name</label><input name="display" placeholder="Agent">
-<h3 class="section-head">Remote server (IMAP)</h3>
-<p class="muted small">Connect this inbox to an existing mailbox over IMAP. Gmail and Microsoft sign-in is coming later; configure their IMAP/SMTP with an app password for now. Leave the host blank to create the inbox now and configure the connector later.</p>
-<div class="standalone-providers"><button type="button" class="secondary" disabled title="Coming later">Gmail <span class="muted small">(coming later)</span></button><button type="button" class="secondary" disabled title="Coming later">Microsoft <span class="muted small">(coming later)</span></button></div>
-<label>IMAP host</label><input name="host" placeholder="imap.example.com">
-<label>IMAP port</label><input name="port" type="number" min="1" max="65535" placeholder="993">
-<label>IMAP username</label><input name="username" placeholder="agent@example.com">
-<label>IMAP password or app password</label><input name="imap_password" type="password" autocomplete="new-password" placeholder="app password">
-<label>Security</label><select name="security"><option value="tls" selected>TLS (implicit, default)</option><option value="starttls">STARTTLS</option><option value="plain">Plain (no transport security)</option></select>
-<p class="muted small">TLS is the default and the connection never downgrades. Plain is an explicit choice for a self-hosted server; the deployment may refuse it.</p>
-<label>Sync root folder</label><input name="namespace" placeholder="INBOX">
-<p class="muted small">The root folder this inbox syncs. The default personal root is INBOX plus its siblings. A missing special folder (Sent, Drafts, Trash, Spam) is mapped on first sync, or you can select or create one from the inbox settings.</p>
-<h3 class="section-head">Outbound SMTP (optional)</h3>
-<p class="muted small">Optional. Without an SMTP server this inbox can receive and hand off drafts but cannot send from MailMoose. Leave the host blank to configure it later.</p>
-<label>SMTP host</label><input name="smtp_host" placeholder="smtp.example.com">
-<label>SMTP port</label><input name="smtp_port" type="number" min="1" max="65535" placeholder="465">
-<label>SMTP username</label><input name="smtp_username" placeholder="agent@example.com">
-<label>SMTP security</label><select name="smtp_security"><option value="tls" selected>TLS (implicit, default)</option><option value="starttls">STARTTLS</option><option value="plain">Plain (no transport security)</option></select>
-<label>SMTP password or app password</label><input name="smtp_password" type="password" autocomplete="new-password" placeholder="app password">
-</section>
-</div></div>
-<footer class="inbox-settings-footer"><span class="spacer"></span><button type="button" class="secondary standalone-cancel">Cancel</button><button type="submit">Add standalone inbox</button></footer>
-</form></dialog>`
-
 // folderSidebarItem is one custom (non-system) folder in the mailbox sidebar. It
 // carries the stable id the rename/delete forms post and a display count; system
 // folders keep their dedicated sidebar entries.
