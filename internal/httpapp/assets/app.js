@@ -3409,44 +3409,80 @@ function hideInboxSubview(dlg) {
         deferred: 'Waiting to retry'
       }[status.state] || 'Waiting';
     }
+    // copyField copies one exact string to the clipboard and reports success on
+    // the button itself, falling back to a manual-copy hint when blocked.
+    function copyField(text) {
+      var copy = document.createElement('button');
+      copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy';
+      copy.addEventListener('click', function () {
+        if (!navigator.clipboard) { fail('Copying needs HTTPS. Select the value and copy it manually.'); return; }
+        navigator.clipboard.writeText(text).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the value and copy it manually.'); });
+      });
+      return copy;
+    }
     // remediationLine renders one failing record to publish on the same status
-    // screen: the prompt, the record name/value, and a copy button. The live
-    // Check now / auto-poll flips the row once DNS propagates, so no wizard jump.
-    function remediationLine(prompt, name, value) {
+    // screen: the prompt, then each part of the record on its own labelled row.
+    // A field is [label, text, copyable]; copyable fields carry their own copy
+    // button so neither half has to be picked apart. The live Check now /
+    // auto-poll flips the row once DNS propagates, so no wizard jump is needed.
+    function remediationLine(prompt, fields) {
       var box = document.createElement('div');
       var p = document.createElement('p');
       p.textContent = prompt;
       box.appendChild(p);
-      var pre = document.createElement('pre');
-      pre.className = 'dialmx-txt';
-      pre.textContent = name + '\n' + value;
-      box.appendChild(pre);
-      var copy = document.createElement('button');
-      copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
-      copy.addEventListener('click', function () {
-        if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
-        navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+      fields.forEach(function (field) {
+        var line = document.createElement('div');
+        line.className = 'dns-remediation-row';
+        var label = document.createElement('span');
+        label.className = 'dns-remediation-label';
+        label.textContent = field[0];
+        var code = document.createElement('code');
+        code.className = 'dns-remediation-value';
+        code.textContent = field[1];
+        line.appendChild(label); line.appendChild(code);
+        if (field[2]) { line.appendChild(copyField(field[1])); }
+        box.appendChild(line);
       });
-      box.appendChild(copy);
       return box;
     }
     // remediationBlock builds the inline fix list for the failing receivers, or an
     // empty node when nothing needs publishing. not_mx is a missing MX record;
     // key_unavailable / authentication_failed are a missing or wrong TXT record.
     function remediationBlock(data, instructions, mxName) {
-      var needMX = (data.status || []).some(function (s) { return s.reason === 'not_mx'; });
-      var needTXT = (data.status || []).some(function (s) { return s.reason === 'key_unavailable' || s.reason === 'authentication_failed'; });
+      var statuses = data.status || [];
+      var needTXT = statuses.some(function (s) { return s.reason === 'key_unavailable' || s.reason === 'authentication_failed'; });
+      // Only the receiver(s) that actually failed MX routing get a fix prompt:
+      // when one receiver is not_mx and another is fine, prompting to republish
+      // every MX record would be misleading. The failing receiver names its own
+      // hostname; its priority comes from the configured record when known.
+      var failedMX = [];
+      statuses.forEach(function (s) {
+        if (s.reason !== 'not_mx' || !s.smtp_hostname) { return; }
+        if (failedMX.some(function (e) { return e.hostname === s.smtp_hostname; })) { return; }
+        var priority = '';
+        (instructions.mx || []).forEach(function (mx) { if (mx.hostname === s.smtp_hostname) { priority = String(mx.priority); } });
+        failedMX.push({ hostname: s.smtp_hostname, priority: priority });
+      });
+      // If a not_mx receiver reported no hostname, fall back to the configured MX
+      // set rather than leaving the operator with no guidance.
+      if (!failedMX.length && statuses.some(function (s) { return s.reason === 'not_mx'; })) {
+        failedMX = (instructions.mx || []).map(function (mx) { return { hostname: mx.hostname, priority: String(mx.priority) }; });
+      }
       var block = document.createElement('div');
-      if (!needMX && !needTXT) { return block; }
+      if (!needTXT && !failedMX.length) { return block; }
       block.className = 'antler-dns-remediation';
       if (needTXT && instructions.txt_value) {
-        block.appendChild(remediationLine('Domain not authorized — publish this TXT record:', instructions.txt_name, instructions.txt_value));
+        block.appendChild(remediationLine('Domain not authorized — publish this TXT record:', [
+          ['Record name', instructions.txt_name, true],
+          ['Record value', instructions.txt_value, true]
+        ]));
       }
-      if (needMX) {
-        (instructions.mx || []).forEach(function (mx) {
-          block.appendChild(remediationLine('Not an MX receiver for this domain — publish this MX record:', mxName, String(mx.priority) + ' ' + mx.hostname));
-        });
-      }
+      failedMX.forEach(function (mx) {
+        var fields = [['Record name', mxName, true], ['Record type', 'MX', false]];
+        if (mx.priority) { fields.push(['Priority', mx.priority, true]); }
+        fields.push(['Record value', mx.hostname, true]);
+        block.appendChild(remediationLine(mx.hostname + ' is not listed as an MX receiver for this domain — publish this MX record:', fields));
+      });
       return block;
     }
     // pendingCell is one status-table cell for a connector with no live status
