@@ -4451,6 +4451,169 @@ function hideInboxSubview(dlg) {
     }
   }
 
+  // --- live list reconcile --------------------------------------------------
+  //
+  // Background-refresh policy: counts and badges always update in place, but a
+  // list body is only ever swapped on the terms the user would not notice —
+  // they are at the top of the page, nothing is selected, no dialog is open and
+  // no field has focus. Otherwise the list is left alone and simply catches up
+  // on the next natural load. The list is never re-fetched while the user is
+  // scrolled down or typing, so the screen never jumps under them.
+
+  var folder = document.body.getAttribute('data-folder') || '';
+  var activeLabel = document.body.getAttribute('data-label') || '';
+  var listSection = document.querySelector('[data-live-list]');
+  var requestsSection = document.querySelector('[data-live-requests]');
+
+  function liveURL(part) {
+    var u = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/live?part=' + encodeURIComponent(part) + '&folder=' + encodeURIComponent(folder);
+    if (activeLabel) {
+      u += '&label=' + encodeURIComponent(activeLabel);
+    }
+    return u;
+  }
+
+  // atTop reports whether the user is at the very top of the scrollable area, so
+  // a swap cannot change what is under their cursor.
+  function atTop() {
+    return (window.pageYOffset || document.documentElement.scrollTop || 0) <= 4;
+  }
+
+  // anySelected reports whether the user has checked a message for a bulk action.
+  function anySelected() {
+    return !!document.querySelector('.mailcheck input[type=checkbox]:checked');
+  }
+
+  // dialogOpen reports whether any modal dialog is open (settings, compose
+  // overlays, confirmations), in which case the page is not a passive view.
+  function dialogOpen() {
+    var dlgs = document.querySelectorAll('dialog[open]');
+    for (var i = 0; i < dlgs.length; i++) {
+      return true;
+    }
+    return false;
+  }
+
+  // editing reports whether focus is in a text field, so a swap cannot steal it.
+  function editing() {
+    var a = document.activeElement;
+    if (!a) {
+      return false;
+    }
+    var tag = a.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
+  }
+
+  function canSwap() {
+    return !document.hidden && atTop() && !anySelected() && !dialogOpen() && !editing();
+  }
+
+  // signature is a cheap, collision-resistant fingerprint of a fragment's
+  // structure (row ids and read/status classes), so an unchanged list is left
+  // in the DOM untouched rather than replaced with an identical tree.
+  function signature(root) {
+    if (!root) {
+      return '';
+    }
+    var out = [];
+    root.querySelectorAll('[data-row-id]').forEach(function (row) {
+      out.push(row.getAttribute('data-row-id') + ':' + (row.classList.contains('unread') ? 'u' : 'r'));
+    });
+    // The pager link and the empty-state text are part of what can change.
+    var pager = root.querySelector('a[href*="before="]');
+    out.push('pager=' + (pager ? pager.getAttribute('href') : ''));
+    out.push('empty=' + (root.querySelector('.muted') ? '1' : '0'));
+    return out.join('|');
+  }
+
+  // listHost is the container the list and requests cards live in, used to
+  // insert a requests card that did not exist on the page before.
+  function listHost() {
+    return document.querySelector('[data-sidebar]') ? document.querySelector('.mailcontent') : null;
+  }
+
+  var listInFlight = false;
+  function reconcileLists() {
+    if (listInFlight || !canSwap()) {
+      return;
+    }
+    // The requests card lives only on the inbox folder; the list exists on every
+    // folder view. Fetch only what the current page can show.
+    var wantList = folder === 'inbox' || folder === 'sent' || folder === 'spam' || folder === 'trash' || folder === 'label';
+    var wantRequests = folder === 'inbox';
+    if (!wantList && !wantRequests) {
+      return;
+    }
+    listInFlight = true;
+    var jobs = [];
+    if (wantList) {
+      jobs.push(fetchFragment(liveURL('list'), '[data-live-list]').then(swapFragment));
+    }
+    if (wantRequests) {
+      jobs.push(fetchFragment(liveURL('requests'), '[data-live-requests]').then(function (part) {
+        // A requests card that is absent on the page but present in the incoming
+        // fragment is inserted ahead of the list; an existing one is swapped.
+        if (!part.incoming && !part.current) {
+          return;
+        }
+        if (part.incoming && !part.current) {
+          var host = listHost();
+          var anchor = document.querySelector('[data-live-list]');
+          if (host && anchor && host.contains(anchor)) {
+            host.insertBefore(part.incoming, anchor);
+          }
+          return;
+        }
+        swapFragment(part);
+      }));
+    }
+    Promise.all(jobs).catch(function () {
+      // Best-effort: a failed fragment fetch leaves the current list in place.
+    }).then(function () {
+      listInFlight = false;
+    });
+  }
+
+  // swapFragment replaces the current node with the incoming one when the tree
+  // actually differs, and removes the current node when the incoming fragment is
+  // empty (e.g. the last pending request was approved). It is a no-op when both
+  // are absent, or when the trees are identical, so an unchanged list is never
+  // rewritten.
+  function swapFragment(part) {
+    if (!part || !part.current) {
+      return;
+    }
+    if (!part.incoming) {
+      if (part.current.parentNode) {
+        part.current.parentNode.removeChild(part.current);
+      }
+      return;
+    }
+    if (signature(part.current) === signature(part.incoming) && part.current.isEqualNode(part.incoming)) {
+      return;
+    }
+    part.current.parentNode.replaceChild(part.incoming, part.current);
+  }
+
+  // fetchFragment fetches a server-rendered fragment and returns the parsed
+  // incoming element plus the element it should replace (if any). A fragment
+  // body with no matching element is reported as absent so the caller can decide
+  // whether to remove or insert.
+  function fetchFragment(url, selector) {
+    return window.fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'text/html' } }).then(function (resp) {
+      if (!resp.ok) {
+        throw new Error('fragment ' + resp.status);
+      }
+      return resp.text();
+    }).then(function (html) {
+      var current = document.querySelector(selector);
+      var holder = document.createElement('div');
+      holder.innerHTML = html;
+      var incoming = holder.querySelector(selector);
+      return { current: current, incoming: incoming };
+    });
+  }
+
   function refresh() {
     if (document.hidden) {
       pendingRefresh = true;
@@ -4473,6 +4636,7 @@ function hideInboxSubview(dlg) {
       return resp.json();
     }).then(function (data) {
       apply(data);
+      reconcileLists();
     }).catch(function () {
       // A failed snapshot is not fatal: the next event or focus retries.
     }).then(function () {
