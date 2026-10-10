@@ -434,25 +434,33 @@ type MessageFilter struct {
 	Limit   int
 }
 
-func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
-	q := messageSelect + ` FROM messages m WHERE m.account_id=? AND m.internal=0`
-	args := []any{p.AccountID}
+// messageFilterWhere builds the shared WHERE predicate (beginning with " AND ")
+// and bound args for a MessageFilter, minus the leading `m.account_id=?`. Every
+// read that lists or counts messages uses it, so the list, the total count and
+// the bulk-by-scope enumeration can never describe a different set. It enforces
+// the per-mailbox Read role for an explicit InboxID and scopes an unscoped read
+// to the caller's readable inboxes; a non-admin with no readable inboxes yields
+// a match-nothing predicate rather than an error.
+func (s *Store) messageFilterWhere(ctx context.Context, p model.Principal, f MessageFilter) (string, []any, error) {
+	q := ` AND m.internal=0`
+	var args []any
 	q += trashClause("m", f.Trashed)
 	q += spamClause("m", f.SpamOnly, f.IncludeSpam)
 	if f.InboxID != "" {
 		if !p.CanRead(f.InboxID) {
-			return nil, ErrForbidden
+			return "", nil, ErrForbidden
 		}
 		q += ` AND m.inbox_id=?`
 		args = append(args, f.InboxID)
 	} else if !p.Admin {
 		ids := principalInboxIDs(p)
 		if len(ids) == 0 {
-			return []model.Message{}, nil
-		}
-		q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
-		for _, id := range ids {
-			args = append(args, id)
+			q += ` AND 1=0`
+		} else {
+			q += ` AND m.inbox_id IN (` + placeholders(len(ids)) + `)`
+			for _, id := range ids {
+				args = append(args, id)
+			}
 		}
 	}
 	if f.ThreadID != "" {
@@ -497,9 +505,19 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 			q += ` AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < (SELECT rowid FROM messages WHERE id=? AND account_id=?)))`
 			args = append(args, beforeCreated, beforeCreated, f.Before, p.AccountID)
 		} else if err != sql.ErrNoRows {
-			return nil, err
+			return "", nil, err
 		}
 	}
+	return q, args, nil
+}
+
+func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFilter) ([]model.Message, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	q := messageSelect + ` FROM messages m WHERE m.account_id=?` + where
 	limit := f.Limit
 	if limit <= 0 || limit > limits.PageSizeMaxList {
 		limit = limits.PageSizeDefault
@@ -518,6 +536,49 @@ func (s *Store) ListMessages(ctx context.Context, p model.Principal, f MessageFi
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// CountMessages returns the exact number of messages matching a filter, without
+// the list page cap. The mailbox uses it for the "select all N" total, and the
+// bulk-by-scope path relies on it and AllMessageIDs agreeing on the same set.
+func (s *Store) CountMessages(ctx context.Context, p model.Principal, f MessageFilter) (int, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return 0, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM messages m WHERE m.account_id=?`+where, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// AllMessageIDs returns the id of every message matching a filter, newest first
+// and deliberately uncapped. It backs bulk actions scoped to "all N" in a
+// folder: ListMessages clamps to PageSizeMaxList, so using it to enumerate a
+// bulk operation would silently skip messages beyond the cap. Callers apply the
+// action one id at a time and enforce the write role themselves.
+func (s *Store) AllMessageIDs(ctx context.Context, p model.Principal, f MessageFilter) ([]string, error) {
+	where, fargs, err := s.messageFilterWhere(ctx, p, f)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]any{p.AccountID}, fargs...)
+	rows, err := s.read.QueryContext(ctx, `SELECT m.id FROM messages m WHERE m.account_id=?`+where+` ORDER BY m.created_at DESC, m.rowid DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

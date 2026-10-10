@@ -60,15 +60,23 @@ const (
 // on pageData.
 const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a></aside>`
 
+// selectBanner is the Gmail-style two-state "select all" bar. Its two spans are
+// toggled by app.js: the first (after checking the header box on a paginated
+// page) offers to widen the selection to every matching item; the second (after
+// that) offers to clear it. The scope itself is driven by a hidden `scope` input
+// on the bulk form, so no state is carried in the DOM here.
+const selectBanner = `{{define "select-banner"}}<div class="select-banner" data-select-banner data-total="{{.TotalCount}}" hidden><span data-select-page hidden>All <b data-page-count></b> on this page are selected. <button type="button" class="cell-link" data-select-all-link>Select all <b data-total-count>{{.TotalCount}}</b> in {{folderLabel .Folder .ActiveLabel}}</button></span><span data-select-all-span hidden>All <b data-total-count>{{.TotalCount}}</b> in {{folderLabel .Folder .ActiveLabel}} are selected. <button type="button" class="cell-link" data-clear-selection>Clear selection</button></span></div>{{end}}`
+
 const liveRequestsCard = `{{define "live-requests-card"}}{{if .SendRequests}}<section class="card" data-live-requests><div class="card-head"><h2>Draft send requests</h2></div><div class="mailheader"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .SendRequests}}<div class="mailrow"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .Draft.To ", "}}</span><span class="mailsubject">{{if eq .Request.Status "pending"}}{{if eq .Request.NotificationStatus "failed"}}<span class="pill danger">Notification failed</span> {{else if eq .Request.NotificationStatus "queued"}}<span class="pill amber">Notification queued</span> {{else}}<span class="pill amber">Awaiting approval</span> {{end}}{{end}}{{if .Draft.Subject}}{{.Draft.Subject}}{{else}}(no subject){{end}}{{if .Draft.Text}} <span class="mailsnippet">— {{snippet .Draft.Text 80}}</span>{{end}}{{if .Request.Feedback}} <span class="muted small">— {{.Request.Feedback}}</span>{{end}}</span><span class="maildate">{{mailDate .Request.RequestedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq .Request.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.Draft.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Approve and send" aria-label="Approve and send">` + iconMarkRead + `</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}{{end}}`
 const liveListCard = `{{define "live-list-card"}}<section class="card" data-live-list{{if .Before}} data-cursor="{{.Before}}"{{end}}>{{if .Messages}}<div class="mailheader"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all messages"></span><span></span><span>{{if eq .Folder "sent"}}To{{else}}From{{end}}</span><span>Subject</span><span class="hcenter">Date</span><span class="hcenter">Size</span><span></span></div><div class="mailrows">{{range .Messages}}<div class="mailrow{{if not .Read}} unread{{end}}" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="bulk-form" aria-label="Select message"></span><a class="mailrowlink" href="/ui/messages/{{.ID}}"><span class="maildot">{{if not .Read}}<span class="dot"></span>{{end}}</span><span class="mailsender">{{if eq $.Folder "sent"}}{{join .To ", "}}{{else}}{{if .From.Name}}{{.From.Name}}{{else}}{{.From.Address}}{{end}}{{end}}</span><span class="mailsubject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .HasAttachments}} <span class="pill">attach</span>{{end}}{{range .Labels}} <span class="labelpill">{{.}}</span>{{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .CreatedAt}}</span><span class="mailsize">{{filesize .SizeBytes}}</span></a><span class="mailaction">{{if eq $.Folder "spam"}}<form method="post" action="/ui/messages/{{.ID}}/spam"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="spam" value="0"><button class="secondary icon-btn" title="Not spam" aria-label="Not spam">` + iconNotSpam + `</button></form><form method="post" action="/ui/messages/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button></form>{{else if eq $.Folder "trash"}}<form method="post" action="/ui/messages/{{.ID}}/restore"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button></form>{{else}}<form method="post" action="/ui/messages/{{.ID}}/read"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="read" value="{{if .Read}}0{{else}}1{{end}}"><button class="secondary icon-btn" title="{{if .Read}}Mark unread{{else}}Mark read{{end}}" aria-label="{{if .Read}}Mark unread{{else}}Mark read{{end}}">{{if .Read}}` + iconMarkUnread + `{{else}}` + iconMarkRead + `{{end}}</button></form><form method="post" action="/ui/messages/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button></form>{{end}}</span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No messages in this folder yet.</p>{{end}}</section>{{end}}`
 const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
-<div class="inboxbar">{{if eq .Folder "trash"}}<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/trash/empty" data-confirm="Permanently delete all messages in Trash? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Empty trash</button></form>{{end}}<form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}{{if eq .Folder "trash"}}<button name="action" value="restore" class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button><button name="action" value="purge" class="secondary icon-btn danger" data-confirm="Delete permanently? This cannot be undone." title="Delete forever" aria-label="Delete forever">` + iconDeleteFore + `</button>{{else}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{end}}</form></div>
+<div class="inboxbar">{{if eq .Folder "trash"}}<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/trash/empty" data-confirm="Permanently delete all messages in Trash? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Empty trash</button></form>{{end}}<form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}"><input type="hidden" name="label" value="{{.ActiveLabel}}"><input type="hidden" name="scope" value="page">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}{{if eq .Folder "trash"}}<button name="action" value="restore" class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button><button name="action" value="purge" class="secondary icon-btn danger" data-confirm-all="Delete all selected messages permanently? This cannot be undone." title="Delete forever" aria-label="Delete forever">` + iconDeleteFore + `</button>{{else}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{end}}</form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}
 {{template "live-requests-card" .}}
+{{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`
 
 const composeBody = `<div class="toolbar"><a href="{{.ComposeCancel}}">← Cancel</a></div><section class="card"><h1>{{.ComposeTitle}}</h1>{{if .ComposeError}}<div class="error">{{.ComposeError}}</div>{{end}}<form method="post" action="{{.ComposeAction}}" enctype="multipart/form-data"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_flash" value="{{.ComposeFlash}}"><input type="hidden" name="draft_id" value="{{.ComposeDraftID}}"><input type="hidden" name="return_to" value="{{.ComposeCancel}}">{{if gt (len .ComposeFromOptions) 1}}<label>From</label><select name="sender">{{$from := .ComposeFrom}}{{range .ComposeFromOptions}}<option value="{{.Address}}"{{if eq .Address $from}} selected{{end}}>{{.Label}}</option>{{end}}</select>{{else if .ComposeFromOptions}}<label>From</label><input value="{{(index .ComposeFromOptions 0).Label}}" disabled>{{end}}<label>To</label><input name="to" value="{{.ComposeTo}}" placeholder="someone@example.com" required><div class="row"><div><label>Cc</label><input name="cc" value="{{.ComposeCC}}"></div><div><label>Bcc</label><input name="bcc" value="{{.ComposeBCC}}"></div></div><label>Subject</label><input name="subject" value="{{.ComposeSubject}}"><label>Message</label><textarea name="text" rows="14">{{.ComposeText}}</textarea><label>Attachments</label><div class="attach-drop" id="attach-drop"><p class="attach-hint">Drag &amp; drop files here, or</p><label class="btn secondary attach-browse" for="attachments">Choose files</label><input class="attach-input" type="file" id="attachments" name="attachments" multiple><ul class="attach-list" id="attach-list"></ul></div><div class="attach-overlay" id="attach-overlay" hidden aria-hidden="true"><div class="attach-overlay-inner">Drop files to attach</div></div>{{if .ComposeNote}}<p class="muted">{{.ComposeNote}}</p>{{end}}<div class="dialog-actions"><a class="btn secondary" href="{{.ComposeCancel}}">Cancel</a><button type="submit" name="action" value="draft" class="secondary">Save Draft</button><button type="submit" name="action" value="send">Send</button></div></form></section>`
@@ -86,10 +94,11 @@ const draftReviewBody = `<div class="toolbar"><a href="/ui/inboxes/{{.Inbox.ID}}
 </section>`
 
 const draftsBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
-<div class="inboxbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div>
+<div class="inboxbar"><form id="drafts-bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/drafts/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="scope" value="page">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Delete all drafts?" title="Delete drafts" aria-label="Delete drafts">` + iconTrash + `</button></form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts"><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{else}}<p class="muted">No drafts yet.</p>{{end}}</section></div></div>`
+{{template "select-banner" .}}
+<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section></div></div>`
 
 const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div>
@@ -248,10 +257,23 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "inbox not found", 404)
 		return
 	}
-	drafts, err := s.Service.Store.ListDrafts(r.Context(), p, box.ID)
+	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	drafts, err := s.Service.Store.ListDraftsPaged(r.Context(), p, box.ID, before, inboxPageSize+1)
 	if err != nil {
 		s.uiError(w, err, 400)
 		return
+	}
+	hasMore := len(drafts) > inboxPageSize
+	if hasMore {
+		drafts = drafts[:inboxPageSize]
+	}
+	cursor := ""
+	if len(drafts) > 0 {
+		cursor = drafts[len(drafts)-1].ID
+	}
+	pagerURL := ""
+	if cursor != "" {
+		pagerURL = "/ui/inboxes/" + box.ID + "/drafts?before=" + url.QueryEscape(cursor)
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
@@ -270,6 +292,10 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 		Inbox:       &box,
 		Drafts:      drafts,
 		Folder:      "drafts",
+		HasMore:     hasMore,
+		Before:      cursor,
+		PagerURL:    pagerURL,
+		TotalCount:  draftCount,
 		Labels:      inboxLabels,
 		LabelUnread: labelUnread,
 		UnreadCount: unread[box.ID],
@@ -618,6 +644,12 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		s.uiError(w, err, 400)
 		return
 	}
+	// The exact folder/label total backs the "select all N" banner; it is
+	// independent of the list page size.
+	totalCount := 0
+	if f, _, ok := mailboxFilter(id, folder, label); ok {
+		totalCount, _ = s.Service.Store.CountMessages(r.Context(), p, f)
+	}
 	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
@@ -662,6 +694,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		Before:                     cursor,
 		Folder:                     folder,
 		PagerURL:                   pagerURL,
+		TotalCount:                 totalCount,
 		Labels:                     inboxLabels,
 		LabelUnread:                labelUnread,
 		ActiveLabel:                label,
@@ -689,50 +722,44 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.Form.Get("action")
+	switch action {
+	case "read", "unread", "delete", "restore", "purge":
+	default:
+		http.Error(w, "unknown action", 400)
+		return
+	}
 	ids := r.Form["ids"]
+	if r.Form.Get("scope") == "all" {
+		// "Select all N": re-derive the folder/label set server-side rather than
+		// trusting a client-supplied id list, so the operation covers exactly
+		// what the rendered banner promised. An unknown folder is refused.
+		folder := r.Form.Get("folder")
+		label := r.Form.Get("label")
+		f, _, ok := mailboxFilter(box.ID, folder, label)
+		if !ok {
+			http.Error(w, "unknown folder", 400)
+			return
+		}
+		// One role check up front: purge needs Owner, everything else Assistant.
+		if action == "purge" {
+			if !p.CanOwn(box.ID) {
+				http.Error(w, "forbidden", 403)
+				return
+			}
+		} else if !p.CanAssist(box.ID) {
+			http.Error(w, "forbidden", 403)
+			return
+		}
+		ids, err = s.Service.Store.AllMessageIDs(r.Context(), p, f)
+		if err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+	}
 	count := 0
 	for _, id := range ids {
-		m, err := s.Service.Store.GetMessage(r.Context(), p, id)
-		if err != nil || m.InboxID != box.ID {
-			continue
-		}
-		switch action {
-		case "read", "unread":
-			read := action == "read"
-			if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err == nil {
-				s.publishStateEvent(ev)
-				count++
-			}
-		case "delete":
-			if _, ev, err := s.Service.Store.TrashMessage(r.Context(), p, m.ID); err == nil {
-				if ev != nil {
-					s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-					s.Service.Hub.Publish(*ev)
-				}
-				count++
-			}
-		case "restore":
-			if _, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, m.ID); err == nil {
-				if ev != nil {
-					s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-					s.Service.Hub.Publish(*ev)
-				}
-				count++
-			}
-		case "purge":
-			path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, m.ID)
-			if err != nil {
-				continue
-			}
-			if path != "" {
-				s.removeDataFile(path)
-			}
-			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-			s.Service.Hub.Publish(ev)
+		if s.bulkMessageAction(r, p, box.ID, id, action) {
 			count++
-		default:
-			http.Error(w, "unknown action", 400)
-			return
 		}
 	}
 	notice := fmt.Sprintf("%d message", count)
@@ -761,6 +788,95 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		base += "/spam"
 	}
 	http.Redirect(w, r, base+"?notice="+url.QueryEscape(notice), 303)
+}
+
+// bulkMessageAction applies one bulk action to one message, scoped to the
+// owning inbox. It returns true when an action was performed, so the caller can
+// count the result. It is a no-op (false) for a message that does not exist or
+// belongs to a different inbox, mirroring the explicit-id list path.
+func (s *Server) bulkMessageAction(r *http.Request, p model.Principal, inboxID, id, action string) bool {
+	m, err := s.Service.Store.GetMessage(r.Context(), p, id)
+	if err != nil || m.InboxID != inboxID {
+		return false
+	}
+	switch action {
+	case "read", "unread":
+		read := action == "read"
+		if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err == nil {
+			s.publishStateEvent(ev)
+			return true
+		}
+	case "delete":
+		if _, ev, err := s.Service.Store.TrashMessage(r.Context(), p, m.ID); err == nil {
+			if ev != nil {
+				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+				s.Service.Hub.Publish(*ev)
+			}
+			return true
+		}
+	case "restore":
+		if _, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, m.ID); err == nil {
+			if ev != nil {
+				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+				s.Service.Hub.Publish(*ev)
+			}
+			return true
+		}
+	case "purge":
+		path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, m.ID)
+		if err != nil {
+			return false
+		}
+		if path != "" {
+			s.removeDataFile(path)
+		}
+		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.Service.Hub.Publish(ev)
+		return true
+	}
+	return false
+}
+
+// uiDraftsBulk deletes the selected drafts (explicit ids or every draft in the
+// inbox with scope=all). Drafts have no read/flag state, so delete is the only
+// bulk action. Each draft is verified to belong to the inbox and the caller to
+// hold Assistant on it before its attachment bytes are unlinked.
+func (s *Server) uiDraftsBulk(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "inbox not found", 404)
+		return
+	}
+	ids := r.Form["ids"]
+	if r.Form.Get("scope") == "all" {
+		ids, err = s.Service.Store.AllDraftIDs(r.Context(), p, box.ID)
+		if err != nil {
+			s.uiError(w, err, 400)
+			return
+		}
+	}
+	count := 0
+	for _, id := range ids {
+		d, err := s.Service.Store.GetDraft(r.Context(), p, id)
+		if err != nil || d.InboxID != box.ID {
+			continue
+		}
+		paths, err := s.Service.Store.DeleteDraftCascade(r.Context(), p, id)
+		if err != nil {
+			continue
+		}
+		for _, path := range paths {
+			s.removeDataFile(path)
+		}
+		count++
+	}
+	notice := fmt.Sprintf("%d draft", count)
+	if count != 1 {
+		notice += "s"
+	}
+	notice += " deleted"
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice="+url.QueryEscape(notice), 303)
 }
 
 func (s *Server) uiCompose(w http.ResponseWriter, r *http.Request) {
