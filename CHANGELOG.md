@@ -114,6 +114,13 @@ standalone, and whether the approver is enabled for the effective mode. See
 
 ### Fixed — release follow-up
 
+- Deleting, restoring, purging or marking spam on a **standalone** inbox's
+  message from the session UI no longer fails with "message not found". A
+  standalone inbox's messages are cached remote metadata, not local rows, so the
+  `/ui/messages/{id}/delete|restore|purge|spam` actions now resolve an opaque
+  remote id to its owning inbox and drive the live remote folder (Trash, Inbox or
+  Spam role) — matching the per-row actions the bulk bar and REST API already
+  used. A genuinely unknown id still answers 404.
 - The Dial MX / Antler MX receiving dialog no longer opens with every connector
   showing a "Pending" light when the dashboard already shows green. The live
   per-receiver statuses the dashboard light is computed from are embedded on the

@@ -1420,6 +1420,11 @@ func (s *Server) uiMessageSpam(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox's message id resolves through the remote reader
+		// (spam is its remote Spam-role folder).
+		if s.remoteMessageSpam(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1446,6 +1451,11 @@ func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
 	// Trash; it is not erased until purged.
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox's message id resolves through the remote reader and
+		// moves to the inbox's remote Trash-role folder.
+		if s.remoteMessageTrash(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1470,6 +1480,11 @@ func (s *Server) uiMessageRestore(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox's message id resolves through the remote reader and
+		// moves from its remote Trash folder back to the remote Inbox.
+		if s.remoteMessageRestore(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}
@@ -1489,6 +1504,11 @@ func (s *Server) uiMessagePurge(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
 	if err != nil {
+		// A standalone inbox's message id resolves through the remote reader and
+		// is erased with a UID-targeted remote expunge.
+		if s.remoteMessagePurge(w, r, p, r.PathValue("id")) {
+			return
+		}
 		http.Error(w, "message not found", 404)
 		return
 	}

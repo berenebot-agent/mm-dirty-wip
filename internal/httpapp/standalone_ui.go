@@ -610,6 +610,116 @@ const (
 	removeLabelAction = "remove"
 )
 
+// remoteMessageActionBox finds the standalone inbox that owns a cached remote
+// message id, so a session-UI state change (trash/restore/purge/spam) can route
+// to the live remote server instead of the local store. A remote id is opaque and
+// not inbox-prefixed, so the owning inbox must be resolved by scanning the
+// account's remote index. It reports ok=false when the id is not a cached remote
+// message of any authorized standalone inbox, so the caller answers a genuine 404.
+// Read authority is the finder gate; the action itself enforces the stronger
+// role (Assistant/Owner), so a read-only principal gets the action's real error
+// rather than a misleading 404.
+func (s *Server) remoteMessageActionBox(ctx context.Context, p model.Principal, id string) (model.Inbox, bool) {
+	if strings.TrimSpace(id) == "" {
+		return model.Inbox{}, false
+	}
+	boxes, err := s.Service.Store.ListStandaloneInboxes(ctx, p.AccountID)
+	if err != nil {
+		return model.Inbox{}, false
+	}
+	for _, box := range boxes {
+		if !p.CanRead(box.ID) && !p.Admin {
+			continue
+		}
+		if _, gerr := s.Service.Store.GetRemoteMessage(ctx, p.AccountID, box.ID, id); gerr != nil {
+			continue
+		}
+		return box, true
+	}
+	return model.Inbox{}, false
+}
+
+// remoteMessageBackend wraps a resolved standalone inbox as the mailboxBackend
+// the remote move/trash helpers dispatch through.
+func (s *Server) remoteMessageBackend(ctx context.Context, p model.Principal, box model.Inbox) mailboxBackend {
+	return mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
+}
+
+// remoteMessageTrash moves a standalone inbox's cached remote message to its
+// remote Trash-role folder. It returns false when id is not a cached remote
+// message, so the caller can fall back to the local delete path and answer 404
+// on a genuine miss.
+func (s *Server) remoteMessageTrash(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		return false
+	}
+	if err := s.trashRemoteMessage(r.Context(), p, s.remoteMessageBackend(r.Context(), p, box), id); err != nil {
+		s.uiError(w, err, 400)
+		return true
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"?notice="+url.QueryEscape("1 message moved to trash"), 303)
+	return true
+}
+
+// remoteMessageRestore moves a standalone inbox's cached remote message from its
+// remote Trash folder back to the remote Inbox. It returns false when id is not a
+// cached remote message.
+func (s *Server) remoteMessageRestore(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		return false
+	}
+	if err := s.moveRemoteToRole(r.Context(), p, s.remoteMessageBackend(r.Context(), p, box), id, model.FolderRoleInbox); err != nil {
+		s.uiError(w, err, 400)
+		return true
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape("Message restored"), 303)
+	return true
+}
+
+// remoteMessagePurge permanently erases a standalone inbox's cached remote
+// message with a UID-targeted remote expunge. PurgeRemoteMessage enforces Owner
+// and requires the message to be in a remote Trash folder; those refusals surface
+// as a 400 with the action's message. It returns false when id is not a cached
+// remote message.
+func (s *Server) remoteMessagePurge(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		return false
+	}
+	if err := s.remoteMailbox().PurgeRemoteMessage(r.Context(), p, box.ID, id); err != nil {
+		s.uiError(w, err, 400)
+		return true
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape("Message deleted permanently"), 303)
+	return true
+}
+
+// remoteMessageSpam moves a standalone inbox's cached remote message to (or out
+// of) its remote Spam-role folder. Spam is not an IMAP server flag, so the state
+// is represented by the role folder. It returns false when id is not a cached
+// remote message.
+func (s *Server) remoteMessageSpam(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
+	box, ok := s.remoteMessageActionBox(r.Context(), p, id)
+	if !ok {
+		return false
+	}
+	spam := r.Form.Get("spam") == "1"
+	role := model.FolderRoleInbox
+	target := "/ui/inboxes/" + box.ID
+	if spam {
+		role = model.FolderRoleSpam
+		target += "/spam"
+	}
+	if err := s.moveRemoteToRole(r.Context(), p, s.remoteMessageBackend(r.Context(), p, box), id, role); err != nil {
+		s.uiError(w, err, 400)
+		return true
+	}
+	http.Redirect(w, r, target, 303)
+	return true
+}
+
 // remoteMessageHTML serves the sanitized HTML body of a standalone inbox's remote
 // message, fetched live. It applies the same remote-image policy as the local
 // reader (?remote=1 opts in) and never loads external images by default. It

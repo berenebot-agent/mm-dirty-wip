@@ -122,6 +122,19 @@ func (f *fakeIMAP) find(loc imap.Locator) *fakeIMAPMsg {
 	return nil
 }
 
+// folderOf returns the folder a message currently lives in, by Message-ID, or ""
+// when it is not present (expunged).
+func (f *fakeIMAP) folderOf(messageID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.messages {
+		if m.messageID == messageID {
+			return m.folder
+		}
+	}
+	return ""
+}
+
 func (f *fakeIMAP) DiscoverFolders(_ context.Context, _ string) ([]imap.RemoteFolder, imap.RootScope, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1077,6 +1090,111 @@ func TestRemoteBulkActions(t *testing.T) {
 	}
 	if !strings.Contains(rr.Header().Get("Location"), "2+messages+marked+read") && !strings.Contains(rr.Header().Get("Location"), "2%20messages%20marked%20read") && !strings.Contains(rr.Header().Get("Location"), "messages%20marked%20read") {
 		t.Fatalf("remote bulk notice missing: %s", rr.Header().Get("Location"))
+	}
+}
+
+// TestRemoteMessageUIDeleteRestorePurgeSpam proves the per-message session-UI
+// actions (/ui/messages/{id}/delete|restore|purge|spam) resolve a standalone
+// inbox's cached remote metadata id and drive the live remote folder state,
+// instead of answering a spurious "message not found" (the local-store miss a
+// remote id always produces).
+func TestRemoteMessageUIDeleteRestorePurgeSpam(t *testing.T) {
+	svc, h, u, _, standalone, fake := standaloneFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	fake.folders["Trash"] = 100
+	fake.folders["Spam"] = 100
+	fake.add("INBOX", "From: a@b.test\r\nSubject: Action me\r\nMessage-ID: <act@test>\r\n\r\nbody", "<act@test>", "Action me")
+
+	// Seed-reconcile so the folder roles and the message are cached.
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages", adminKey(t, svc, u)); rr.Code != 200 {
+		t.Fatalf("seed reconcile %d: %s", rr.Code, rr.Body.String())
+	}
+	type listEnv struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	var env listEnv
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages?folder=INBOX", adminKey(t, svc, u)); rr.Code != 200 {
+		t.Fatalf("list %d: %s", rr.Code, rr.Body.String())
+	} else if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Items) != 1 {
+		t.Fatalf("want 1 cached message, got %d", len(env.Items))
+	}
+	id := env.Items[0].ID
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", path, strings.NewReader("_csrf="+csrf+body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Purge before trash is refused (must be trashed first) and the live message
+	// is untouched.
+	if rr := post("/ui/messages/"+id+"/purge", ""); rr.Code != 400 {
+		t.Fatalf("purge untrashed = %d want 400: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "INBOX" {
+		t.Fatalf("purge untrashed moved message: %q", got)
+	}
+
+	// Delete moves it to the remote Trash folder and out of the INBOX listing.
+	if rr := post("/ui/messages/"+id+"/delete", ""); rr.Code != 303 {
+		t.Fatalf("delete = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "Trash" {
+		t.Fatalf("delete did not move to Trash: %q", got)
+	}
+	env = listEnv{}
+	if rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/messages?folder=INBOX", adminKey(t, svc, u)); rr.Code != 200 {
+		t.Fatalf("inbox after delete %d", rr.Code)
+	} else if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	} else if len(env.Items) != 0 {
+		t.Fatalf("deleted message still in INBOX: %+v", env.Items)
+	}
+
+	// Restore moves it back to the remote Inbox.
+	if rr := post("/ui/messages/"+id+"/restore", ""); rr.Code != 303 {
+		t.Fatalf("restore = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "INBOX" {
+		t.Fatalf("restore did not return to INBOX: %q", got)
+	}
+
+	// Spam moves it to the remote Spam folder, and not-spam returns it.
+	if rr := post("/ui/messages/"+id+"/spam", "&spam=1"); rr.Code != 303 {
+		t.Fatalf("spam = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "Spam" {
+		t.Fatalf("spam did not move to Spam: %q", got)
+	}
+	if rr := post("/ui/messages/"+id+"/spam", "&spam=0"); rr.Code != 303 {
+		t.Fatalf("not-spam = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "INBOX" {
+		t.Fatalf("not-spam did not return to INBOX: %q", got)
+	}
+
+	// Trash then purge erases it on the remote server.
+	if rr := post("/ui/messages/"+id+"/delete", ""); rr.Code != 303 {
+		t.Fatalf("re-delete = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr := post("/ui/messages/"+id+"/purge", ""); rr.Code != 303 {
+		t.Fatalf("purge = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := fake.folderOf("<act@test>"); got != "" {
+		t.Fatalf("purge did not expunge the message: %q", got)
+	}
+
+	// A genuinely unknown id still answers 404 from the local path.
+	if rr := post("/ui/messages/rm-nonexistent/delete", ""); rr.Code != 404 {
+		t.Fatalf("unknown id delete = %d want 404: %s", rr.Code, rr.Body.String())
 	}
 }
 
