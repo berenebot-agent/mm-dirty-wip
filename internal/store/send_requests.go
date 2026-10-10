@@ -340,6 +340,18 @@ func (s *Store) PendingRequestExists(ctx context.Context, accountID, draftID str
 	return n > 0, nil
 }
 
+// CountPendingSendRequests returns the number of outstanding pending approval
+// requests for an inbox. It is used by the remote watcher to decide whether an
+// arrival might be an email approval control message (which is only meaningful
+// when a request is outstanding), avoiding a live body fetch for ordinary mail.
+func (s *Store) CountPendingSendRequests(ctx context.Context, accountID, inboxID string) (int, error) {
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM draft_send_requests WHERE account_id=? AND inbox_id=? AND status=?`, accountID, inboxID, model.SendRequestPending).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // ExpireStaleRequestForDraft expires a pending request for a draft whose token
 // has passed and returns the events to publish.
 func (s *Store) ExpireStaleRequestForDraft(ctx context.Context, accountID, draftID string) ([]model.Event, error) {

@@ -139,6 +139,131 @@ names for the supplied addresses are set. An empty name clears it (the sender
 falls back to the inbox `display_name`). The response includes `alias_names`
 for aliases that have a name.
 
+### Inbox kinds
+
+An inbox has a `kind`, `domain` (default) or `standalone`. A **domain** inbox is
+the classic managed-domain mailbox described above. A **standalone** inbox owns
+an address independent of any managed domain and is reached through a per-inbox
+remote IMAP/SMTP connector; it is otherwise a first-class mailbox with the same
+folder, label, thread, event and API-key model. The kind is immutable after
+creation. Managed `aliases` apply to domain inboxes only. See the common mailbox
+surface below and [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
+
+## 3a. Common mailbox surface
+
+Routes under `/v1/inboxes/{id}/…` dispatch on the inbox kind, so one set of
+endpoints reads a domain inbox (local store) and a standalone inbox (live remote
+server) alike. Every listing returns the shared **envelope**:
+
+```json
+{
+  "items": [ ... ],
+  "next_cursor": "opaque-token-or-empty",
+  "completeness": "complete",
+  "errors": []
+}
+```
+
+- `items` is the page; `next_cursor` is an opaque token for the next page and is
+  empty on the last page. **Pagination and completeness are orthogonal:** having
+  a `next_cursor` does not mean the result set is partial.
+- `completeness` is `complete`, `partial` or `unknown`, describing whether the
+  source could enumerate the whole result set at all. A standalone inbox's index
+  is **progressive**: ordinary large folders backfill to `complete` over
+  successive passes, so completeness is `partial` only while a folder's backfill
+  has not yet reached the bottom (or a pass was interrupted / a folder exceeds
+  the 500k-UID snapshot ceiling). A client must not present a `partial` listing
+  as complete. See [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) §3/§5.
+- `errors` carries per-inbox failures (`{inbox_id, code, message, retryable}`)
+  when an account-wide listing spans several inboxes, so one unreachable mailbox
+  does not fail the whole request. Only a stable `code` and a short safe message
+  are exposed; never raw provider or store text.
+- An **account-wide** listing (no `inbox` scope) merges the local store and every
+  authorized remote inbox into one globally date-sorted stream; the opaque cursor
+  records each source's own progress plus the global key of the last item, so
+  resuming never duplicates or skips an item. A per-source failure is reported in
+  `errors` and does not fail the page.
+
+The common routes:
+
+```text
+GET    /v1/inboxes/{id}/folders
+POST   /v1/inboxes/{id}/folders
+PATCH  /v1/inboxes/{id}/folders/{folderId}
+DELETE /v1/inboxes/{id}/folders/{folderId}
+GET    /v1/inboxes/{id}/messages        ?folder=&before=&label=&from=&to=&limit=
+GET    /v1/inboxes/{id}/messages/{messageId}
+GET    /v1/inboxes/{id}/messages/{messageId}/content
+GET    /v1/inboxes/{id}/messages/{messageId}/attachments/{part}
+GET    /v1/inboxes/{id}/threads         ?folder=&limit=
+GET    /v1/inboxes/{id}/threads/{threadId}
+GET    /v1/inboxes/{id}/search          ?q=&folder=&from=&to=&label=&limit=
+GET    /v1/inboxes/{id}/labels
+```
+
+Also under `/v1/messages/{id}` for both kinds: `GET …/content` (raw MIME) and
+`GET …/attachments/{part}` (one MIME part). `part` is a numeric dotted MIME part
+path (e.g. `1.2`).
+
+### Folders, roles and labels
+
+Every inbox has a single hierarchical **folder** tree. A folder carries a
+`role` (`folder`, `inbox`, `sent`, `drafts`, `trash`, `spam`, `archive`,
+`outbox`, `label`) or is an ordinary custom folder. A message belongs to exactly
+one folder; moving it emits `message.folder_changed`. A protected system folder
+cannot be renamed or deleted, and a non-empty folder is refused (nothing is
+silently cascaded). **Labels are not folders**: a label is free-text metadata on
+a message and is independent of the folder tree on both inbox kinds.
+
+### Standalone (remote) specifics
+
+```text
+GET  /v1/inboxes/{id}/remote
+PUT  /v1/inboxes/{id}/remote
+POST /v1/inboxes/{id}/remote/test
+POST /v1/inboxes/{id}/remote/refresh
+POST /v1/inboxes/{id}/remote/roles/{role}
+GET /v1/inboxes/{id}/handoffs
+GET /v1/inboxes/{id}/authoring
+PUT /v1/inboxes/{id}/authoring
+```
+
+- `GET /remote` returns the secret-free binding (`host`, `port`, `username`,
+  `security`, `namespace`, optional SMTP fields, `imap_password_set`,
+  `smtp_password_set`, `configured`, `capabilities`, `sent_copy_enabled`,
+  `sent_copy_folder`) plus `missing_roles` — the special roles not yet mapped, so
+  a client can prompt an explicit select or create. Secrets are never returned.
+- `PUT /remote` sets the binding (Owner/Admin). `security` is `tls` (default),
+  `starttls` or `plain`; plain is an explicit per-inbox choice and is never
+  auto-selected or silently downgraded. A blank password field retains the
+  stored value. It also sets `sent_copy_enabled` and an optional
+  `sent_copy_folder` for the remote Sent copy.
+- `POST /remote/test` authenticates and resolves the folder scope without
+  mutating mailbox state. `POST /remote/refresh` forces a reconcile pass and
+  returns the resulting index `status`.
+- `POST /remote/roles/{role}` maps a role: it returns the folder already
+  carrying the role, or with `{"create":true}` creates the conventional folder;
+  without either it answers `404` so the client prompts explicitly. A mapping is
+  never silently invented.
+- `GET /handoffs` lists the inbox's RemoteDraft handoffs newest first as the
+  shared envelope, retaining terminal records (`published`, `ambiguous`,
+  `failed`/`cancelled`) even after the source draft is cleaned up. Each record
+  carries its `publication` and `notification_status` independently and never an
+  approval token or the frozen content hash.
+- `GET`/`PUT /authoring` read/write the assistant authoring mode
+  (`mailmoose_approval` or `remote_draft`) and the notify override. A standalone
+  inbox defaults to `remote_draft`; the mode is snapshotted onto each request.
+  The read also reports `standalone` and `approver_enabled` (true exactly when the
+  effective mode is `mailmoose_approval`).
+
+For a standalone inbox, a message's body and attachments are fetched **live**
+from the remote server on each request and are never archived; the attachment
+listing is empty and parts are downloaded structurally by MIME part path. The
+single-message `GET` returns the **live body**, or `503` if the connector is
+unreachable — there is no offline fallback that serves cached metadata as the
+body. A purge (`DELETE /v1/messages/{id}/purge`) requires Owner and only acts on
+a message already in the Trash-role folder.
+
 ## 4. Messages
 
 ```http
@@ -308,6 +433,8 @@ Search operates only within the key's authorized inbox set.
 
 ```http
 GET /v1/messages/{message_id}/attachments
+GET /v1/messages/{message_id}/attachments/{part}
+GET /v1/messages/{message_id}/content
 GET /v1/attachments/{id}
 ```
 
@@ -321,6 +448,12 @@ Metadata:
   "size": 184920
 }
 ```
+
+`GET /v1/messages/{id}/content` streams the raw RFC5322 MIME; `GET
+/v1/messages/{id}/attachments/{part}` streams one MIME part by its numeric
+dotted part path (e.g. `1.2`). For a **standalone** inbox's message only the
+header is cached, so the `attachments` listing is empty and parts are downloaded
+structurally by path (the body is fetched live and never archived).
 
 Attachment content responses use download disposition and `nosniff` headers.
 
@@ -401,6 +534,35 @@ GET  /v1/send-requests?inbox={id}&active=true
 - Workflow events: `draft.send_requested`, `draft.send_request_cancelled`,
   `draft.approved`, `draft.rejected`, `draft.sent`, `draft.send_failed`,
   `draft.notification_sent`, `draft.notification_failed`.
+
+The inbox's **authoring mode** decides how a request is handled (snapshotted at
+creation). **MailMoose approvals** (domain default) is the workflow above.
+**Remote draft handoff** (standalone default) is a one-way handoff to the
+connected mailbox's remote Drafts folder instead: MailMoose never sends it, a
+notification without a token tells the human it is waiting, and publication,
+notification and Sent-copy states advance independently. The handoff events are
+`draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`,
+`draft.handoff_failed`, `draft.handoff_cancelled`, `draft.handoff_notification_sent`
+and `draft.handoff_notification_failed`. An unverifiable remote append is
+reported `ambiguous`, never retried blindly. A handoff on an inbox with no remote
+Drafts folder is refused.
+
+A draft response carries a **`handoff`** object when a RemoteDraft handoff is
+active or most recent, exposing the immutable `handoff_id` and the independent
+`publication` (`pending`/`published`/`ambiguous`/`failed`) and
+`notification_status` states, so a client that requested a handoff can act on
+its outcome rather than only seeing the frozen draft. The full history is at
+`GET /v1/inboxes/{id}/handoffs` (terminal records are retained after the local
+draft is cleaned up).
+
+Only a **pending** handoff can be cancelled (the UI `cancel-handoff` action;
+`Store.CancelHandoff`): it becomes `failed` with `last_error="cancelled"`, the
+draft returns to editable, and `draft.handoff_cancelled` is emitted; a
+`published` or `ambiguous` handoff cannot be cancelled. A **retry**
+(`retry-handoff`) is a deliberate re-request through the inbox's effective
+authoring mode, so it only produces a new handoff while the inbox is in
+`remote_draft` mode. An `ambiguous` append is **never** automatically retried —
+the record is terminal and re-requesting is a human choice.
 
 Mailbox roles apply to API keys and to human users alike. An account Admin is an Owner of every mailbox in the account; a non-admin mailbox operator holds Owner on only the inboxes assigned to them.
 Hermes Relay sends as an owner directly and does not use the draft workflow.
@@ -503,6 +665,15 @@ data: {"message_id":"msg_01K...","inbox_id":"in_01K...","thread_id":"thr_01K..."
 ```
 
 On connection, backlog after the supplied cursor is delivered before the stream joins live events.
+
+For a **standalone** inbox, a new arrival's event `entity_id` is the durable
+**arrival id**, not the cached-metadata message id (detection is independent of,
+and may run before, the metadata reconcile). The canonical read resolves an
+arrival id to its message — materializing the metadata row from the arrival's
+durable header fields when the reconcile has not yet run — so a client can follow
+an event id straight into `GET /v1/messages/{id}` and obtain the canonical
+message (including its message id, which a reply/forward then uses). An arrival
+whose folder UIDVALIDITY has since changed resolves to `404`.
 
 ## 11. Inbound endpoints and domain provider configuration
 

@@ -39,6 +39,28 @@ default to `owner`.
 This is the same boundary as the per-mailbox API-key roles `read` /
 `assistant` / `owner`; a connector is effectively a mailbox-bound principal.
 
+### How an `assistant` send is resolved
+
+An `assistant` send (a request to send a draft) is resolved per the inbox's
+**authoring mode**, snapshotted onto each request at creation:
+
+- **MailMoose approvals** (the default for a managed-domain inbox) — the
+  in-product approval workflow. An Owner approves and rejects in the UI, or
+  approves by replying to a tokenized notification email sent to the inbox's
+  nominated approver. An approved request then sends through the domain's
+  outbound configuration.
+- **Remote draft handoff** (the default for a standalone inbox) — the frozen
+  draft is placed one-way into the connected mailbox's remote **Drafts** folder
+  for a human to review and send from their own client. MailMoose never sends
+  it. A notification (which carries **no** approval token) tells the human a
+  draft is waiting, and publication, notification and the Sent-copy are tracked
+  as separate states.
+
+Both modes are set per inbox (**Approvals** settings) and can be changed; the
+change never affects a request already in flight. See
+[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) for the state
+machines and the standalone approval identity caveat.
+
 ### The no-allow-list warning
 
 An inbox may block senders that are not on its allow list. A connector on an
@@ -262,7 +284,14 @@ The destination must be an **HTTPS URL** with no userinfo and no fragment.
   {"event":"message.received","cursor":"evt_123","inbox_id":"in_01K...","message_id":"msg_01K..."}
   ```
 
+  For a **standalone** inbox the arrival has no local message row, so the notify
+  body carries the remote locator instead of a local message id
+  (`"remote":true`, `remote_uid`, `uid_validity`, `folder_path`,
+  `rfc_message_id`, `from`, `subject`, `size_bytes`).
+
 - **forward** — the raw stored MIME, byte-for-byte, `Content-Type: message/rfc822`.
+  For a standalone inbox the body is fetched **live** from the remote server for
+  the delivery (only when the client's mode is `forward`) and is never archived.
 
 ### Headers
 

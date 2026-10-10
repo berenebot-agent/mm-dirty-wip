@@ -44,8 +44,8 @@ type MailboxRoute struct {
 
 // MailboxRouter resolves an inbox to its backend and capability surface. It is
 // intentionally thin: it performs no I/O beyond a store read and holds no remote
-// session. The remote adapter (a later wave) is registered onto it, so workflow
-// code depends only on this boundary and never on an IMAP type.
+// session. The RemoteBackend adapter is registered onto it, so workflow code
+// depends only on this boundary and never on an IMAP type.
 type MailboxRouter struct {
 	store *store.Store
 }
@@ -213,10 +213,9 @@ func (m *StandaloneMailboxService) ListFolders(ctx context.Context, accountID, i
 // return an *model.MailboxError with ErrKindUnsupported so callers can degrade
 // cleanly instead of type-asserting a provider.
 //
-// Scaffold vs upcoming: only the methods documented as "scaffolded" are wired
-// today. The rest are declared so the API of both backends is fixed before the
-// remote adapter exists; implementing them is the remote wave's job (and the
-// local wave's job for any that the domain backend should answer locally).
+// A backend answers every method it can; a method it cannot answer returns an
+// *model.MailboxError with ErrKindUnsupported so callers degrade cleanly instead
+// of type-asserting a provider.
 type MailboxBackend interface {
 	// Kind reports which backend this is.
 	Kind() MailboxBackendKind

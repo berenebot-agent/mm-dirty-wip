@@ -192,12 +192,14 @@ func TestSearchFiltersFromToBefore(t *testing.T) {
 	if rr.Code != 200 {
 		t.Fatalf("before filter %d %s", rr.Code, rr.Body.String())
 	}
-	var got []model.Message
-	if err = json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+	var env struct {
+		Items []model.Message `json:"items"`
+	}
+	if err = json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("before filter returned %d messages, want 1", len(got))
+	if len(env.Items) != 1 {
+		t.Fatalf("before filter returned %d messages, want 1", len(env.Items))
 	}
 }
 

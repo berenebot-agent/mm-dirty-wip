@@ -46,7 +46,7 @@ func (w *WebhookWorker) RunOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		m, skip, err := w.deliverableMessage(ctx, d)
+		m, arrival, skip, err := w.deliverableMessage(ctx, d)
 		if err != nil {
 			return err
 		}
@@ -56,7 +56,7 @@ func (w *WebhookWorker) RunOnce(ctx context.Context) error {
 			}
 			continue
 		}
-		return w.dispatch(ctx, d, m)
+		return w.dispatch(ctx, d, m, arrival)
 	}
 }
 
@@ -68,21 +68,51 @@ func (w *WebhookWorker) RunOnce(ctx context.Context) error {
 // message.spam_state_changed event, so a stale "moved to Spam" transition is
 // skipped even if the message was later released (which enqueues its own,
 // deliverable event).
-func (w *WebhookWorker) deliverableMessage(ctx context.Context, d store.PendingWebhookDelivery) (model.Message, bool, error) {
+//
+// A remote-arrival event (payload remote=true) has no local message row: it is
+// resolved to its durable arrival record instead. A control or handoff-skipped
+// arrival is never forwarded.
+func (w *WebhookWorker) deliverableMessage(ctx context.Context, d store.PendingWebhookDelivery) (model.Message, *store.RemoteArrival, bool, error) {
+	if IsRemotePayload(d.Payload) {
+		arrival, err := w.svc.Store.GetRemoteArrival(ctx, d.Client.AccountID, d.EntityID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return model.Message{}, nil, true, nil
+			}
+			return model.Message{}, nil, false, err
+		}
+		if arrival.Control || arrival.DeliveryState == store.RemoteArrivalSkipped {
+			return model.Message{}, nil, true, nil
+		}
+		if arrival.InboxID != d.Client.InboxID {
+			return model.Message{}, nil, true, nil
+		}
+		m := model.Message{
+			ID:           arrival.ID,
+			InboxID:      arrival.InboxID,
+			Direction:    "inbound",
+			From:         model.Address{Name: arrival.FromName, Address: arrival.FromAddress},
+			Subject:      arrival.Subject,
+			SizeBytes:    arrival.SizeBytes,
+			RFCMessageID: arrival.RFCMessageID,
+			CreatedAt:    arrival.CreatedAt,
+		}
+		return m, &arrival, false, nil
+	}
 	if eventIsSpam(d.Payload) {
-		return model.Message{}, true, nil
+		return model.Message{}, nil, true, nil
 	}
 	m, err := w.svc.Store.GetMessageByID(ctx, d.Client.AccountID, d.EntityID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return model.Message{}, true, nil
+			return model.Message{}, nil, true, nil
 		}
-		return model.Message{}, false, err
+		return model.Message{}, nil, false, err
 	}
 	if m.Internal || m.Spam || m.DeletedAt != nil {
-		return model.Message{}, true, nil
+		return model.Message{}, nil, true, nil
 	}
-	return m, false, nil
+	return m, nil, false, nil
 }
 
 // eventIsSpam reports whether a durable event payload marks the message as Spam.
@@ -110,29 +140,42 @@ func eventIsSpam(payload []byte) bool {
 	return false
 }
 
-// dispatch performs one HTTP delivery for an already-validated event.
-func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDelivery, m model.Message) error {
+// dispatch performs one HTTP delivery for an already-validated event. A remote
+// arrival's raw body is fetched from the live server on demand (only when the
+// client's mode is forward); the fetch is bounded to a transient temp file that is
+// removed immediately after the request body is read.
+func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDelivery, m model.Message, arrival *store.RemoteArrival) error {
 	var body []byte
 	if d.Client.Mode == "forward" {
-		path, err := w.svc.dataPath(m.RawPath)
-		if err != nil {
-			return err
+		var raw []byte
+		if arrival != nil {
+			var err error
+			raw, err = w.remoteArrivalRaw(ctx, d.Client.InboxID, *arrival)
+			if err != nil {
+				return err
+			}
+		} else {
+			path, err := w.svc.dataPath(m.RawPath)
+			if err != nil {
+				return err
+			}
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			raw, err = io.ReadAll(io.LimitReader(f, w.svc.Config.MaxMessageBytes+1))
+			_ = f.Close()
+			if err != nil {
+				return err
+			}
+			if int64(len(raw)) > w.svc.Config.MaxMessageBytes {
+				return fmt.Errorf("raw message exceeds configured maximum")
+			}
 		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		body, err = io.ReadAll(io.LimitReader(f, w.svc.Config.MaxMessageBytes+1))
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-		if int64(len(body)) > w.svc.Config.MaxMessageBytes {
-			return fmt.Errorf("raw message exceeds configured maximum")
-		}
+		body = raw
 	} else {
 		var err error
-		body, err = json.Marshal(map[string]any{"event": d.Type, "cursor": d.Cursor, "inbox_id": d.Client.InboxID, "message_id": d.EntityID})
+		body, err = json.Marshal(remoteAwareJSON(d, arrival))
 		if err != nil {
 			return err
 		}
@@ -272,4 +315,71 @@ func truncateWebhookError(s string) string {
 		return s[:512]
 	}
 	return s
+}
+
+// IsRemotePayload reports whether a durable event payload describes a remote
+// arrival (payload remote=true) rather than a locally-persisted message.
+func IsRemotePayload(payload []byte) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	var p struct {
+		Remote bool `json:"remote"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return false
+	}
+	return p.Remote
+}
+
+// remoteAwareJSON builds the JSON delivery body for an event. A remote arrival
+// carries its remote locator and no local message id, so a consumer can fetch it
+// live; a local event keeps its original shape.
+func remoteAwareJSON(d store.PendingWebhookDelivery, arrival *store.RemoteArrival) map[string]any {
+	if arrival == nil {
+		return map[string]any{"event": d.Type, "cursor": d.Cursor, "inbox_id": d.Client.InboxID, "message_id": d.EntityID}
+	}
+	return map[string]any{
+		"event": d.Type, "cursor": d.Cursor, "inbox_id": d.Client.InboxID, "message_id": arrival.ID,
+		"remote": true, "remote_uid": arrival.UID, "uid_validity": arrival.UIDValidity,
+		"folder_path": arrival.FolderPath, "rfc_message_id": arrival.RFCMessageID,
+		"from": arrival.FromAddress, "subject": arrival.Subject, "size_bytes": arrival.SizeBytes,
+	}
+}
+
+// remoteArrivalRaw streams a remote arrival's raw MIME to a transient file, reads
+// it back bounded by the configured maximum, and removes the file. It is only
+// called for a forward-mode client, so no body is fetched on a metadata-only
+// delivery. The remote forwarder is installed once at startup; when it is absent
+// (a deployment with no remote bridge), a forward of a remote arrival is a
+// terminal error rather than a silent empty body.
+func (w *WebhookWorker) remoteArrivalRaw(ctx context.Context, inboxID string, arrival store.RemoteArrival) ([]byte, error) {
+	if w.svc.RemoteForwarder == nil {
+		return nil, fmt.Errorf("remote forwarder is not installed")
+	}
+	inbox, err := w.svc.Store.GetInboxInternal(ctx, arrival.AccountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
+	path, size, err := w.svc.RemoteForwarder.FetchArrivalRaw(ctx, inbox, arrival)
+	if err != nil {
+		return nil, err
+	}
+	defer w.svc.RemoteForwarder.CleanupRemoteRaw(path)
+	if size > w.svc.Config.MaxMessageBytes {
+		return nil, fmt.Errorf("raw message exceeds configured maximum")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	body, err := io.ReadAll(io.LimitReader(f, w.svc.Config.MaxMessageBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > w.svc.Config.MaxMessageBytes {
+		return nil, fmt.Errorf("raw message exceeds configured maximum")
+	}
+	return body, nil
 }

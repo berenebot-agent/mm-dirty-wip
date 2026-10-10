@@ -553,7 +553,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 // fullInboxSelectCols is the projection every full-inbox read shares. It uses
 // the domain name only for a domain inbox; a standalone inbox carries its own
 // address, so the domain join is a LEFT JOIN and d.name may be NULL.
-const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured`
+const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured,i.remote_sent_copy_enabled,i.remote_sent_copy_folder`
 
 // scanFullInbox reads one row projected by fullInboxSelectCols. It resolves the
 // address and remote description and never queries further tables. storageKnown
@@ -561,12 +561,12 @@ const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,C
 // means the inbox predates migration 047 and must be recomputed on read).
 func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, error) {
 	var i model.Inbox
-	var domain, allowed, created, ns, rhost, ruser, rsec, shost, suser, ssec string
-	var enabled, restricted, requireAuth, autoMarkRead, remoteConfigured int
+	var domain, allowed, created, ns, rhost, ruser, rsec, shost, suser, ssec, sentCopyFolder string
+	var enabled, restricted, requireAuth, autoMarkRead, remoteConfigured, sentCopyEnabled int
 	var rport, sport int
 	var domainID sql.NullString
 	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
-	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured); err != nil {
+	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured, &sentCopyEnabled, &sentCopyFolder); err != nil {
 		return model.Inbox{}, false, err
 	}
 	i.DomainID = domainID.String
@@ -584,6 +584,8 @@ func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, erro
 	i.AutoMarkReadOnDelivery = autoMarkRead != 0
 	i.Namespace = ns
 	i.RemoteConfigured = remoteConfigured != 0
+	i.RemoteSentCopyEnabled = sentCopyEnabled != 0
+	i.RemoteSentCopyFolder = sentCopyFolder
 	if rhost != "" || ruser != "" || rport != 0 {
 		rc := &model.RemoteConnection{Host: rhost, Port: rport, Username: ruser, Security: rsec}
 		if shost != "" || suser != "" || sport != 0 {

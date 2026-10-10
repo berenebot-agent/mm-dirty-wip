@@ -160,7 +160,7 @@ func resolveAttemptDomainTx(ctx context.Context, tx *sql.Tx, accountID, domainID
 	if messageID == "" {
 		return "", nil
 	}
-	var derived string
+	var derived sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT i.domain_id FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, messageID, accountID).Scan(&derived)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -168,7 +168,9 @@ func resolveAttemptDomainTx(ctx context.Context, tx *sql.Tx, accountID, domainID
 	if err != nil {
 		return "", err
 	}
-	return derived, nil
+	// A standalone inbox has no managed domain: the derived value is NULL, which
+	// is a valid "no domain" for the delivery log.
+	return derived.String, nil
 }
 
 // pruneDeliveryLogTx deletes delivery-log rows for an account that fall outside

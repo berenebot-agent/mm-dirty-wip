@@ -587,3 +587,88 @@ func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 		t.Fatalf("ack not persisted: %d", updated.LastAckEventID)
 	}
 }
+
+// TestRelayDeliversRemoteArrival proves a detected remote arrival (a standalone
+// inbox's new mail, which has no local message row) is delivered to the gateway as
+// a remote-aware inbound event, and the durable cursor advances only on the
+// gateway's acknowledgement.
+func TestRelayDeliversRemoteArrival(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
+	hub := events.NewHub()
+	svc, err := app.New(cfg, st, hub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)
+	inbox, err := st.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
+		Address: "agent@remote.example",
+		Remote:  &model.RemoteConnection{Host: "imap.remote.example", Username: "agent@remote.example"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: inbox.ID, Name: "Hermes"}
+	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
+	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
+	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-remote", se, de)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A detected remote arrival: no local message row exists for it.
+	arrival, _, err := st.RecordRemoteArrival(ctx, u.AccountID, inbox.ID, store.RemoteArrivalInput{
+		FolderPath: "INBOX", UIDValidity: 7, UID: 42, RFCMessageID: "<remote@test>",
+		FromName: "Alice", FromAddress: "alice@outside.test", Subject: "Remote mail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, _, err := st.RecordRemoteArrivalEvent(ctx, u.AccountID, inbox.ID, arrival)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := hermesrelay.New(svc)
+	ts := httptest.NewServer(http.HandlerFunc(rs.ServeWebSocket))
+	defer ts.Close()
+	client := dialRawWS(t, "ws"+strings.TrimPrefix(ts.URL, "http")+"/relay", makeUpgradeTokenTest(conn.GatewayID, secret))
+	defer client.close()
+	if err = client.writeJSON(map[string]any{"type": "hello", "platform": "email", "botId": "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.readFrame(); err != nil {
+		t.Fatal(err)
+	}
+	var inbound map[string]any
+	if err = client.readJSON(&inbound); err != nil {
+		t.Fatalf("remote arrival not delivered: %v", err)
+	}
+	if inbound["type"] != "inbound" || inbound["bufferId"] != ev.Cursor {
+		t.Fatalf("inbound %#v", inbound)
+	}
+	e := inbound["event"].(map[string]any)
+	if e["message_id"] != arrival.ID {
+		t.Fatalf("event message_id = %v want %v", e["message_id"], arrival.ID)
+	}
+	meta := e["metadata"].(map[string]any)
+	if meta["remote"] != true {
+		t.Fatalf("event not remote-aware: %#v", meta)
+	}
+	if err = client.writeJSON(map[string]any{"type": "inbound_ack", "bufferId": ev.Cursor}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	updated, err := st.GetHermesConnectionByGateway(ctx, conn.GatewayID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastAckEventID < ev.ID {
+		t.Fatalf("ack not persisted: %d", updated.LastAckEventID)
+	}
+}

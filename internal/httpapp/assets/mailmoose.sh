@@ -156,6 +156,7 @@ DELETE_DRAFT=0
 MODE=""
 
 SUBJECT=""
+FOLDER=""
 TEXT=""
 HTML=""
 SENDER=""
@@ -207,6 +208,15 @@ if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
 (["LABEL"]|@tsv),
 (rows[] | [(if type=="object" then (.label//"") else . end)] | @tsv) end'
 
+TABLE_FOLDERS='def rows: if type=="array" then . elif ((.items? // null)|type)=="array" then .items else null end;
+if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
+(["ID","PATH","NAME","ROLE","MESSAGES","UNREAD"]|@tsv),
+(rows[] | [.id, (.path//""), (.name//""), (.role//""), ((.message_count//0)|tostring), ((.unread_count//0)|tostring)] | map(tostring) | @tsv) end'
+
+TABLE_REMOTE='if type!="object" then tostring else
+(["HOST","PORT","USERNAME","SECURITY","SMTP_HOST","NAMESPACE","CONFIGURED","IMAP_PW_SET","SMTP_PW_SET","MISSING_ROLES"]|@tsv),
+([(.host//""), ((.port//0)|tostring), (.username//""), (.security//""), (.smtp_host//""), (.namespace//""), ((.configured//false)|tostring), ((.imap_password_set//false)|tostring), ((.smtp_password_set//false)|tostring), ((.missing_roles//[])|join(","))] | map(tostring) | @tsv) end'
+
 TABLE_OUTBOX='(["ID","SUBJECT","TO","STATUS","ATTEMPTS","LAST_ERROR","NEXT_RETRY","DATE"]|@tsv),
 (.[] | [.id, (.subject//""), ((.to//[])|join(", ")), (.status//""), ((.attempts//0)|tostring), (.last_error//""), (.next_retry//""), (.created_at//.received_at//"")] | map(tostring) | @tsv)'
 
@@ -229,6 +239,15 @@ TABLE_REQUESTS='def rows: if type=="array" then . elif ((.send_requests? // null
 if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
 (["ID","DRAFT","INBOX","STATUS","DELIVERY","APPROVER","REQUESTED"]|@tsv),
 (rows[] | [.id, (.draft_id//""), (.inbox_id//""), (.status//""), (.delivery_status//""), (.approver_email//""), (.requested_at//"")] | map(tostring) | @tsv) end'
+
+TABLE_AUTHORING='if type!="object" then tostring else
+(["MODE","DEFAULT_MODE","NOTIFY_ADDRESS","NOTIFY_OVERRIDDEN","APPROVER_ENABLED","APPROVER_EMAIL"]|@tsv),
+([(.mode//""), (.default_mode//""), (.notify_address//""), ((.notify_overridden//false)|tostring), ((.approver_enabled//false)|tostring), (.approver_email//"")] | map(tostring) | @tsv) end'
+
+TABLE_HANDOFFS='def rows: if type=="array" then . elif ((.items? // null)|type)=="array" then .items else null end;
+if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
+(["ID","DRAFT","PUBLICATION","NOTIFICATION","REMOTE_FOLDER","ERROR","REQUESTED"]|@tsv),
+(rows[] | [.id, (.draft_id//""), (.publication//""), (.notification_status//""), (.remote_folder//""), (.last_error//""), (.requested_at//"")] | map(tostring) | @tsv) end'
 
 # ---------------------------------------------------------------------------
 # Usage
@@ -260,6 +279,13 @@ commands:
   threads          GET  /v1/threads                 list threads
   thread           GET  /v1/threads/{id}            thread detail (+ --messages)
   labels           GET  /v1/labels                  distinct labels in use
+  folders          GET  /v1/inboxes/{id}/folders    list an inbox's folders (common)
+  folder-add       POST /v1/inboxes/{id}/folders    create a folder (--inbox, PATH [NAME])
+  folder-delete    DELETE /v1/inboxes/{id}/folders/{folderId}
+  remote           GET  /v1/inboxes/{id}/remote     standalone inbox remote config
+  authoring        GET/PUT /v1/inboxes/{id}/authoring  assistant authoring settings
+  handoffs         GET  /v1/inboxes/{id}/handoffs   RemoteDraft handoff history
+  remote-role      POST /v1/inboxes/{id}/remote/roles/{role}  map a special folder role
   send             POST /v1/send                    send (Owner)
   reply            POST /v1/messages/{id}/reply    reply (Owner)
   mark-read        PATCH  /v1/messages/{id}         set read=true
@@ -723,7 +749,11 @@ cmd_search() {
 	add_multi label ${LABEL_PARTS[@]+"${LABEL_PARTS[@]}"}
 	if [ -n "$FROM_Q" ]; then addq from "$FROM_Q"; fi
 	if [ "${#TO_PARTS[@]}" -gt 0 ]; then addq to "${TO_PARTS[0]}"; fi
+	if [ -n "$SUBJECT" ]; then addq subject "$SUBJECT"; fi
+	if [ "$UNREAD" -eq 1 ]; then addq unread true; fi
 	if [ "$HAS_ATT" -eq 1 ]; then addq has_attachment true; fi
+	if [ -n "$FOLDER" ]; then addq folder "$FOLDER"; fi
+	if [ -n "$BEFORE" ]; then addq before "$BEFORE"; fi
 	if [ -n "$LIMIT" ]; then addq limit "$LIMIT"; fi
 	api GET "/v1/search?$QUERY" "" "" "$TABLE_MESSAGES"
 }
@@ -732,6 +762,8 @@ cmd_threads() {
 	reject_extra
 	QUERY=""
 	if [ -n "$INBOX" ]; then addq inbox "$INBOX"; fi
+	if [ -n "$FOLDER" ]; then addq folder "$FOLDER"; fi
+	if [ -n "$BEFORE" ]; then addq before "$BEFORE"; fi
 	if [ -n "$LIMIT" ]; then addq limit "$LIMIT"; fi
 	local path="/v1/threads"
 	if [ -n "$QUERY" ]; then path="$path?$QUERY"; fi
@@ -752,6 +784,77 @@ cmd_thread() {
 cmd_labels() {
 	reject_extra
 	api GET "/v1/labels" "" "" "$TABLE_LABELS"
+}
+
+# cmd_folders lists an inbox's folders (common to domain and standalone inboxes).
+cmd_folders() {
+	reject_extra
+	if [ -z "$INBOX" ]; then die_usage "folders: --inbox is required"; fi
+	api GET "/v1/inboxes/$INBOX/folders" "" "" "$TABLE_FOLDERS"
+}
+
+# cmd_folder_add creates a folder. Usage: folder-add PATH [NAME] (--inbox required).
+cmd_folder_add() {
+	local path="${POSITIONAL[0]:-$FOLDER_PATH}"
+	local name="${POSITIONAL[1]:-$FOLDER_NAME}"
+	if [ -z "$INBOX" ]; then die_usage "folder-add: --inbox is required"; fi
+	if [ -z "$path" ]; then die_usage "folder-add: PATH is required"; fi
+	local body
+	body="$(jq -n -c --arg path "$path" --arg name "$name" '{path:$path} + (if $name!="" then {name:$name} else {} end)')"
+	api POST "/v1/inboxes/$INBOX/folders" "$body" "" "$TABLE_FOLDERS"
+}
+
+# cmd_folder_delete deletes an empty folder. Usage: folder-delete FOLDER_ID.
+cmd_folder_delete() {
+	need_pos "$COMMAND"
+	reject_extra
+	if [ -z "$INBOX" ]; then die_usage "folder-delete: --inbox is required"; fi
+	api DELETE "/v1/inboxes/$INBOX/folders/$POSITION" "" "" "$TABLE_DEFAULT"
+}
+
+# cmd_remote_role maps or creates a standalone inbox's special folder role.
+# Usage: remote-role ROLE [--create] [--path NAME] (--inbox required).
+cmd_remote_role() {
+	local role="${POSITIONAL[0]:-$REMOTE_ROLE}"
+	if [ -z "$INBOX" ]; then die_usage "remote-role: --inbox is required"; fi
+	if [ -z "$role" ]; then die_usage "remote-role: ROLE is required"; fi
+	local body
+	body="$(jq -n -c --arg path "$REMOTE_ROLE_PATH" --arg fid "$REMOTE_ROLE_FOLDER_ID" --argjson create "${CREATE:-0}" \
+		'{} + (if $create==1 then {create:true} else {} end) + (if $path!="" then {path:$path} else {} end) + (if $fid!="" then {folder_id:$fid} else {} end)')"
+	api POST "/v1/inboxes/$INBOX/remote/roles/$role" "$body" "" "$TABLE_DEFAULT"
+}
+
+# cmd_handoffs lists a standalone inbox's RemoteDraft handoff history.
+cmd_handoffs() {
+	reject_extra
+	local box="${POSITIONAL[0]:-$INBOX}"
+	if [ -z "$box" ]; then die_usage "handoffs: an inbox id is required (positional or --inbox)"; fi
+	local path="/v1/inboxes/$box/handoffs"
+	if [ -n "$LIMIT" ]; then path="$path?limit=$LIMIT"; fi
+	api GET "$path" "" "" "$TABLE_HANDOFFS"
+}
+
+# cmd_authoring shows or sets an inbox's assistant authoring settings. Usage:
+# authoring [--inbox ID] [--mode MODE] [--notify ADDR].
+cmd_authoring() {
+	reject_extra
+	local box="${POSITIONAL[0]:-$INBOX}"
+	if [ -z "$box" ]; then die_usage "authoring: an inbox id is required (positional or --inbox)"; fi
+	if [ -n "$AUTH_MODE" ] || [ -n "$AUTH_NOTIFY" ]; then
+		local body
+		body="$(jq -n -c --arg mode "$AUTH_MODE" --arg notify "$AUTH_NOTIFY" 			'{} + (if $mode!="" then {mode:$mode} else {} end) + (if $notify!="" then {notify_address:$notify} else {} end)')"
+		api PUT "/v1/inboxes/$box/authoring" "$body" "" "$TABLE_AUTHORING"
+	else
+		api GET "/v1/inboxes/$box/authoring" "" "" "$TABLE_AUTHORING"
+	fi
+}
+
+# cmd_remote shows a standalone inbox's secret-free remote configuration.
+cmd_remote() {
+	reject_extra
+	local box="${POSITIONAL[0]:-$INBOX}"
+	if [ -z "$box" ]; then die_usage "remote: an inbox id is required (positional or --inbox)"; fi
+	api GET "/v1/inboxes/$box/remote" "" "" "$TABLE_REMOTE"
 }
 
 cmd_send() {
@@ -1114,6 +1217,14 @@ parse_flags() {
 			BEFORE="${1#*=}"
 			shift
 			;;
+		--folder)
+			FOLDER="$2"
+			shift 2
+			;;
+		--folder=*)
+			FOLDER="${1#*=}"
+			shift
+			;;
 		--limit)
 			LIMIT="$2"
 			shift 2
@@ -1128,6 +1239,38 @@ parse_flags() {
 			;;
 		--timeout=*)
 			TIMEOUT="${1#*=}"
+			shift
+			;;
+		--path)
+			REMOTE_ROLE_PATH="$2"
+			shift 2
+			;;
+		--path=*)
+			REMOTE_ROLE_PATH="${1#*=}"
+			shift
+			;;
+		--folder-id)
+			REMOTE_ROLE_FOLDER_ID="$2"
+			shift 2
+			;;
+		--folder-id=*)
+			REMOTE_ROLE_FOLDER_ID="${1#*=}"
+			shift
+			;;
+		--authoring-mode)
+			AUTH_MODE="$2"
+			shift 2
+			;;
+		--authoring-mode=*)
+			AUTH_MODE="${1#*=}"
+			shift
+			;;
+		--notify)
+			AUTH_NOTIFY="$2"
+			shift 2
+			;;
+		--notify=*)
+			AUTH_NOTIFY="${1#*=}"
 			shift
 			;;
 		--q | --query)
@@ -1437,6 +1580,13 @@ main() {
 	threads) cmd_threads ;;
 	thread) cmd_thread ;;
 	labels) cmd_labels ;;
+	folders) cmd_folders ;;
+	folder-add) cmd_folder_add ;;
+	folder-delete) cmd_folder_delete ;;
+	remote) cmd_remote ;;
+	authoring) cmd_authoring ;;
+	handoffs) cmd_handoffs ;;
+	remote-role) cmd_remote_role ;;
 	send) cmd_send ;;
 	reply) cmd_reply ;;
 	mark-read) cmd_mark_read ;;

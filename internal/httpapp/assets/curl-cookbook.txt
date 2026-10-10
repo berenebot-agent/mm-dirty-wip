@@ -279,3 +279,116 @@ curl -sS -H "Authorization: Bearer $KEY" \
 # 204 No Content means no new message arrived before the timeout.
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
   "$BASE/v1/messages/wait?inbox=$INBOX&timeout=60"
+
+# ===========================================================================
+# 15. Common mailbox surface — folders and messages (domain or standalone)
+# ---------------------------------------------------------------------------
+# These endpoints dispatch on the inbox kind, so the same calls read a managed
+# domain inbox (local store) and a standalone inbox (live IMAP). Every listing
+# returns the shared envelope {items, next_cursor, completeness, errors}.
+# ===========================================================================
+
+# List an inbox's folder tree (hierarchical). `errors` carries a per-inbox
+# failure and `completeness` is "unknown" when a remote server is unreachable but
+# the last-known folders are still served.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/folders" | jq '{folders: [.items[].path], completeness, errors}'
+
+# Create a folder (Assistant or Owner). A standalone inbox creates it on the
+# live server; a domain inbox creates it locally.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"path":"Archive/2026"}' "$BASE/v1/inboxes/$INBOX/folders" | jq .
+
+# List messages in one folder (a folder path for a standalone inbox, a folder id
+# for a domain inbox). `before` is the opaque cursor from the previous page.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/messages?folder=INBOX&limit=50" | jq '{items: [.items[].subject], next_cursor, completeness}'
+
+# Download a message's raw MIME as an attachment (local file, or streamed live
+# from the remote server for a standalone inbox; never archived).
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/messages/$MSG/content" -o message.eml
+
+# Download one MIME attachment (a numeric part path, e.g. 1.2 for a nested part).
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/messages/$MSG/attachments/1.2?filename=report.pdf" -o report.pdf
+
+# ===========================================================================
+# 16. Standalone inbox remote connector (IMAP/SMTP)
+# ---------------------------------------------------------------------------
+# The non-secret remote description is readable by anyone who can read the
+# inbox; the password fields are only ever reported present/absent, never
+# returned. Configure/test/refresh require Owner.
+# ===========================================================================
+
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/remote" | jq '{host, port, security, configured, imap_password_set, missing_roles}'
+
+# Save the connector. A blank secret keeps the stored one. security defaults to
+# tls; starttls and plain are explicit choices (plain may be refused by policy).
+curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"host":"imap.example.com","port":993,"username":"agent@example.com","security":"tls","namespace":"INBOX","imap_password":"app-password"}' \
+  "$BASE/v1/inboxes/$INBOX/remote" | jq '{status: "saved"}'
+
+# Test the connector without saving (a blank imap_password uses the stored one).
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{}' "$BASE/v1/inboxes/$INBOX/remote/test" | jq .
+
+# Force a full metadata reconcile (folders and headers; bodies are never stored).
+curl -sS -X POST -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/remote/refresh" | jq .
+
+# ===========================================================================
+# 17. Merged pagination, filters, role mapping, sent copy, remote purge
+# ===========================================================================
+# An account-wide listing merges the local store and every authorized standalone
+# inbox into ONE globally date-sorted stream. The cursor is opaque: pass the
+# next_cursor value straight back as before.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages?limit=50" | jq '{subjects: [.items[].subject], next_cursor, errors}'
+# Follow the cursor (repeat until next_cursor is empty).
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/messages?limit=50&before=$CURSOR" | jq .
+
+# Search filters are applied on both local and remote mail: from/to/subject/
+# unread/has_attachment/label, plus folder. An unsupported combination is reported.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/search?q=invoice&unread=true&has_attachment=true" | jq '{items: [.items[].subject], completeness}'
+
+# Map an EXISTING (arbitrarily named) remote folder to a special role by id.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"folder_id":"fld_123"}' "$BASE/v1/inboxes/$INBOX/remote/roles/trash" | jq .
+# Or create the conventional folder for the role.
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"create":true}' "$BASE/v1/inboxes/$INBOX/remote/roles/trash" | jq .
+
+# Sent-copy switch (standalone): copy a sent message into the remote Sent folder.
+curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"sent_copy_enabled":true,"sent_copy_folder":""}' \
+  "$BASE/v1/inboxes/$INBOX/remote" | jq '{sent_copy_enabled, sent_copy_folder}'
+
+# Permanent remote purge (Owner): the message must already be in the mapped
+# Trash-role folder. Trash first, then purge.
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG"
+curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG/purge"
+
+# ===========================================================================
+# 18. Assistant authoring: mode and RemoteDraft handoff history
+# ===========================================================================
+# The effective authoring mode decides how a send request is handled. approver_
+# enabled tracks the EFFECTIVE mode, not the inbox kind: a standalone inbox
+# switched to mailmoose_approval enables the approver; a domain inbox switched to
+# remote_draft disables it. standalone is true for a remote (IMAP/SMTP) mailbox.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/authoring" | jq '{mode, default_mode, approver_enabled, notify_address, standalone}'
+
+# Switch an inbox's mode (Owner). Empty mode clears to the kind default.
+curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"mode":"remote_draft"}' "$BASE/v1/inboxes/$INBOX/authoring" | jq .
+
+# A RemoteDraft handoff is one-way to the connected remote Drafts folder. The
+# history retains terminal records (published, ambiguous, failed/cancelled) even
+# after the local draft is cleaned up, and reports publication and notification
+# independently.
+curl -sS -H "Authorization: Bearer $KEY" \
+  "$BASE/v1/inboxes/$INBOX/handoffs" | jq '{handoffs: [.items[] | {draft_id, publication, notification_status, remote_folder, last_error}]}'

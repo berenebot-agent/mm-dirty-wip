@@ -83,6 +83,23 @@ type Folder struct {
 	Selectable bool      `json:"selectable"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	// IsSystem marks a seeded system-role folder (Inbox, Sent, Drafts, Trash,
+	// Spam, Outbox, Archive) whose role is protected: it cannot be arbitrarily
+	// renamed or deleted, and its role is not inferred from a user-chosen name.
+	// Custom folders created by an assistant have IsSystem=false.
+	IsSystem bool `json:"is_system,omitempty"`
+	// RoleLocked marks an explicit operator role mapping (SetFolderRole) that a
+	// remote reconcile must never overwrite by re-inferring the role from the
+	// folder's name. It lets an arbitrarily-named existing remote folder be
+	// permanently mapped to a role (for example an "Old Mail" folder mapped to
+	// Trash) without a later sync resetting it. It is false for a name-inferred or
+	// seeded system role.
+	RoleLocked bool `json:"role_locked,omitempty"`
+	// Origin is where the folder came from: "local" for a seeded system or
+	// operator-created folder owned by the account, or "remote" for a folder
+	// mirrored from the connected provider. It distinguishes a real remote
+	// mapping from a local folder that merely carries a role.
+	Origin string `json:"origin,omitempty"`
 }
 
 // RemoteLocator names the remote position of a message or folder. It is the
