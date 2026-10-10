@@ -377,12 +377,14 @@ curl -sS -X DELETE -H "Authorization: Bearer $KEY" "$BASE/v1/messages/$MSG/purge
 # ===========================================================================
 # The effective authoring mode decides how a send request is handled. approver_
 # enabled tracks the EFFECTIVE mode, not the inbox kind: a standalone inbox
-# switched to mailmoose_approval enables the approver; a domain inbox switched to
-# remote_draft disables it. standalone is true for a remote (IMAP/SMTP) mailbox.
+# switched to mailmoose_approval enables the approver. remote_draft is a
+# standalone-only mode — a domain inbox is preset to mailmoose_approval and
+# rejects remote_draft with 400. standalone is true for a remote (IMAP/SMTP)
+# mailbox.
 curl -sS -H "Authorization: Bearer $KEY" \
   "$BASE/v1/inboxes/$INBOX/authoring" | jq '{mode, default_mode, approver_enabled, notify_address, standalone}'
 
-# Switch an inbox's mode (Owner). Empty mode clears to the kind default.
+# Switch a standalone inbox's mode (Owner). Empty mode clears to the kind default.
 curl -sS -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"mode":"remote_draft"}' "$BASE/v1/inboxes/$INBOX/authoring" | jq .
 

@@ -422,10 +422,10 @@ and never a second send).
 How an assistant's request to send a draft is handled is a per-inbox setting,
 snapshotted onto each request at creation:
 
-- **MailMoose approvals** (a domain inbox's default): the in-product approval
-  workflow — an Owner approves/rejects in the UI or via a tokenized approval
-  email; an approved request is then sent through the domain's outbound
-  configuration.
+- **MailMoose approvals** (a domain inbox's preset and default): the in-product
+  approval workflow — an Owner approves/rejects in the UI or via a tokenized
+  approval email; an approved request is then sent through the domain's outbound
+  configuration. A domain inbox cannot be switched to remote draft.
 - **Remote draft handoff** (a standalone inbox's default): a one-way handoff
   that places the frozen draft in the inbox's connected remote Drafts folder for
   the human to review and send from their own client. MailMoose never sends it.

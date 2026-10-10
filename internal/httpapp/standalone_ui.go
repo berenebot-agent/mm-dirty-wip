@@ -712,7 +712,8 @@ func (s *Server) buildMoveTargets(ctx context.Context, accountID, inboxID string
 // uiInboxAuthoringSave saves an inbox's assistant authoring settings (mode and
 // notify override) from the Approvals tab. It requires Owner. The mode is
 // snapshotted onto each request at creation, so a change never affects an
-// in-flight request.
+// in-flight request. A domain inbox cannot be set to remote_draft (the store
+// rejects it; remote_draft is a standalone-only mode).
 func (s *Server) uiInboxAuthoringSave(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	inboxID := r.PathValue("id")

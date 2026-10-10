@@ -237,8 +237,9 @@ partial or windowed view never deletes cached mail.
 
 ### Assistant handling modes, drafts, notify (`internal/app/draft_workflow.go`,
 `draft_handoff.go`, `remote_worker.go`, `control.go`)
-- **`MailMooseApproval`** (a domain inbox's default): the in-product approval
-  workflow; the approval email carries the one-time token and the frozen `From`.
+- **`MailMooseApproval`** (a domain inbox's preset and default): the in-product
+  approval workflow; the approval email carries the one-time token and the frozen
+  `From`.
 - **`RemoteDraft`** (a standalone inbox's default): a one-way handoff that
   appends the frozen draft to the connected remote Drafts folder. MailMoose
   never sends it. A handoff notification (carrying the correlation header, no
@@ -246,10 +247,11 @@ partial or windowed view never deletes cached mail.
 - The mode is snapshotted onto each request at creation, so an inbox setting
   change never affects an in-flight request. A standalone inbox can be switched
   to `MailMooseApproval` (its approver identity is matched against the message
-  `From`; see the accepted risk below). `RemoteDraft` is meaningful only for a
-  standalone inbox: `requestRemoteDraft` requires `kind=standalone` and a mapped
-  remote Drafts folder, so a domain inbox left on (or set to) `remote_draft`
-  fails a handoff request rather than silently switching modes.
+  `From`; see the accepted risk below). `RemoteDraft` is a standalone-only mode:
+  a domain inbox cannot be set to it (the write is rejected, and a legacy domain
+  row stored as `remote_draft` normalizes back to the kind default on read), and
+  `requestRemoteDraft` requires `kind=standalone` and a mapped remote Drafts
+  folder.
 - **Notify**: defaults to the inbox's own connected address, with an optional
   per-inbox override, snapshotted per submitted request.
 - **Publication, notification and Sent-copy are separate state machines.** A
@@ -288,7 +290,10 @@ partial or windowed view never deletes cached mail.
   effective `mode`, the kind `default_mode`, the notify override, whether the
   inbox `standalone`, and `approver_enabled` — which is true exactly when the
   effective mode is `mailmoose_approval` (a `remote_draft` inbox has no in-app
-  approver, regardless of kind).
+  approver, regardless of kind). A domain inbox is preset to `mailmoose_approval`:
+  `PUT /authoring` rejects `remote_draft` for a domain inbox with `400`, and the
+  UI hides the mode selector and notify override for a domain inbox rather than
+  offering them.
 
 ### Remote detection and approval (`internal/app/remote_worker.go`, `control.go`)
 - `RemoteWorker` watches each remote-configured standalone inbox (IDLE with a

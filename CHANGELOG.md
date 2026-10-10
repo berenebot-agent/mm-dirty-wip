@@ -35,8 +35,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   `docs/MAILBOX_SERVICE_CONTRACT.md`.
 - **Assistant authoring modes.** A request to send a draft is resolved per the
   inbox's authoring mode, snapshotted onto each request. **MailMoose approvals**
-  (the domain-inbox default) is the existing in-product approval workflow with
-  tokenized email approval. **Remote draft handoff** (the standalone-inbox
+  (the domain inbox's preset) is the in-product approval workflow with
+  tokenized email approval — a domain inbox cannot be switched to remote draft;
+  the mode selector is not offered for one. **Remote draft handoff** (the
+  standalone-inbox
   default) places the frozen draft one-way in the connected mailbox's remote
   Drafts folder for a human to send from their own client; MailMoose never sends
 it, and a token-free notification tells the human it is waiting. Publication,
