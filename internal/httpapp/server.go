@@ -97,6 +97,20 @@ type Server struct {
 	// dns performs the live published-record checks behind the Dial MX setup
 	// traffic lights. It is never on a save path and never fails a request.
 	dns *dnsChecker
+	// lightCache short-TTL caches the inbound traffic light computed for the
+	// live dashboard snapshot, so a burst of snapshot calls (a reconnect, or
+	// several tabs) does not each run a fresh published-MX lookup per domain.
+	// The setup dialog's explicit checks do not use it and stay live.
+	lightMu    sync.Mutex
+	lightCache map[string]lightCacheEntry
+}
+
+// lightCacheEntry is a cached inbound traffic light for one domain, keyed on the
+// inputs the light depends on so a key rotation or receiving change misses.
+type lightCacheEntry struct {
+	light   string
+	title   string
+	expires time.Time
 }
 
 type ctxKey int
@@ -298,6 +312,11 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/messages/{id}/html", s.withSession(s.uiMessageHTML))
 	m.HandleFunc("GET /ui/attachments/{id}", s.withSession(s.uiAttachment))
 	m.HandleFunc("GET /ui/attachments/{id}/inline", s.withSession(s.uiAttachmentInline))
+
+	// Live UI updates: a session-authenticated durable event stream plus a
+	// small role-scoped snapshot the browser reconciles against.
+	m.HandleFunc("GET /ui/events/stream", s.withSession(s.uiEventsStream))
+	m.HandleFunc("GET /ui/state", s.withSession(s.uiState))
 
 	// Discovery.
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)

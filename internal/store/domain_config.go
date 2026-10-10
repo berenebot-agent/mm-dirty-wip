@@ -44,6 +44,28 @@ type DialMXCredential struct {
 	UpdatedAt            time.Time
 }
 
+// AccountsForDomainName maps every account that owns a domain with the given
+// (canonical, case-insensitive) name to that domain's id. Receiver status is
+// reported per canonical domain name, so a live-status observer uses this to
+// reach the owning account(s) without scanning every domain. Domain names are
+// unique per account, so distinct accounts may share a name.
+func (s *Store) AccountsForDomainName(ctx context.Context, name string) (map[string]string, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id FROM domains WHERE name=?`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, accountID string
+		if err := rows.Scan(&id, &accountID); err != nil {
+			return nil, err
+		}
+		out[accountID] = id
+	}
+	return out, rows.Err()
+}
+
 // HasDirectMXDomains checks installation-wide usage. Inherited receiving paths
 // ultimately resolve to an explicit configuration on an existing ancestor, so
 // that ancestor keeps the receiver in use too.

@@ -171,6 +171,11 @@ type Manager struct {
 	stopping bool
 	ownWG    sync.WaitGroup
 
+	// onStatus, when set, is invoked (outside mu) whenever a domain status row
+	// or the single-mode connection state changes, so an observer can refresh
+	// live UI. It receives the canonical domain name and the receiver URL.
+	onStatus func(domain, receiverURL string)
+
 	// slots is the single global transaction cap shared across every
 	// connection.
 	slots chan struct{}
@@ -225,6 +230,16 @@ func New(backend Backend, cfg Config) *Manager {
 	}
 }
 
+// SetStatusObserver registers a callback invoked when a domain's status row or
+// the single-mode connection state changes. It must be set before Run and the
+// callback must not block or call back into the manager. A nil callback clears
+// the observer.
+func (m *Manager) SetStatusObserver(fn func(domain, receiverURL string)) {
+	m.mu.Lock()
+	m.onStatus = fn
+	m.mu.Unlock()
+}
+
 // Wake requests an immediate reconcile pass. It never blocks.
 func (m *Manager) Wake() {
 	select {
@@ -248,8 +263,15 @@ func (s *session) connectionStatus(state, reason string) {
 		return
 	}
 	s.m.mu.Lock()
-	s.m.connection = Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: s.ready.SMTPHostname}
+	prev := s.m.connection
+	next := Status{ReceiverURL: s.url, State: state, Reason: reason, SMTPHostname: s.ready.SMTPHostname}
+	s.m.connection = next
+	obs := s.m.onStatus
+	changed := prev != next
 	s.m.mu.Unlock()
+	if changed && obs != nil {
+		obs("", s.url)
+	}
 }
 
 // Status returns the current per-receiver status for a canonical domain.
@@ -648,13 +670,20 @@ func statusKey(domain, url string) string { return domain + "\x00" + url }
 // status with a stale row.
 func (m *Manager) setStatus(s *session, domain, state, reason, host string, expires time.Time, keyID string) {
 	m.mu.Lock()
+	changed := false
 	if !m.stopping {
 		k := statusKey(domain, s.url)
 		if m.owner[k] == s {
-			m.status[k] = Status{ReceiverURL: s.url, KeyID: keyID, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
+			next := Status{ReceiverURL: s.url, KeyID: keyID, State: state, Reason: reason, SMTPHostname: host, ExpiresAt: expires}
+			changed = m.status[k] != next
+			m.status[k] = next
 		}
 	}
+	obs := m.onStatus
 	m.mu.Unlock()
+	if changed && obs != nil {
+		obs(domain, s.url)
+	}
 }
 
 // clearStatus removes a domain's status row only when s currently owns it. A
@@ -662,10 +691,15 @@ func (m *Manager) setStatus(s *session, domain, state, reason, host string, expi
 func (m *Manager) clearStatus(s *session, domain string) {
 	m.mu.Lock()
 	k := statusKey(domain, s.url)
+	_, existed := m.status[k]
 	if m.owner[k] == s {
 		delete(m.status, k)
 	}
+	obs := m.onStatus
 	m.mu.Unlock()
+	if existed && obs != nil {
+		obs(domain, s.url)
+	}
 }
 
 // recordReadyCaps stores a receiver's advertised Ready limits and wakes the

@@ -59,7 +59,7 @@ const (
 // Labels section listing the inbox's labels one level in. It relies on
 // .Inbox, .Folder, .ActiveLabel, .Labels and the count fields being populated
 // on pageData.
-const mailSidebar = `<aside class="mailnav"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count">{{.OutboxCount}}</span>{{end}}</a>{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count">{{.SpamCount}}</span>{{end}}</a></aside>`
+const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a></aside>`
 
 const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar">{{if eq .Folder "trash"}}<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/trash/empty" data-confirm="Permanently delete all messages in Trash? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Empty trash</button></form>{{end}}<form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}{{if eq .Folder "trash"}}<button name="action" value="restore" class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button><button name="action" value="purge" class="secondary icon-btn danger" data-confirm="Delete permanently? This cannot be undone." title="Delete forever" aria-label="Delete forever">` + iconDeleteFore + `</button>{{else}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{end}}</form></div>
@@ -262,6 +262,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
 	s.render(w, r, draftsBody, pageData{
 		Title:       box.Address + " · Drafts",
+		Page:        "inbox",
 		Principal:   p,
 		CSRF:        csrf(r),
 		Account:     acc,
@@ -310,6 +311,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
 	s.render(w, r, outboxBody, pageData{
 		Title:       box.Address + " · Outbox",
+		Page:        "inbox",
 		Principal:   p,
 		CSRF:        csrf(r),
 		Account:     acc,
@@ -693,6 +695,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	}
 	s.render(w, r, inboxBody, pageData{
 		Title:                      box.Address,
+		Page:                       "inbox",
 		Principal:                  p,
 		CSRF:                       csrf(r),
 		Account:                    acc,
@@ -740,7 +743,8 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		switch action {
 		case "read", "unread":
 			read := action == "read"
-			if err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err == nil {
+			if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err == nil {
+				s.publishStateEvent(ev)
 				count++
 			}
 		case "delete":
@@ -1152,9 +1156,11 @@ func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	read := r.Form.Get("read") == "1"
-	if err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err != nil {
+	if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err != nil {
 		s.uiError(w, err, 400)
 		return
+	} else {
+		s.publishStateEvent(ev)
 	}
 	target := "/ui/inboxes/" + m.InboxID
 	if m.Direction == "outbound" {

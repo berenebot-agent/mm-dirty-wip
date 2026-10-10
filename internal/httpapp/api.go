@@ -633,10 +633,12 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if in.Read != nil {
-			if err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read); err != nil {
+			ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read)
+			if err != nil {
 				mapStoreError(w, err)
 				return
 			}
+			s.publishStateEvent(ev)
 		}
 		if in.Spam != nil {
 			_, ev, err := s.Service.Store.SetMessageSpam(r.Context(), p, id, *in.Spam)
@@ -753,9 +755,11 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err = s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &seen); err != nil {
+	if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &seen); err != nil {
 		mapStoreError(w, err)
 		return
+	} else {
+		s.publishStateEvent(ev)
 	}
 	writeJSON(w, 200, map[string]any{"id": m.ID, "seen": seen})
 }
@@ -1385,6 +1389,39 @@ func eventsCursor(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return n, true
 }
 
+// streamCursor resolves an SSE stream's resume position. An explicit ?after=
+// wins; otherwise the standard Last-Event-ID header a reconnecting EventSource
+// sends is honored (so a native reconnect resumes without replaying history);
+// failing both, a zero-position default is used, except that a UI stream seeds
+// from the account's current head so a first connect does not replay history.
+func (s *Server) streamCursor(w http.ResponseWriter, r *http.Request, accountID string, seedHead bool) (int64, bool) {
+	if raw := strings.TrimSpace(r.URL.Query().Get("after")); raw != "" {
+		n, ok := store.ParseCursorStrict(raw)
+		if !ok {
+			writeError(w, 400, "invalid after: must be an evt_ cursor")
+			return 0, false
+		}
+		return n, true
+	}
+	if raw := strings.TrimSpace(r.Header.Get("Last-Event-ID")); raw != "" {
+		n, ok := store.ParseCursorStrict(raw)
+		if !ok {
+			writeError(w, 400, "invalid last event id: must be an evt_ cursor")
+			return 0, false
+		}
+		return n, true
+	}
+	if seedHead {
+		head, err := s.Service.Store.LatestEventID(r.Context(), accountID)
+		if err != nil {
+			mapStoreError(w, err)
+			return 0, false
+		}
+		return head, true
+	}
+	return 0, true
+}
+
 func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 	after, ok := eventsCursor(w, r)
 	if !ok {
@@ -1470,7 +1507,33 @@ func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, v)
 }
+
+// publishStateEvent logs and fans out a durable event to live subscribers. A nil
+// event (a no-op transition) is ignored.
+func (s *Server) publishStateEvent(ev *model.Event) {
+	if ev == nil {
+		return
+	}
+	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+	s.Service.Hub.Publish(*ev)
+}
+
 func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
+	// The API stream carries durable events only; transient notifications are a
+	// web-UI concern.
+	s.eventsStream(w, r, false, false)
+}
+
+// uiEventsStream is the session-authenticated SSE stream the human UI uses for
+// live counts and lists. It shares the API stream's framing, scoping and
+// lifecycle, but seeds from the current event head on a fresh connect (no
+// cursor) so a first page load does not replay the account's event history, and
+// forwards transient notifications (e.g. mx.health_changed) as well.
+func (s *Server) uiEventsStream(w http.ResponseWriter, r *http.Request) {
+	s.eventsStream(w, r, true, true)
+}
+
+func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, withTransient bool) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, 500, "streaming unavailable")
@@ -1490,7 +1553,7 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 	defer cancelCtx()
 	stop := context.AfterFunc(scopeCtx, cancelCtx)
 	defer stop()
-	after, ok := eventsCursor(w, r)
+	after, ok := s.streamCursor(w, r, p.AccountID, seedHead)
 	if !ok {
 		return
 	}
@@ -1507,14 +1570,25 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 	fl.Flush()
 	send := func(e model.Event) error {
 		b, _ := json.Marshal(e)
-		if _, err := fmt.Fprintf(bw, "id: %s\nevent: %s\ndata: %s\n\n", e.Cursor, e.Type, b); err != nil {
+		// A transient event (e.g. the mx.health_changed ping) must not emit an
+		// id: line — that would reset the client's last-event-id — and must not
+		// move the durable replay cursor.
+		var err error
+		if e.Transient {
+			_, err = fmt.Fprintf(bw, "event: %s\ndata: %s\n\n", e.Type, b)
+		} else {
+			_, err = fmt.Fprintf(bw, "id: %s\nevent: %s\ndata: %s\n\n", e.Cursor, e.Type, b)
+		}
+		if err != nil {
 			return err
 		}
 		if err := bw.Flush(); err != nil {
 			return err
 		}
 		fl.Flush()
-		after = e.ID
+		if !e.Transient && e.ID > 0 {
+			after = e.ID
+		}
 		return nil
 	}
 	for {
@@ -1528,7 +1602,15 @@ func (s *Server) apiEventsStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		select {
-		case <-ch:
+		case e := <-ch:
+			// A transient event is delivered directly, but only on the UI
+			// stream; a durable one just wakes the loop so it is read from the
+			// store in id order, which keeps replay and live delivery consistent.
+			if withTransient && e.Transient && e.AccountID == p.AccountID {
+				if send(e) != nil {
+					return
+				}
+			}
 			continue
 		case <-time.After(20 * time.Second):
 			fmt.Fprint(bw, ": keepalive\n\n")
