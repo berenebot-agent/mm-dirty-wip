@@ -303,7 +303,7 @@ func Load() (Config, error) {
 		DedicatedReceiverEnable: receiverEnabled,
 		DedicatedReceiverPort:   receiverPort,
 		DedicatedReceiverURL:    receiverURL,
-		MicrosoftClientID:       strings.TrimSpace(os.Getenv("MICROSOFT_CLIENT_ID")),
+		MicrosoftClientID:       strings.TrimSpace(env("MICROSOFT_CLIENT_ID", "1b20bf22-8552-44a8-b4ff-1fabddafab02")),
 		MicrosoftTenantID:       env("MICROSOFT_TENANT_ID", "common"),
 		baseHost:                baseHost,
 		DataDir:                 env("DATA_DIR", "/data"),
