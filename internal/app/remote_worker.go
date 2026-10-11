@@ -92,6 +92,17 @@ type RemoteWorker struct {
 	watchBackoff time.Duration
 	detectionMu  sync.Mutex
 	detecting    map[string]bool
+	// demandMu guards lastDemand, the per-inbox timestamp of the last
+	// demand-driven detection pass. It coalesces the many clients that can ask
+	// for freshness (SSE streams, long-polls, list/thread reads, the reload
+	// button) onto one schedule per inbox instead of each launching a pass.
+	demandMu   sync.Mutex
+	lastDemand map[string]time.Time
+	// demandInterval overrides the demand-coalescing spacing. A zero value
+	// derives it from the inbox's quick poll interval; a negative value disables
+	// coalescing entirely (every demand pass runs), which tests use for
+	// determinism.
+	demandInterval time.Duration
 }
 
 // Defaults for the remote watcher.
@@ -124,6 +135,7 @@ func NewRemoteWorker(svc *Service, rm *RemoteMailboxService, log *slog.Logger) *
 		pollInterval:        defaultRemotePollInterval,
 		watchBackoff:        defaultRemoteWatchBackoff,
 		detecting:           make(map[string]bool),
+		lastDemand:          make(map[string]time.Time),
 	}
 }
 
@@ -138,6 +150,15 @@ func (w *RemoteWorker) SetMaxInboxConnections(n int) {
 	if n > 0 {
 		w.maxInboxConnections = n
 	}
+}
+
+// SetDemandInterval overrides the demand-coalescing spacing (used by tests). A
+// negative value disables coalescing so every demand pass runs.
+func (w *RemoteWorker) SetDemandInterval(d time.Duration) { w.demandInterval = d }
+
+// WatchIntervalForTest exposes the push-aware watcher cadence for tests.
+func (w *RemoteWorker) WatchIntervalForTest(inbox model.Inbox) time.Duration {
+	return w.watchIntervalFor(inbox)
 }
 
 // Start launches the worker. It returns immediately.
@@ -293,16 +314,27 @@ func fullSyncDue(status store.RemoteIndexStatus, fullMinutes *int) bool {
 // arrival is lost.
 func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
 	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
-		ticker := time.NewTicker(w.pollInterval)
-		defer ticker.Stop()
+		// Neither provider has an IDLE watch, so the worker polls. The interval is
+		// re-resolved every pass: a Microsoft inbox with active push drops its
+		// quick poll to the full-sync safety net, and returns to quick polling if
+		// the subscription expires or is removed.
+		timer := time.NewTimer(0)
+		defer timer.Stop()
 		for {
 			w.detectInbox(ctx, inbox)
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(w.watchIntervalFor(inbox))
 			select {
 			case <-ctx.Done():
 				return
 			case <-w.stop:
 				return
-			case <-ticker.C:
+			case <-timer.C:
 			}
 		}
 	}
@@ -448,6 +480,14 @@ func (w *RemoteWorker) DetectInbox(ctx context.Context, inbox model.Inbox) {
 	if inbox.Kind != model.InboxKindStandalone || inbox.AccountID == "" || inbox.ID == "" {
 		return
 	}
+	// Coalesce demand: many clients can ask for freshness at once (SSE streams
+	// on their own tick, long-polls, list/thread reads, the reload button). A pass
+	// is run at most once per quick interval per inbox, so client presence cannot
+	// outpace the worker's own poll; concurrent callers share the in-flight pass
+	// via the per-provider guards. An explicit manual sync always runs.
+	if !w.admitDemand(ctx, inbox) {
+		return
+	}
 	// Durable detection belongs to the worker: a polling client disconnect must
 	// not cancel persistence after a successful IMAP fetch. Bound the pass and
 	// still honour process shutdown.
@@ -463,6 +503,38 @@ func (w *RemoteWorker) DetectInbox(ctx context.Context, inbox model.Inbox) {
 	}()
 	defer close(done)
 	w.detectInbox(pass, inbox)
+}
+
+// admitDemand reports whether a demand-driven detection pass for the inbox may
+// run now: it stamps the inbox's last-demand time and returns true, unless a pass
+// already ran within the inbox's quick interval, in which case it returns false.
+// A manual sync (WithManualRemoteSync) always admits. The stamp is taken before
+// the pass so a burst of concurrent callers admits at most one.
+func (w *RemoteWorker) admitDemand(ctx context.Context, inbox model.Inbox) bool {
+	if remoteManualSync(ctx) {
+		return true
+	}
+	interval := w.demandIntervalFor(inbox)
+	if interval < 0 {
+		// A negative override disables coalescing (tests): every demand pass runs.
+		return true
+	}
+	key := inbox.AccountID + ":" + inbox.ID
+	now := time.Now()
+	w.demandMu.Lock()
+	defer w.demandMu.Unlock()
+	if last, ok := w.lastDemand[key]; ok && now.Sub(last) < interval {
+		return false
+	}
+	w.lastDemand[key] = now
+	return true
+}
+
+// remoteManualSync reports whether ctx carries the explicit user-triggered sync
+// marker.
+func remoteManualSync(ctx context.Context) bool {
+	v, _ := ctx.Value(remoteSyncTriggerKey{}).(bool)
+	return v
 }
 
 // PendingRemoteApprovals reports whether an inbox has an outstanding pending email
@@ -543,15 +615,52 @@ func inboxFolder(inbox model.Inbox) string {
 	return f
 }
 
-// pollIntervalFor resolves the fallback poll cadence for one inbox: its
+// pollIntervalFor resolves the quick (new-mail) poll cadence for one inbox: its
 // per-inbox override when positive, else the worker's configured default. The
 // override is clamped to the model minimum so a bad value cannot hammer the
-// remote server.
+// remote server. This is the quick cadence the demand side (client presence,
+// long-polls, list reads) also coalesces onto.
 func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
 	if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
 		return time.Duration(model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds)) * time.Second
 	}
 	return w.pollInterval
+}
+
+// fullSyncIntervalFor resolves the deep index-reconcile cadence for one inbox:
+// its per-inbox override when positive, else the model default, clamped to the
+// model minimum.
+func (w *RemoteWorker) fullSyncIntervalFor(inbox model.Inbox) time.Duration {
+	return time.Duration(model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes)) * time.Minute
+}
+
+// watchIntervalFor resolves how often the worker's dedicated watcher runs a
+// detection pass for one inbox. Microsoft and Google have no IDLE watch, so the
+// worker polls them; the cadence adapts to push:
+//
+//   - When Microsoft push is active, a notification wakes detection immediately,
+//     so the redundant quick poll is dropped and only a slow safety-net pass runs
+//     on the inbox's full-sync cadence (so a missed or expired notification is
+//     still caught). Re-evaluated every loop, so a subscription that expires or
+//     activates takes effect on the next pass.
+//   - Otherwise the quick poll cadence applies.
+func (w *RemoteWorker) watchIntervalFor(inbox model.Inbox) time.Duration {
+	if w.svc.Store.MicrosoftPushActive(context.Background(), inbox.AccountID, inbox.ID) {
+		return w.fullSyncIntervalFor(inbox)
+	}
+	return w.pollIntervalFor(inbox)
+}
+
+// demandIntervalFor is the minimum spacing of demand-driven detection passes for
+// one inbox. It is the quick cadence so client presence cannot outpace the
+// worker's own poll. Gmail and IMAP share the same guard; Microsoft is exempt
+// only in that a push wake still forces an immediate pass on the watcher path
+// (this gate governs HTTP-demand callers, which push does not drive).
+func (w *RemoteWorker) demandIntervalFor(inbox model.Inbox) time.Duration {
+	if w.demandInterval != 0 {
+		return w.demandInterval
+	}
+	return w.pollIntervalFor(inbox)
 }
 
 // detectInbox runs one durable detection pass for one inbox and emits the
@@ -580,10 +689,13 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	w.remote.logRemoteSync(ctx, inbox.AccountID, inbox.ID, result)
 }
 
-// detectMicrosoft runs the Microsoft delta reconcile the on-demand detection path
-// uses. The reconcile itself logs the completion line, so this only delegates.
+// detectMicrosoft runs the cheap Microsoft detection pass the on-demand and
+// watcher paths use: the Inbox folder's delta from its stored cursor, with the
+// folder tree taken from the store (no Graph folder enumeration). The slower
+// whole-mailbox reconcile (every folder, prune, folder tree) runs on the
+// full-sync cadence instead. It logs its own completion line.
 func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) {
-	_, _ = w.remote.ReconcileRemote(ctx, inbox.AccountID, inbox.ID)
+	_, _ = w.remote.reconcileMicrosoftQuick(ctx, inbox.AccountID, inbox.ID)
 }
 
 // detectInboxIMAP runs one durable IMAP detection pass for one inbox. It opens a

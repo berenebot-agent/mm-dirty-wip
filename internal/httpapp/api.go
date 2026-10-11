@@ -648,6 +648,13 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 // messages from every authorized standalone inbox (reconciling on demand and
 // recording per-inbox failures rather than failing the whole request). A scoped
 // standalone inbox reads its remote index; a scoped domain inbox reads the store.
+
+// sseDetectTick is how often an open events stream nudges remote detection. It is
+// deliberately coarse: the app worker coalesces demand onto each inbox's quick
+// interval, so this only bounds how quickly the stream notices it may ask. It is
+// independent of the 20s keepalive.
+const sseDetectTick = 15 * time.Second
+
 // remoteFilterScanPage is the minimum raw page pulled from the remote metadata
 // source while filtering in-memory, so a page dominated by non-matching rows
 // still makes progress without a round-trip per row.
@@ -1988,9 +1995,12 @@ func (s *Server) eventsStream(w http.ResponseWriter, r *http.Request, seedHead, 
 		}
 		return nil
 	}
-	// Ongoing active detection: triggered on a short tick independent of the
-	// keepalive, and bounded so it never blocks the stream.
-	detectTick := time.NewTicker(5 * time.Second)
+	// Ongoing active detection: a bounded tick independent of the keepalive. The
+	// tick only nudges detection; the per-inbox cadence guard (the app worker's
+	// DetectInbox gate) coalesces it onto the inbox's quick interval, so client
+	// presence cannot outpace the worker's own poll and several tabs share one
+	// schedule. It is bounded so it never blocks the stream.
+	detectTick := time.NewTicker(sseDetectTick)
 	defer detectTick.Stop()
 	for {
 		items, err := s.Service.Store.ListEvents(ctx, p, after, inbox, 500)
