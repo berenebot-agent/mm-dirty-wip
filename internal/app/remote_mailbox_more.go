@@ -711,11 +711,11 @@ func (p *RemoteHandoffPublisher) Append(ctx context.Context, inboxID string, raw
 		return HandoffOutcome{Confirmed: d.ID != "", RemoteFolder: d.ParentFolderID}, nil
 	}
 	if p.Service.IsGoogle(ctx, accountID, inboxID) {
-		t, e := p.Service.GoogleAccess(ctx, accountID, inboxID)
+		client, t, e := p.Service.GoogleMailboxClient(ctx, accountID, inboxID)
 		if e != nil {
 			return HandoffOutcome{}, e
 		}
-		d, e := p.Service.Google.CreateDraft(ctx, t, bytes.NewReader(raw), "")
+		d, e := client.CreateDraft(ctx, t, bytes.NewReader(raw), "")
 		if e != nil {
 			if transport.AsAmbiguous(e) {
 				return HandoffOutcome{RemoteFolder: "DRAFT"}, nil
@@ -775,11 +775,11 @@ func (p *RemoteHandoffPublisher) Lookup(ctx context.Context, inboxID, handoffID,
 		return HandoffOutcome{Found: count > 0, Confirmed: count == 1 && res.NextLink == "", Ambiguous: count > 1 || res.NextLink != "", RemoteFolder: "drafts"}, nil
 	}
 	if p.Service.IsGoogle(ctx, accountID, inboxID) {
-		t, e := p.Service.GoogleAccess(ctx, accountID, inboxID)
+		client, t, e := p.Service.GoogleMailboxClient(ctx, accountID, inboxID)
 		if e != nil {
 			return HandoffOutcome{}, e
 		}
-		res, e := p.Service.Google.List(ctx, t, "rfc822msgid:"+strings.Trim(messageID, "<>"), "DRAFT", "", 100)
+		res, e := client.List(ctx, t, "rfc822msgid:"+strings.Trim(messageID, "<>"), "DRAFT", "", 100)
 		if e != nil {
 			return HandoffOutcome{}, e
 		}

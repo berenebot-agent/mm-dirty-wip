@@ -164,7 +164,11 @@ func (m *RemoteMailboxService) googleView(ctx context.Context, r store.RemoteMes
 	return v
 }
 func (m *RemoteMailboxService) googleFolders(ctx context.Context, account, inbox, t string) error {
-	labels, e := m.Google.Labels(ctx, t)
+	client, t, e := m.GoogleMailboxClient(ctx, account, inbox)
+	if e != nil {
+		return e
+	}
+	labels, e := client.Labels(ctx, t)
 	if e != nil {
 		return e
 	}
@@ -207,19 +211,19 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	if e := m.Service.Store.BeginGoogleRefresh(ctx, account, inbox); e != nil {
 		return store.RemoteIndexStatus{}, e
 	}
-	t, e := m.GoogleAccess(ctx, account, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, account, inbox)
 	if e != nil {
 		return store.RemoteIndexStatus{}, e
 	}
 	if e = m.googleFolders(ctx, account, inbox, t); e != nil {
 		return store.RemoteIndexStatus{}, e
 	}
-	c, e := m.Service.Store.GoogleConnection(ctx, account, inbox)
+	c, e := m.Service.Store.GmailSync(ctx, account, inbox)
 	if e != nil {
 		return store.RemoteIndexStatus{}, e
 	}
 	if c.HistoryID == "" {
-		p, e := m.Google.Profile(ctx, t)
+		p, e := client.Profile(ctx, t)
 		if e != nil {
 			return store.RemoteIndexStatus{}, e
 		}
@@ -229,76 +233,153 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	// the old anchor on interruption, making replay safe and idempotent.
 	quotaHit := false
 	page := ""
-	for n := 0; n < 20 && !quotaHit; n++ {
-		h, e := m.Google.History(ctx, t, c.HistoryID, page)
-		if e != nil {
-			var mb *model.MailboxError
-			if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
-				p, pe := m.Google.Profile(ctx, t)
-				if pe != nil {
-					return store.RemoteIndexStatus{}, pe
+	if m.Service.Store.IsOne(ctx, account, inbox) {
+		next, complete, err := m.drainGoogleHistory(ctx, account, inbox, "sync", c.HistoryID, client, t, func(ctx context.Context, item gmailHistoryItem) error {
+			if item.Deleted {
+				if id, err := m.Service.Store.GoogleLocalID(ctx, account, inbox, item.ID); err == nil {
+					return m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
+				} else if errors.Is(err, store.ErrNotFound) {
+					return nil
+				} else {
+					return err
 				}
-				c.HistoryID = p.HistoryID
-				c.BackfillDone = false
-				c.BackfillPage = ""
-				if e = m.Service.Store.StartGoogleResync(ctx, account, inbox, c.HistoryID); e != nil {
-					return store.RemoteIndexStatus{}, e
-				}
-				break
 			}
-			return store.RemoteIndexStatus{}, e
+			g, err := client.Get(ctx, t, item.ID, "metadata")
+			if err != nil {
+				var mb *model.MailboxError
+				if errors.As(err, &mb) && mb.Kind == model.ErrKindNotFound {
+					if id, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, item.ID); e == nil {
+						return m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id)
+					} else if errors.Is(e, store.ErrNotFound) {
+						return nil
+					} else {
+						return e
+					}
+				}
+				return err
+			}
+			_, err = m.cacheGoogle(ctx, account, inbox, g)
+			return err
+		})
+		if err != nil {
+			var expired *gmailHistoryExpired
+			if errors.As(err, &expired) {
+				profile, err := client.Profile(ctx, t)
+				if err != nil {
+					return store.RemoteIndexStatus{}, err
+				}
+				c.HistoryID, c.BackfillPage, c.BackfillDone = profile.HistoryID, "", false
+				if err = m.Service.Store.StartGoogleResync(ctx, account, inbox, c.HistoryID); err != nil {
+					return store.RemoteIndexStatus{}, err
+				}
+			} else {
+				return store.RemoteIndexStatus{}, err
+			}
+		} else if !complete {
+			return store.RemoteIndexStatus{Status: store.RemoteIndexPartial}, nil
+		} else {
+			c.HistoryID = next
 		}
-		changed := map[string]bool{}
-		deleted := map[string]bool{}
-		for _, v := range h.History {
-			for _, a := range v.MessagesDeleted {
-				deleted[a.Message.ID] = true
-			}
-			for _, set := range [][]gmail.HistoryMessage{v.MessagesAdded, v.LabelsAdded, v.LabelsRemoved} {
-				for _, a := range set {
-					changed[a.Message.ID] = true
-				}
-			}
-		}
-		for id := range deleted {
-			if local, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, id); e == nil {
-				if e = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, local); e != nil {
-					return store.RemoteIndexStatus{}, e
-				}
-			}
-		}
-		for id := range changed {
-			if deleted[id] {
-				continue
-			}
-			g, e := m.Google.Get(ctx, t, id, "metadata")
+	} else {
+		for n := 0; n < 20 && !quotaHit; n++ {
+			h, e := client.History(ctx, t, c.HistoryID, page)
 			if e != nil {
+				var mb *model.MailboxError
+				if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+					p, pe := client.Profile(ctx, t)
+					if pe != nil {
+						return store.RemoteIndexStatus{}, pe
+					}
+					c.HistoryID = p.HistoryID
+					c.BackfillDone = false
+					c.BackfillPage = ""
+					if e = m.Service.Store.StartGoogleResync(ctx, account, inbox, c.HistoryID); e != nil {
+						return store.RemoteIndexStatus{}, e
+					}
+					break
+				}
 				return store.RemoteIndexStatus{}, e
 			}
-			if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
-				quotaHit = true
+			changed := map[string]bool{}
+			deleted := map[string]bool{}
+			for _, v := range h.History {
+				for _, a := range v.MessagesDeleted {
+					deleted[a.Message.ID] = true
+				}
+				for _, set := range [][]gmail.HistoryMessage{v.MessagesAdded, v.LabelsAdded, v.LabelsRemoved} {
+					for _, a := range set {
+						changed[a.Message.ID] = true
+					}
+				}
+			}
+			for id := range deleted {
+				if local, e := m.Service.Store.GoogleLocalID(ctx, account, inbox, id); e == nil {
+					if e = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, local); e != nil {
+						return store.RemoteIndexStatus{}, e
+					}
+				}
+			}
+			for id := range changed {
+				if deleted[id] {
+					continue
+				}
+				g, e := client.Get(ctx, t, id, "metadata")
+				if e != nil {
+					return store.RemoteIndexStatus{}, e
+				}
+				if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
+					quotaHit = true
+					break
+				} else if e != nil {
+					return store.RemoteIndexStatus{}, e
+				}
+			}
+			page = h.NextPageToken
+			if page == "" {
+				c.HistoryID = h.HistoryID
 				break
-			} else if e != nil {
-				return store.RemoteIndexStatus{}, e
 			}
-		}
-		page = h.NextPageToken
-		if page == "" {
-			c.HistoryID = h.HistoryID
-			break
-		}
-		if n == 19 && !quotaHit {
-			return store.RemoteIndexStatus{}, model.NewMailboxError(model.ErrKindUnavailable, "Google history catch-up is still in progress", true, nil)
+			if n == 19 && !quotaHit {
+				return store.RemoteIndexStatus{}, model.NewMailboxError(model.ErrKindUnavailable, "Google history catch-up is still in progress", true, nil)
+			}
 		}
 	}
 	if !c.BackfillDone && !quotaHit {
-		p, e := m.Google.List(ctx, t, "", "", c.BackfillPage, 100)
+		limit := 100
+		one := m.Service.Store.IsOne(ctx, account, inbox)
+		if one {
+			limit = 10
+		}
+		var p gmail.MessagePage
+		if one && c.BackfillSnapshot != "" {
+			e = json.Unmarshal([]byte(c.BackfillSnapshot), &p)
+		} else {
+			p, e = client.List(ctx, t, "", "", c.BackfillPage, limit)
+			if e == nil && one {
+				b, err := json.Marshal(p)
+				if err != nil {
+					return store.RemoteIndexStatus{}, err
+				}
+				e = m.Service.Store.SaveGmailBackfillSnapshot(ctx, account, inbox, string(b))
+				c.BackfillOffset = 0
+			}
+		}
 		if e != nil {
 			return store.RemoteIndexStatus{}, e
 		}
-		for _, v := range p.Messages {
-			g, e := m.Google.Get(ctx, t, v.ID, "metadata")
+		for i, v := range p.Messages {
+			if one && i < c.BackfillOffset {
+				continue
+			}
+			g, e := client.Get(ctx, t, v.ID, "metadata")
 			if e != nil {
+				var mb *model.MailboxError
+				if one && errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+					if e = m.Service.Store.SaveGmailBackfillOffset(ctx, account, inbox, i+1); e != nil {
+						return store.RemoteIndexStatus{}, e
+					}
+					continue
+				}
 				return store.RemoteIndexStatus{}, e
 			}
 			if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
@@ -307,9 +388,16 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			} else if e != nil {
 				return store.RemoteIndexStatus{}, e
 			}
+			if one {
+				if e = m.Service.Store.SaveGmailBackfillOffset(ctx, account, inbox, i+1); e != nil {
+					return store.RemoteIndexStatus{}, e
+				}
+			}
 		}
-		c.BackfillPage = p.NextPageToken
-		c.BackfillDone = c.BackfillPage == ""
+		if !quotaHit {
+			c.BackfillPage = p.NextPageToken
+			c.BackfillDone = c.BackfillPage == ""
+		}
 	}
 	if e = m.Service.Store.SaveGoogleProgress(ctx, account, inbox, c.HistoryID, c.BackfillPage, c.BackfillDone); e != nil {
 		return store.RemoteIndexStatus{}, e
@@ -369,11 +457,11 @@ func (m *RemoteMailboxService) getGoogle(ctx context.Context, p model.Principal,
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	t, e := m.GoogleAccess(ctx, p.AccountID, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inbox)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	g, e := m.Google.Get(ctx, t, provider, "metadata")
+	g, e := client.Get(ctx, t, provider, "metadata")
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
@@ -384,7 +472,7 @@ func (m *RemoteMailboxService) googleRaw(ctx context.Context, account, inbox, id
 	if e != nil {
 		return "", 0, e
 	}
-	t, e := m.GoogleAccess(ctx, account, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, account, inbox)
 	if e != nil {
 		return "", 0, e
 	}
@@ -395,7 +483,7 @@ func (m *RemoteMailboxService) googleRaw(ctx context.Context, account, inbox, id
 	path := f.Name()
 	defer f.Close()
 	w := &limitedWriter{w: f, limit: m.remoteBodyLimit()}
-	if e = m.Google.Raw(ctx, t, provider, w); e != nil {
+	if e = client.Raw(ctx, t, provider, w); e != nil {
 		os.Remove(path)
 		return "", 0, e
 	}
@@ -414,11 +502,11 @@ func (m *RemoteMailboxService) modifyGoogle(ctx context.Context, p model.Princip
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	t, e := m.GoogleAccess(ctx, p.AccountID, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inbox)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	if _, e = m.Google.Modify(ctx, t, provider, add, remove); e != nil {
+	if _, e = client.Modify(ctx, t, provider, add, remove); e != nil {
 		return RemoteMessageView{}, e
 	}
 	return m.getGoogle(ctx, p, inbox, id)
@@ -454,11 +542,11 @@ func (m *RemoteMailboxService) googleLabels(ctx context.Context, p model.Princip
 	if _, e := m.authorizeAssist(ctx, p, inbox); e != nil {
 		return RemoteMessageView{}, e
 	}
-	t, e := m.GoogleAccess(ctx, p.AccountID, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inbox)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
-	labels, e := m.Google.Labels(ctx, t)
+	labels, e := client.Labels(ctx, t)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}
@@ -480,7 +568,7 @@ func (m *RemoteMailboxService) googleLabels(ctx context.Context, p model.Princip
 			}
 		}
 		if found == "" && mode != "remove" {
-			l, e := m.Google.CreateLabel(ctx, t, name)
+			l, e := client.CreateLabel(ctx, t, name)
 			if e != nil {
 				return RemoteMessageView{}, e
 			}
@@ -510,7 +598,7 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 	if _, e := m.authorizeAssist(ctx, p, inbox); e != nil {
 		return model.Folder{}, e
 	}
-	t, e := m.GoogleAccess(ctx, p.AccountID, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inbox)
 	if e != nil {
 		return model.Folder{}, e
 	}
@@ -519,7 +607,7 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 		if name == "" {
 			name = path
 		}
-		l, e = m.Google.CreateLabel(ctx, t, name)
+		l, e = client.CreateLabel(ctx, t, name)
 	} else {
 		fs, e := m.Service.Store.ListFolders(ctx, p.AccountID, inbox)
 		if e != nil {
@@ -539,9 +627,9 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 			return model.Folder{}, model.NewMailboxError(model.ErrKindForbidden, "Gmail system labels are protected", false, nil)
 		}
 		if mode == "rename" {
-			l, e = m.Google.RenameLabel(ctx, t, f.Path, name)
+			l, e = client.RenameLabel(ctx, t, f.Path, name)
 		} else {
-			e = m.Google.DeleteLabel(ctx, t, f.Path)
+			e = client.DeleteLabel(ctx, t, f.Path)
 			l.ID = f.Path
 		}
 	}

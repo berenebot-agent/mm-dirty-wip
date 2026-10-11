@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
 	"github.com/dellarb/mailmoose/internal/transport/microsoft"
+	"github.com/dellarb/mailmoose/internal/transport/one"
 	"github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
@@ -93,6 +95,11 @@ type RemoteMailboxService struct {
 	microsoftPushMu sync.Mutex
 	pushWake        chan struct{}
 	googleMu        sync.Mutex
+	OneHTTP         *http.Client
+	OneInterval     time.Duration // fixtures only; production uses 15 requests/minute
+	oneMu           sync.Mutex
+	oneClients      map[string]oneCachedClient
+	oneLimiters     map[string]*one.Limiter
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
 	dial           RemoteDialer
@@ -144,7 +151,7 @@ func (m *RemoteMailboxService) ScheduleRefresh(accountID, inboxID string) {
 		}
 		ctx, cancel := context.WithTimeout(m.refreshContext, 2*time.Minute)
 		defer cancel()
-		_, _ = m.ReconcileRemote(ctx, accountID, inboxID)
+		_, _ = m.ReconcileRemote(one.Background(ctx), accountID, inboxID)
 	}()
 }
 
@@ -359,11 +366,11 @@ func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model
 		if _, e := m.authorizeRead(ctx, p, inboxID); e != nil {
 			return imap.RootScope{}, e
 		}
-		t, e := m.GoogleAccess(ctx, p.AccountID, inboxID)
+		client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inboxID)
 		if e != nil {
 			return imap.RootScope{}, e
 		}
-		_, e = m.Google.Profile(ctx, t)
+		_, e = client.Profile(ctx, t)
 		return imap.RootScope{}, e
 	}
 	if !p.CanRead(inboxID) && !p.Admin {
@@ -560,6 +567,18 @@ func (r *RemoteStandaloneSender) ResolveInboxSendingConfig(ctx context.Context, 
 		if r.Remote == nil {
 			return store.DomainSendingConfig{}, store.ErrNoProvider
 		}
+		if r.Service.Store.IsOne(ctx, accountID, inboxID) {
+			// Resolve only a mailbox reference here. Live credentials and the
+			// account limiter are attached at submission, never queued in cfg.
+			if _, _, e := r.Remote.GoogleMailboxClient(ctx, accountID, inboxID); e != nil {
+				return store.DomainSendingConfig{}, e
+			}
+			enc, e := r.Service.encryptConfig(configAAD(accountID, inboxID), map[string]any{"one_binding": true})
+			if e != nil {
+				return store.DomainSendingConfig{}, e
+			}
+			return store.DomainSendingConfig{ID: "remote:" + inboxID, AccountID: accountID, DomainID: inboxID, Provider: "gmail", EncryptedConfig: enc}, nil
+		}
 		t, e := r.Remote.GoogleAccess(ctx, accountID, inboxID)
 		if e != nil {
 			return store.DomainSendingConfig{}, e
@@ -620,6 +639,7 @@ func (m *RemoteMailboxService) InstallRemoteBridges() {
 	// The remote message resolver lets a reply/forward target a remote message
 	// whose body lives only on the server.
 	m.Service.RemoteMessages = m
+	m.Service.GmailMailboxClient = m.GoogleMailboxClient
 }
 
 // CopySentCopies drives the durable sent-copy queue once. cmd/server's worker

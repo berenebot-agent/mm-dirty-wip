@@ -56,9 +56,14 @@ func (s *Server) uiStandaloneWizard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
+	if r.URL.Query().Get("provider") == "one" {
+		http.Redirect(w, r, "/ui/connections/one", http.StatusSeeOther)
+		return
+	}
 	d := pageData{Title: "Connect standalone inbox", Principal: principal(r), CSRF: csrf(r), Notice: r.URL.Query().Get("notice")}
 	body := strings.Replace(standaloneWizardBody, `<button type="button" class="secondary" disabled>Microsoft / Outlook — Coming next</button>`, `<label><input type="radio" name="standalone_provider" value="microsoft"> Microsoft / Outlook</label>`, 1)
 	body = strings.TrimSuffix(body, "</section>") + microsoftWizardBody + "</section>"
+	body = strings.Replace(body, `<div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a>`, `<label><input type="radio" name="standalone_provider" value="one"> One (Easy Gmail Setup)</label><div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a>`, 1)
 	if id := r.URL.Query().Get("microsoft_inbox"); id != "" {
 		if _, err := s.Service.Store.GetInbox(r.Context(), principal(r), id); err == nil && s.remoteMailbox().IsMicrosoft(r.Context(), principal(r).AccountID, id) {
 			status := "Push setup pending; polling fallback."
@@ -102,7 +107,7 @@ func (s *Server) uiGoogleBegin(w http.ResponseWriter, r *http.Request) {
 	inbox := strings.TrimSpace(r.Form.Get("inbox_id"))
 	if inbox != "" {
 		box, e := s.Service.Store.GetInbox(r.Context(), p, inbox)
-		if e != nil || box.Kind != "standalone" || !s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, inbox) {
+		if e != nil || box.Kind != "standalone" || !s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, inbox) || s.Service.Store.IsOne(r.Context(), p.AccountID, inbox) {
 			http.Error(w, "Google inbox not found", 404)
 			return
 		}
