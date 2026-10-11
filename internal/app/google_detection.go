@@ -72,7 +72,7 @@ func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) 
 				}
 				in := googleInput(g)
 				date := time.UnixMilli(g.InternalDate)
-				a, inserted, e := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{FolderPath: "gmail:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, SizeBytes: in.SizeBytes, InternalDate: &date})
+				a, inserted, e := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{FolderPath: "gmail:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, SizeBytes: in.SizeBytes, InternalDate: &date, Source: "gmail"})
 				if e != nil {
 					return arrived, "partial", e
 				}

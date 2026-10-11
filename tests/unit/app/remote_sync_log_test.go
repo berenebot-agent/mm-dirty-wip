@@ -58,15 +58,29 @@ func (h *syncLogSink) syncRecords() []map[string]string {
 	return out
 }
 
+func (h *syncLogSink) records(message string) []map[string]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []map[string]string
+	for i, m := range h.msgs {
+		if m == message {
+			out = append(out, h.attrs[i])
+		}
+	}
+	return out
+}
+
 // TestIMAPSyncIsLogged proves a manual IMAP detection pass emits one "remote
 // sync" INFO line naming the provider, inbox, trigger, a duration, the number of
 // newly-detected messages and the completion status. A subsequent pass that
 // finds nothing still logs (the heartbeat), with new=0.
 func TestIMAPSyncIsLogged(t *testing.T) {
-	svc, box, _, fake, w := workerEnv(t)
+	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()
 	svc.Log = slog.New(sink)
+	w = app.NewRemoteWorker(svc, rm, slog.New(sink))
+	w.SetDemandInterval(-1)
 
 	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
 	if err != nil {
@@ -101,6 +115,13 @@ func TestIMAPSyncIsLogged(t *testing.T) {
 	}
 	if last["status"] != "complete" {
 		t.Fatalf("status = %q, want complete", last["status"])
+	}
+	received := sink.records("remote received")
+	if len(received) != 1 {
+		t.Fatalf("logged %d remote received lines, want 1", len(received))
+	}
+	if received[0]["provider"] != "imap" || received[0]["source"] != "imap" || received[0]["from"] != "sender@elsewhere.test" || received[0]["to"] != box.Address {
+		t.Fatalf("remote received attrs = %#v", received[0])
 	}
 	if strings.TrimSpace(last["duration"]) == "" {
 		t.Fatalf("duration missing")
@@ -157,6 +178,19 @@ func TestMicrosoftDeltaSyncIsLogged(t *testing.T) {
 	if last["status"] != "complete" {
 		t.Fatalf("status = %q, want complete", last["status"])
 	}
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPoll := false
+	for _, arrival := range arrivals {
+		if arrival.FolderPath == "microsoft:FreshID" {
+			foundPoll = arrival.Source == "microsoft"
+		}
+	}
+	if !foundPoll {
+		t.Fatalf("poll-sourced arrival missing: %#v", arrivals)
+	}
 
 	// A quiet repeat logs new=0.
 	if _, err := rm.ReconcileRemote(ctx, box.AccountID, box.ID); err != nil {
@@ -165,6 +199,28 @@ func TestMicrosoftDeltaSyncIsLogged(t *testing.T) {
 	final := sink.syncRecords()
 	if q := final[len(final)-1]; q["new"] != "0" {
 		t.Fatalf("quiet pass new = %q, want 0", q["new"])
+	}
+
+	fixture.add("PushID", "inbox-id", "Push")
+	if _, err := rm.ReconcileRemote(app.WithPushRemoteSync(ctx), box.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	final = sink.syncRecords()
+	if got := final[len(final)-1]["trigger"]; got != "push" {
+		t.Fatalf("push sync trigger = %q, want push", got)
+	}
+	arrivals, err = svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPush := false
+	for _, arrival := range arrivals {
+		if arrival.FolderPath == "microsoft:PushID" {
+			foundPush = arrival.Source == "microsoft push"
+		}
+	}
+	if !foundPush {
+		t.Fatalf("push-sourced arrival missing: %#v", arrivals)
 	}
 }
 
@@ -250,6 +306,10 @@ func TestGmailSyncIsLogged(t *testing.T) {
 	}
 	if last := final[len(final)-1]; last["new"] != "1" || last["provider"] != "gmail" {
 		t.Fatalf("arrival pass = %#v, want new=1 provider=gmail", last)
+	}
+	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 100)
+	if err != nil || len(arrivals) != 1 || arrivals[0].Source != "gmail" {
+		t.Fatalf("Gmail arrival source = %#v, err=%v", arrivals, err)
 	}
 }
 

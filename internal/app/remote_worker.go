@@ -831,6 +831,7 @@ func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (
 		}
 		arrival, inserted, aerr := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{
 			FolderPath:   folder,
+			Source:       "imap",
 			UIDValidity:  validity,
 			UID:          uid,
 			RFCMessageID: h.MessageID,
@@ -941,6 +942,18 @@ func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arri
 		return
 	}
 	if emitted {
+		provider := w.remote.remoteProviderLabel(context.WithoutCancel(ctx), inbox.AccountID, inbox.ID)
+		source := strings.TrimSpace(arrival.Source)
+		if source == "" {
+			source = provider
+		}
+		w.log.Info("remote received",
+			"message_id", arrival.ID,
+			"from", arrival.FromAddress,
+			"to", inbox.Address,
+			"provider", provider,
+			"source", source,
+		)
 		w.svc.Hub.Publish(ev)
 	}
 	w.settle(ctx, inbox, arrival, store.RemoteArrivalDelivered, "")

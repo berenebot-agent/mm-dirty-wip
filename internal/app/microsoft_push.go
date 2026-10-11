@@ -32,15 +32,23 @@ func (m *RemoteMailboxService) WakeMicrosoftPush() {
 }
 
 // AcceptMicrosoftPush persists work before the HTTP callback acknowledges it.
-func (m *RemoteMailboxService) AcceptMicrosoftPush(ctx context.Context, id, state, lifecycle string) (bool, error) {
+// It returns the matched inbox address only for an authenticated subscription.
+func (m *RemoteMailboxService) AcceptMicrosoftPush(ctx context.Context, id, state, lifecycle string) (string, bool, error) {
 	if id == "" || state == "" || len(state) > 128 {
-		return false, nil
+		return "", false, nil
 	}
-	ok, err := m.Service.Store.QueueMicrosoftPush(ctx, id, MicrosoftPushHash(state), lifecycle)
+	accountID, inboxID, ok, err := m.Service.Store.QueueMicrosoftPush(ctx, id, MicrosoftPushHash(state), lifecycle, "microsoft push")
 	if ok && err == nil {
 		m.WakeMicrosoftPush()
 	}
-	return ok, err
+	if !ok || err != nil {
+		return "", ok, err
+	}
+	address := inboxID
+	if inbox, lookupErr := m.Service.Store.GetInboxInternal(ctx, accountID, inboxID); lookupErr == nil && strings.TrimSpace(inbox.Address) != "" {
+		address = inbox.Address
+	}
+	return address, true, nil
 }
 
 func microsoftMissing(err error) bool {
@@ -197,14 +205,14 @@ func (m *RemoteMailboxService) processMicrosoftPush(ctx context.Context, p *stor
 		if err = m.Service.Store.SaveMicrosoftPush(ctx, *p); err != nil {
 			return err
 		}
-		if _, err = m.Service.Store.QueueMicrosoftPush(ctx, p.SubscriptionID, p.StateHash, ""); err != nil {
+		if _, _, _, err = m.Service.Store.QueueMicrosoftPush(ctx, p.SubscriptionID, p.StateHash, "", ""); err != nil {
 			return err
 		}
 		fresh, err := m.Service.Store.MicrosoftPush(ctx, p.AccountID, p.InboxID)
 		if err != nil {
 			return err
 		}
-		p.Requested, p.Completed, p.Lifecycle = fresh.Requested, fresh.Completed, fresh.Lifecycle
+		p.Requested, p.Completed, p.Lifecycle, p.RequestedSource = fresh.Requested, fresh.Completed, fresh.Lifecycle, fresh.RequestedSource
 	} else if time.Until(p.ExpiresAt) < 24*time.Hour || p.Lifecycle == "reauthorizationRequired" {
 		sub, err := m.Microsoft.RenewSubscription(ctx, token, p.SubscriptionID, time.Now().UTC().Add(6*24*time.Hour))
 		if microsoftMissing(err) {
@@ -228,7 +236,11 @@ func (m *RemoteMailboxService) processMicrosoftPush(ctx context.Context, p *stor
 		return err
 	}
 	if p.Requested > p.Completed {
-		status, err := m.ReconcileRemote(ctx, p.AccountID, p.InboxID)
+		syncCtx := ctx
+		if p.RequestedSource == "microsoft push" {
+			syncCtx = WithPushRemoteSync(ctx)
+		}
+		status, err := m.ReconcileRemote(syncCtx, p.AccountID, p.InboxID)
 		if err != nil {
 			return err
 		}

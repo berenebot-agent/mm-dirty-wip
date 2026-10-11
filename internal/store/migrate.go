@@ -241,6 +241,10 @@ func migrations(dataDir string) []migration {
 		{version: "062", sql: migration062, detect: stateOf(tableExists("microsoft_push"))},
 		{version: "063", sql: migration063, detect: stateOf(columnAdded("microsoft_oauth_attempts", "encrypted_token"))},
 		{version: "064", sql: migration064, detect: stateOf(tableExists("inbox_message_actions"))},
+		{version: "065", sql: migration065, detect: allOf(
+			columnAdded("inbox_remote_arrivals", "source"),
+			columnAdded("microsoft_push", "requested_source"),
+		)},
 	}
 }
 

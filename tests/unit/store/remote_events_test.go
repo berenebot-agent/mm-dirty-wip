@@ -41,6 +41,34 @@ func TestMigration057RemoteEvents(t *testing.T) {
 	}
 }
 
+func TestMigration065RemoteArrivalSources(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if n := markerCount(t, st, "065"); n != 1 {
+		t.Fatalf("migration 065 marker count %d", n)
+	}
+	db := rawDB(t, st.Path())
+	defer db.Close()
+	ctx := context.Background()
+	for _, column := range []struct{ table, name string }{
+		{"inbox_remote_arrivals", "source"},
+		{"microsoft_push", "requested_source"},
+	} {
+		var n int
+		query := `SELECT count(*) FROM pragma_table_info('` + column.table + `') WHERE name=?`
+		if err := db.QueryRowContext(ctx, query, column.name).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("%s.%s missing after migration 065", column.table, column.name)
+		}
+	}
+}
+
 // remoteEventEnv seeds a standalone inbox with a configured remote binding and a
 // credential so it is detectable.
 func remoteEventEnv(t *testing.T) (*store.Store, string, model.Inbox) {
@@ -84,7 +112,7 @@ func TestRemoteDetectionBaselineAndArrivals(t *testing.T) {
 		t.Fatalf("cursor = %+v", c)
 	}
 
-	a11, inserted, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 100, UID: 11, RFCMessageID: "<a11@remote>", FromAddress: "x@y.test", Subject: "New"})
+	a11, inserted, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 100, UID: 11, RFCMessageID: "<a11@remote>", FromAddress: "x@y.test", Subject: "New", Source: "imap"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,14 +122,20 @@ func TestRemoteDetectionBaselineAndArrivals(t *testing.T) {
 	if a11.DeliveryState != store.RemoteArrivalPending {
 		t.Fatalf("arrival state = %q", a11.DeliveryState)
 	}
+	if a11.Source != "imap" {
+		t.Fatalf("arrival source = %q, want imap", a11.Source)
+	}
 
 	// Idempotent re-detection.
-	_, inserted, err = st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 100, UID: 11, RFCMessageID: "<a11@remote>"})
+	redetected, inserted, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 100, UID: 11, RFCMessageID: "<a11@remote>"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if inserted {
 		t.Fatal("arrival 11 re-inserted (not idempotent)")
+	}
+	if redetected.Source != "imap" {
+		t.Fatalf("re-detected arrival source = %q, want persisted imap", redetected.Source)
 	}
 
 	if err := st.AdvanceRemoteCursor(ctx, acct, in.ID, "INBOX", 100, 12); err != nil {
@@ -121,7 +155,7 @@ func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
 	if err := st.EstablishRemoteBaseline(ctx, acct, in.ID, "INBOX", 5, 0); err != nil {
 		t.Fatal(err)
 	}
-	a, _, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 5, UID: 1, RFCMessageID: "<e1@remote>", FromAddress: "alice@example.test", Subject: "Hi"})
+	a, _, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 5, UID: 1, RFCMessageID: "<e1@remote>", FromAddress: "alice@example.test", Subject: "Hi", Source: "imap"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +171,9 @@ func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
 	}
 	if !store.IsRemoteArrivalEvent(ev.Payload) {
 		t.Fatal("payload not marked remote")
+	}
+	if ev.Payload["provider"] != "imap" || ev.Payload["source"] != "imap" {
+		t.Fatalf("provider/source payload = %#v, want imap/imap", ev.Payload)
 	}
 	if ev.EntityID != a.ID {
 		t.Fatalf("event entity = %q want arrival id %q", ev.EntityID, a.ID)
