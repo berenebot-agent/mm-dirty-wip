@@ -662,7 +662,7 @@ func (s *Server) remoteMessageSetLabels(w http.ResponseWriter, r *http.Request, 
 				}
 			}
 		}
-		if _, uerr := s.Service.Store.SetRemoteMessageLabels(r.Context(), p.AccountID, box.ID, id, next); uerr != nil {
+		if _, uerr := s.remoteMailbox().SetRemoteLabels(r.Context(), p, box.ID, id, next); uerr != nil {
 			http.Redirect(w, r, "/ui/messages/"+id+"?notice="+url.QueryEscape("Invalid label: "+uerr.Error()), 303)
 			return true
 		}
@@ -1042,6 +1042,10 @@ func (s *Server) composeRemoteMessage(w http.ResponseWriter, r *http.Request, p 
 func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
+	if s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, id) {
+		http.Redirect(w, r, "/ui/inboxes/standalone/new?google_inbox="+url.QueryEscape(id), 303)
+		return
+	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
 	if err != nil {
 		http.Error(w, "inbox not found", 404)

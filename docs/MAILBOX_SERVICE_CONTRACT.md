@@ -8,6 +8,23 @@ schema is described by the migrations; this file describes behaviour.
 
 Authoritative tree: `repo/`. Every path below is relative to `repo/`.
 
+### Google extension (D098)
+
+Standalone Google inboxes use the same `RemoteMailboxService` and canonical
+HTTP/UI surface. The IMAP-specific descriptions below apply to IMAP bindings;
+Google uses `internal/transport/gmail`, encrypted per-inbox OAuth grants and
+opaque provider message/thread IDs. Migration 059 adds the binding, OAuth-attempt,
+ID mapping, native label-membership and independent detection-cursor tables.
+Google messages have one cache row and multiple label memberships; `folder_path`
+is an internal `gmail:<provider-id>` storage locator, while public folder views
+project Gmail system labels or user-label IDs. `ARCHIVE` is a derived view.
+Read/star/label/archive/trash operations execute live, as do send, raw/attachment
+reads and native draft creation. Metadata backfill is progressive and History API
+updates catch up external changes; API list reads synchronize, UI navigation
+schedules synchronization. Search uses string continuation tokens (including
+within-page position) rather than the IMAP UID continuation. Permanent deletion
+and remapping Google's system roles return unsupported. See `docs/GOOGLE.md`.
+
 ## 1. Domain model (`internal/model`)
 
 ### Inbox kinds — `internal/model/mailbox.go`

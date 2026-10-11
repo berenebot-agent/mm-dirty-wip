@@ -679,8 +679,18 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 	q := `SELECT ` + remoteMessageColumns + ` FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`
 	args := []any{accountID, inboxID}
 	if strings.TrimSpace(f.FolderPath) != "" {
-		q += ` AND folder_path=?`
-		args = append(args, f.FolderPath)
+		if s.IsGoogle(ctx, accountID, inboxID) {
+			if f.FolderPath == "ARCHIVE" {
+				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
+				args = append(args, inboxID)
+			} else {
+				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
+				args = append(args, inboxID, f.FolderPath)
+			}
+		} else {
+			q += ` AND folder_path=?`
+			args = append(args, f.FolderPath)
+		}
 	}
 	if f.UnreadOnly {
 		q += ` AND is_read=0`
@@ -950,8 +960,18 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 		SELECT thread_key, inbox_id AS inb_id, subject, is_read, received_at FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND thread_key<>''`
 	args := []any{accountID, inboxID}
 	if strings.TrimSpace(folderPath) != "" {
-		q += ` AND folder_path=?`
-		args = append(args, folderPath)
+		if s.IsGoogle(ctx, accountID, inboxID) {
+			if folderPath == "ARCHIVE" {
+				q += ` AND id NOT IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id IN ('INBOX','TRASH','SPAM'))`
+				args = append(args, inboxID)
+			} else {
+				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
+				args = append(args, inboxID, folderPath)
+			}
+		} else {
+			q += ` AND folder_path=?`
+			args = append(args, folderPath)
+		}
 	}
 	q += `) GROUP BY thread_key, inb_id`
 	if strings.TrimSpace(beforeKey) != "" {
@@ -1019,7 +1039,11 @@ func (s *Store) ListRemoteThreadMessages(ctx context.Context, accountID, inboxID
 // cached remote index, so a folder listing can show counts without a live status
 // round-trip.
 func (s *Store) CountRemoteFolderMessages(ctx context.Context, accountID, inboxID string) (map[string][2]int, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`, accountID, inboxID)
+	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
+	if s.IsGoogle(ctx, accountID, inboxID) {
+		query = `SELECT g.label_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.label_id`
+	}
+	rows, err := s.read.QueryContext(ctx, query, accountID, inboxID)
 	if err != nil {
 		return nil, err
 	}

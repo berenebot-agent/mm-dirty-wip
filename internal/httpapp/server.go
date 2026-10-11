@@ -241,6 +241,11 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/domains/{id}/delete", s.withSession(s.withCSRF(s.uiDeleteDomain)))
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
 	m.HandleFunc("POST /ui/inboxes/standalone", s.withSession(s.withCSRF(s.uiCreateStandalone)))
+	m.HandleFunc("GET /ui/inboxes/standalone/new", s.withSession(s.uiStandaloneWizard))
+	m.HandleFunc("GET /ui/oauth/google/info", s.withSession(s.uiGoogleInfo))
+	m.HandleFunc("POST /ui/oauth/google/begin", s.withSession(s.withCSRF(s.uiGoogleBegin)))
+	m.HandleFunc("POST /ui/oauth/google/finish", s.withSession(s.withCSRF(s.uiGoogleFinish)))
+	m.HandleFunc("GET /ui/oauth/google/callback", s.withSession(s.uiGoogleFinish))
 	m.HandleFunc("POST /ui/inboxes/{id}/edit", s.withSession(s.withCSRF(s.uiUpdateInbox)))
 	// Common folder management for both inbox kinds (session + CSRF).
 	m.HandleFunc("POST /ui/inboxes/{id}/folders", s.withSession(s.withCSRF(s.uiInboxFolderCreate)))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
 )
 
@@ -77,6 +78,9 @@ func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Prin
 			unread++
 		}
 		v := remoteView(msg)
+		if m.IsGoogle(ctx, p.AccountID, inboxID) {
+			v = m.googleView(ctx, msg)
+		}
 		labels, lerr := m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inboxID, msg.ID)
 		if lerr == nil {
 			v.Labels = labels
@@ -93,6 +97,10 @@ func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Prin
 
 // ensureIndexed reconciles the remote index once if it has never been built.
 func (m *RemoteMailboxService) ensureIndexed(ctx context.Context, accountID, inboxID string) error {
+	if m.IsGoogle(ctx, accountID, inboxID) {
+		_, e := m.ReconcileRemote(ctx, accountID, inboxID)
+		return e
+	}
 	status, err := m.Service.Store.GetRemoteIndexStatus(ctx, accountID, inboxID)
 	if err != nil {
 		return mapStoreError(err)
@@ -122,7 +130,8 @@ type RemoteSearchQuery struct {
 	Limit      int
 	// Cursor is the opaque pagination token from a prior page (the lowest UID of
 	// the prior, newest-first page). A zero cursor starts at the newest match.
-	Cursor uint32
+	Cursor         uint32
+	ProviderCursor string
 }
 
 // SearchRemote runs a live search on the remote server and intersects the result
@@ -131,15 +140,19 @@ type RemoteSearchQuery struct {
 // second round-trip. Pagination beyond the limit is offered through the adapter's
 // NextCursor via NextCursor.
 type RemoteSearchResult struct {
-	Items        []RemoteMessageView    `json:"items"`
-	NextCursor   uint32                 `json:"next_cursor,omitempty"`
-	Completeness model.ListCompleteness `json:"completeness"`
+	Items          []RemoteMessageView    `json:"items"`
+	NextCursor     uint32                 `json:"next_cursor,omitempty"`
+	ProviderCursor string                 `json:"provider_cursor,omitempty"`
+	Completeness   model.ListCompleteness `json:"completeness"`
 }
 
 const remoteSearchDefaultLimit = 200
 
 // SearchRemote performs a live server search restricted to one folder in scope.
 func (m *RemoteMailboxService) SearchRemote(ctx context.Context, p model.Principal, inboxID string, q RemoteSearchQuery) (RemoteSearchResult, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.searchGoogle(ctx, p, inboxID, q)
+	}
 	inbox, err := m.authorizeRead(ctx, p, inboxID)
 	if err != nil {
 		return RemoteSearchResult{}, err
@@ -284,6 +297,9 @@ func containsFoldApp(list []string, v string) bool {
 // SetRemoteLabels replaces the local labels of a cached remote message. Labels are
 // local metadata, independent of folders, and never require a provider call.
 func (m *RemoteMailboxService) SetRemoteLabels(ctx context.Context, p model.Principal, inboxID, messageID string, labels []string) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.googleLabels(ctx, p, inboxID, messageID, labels, "set")
+	}
 	if _, err := m.authorizeAssist(ctx, p, inboxID); err != nil {
 		return RemoteMessageView{}, err
 	}
@@ -295,6 +311,9 @@ func (m *RemoteMailboxService) SetRemoteLabels(ctx context.Context, p model.Prin
 
 // AddRemoteLabels merges labels onto a cached remote message.
 func (m *RemoteMailboxService) AddRemoteLabels(ctx context.Context, p model.Principal, inboxID, messageID string, labels []string) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.googleLabels(ctx, p, inboxID, messageID, labels, "add")
+	}
 	if _, err := m.authorizeAssist(ctx, p, inboxID); err != nil {
 		return RemoteMessageView{}, err
 	}
@@ -306,6 +325,9 @@ func (m *RemoteMailboxService) AddRemoteLabels(ctx context.Context, p model.Prin
 
 // RemoveRemoteLabels removes labels from a cached remote message.
 func (m *RemoteMailboxService) RemoveRemoteLabels(ctx context.Context, p model.Principal, inboxID, messageID string, labels []string) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.googleLabels(ctx, p, inboxID, messageID, labels, "remove")
+	}
 	if _, err := m.authorizeAssist(ctx, p, inboxID); err != nil {
 		return RemoteMessageView{}, err
 	}
@@ -331,6 +353,9 @@ func (m *RemoteMailboxService) ListRemoteLabels(ctx context.Context, p model.Pri
 // CreateRemoteFolder creates a folder on the live server and mirrors it into the
 // cached index. The new folder is within the inbox's selected root scope.
 func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.Principal, inboxID, path string, name string) (model.Folder, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.googleFolderMutation(ctx, p, inboxID, path, name, "create")
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return model.Folder{}, err
@@ -378,6 +403,9 @@ func (m *RemoteMailboxService) CreateRemoteFolder(ctx context.Context, p model.P
 // folder tree. A local custom folder (origin='local') is renamed locally without a
 // provider call. A protected system folder cannot be renamed.
 func (m *RemoteMailboxService) RenameRemoteFolder(ctx context.Context, p model.Principal, inboxID, folderID, newName string) (model.Folder, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.googleFolderMutation(ctx, p, inboxID, folderID, newName, "rename")
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return model.Folder{}, err
@@ -449,6 +477,10 @@ func (m *RemoteMailboxService) RenameRemoteFolder(ctx context.Context, p model.P
 // refuses a non-empty folder; the adapter reports that as a conflict, which the
 // caller surfaces rather than cascading a delete.
 func (m *RemoteMailboxService) DeleteRemoteFolder(ctx context.Context, p model.Principal, inboxID, folderID string) error {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		_, e := m.googleFolderMutation(ctx, p, inboxID, folderID, "", "delete")
+		return e
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return err
@@ -523,6 +555,9 @@ func (m *RemoteMailboxService) DeleteRemoteFolder(ctx context.Context, p model.P
 // system folder's role is protected. It performs no provider call: the role is
 // local metadata over a folder the server already has.
 func (m *RemoteMailboxService) SetRemoteFolderRole(ctx context.Context, p model.Principal, inboxID, folderID, role string) (model.Folder, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return model.Folder{}, model.NewMailboxError(model.ErrKindUnsupported, "Google system label roles are fixed", false, nil)
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return model.Folder{}, err
@@ -632,6 +667,20 @@ func (p *RemoteHandoffPublisher) Append(ctx context.Context, inboxID string, raw
 	if err != nil {
 		return HandoffOutcome{}, mapStoreError(err)
 	}
+	if p.Service.IsGoogle(ctx, accountID, inboxID) {
+		t, e := p.Service.GoogleAccess(ctx, accountID, inboxID)
+		if e != nil {
+			return HandoffOutcome{}, e
+		}
+		d, e := p.Service.Google.CreateDraft(ctx, t, bytes.NewReader(raw), "")
+		if e != nil {
+			if transport.AsAmbiguous(e) {
+				return HandoffOutcome{RemoteFolder: "DRAFT"}, nil
+			}
+			return HandoffOutcome{}, e
+		}
+		return HandoffOutcome{Confirmed: d.ID != "", RemoteFolder: "DRAFT"}, nil
+	}
 	folder, ferr := p.Service.Service.Store.GetSystemFolder(ctx, accountID, inboxID, model.FolderRoleDrafts)
 	if ferr != nil || strings.TrimSpace(folder.Path) == "" {
 		return HandoffOutcome{}, model.NewMailboxError(model.ErrKindUnsupported, "this inbox has no remote Drafts folder", false, store.ErrHandoffUnsupported)
@@ -664,6 +713,17 @@ func (p *RemoteHandoffPublisher) Lookup(ctx context.Context, inboxID, handoffID,
 	accountID, err := p.Service.Service.Store.InboxAccountID(ctx, inboxID)
 	if err != nil {
 		return HandoffOutcome{}, mapStoreError(err)
+	}
+	if p.Service.IsGoogle(ctx, accountID, inboxID) {
+		t, e := p.Service.GoogleAccess(ctx, accountID, inboxID)
+		if e != nil {
+			return HandoffOutcome{}, e
+		}
+		res, e := p.Service.Google.List(ctx, t, "rfc822msgid:"+strings.Trim(messageID, "<>"), "DRAFT", "", 100)
+		if e != nil {
+			return HandoffOutcome{}, e
+		}
+		return HandoffOutcome{Found: len(res.Messages) > 0, Confirmed: len(res.Messages) == 1 && res.NextPageToken == "", Ambiguous: len(res.Messages) > 1 || res.NextPageToken != "", RemoteFolder: "DRAFT"}, nil
 	}
 	folder, ferr := p.Service.Service.Store.GetSystemFolder(ctx, accountID, inboxID, model.FolderRoleDrafts)
 	if ferr != nil || strings.TrimSpace(folder.Path) == "" {
