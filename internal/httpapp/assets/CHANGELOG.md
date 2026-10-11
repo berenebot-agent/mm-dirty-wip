@@ -8,18 +8,23 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The reload button on a standalone (IMAP) inbox no longer hides the newest
+  messages. It submitted the page's outgoing "load older" cursor instead of the
+  page it was on, so pressing reload advanced the list to an older page (and a
+  manual browser refresh was needed to get back). Reload now preserves the
+  current page exactly.
+
 - The periodic/manual provider-sync log now names the mailbox by its address
   instead of the opaque inbox id, so an operator can tell which inbox a sync
   belongs to.
 
-- A standalone (IMAP) inbox no longer loses recent messages from the list while
-  a sync runs. Two reconcile paths could transiently (and sometimes permanently)
-  delete cached message metadata: a `UIDVALIDITY` change deleted every cached row
+- Reconcile no longer risks deleting cached remote metadata against an
+  incomplete view. A `UIDVALIDITY` change previously deleted every cached row
   for a folder before re-inserting only the fetched window, and a reduced/partial
   folder discovery pruned a folder together with its cached messages. Cached rows
-  are now dropped only against a complete snapshot, so metadata is preserved
-  across a transient reconcile. The reload button also no longer schedules the
-  deep reconcile (it was the concurrent rebuild that surfaced the disappearance).
+  are now dropped only against a complete snapshot, so a transient reconcile
+  cannot drop metadata. The reload button also no longer schedules the deep
+  reconcile (the deep pass runs on its own cadence).
 
 - A standalone (IMAP) inbox's message now opens in the same reader as any other
   message, so it exposes Reply, Reply all, Forward, Move to trash (and Restore /
