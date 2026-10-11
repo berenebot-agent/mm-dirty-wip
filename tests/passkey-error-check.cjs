@@ -4,7 +4,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
-const moduleSource = source.slice(source.indexOf('/* Passkey (WebAuthn) ceremonies.'));
+// Take the passkey module alone. Slicing to the end of the file would drag in
+// every module that follows it (the status flag, the navigation reporter) and
+// their DOM needs, which is not what this check is about.
+const markerAt = source.indexOf('/* Passkey (WebAuthn) ceremonies.');
+const start = source.indexOf('(function () {', markerAt);
+const end = source.indexOf('\n})();', start);
+assert.ok(markerAt >= 0 && start > markerAt && end > start, 'passkey module not found');
+const moduleSource = source.slice(start, end + '\n})();'.length);
+// Pin the boundary: the slice must be this module alone, not the modules that
+// follow it in the bundle.
+assert.ok(
+  moduleSource.includes('passkey-signin') && !moduleSource.includes('Global Live/Loading status flag'),
+  'passkey module slice covers the wrong range'
+);
 
 async function check(register, error, expected) {
   let click;
@@ -17,6 +30,11 @@ async function check(register, error, expected) {
     Uint8Array, atob,
     document: {
       querySelector() { return { value: 'csrf' }; },
+      // The module also wires the per-passkey settings gears, the dialog close
+      // buttons and the feedback/settings modals it finds on the page. This
+      // check drives only the sign-in and add-passkey error paths, so an empty
+      // list lets that extra wiring no-op instead of throwing at load.
+      querySelectorAll() { return []; },
       getElementById(id) {
         if (id === 'passkey-status') return status;
         return id === (register ? 'passkey-add' : 'passkey-signin') ? button : null;
