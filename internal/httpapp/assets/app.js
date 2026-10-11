@@ -3500,6 +3500,9 @@ function bindInboxSettingsShell(dlg) {
     // The two chooser steps carry no tabs and no footer submit; the provider
     // step is the second half of the standalone flow.
     var chooserStep = mode === 'choose' || mode === 'provider';
+    // The chooser steps carry no section navigation, so collapse the empty
+    // left-hand column instead of leaving it blank beside the panel.
+    dlg.classList.toggle('inbox-settings--chooser', chooserStep);
     tabs.forEach(function (t) {
       var tm = t.getAttribute('data-inbox-mode');
       // Untagged tabs belong to every kind. Tagged tabs show only in their
