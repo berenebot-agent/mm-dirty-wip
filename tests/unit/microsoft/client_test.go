@@ -3,6 +3,7 @@ package microsoft_test
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,5 +69,75 @@ func TestSendServerFailureIsAmbiguous(t *testing.T) {
 	e := c.SendDraft(context.Background(), "secret-token", "mailbox", "draft")
 	if !transport.AsAmbiguous(e) || strings.Contains(e.Error(), "secret") {
 		t.Fatalf("unsafe retry classification: %v", e)
+	}
+}
+
+func TestFreshDraftRecipientRepairAndMismatchStopsSend(t *testing.T) {
+	for _, ignorePatch := range []bool{false, true} {
+		t.Run(map[bool]string{false: "repair", true: "mismatch"}[ignorePatch], func(t *testing.T) {
+			to := []map[string]any{{"emailAddress": map[string]string{"address": "b.dellar@outlook.com"}}}
+			cc, bcc := []map[string]any{}, []map[string]any{}
+			sent := false
+			patched := false
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/messages"):
+					b, _ := io.ReadAll(r.Body)
+					raw, e := base64.StdEncoding.DecodeString(string(b))
+					if e != nil || !strings.Contains(string(raw), "To: dellarb@gmail.com") || strings.Contains(string(raw), "In-Reply-To:") {
+						t.Fatal("not a fresh composed message")
+					}
+					w.WriteHeader(201)
+					w.Write([]byte(`{"id":"draft","toRecipients":[{"emailAddress":{"address":"b.dellar@outlook.com"}}]}`))
+				case r.Method == "PATCH":
+					var body struct {
+						To  []map[string]any `json:"toRecipients"`
+						CC  []map[string]any `json:"ccRecipients"`
+						BCC []map[string]any `json:"bccRecipients"`
+					}
+					if e := json.NewDecoder(r.Body).Decode(&body); e != nil {
+						t.Error(e)
+					}
+					patched = true
+					if !ignorePatch {
+						to, cc, bcc = body.To, body.CC, body.BCC
+					}
+					w.Write([]byte(`{"id":"draft"}`))
+				case r.Method == "GET":
+					json.NewEncoder(w).Encode(map[string]any{"id": "draft", "toRecipients": to, "ccRecipients": cc, "bccRecipients": bcc})
+				case strings.HasSuffix(r.URL.Path, "/send"):
+					sent = true
+					w.WriteHeader(202)
+				default:
+					t.Errorf("unexpected operation %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(400)
+				}
+			}))
+			defer s.Close()
+			c := microsoft.NewClient(s.Client())
+			c.BaseURL = s.URL
+			d, e := c.CreateVerifiedDraft(context.Background(), "token", "mailbox", []byte("From: b.dellar@outlook.com\r\nTo: dellarb@gmail.com\r\nCc: copied@example.net\r\nBcc: hidden@example.net\r\nSubject: Microsoft\r\n\r\nHello"))
+			if !patched {
+				t.Fatal("draft recipients were not explicitly set")
+			}
+			if ignorePatch {
+				if e == nil || !transport.AsAmbiguous(e) {
+					t.Fatalf("mismatch accepted: %v", e)
+				}
+			} else {
+				if e != nil {
+					t.Fatal(e)
+				}
+				if e = c.SendDraft(context.Background(), "token", "mailbox", d.ID); e != nil {
+					t.Fatal(e)
+				}
+				if len(cc) != 1 || len(bcc) != 1 || to[0]["emailAddress"].(map[string]any)["address"] != "dellarb@gmail.com" {
+					t.Fatal("recipient envelope lost")
+				}
+			}
+			if sent == ignorePatch {
+				t.Fatalf("submission state: sent=%v ignorePatch=%v", sent, ignorePatch)
+			}
+		})
 	}
 }

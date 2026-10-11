@@ -37,7 +37,7 @@ type Header struct{ Name, Value string }
 type Message struct {
 	ID, ConversationID, ParentFolderID, InternetMessageID, Subject, BodyPreview string
 	From, Sender                                                                Recipient
-	ToRecipients, CCRecipients                                                  []Recipient
+	ToRecipients, CCRecipients, BCCRecipients                                   []Recipient
 	ReceivedDateTime, SentDateTime                                              string
 	IsRead, IsDraft, HasAttachments                                             bool
 	Categories                                                                  []string
@@ -363,4 +363,106 @@ func (c *Client) mimeDraft(ctx context.Context, t, path string, raw io.Reader) (
 }
 func (c *Client) SendDraft(ctx context.Context, t, mailbox, id string) error {
 	return c.json(ctx, t, "POST", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"/send", nil, nil, true)
+}
+
+// SetDraftRecipientsVerified makes the composed envelope authoritative rather
+// than relying on Graph's MIME import or native reply recipient defaults.
+// Read back independently: a successful PATCH alone is not proof of its result.
+func (c *Client) SetDraftRecipientsVerified(ctx context.Context, token, mailbox, id string, to, cc, bcc []string) error {
+	values := func(addresses []string) ([]Recipient, error) {
+		out := make([]Recipient, 0, len(addresses))
+		for _, raw := range addresses {
+			a, e := mail.ParseAddress(raw)
+			if e != nil {
+				return nil, failure(model.ErrKindInvalid, "invalid draft recipient", false)
+			}
+			var r Recipient
+			r.EmailAddress.Name = a.Name
+			r.EmailAddress.Address = a.Address
+			out = append(out, r)
+		}
+		return out, nil
+	}
+	wantTo, e := values(to)
+	if e != nil {
+		return e
+	}
+	wantCC, e := values(cc)
+	if e != nil {
+		return e
+	}
+	wantBCC, e := values(bcc)
+	if e != nil {
+		return e
+	}
+	if len(wantTo)+len(wantCC)+len(wantBCC) == 0 {
+		return failure(model.ErrKindInvalid, "draft recipient required", false)
+	}
+	// Graph JSON names must be lower camel case even though response decoding
+	// accepts Go field names case-insensitively.
+	encode := func(rs []Recipient) []map[string]any {
+		out := make([]map[string]any, 0, len(rs))
+		for _, r := range rs {
+			out = append(out, map[string]any{"emailAddress": map[string]string{"name": r.EmailAddress.Name, "address": r.EmailAddress.Address}})
+		}
+		return out
+	}
+	if _, e = c.Patch(ctx, token, mailbox, id, map[string]any{"toRecipients": encode(wantTo), "ccRecipients": encode(wantCC), "bccRecipients": encode(wantBCC)}); e != nil {
+		return e
+	}
+	var actual Message
+	if e = c.json(ctx, token, "GET", mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"?$select=id,toRecipients,ccRecipients,bccRecipients", nil, &actual, false); e != nil {
+		return e
+	}
+	equal := func(a, b []Recipient) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		counts := map[string]int{}
+		for _, r := range a {
+			counts[strings.ToLower(r.EmailAddress.Address)]++
+		}
+		for _, r := range b {
+			k := strings.ToLower(r.EmailAddress.Address)
+			if counts[k] == 0 {
+				return false
+			}
+			counts[k]--
+		}
+		return true
+	}
+	if !equal(wantTo, actual.ToRecipients) || !equal(wantCC, actual.CCRecipients) || !equal(wantBCC, actual.BCCRecipients) {
+		return failure(model.ErrKindConflict, "draft recipients did not match the composed message; submission stopped", false)
+	}
+	return nil
+}
+
+// CreateVerifiedDraft is also used for human handoff: preserve the reviewed
+// MIME recipients before reporting that a draft is ready in Outlook.
+func (c *Client) CreateVerifiedDraft(ctx context.Context, token, mailbox string, raw []byte) (Message, error) {
+	m, e := mail.ReadMessage(bytes.NewReader(raw))
+	if e != nil {
+		return Message{}, failure(model.ErrKindInvalid, "invalid draft MIME", false)
+	}
+	lists := make([][]string, 3)
+	for i, key := range []string{"To", "Cc", "Bcc"} {
+		if m.Header.Get(key) == "" {
+			continue
+		}
+		as, e := m.Header.AddressList(key)
+		if e != nil {
+			return Message{}, failure(model.ErrKindInvalid, "invalid draft recipient", false)
+		}
+		for _, a := range as {
+			lists[i] = append(lists[i], a.String())
+		}
+	}
+	d, e := c.CreateDraft(ctx, token, mailbox, bytes.NewReader(raw))
+	if e != nil {
+		return d, e
+	}
+	if e = c.SetDraftRecipientsVerified(ctx, token, mailbox, d.ID, lists[0], lists[1], lists[2]); e != nil {
+		return d, &transport.AmbiguousError{Err: e}
+	}
+	return d, nil
 }
