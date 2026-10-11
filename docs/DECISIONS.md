@@ -3320,8 +3320,16 @@ control over poll cadence.
   a fixed one-minute trigger.
 - **Manual refresh.** A square reload button on the standalone inbox toolbar,
   shown to every user, posts `POST /ui/inboxes/{id}/sync`: quick detection/index
-  + on-screen header refresh + a background deep reconcile, then redirects to
-  the same view. Requires only Read (no remote mutation).
+  + on-screen header refresh, then redirects to the same view. It deliberately
+  does **not** schedule the deep reconcile (the concurrent rebuild is what
+  surfaced a metadata-loss bug); the deep pass runs on its own cadence. Requires
+  only Read (no remote mutation).
+- **Conservative reconcile prune.** Cached remote metadata is now deleted only
+  against a complete snapshot: a `UIDVALIDITY` change no longer deletes a
+  folder's rows up front (they are pruned once a complete new-generation snapshot
+  proves them obsolete), and a reduced/empty folder discovery no longer prunes a
+  folder that still holds cached messages. This keeps metadata durable across a
+  transient reconcile.
 - **Cheaper polling.** The poll fallback uses `STATUS` instead of `EXAMINE`, and
   the adapter tracks CONDSTORE/QRESYNC capabilities (requesting `HIGHESTMODSEQ`).
 
