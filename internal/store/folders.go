@@ -111,7 +111,14 @@ func (s *Store) SetFolderRole(ctx context.Context, p model.Principal, inboxID, f
 			return model.Folder{}, fmt.Errorf("%w: another folder is already mapped to the %s role", ErrConflict, role)
 		}
 	}
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
+	if err != nil {
+		return model.Folder{}, err
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET role=?,role_locked=1,updated_at=? WHERE id=? AND inbox_id=?`, role, nowText(), folderID, inboxID); err != nil {
+		return model.Folder{}, err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
 		return model.Folder{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -367,6 +374,10 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 		return model.Folder{}, ErrFolderNameConflict
 	}
 	now := nowText()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
+	if err != nil {
+		return model.Folder{}, err
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET path=?,name=?,updated_at=? WHERE id=? AND inbox_id=?`, newPath, newName, now, folderID, inboxID); err != nil {
 		return model.Folder{}, err
 	}
@@ -378,6 +389,9 @@ func (s *Store) RenameFolder(ctx context.Context, p model.Principal, inboxID, fo
 			updated_at=?
 		WHERE inbox_id=? AND path LIKE ? ESCAPE '\'`,
 		newPath, suffixFrom, oldPath, newPath, newPath, suffixFrom, now, inboxID, escapeLike(oldPath)+"/%"); err != nil {
+		return model.Folder{}, err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
 		return model.Folder{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -448,7 +462,14 @@ func (s *Store) DeleteFolder(ctx context.Context, p model.Principal, inboxID, fo
 	if children != 0 || messages != 0 {
 		return ErrFolderNotEmpty
 	}
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, p.AccountID, inboxID)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE id=? AND inbox_id=?`, folderID, inboxID); err != nil {
+		return err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, p.AccountID, inboxID, metaBefore); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -530,14 +551,26 @@ func (s *Store) SetFolderRemoteMetadata(ctx context.Context, accountID, inboxID,
 	if strings.TrimSpace(metadataJSON) == "" {
 		metadataJSON = "{}"
 	}
-	res, err := s.write.ExecContext(ctx, `UPDATE inbox_folders SET remote_metadata_json=?,updated_at=? WHERE account_id=? AND inbox_id=? AND id=?`, metadataJSON, nowText(), accountID, inboxID, folderID)
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_metadata_json=?,updated_at=? WHERE account_id=? AND inbox_id=? AND id=?`, metadataJSON, nowText(), accountID, inboxID, folderID)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GetFolderRemoteMetadata returns the opaque adapter metadata of a folder.
