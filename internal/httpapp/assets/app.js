@@ -6064,3 +6064,53 @@ function hideInboxSubview(dlg) {
     if (notice) { notice.hidden = true; }
   });
 }());
+
+// Folder management (shared mailbox sidebar). The "New folder" button opens a
+// dialog with a single name field; each custom folder's folder glyph opens a
+// manage dialog with Rename and Delete. The manage dialog's forms start with no
+// action and are pointed at the clicked folder's routes here, so one dialog
+// serves every folder on the page.
+(function () {
+  var sidebar = document.querySelector('[data-sidebar]');
+  if (!sidebar) { return; }
+  var inboxID = sidebar.getAttribute('data-inbox') || '';
+  var newDlg = document.getElementById('folder-new-dialog');
+  var manageDlg = document.getElementById('folder-manage-dialog');
+
+  function wireClose(dlg) {
+    if (!dlg) { return; }
+    dlg.querySelectorAll('[data-close-dialog]').forEach(function (btn) {
+      btn.addEventListener('click', function () { dlg.close(); });
+    });
+  }
+  wireClose(newDlg);
+  wireClose(manageDlg);
+
+  var newBtn = sidebar.querySelector('[data-folder-new]');
+  if (newBtn && newDlg && typeof newDlg.showModal === 'function') {
+    newBtn.addEventListener('click', function () {
+      var input = newDlg.querySelector('input[name=path]');
+      if (input) { input.value = ''; }
+      newDlg.showModal();
+      if (input) { input.focus(); }
+    });
+  }
+
+  if (!manageDlg || typeof manageDlg.showModal !== 'function') { return; }
+  sidebar.querySelectorAll('[data-folder-manage]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-folder-id') || '';
+      var name = btn.getAttribute('data-folder-name') || '';
+      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/folders/' + encodeURIComponent(id);
+      var renameForm = manageDlg.querySelector('[data-folder-rename-form]');
+      var deleteForm = manageDlg.querySelector('[data-folder-delete-form]');
+      var input = manageDlg.querySelector('[data-folder-rename-input]');
+      if (renameForm) { renameForm.setAttribute('action', base + '/rename'); }
+      if (deleteForm) { deleteForm.setAttribute('action', base + '/delete'); }
+      if (input) { input.value = name; }
+      manageDlg.showModal();
+      if (input) { input.focus(); input.select(); }
+    });
+  });
+}());
+
