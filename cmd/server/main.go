@@ -145,6 +145,10 @@ func main() {
 	// layer so a standalone inbox's reads and the watcher share one surface.
 	remoteMailbox := app.NewRemoteMailboxService(svc)
 	remoteMailbox.InstallRemoteBridges()
+	actionWorker := app.NewActionWorker(svc, remoteMailbox)
+	svc.ActionWaker = actionWorker
+	actionWorker.Start()
+	defer actionWorker.Stop()
 	remoteWorker := app.NewRemoteWorker(svc, remoteMailbox, log)
 	remoteWorker.Start()
 	svc.RemoteDetection = remoteWorker

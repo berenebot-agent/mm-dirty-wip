@@ -99,6 +99,84 @@
   render();
 })();
 
+// The existing header status flag is also the durable action queue entry point.
+(function () {
+  'use strict';
+  if (!document.querySelector('header .menu-right')) { return; }
+  var flag = document.querySelector('[data-conn-status]');
+  if (!flag) {
+    flag = document.createElement('span');
+    flag.className = 'conn-status';
+    flag.textContent = 'Ready';
+    document.querySelector('header .menu-right').prepend(flag);
+  }
+  flag.setAttribute('role', 'button');
+  flag.setAttribute('tabindex', '0');
+  flag.setAttribute('aria-haspopup', 'dialog');
+  var badge = document.createElement('span');
+  badge.setAttribute('aria-live', 'polite');
+  flag.appendChild(badge);
+  var dialog = document.createElement('dialog');
+  var heading = document.createElement('h2');
+  heading.textContent = 'Mailbox action queue';
+  var list = document.createElement('div');
+  var close = document.createElement('button');
+  close.textContent = 'Close';
+  close.onclick = function () { dialog.close(); };
+  dialog.append(heading, list, close);
+  document.body.appendChild(dialog);
+  var csrf = '', items = [], active = false;
+  function update(data) {
+    csrf = data.csrf;
+    items = data.items || [];
+    var pending = items.filter(function (a) { return a.state === 'pending' || a.state === 'running'; }).length;
+    var failed = items.some(function (a) { return a.state === 'failed' || a.state === 'ambiguous'; });
+    badge.textContent = failed ? ' !' : pending ? ' (' + pending + ')' : '';
+    badge.style.color = failed ? '#b3261e' : '';
+    badge.style.fontWeight = 'bold';
+    badge.setAttribute('aria-label', failed ? 'Mailbox action failed. Click to view queue.' : pending + ' pending actions');
+    if (!dialog.open) { return; }
+    list.replaceChildren();
+    if (!items.length) { list.textContent = 'No queued actions.'; }
+    items.forEach(function (a) {
+      var row = document.createElement('div');
+      row.style.cssText = 'padding:10px 0;border-bottom:1px solid #ddd;overflow-wrap:anywhere';
+      var title = document.createElement('p');
+      title.textContent = a.input.kind + ' · ' + a.message_id + ' · ' + a.state;
+      row.appendChild(title);
+      if (a.error) { var error = document.createElement('p'); error.textContent = a.error; error.style.color = '#b3261e'; row.appendChild(error); }
+      function control(label, action) {
+        var button = document.createElement('button');
+        button.textContent = label;
+        button.onclick = function () {
+          button.disabled = true;
+          fetch('/ui/actions/' + encodeURIComponent(a.id), {method:'POST',credentials:'same-origin',body:new URLSearchParams({_csrf:csrf,action:action})})
+            .then(function (r) { if (!r.ok) { throw new Error('Could not update action'); } return r.json(); })
+            .then(update).catch(function (e) { title.textContent = e.message; button.disabled = false; });
+        };
+        row.appendChild(button);
+      }
+      if (a.state === 'failed') { control('Retry', 'retry'); }
+      if (a.state === 'failed' || a.state === 'ambiguous' || a.state === 'done') { control('Dismiss', 'dismiss'); }
+      list.appendChild(row);
+    });
+  }
+  function refresh() {
+    if (active || document.hidden) { return; }
+    active = true;
+    fetch('/ui/actions', {credentials:'same-origin'}).then(function (r) { if (!r.ok) { throw new Error('Queue unavailable'); } return r.json(); })
+      .then(update).catch(function () { if (dialog.open) { list.textContent = 'Queue unavailable. Please retry.'; } })
+      .finally(function () { active = false; });
+  }
+  function open() { dialog.showModal(); update({items:items,csrf:csrf}); refresh(); }
+  flag.addEventListener('click', open);
+  flag.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+	window.mailmooseRefreshActions = refresh;
+  window.setInterval(refresh, 10000);
+  document.addEventListener('visibilitychange', refresh);
+  refresh();
+})();
+
 (function () {
   var dlg = document.getElementById('key-dialog');
   if (!dlg) {
@@ -5556,6 +5634,7 @@ function hideInboxSubview(dlg) {
       refresh();
     };
     source.onmessage = schedule;
+	  source.addEventListener('actions.changed', function () { schedule(); if (window.mailmooseRefreshActions) { window.mailmooseRefreshActions(); } });
     // Named message events (id/event/data) do not fire onmessage; listen for the
     // durable types the UI cares about, plus the transient receiver-health ping.
     ['message.received', 'message.sent', 'message.trashed', 'message.restored',

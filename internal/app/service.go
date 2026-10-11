@@ -93,6 +93,7 @@ type Service struct {
 	// the periodic poll) a send simply enqueues and delivery waits for the next
 	// tick. Wake requests an immediate delivery pass and never blocks.
 	OutboxWaker   OutboxWaker
+	ActionWaker   OutboxWaker
 	Log           *slog.Logger
 	EncryptionKey []byte
 	// HandoffPublisher publishes a RemoteDraft handoff to a standalone inbox's

@@ -11,8 +11,8 @@ import (
 // registration count so a new transport route cannot be added without a
 // matching table entry.
 func TestRoutesCount(t *testing.T) {
-	if got := len(apispec.Routes()); got != 112 {
-		t.Fatalf("len(Routes()) = %d, want 112", got)
+	if got := len(apispec.Routes()); got != 115 {
+		t.Fatalf("len(Routes()) = %d, want 115", got)
 	}
 }
 
@@ -112,9 +112,9 @@ func TestRestoredProse(t *testing.T) {
 func TestRouteSuccessStatus(t *testing.T) {
 	for _, r := range apispec.Routes() {
 		switch r.Status() {
-		case 200, 201, 204:
+		case 200, 201, 202, 204:
 		default:
-			t.Errorf("%s %s: Status() = %d, want 200, 201 or 204", r.Method, r.Path, r.Status())
+			t.Errorf("%s %s: Status() = %d, want 200, 201, 202 or 204", r.Method, r.Path, r.Status())
 		}
 	}
 }

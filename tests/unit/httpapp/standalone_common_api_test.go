@@ -72,7 +72,7 @@ func standaloneFixture(t *testing.T) (*app.Service, http.Handler, model.User, mo
 	}
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
-	return svc, srv.Handler(), u, domainBox, standalone, fake
+	return svc, settledActionFixture(t, svc, rm, srv.Handler(), u.AccountID), u, domainBox, standalone, fake
 }
 
 // fakeIMAP is a minimal deterministic IMAP session used to exercise the HTTP
@@ -1864,8 +1864,8 @@ func TestRemoteErrorIs503Not404(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
-	if rr.Code != 503 {
-		t.Fatalf("remote state change on unavailable connector = %d, want 503: %s", rr.Code, rr.Body.String())
+	if rr.Code != 202 {
+		t.Fatalf("remote state change must queue without dialing = %d, want 202: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -1952,7 +1952,7 @@ func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
 	}
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
-	h := srv.Handler()
+	h := settledActionFixture(t, svc, rm, srv.Handler(), u.AccountID)
 	// Reconcile to cache the message and the Trash/Sent roles.
 	key := adminKey(t, svc, u)
 	if rr := apiGet(t, h, "/v1/inboxes/"+box.ID+"/messages", key); rr.Code != 200 {

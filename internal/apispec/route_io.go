@@ -32,7 +32,7 @@ var (
 	qInclSpam    = p("include_spam", "boolean", false, "Include spam alongside ordinary mail.")
 	qAfter       = p("after", "string", false, "Durable event cursor (evt_...); return events after it.")
 	qTimeout     = p("timeout", "integer", false, "Seconds to wait; the server caps this value.")
-	qWait        = p("wait", "boolean", false, "Block until delivery completes instead of returning as soon as queued.")
+	qWait        = p("wait", "boolean", false, "Block until delivery or action completes instead of returning as soon as queued (up to 30 seconds).")
 	qActive      = p("active", "boolean", false, "Only outstanding send requests.")
 	qAddress     = p("address", "string", false, "openagent.email compatibility alias for inbox.")
 	qQ           = p("q", "string", true, "FTS5 query string.")
@@ -91,12 +91,18 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/messages/wait": {Request: "MessageWaitBody", Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
 	}},
-	"GET /v1/messages/{id}":       {Response: "Message"},
-	"PATCH /v1/messages/{id}":     {Request: "MessagePatch", Response: "Message"},
-	"DELETE /v1/messages/{id}":    {},
-	"POST /v1/messages/{id}/seen": {Request: "SeenBody", Response: "SeenResult"},
+	"GET /v1/messages/{id}":             {Response: "Message", Query: []Param{p("action", "string", false, "Return the scoped action status instead of message content; works after purge.")}},
+	"PATCH /v1/messages/{id}":           {Request: "MessagePatch", Response: "MessageActionResult", Query: []Param{qWait}},
+	"DELETE /v1/messages/{id}":          {Response: "MessageActionResult", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/seen":       {Request: "SeenBody", Response: "MessageActionResult", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/restore":    {Response: "MessageActionResult", Query: []Param{qWait}},
+	"DELETE /v1/messages/{id}/purge":    {Response: "MessageActionResult", Query: []Param{qWait}},
+	"POST /v1/inboxes/{id}/trash/empty": {Query: []Param{qWait}},
 
 	// Attachments.
+	"GET /v1/actions":                          {},
+	"GET /v1/actions/{id}":                     {Response: "MessageActionResult"},
+	"POST /v1/actions/{id}":                    {Request: "MessageActionControl"},
 	"GET /v1/messages/{id}/attachments":        {Response: "AttachmentList"},
 	"GET /v1/messages/{id}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
 	"GET /v1/messages/{id}/content":            {},
