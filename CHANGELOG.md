@@ -50,6 +50,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   Identity tab. Picking **Personal Inbox and Shared Inbox** now replaces both
   halves of the Microsoft connect flow with the shared-mailbox picker.
 
+- The **action queue** behind the header status flag is now a small bubble
+  anchored under the flag instead of a large modal. It reads in the flag's own
+  13px type, names each action in plain language ("Move to trash", "Delete
+  permanently", "Mark read"), shows the state as a chip, lists failures first
+  with Retry / Dismiss, and renders at most six rows with an "and N more" line,
+  so a bulk delete of hundreds of messages no longer floods the pop-up.
+
 ### Fixed
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest
