@@ -62,11 +62,13 @@ const (
 // rendered only when StandaloneMode is set.
 const syncButton = `{{if .StandaloneMode}}<button type="submit" formaction="/ui/inboxes/{{.Inbox.ID}}/sync" formmethod="post" formnovalidate class="secondary icon-btn" title="Sync now" aria-label="Sync now">` + iconReloadSvg + `</button>{{end}}`
 
-// syncViewFields carries the current view (pagination cursor and custom-folder
-// id) on the bulk form so the sync button's formaction redirect can return the
-// user to exactly where they were. The folder and label already travel in the
-// bulk form's hidden fields.
-const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before" value="{{.Before}}"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}">{{end}}`
+// syncViewFields carries the current view (incoming pagination boundary and
+// custom-folder id) on the bulk form so the sync button's formaction redirect
+// can return the user to exactly where they were. It deliberately submits
+// CurrentPageBefore (the page the browser requested), not Before (the outgoing
+// next-page cursor): submitting Before would make the reload act like "Load
+// older". The folder and label already travel in the bulk form's hidden fields.
+const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before" value="{{.CurrentPageBefore}}"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}">{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
@@ -724,6 +726,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		SendRequests:               sendRequests,
 		HasMore:                    hasMore,
 		Before:                     cursor,
+		CurrentPageBefore:          before,
 		Folder:                     folder,
 		Folders:                    folderSidebar,
 		PagerURL:                   pagerURL,

@@ -3323,7 +3323,10 @@ control over poll cadence.
   + on-screen header refresh, then redirects to the same view. It deliberately
   does **not** schedule the deep reconcile (the concurrent rebuild is what
   surfaced a metadata-loss bug); the deep pass runs on its own cadence. Requires
-  only Read (no remote mutation).
+  only Read (no remote mutation). It submits the page's **incoming** pagination
+  boundary (`pageData.CurrentPageBefore`), never the outgoing "load older"
+  cursor (`pageData.Before`), so reload preserves the exact page instead of
+  advancing to an older one.
 - **Conservative reconcile prune.** Cached remote metadata is now deleted only
   against a complete snapshot: a `UIDVALIDITY` change no longer deletes a
   folder's rows up front (they are pruned once a complete new-generation snapshot

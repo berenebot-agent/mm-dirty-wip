@@ -506,8 +506,14 @@ type pageData struct {
 	OutboxCount int
 	HasMore     bool
 	Before      string
-	Folder      string
-	PagerURL    string
+	// CurrentPageBefore is the incoming pagination boundary of the page being
+	// displayed: the `before` value the browser requested with, empty on the
+	// newest page. Before is the OUTGOING cursor used to load the next, older
+	// page. The two must never be conflated: a refresh must preserve the current
+	// page (use CurrentPageBefore), never advance to the next one (Before).
+	CurrentPageBefore string
+	Folder            string
+	PagerURL          string
 	// TotalCount is the exact number of items in the current folder/label, used
 	// by the "select all N" banner. It is independent of the page size, so a
 	// paginated folder can offer a bulk action over every matching item.

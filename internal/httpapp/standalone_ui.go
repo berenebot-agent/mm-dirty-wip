@@ -349,9 +349,12 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		OutboxCount:    outboxCount,
 		HasMore:        hasMore,
 		Before:         cursor,
-		PagerURL:       pagerURL,
-		TotalCount:     totalCount,
-		Notice:         r.URL.Query().Get("notice"),
+		// CurrentPageBefore is the incoming `before` this custom-folder page was
+		// requested with; the reload control preserves that page.
+		CurrentPageBefore: before,
+		PagerURL:          pagerURL,
+		TotalCount:        totalCount,
+		Notice:            r.URL.Query().Get("notice"),
 	}
 	if box.Kind == model.InboxKindStandalone {
 		data.StandaloneMode = true
