@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Standalone remote-mail arrivals now log a concise `remote received` line and
+  include `provider` and `source` in their durable event payload. Source is
+  persisted through asynchronous delivery: Microsoft delta polling reports
+  `microsoft`, Graph-notification-triggered delivery reports `microsoft push`,
+  and IMAP/Gmail report `imap`/`gmail`. Accepted Microsoft push notifications
+  also log one INFO line each; unmatched notifications are Debug-only, and
+  callback secrets are never logged.
+
 - A global **status flag** in the header on the dashboard and inbox views.
   It is green "Live" while the event stream is connected, red "Disconnected"
   when the stream drops (reconnecting with backoff), amber "Sync problem" when

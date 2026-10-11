@@ -110,3 +110,11 @@ CREATE INDEX idx_inbox_remote_actions_due ON inbox_remote_actions(trash_done, tr
 
 ALTER TABLE inboxes ADD COLUMN remote_notify_baseline_set INTEGER NOT NULL DEFAULT 0;
 `
+
+// migration065 records source provenance on asynchronous remote arrivals and
+// pending Microsoft push work, so provider and push-vs-poll labels survive
+// delivery drains and process restarts.
+const migration065 = `
+ALTER TABLE inbox_remote_arrivals ADD COLUMN source TEXT NOT NULL DEFAULT '';
+ALTER TABLE microsoft_push ADD COLUMN requested_source TEXT NOT NULL DEFAULT '';
+`

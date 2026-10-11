@@ -3,15 +3,21 @@ package httpapp
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 )
 
 func (s *Server) microsoftPush(w http.ResponseWriter, r *http.Request) {
+	logger := s.Log
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if values, ok := r.URL.Query()["validationToken"]; ok {
 		if len(values) != 1 || values[0] == "" || len(values[0]) > 4096 {
 			http.Error(w, "invalid validation challenge", http.StatusBadRequest)
 			return
 		}
+		logger.DebugContext(r.Context(), "microsoft push validation challenge")
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, values[0])
@@ -41,10 +47,20 @@ func (s *Server) microsoftPush(w http.ResponseWriter, r *http.Request) {
 		default:
 			continue
 		}
-		if _, err := s.remoteMailbox().AcceptMicrosoftPush(r.Context(), n.SubscriptionID, n.ClientState, n.Lifecycle); err != nil {
+		inbox, accepted, err := s.remoteMailbox().AcceptMicrosoftPush(r.Context(), n.SubscriptionID, n.ClientState, n.Lifecycle)
+		if err != nil {
 			http.Error(w, "notification persistence unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		if !accepted {
+			logger.DebugContext(r.Context(), "microsoft push ignored")
+			continue
+		}
+		event := n.Lifecycle
+		if event == "" {
+			event = n.ChangeType
+		}
+		logger.InfoContext(r.Context(), "microsoft push received", "provider", "microsoft", "inbox", inbox, "event", event, "subscription_id", n.SubscriptionID)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
