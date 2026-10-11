@@ -55,8 +55,17 @@ func TestInboxSyncButtonRenderedForStandaloneOnly(t *testing.T) {
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	rr := uiGet(t, h, cookie, "/ui/inboxes/"+standalone.ID)
-	if !strings.Contains(rr.Body.String(), `action="/ui/inboxes/`+standalone.ID+`/sync"`) {
+	body := rr.Body.String()
+	if !strings.Contains(body, `action="/ui/inboxes/`+standalone.ID+`/sync"`) {
 		t.Fatal("standalone inbox toolbar missing the sync button")
+	}
+	// Regression: the sync form must be a sibling BEFORE the bulk form, never
+	// nested inside it (a nested form is dropped by the browser, so the button
+	// submitted the bulk form and hit "unknown action").
+	syncIdx := strings.Index(body, `action="/ui/inboxes/`+standalone.ID+`/sync"`)
+	bulkIdx := strings.Index(body, `id="bulk-form"`)
+	if syncIdx < 0 || bulkIdx < 0 || syncIdx > bulkIdx {
+		t.Fatalf("sync form must appear before the bulk form (sync=%d bulk=%d)", syncIdx, bulkIdx)
 	}
 	rr = uiGet(t, h, cookie, "/ui/inboxes/"+domainBox.ID)
 	if strings.Contains(rr.Body.String(), "/sync\"") {
