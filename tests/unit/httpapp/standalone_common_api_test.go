@@ -836,6 +836,16 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 			t.Fatalf("dashboard missing %q", want)
 		}
 	}
+	// The standalone flow offers one logo button per provider inside the dialog
+	// and no longer advertises Google/Microsoft as "coming later".
+	for _, want := range []string{`data-inbox-panel="sa-provider"`, `data-standalone-provider="google"`, `data-standalone-provider="microsoft"`, `data-standalone-provider="imap"`, "Google / Gmail", "Microsoft / Outlook", "IMAP + SMTP"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing provider button %q", want)
+		}
+	}
+	if strings.Contains(body, "coming later") {
+		t.Fatal("dashboard still shows the stale Google/Microsoft 'coming later' buttons")
+	}
 	// The standalone inbox page shows the remote banner and folder management.
 	req = httptest.NewRequest("GET", "/ui/inboxes/"+standalone.ID, nil)
 	req.AddCookie(cookie)
@@ -849,6 +859,40 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Fatalf("standalone inbox missing %q", want)
 		}
+	}
+}
+
+// TestStandaloneWizardProviderSteps proves the standalone wizard renders a step
+// for each provider and offers Microsoft as a real choice rather than the old
+// disabled "coming next" button. The Add-inbox dialog deep-links each provider
+// with ?provider=, so every step must exist in the rendered page.
+func TestStandaloneWizardProviderSteps(t *testing.T) {
+	svc, h, u, _, _, _ := standaloneFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest("GET", "/ui/inboxes/standalone/new", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("standalone wizard %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"data-standalone-wizard",
+		`name="standalone_provider"`,
+		`value="imap"`,
+		`value="google"`,
+		`value="microsoft"`,
+		`data-wizard-step="imap"`,
+		`data-wizard-step="google"`,
+		`data-wizard-step="microsoft"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("standalone wizard missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Coming next") {
+		t.Fatal("standalone wizard still shows the disabled Microsoft 'coming next' button")
 	}
 }
 

@@ -1,6 +1,6 @@
 # Connect Google / Gmail
 
-Use **Add inbox → Standalone → Google / Gmail → Next**. Each connected inbox
+Use **Add inbox → Standalone inbox → Google / Gmail**. Each connected inbox
 uses your own Google Cloud OAuth client. The Google mailbox remains the source
 of truth. MailMoose caches headers, snippets, thread and label metadata, not a
 default full-message archive. Bodies and attachments are fetched when opened.

@@ -38,7 +38,8 @@ change. Keep their app registrations operational for refresh/reconnection.
 
 ## Connecting
 
-Choose Microsoft in the standalone wizard and pick **Connect personal mailbox**
+Choose **Add inbox → Standalone inbox → Microsoft / Outlook**, then pick
+**Connect personal mailbox**
 (signing in as the mailbox itself) or **Connect personal + shared** (the extra
 shared scopes are requested before sign-in, because Microsoft fixes granted
 scope in the authorization request). Sign in and approve delegated access.
