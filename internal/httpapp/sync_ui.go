@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
@@ -43,9 +44,12 @@ func (s *Server) uiInboxSync(w http.ResponseWriter, r *http.Request) {
 	// sync. A domain inbox has no remote; the button is not shown for one, but
 	// guard anyway and simply return the user to their view.
 	if box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
+		// Mark the pass as an explicit manual sync so the completion log reports
+		// trigger=manual rather than the watcher's automatic cadence.
+		ctx := app.WithManualRemoteSync(r.Context())
 		// 1. Fast new-mail detection + quick INBOX index.
 		if s.Service.RemoteDetection != nil {
-			s.Service.RemoteDetection.DetectInbox(r.Context(), box)
+			s.Service.RemoteDetection.DetectInbox(ctx, box)
 		}
 		// 2. Re-sync the on-screen page's headers so read/flag state is current.
 		ids := s.visibleRemoteMessageIDs(r, p, box, folder, label, before, folderID)

@@ -139,12 +139,33 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	// Each provider pass logs its own "remote sync" completion line, so a pass
+	// is reported exactly once regardless of which provider it ran.
 	if m.IsMicrosoft(ctx, accountID, inboxID) {
 		return m.reconcileMicrosoft(ctx, accountID, inboxID)
 	}
 	if m.IsGoogle(ctx, accountID, inboxID) {
 		return m.reconcileGoogle(ctx, accountID, inboxID)
 	}
+	return m.reconcileIMAP(ctx, accountID, inboxID)
+}
+
+// reconcileIMAP runs one generic IMAP folder/header reconcile and emits the
+// operator-facing completion line. New arrivals are detected separately by the
+// watcher's detection pass, so this deep index pass always reports new=0; its
+// value is the index completeness and duration.
+func (m *RemoteMailboxService) reconcileIMAP(ctx context.Context, accountID, inboxID string) (store.RemoteIndexStatus, error) {
+	start := time.Now()
+	status, err := m.reconcileIMAPPass(ctx, accountID, inboxID)
+	result := remoteSyncResult{started: start, status: syncStatus(status.Status), err: err}
+	if err != nil {
+		result.status = "error"
+	}
+	m.logRemoteSync(ctx, accountID, inboxID, result)
+	return status, err
+}
+
+func (m *RemoteMailboxService) reconcileIMAPPass(ctx context.Context, accountID, inboxID string) (store.RemoteIndexStatus, error) {
 	sess, resolved, err := m.open(ctx, accountID, inboxID)
 	if err != nil {
 		_ = m.Service.Store.SetRemoteIndexStatus(context.WithoutCancel(ctx), accountID, inboxID, store.RemoteIndexError, "could not open the remote connection")

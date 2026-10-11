@@ -169,51 +169,69 @@ func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, in
 	}
 	return m.Service.Store.ReconcileRemoteFolders(ctx, account, inbox, out)
 }
+
+// reconcileMicrosoft runs one Microsoft delta pass and emits the operator-facing
+// completion line. The pass reports the number of newly-detected INBOX arrivals
+// so the log's "new" count is the genuinely new mail, not folder churn.
 func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
+	start := time.Now()
+	status, arrived, err := m.reconcileMicrosoftPass(ctx, account, inbox)
+	result := remoteSyncResult{started: start, new: arrived, status: syncStatus(status.Status), err: err}
+	if err != nil {
+		result.status = "error"
+	}
+	m.logRemoteSync(ctx, account, inbox, result)
+	return status, err
+}
+
+// reconcileMicrosoftPass is the timed body of a Microsoft delta reconcile. It
+// returns the index status, the count of newly-recorded arrivals, and any error.
+func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, int, error) {
 	t, c, e := m.microsoftAccess(ctx, account, inbox)
 	if e != nil {
-		return store.RemoteIndexStatus{}, e
+		return store.RemoteIndexStatus{}, 0, e
 	}
 	fs, e := m.microsoftFolders(ctx, account, inbox, t, c.Mailbox)
 	if e != nil {
-		return store.RemoteIndexStatus{}, e
+		return store.RemoteIndexStatus{}, 0, e
 	}
 	complete := true
+	arrived := 0
 	for _, f := range fs {
 		if f.Origin != "remote" {
 			continue
 		}
 		cursor, initialized, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
 		if e != nil {
-			return store.RemoteIndexStatus{}, e
+			return store.RemoteIndexStatus{}, arrived, e
 		}
 		page, e := m.Microsoft.Delta(ctx, t, c.Mailbox, f.Path, cursor)
 		if e != nil {
 			var mb *model.MailboxError
 			if errors.As(e, &mb) && mb.Kind == model.ErrKindConflict {
 				if e = m.Service.Store.StartMicrosoftResync(ctx, inbox, f.Path); e != nil {
-					return store.RemoteIndexStatus{}, e
+					return store.RemoteIndexStatus{}, arrived, e
 				}
 				complete = false
 				continue
 			}
-			return store.RemoteIndexStatus{}, e
+			return store.RemoteIndexStatus{}, arrived, e
 		}
 		for _, g := range page.Messages {
 			if g.Removed != nil {
 				live, ge := m.Microsoft.Message(ctx, t, c.Mailbox, g.ID)
 				if ge == nil {
 					if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); ge != nil {
-						return store.RemoteIndexStatus{}, ge
+						return store.RemoteIndexStatus{}, arrived, ge
 					}
 				} else {
 					var mb *model.MailboxError
 					if !errors.As(ge, &mb) || mb.Kind != model.ErrKindNotFound {
-						return store.RemoteIndexStatus{}, ge
+						return store.RemoteIndexStatus{}, arrived, ge
 					}
 					if id, ie := m.Service.Store.MicrosoftLocalID(ctx, account, inbox, g.ID); ie == nil {
 						if ie = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); ie != nil {
-							return store.RemoteIndexStatus{}, ie
+							return store.RemoteIndexStatus{}, arrived, ie
 						}
 					}
 				}
@@ -221,21 +239,24 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 			}
 			detected, de := m.Service.Store.MicrosoftDetected(ctx, inbox, g.ID)
 			if de != nil {
-				return store.RemoteIndexStatus{}, de
+				return store.RemoteIndexStatus{}, arrived, de
 			}
 			if initialized && !detected && f.Role == model.FolderRoleInbox && !g.IsDraft {
 				in := microsoftInput(g)
 				date := parseStoreTime(g.ReceivedDateTime)
-				_, _, e = m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date})
-				if e != nil {
-					return store.RemoteIndexStatus{}, e
+				_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date})
+				if ae != nil {
+					return store.RemoteIndexStatus{}, arrived, ae
+				}
+				if inserted {
+					arrived++
 				}
 			}
 			if _, e = m.cacheMicrosoft(ctx, account, inbox, g); e != nil {
-				return store.RemoteIndexStatus{}, e
+				return store.RemoteIndexStatus{}, arrived, e
 			}
 			if e = m.Service.Store.MarkMicrosoftDetected(ctx, inbox, g.ID); e != nil {
-				return store.RemoteIndexStatus{}, e
+				return store.RemoteIndexStatus{}, arrived, e
 			}
 		}
 		next := page.NextLink
@@ -243,7 +264,7 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 			next = page.DeltaLink
 		}
 		if next == "" {
-			return store.RemoteIndexStatus{}, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
+			return store.RemoteIndexStatus{}, arrived, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
 		}
 		if page.NextLink != "" {
 			complete = false
@@ -251,11 +272,11 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 			initialized = true
 		}
 		if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized); e != nil {
-			return store.RemoteIndexStatus{}, e
+			return store.RemoteIndexStatus{}, arrived, e
 		}
 		if page.NextLink == "" {
 			if e = m.Service.Store.PruneMicrosoftResync(ctx, account, inbox, f.Path); e != nil {
-				return store.RemoteIndexStatus{}, e
+				return store.RemoteIndexStatus{}, arrived, e
 			}
 		}
 	}
@@ -264,7 +285,7 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 		status = store.RemoteIndexComplete
 	}
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")
-	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, e
+	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, arrived, e
 }
 func (m *RemoteMailboxService) getMicrosoft(ctx context.Context, p model.Principal, inbox, id string) (RemoteMessageView, error) {
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
