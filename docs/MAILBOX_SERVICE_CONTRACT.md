@@ -252,6 +252,42 @@ normal case — ordinary folders (even large ones) backfill progressively to
 Removals are pruned only against a **complete** UID snapshot (`fullKnown`); a
 partial or windowed view never deletes cached mail.
 
+### Quick new-mail index and the quiescent fast-path
+Detection (`RemoteWorker.detectInbox`) records durable arrivals and, for a
+standalone inbox, also **quick-indexes** the new INBOX UIDs' headers into the read
+index (`inbox_remote_messages`) in the same pass, so new mail appears in the inbox
+list immediately rather than waiting for the next deep reconcile. This is the
+standard client "fetch only new" behaviour; the deep reconcile later upserts the
+same rows in place.
+
+Once a folder's backfill has reached the bottom, `indexRemoteFolder` runs a
+**quiescent fast-path**: a single `STATUS` read establishes that the folder's
+highest cached UID and cached message count both match the live mailbox (so
+neither a new arrival nor a mid-folder deletion occurred), and then only the
+flag state is refreshed. When the server advertises CONDSTORE and the folder has
+a stored modification sequence, that refresh is an incremental
+`FLAGS CHANGEDSINCE` fetch (the stored `inbox_folders.remote_highest_modseq` is
+advanced); otherwise the newest window is re-fetched (one bounded newest-first
+SEARCH plus a header fetch). The full UID snapshot, prune and backfill batch are
+skipped. A new arrival or a deletion moves the max UID or the count and falls
+through to the full pass.
+
+### Sync cadence (per-inbox) and the manual refresh
+Each standalone inbox carries two optional overrides (`inboxes.remote_poll_seconds`,
+`inboxes.remote_full_sync_minutes`; NULL inherits the process default, clamped to
+the model minimums). The quick interval governs the fallback poll when the server
+does not advertise IDLE; IDLE-capable servers still deliver new mail instantly.
+The full interval governs how often the deep reconcile runs (previously the worker
+re-ran it roughly every minute). Both are set on the inbox Identity tab's remote
+section.
+
+`POST /ui/inboxes/{id}/sync` is the toolbar's square reload button. It runs the
+fast new-mail detection/index, re-syncs the headers of the messages currently on
+screen (so read/flag changes show immediately), schedules the deep reconcile in
+the background, and redirects back to the same view. It requires only Read on the
+inbox (it performs no remote mutation) and is shown to every user on a standalone
+inbox.
+
 ### Assistant handling modes, drafts, notify (`internal/app/draft_workflow.go`,
 `draft_handoff.go`, `remote_worker.go`, `control.go`)
 - **`MailMooseApproval`** (a domain inbox's preset and default): the in-product

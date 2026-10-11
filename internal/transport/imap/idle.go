@@ -182,15 +182,14 @@ func (a *Adapter) Poll(ctx context.Context, folder string, interval time.Duratio
 	ch := make(chan Notification, buffer)
 	errCh := make(chan error, 1)
 
-	data, err := a.examine(ctx, folder)
+	data, err := a.Status(ctx, folder)
 	if err != nil {
 		close(ch)
 		errCh <- err
 		close(errCh)
 		return nil, nil, nil, err
 	}
-	a.clearSelected()
-	last := data.NumMessages
+	last := numMessages(data)
 
 	stopCh := make(chan struct{})
 	var once sync.Once
@@ -210,16 +209,17 @@ func (a *Adapter) Poll(ctx context.Context, folder string, interval time.Duratio
 				errCh <- nil
 				return
 			case <-ticker.C:
-				d, err := a.examine(ctx, folder)
+				// STATUS does not select the folder, so no state is disturbed and
+				// no clearSelected is needed.
+				d, err := a.Status(ctx, folder)
 				if err != nil {
 					errCh <- err
 					return
 				}
-				a.clearSelected()
-				if d.NumMessages != last {
-					last = d.NumMessages
+				if n := numMessages(d); n != last {
+					last = n
 					select {
-					case ch <- Notification{Folder: folder, NumMessages: d.NumMessages, HasNumMessages: true, Kind: "poll"}:
+					case ch <- Notification{Folder: folder, NumMessages: n, HasNumMessages: true, Kind: "poll"}:
 					case <-ctx.Done():
 						errCh <- nil
 						return
@@ -234,7 +234,55 @@ func (a *Adapter) Poll(ctx context.Context, folder string, interval time.Duratio
 	return ch, stop, errCh, nil
 }
 
+// numMessages returns a STATUS result's message count.
+func numMessages(d MailboxStatus) uint32 {
+	return d.NumMessages
+}
+
 const defaultPollInterval = 60 * time.Second
+
+// MailboxStatus is the provider-neutral result of a STATUS read: the live
+// message count, the next UID, the UIDVALIDITY and the unseen count. It is the
+// cheap poll surface and never selects the folder.
+type MailboxStatus struct {
+	NumMessages uint32
+	UIDNext     uint32
+	UIDValidity uint32
+	Unseen      uint32
+	// HighestModSeq is the mailbox's highest modification sequence when the
+	// server advertises CONDSTORE, else 0.
+	HighestModSeq uint64
+}
+
+// Status returns a mailbox's live status without selecting it, using the IMAP
+// STATUS command. Unlike EXAMINE it does not disturb the currently selected
+// folder, and it is cheaper than a full SELECT on a large mailbox.
+func (a *Adapter) Status(ctx context.Context, folder string) (MailboxStatus, error) {
+	a.mu.Lock()
+	conn := a.conn
+	caps := a.caps
+	a.mu.Unlock()
+	if conn == nil {
+		return MailboxStatus{}, wrapErr(ErrNotConnected)
+	}
+	opts := &imap.StatusOptions{NumMessages: true, UIDNext: true, UIDValidity: true, NumUnseen: true}
+	if caps.CondStore {
+		opts.HighestModSeq = true
+	}
+	cmd := conn.Status(folder, opts)
+	data, err := cmd.Wait()
+	if err != nil {
+		return MailboxStatus{}, wrapErr(err)
+	}
+	st := MailboxStatus{UIDNext: uint32(data.UIDNext), UIDValidity: data.UIDValidity, HighestModSeq: data.HighestModSeq}
+	if data.NumMessages != nil {
+		st.NumMessages = *data.NumMessages
+	}
+	if data.NumUnseen != nil {
+		st.Unseen = *data.NumUnseen
+	}
+	return st, nil
+}
 
 // selectReadOnly selects a folder read-only, leaving it selected.
 func (a *Adapter) selectReadOnly(ctx context.Context, path string) (*imap.SelectData, error) {

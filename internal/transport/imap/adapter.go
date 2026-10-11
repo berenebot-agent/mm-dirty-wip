@@ -179,7 +179,13 @@ type Capabilities struct {
 	SpecialUse   bool
 	Unselect     bool
 	LiteralMinus bool
-	Raw          imap.CapSet
+	// CondStore reports CONDSTORE (RFC 7162): the server tracks a per-message
+	// modification sequence, so flag changes can be fetched incrementally. The
+	// deep reconcile uses it when present.
+	CondStore bool
+	// QResync reports QRESYNC (RFC 7162), which builds on CONDSTORE.
+	QResync bool
+	Raw     imap.CapSet
 }
 
 // Adapter is a live IMAP session for one standalone inbox. It is safe for
@@ -293,6 +299,8 @@ func (a *Adapter) readCapabilities() Capabilities {
 	out.SpecialUse = caps.Has(imap.CapSpecialUse)
 	out.Unselect = caps.Has(imap.CapUnselect)
 	out.LiteralMinus = caps.Has(imap.CapLiteralMinus)
+	out.CondStore = caps.Has(imap.CapCondStore)
+	out.QResync = caps.Has(imap.CapQResync)
 	return out
 }
 

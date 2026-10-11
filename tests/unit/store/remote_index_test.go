@@ -156,6 +156,82 @@ func TestMigration058RoleLockAndSentCopy(t *testing.T) {
 	}
 }
 
+// TestMigration060RemoteSyncColumns proves the per-inbox sync-cadence columns are
+// added and round-trip through SetInboxRemoteSync and a full-inbox read.
+func TestMigration060RemoteSyncColumns(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if n := markerCount(t, st, "060"); n != 1 {
+		t.Fatalf("migration 060 marker count %d", n)
+	}
+	db := rawDB(t, st.Path())
+	defer db.Close()
+	ctx := context.Background()
+	var n int
+	for _, col := range []string{"remote_poll_seconds", "remote_full_sync_minutes"} {
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inboxes') WHERE name=?`, col).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Fatalf("inboxes.%s missing after 060", col)
+		}
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM pragma_table_info('inbox_folders') WHERE name='remote_highest_modseq'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatal("inbox_folders.remote_highest_modseq missing after 060")
+	}
+}
+
+// TestSetInboxRemoteSyncRoundTrip proves the per-inbox sync cadence overrides set,
+// clear, and read back through the full inbox projection.
+func TestSetInboxRemoteSyncRoundTrip(t *testing.T) {
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh inbox inherits the defaults (no override).
+	got, err := st.GetInboxInternal(ctx, acct, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RemotePollSeconds != nil || got.RemoteFullSyncMinutes != nil {
+		t.Fatalf("new inbox unexpectedly carries overrides: %v %v", got.RemotePollSeconds, got.RemoteFullSyncMinutes)
+	}
+	poll, full := 30, 5
+	if err := st.SetInboxRemoteSync(ctx, acct, in.ID, &poll, &full); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetInboxInternal(ctx, acct, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RemotePollSeconds == nil || *got.RemotePollSeconds != 30 {
+		t.Fatalf("poll seconds = %v want 30", got.RemotePollSeconds)
+	}
+	if got.RemoteFullSyncMinutes == nil || *got.RemoteFullSyncMinutes != 5 {
+		t.Fatalf("full sync minutes = %v want 5", got.RemoteFullSyncMinutes)
+	}
+	// A nil override clears it back to inherit.
+	if err := st.SetInboxRemoteSync(ctx, acct, in.ID, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetInboxInternal(ctx, acct, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RemotePollSeconds != nil || got.RemoteFullSyncMinutes != nil {
+		t.Fatalf("cleared overrides persisted: %v %v", got.RemotePollSeconds, got.RemoteFullSyncMinutes)
+	}
+}
+
 // TestSetFolderRolePersistsThroughReconcile proves an explicit role mapping of an
 // arbitrarily-named existing folder is durable: a later remote reconcile that
 // re-infers roles from names must not reset it.
