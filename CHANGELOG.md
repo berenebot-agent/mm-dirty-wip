@@ -8,6 +8,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The periodic/manual provider-sync log now names the mailbox by its address
+  instead of the opaque inbox id, so an operator can tell which inbox a sync
+  belongs to.
+
 - A standalone (IMAP) inbox no longer loses recent messages from the list while
   a sync runs. Two reconcile paths could transiently (and sometimes permanently)
   delete cached message metadata: a `UIDVALIDITY` change deleted every cached row

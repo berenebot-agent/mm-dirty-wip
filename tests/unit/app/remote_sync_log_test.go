@@ -90,8 +90,8 @@ func TestIMAPSyncIsLogged(t *testing.T) {
 	if last["provider"] != "imap" {
 		t.Fatalf("provider = %q, want imap", last["provider"])
 	}
-	if last["inbox_id"] != box.ID {
-		t.Fatalf("inbox_id = %q, want %q", last["inbox_id"], box.ID)
+	if last["inbox"] != box.Address {
+		t.Fatalf("inbox = %q, want %q", last["inbox"], box.Address)
 	}
 	if last["trigger"] != "manual" {
 		t.Fatalf("trigger = %q, want manual", last["trigger"])
