@@ -2116,6 +2116,21 @@ function clearUrlParams(names) {
       cfg = {};
     }
     var host = document.getElementById('inbox-remote-host');
+    var google = standalone && cfg.provider === 'google';
+    dlg.querySelectorAll('[data-standalone-only]').forEach(function (el) {
+      el.hidden = !standalone || google;
+      el.querySelectorAll('input, select').forEach(function (field) { field.disabled = google; });
+    });
+    var googleLink = dlg.querySelector('[data-google-reconnect]');
+    if (!googleLink) {
+      googleLink = document.createElement('a');
+      googleLink.setAttribute('data-google-reconnect', '');
+      googleLink.className = 'btn secondary';
+      dlg.querySelector('[data-inbox-panel=basic]').appendChild(googleLink);
+    }
+    googleLink.hidden = !google;
+    googleLink.textContent = 'Google / Gmail — reconnect account';
+    googleLink.href = '/ui/inboxes/standalone/new?google_inbox=' + encodeURIComponent(inboxID);
     var port = document.getElementById('inbox-remote-port');
     var username = document.getElementById('inbox-remote-username');
     var security = document.getElementById('inbox-remote-security');
@@ -3155,7 +3170,11 @@ function bindInboxSettingsShell(dlg) {
   if (chooser) {
     dlg.querySelectorAll('[data-inbox-choose] [data-choose]').forEach(function (tile) {
       tile.addEventListener('click', function () {
-        activate(tile.getAttribute('data-choose') === 'standalone' ? 'sa-basic' : 'basic');
+        if (tile.getAttribute('data-choose') === 'standalone') {
+          window.location.assign('/ui/inboxes/standalone/new');
+          return;
+        }
+        activate('basic');
       });
     });
     if (backBtn) {
@@ -3197,6 +3216,73 @@ function bindInboxSettingsShell(dlg) {
     });
   });
 }
+
+(function () {
+  var root = document.querySelector('[data-standalone-wizard]');
+  if (!root) { return; }
+  var status = root.querySelector('[data-google-status]');
+  function show(step) {
+    root.querySelectorAll('[data-wizard-step]').forEach(function (el) {
+      el.hidden = el.dataset.wizardStep !== step;
+    });
+  }
+  var reconnect = new URLSearchParams(window.location.search).get('google_inbox');
+  if (reconnect) {
+    root.querySelector('[data-google-inbox]').value = reconnect;
+    show('google');
+  }
+  root.querySelector('[data-wizard-next]').addEventListener('click', function () {
+    show(root.querySelector('[name=standalone_provider]:checked').value);
+  });
+  root.querySelectorAll('[data-wizard-back]').forEach(function (b) {
+    b.addEventListener('click', function () { show('provider'); });
+  });
+  fetch('/ui/oauth/google/info', { credentials: 'same-origin' }).then(function (r) {
+    if (!r.ok) { throw new Error('Could not load callback configuration'); }
+    return r.json();
+  }).then(function (info) {
+    root.querySelector('[data-google-callback]').value = info.callback_url;
+    if (!info.valid) {
+      status.textContent = 'Set BASE_URL to an HTTPS hostname or localhost URL before connecting Google.';
+      root.querySelector('[data-google-begin] button[type=submit], [data-google-begin] button:last-child').disabled = true;
+    }
+  }).catch(function (e) { status.textContent = e.message; });
+  root.querySelector('[data-google-copy]').addEventListener('click', function () {
+    var input = root.querySelector('[data-google-callback]');
+    if (navigator.clipboard) { navigator.clipboard.writeText(input.value).catch(function () { input.select(); }); }
+    else { input.select(); }
+  });
+  root.querySelectorAll('[data-google-begin], [data-google-finish]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var submit = form.querySelector('button:last-child');
+      submit.disabled = true;
+      var popup = form.hasAttribute('data-google-begin') ? window.open('about:blank', '_blank') : null;
+      status.textContent = 'Connecting…';
+      fetch(form.action, { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) }).then(function (r) {
+        if (!r.ok) { return r.text().then(function (text) { throw new Error(text); }); }
+        return r.json();
+      }).then(function (result) {
+        if (result.authorization_url) {
+          form.querySelector('[name=client_secret]').value = '';
+          if (popup) { popup.location = result.authorization_url; }
+          else {
+            var link = document.createElement('a');
+            link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+            link.textContent = 'Open Google authorization'; status.replaceChildren(link);
+          }
+          if (popup) { status.textContent = 'Approve access in the Google tab. If the return page fails, paste its complete URL below.'; }
+        } else if (result.inbox_id) {
+          form.querySelector('[name=callback_url]').value = '';
+          window.location.assign('/ui/inboxes/' + encodeURIComponent(result.inbox_id));
+        }
+      }).catch(function (e) {
+        if (popup) { popup.close(); }
+        status.textContent = e.message;
+      }).finally(function () { submit.disabled = false; });
+    });
+  });
+})();
 
 // showInboxSubview switches the whole panels area to a sub-view (the connector
 // editor or the external-alias sending editor) and marks its footer submit so

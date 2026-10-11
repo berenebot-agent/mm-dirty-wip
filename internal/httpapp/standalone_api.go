@@ -633,14 +633,15 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sq := app.RemoteSearchQuery{
-		FolderPath: r.URL.Query().Get("folder"),
-		From:       r.URL.Query().Get("from"),
-		To:         r.URL.Query().Get("to"),
-		Subject:    r.URL.Query().Get("subject"),
-		Text:       q,
-		Label:      firstQuery(r, "label"),
-		Limit:      limit,
-		Cursor:     cursorUID,
+		FolderPath:     r.URL.Query().Get("folder"),
+		From:           r.URL.Query().Get("from"),
+		To:             r.URL.Query().Get("to"),
+		Subject:        r.URL.Query().Get("subject"),
+		Text:           q,
+		Label:          firstQuery(r, "label"),
+		Limit:          limit,
+		Cursor:         cursorUID,
+		ProviderCursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
 	}
 	res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, sq)
 	if rerr != nil {
@@ -654,6 +655,9 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 	cursor := ""
 	if res.NextCursor != 0 {
 		cursor = strconv.FormatUint(uint64(res.NextCursor), 10)
+	}
+	if res.ProviderCursor != "" {
+		cursor = res.ProviderCursor
 	}
 	writeJSON(w, 200, newEnvelope(items, cursor, res.Completeness, nil))
 }
@@ -740,6 +744,7 @@ func appExtractAttachment(path string, partIndex int, w io.Writer) error {
 // binding, for the API and the UI. It reports whether each secret is present but
 // never returns it.
 type remoteConfigResponse struct {
+	Provider        string             `json:"provider"`
 	Host            string             `json:"host,omitempty"`
 	Port            int                `json:"port,omitempty"`
 	Username        string             `json:"username,omitempty"`
@@ -775,7 +780,13 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	}
 	caps := model.StandaloneCapabilities()
 	caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
+	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
+		caps.Outbound = true
+		caps.HierarchicalFolders = false
+		return remoteConfigResponse{Provider: "google", Configured: true, Host: "Google / Gmail", Capabilities: caps}, nil
+	}
 	out := remoteConfigResponse{
+		Provider:        "imap",
 		Namespace:       inbox.Namespace,
 		IMAPPasswordSet: strings.TrimSpace(creds.EncryptedIMAP) != "",
 		SMTPPasswordSet: strings.TrimSpace(creds.EncryptedSMTP) != "",
