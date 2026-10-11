@@ -257,6 +257,60 @@ func (s *Store) GetRemoteFolderBackfill(ctx context.Context, accountID, inboxID,
 	return b, nil
 }
 
+// RemoteFolderIndexSummary reports the state of a folder's cached index for the
+// cheap-idle reconcile fast-path: the highest cached UID for a generation and
+// how many rows are cached. It is a single indexed aggregate read and performs
+// no provider call. Known is false when the folder has no cached rows for the
+// generation, so the caller treats it as needing a full pass.
+type RemoteFolderIndexSummary struct {
+	HighestUID uint32
+	Count      int
+	Known      bool
+}
+
+// RemoteFolderModSeq returns a folder's last-seen CONDSTORE highest
+// modification sequence (0 when unset).
+func (s *Store) RemoteFolderModSeq(ctx context.Context, accountID, inboxID, folderPath string) (uint64, error) {
+	var modseq uint64
+	err := s.read.QueryRowContext(ctx, `SELECT remote_highest_modseq FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=?`, accountID, inboxID, folderPath).Scan(&modseq)
+	if err == sql.ErrNoRows {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	return modseq, nil
+}
+
+// SetRemoteFolderModSeq records a folder's last-seen CONDSTORE highest
+// modification sequence.
+func (s *Store) SetRemoteFolderModSeq(ctx context.Context, accountID, inboxID, folderPath string, modseq uint64) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_folders SET remote_highest_modseq=? WHERE account_id=? AND inbox_id=? AND path=?`, modseq, accountID, inboxID, folderPath)
+	return err
+}
+
+// GetRemoteFolderIndexSummary returns the highest cached UID and row count for
+// a folder's generation.
+func (s *Store) GetRemoteFolderIndexSummary(ctx context.Context, accountID, inboxID, folderPath string, uidValidity uint32) (RemoteFolderIndexSummary, error) {
+	var sum RemoteFolderIndexSummary
+	var highest sql.NullInt64
+	var count int
+	err := s.read.QueryRowContext(ctx, `SELECT MAX(remote_uid),COUNT(*) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND folder_path=? AND remote_uid_validity=?`, accountID, inboxID, folderPath, uidValidity).
+		Scan(&highest, &count)
+	if err != nil {
+		return RemoteFolderIndexSummary{}, err
+	}
+	if count == 0 {
+		return RemoteFolderIndexSummary{}, nil
+	}
+	sum.Known = true
+	sum.Count = count
+	if highest.Valid {
+		sum.HighestUID = uint32(highest.Int64)
+	}
+	return sum, nil
+}
+
 // ReconcileRemoteFolderBatch applies one bounded reconcile batch to a folder in a
 // single transaction: it upserts the batch's message metadata, optionally prunes
 // cached rows whose UID is absent from a COMPLETE snapshot (keepUIDs), and records

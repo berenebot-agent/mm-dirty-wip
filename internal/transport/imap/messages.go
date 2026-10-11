@@ -295,6 +295,46 @@ func searchCriteria(q SearchQuery) *imap.SearchCriteria {
 	return c
 }
 
+// FlagsChangedSince fetches the flags of every message whose modification
+// sequence is greater than sinceModSeq (CONDSTORE, RFC 7162), together with the
+// mailbox's current highest modification sequence. It requests only UID and
+// FLAGS, never a body or envelope, so it is a cheap incremental flag sync. It
+// returns an unsupported error when the server does not advertise CONDSTORE.
+func (a *Adapter) FlagsChangedSince(ctx context.Context, folder string, sinceModSeq uint64) ([]MessageHeader, uint32, uint64, error) {
+	if !a.caps.CondStore {
+		return nil, 0, 0, Unsupported("the server does not advertise CONDSTORE")
+	}
+	options := &imap.FetchOptions{Flags: true, UID: true, ChangedSince: sinceModSeq}
+	var out []MessageHeader
+	var uidValidity uint32
+	var highest uint64
+	err := a.withExamine(ctx, folder, func(data *imap.SelectData) error {
+		uidValidity = data.UIDValidity
+		highest = data.HighestModSeq
+		// CHANGEDSINCE narrows the fetch server-side, so 1:* is correct and cheap.
+		var all imap.SeqSet
+		all.AddRange(1, 0)
+		cmd := a.conn.Fetch(all, options)
+		for {
+			msg := cmd.Next()
+			if msg == nil {
+				break
+			}
+			item, cerr := msg.Collect()
+			if cerr != nil {
+				_ = cmd.Close()
+				return wrapErr(cerr)
+			}
+			out = append(out, headerFromBuffer(folder, uidValidity, item))
+		}
+		return wrapErr(cmd.Close())
+	})
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return out, uidValidity, highest, nil
+}
+
 // ListHeaders fetches header metadata for the given UIDs in a folder. When uids
 // is empty it fetches every message in the folder (bounded by max). It requests
 // the flags and BODYSTRUCTURE but never a body section, so listing never marks a

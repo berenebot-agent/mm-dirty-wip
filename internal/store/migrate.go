@@ -232,6 +232,11 @@ func migrations(dataDir string) []migration {
 			columnAdded("assistant_handling_requests", "notification_message_id"),
 		)},
 		{version: "059", sql: migration059, detect: stateOf(tableExists("inbox_google_connections"))},
+		{version: "060", sql: migration060, detect: allOf(
+			columnAdded("inboxes", "remote_poll_seconds"),
+			columnAdded("inboxes", "remote_full_sync_minutes"),
+			columnAdded("inbox_folders", "remote_highest_modseq"),
+		)},
 	}
 }
 

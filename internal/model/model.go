@@ -218,8 +218,18 @@ type Inbox struct {
 	// DeliveryTrigger selects when the auto-actions fire: "any" (first
 	// connector to deliver) or "all" (every connector that existed when the
 	// message arrived has delivered). A new inbox carries "all".
-	DeliveryTrigger string    `json:"delivery_trigger,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	DeliveryTrigger string `json:"delivery_trigger,omitempty"`
+	// RemotePollSeconds is a standalone inbox's quick new-mail poll cadence in
+	// seconds, overriding the process default. It governs the fallback poll
+	// when the server does not support IDLE; IDLE-capable servers still react
+	// instantly. Nil inherits the default.
+	RemotePollSeconds *int `json:"remote_poll_seconds,omitempty"`
+	// RemoteFullSyncMinutes is a standalone inbox's deep index-reconcile cadence
+	// in minutes, overriding the process default. The deep pass refreshes read
+	// and flag state, non-INBOX folders, the folder tree and older-mail
+	// backfill. Nil inherits the default.
+	RemoteFullSyncMinutes *int      `json:"remote_full_sync_minutes,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
 }
 
 // HasApprover reports whether the inbox has a configured external approver.

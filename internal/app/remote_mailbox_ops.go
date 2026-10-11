@@ -223,7 +223,30 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 // complete set when it is known. It never fetches a body. A folder larger than the
 // per-pass batch is indexed over successive passes, so it is never permanently
 // truncated.
+//
+// Steady-state fast-path: once a folder's backfill has reached the bottom AND its
+// cached UID maximum and message count both match the live mailbox (checked with
+// one STATUS read), the folder has neither gained nor lost a message, so the
+// expensive complete-UID snapshot (a full SEARCH), the prune pass and the backfill
+// batch are skipped. The newest window is still refreshed — from a single bounded
+// newest-first SEARCH — so read/flag changes made elsewhere are picked up. A new
+// arrival or a deletion moves the max UID or the count and falls through to the
+// full pass. This keeps a quiescent folder to two cheap round-trips instead of a
+// full snapshot plus a several-hundred-header fetch.
 func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess RemoteSession, accountID, inboxID, folderPath string, validity uint32) (bool, error) {
+	bf, berr := m.Service.Store.GetRemoteFolderBackfill(ctx, accountID, inboxID, folderPath)
+	if berr != nil && !errors.Is(berr, store.ErrNotFound) {
+		return false, mapStoreError(berr)
+	}
+	started := bf.Known && bf.Generation == validity
+	isComplete := started && bf.Complete
+	if isComplete {
+		unchanged, ferr := m.folderQuiescent(ctx, sess, accountID, inboxID, folderPath, validity)
+		if ferr == nil && unchanged {
+			return m.refreshQuiescent(ctx, sess, accountID, inboxID, folderPath, validity)
+		}
+	}
+
 	// The complete matching UID set. A UID SEARCH returns every match; a UID set is
 	// only four bytes per message, so this is the cheapest way to obtain the full
 	// snapshot needed to prune removals safely.
@@ -240,13 +263,6 @@ func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess Remot
 		// relative to the full set, which we do not have).
 		allUIDs = allUIDs[len(allUIDs)-DefaultRemoteReconcileLimit:]
 	}
-
-	bf, berr := m.Service.Store.GetRemoteFolderBackfill(ctx, accountID, inboxID, folderPath)
-	if berr != nil && !errors.Is(berr, store.ErrNotFound) {
-		return false, mapStoreError(berr)
-	}
-	started := bf.Known && bf.Generation == validity
-	isComplete := started && bf.Complete
 
 	// Newest window: always refreshed so recent mail and flag changes are current.
 	newestStart := len(allUIDs) - remoteNewestRefresh
@@ -321,6 +337,123 @@ func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess Remot
 		return false, mapStoreError(werr)
 	}
 	return fullKnown && newComplete, nil
+}
+
+// refreshQuiescent refreshes a folder that has neither gained nor lost a message.
+// When the session supports CONDSTORE and a previous modification sequence is
+// recorded for the folder, it fetches only the flags of messages changed since
+// then (a single FLAGS CHANGEDSINCE fetch) and advances the stored sequence — the
+// cheapest possible flag sync. Otherwise it falls back to re-fetching the newest
+// window's headers. It never advances the backfill cursor.
+func (m *RemoteMailboxService) refreshQuiescent(ctx context.Context, sess RemoteSession, accountID, inboxID, folderPath string, validity uint32) (bool, error) {
+	if cond, ok := sess.(condStoreSession); ok {
+		since, err := m.Service.Store.RemoteFolderModSeq(ctx, accountID, inboxID, folderPath)
+		if err != nil {
+			since = 0
+		}
+		if since > 0 {
+			headers, liveValidity, highest, ferr := cond.FlagsChangedSince(ctx, folderPath, since)
+			if ferr == nil && (liveValidity == 0 || liveValidity == validity) {
+				for _, h := range headers {
+					if h.UID == 0 {
+						continue
+					}
+					if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr != nil {
+						return false, mapStoreError(uerr)
+					}
+				}
+				if highest > since {
+					if serr := m.Service.Store.SetRemoteFolderModSeq(ctx, accountID, inboxID, folderPath, highest); serr != nil {
+						m.Service.Log.Warn("remote modseq advance", "inbox_id", inboxID, "folder", folderPath, "error", serr)
+					}
+				}
+				return true, nil
+			}
+		}
+	}
+	// No prior modseq (first quiescent pass) or non-CONDSTORE server: refresh the
+	// newest window, then seed the modseq so the next pass can be incremental.
+	if _, err := m.refreshNewestWindow(ctx, sess, accountID, inboxID, folderPath, validity); err != nil {
+		return false, err
+	}
+	if _, ok := sess.(condStoreSession); ok {
+		if st, serr := sess.Status(ctx, folderPath); serr == nil && st.HighestModSeq > 0 {
+			if serr := m.Service.Store.SetRemoteFolderModSeq(ctx, accountID, inboxID, folderPath, st.HighestModSeq); serr != nil {
+				m.Service.Log.Warn("remote modseq seed", "inbox_id", inboxID, "folder", folderPath, "error", serr)
+			}
+		}
+	}
+	return true, nil
+}
+
+// condStoreSession is the optional CONDSTORE surface of a remote session. The
+// production adapter implements it; a test fake may or may not.
+type condStoreSession interface {
+	FlagsChangedSince(ctx context.Context, folder string, sinceModSeq uint64) ([]imap.MessageHeader, uint32, uint64, error)
+}
+
+// refreshNewestWindow fetches and upserts only the folder's newest window of
+// headers, without a full UID snapshot, prune or backfill. It is the quiescent
+// fast-path's body: it keeps recent mail and flag changes current at two
+// round-trips (one bounded newest-first SEARCH, one header fetch). It never
+// advances the backfill cursor, so it cannot falsely mark a folder complete.
+func (m *RemoteMailboxService) refreshNewestWindow(ctx context.Context, sess RemoteSession, accountID, inboxID, folderPath string, validity uint32) (bool, error) {
+	res, err := sess.Search(ctx, folderPath, imap.SearchQuery{NewestFirst: true, Limit: remoteNewestRefresh})
+	if err != nil {
+		return false, normalizeRemoteError(err)
+	}
+	if len(res.UIDs) == 0 {
+		return true, nil
+	}
+	headers, liveValidity, herr := sess.ListHeaders(ctx, folderPath, res.UIDs, 0)
+	if herr != nil {
+		return false, normalizeRemoteError(herr)
+	}
+	if liveValidity != 0 && liveValidity != validity {
+		return false, nil
+	}
+	for _, h := range headers {
+		if h.UID == 0 {
+			continue
+		}
+		if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr != nil {
+			return false, mapStoreError(uerr)
+		}
+	}
+	return true, nil
+}
+
+// folderQuiescent reports whether a folder has neither gained nor lost a message
+// since its cache was built: its backfill has reached the bottom, its cached
+// index is non-empty, and both its highest cached UID and its cached message
+// count match the live mailbox (a single STATUS read). The count check is what
+// catches a mid-folder deletion, which does not move the maximum UID. It returns
+// false (so the caller runs the full pass) when the live state cannot be
+// established, the generation changed, the folder is still backfilling, or
+// nothing is cached yet.
+func (m *RemoteMailboxService) folderQuiescent(ctx context.Context, sess RemoteSession, accountID, inboxID, folderPath string, validity uint32) (bool, error) {
+	st, err := sess.Status(ctx, folderPath)
+	if err != nil {
+		return false, normalizeRemoteError(err)
+	}
+	if st.UIDValidity != 0 && st.UIDValidity != validity {
+		// The generation changed: a full pass must re-index from scratch.
+		return false, nil
+	}
+	sum, serr := m.Service.Store.GetRemoteFolderIndexSummary(ctx, accountID, inboxID, folderPath, validity)
+	if serr != nil {
+		return false, mapStoreError(serr)
+	}
+	if !sum.Known {
+		return false, nil
+	}
+	// Live max UID is UIDNext-1 (the next UID to assign). A folder whose next UID
+	// is 1 is empty.
+	var liveMax uint32
+	if st.UIDNext > 0 {
+		liveMax = st.UIDNext - 1
+	}
+	return sum.HighestUID == liveMax && sum.Count == int(st.NumMessages), nil
 }
 
 // unionUIDs merges two ascending UID slices into a de-duplicated ascending slice.
@@ -575,6 +708,69 @@ func (m *RemoteMailboxService) refreshRemoteHeader(ctx context.Context, accountI
 			labels := view.Labels
 			*view = remoteView(updated)
 			view.Labels = labels
+		}
+	}
+}
+
+// RefreshRemoteView re-fetches the live headers of a set of cached remote
+// messages in one session and upserts them, so the on-screen page's read/flag
+// state and metadata are current after a manual refresh. It is the "sync the
+// messages on screen" half of a quick refresh. It is best-effort: an
+// unreadable or relocated message is skipped and never marks a message seen. It
+// requires Read on the inbox.
+func (m *RemoteMailboxService) RefreshRemoteView(ctx context.Context, p model.Principal, inboxID string, messageIDs []string) {
+	inbox, err := m.authorizeRead(ctx, p, inboxID)
+	if err != nil {
+		return
+	}
+	if len(messageIDs) == 0 {
+		return
+	}
+	// Resolve the ids to cached locators first (no provider call), grouped by
+	// folder so one session can fetch a whole folder's page with one command.
+	locs := make([]imap.Locator, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		rec, gerr := m.Service.Store.GetRemoteMessage(ctx, p.AccountID, inboxID, id)
+		if gerr != nil {
+			continue
+		}
+		if !m.folderInScope(inbox, rec.FolderPath) {
+			continue
+		}
+		locs = append(locs, imap.Locator{FolderPath: rec.FolderPath, UIDValidity: rec.UIDValidity, UID: rec.UID, MessageID: rec.RFCMessageID})
+	}
+	if len(locs) == 0 {
+		return
+	}
+	sess, _, oerr := m.open(ctx, p.AccountID, inboxID)
+	if oerr != nil {
+		return
+	}
+	defer sess.Close()
+	// Group by folder path; a UID fetch is per folder.
+	byFolder := map[string][]uint32{}
+	validity := map[string]uint32{}
+	for _, l := range locs {
+		byFolder[l.FolderPath] = append(byFolder[l.FolderPath], l.UID)
+		validity[l.FolderPath] = l.UIDValidity
+	}
+	for folder, uids := range byFolder {
+		headers, liveValidity, herr := sess.ListHeaders(ctx, folder, uids, len(uids))
+		if herr != nil {
+			continue
+		}
+		if liveValidity != 0 && validity[folder] != 0 && liveValidity != validity[folder] {
+			// UIDVALIDITY changed: cached UIDs no longer name these messages.
+			// Leave them for the full reconcile to relocate by Message-ID.
+			continue
+		}
+		for _, h := range headers {
+			if h.UID == 0 {
+				continue
+			}
+			if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, p.AccountID, inboxID, remoteMessageInputFromHeader(h)); uerr != nil {
+				m.Service.Log.Warn("refresh remote view upsert", "inbox_id", inboxID, "uid", h.UID, "error", uerr)
+			}
 		}
 	}
 }

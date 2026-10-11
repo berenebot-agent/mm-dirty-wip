@@ -1688,3 +1688,15 @@ ALTER TABLE inboxes ADD COLUMN remote_sent_copy_enabled INTEGER NOT NULL DEFAULT
 ALTER TABLE inboxes ADD COLUMN remote_sent_copy_folder TEXT NOT NULL DEFAULT '';
 ALTER TABLE assistant_handling_requests ADD COLUMN notification_message_id TEXT NOT NULL DEFAULT '';
 `
+
+// migration060 adds per-inbox remote sync cadence overrides for a standalone
+// inbox, plus a per-folder CONDSTORE high-water mark. The cadence columns are
+// nullable: NULL means the inbox inherits the process default (60s quick poll,
+// 15m full sync). remote_highest_modseq is the folder's last-seen highest
+// modification sequence (RFC 7162), used to fetch only flag changes since the
+// previous pass when the server advertises CONDSTORE; 0 means unset.
+const migration060 = `
+ALTER TABLE inboxes ADD COLUMN remote_poll_seconds INTEGER;
+ALTER TABLE inboxes ADD COLUMN remote_full_sync_minutes INTEGER;
+ALTER TABLE inbox_folders ADD COLUMN remote_highest_modseq INTEGER NOT NULL DEFAULT 0;
+`
