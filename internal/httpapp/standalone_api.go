@@ -801,6 +801,15 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
 		caps.Outbound = true
 		caps.HierarchicalFolders = false
+		if s.Service.Store.IsOne(ctx, p.AccountID, inboxID) {
+			caps.Realtime = false
+			caps.Outbound = inbox.RemoteConfigured
+			poll := 300
+			if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
+				poll = max(120, min(*inbox.RemotePollSeconds, 1800))
+			}
+			return remoteConfigResponse{Provider: "one", Configured: inbox.RemoteConfigured, Host: "Gmail via One", PollSeconds: poll, FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes), Capabilities: caps}, nil
+		}
 		return remoteConfigResponse{
 			Provider:        "google",
 			Configured:      true,

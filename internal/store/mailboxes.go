@@ -835,6 +835,9 @@ func (s *Store) SetInboxTrashRetention(ctx context.Context, accountID, inboxID s
 // non-positive value clears the override rather than storing it, so a bogus
 // zero cannot reach the clamp path.
 func (s *Store) SetInboxRemoteSync(ctx context.Context, accountID, inboxID string, pollSeconds, fullSyncMinutes *int) error {
+	if s.IsOne(ctx, accountID, inboxID) && pollSeconds != nil && *pollSeconds > 0 && (*pollSeconds < 120 || *pollSeconds > 1800) {
+		return fmt.Errorf("One polling must be between 2 and 30 minutes")
+	}
 	var poll, full any
 	if pollSeconds != nil && *pollSeconds > 0 {
 		poll = *pollSeconds

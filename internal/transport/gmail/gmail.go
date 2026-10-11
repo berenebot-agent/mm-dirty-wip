@@ -39,6 +39,20 @@ type Client struct {
 	HTTP     *http.Client
 	BaseURL  string
 	TokenURL string
+	Executor RequestExecutor
+}
+
+// RequestExecutor replaces only mailbox HTTP execution, never OAuth exchange or
+// refresh. Both JSON operations and streamed MIME use this same boundary.
+type RequestExecutor interface {
+	Execute(context.Context, string, *http.Request) (*http.Response, error)
+}
+
+func (c *Client) execute(ctx context.Context, op string, req *http.Request) (*http.Response, error) {
+	if c.Executor != nil {
+		return c.Executor.Execute(ctx, op, req)
+	}
+	return c.httpClient().Do(req)
 }
 
 // NewClient builds a Client using the supplied HTTP client and the production
@@ -165,8 +179,11 @@ func (c *Client) do(ctx context.Context, op, method, endpoint, token string, bod
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.execute(ctx, op, req)
 	if err != nil {
+		if c.Executor != nil {
+			return nil, err
+		}
 		return nil, networkError(op, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

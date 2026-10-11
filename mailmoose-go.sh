@@ -75,6 +75,13 @@ if [ -n "${MAILMOOSE_SMOKE:-}" ]; then
     SMOKE_FLAGS="-e MAILMOOSE_SMOKE=$MAILMOOSE_SMOKE"
 fi
 
+# Manual One compatibility probe only: forward variable names, never embed
+# credential values in command arguments, log filenames or test metadata.
+ONE_PROBE_FLAGS=""
+if [ "${1:-}" = "run" ] && [ "${2:-}" = "./cmd/oneprobe" ]; then
+    ONE_PROBE_FLAGS="-e ONE_API_KEY -e ONE_CONNECTION_ID -e ONE_PROBE_SEND_TO"
+fi
+
 # Log capture: always write full output to a repo-local log file under
 # tests/logs/ (gitignored, persistent across runs). The summary printed at
 # the end shows the path; on failure the first FAIL line is also inlined.
@@ -106,6 +113,7 @@ if [ "${1:-}" = "gofmt" ]; then
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \
+        $ONE_PROBE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \
@@ -119,6 +127,7 @@ else
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \
+        $ONE_PROBE_FLAGS \
         -v "$MOD_CACHE:/go/pkg/mod" \
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \

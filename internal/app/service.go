@@ -36,6 +36,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport"
 	_ "github.com/dellarb/mailmoose/internal/transport/brevo"
 	_ "github.com/dellarb/mailmoose/internal/transport/cloudflare"
+	"github.com/dellarb/mailmoose/internal/transport/gmail"
 	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
 	_ "github.com/dellarb/mailmoose/internal/transport/mx"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
@@ -119,7 +120,8 @@ type Service struct {
 	// source when it is not a locally-persisted message. cmd/server installs the
 	// remote bridge; when nil a reply/forward to a remote message is not
 	// resolvable and the send is refused as not found. It is never a global.
-	RemoteMessages RemoteMessageResolver
+	RemoteMessages     RemoteMessageResolver
+	GmailMailboxClient func(context.Context, string, string) (*gmail.Client, string, error)
 	// encryptionKeys holds the primary key first and any legacy derivation
 	// after it, so decrypting pre-upgrade ciphertext still works.
 	encryptionKeys  [][]byte
@@ -1965,6 +1967,9 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	}
 	// The provider send uses the delivery context only; recording the outcome
 	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
+	if err := s.bindGmailSend(ctx, m.AccountID, m.InboxID, cfg); err != nil {
+		return s.failDetached(ctx, m, err, sending.Provider)
+	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
 		return s.failDetached(ctx, m, err, sending.Provider)
@@ -2216,6 +2221,9 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	}
 	// The provider send uses the delivery context only; recording the outcome
 	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
+	if err := s.bindGmailSend(ctx, accountID, w.InboxID, cfg); err != nil {
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
+	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
 		return s.failWorkflowDetached(ctx, w, err, sending.Provider)

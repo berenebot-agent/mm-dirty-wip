@@ -1085,6 +1085,10 @@ func (s *Server) providerConnected(ctx context.Context, accountID, inboxID strin
 func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
+	if s.Service.Store.IsOne(r.Context(), p.AccountID, id) {
+		http.Redirect(w, r, "/ui/connections/one", http.StatusSeeOther)
+		return
+	}
 	if s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, id) {
 		http.Redirect(w, r, "/ui/inboxes/standalone/new?microsoft_inbox="+url.QueryEscape(id), 303)
 		return

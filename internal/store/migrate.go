@@ -245,6 +245,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("inbox_remote_arrivals", "source"),
 			columnAdded("microsoft_push", "requested_source"),
 		)},
+		{version: "066", sql: migration066, detect: allOf(tableExists("inbox_gmail_sync"), tableExists("one_accounts"), tableExists("inbox_one_bindings"), tableExists("gmail_history_pages"))},
 	}
 }
 

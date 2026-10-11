@@ -14,7 +14,7 @@ func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Princip
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
 		return RemoteSearchResult{}, e
 	}
-	t, e := m.GoogleAccess(ctx, p.AccountID, inbox)
+	client, t, e := m.GoogleMailboxClient(ctx, p.AccountID, inbox)
 	if e != nil {
 		return RemoteSearchResult{}, e
 	}
@@ -54,7 +54,11 @@ func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Princip
 		}{page, offset})
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
-	page, e := m.Google.List(ctx, t, strings.TrimSpace(query), label, cursor.Page, 100)
+	pageSize := 100
+	if m.Service.Store.IsOne(ctx, p.AccountID, inbox) {
+		pageSize = 10
+	}
+	page, e := client.List(ctx, t, strings.TrimSpace(query), label, cursor.Page, pageSize)
 	if e != nil {
 		return RemoteSearchResult{}, e
 	}
@@ -64,7 +68,7 @@ func (m *RemoteMailboxService) searchGoogle(ctx context.Context, p model.Princip
 	}
 	for i := cursor.Offset; i < len(page.Messages); i++ {
 		g := page.Messages[i]
-		g, e := m.Google.Get(ctx, t, g.ID, "metadata")
+		g, e := client.Get(ctx, t, g.ID, "metadata")
 		if e != nil {
 			return RemoteSearchResult{}, e
 		}

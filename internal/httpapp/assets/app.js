@@ -2492,7 +2492,8 @@ function clearUrlParams(names) {
     }
     var host = document.getElementById('inbox-remote-host');
     var microsoft = standalone && cfg.provider === 'microsoft';
-    var google = standalone && (cfg.provider === 'google' || microsoft);
+    var one = standalone && cfg.provider === 'one';
+    var google = standalone && (cfg.provider === 'google' || microsoft || one);
     dlg.querySelectorAll('[data-standalone-only]').forEach(function (el) {
       el.hidden = !standalone || google;
       el.querySelectorAll('input, select').forEach(function (field) { field.disabled = google; });
@@ -2524,8 +2525,8 @@ function clearUrlParams(names) {
       dlg.querySelector('[data-inbox-panel=basic]').appendChild(googleLink);
     }
     googleLink.hidden = !google;
-    googleLink.textContent = microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account';
-    googleLink.href = '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
+    googleLink.textContent = one ? 'Gmail via One — connection settings' : (microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account');
+    googleLink.href = one ? '/ui/connections/one' : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
     var port = document.getElementById('inbox-remote-port');
     var username = document.getElementById('inbox-remote-username');
     var security = document.getElementById('inbox-remote-security');
@@ -3678,7 +3679,12 @@ function bindInboxSettingsShell(dlg) {
     show(deepProvider);
   }
   root.querySelector('[data-wizard-next]').addEventListener('click', function () {
-    show(root.querySelector('[name=standalone_provider]:checked').value);
+	  var provider = root.querySelector('[name=standalone_provider]:checked').value;
+	  if (provider === 'one') {
+	    window.location.assign('/ui/connections/one');
+	    return;
+	  }
+	  show(provider);
   });
   root.querySelectorAll('[data-wizard-back]').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -6113,4 +6119,3 @@ function hideInboxSubview(dlg) {
     });
   });
 }());
-

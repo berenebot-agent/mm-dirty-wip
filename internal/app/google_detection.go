@@ -8,6 +8,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/internal/transport/one"
 )
 
 func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) {
@@ -24,7 +25,10 @@ func (w *RemoteWorker) detectGoogle(ctx context.Context, inbox model.Inbox) {
 // "complete" on a clean drain (or an established baseline) and "partial" when
 // the pass returned early without draining history.
 func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) (int, string, error) {
-	t, e := w.remote.GoogleAccess(ctx, inbox.AccountID, inbox.ID)
+	if w.svc.Store.IsOne(ctx, inbox.AccountID, inbox.ID) {
+		ctx = one.Background(ctx)
+	}
+	client, t, e := w.remote.GoogleMailboxClient(ctx, inbox.AccountID, inbox.ID)
 	if e != nil {
 		return 0, "partial", e
 	}
@@ -33,7 +37,7 @@ func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) 
 		return 0, "partial", e
 	}
 	if anchor == "" {
-		p, e := w.remote.Google.Profile(ctx, t)
+		p, e := client.Profile(ctx, t)
 		if e == nil {
 			_ = w.svc.Store.SaveGoogleDetection(ctx, inbox.ID, p.HistoryID)
 		}
@@ -41,15 +45,63 @@ func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) 
 	}
 	arrived := 0
 	page := ""
+	if w.svc.Store.IsOne(ctx, inbox.AccountID, inbox.ID) {
+		next, complete, err := w.remote.drainGoogleHistory(ctx, inbox.AccountID, inbox.ID, "detection", anchor, client, t, func(ctx context.Context, item gmailHistoryItem) error {
+			g, err := client.Get(ctx, t, item.ID, "metadata")
+			if err != nil {
+				var mb *model.MailboxError
+				if errors.As(err, &mb) && mb.Kind == model.ErrKindNotFound {
+					return nil // message deleted since the durable history snapshot
+				}
+				return err
+			}
+			if !containsFoldApp(g.LabelIDs, "INBOX") {
+				return nil
+			}
+			if _, err = w.remote.cacheGoogle(ctx, inbox.AccountID, inbox.ID, g); err != nil {
+				return err
+			}
+			in := googleInput(g)
+			date := time.UnixMilli(g.InternalDate)
+			a, inserted, err := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{FolderPath: "gmail:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, SizeBytes: in.SizeBytes, InternalDate: &date})
+			if err != nil {
+				return err
+			}
+			if inserted {
+				arrived++
+				w.onNewArrival(ctx, inbox, a)
+			}
+			return nil
+		})
+		var expired *gmailHistoryExpired
+		if errors.As(err, &expired) {
+			profile, e := client.Profile(ctx, t)
+			if e != nil {
+				return arrived, "partial", e
+			}
+			if e = w.svc.Store.SaveGoogleDetection(ctx, inbox.ID, profile.HistoryID); e != nil {
+				return arrived, "partial", e
+			}
+			w.remote.ScheduleRefresh(inbox.AccountID, inbox.ID)
+			return arrived, "partial", nil
+		}
+		if err != nil || !complete {
+			return arrived, "partial", err
+		}
+		if err = w.svc.Store.SaveGoogleDetection(ctx, inbox.ID, next); err != nil {
+			return arrived, "partial", err
+		}
+		return arrived, "complete", nil
+	}
 	for n := 0; n < 20; n++ {
-		h, e := w.remote.Google.History(ctx, t, anchor, page)
+		h, e := client.History(ctx, t, anchor, page)
 		if e != nil {
 			var mb *model.MailboxError
 			if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
 				// An expired history cursor is a routine resync trigger, not a
 				// failed pass: reset the anchor and schedule a full reconcile.
 				// Report partial rather than error so the log is not alarming.
-				profile, pe := w.remote.Google.Profile(ctx, t)
+				profile, pe := client.Profile(ctx, t)
 				if pe == nil {
 					_ = w.svc.Store.SaveGoogleDetection(ctx, inbox.ID, profile.HistoryID)
 					w.remote.ScheduleRefresh(inbox.AccountID, inbox.ID)
@@ -60,7 +112,7 @@ func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) 
 		}
 		for _, history := range h.History {
 			for _, added := range history.MessagesAdded {
-				g, e := w.remote.Google.Get(ctx, t, added.Message.ID, "metadata")
+				g, e := client.Get(ctx, t, added.Message.ID, "metadata")
 				if e != nil {
 					return arrived, "partial", e
 				}
