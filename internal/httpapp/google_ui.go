@@ -44,7 +44,9 @@ func (s *Server) uiStandaloneWizard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := pageData{Title: "Connect standalone inbox", Principal: principal(r), CSRF: csrf(r), Notice: r.URL.Query().Get("notice")}
-	s.render(w, r, standaloneWizardBody, d)
+	body := strings.Replace(standaloneWizardBody, `<button type="button" class="secondary" disabled>Microsoft / Outlook — Coming next</button>`, `<label><input type="radio" name="standalone_provider" value="microsoft"> Microsoft / Outlook</label>`, 1)
+	body = strings.TrimSuffix(body, "</section>") + microsoftWizardBody + "</section>"
+	s.render(w, r, body, d)
 }
 func (s *Server) uiGoogleInfo(w http.ResponseWriter, r *http.Request) {
 	if !principal(r).Admin {

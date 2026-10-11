@@ -458,7 +458,7 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		// no match carries a scan continuation so the next page continues deeper
 		// instead of re-scanning the same window.
 		scanUID := uint32(0)
-		google := mb.remote.IsGoogle(ctx, p.AccountID, mb.inbox.ID)
+		google := mb.remote.IsGoogle(ctx, p.AccountID, mb.inbox.ID) || mb.remote.IsMicrosoft(ctx, p.AccountID, mb.inbox.ID)
 		scanProvider := cur.sourceCursor(mb.inbox.ID)
 		if raw := cur.scanCursor(mb.inbox.ID); raw != "" {
 			scanProvider = raw

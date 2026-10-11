@@ -1042,6 +1042,10 @@ func (s *Server) composeRemoteMessage(w http.ResponseWriter, r *http.Request, p 
 func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
+	if s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, id) {
+		http.Redirect(w, r, "/ui/inboxes/standalone/new?microsoft_inbox="+url.QueryEscape(id), 303)
+		return
+	}
 	if s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, id) {
 		http.Redirect(w, r, "/ui/inboxes/standalone/new?google_inbox="+url.QueryEscape(id), 303)
 		return

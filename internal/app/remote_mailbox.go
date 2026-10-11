@@ -12,6 +12,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 	"github.com/dellarb/mailmoose/internal/transport/smtp"
 )
 
@@ -85,9 +86,11 @@ type RemoteSession interface {
 // metadata reconciliation and the live operations. The local/remote routing
 // decision is the MailboxRouter's; this service performs the remote side.
 type RemoteMailboxService struct {
-	Service  *Service
-	Google   *gmail.Client
-	googleMu sync.Mutex
+	Service     *Service
+	Google      *gmail.Client
+	Microsoft   *microsoft.Client
+	microsoftMu sync.Mutex
+	googleMu    sync.Mutex
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
 	dial           RemoteDialer
@@ -109,7 +112,7 @@ type remoteReconcileCall struct {
 // NewRemoteMailboxService builds the remote surface over the app service.
 func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs
@@ -250,6 +253,9 @@ func (m *RemoteMailboxService) open(ctx context.Context, accountID, inboxID stri
 // an operator can change only the host or username; a non-secret field is a whole
 // value (never merged). It requires Owner on the inbox (or an account admin).
 func (m *RemoteMailboxService) ConfigureStandaloneRemote(ctx context.Context, p model.Principal, inboxID string, in store.StandaloneRemoteUpdate) (model.Inbox, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return model.Inbox{}, model.NewMailboxError(model.ErrKindUnsupported, "Use Microsoft reconnection to update this connector", false, nil)
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		return model.Inbox{}, model.NewMailboxError(model.ErrKindUnsupported, "Use Google reconnection to update this connector", false, nil)
 	}
@@ -336,6 +342,17 @@ func hasRemoteNonSecretFields(in store.StandaloneRemoteUpdate) bool {
 // operator can test a configuration before saving it. It is the "test service
 // method" the configure flow calls.
 func (m *RemoteMailboxService) TestStandaloneRemote(ctx context.Context, p model.Principal, inboxID string, in store.StandaloneRemoteUpdate) (imap.RootScope, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		if _, e := m.authorizeRead(ctx, p, inboxID); e != nil {
+			return imap.RootScope{}, e
+		}
+		t, c, e := m.microsoftAccess(ctx, p.AccountID, inboxID)
+		if e != nil {
+			return imap.RootScope{}, e
+		}
+		_, e = m.Microsoft.Folder(ctx, t, c.Mailbox, "inbox")
+		return imap.RootScope{}, e
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		if _, e := m.authorizeRead(ctx, p, inboxID); e != nil {
 			return imap.RootScope{}, e
@@ -522,6 +539,20 @@ func (r *RemoteStandaloneSender) ResolveInboxSendingConfig(ctx context.Context, 
 	}
 	if inbox.Kind != model.InboxKindStandalone {
 		return store.DomainSendingConfig{}, store.ErrNoProvider
+	}
+	if r.Service.Store.IsMicrosoft(ctx, accountID, inboxID) {
+		if r.Remote == nil {
+			return store.DomainSendingConfig{}, store.ErrNoProvider
+		}
+		t, c, e := r.Remote.microsoftAccess(ctx, accountID, inboxID)
+		if e != nil {
+			return store.DomainSendingConfig{}, e
+		}
+		enc, e := r.Service.encryptConfig(configAAD(accountID, inboxID), map[string]any{"access_token": t, "mailbox": c.Mailbox})
+		if e != nil {
+			return store.DomainSendingConfig{}, e
+		}
+		return store.DomainSendingConfig{ID: "remote:" + inboxID, AccountID: accountID, DomainID: inboxID, Provider: "microsoft", EncryptedConfig: enc}, nil
 	}
 	if r.Service.Store.IsGoogle(ctx, accountID, inboxID) {
 		if r.Remote == nil {
