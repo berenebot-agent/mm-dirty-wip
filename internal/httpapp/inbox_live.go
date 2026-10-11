@@ -105,6 +105,7 @@ func (s *Server) uiInboxLive(w http.ResponseWriter, r *http.Request) {
 		data.HasMore = hasMore
 		data.Before = cursor
 		data.PagerURL = pagerURL
+		s.pendingMessageOverlay(r, &data)
 		s.renderFragment(w, r, "live-list-card", data)
 	default:
 		http.Error(w, "not found", 404)

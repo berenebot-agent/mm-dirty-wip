@@ -288,6 +288,34 @@ POST /v1/messages/{id}/restore
 DELETE /v1/messages/{id}/purge
 ```
 
+Message mutations (including `POST /v1/messages/{id}/seen`) now use the same
+async-default / `?wait=true` convention as sending, for both domain and standalone
+inboxes. The default response is `202` with `{"queued":true,"action":{...}}`.
+The action contains an opaque `id`, `inbox_id`, `message_id`, `input`, and `state`.
+Follow the response's `Location` (`GET /v1/messages/{id}?action={action_id}`) to
+inspect completion, including after purge removes the message itself.
+The same queue is available through `GET /v1/actions` and `GET /v1/actions/{id}`.
+`POST /v1/actions/{id}` accepts `{"action":"retry"}` for failed jobs or
+`{"action":"dismiss"}` for settled jobs. These controls require Assistant or
+Owner and are the same core operations the human queue panel uses.
+States are `pending`, `running`, `done`, `failed`, or `ambiguous`.
+
+Add `?wait=true` to wait up to 30 seconds. Successful PATCH/restore returns the
+updated message; delete/purge returns `204`; seen returns `{id,seen}`.
+A wait timeout returns `504` with the action handle; it does not cancel the job.
+Failed or uncertain actions return `409` with their action record. Submission
+checks mailbox scope and roles before enqueueing; purge still requires Trash.
+Clients that previously depended on immediate mutation must add `?wait=true`.
+Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) queues one purge per cached
+trashed message and returns `202` with `actions`; `?wait=true` returns the
+completed `purged` count. Standalone enumeration covers the cached Trash index.
+
+Actions execute in submission order per message. Transient absolute-state patches
+have bounded retries; moves and purge with uncertain remote outcomes are never
+blindly replayed. The human UI's header status flag opens the shared queue,
+shows a red exclamation for failures, and offers Retry/Dismiss. An ambiguous
+action must be verified before dismissing it and submitting a new action.
+
 Filters may include:
 
 ```text

@@ -3471,6 +3471,32 @@ Go mirror, headroom/room check, delta apply, per-mutation sync), instrumentation
 of the existing remote write paths, sentinel mapping, one new unit-test file.
 No new dependency or runtime service. See `docs/MAILBOX_SERVICE_CONTRACT.md` §5.
 
+## D103 — Shared durable inbox action queue
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** Human mailbox actions must return promptly despite slow remote
+providers. API callers need the same capability, following send's async-default
+and `?wait=true` convention. Domain and standalone actions share one core.
+
+**Decision:** Persist message mutation jobs in SQLite (migration 064), executed
+by a dedicated process-owned, wake-driven action worker. Read/unread, labels,
+spam, trash, restore, move and purge use the common submission seam. Serialize
+per message; retry safe absolute-state changes with bounded backoff, never
+blindly repeat uncertain remote moves or purge. Keep provider locators confirmed;
+optimistic UI changes are an overlay, removed on failure. The header status flag
+opens the account-wide, mailbox-scoped queue and shows a red exclamation for
+failures, with Retry/Dismiss controls. Completed jobs expire after seven days.
+
+**Compatibility:** Message mutation endpoints now return a queued action by
+default. `?wait=true` preserves settled success responses; timeouts retain the
+durable job. Existing send/reply queues remain independent.
+
+**Complexity:** One table, store queue methods, app submission/waiter and worker,
+HTTP adapters, header queue view, and deterministic tests. No dependencies or
+additional runtime service. See `docs/API.md` and
+`docs/proposals/inbox-action-queue.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

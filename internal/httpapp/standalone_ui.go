@@ -365,6 +365,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 			data.RemoteConfig = view
 		}
 	}
+	s.pendingMessageOverlay(r, &data)
 	s.renderMail(w, r, folderBody, data)
 }
 

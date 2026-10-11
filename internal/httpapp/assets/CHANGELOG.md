@@ -730,3 +730,13 @@ standalone, and whether the approver is enabled for the effective mode. See
 - Added Gmail API operations, native labels and stable IDs, progressive metadata
   caching, History API updates, notification polling, sending and draft handoff.
 - Added Google setup documentation and deterministic transport/OAuth fixtures.
+# Durable mailbox action queue
+
+- Domain and standalone message actions share async submission and `?wait=true`,
+  matching send. Queued actions survive restart and execute in message order.
+- The header status flag opens the account-wide queue; pending counts and a red
+  exclamation identify work and failures. Retry/Dismiss are available in the UI
+  and through `/v1/actions`.
+- Read/unread, labels, spam, trash, restore, bulk move and purge—including Empty
+  Trash—use the shared action worker. Optimistic views preserve provider locators.
+- Existing clients expecting immediate mutations should add `?wait=true`.

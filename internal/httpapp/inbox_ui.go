@@ -749,6 +749,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 		Notice:                     r.URL.Query().Get("notice"),
 	}
 	s.applyStandaloneMailbox(r, p, box, &data)
+	s.pendingMessageOverlay(r, &data)
 	s.renderMail(w, r, inboxBody, data)
 }
 
@@ -1379,207 +1380,31 @@ func (s *Server) formAttachments(r *http.Request) ([]app.SendAttachment, error) 
 }
 
 func (s *Server) uiMessageLabels(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox message resolves its labels through the remote
-		// metadata cache (labels are local metadata on both kinds).
-		if s.remoteMessageSetLabels(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	label := strings.TrimSpace(r.Form.Get("label"))
-	current := append([]string{}, m.Labels...)
-	switch r.Form.Get("action") {
-	case "add":
-		if label == "" {
-			http.Redirect(w, r, "/ui/messages/"+m.ID, 303)
-			return
-		}
-		current = append(current, label)
-	case "remove":
-		kept := current[:0]
-		for _, l := range current {
-			if !strings.EqualFold(l, label) {
-				kept = append(kept, l)
-			}
-		}
-		current = kept
-	default:
-		http.Error(w, "unknown action", 400)
-		return
-	}
-	ev, err := s.Service.Store.ReplaceMessageLabels(r.Context(), p, m.ID, current)
-	if err != nil {
-		http.Redirect(w, r, "/ui/messages/"+m.ID+"?notice="+url.QueryEscape("Invalid label: "+err.Error()), 303)
-		return
-	}
-	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-	s.Service.Hub.Publish(ev)
-	http.Redirect(w, r, "/ui/messages/"+m.ID, 303)
+	s.queuedUIAction(w, r, "labels")
 }
 
 func (s *Server) uiMessageRead(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox message id resolves through the remote reader.
-		if s.remoteMessageSetRead(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	read := r.Form.Get("read") == "1"
-	if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &read); err != nil {
-		s.uiError(w, err, 400)
-		return
-	} else {
-		s.publishStateEvent(ev)
-	}
-	target := "/ui/inboxes/" + m.InboxID
-	if m.Direction == "outbound" {
-		target += "/sent"
-	}
-	http.Redirect(w, r, target, 303)
+	s.queuedUIAction(w, r, "read")
 }
 
 func (s *Server) uiMessageSpam(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox's message id resolves through the remote reader
-		// (spam is its remote Spam-role folder).
-		if s.remoteMessageSpam(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	spam := r.Form.Get("spam") == "1"
-	if _, ev, err := s.Service.Store.SetMessageSpam(r.Context(), p, m.ID, spam); err != nil {
-		s.uiError(w, err, 400)
-		return
-	} else if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(*ev)
-	}
-	target := "/ui/inboxes/" + m.InboxID
-	if spam {
-		target += "/spam"
-	}
-	http.Redirect(w, r, target, 303)
+	s.queuedUIAction(w, r, "spam")
 }
 
 func (s *Server) uiMessageDelete(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	// GetMessage enforces the per-mailbox Read role and TrashMessage the
-	// Assistant/Owner role, so a non-admin mailbox user can act on their own
-	// mail without the account-wide Admin flag. Delete moves the message to
-	// Trash; it is not erased until purged.
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox's message id resolves through the remote reader and
-		// moves to the inbox's remote Trash-role folder.
-		if s.remoteMessageTrash(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	_, ev, err := s.Service.Store.TrashMessage(r.Context(), p, m.ID)
-	if err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(*ev)
-	}
-	target := "/ui/inboxes/" + m.InboxID
-	if m.Direction == "outbound" {
-		target += "/sent"
-	}
-	target += "?notice=" + url.QueryEscape("1 message moved to trash")
-	http.Redirect(w, r, target, 303)
+	s.queuedUIAction(w, r, "delete")
 }
 
 func (s *Server) uiMessageRestore(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox's message id resolves through the remote reader and
-		// moves from its remote Trash folder back to the remote Inbox.
-		if s.remoteMessageRestore(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	_, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, m.ID)
-	if err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(*ev)
-	}
-	http.Redirect(w, r, "/ui/inboxes/"+m.InboxID+"/trash", 303)
+	s.queuedUIAction(w, r, "restore")
 }
 
 func (s *Server) uiMessagePurge(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		// A standalone inbox's message id resolves through the remote reader and
-		// is erased with a UID-targeted remote expunge.
-		if s.remoteMessagePurge(w, r, p, r.PathValue("id")) {
-			return
-		}
-		http.Error(w, "message not found", 404)
-		return
-	}
-	path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, m.ID)
-	if err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	if path != "" {
-		s.removeDataFile(path)
-	}
-	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-	s.Service.Hub.Publish(ev)
-	http.Redirect(w, r, "/ui/inboxes/"+m.InboxID+"/trash?notice=Message+deleted+permanently", 303)
+	s.queuedUIAction(w, r, "purge")
 }
 
 func (s *Server) uiInboxTrashEmpty(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "inbox not found", 404)
-		return
-	}
-	paths, events, err := s.Service.Store.EmptyTrash(r.Context(), p, box.ID)
-	if err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	for _, path := range paths {
-		s.removeDataFile(path)
-	}
-	for _, ev := range events {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(ev)
-	}
-	notice := fmt.Sprintf("Trash emptied (%d message", len(events))
-	if len(events) != 1 {
-		notice += "s"
-	}
-	notice += ")"
-	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape(notice), 303)
+	s.enqueueEmptyTrash(w, r, true)
 }
 
 func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {

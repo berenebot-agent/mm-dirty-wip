@@ -329,6 +329,8 @@ func (s *Server) Handler() http.Handler {
 	// list fragment the browser swaps in place.
 	m.HandleFunc("GET /ui/events/stream", s.withSession(s.uiEventsStream))
 	m.HandleFunc("GET /ui/state", s.withSession(s.uiState))
+	m.HandleFunc("GET /ui/actions", s.withSession(s.uiActionQueue))
+	m.HandleFunc("POST /ui/actions/{id}", s.withSession(s.withCSRF(s.uiActionQueue)))
 	m.HandleFunc("GET /ui/inboxes/{id}/live", s.withSession(s.uiInboxLive))
 
 	// Discovery.
@@ -380,6 +382,9 @@ func (rt apiRoute) bind(s *Server) http.HandlerFunc {
 // the code-side half of the auto-discovery contract: internal/apispec holds the
 // documentation table and a test fails when the two disagree.
 var v1Routes = []apiRoute{
+	{"GET /v1/actions", (*Server).uiActionQueue},
+	{"GET /v1/actions/{id}", (*Server).apiAction},
+	{"POST /v1/actions/{id}", (*Server).uiActionQueue},
 	{"GET /v1/bootstrap", (*Server).apiBootstrap},
 	{"GET /v1/limits", (*Server).apiLimits},
 	{"GET /v1/account/settings", (*Server).apiAccountSettings},

@@ -804,6 +804,15 @@ func (s *Server) listMessagesUnified(ctx context.Context, p model.Principal, f s
 	return s.mergeMessages(ctx, p, f, folder, cur, limit)
 }
 func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Query().Get("action") != "" {
+		a, err := s.Service.Store.GetMessageAction(r.Context(), principal(r), r.URL.Query().Get("action"))
+		if err != nil || a.MessageID != r.PathValue("id") {
+			writeError(w, 404, "not found")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"action": a})
+		return
+	}
 	p := principal(r)
 	id := r.PathValue("id")
 	switch r.Method {
@@ -848,98 +857,15 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		// A standalone inbox's message is cached remote metadata; a state change
-		// routes to the live server (read/flag) or the local label store.
-		if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
-			s.patchRemoteMessage(w, r, p, mb, id, in.Read, in.Labels)
-			return
-		}
-		if in.Read != nil {
-			ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, id, in.Read)
-			if err != nil {
-				mapStoreError(w, err)
-				return
-			}
-			s.publishStateEvent(ev)
-		}
-		if in.Spam != nil {
-			_, ev, err := s.Service.Store.SetMessageSpam(r.Context(), p, id, *in.Spam)
-			if err != nil {
-				mapStoreError(w, err)
-				return
-			}
-			if ev != nil {
-				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-				s.Service.Hub.Publish(*ev)
-			}
-		}
-		if in.Labels != nil {
-			ev, err := s.Service.Store.ReplaceMessageLabels(r.Context(), p, id, *in.Labels)
-			if err != nil {
-				mapStoreError(w, err)
-				return
-			}
-			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-			s.Service.Hub.Publish(ev)
-		}
-		m, err := s.Service.Store.GetMessage(r.Context(), p, id)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		writeJSON(w, 200, sanitizedMessage(m))
+		s.submitMessageAction(w, r, id, store.MessageActionInput{Kind: "patch", Read: in.Read, Spam: in.Spam, Labels: in.Labels}, false)
 	case http.MethodDelete:
-		// Delete moves the message to Trash (recoverable); use the purge route
-		// to erase it permanently. A standalone inbox's message is moved to its
-		// remote Trash folder instead.
-		if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, id); rerr == nil && remote {
-			if derr := s.trashRemoteMessage(r.Context(), p, mb, id); derr != nil {
-				mapMailboxError(w, derr)
-				return
-			}
-			w.WriteHeader(204)
-			return
-		}
-		_, ev, err := s.Service.Store.TrashMessage(r.Context(), p, id)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		if ev != nil {
-			s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-			s.Service.Hub.Publish(*ev)
-		}
-		w.WriteHeader(204)
+		s.submitMessageAction(w, r, id, store.MessageActionInput{Kind: "delete"}, false)
 	}
 }
 
 // apiMessageRestore returns a trashed message to the mailbox.
 func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	// A standalone inbox's message restores by moving it back to the remote Inbox.
-	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
-		if err := s.moveRemoteToRole(r.Context(), p, mb, r.PathValue("id"), model.FolderRoleInbox); err != nil {
-			mapMailboxError(w, err)
-			return
-		}
-		updated, uerr := s.resolveRemoteMessage(r.Context(), p, mb, r.PathValue("id"))
-		if uerr != nil {
-			mapMailboxError(w, uerr)
-			return
-		}
-		writeJSON(w, 200, sanitizedMessage(updated))
-		return
-	}
-	m, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(*ev)
-	}
-	writeJSON(w, 200, sanitizedMessage(m))
+	s.submitMessageAction(w, r, r.PathValue("id"), store.MessageActionInput{Kind: "restore"}, false)
 }
 
 // apiMessagePurge permanently erases a trashed message and unlinks its file. A
@@ -947,44 +873,12 @@ func (s *Server) apiMessageRestore(w http.ResponseWriter, r *http.Request) {
 // expunge. It requires Assistant or Owner (the store/app enforce this) and only
 // acts on a message already in the Trash-role folder.
 func (s *Server) apiMessagePurge(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	if _, mb, remote, rerr := s.resolveMessageAny(r.Context(), p, r.PathValue("id")); rerr == nil && remote {
-		if err := mb.remote.PurgeRemoteMessage(r.Context(), p, mb.inbox.ID, r.PathValue("id")); err != nil {
-			mapMailboxError(w, err)
-			return
-		}
-		w.WriteHeader(204)
-		return
-	}
-	path, _, ev, err := s.Service.Store.PurgeMessage(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	if path != "" {
-		s.removeDataFile(path)
-	}
-	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-	s.Service.Hub.Publish(ev)
-	w.WriteHeader(204)
+	s.submitMessageAction(w, r, r.PathValue("id"), store.MessageActionInput{Kind: "purge"}, false)
 }
 
 // apiInboxTrashEmpty permanently purges every trashed message in an inbox.
 func (s *Server) apiInboxTrashEmpty(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	paths, events, err := s.Service.Store.EmptyTrash(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		mapStoreError(w, err)
-		return
-	}
-	for _, path := range paths {
-		s.removeDataFile(path)
-	}
-	for _, ev := range events {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
-		s.Service.Hub.Publish(ev)
-	}
-	writeJSON(w, 200, map[string]int{"purged": len(events)})
+	s.enqueueEmptyTrash(w, r, false)
 }
 func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -999,7 +893,7 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 	if in.Seen != nil {
 		seen = *in.Seen
 	}
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	m, _, err := s.resolveActionMessage(r, p, r.PathValue("id"))
 	if err != nil {
 		mapStoreError(w, err)
 		return
@@ -1011,13 +905,7 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if ev, err := s.Service.Store.UpdateMessageState(r.Context(), p, m.ID, &seen); err != nil {
-		mapStoreError(w, err)
-		return
-	} else {
-		s.publishStateEvent(ev)
-	}
-	writeJSON(w, 200, map[string]any{"id": m.ID, "seen": seen})
+	s.submitMessageAction(w, r, m.ID, store.MessageActionInput{Kind: "patch", Read: &seen}, false)
 }
 func (s *Server) apiMessageAttachments(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)

@@ -48,7 +48,7 @@ func httpFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Do
 		t.Fatal(err)
 	}
 	seedInboundCredential(t, svc, u.AccountID, d.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
-	return svc, httpapp.New(svc, nil).Handler(), u, d, b
+	return svc, settledActionFixture(t, svc, app.NewRemoteMailboxService(svc), httpapp.New(svc, nil).Handler(), u.AccountID), u, d, b
 }
 
 const (
