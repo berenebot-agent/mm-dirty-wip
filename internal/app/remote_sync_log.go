@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/store"
@@ -82,12 +83,19 @@ func (m *RemoteMailboxService) logRemoteSync(ctx context.Context, accountID, inb
 		logger = slog.Default()
 	}
 	// The pass context may have been cancelled (per-pass timeout, or a client
-	// disconnect on the demand path); resolve the provider label and log under a
-	// context that is never cancelled so a completed pass is always reported.
+	// disconnect on the demand path); resolve the provider label, inbox address
+	// and log under a context that is never cancelled so a completed pass is
+	// always reported.
 	ctx = context.WithoutCancel(ctx)
+	// Address identifies the mailbox to an operator far better than the opaque
+	// id; fall back to the id only if the inbox row cannot be read.
+	address := inboxID
+	if inbox, err := m.Service.Store.GetInboxInternal(ctx, accountID, inboxID); err == nil && strings.TrimSpace(inbox.Address) != "" {
+		address = inbox.Address
+	}
 	attrs := []any{
 		"provider", m.remoteProviderLabel(ctx, accountID, inboxID),
-		"inbox_id", inboxID,
+		"inbox", address,
 		"trigger", remoteSyncTrigger(ctx),
 		"duration", time.Since(r.started).Round(time.Millisecond),
 		"new", r.new,
