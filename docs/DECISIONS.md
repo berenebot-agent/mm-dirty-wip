@@ -3386,6 +3386,14 @@ selection phase and is single-use. Shared connections therefore add
 `User.ReadBasic.All`. Inbox labels default from the operator's optional label,
 else the provider display name or connected address, and are editable later.
 
+**Amendment (2026-10-11, human approved):** The Google and Microsoft wizard steps
+no longer prompt for an inbox label. The label always defaults from the provider
+display name or the connected address and stays editable from the inbox'
+Identity tab. The Microsoft step presents two Microsoft-styled **Connect
+Microsoft** buttons — *Personal Inbox only* and *Personal Inbox and Shared
+Inbox* — in place of the previous pair, and both provider steps are grouped into
+bordered boxes headed by the provider logo.
+
 ## D101 — Microsoft own-mailbox push with durable delta catch-up
 
 **Decision (2026-10-11, human approved):** Extend D100 with automatic Graph Inbox

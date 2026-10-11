@@ -886,6 +886,13 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 		`data-wizard-step="imap"`,
 		`data-wizard-step="google"`,
 		`data-wizard-step="microsoft"`,
+		`class="wizard-box"`,
+		`data-google-begin`,
+		`data-microsoft-begin`,
+		`class="ms-connect"`,
+		"Connect Microsoft",
+		"Personal Inbox only",
+		"Personal Inbox and Shared Inbox",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("standalone wizard missing %q", want)
@@ -893,6 +900,14 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 	}
 	if strings.Contains(body, "Coming next") {
 		t.Fatal("standalone wizard still shows the disabled Microsoft 'coming next' button")
+	}
+	// The provider steps label the inbox automatically, so the operator is no
+	// longer prompted for a label.
+	if strings.Contains(body, "Inbox label") {
+		t.Fatal("standalone wizard still prompts for an inbox label")
+	}
+	if n := strings.Count(body, `class="ms-connect"`); n != 2 {
+		t.Fatalf("Microsoft step has %d connect buttons, want 2", n)
 	}
 }
 

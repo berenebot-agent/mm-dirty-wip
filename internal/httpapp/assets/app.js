@@ -3542,6 +3542,10 @@ function bindInboxSettingsShell(dlg) {
 						if (popup) { popup.opener = null; popup.location = result.authorization_url; status.textContent = 'Approve access, then paste the complete localhost URL below.'; }
 						else { var link = document.createElement('a'); link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open Microsoft sign-in'; status.replaceChildren(link); }
 					} else if (result.mailboxes) {
+						// The shared-mailbox picker replaces both halves of the connect
+						// flow, leaving only the picker and Back.
+						var begin = root.querySelector('[data-microsoft-begin]');
+						if (begin) { begin.hidden = true; }
 						form.hidden = true;
 						status.textContent = '';
 						showMicrosoftChoice(form, result.mailboxes, result.selection_state);
