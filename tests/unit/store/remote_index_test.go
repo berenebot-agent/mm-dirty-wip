@@ -116,6 +116,118 @@ func TestRemoteIndexAndLabels(t *testing.T) {
 	}
 }
 
+// TestRemotePartialValidityChangeKeepsCachedRows proves a UIDVALIDITY change on a
+// PARTIAL (windowed) pass does not transiently delete the folder's cached rows:
+// the stale-generation rows stay visible until a complete pass can prove them
+// obsolete. This is the regression guard for "recent mail vanished while a sync
+// ran".
+func TestRemotePartialValidityChangeKeepsCachedRows(t *testing.T) {
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 10},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolderBatch(ctx, acct, in.ID, "INBOX", 10, []store.RemoteMessageInput{
+		{UID: 1, RFCMessageID: "<m1@remote>", Subject: "One"},
+		{UID: 2, RFCMessageID: "<m2@remote>", Subject: "Two"},
+		{UID: 3, RFCMessageID: "<m3@remote>", Subject: "Three"},
+	}, []uint32{1, 2, 3}, true, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	// A UIDVALIDITY change arrives, but this pass only supplies a PARTIAL window
+	// of the new generation (prune=false).
+	if _, err := st.ReconcileRemoteFolderBatch(ctx, acct, in.ID, "INBOX", 20, []store.RemoteMessageInput{
+		{UID: 50, RFCMessageID: "<m50@remote>", Subject: "Newest"},
+	}, nil, false, 50, false); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := st.ListRemoteMessages(ctx, acct, in.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawOld := false
+	sawNew := false
+	for _, m := range msgs {
+		if m.UID == 2 && m.UIDValidity == 10 {
+			sawOld = true
+		}
+		if m.UID == 50 && m.UIDValidity == 20 {
+			sawNew = true
+		}
+	}
+	if !sawOld || !sawNew {
+		t.Fatalf("partial validity change dropped cached rows: old=%v new=%v rows=%d", sawOld, sawNew, len(msgs))
+	}
+	// A later COMPLETE pass prunes the stale-generation rows.
+	if _, err := st.ReconcileRemoteFolderBatch(ctx, acct, in.ID, "INBOX", 20, []store.RemoteMessageInput{
+		{UID: 50, RFCMessageID: "<m50@remote>", Subject: "Newest"},
+	}, []uint32{50}, true, 50, true); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err = st.ListRemoteMessages(ctx, acct, in.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].UID != 50 || msgs[0].UIDValidity != 20 {
+		t.Fatalf("complete pass did not prune stale generation: %+v", msgs)
+	}
+}
+
+// TestRemoteFolderPruneKeepsFoldersWithMessages proves a reduced folder discovery
+// does not delete a remote folder (and its cached messages) while it still holds
+// cached rows, and that an empty discovery prunes nothing at all.
+func TestRemoteFolderPruneKeepsFoldersWithMessages(t *testing.T) {
+	st, acct := seedStandaloneAccount(t)
+	ctx := context.Background()
+	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 10},
+		{Path: "Archive", Name: "Archive", Role: model.FolderRoleArchive, Selectable: true, UIDValidity: 10},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReconcileRemoteFolderBatch(ctx, acct, in.ID, "Archive", 10, []store.RemoteMessageInput{
+		{UID: 7, RFCMessageID: "<m7@remote>", Subject: "Archived"},
+	}, []uint32{7}, true, 7, true); err != nil {
+		t.Fatal(err)
+	}
+	// A reduced discovery omits Archive. Its cached message must survive.
+	folders, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, []store.RemoteFolderSync{
+		{Path: "INBOX", Name: "INBOX", Role: model.FolderRoleInbox, Selectable: true, UIDValidity: 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range folders {
+		if f.Path == "Archive" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("folder with cached messages was pruned by a reduced discovery")
+	}
+	if msgs, _ := st.ListRemoteMessages(ctx, acct, in.ID, "Archive"); len(msgs) != 1 {
+		t.Fatalf("cached messages pruned with folder: %d", len(msgs))
+	}
+	// An empty discovery prunes nothing.
+	if _, err := st.ReconcileRemoteFolders(ctx, acct, in.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if msgs, _ := st.ListRemoteMessages(ctx, acct, in.ID, "Archive"); len(msgs) != 1 {
+		t.Fatalf("empty discovery pruned cached messages: %d", len(msgs))
+	}
+}
+
 // TestMigration058RoleLockAndSentCopy proves migration 058 adds the role-lock and
 // sent-copy columns and the notification-message-id column on a fresh database.
 func TestMigration058RoleLockAndSentCopy(t *testing.T) {

@@ -8,6 +8,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- A standalone (IMAP) inbox no longer loses recent messages from the list while
+  a sync runs. Two reconcile paths could transiently (and sometimes permanently)
+  delete cached message metadata: a `UIDVALIDITY` change deleted every cached row
+  for a folder before re-inserting only the fetched window, and a reduced/partial
+  folder discovery pruned a folder together with its cached messages. Cached rows
+  are now dropped only against a complete snapshot, so metadata is preserved
+  across a transient reconcile. The reload button also no longer schedules the
+  deep reconcile (it was the concurrent rebuild that surfaced the disappearance).
+
 - A standalone (IMAP) inbox's message now opens in the same reader as any other
   message, so it exposes Reply, Reply all, Forward, Move to trash (and Restore /
   Delete forever in its Trash folder) instead of only "Mark unread". A reply or
@@ -43,9 +52,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ### Added
 
 - A square **reload button** on a standalone (IMAP) inbox toolbar, shown to
-  every user. It quick-syncs the current view: new-mail detection, a header
-  refresh of the messages on screen, and a background full sync — so new mail
-  and read/flag changes appear without a page reload. Requires only read access.
+  every user. It quick-syncs the current view — new-mail detection and a header
+  refresh of the messages on screen — so new mail and read/flag changes appear
+  without a page reload, and it never triggers a full reconcile. Requires only
+  read access.
 
 - Per-inbox **sync schedule** for standalone inboxes (Identity tab): how often
   to check for new mail and how often to run a full sync. Unset values inherit

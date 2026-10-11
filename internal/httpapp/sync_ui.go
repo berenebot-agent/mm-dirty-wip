@@ -12,14 +12,14 @@ import (
 // uiInboxSync is the square reload button's target: a quick, user-triggered sync
 // of a standalone (IMAP) inbox against its live server. It is available to any
 // principal with Read on the inbox, because it performs only header/arrival
-// reads and a background index catch-up; it never mutates remote state.
+// reads; it never mutates remote state and never deletes cached metadata.
 //
-// It runs the fast INBOX new-mail detection/index and re-syncs the headers of the
-// messages currently on screen (so read/flag changes show immediately), then
-// schedules the slower deep reconcile in the background and redirects straight
-// back to the same view. The page's live snapshot reports the in-flight reconcile
-// as "Syncing…" and swaps the list when it lands, so the user never blocks on the
-// full pass.
+// It runs the fast INBOX new-mail detection/quick-index and re-syncs the headers
+// of the messages currently on screen (so new mail and read/flag changes show
+// immediately), then redirects straight back to the same view. It deliberately
+// does NOT schedule the deep reconcile: that pass rewrites cached rows and could
+// transiently empty a folder, making recent mail vanish from the list while it
+// ran. The deep reconcile runs on the worker's own cadence.
 func (s *Server) uiInboxSync(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
@@ -44,18 +44,21 @@ func (s *Server) uiInboxSync(w http.ResponseWriter, r *http.Request) {
 	// sync. A domain inbox has no remote; the button is not shown for one, but
 	// guard anyway and simply return the user to their view.
 	if box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
+		// The reload button is deliberately QUICK and NON-DESTRUCTIVE: it runs
+		// only the two upsert-only paths (new-mail detection/quick-index and an
+		// on-screen header refresh). It must never trigger the deep reconcile
+		// here: a background reconcile concurrently rewrites a folder's cached
+		// rows (and can transiently empty it), which made recent mail vanish from
+		// the list while it ran. The deep reconcile runs on its own cadence.
+		//
 		// Mark the pass as an explicit manual sync so the completion log reports
 		// trigger=manual rather than the watcher's automatic cadence.
 		ctx := app.WithManualRemoteSync(r.Context())
-		// 1. Fast new-mail detection + quick INBOX index.
 		if s.Service.RemoteDetection != nil {
 			s.Service.RemoteDetection.DetectInbox(ctx, box)
 		}
-		// 2. Re-sync the on-screen page's headers so read/flag state is current.
 		ids := s.visibleRemoteMessageIDs(r, p, box, folder, label, before, folderID)
 		s.remoteMailbox().RefreshRemoteView(r.Context(), p, id, ids)
-		// 3. Deep reconcile in the background (never blocks the response).
-		s.remoteMailbox().ScheduleRefresh(p.AccountID, id)
 	}
 	http.Redirect(w, r, redirectInboxView(id, folder, label, before, folderID), 303)
 }
