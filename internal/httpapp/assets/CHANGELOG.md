@@ -32,6 +32,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   automatically — the operator's optional label, else the provider's display
   name or the connected address — so the identity tab can rename it later.
 
+### Changed
+
+- Adding a standalone inbox now picks the provider with one button per
+  provider instead of a radio list. **Add inbox → Standalone inbox** shows
+  **Google / Gmail**, **Microsoft / Outlook** and **IMAP + SMTP** as logo
+  buttons; the Google and Microsoft buttons open that provider's setup step
+  directly (no separate Next), and IMAP opens the in-dialog IMAP/SMTP form.
+  The stale "(coming later)" Google and Microsoft buttons on that form are
+  gone.
+
 ### Fixed
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest

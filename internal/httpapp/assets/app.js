@@ -3298,6 +3298,9 @@ function bindInboxSettingsShell(dlg) {
     if (name === 'choose') {
       return 'choose';
     }
+    if (name === 'sa-provider') {
+      return 'provider';
+    }
     if (name.indexOf('sa-') === 0) {
       return 'standalone';
     }
@@ -3311,11 +3314,14 @@ function bindInboxSettingsShell(dlg) {
       v.classList.remove('active');
     });
     var mode = modeFor(name);
+    // The two chooser steps carry no tabs and no footer submit; the provider
+    // step is the second half of the standalone flow.
+    var chooserStep = mode === 'choose' || mode === 'provider';
     tabs.forEach(function (t) {
       var tm = t.getAttribute('data-inbox-mode');
       // Untagged tabs belong to every kind. Tagged tabs show only in their
       // flow's mode. This never hides the tab that is about to be activated.
-      var visible = mode !== 'choose' && (!tm || tm === mode);
+      var visible = !chooserStep && (!tm || tm === mode);
       t.hidden = !visible;
       var on = visible && t.getAttribute('data-inbox-tab') === name;
       t.classList.toggle('active', on);
@@ -3325,11 +3331,15 @@ function bindInboxSettingsShell(dlg) {
       p.hidden = p.getAttribute('data-inbox-panel') !== name;
     });
     if (chooser) {
+      var heading = dlg.querySelector('.inbox-settings-head h2');
+      if (heading) {
+        heading.textContent = mode === 'provider' || mode === 'standalone' ? 'Add standalone inbox' : 'Add inbox';
+      }
       if (backBtn) {
         backBtn.hidden = mode === 'choose';
       }
       if (addSubmit) {
-        addSubmit.hidden = mode === 'choose';
+        addSubmit.hidden = chooserStep;
         if (mode === 'standalone') {
           addSubmit.textContent = 'Add standalone inbox';
           addSubmit.setAttribute('form', 'inbox-add-standalone-form');
@@ -3360,16 +3370,32 @@ function bindInboxSettingsShell(dlg) {
   if (chooser) {
     dlg.querySelectorAll('[data-inbox-choose] [data-choose]').forEach(function (tile) {
       tile.addEventListener('click', function () {
+        // Standalone inboxes pick a provider first: the two hosted providers
+        // open their own setup page, IMAP stays in this dialog.
         if (tile.getAttribute('data-choose') === 'standalone') {
-          window.location.assign('/ui/inboxes/standalone/new');
+          activate('sa-provider');
           return;
         }
         activate('basic');
       });
     });
+    dlg.querySelectorAll('[data-standalone-provider]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var provider = btn.getAttribute('data-standalone-provider');
+        if (provider === 'imap') {
+          activate('sa-basic');
+          return;
+        }
+        window.location.assign('/ui/inboxes/standalone/new?provider=' + encodeURIComponent(provider));
+      });
+    });
     if (backBtn) {
       backBtn.addEventListener('click', function () {
-        activate('choose');
+        // The IMAP form steps back to the provider list; anything else returns
+        // to the inbox-type chooser.
+        var panel = dlg.querySelector('[data-inbox-panel]:not([hidden])');
+        var current = panel ? panel.getAttribute('data-inbox-panel') : '';
+        activate(current === 'sa-basic' ? 'sa-provider' : 'choose');
       });
     }
   }
@@ -3416,18 +3442,35 @@ function bindInboxSettingsShell(dlg) {
       el.hidden = el.dataset.wizardStep !== step;
     });
   }
-  var reconnect = new URLSearchParams(window.location.search).get('google_inbox');
-	var microsoftReconnect = new URLSearchParams(window.location.search).get('microsoft_inbox');
+  var params = new URLSearchParams(window.location.search);
+  var reconnect = params.get('google_inbox');
+	var microsoftReconnect = params.get('microsoft_inbox');
 	if (microsoftReconnect) { root.querySelector('[data-microsoft-inbox]').value = microsoftReconnect; show('microsoft'); }
   if (reconnect) {
     root.querySelector('[data-google-inbox]').value = reconnect;
     show('google');
   }
+  // The Add-inbox dialog picks the provider and deep-links straight to its
+  // step, so this page's own provider chooser is skipped. Direct visits still
+  // land on the chooser below.
+  var deepProvider = params.get('provider');
+  var deepLinked = !reconnect && !microsoftReconnect && (deepProvider === 'google' || deepProvider === 'microsoft' || deepProvider === 'imap');
+  if (deepLinked) {
+    show(deepProvider);
+  }
   root.querySelector('[data-wizard-next]').addEventListener('click', function () {
     show(root.querySelector('[name=standalone_provider]:checked').value);
   });
   root.querySelectorAll('[data-wizard-back]').forEach(function (b) {
-    b.addEventListener('click', function () { show('provider'); });
+    b.addEventListener('click', function () {
+      // Arrived from the Add-inbox dialog: step back to the dashboard rather
+      // than to this page's own provider chooser.
+      if (deepLinked) {
+        window.location.assign('/');
+        return;
+      }
+      show('provider');
+    });
   });
   fetch('/ui/oauth/google/info', { credentials: 'same-origin' }).then(function (r) {
     if (!r.ok) { throw new Error('Could not load callback configuration'); }
