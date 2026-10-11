@@ -53,11 +53,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - The **action queue** behind the header status flag is now a small bubble
   anchored under the flag instead of a large modal. It reads in the flag's own
   13px type, names each action in plain language ("Move to trash", "Delete
-  permanently", "Mark read"), shows the state as a chip, lists failures first
+  permanently", "Mark read"), shows a plain status, lists failures first
   with Retry / Dismiss, and renders at most six rows with an "and N more" line,
   so a bulk delete of hundreds of messages no longer floods the pop-up.
 
 ### Fixed
+
+- The header action queue now stays hidden until opened and closes correctly.
+  Successful actions disappear from the popup as soon as the worker completes
+  them, leaving only queued work and actions that need attention.
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest
   messages. It submitted the page's outgoing "load older" cursor instead of the
