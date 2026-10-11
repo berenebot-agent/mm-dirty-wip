@@ -162,7 +162,7 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 		h.ServeHTTP(rr, r)
 		return rr
 	}
-	begin := post("/ui/oauth/google/begin", url.Values{"client_id": {"client"}, "client_secret": {"secret"}, "display": {"Google"}})
+	begin := post("/ui/oauth/google/begin", url.Values{"client_id": {"client"}, "client_secret": {"secret"}})
 	if begin.Code != 200 {
 		t.Fatalf("begin %d %s", begin.Code, begin.Body.String())
 	}
@@ -201,6 +201,9 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 	for _, b := range boxes {
 		if b.Address == "oauth@example.net" {
 			found = true
+			if b.DisplayName != "oauth@example.net" {
+				t.Fatalf("label not defaulted from the address: %#v", b)
+			}
 		}
 	}
 	if !found {

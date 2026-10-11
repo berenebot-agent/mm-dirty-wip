@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/transport"
@@ -55,6 +56,49 @@ func TestCursorBoundaryAndNativeReply(t *testing.T) {
 	}
 	if e = c.SendDraft(context.Background(), "token", "selected", d.ID); e != nil {
 		t.Fatal(e)
+	}
+}
+
+func TestSharedMailboxDiscoveryProbesAccess(t *testing.T) {
+	var mu sync.Mutex
+	probed := map[string]int{}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/users":
+			if got := r.URL.Query().Get("$select"); !strings.Contains(got, "displayName") || !strings.Contains(got, "mail") {
+				t.Errorf("directory select: %s", got)
+			}
+			w.Write([]byte(`{"value":[{"id":"1","displayName":"Owner","mail":"owner@example.net"},{"id":"2","displayName":"Box","mail":"box@example.net"},{"id":"3","displayName":"Other","mail":"other@example.net"},{"id":"4","displayName":"NoMail","mail":""}]}`))
+		case strings.HasSuffix(r.URL.Path, "/mailFolders/inbox"):
+			mu.Lock()
+			probed[r.URL.Path]++
+			mu.Unlock()
+			if r.URL.Path != "/users/box@example.net/mailFolders/inbox" {
+				w.WriteHeader(403)
+				return
+			}
+			w.Write([]byte(`{"id":"inbox"}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer s.Close()
+	c := microsoft.NewClient(s.Client())
+	c.BaseURL = s.URL
+	found, e := c.SharedMailboxes(context.Background(), "token", "owner@example.net")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(found) != 1 || found[0].Mail != "box@example.net" || found[0].DisplayName != "Box" {
+		t.Fatalf("discovery %#v", found)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if probed["/users/owner@example.net/mailFolders/inbox"] != 0 {
+		t.Fatal("signed-in mailbox was probed")
+	}
+	if probed["/users/other@example.net/mailFolders/inbox"] != 1 {
+		t.Fatal("candidate without access was not probed")
 	}
 }
 
