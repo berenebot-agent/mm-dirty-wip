@@ -3341,6 +3341,27 @@ non-INBOX folders, the folder tree and backfill, and belongs on a slow,
 configurable cadence, not every tick. Tying the quick path to the read index and
 adding a user-triggered refresh match how mainstream IMAP clients behave.
 
+**Amendment (floor, provider reporting and the provider save path):**
+
+- The quick-poll floor moved from 15s to one minute (`RemotePollSecondsMin = 60`),
+equal to the process default. The interval is operated in whole minutes, so a
+quicker poll is not expressible and an override can only slow a mailbox down; a
+sub-minute value stored before the change is clamped up on read, and polls at the
+floor. No migration is needed: the column keeps the raw value and every read path
+normalizes.
+- `GET /v1/inboxes/{id}/remote` now reports `poll_seconds` and
+`full_sync_minutes` for the Google and Microsoft branches too, not only for a
+hand-configured IMAP binding. A Microsoft delegated shared mailbox is poll-only
+(Graph has no change subscriptions for one), so an unreported cadence left that
+inbox with no visible delivery knob at all.
+- The Identity-tab save path no longer routes a provider-connected inbox through
+the live IMAP verification gate. A provider inbox's connector fields are hidden
+and disabled, so its blank form was read as a connector change; the gate then had
+no IMAP credentials to test and every Identity-tab save answered `IMAP connection
+failed: … credentials unavailable` while persisting nothing — not even the display
+name. `ConfigureStandaloneRemote` already refuses a provider inbox outright, so
+this aligns the save path with the connector path.
+
 **Complexity/resource budget:** One additive migration; model/store fields and a
 setter; a worker cadence helper and quick-index step; an adapter `Status` method
 and capability flags; one HTTP route plus a toolbar button and two settings

@@ -1043,6 +1043,16 @@ func (s *Server) composeRemoteMessage(w http.ResponseWriter, r *http.Request, p 
 // the IMAP/SMTP bindings (secret-free; blank secrets keep the stored value) and
 // the special-folder role mappings, showing detected folders and offering an
 // explicit select-or-create for each missing role.
+// providerConnected reports whether a standalone inbox is bound through a
+// provider OAuth connection (Microsoft or Google) rather than a hand-configured
+// IMAP/SMTP binding. Such an inbox has no editable connector on the Identity tab
+// — it shows the provider's reconnect link — and ConfigureStandaloneRemote
+// refuses to update it.
+func (s *Server) providerConnected(ctx context.Context, accountID, inboxID string) bool {
+	rm := s.remoteMailbox()
+	return rm.IsMicrosoft(ctx, accountID, inboxID) || rm.IsGoogle(ctx, accountID, inboxID)
+}
+
 func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
