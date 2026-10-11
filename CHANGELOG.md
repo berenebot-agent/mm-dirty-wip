@@ -660,3 +660,12 @@ standalone, and whether the approver is enabled for the effective mode. See
 - MX edge credentials are 256-bit.
 
 [Unreleased]: https://github.com/dellarb/mailmoose/commits/main
+# Google standalone inboxes
+
+- Added standalone provider selection with IMAP/SMTP, Google/Gmail and a
+  Microsoft/Outlook coming-next choice.
+- Added guided BYO Google app setup, exact callback instructions, OAuth with
+  encrypted offline tokens, and a validated callback-URL paste fallback.
+- Added Gmail API operations, native labels and stable IDs, progressive metadata
+  caching, History API updates, notification polling, sending and draft handoff.
+- Added Google setup documentation and deterministic transport/OAuth fixtures.

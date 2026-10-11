@@ -458,6 +458,11 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		// no match carries a scan continuation so the next page continues deeper
 		// instead of re-scanning the same window.
 		scanUID := uint32(0)
+		google := mb.remote.IsGoogle(ctx, p.AccountID, mb.inbox.ID)
+		scanProvider := cur.sourceCursor(mb.inbox.ID)
+		if raw := cur.scanCursor(mb.inbox.ID); raw != "" {
+			scanProvider = raw
+		}
 		if raw := strings.TrimSpace(cur.sourceCursor(mb.inbox.ID)); raw != "" {
 			if n, cerr := strconv.ParseUint(raw, 10, 32); cerr == nil {
 				scanUID = uint32(n)
@@ -477,15 +482,16 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		var rerr error
 		for scan := 0; scan < remoteFilterScanMaxPages && collected <= limit; scan++ {
 			res, e := mb.remote.SearchRemote(ctx, p, mb.inbox.ID, app.RemoteSearchQuery{
-				FolderPath: folder,
-				From:       from,
-				To:         to,
-				Subject:    subject,
-				Text:       q,
-				Unread:     unread,
-				Label:      label,
-				Limit:      rawLimit,
-				Cursor:     scanUID,
+				FolderPath:     folder,
+				From:           from,
+				To:             to,
+				Subject:        subject,
+				Text:           q,
+				Unread:         unread,
+				Label:          label,
+				Limit:          rawLimit,
+				Cursor:         scanUID,
+				ProviderCursor: scanProvider,
 			})
 			if e != nil {
 				rerr = e
@@ -505,6 +511,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 				if v.UID != 0 {
 					cur = strconv.FormatUint(uint64(v.UID), 10)
 				}
+				if google {
+					cur = v.ProviderCursor
+				}
 				entries = append(entries, mergedItem{msg: m, source: mb.inbox.ID, cursor: cur, ts: ts, key: stableKey(ts, m.ID)})
 				collected++
 				if collected > limit {
@@ -516,6 +525,14 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			}
 			// The server search is newest-first; NextCursor is the lowest UID it
 			// enumerated. If it did not advance (or was exhausted) stop scanning.
+			if google {
+				if res.ProviderCursor == "" || res.ProviderCursor == scanProvider {
+					exhausted = true
+					break
+				}
+				scanProvider = res.ProviderCursor
+				continue
+			}
 			if res.NextCursor == 0 || res.NextCursor == scanUID {
 				exhausted = true
 				break
@@ -527,6 +544,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 			completeness = model.CompletenessPartial
 		} else if collected == 0 && !exhausted && scanUID != 0 {
 			scanCursors[mb.inbox.ID] = strconv.FormatUint(uint64(scanUID), 10)
+		}
+		if google && collected == 0 && !exhausted && scanProvider != "" {
+			scanCursors[mb.inbox.ID] = scanProvider
 		}
 	}
 	items, next := pageMerged(entries, cur, limit, scanCursors)

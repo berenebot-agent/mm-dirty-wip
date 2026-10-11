@@ -231,6 +231,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("inboxes", "remote_sent_copy_folder"),
 			columnAdded("assistant_handling_requests", "notification_message_id"),
 		)},
+		{version: "059", sql: migration059, detect: stateOf(tableExists("inbox_google_connections"))},
 	}
 }
 

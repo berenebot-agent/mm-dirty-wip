@@ -3206,8 +3206,13 @@ clean break.
   header/thread metadata; bodies and attachments stay live on the remote
   server and are never archived. Threads stay scoped to account + inbox.
 - **Encrypted credentials.** `inbox_remote_credentials` holds the encrypted
-  IMAP (and optional SMTP) secrets under `APP_ENCRYPTION_KEY`. TLS is mandatory;
-  plaintext is never offered and there is no automatic cleartext fallback.
+  IMAP (and optional SMTP) secrets under `APP_ENCRYPTION_KEY`. TLS is the
+  default and a connection never downgrades to a weaker mode; there is no
+  automatic cleartext fallback. Plaintext is an explicit operator choice
+  rather than a ban: it is offered for self-hosted servers (with a UI warning
+  on the connection dialog and the connection-settings page), never
+  auto-selected, gated behind a per-connection opt-in (`AllowPlain`), and a
+  deployment policy may refuse it outright.
 - **External aliases removed.** The `external_aliases` feature (store, model,
   service, HTTP, UI, spec) is deleted. Migration 053 drops the table and the
   three attribution columns and discards external-alias-specific unsent drafts,
@@ -3263,6 +3268,33 @@ as discovered by `NAMESPACE` (`Other`/`Shared` always excluded); when `NAMESPACE
 is unsupported the scope is deliberately conservative (the explicit root,
 default `INBOX`, and its children). See `docs/MAILBOX_SERVICE_CONTRACT.md`
 §1/§3/§5.
+
+## D098 — BYO Google connected inboxes
+
+**Requirement:** Connect a Google mailbox through the standalone wizard, using
+an operator-owned OAuth app and the same metadata-first browsing and common
+mailbox operations as IMAP.
+
+**Decision (2026-10-11):** Use Google Web application authorization-code OAuth
+with state, PKCE S256, offline access and an exact `BASE_URL` callback. Provide a
+same-callback URL paste fallback when the browser cannot load the return page.
+Each inbox stores its client secret and tokens encrypted under account/inbox AAD.
+Gmail message and thread IDs are opaque and stable; multiple label memberships
+share one metadata record. Gmail protocol code stays in `internal/transport/gmail`.
+History cursors and progressive metadata backfill replace IMAP's UID traversal.
+Notification detection has an independent cursor. Request `gmail.modify` and
+report permanent deletion unsupported. Send via Gmail and create native drafts;
+Gmail owns its Sent copy. Microsoft is visible as a future wizard choice.
+
+**Reason:** IMAP UID locators and single-folder membership cannot faithfully
+represent Gmail labels. A small provider-specific extension behind the existing
+mailbox boundary preserves source-of-truth, permission and body-storage rules.
+
+**Complexity/resource budget:** One additive migration for encrypted Google
+bindings, one-time OAuth attempts, opaque ID/label membership mappings and
+independent detection cursors. Standard-library REST/OAuth, SQLite and the
+existing process-owned workers; no new dependency or runtime service. Background
+metadata work is coalesced and bounded. See `docs/GOOGLE.md`.
 
 ## Future extension register
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
@@ -229,6 +230,13 @@ func (s *Store) RemoteMessageForArrival(ctx context.Context, accountID, arrivalI
 	a, err := s.GetRemoteArrival(ctx, accountID, arrivalID)
 	if err != nil {
 		return RemoteMessage{}, err
+	}
+	if s.IsGoogle(ctx, accountID, a.InboxID) {
+		id, e := s.GoogleLocalID(ctx, accountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "gmail:"))
+		if e != nil {
+			return RemoteMessage{}, e
+		}
+		return s.GetRemoteMessage(ctx, accountID, a.InboxID, id)
 	}
 	if rec, gerr := s.GetRemoteMessageByUID(ctx, accountID, a.InboxID, a.FolderPath, a.UIDValidity, a.UID); gerr == nil {
 		return rec, nil
