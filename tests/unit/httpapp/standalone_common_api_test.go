@@ -893,6 +893,12 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 		"Connect Microsoft",
 		"Personal Inbox only",
 		"Personal Inbox and Shared Inbox",
+		// The Microsoft step is the only provider that finishes by pasting a
+		// localhost URL back, so it ships the flashing paste prompt above the
+		// completion field, plus the keyframes that pulse it.
+		`data-microsoft-paste-hint`,
+		"Paste the resulting URL here",
+		`@keyframes paste-hint-flash`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("standalone wizard missing %q", want)

@@ -3736,6 +3736,33 @@ function bindInboxSettingsShell(dlg) {
       }).finally(function () { submit.disabled = false; });
     });
   });
+	// openOAuthPopup opens the provider sign-in in a centred partial-screen
+	// window so the wizard stays visible behind it. It stays narrow but tall so
+	// the browser keeps its address bar: the Microsoft flow finishes on a
+	// localhost URL that cannot load, and copying that URL out of the window is
+	// the only way to complete the connection. The fixed name reuses one window
+	// when the operator starts a sign-in again.
+	function openOAuthPopup() {
+		var w = 520, h = 720;
+		var left = Math.max(0, window.screenX + Math.round((window.outerWidth - w) / 2));
+		var top = Math.max(0, window.screenY + Math.round((window.outerHeight - h) / 2));
+		return window.open('about:blank', 'mm-oauth-signin', 'popup=yes,width=' + w + ',height=' + h + ',left=' + left + ',top=' + top + ',resizable=yes,scrollbars=yes,location=yes');
+	}
+
+	// flashPasteHint reveals the paste-the-URL prompt at the top of the finish
+	// box and pulses it. Removing the class and forcing a reflow restarts the
+	// animation, so a second sign-in flashes it again rather than leaving it
+	// silently already-flashed.
+	function flashPasteHint() {
+		var hint = root.querySelector('[data-microsoft-paste-hint]');
+		if (!hint) { return; }
+		hint.hidden = false;
+		hint.classList.remove('flash');
+		void hint.offsetWidth;
+		hint.classList.add('flash');
+		hint.scrollIntoView({ block: 'nearest' });
+	}
+
 	root.querySelectorAll('[data-microsoft-begin], [data-microsoft-finish]').forEach(function (form) {
 		// The begin step carries two submit buttons; keep the hidden default in
 		// sync on click so the chosen type survives browsers that omit the
@@ -3750,7 +3777,7 @@ function bindInboxSettingsShell(dlg) {
 			event.preventDefault();
 			var status = root.querySelector('[data-microsoft-status]');
 			form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-			var popup = form.hasAttribute('data-microsoft-begin') ? window.open('about:blank', '_blank') : null;
+			var popup = form.hasAttribute('data-microsoft-begin') ? openOAuthPopup() : null;
 			status.textContent = 'Connecting…';
 			function submit(body) {
 				fetch(form.action, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) {
@@ -3758,6 +3785,7 @@ function bindInboxSettingsShell(dlg) {
 					return r.json();
 				}).then(function (result) {
 					if (result.authorization_url) {
+						flashPasteHint();
 						if (popup) { popup.opener = null; popup.location = result.authorization_url; status.textContent = 'Approve access, then paste the complete localhost URL below.'; }
 						else { var link = document.createElement('a'); link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open Microsoft sign-in'; status.replaceChildren(link); }
 					} else if (result.mailboxes) {
