@@ -81,6 +81,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   download) and its conversation thread from the cached remote index, and
   offers a plain-text alternative when the body has both HTML and text.
 
+- Saving the Identity tab of a Microsoft- or Google-connected inbox no longer
+  fails. Its connector fields are hidden and disabled, so the blank form was read
+  as a connector change and sent through the live IMAP sign-in test, which has no
+  IMAP credentials to test for a provider inbox: the save answered "IMAP
+  connection failed: … credentials unavailable" and persisted nothing, not even
+  the display name.
+
 ### Performance
 
 - Opening a standalone message immediately renders cached metadata with a body
@@ -111,8 +118,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   read access.
 
 - Per-inbox **sync schedule** for standalone inboxes (Identity tab): how often
-  to check for new mail and how often to run a full sync. Unset values inherit
-  the defaults (60s / 15m); entries are clamped to safe minimums.
+  to check for new mail and how often to run a full sync, both in whole minutes.
+  Unset values inherit the defaults (1 minute / 15 minutes); the new-mail poll is
+  floored at one minute. The schedule is shown for a provider-connected inbox too,
+  not only a hand-configured IMAP one — a Microsoft delegated shared mailbox is
+  poll-only, since Graph has no change subscriptions for it.
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
   `standalone`). A standalone mailbox owns an address independent of any managed

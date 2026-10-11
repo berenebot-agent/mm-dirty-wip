@@ -189,6 +189,10 @@ const (
 	RemotePollSecondsMin         = 60
 	RemoteFullSyncMinutesDefault = 15
 	RemoteFullSyncMinutesMin     = 1
+	// RemotePollMinutesMin is the new-mail poll as the settings form states it:
+	// whole minutes, mirroring RemotePollSecondsMin. The form's minutes are
+	// converted to the column's seconds at the save boundary.
+	RemotePollMinutesMin = RemotePollSecondsMin / 60
 )
 
 // NormalizeRemotePollSeconds resolves a per-inbox quick-poll override to an

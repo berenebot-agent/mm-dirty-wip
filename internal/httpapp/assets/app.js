@@ -2301,6 +2301,25 @@ function clearUrlParams(names) {
       el.hidden = !standalone || google;
       el.querySelectorAll('input, select').forEach(function (field) { field.disabled = google; });
     });
+    // The sync schedule applies to every standalone inbox, including a
+    // provider-connected one: a Microsoft delegated shared mailbox is poll-only,
+    // because Graph has no change subscriptions for it. It sits outside the IMAP
+    // connector block above so the provider hide rule leaves it alone.
+    var schedule = document.getElementById('inbox-sync-schedule');
+    if (schedule) {
+      schedule.hidden = !standalone;
+      schedule.querySelectorAll('input').forEach(function (field) { field.disabled = !standalone; });
+    }
+    var scheduleNote = document.getElementById('inbox-schedule-note');
+    if (scheduleNote) {
+      if (cfg.capabilities && cfg.capabilities.realtime) {
+        scheduleNote.textContent = 'Instant push is active for this mailbox, so new mail arrives on its own; the poll below is only a safety net.';
+      } else if (google) {
+        scheduleNote.textContent = 'This mailbox has no instant push, so new mail arrives on this poll.';
+      } else {
+        scheduleNote.textContent = 'New mail is pushed instantly when the server supports IDLE; these intervals govern the fallback poll and the periodic full sync.';
+      }
+    }
     var googleLink = dlg.querySelector('[data-google-reconnect]');
     if (!googleLink) {
       googleLink = document.createElement('a');
@@ -2354,11 +2373,12 @@ function clearUrlParams(names) {
     if (settingsLink) {
       settingsLink.setAttribute('href', '/ui/inboxes/' + encodeURIComponent(inboxID) + '/remote');
     }
-    var pollSeconds = document.getElementById('inbox-remote-poll-seconds');
+    var pollMinutes = document.getElementById('inbox-remote-poll-minutes');
     var fullSync = document.getElementById('inbox-remote-full-sync-minutes');
-    if (pollSeconds) {
-      pollSeconds.value = cfg.poll_seconds || '';
-      pollSeconds.placeholder = '60';
+    // The form states the poll in whole minutes; the API reports it in seconds.
+    if (pollMinutes) {
+      pollMinutes.value = cfg.poll_seconds ? Math.round(cfg.poll_seconds / 60) : '';
+      pollMinutes.placeholder = '1';
     }
     if (fullSync) {
       fullSync.value = cfg.full_sync_minutes || '';

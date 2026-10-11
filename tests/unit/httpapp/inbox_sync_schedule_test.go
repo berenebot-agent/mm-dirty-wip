@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -122,8 +123,9 @@ func TestInboxSettingsSaveCadenceKeepsProviderGrant(t *testing.T) {
 			}
 
 			cookie, csrf := uiSession(t, svc, u.ID)
+			// The Identity tab states the poll in whole minutes.
 			rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/edit",
-				"_csrf="+csrf+"&display=Shared&remote_poll_seconds=120&remote_full_sync_minutes=30")
+				"_csrf="+csrf+"&display=Shared&remote_poll_minutes=2&remote_full_sync_minutes=30")
 			if rr.Code != http.StatusSeeOther {
 				t.Fatalf("settings save = %d location=%q body=%s", rr.Code, rr.Header().Get("Location"), rr.Body.String())
 			}
@@ -156,6 +158,54 @@ func TestInboxSettingsSaveCadenceKeepsProviderGrant(t *testing.T) {
 				t.Fatalf("cadence after save = %v/%v, want 120/30", stored.RemotePollSeconds, stored.RemoteFullSyncMinutes)
 			}
 		})
+	}
+}
+
+// TestInboxSettingsPollMinutesConvertedAndBounded proves the Identity tab's
+// new-mail poll is entered in whole minutes and converted to the column's
+// seconds, that a blank field keeps inheriting the process default (no override
+// row), and that the one-minute floor rejects a zero instead of storing a poll
+// of nothing. The connector fields are submitted as the dialog sends them, so
+// the save is a real Identity-tab save rather than a partial form.
+func TestInboxSettingsPollMinutesConvertedAndBounded(t *testing.T) {
+	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+	// The fixture's connector, resubmitted unchanged so the save is not read as a
+	// connector update and does not run the live IMAP test.
+	connector := "&remote_host=imap.remote.test&remote_port=143&remote_username=agent@remote.test&remote_security=plain&namespace="
+	post := func(poll string) *httptest.ResponseRecorder {
+		return uiPost(t, h, cookie, "/ui/inboxes/"+standalone.ID+"/edit",
+			"_csrf="+csrf+"&display=Agent"+connector+"&remote_poll_minutes="+poll)
+	}
+
+	// Five minutes is stored as 300 seconds.
+	if rr := post("5"); rr.Code != http.StatusSeeOther {
+		t.Fatalf("minutes save = %d body=%s", rr.Code, rr.Body.String())
+	}
+	box, err := svc.Store.GetInboxInternal(ctx, u.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.RemotePollSeconds == nil || *box.RemotePollSeconds != 300 {
+		t.Fatalf("poll seconds = %v, want 300", box.RemotePollSeconds)
+	}
+
+	// The floor is one minute, so a zero is refused rather than stored.
+	if rr := post("0"); rr.Code != http.StatusBadRequest {
+		t.Fatalf("zero minutes = %d, want 400", rr.Code)
+	}
+
+	// A blank field inherits the default again, clearing the override.
+	if rr := post(""); rr.Code != http.StatusSeeOther {
+		t.Fatalf("blank poll = %d body=%s", rr.Code, rr.Body.String())
+	}
+	box, err = svc.Store.GetInboxInternal(ctx, u.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.RemotePollSeconds != nil {
+		t.Fatalf("blank poll kept an override: %v", *box.RemotePollSeconds)
 	}
 }
 

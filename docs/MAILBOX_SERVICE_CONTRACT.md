@@ -288,8 +288,9 @@ read). The full interval governs how often the deep reconcile runs (previously t
 worker re-ran it roughly every minute). Both are reported by
 `GET /v1/inboxes/{id}/remote` (`poll_seconds`, `full_sync_minutes`) for every
 standalone provider — IMAP, Google and Microsoft — so a client sees one unit per
-field. On the Identity tab they are edited from the remote (IMAP) connector
-section.
+field. On the Identity tab they are edited from the sync schedule block, which is
+shown for every standalone inbox — including a provider-connected one — as whole
+minutes for the poll and minutes for the full sync.
 
 Microsoft uses the same split: the quick pass applies only the Inbox folder's
 stored delta cursor (no folder-tree enumeration), and the deep reconcile runs on
