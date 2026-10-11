@@ -187,7 +187,23 @@ func (m *RemoteMailboxService) googleFolders(ctx context.Context, account, inbox
 	}
 	return e
 }
+
+// reconcileGoogle runs one Gmail full reconcile and emits the operator-facing
+// completion line. New arrivals are reported by the history detection pass
+// (detectGoogle), so this deep index pass always reports new=0; its value is the
+// index completeness and duration.
 func (m *RemoteMailboxService) reconcileGoogle(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
+	start := time.Now()
+	status, err := m.reconcileGooglePass(ctx, account, inbox)
+	result := remoteSyncResult{started: start, status: syncStatus(status.Status), err: err}
+	if err != nil {
+		result.status = "error"
+	}
+	m.logRemoteSync(ctx, account, inbox, result)
+	return status, err
+}
+
+func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
 	if e := m.Service.Store.BeginGoogleRefresh(ctx, account, inbox); e != nil {
 		return store.RemoteIndexStatus{}, e
 	}

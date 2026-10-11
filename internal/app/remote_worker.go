@@ -545,8 +545,40 @@ func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
 	return w.pollInterval
 }
 
-// detectInbox runs one durable detection pass for one inbox. It opens a session,
-// reads the live UID set of the selected folder, and:
+// detectInbox runs one durable detection pass for one inbox and emits the
+// operator-facing completion line for the IMAP connector. Microsoft and Google
+// have dedicated passes (reconcileMicrosoft, detectGoogle) that log their own
+// completion, so this wrapper delegates to them without a second line. A
+// connection failure returns without touching the cursor.
+func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
+	if w.stopping() {
+		return
+	}
+	start := time.Now()
+	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		w.detectMicrosoft(ctx, inbox)
+		return
+	}
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		w.detectGoogle(ctx, inbox)
+		return
+	}
+	arrived, status, err := w.detectInboxIMAP(ctx, inbox)
+	result := remoteSyncResult{started: start, new: arrived, status: status, err: err}
+	if err != nil {
+		result.status = "error"
+	}
+	w.remote.logRemoteSync(ctx, inbox.AccountID, inbox.ID, result)
+}
+
+// detectMicrosoft runs the Microsoft delta reconcile the on-demand detection path
+// uses. The reconcile itself logs the completion line, so this only delegates.
+func (w *RemoteWorker) detectMicrosoft(ctx context.Context, inbox model.Inbox) {
+	_, _ = w.remote.ReconcileRemote(ctx, inbox.AccountID, inbox.ID)
+}
+
+// detectInboxIMAP runs one durable IMAP detection pass for one inbox. It opens a
+// session, reads the live UID set of the selected folder, and:
 //
 //   - on the first ever pass (no cursor) establishes the baseline to the current
 //     max UID WITHOUT emitting arrivals, so enabling the watcher on an existing
@@ -556,16 +588,18 @@ func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
 //     order and the cursor is only advanced to the highest UID whose arrival rows
 //     have all been persisted, so a mid-pass failure re-detects rather than skips.
 //
-// A connection failure returns without touching the cursor.
-func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
+// It returns the number of newly-recorded arrivals, a status ("complete" when the
+// pass completed, "partial" when it returned early and will retry) and any error.
+func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (arrived int, status string, err error) {
+	status = "complete"
 	if w.stopping() {
-		return
+		return 0, "partial", nil
 	}
 	key := inbox.AccountID + ":" + inbox.ID
 	w.detectionMu.Lock()
 	if w.detecting[key] {
 		w.detectionMu.Unlock()
-		return
+		return 0, "partial", nil
 	}
 	w.detecting[key] = true
 	w.detectionMu.Unlock()
@@ -574,19 +608,11 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		delete(w.detecting, key)
 		w.detectionMu.Unlock()
 	}()
-	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
-		_, _ = w.remote.ReconcileRemote(ctx, inbox.AccountID, inbox.ID)
-		return
-	}
-	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
-		w.detectGoogle(ctx, inbox)
-		return
-	}
 	folder := w.inboxFolder(inbox)
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {
 		w.log.Debug("remote detection open", "inbox_id", inbox.ID, "error", err)
-		return
+		return 0, "partial", err
 	}
 	defer sess.Close()
 
@@ -595,13 +621,13 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	validity, verr := remoteFolderUIDValidity(ctx, sess, folder)
 	if verr != nil {
 		w.log.Debug("remote detection validity", "inbox_id", inbox.ID, "error", verr)
-		return
+		return 0, "partial", verr
 	}
 
 	cursor, ok, cerr := w.svc.Store.GetRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder)
 	if cerr != nil {
 		w.log.Error("remote detection cursor", "inbox_id", inbox.ID, "error", cerr)
-		return
+		return 0, "partial", cerr
 	}
 	if !ok || !cursor.BaselineDone || (cursor.UIDValidity != 0 && cursor.UIDValidity != validity) {
 		// First observation (or a UIDVALIDITY reset): establish the notification
@@ -613,7 +639,7 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		res, serr := sess.Search(ctx, folder, imap.SearchQuery{NewestFirst: true, Limit: 1})
 		if serr != nil {
 			w.log.Debug("remote detection baseline search", "inbox_id", inbox.ID, "error", serr)
-			return
+			return 0, "partial", serr
 		}
 		maxUID := uint32(0)
 		if len(res.UIDs) > 0 {
@@ -621,7 +647,7 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		}
 		if err := w.svc.Store.EstablishRemoteBaseline(ctx, inbox.AccountID, inbox.ID, folder, validity, maxUID); err != nil {
 			w.log.Error("remote baseline establish", "inbox_id", inbox.ID, "error", err)
-			return
+			return 0, "partial", err
 		}
 		// Record the notification baseline flag once so a later pass never treats
 		// the pre-existing backlog as notifiable.
@@ -630,7 +656,7 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 				w.log.Warn("remote baseline flag", "inbox_id", inbox.ID, "error", merr)
 			}
 		}
-		return
+		return 0, "complete", nil
 	}
 
 	// Incremental: the oldest new UIDs strictly above the cursor, fetched with an
@@ -641,11 +667,11 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	res, err := sess.Search(ctx, folder, imap.SearchQuery{AfterUID: cursor.LastUID, Limit: remoteArrivalPageLimit})
 	if err != nil {
 		w.log.Debug("remote detection search", "inbox_id", inbox.ID, "error", err)
-		return
+		return 0, "partial", err
 	}
 	newUIDs := res.UIDs
 	if len(newUIDs) == 0 {
-		return
+		return 0, "complete", nil
 	}
 	// Defensive: a session that ignores Limit must not blow the per-pass bound.
 	if len(newUIDs) > remoteArrivalPageLimit {
@@ -654,14 +680,14 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	headers, liveValidity, herr := sess.ListHeaders(ctx, folder, newUIDs, len(newUIDs))
 	if herr != nil {
 		w.log.Debug("remote detection headers", "inbox_id", inbox.ID, "error", herr)
-		return
+		return 0, "partial", herr
 	}
 	// A UIDVALIDITY change between the SEARCH and the FETCH means the UIDs no
 	// longer name the messages the search found; do not record arrivals under a
 	// stale generation. The cursor is left unadvanced so the next pass re-baselines.
 	if liveValidity != 0 && liveValidity != validity {
 		w.log.Debug("remote detection generation changed mid-pass", "inbox_id", inbox.ID, "want", validity, "live", liveValidity)
-		return
+		return 0, "partial", nil
 	}
 	byUID := map[uint32]imap.MessageHeader{}
 	for _, h := range headers {
@@ -696,18 +722,26 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		if aerr != nil {
 			w.log.Error("remote arrival record", "inbox_id", inbox.ID, "uid", uid, "error", aerr)
 			// Do not advance past an unrecorded UID: a later pass retries it.
+			err = aerr
+			status = "partial"
 			break
 		}
 		if inserted {
+			arrived++
 			w.onNewArrival(ctx, inbox, arrival)
 		}
 		highestRecorded = uid
 	}
 	if highestRecorded > cursor.LastUID {
-		if err := w.svc.Store.AdvanceRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder, validity, highestRecorded); err != nil {
-			w.log.Error("remote cursor advance", "inbox_id", inbox.ID, "error", err)
+		if aerr := w.svc.Store.AdvanceRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder, validity, highestRecorded); aerr != nil {
+			w.log.Error("remote cursor advance", "inbox_id", inbox.ID, "error", aerr)
+			if err == nil {
+				err = aerr
+				status = "partial"
+			}
 		}
 	}
+	return arrived, status, err
 }
 
 // quickIndexHeaders upserts fetched INBOX header metadata into the read index

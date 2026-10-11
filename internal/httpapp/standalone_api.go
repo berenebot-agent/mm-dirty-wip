@@ -1007,7 +1007,7 @@ func (s *Server) apiInboxRemoteRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "forbidden")
 		return
 	}
-	status, err := s.remoteMailbox().ReconcileRemote(r.Context(), p.AccountID, inboxID)
+	status, err := s.remoteMailbox().ReconcileRemote(app.WithManualRemoteSync(r.Context()), p.AccountID, inboxID)
 	if err != nil {
 		mapMailboxError(w, err)
 		return
