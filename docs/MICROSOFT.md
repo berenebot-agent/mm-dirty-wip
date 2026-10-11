@@ -145,7 +145,9 @@ Connection settings show push setup/active/retrying status; the API realtime
 capability is true only while a recorded push subscription is active and unexpired.
 Shared delegated mailboxes retain polling: Graph does not support change
 subscriptions with delegated shared-mailbox permissions. Shared push would
-require a separately approved application-permission integration.
+require a separately approved application-permission integration. The Identity
+tab's **sync schedule** is therefore how new mail arrives for one: nothing beats
+that poll, so the quick interval is the mailbox's real delivery latency.
 
 ## Rollout acceptance
 
