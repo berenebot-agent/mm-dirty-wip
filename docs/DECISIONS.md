@@ -3296,6 +3296,46 @@ independent detection cursors. Standard-library REST/OAuth, SQLite and the
 existing process-owned workers; no new dependency or runtime service. Background
 metadata work is coalesced and bounded. See `docs/GOOGLE.md`.
 
+## D099 — Standalone IMAP quick sync, configurable cadence and manual refresh
+
+**Requirement:** IMAP/standalone inboxes refreshed slowly because the worker
+re-ran a full index reconcile for every inbox roughly every minute (full UID
+snapshot + newest-500 + 2000-message backfill per selectable folder). New mail
+also only appeared in the list after that reconcile, since detection wrote only
+arrival events, not the read index. Operators wanted a manual refresh control and
+control over poll cadence.
+
+**Decision (2026-10-11):**
+
+- **Quick new-mail index.** A detection pass quick-indexes the new INBOX UIDs'
+  headers into `inbox_remote_messages`, so new mail is visible immediately
+  (standard client "fetch only new").
+- **Quiescent fast-path.** Once a folder is fully backfilled, a single `STATUS`
+  read confirms the max UID and message count are unchanged and only the newest
+  window is refreshed; the full SEARCH, prune and backfill are skipped.
+- **Per-inbox cadence.** Two nullable columns (`remote_poll_seconds`,
+  `remote_full_sync_minutes`, migration 060) override the quick-poll and
+  full-reconcile intervals; NULL inherits the process default and values are
+  clamped to model minimums (15s / 1min). The worker no longer re-reconciles on
+  a fixed one-minute trigger.
+- **Manual refresh.** A square reload button on the standalone inbox toolbar,
+  shown to every user, posts `POST /ui/inboxes/{id}/sync`: quick detection/index
+  + on-screen header refresh + a background deep reconcile, then redirects to
+  the same view. Requires only Read (no remote mutation).
+- **Cheaper polling.** The poll fallback uses `STATUS` instead of `EXAMINE`, and
+  the adapter tracks CONDSTORE/QRESYNC capabilities (requesting `HIGHESTMODSEQ`).
+
+**Reason:** New mail is the priority; the deep pass exists for read/flag state,
+non-INBOX folders, the folder tree and backfill, and belongs on a slow,
+configurable cadence, not every tick. Tying the quick path to the read index and
+adding a user-triggered refresh match how mainstream IMAP clients behave.
+
+**Complexity/resource budget:** One additive migration; model/store fields and a
+setter; a worker cadence helper and quick-index step; an adapter `Status` method
+and capability flags; one HTTP route plus a toolbar button and two settings
+fields. No new dependency or runtime service. See
+`docs/MAILBOX_SERVICE_CONTRACT.md` §5.
+
 ## Future extension register
 
 - additional inbound transport adapters

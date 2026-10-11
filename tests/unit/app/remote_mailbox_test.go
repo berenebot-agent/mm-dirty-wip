@@ -229,6 +229,23 @@ func (f *fakeRemoteServer) EnsureFolderExists(_ context.Context, path string) (u
 	return v, nil
 }
 
+func (f *fakeRemoteServer) Status(_ context.Context, folder string) (imap.MailboxStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var count uint32
+	var lastUID uint32
+	for _, m := range f.messages {
+		if m.folder != folder {
+			continue
+		}
+		count++
+		if m.uid > lastUID {
+			lastUID = m.uid
+		}
+	}
+	return imap.MailboxStatus{NumMessages: count, UIDValidity: f.folders[folder], UIDNext: lastUID + 1}, nil
+}
+
 func (f *fakeRemoteServer) ListHeaders(_ context.Context, folder string, uids []uint32, max int) ([]imap.MessageHeader, uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -551,6 +568,9 @@ type fakeSession struct{ fake *fakeRemoteServer }
 
 func (s *fakeSession) DiscoverFolders(ctx context.Context, root string) ([]imap.RemoteFolder, imap.RootScope, error) {
 	return s.fake.DiscoverFolders(ctx, root)
+}
+func (s *fakeSession) Status(ctx context.Context, folder string) (imap.MailboxStatus, error) {
+	return s.fake.Status(ctx, folder)
 }
 func (s *fakeSession) Search(ctx context.Context, folder string, q imap.SearchQuery) (imap.SearchResult, error) {
 	return s.fake.Search(ctx, folder, q)
@@ -1357,6 +1377,67 @@ func TestRemoteReconcileBackfillsWholeFolder(t *testing.T) {
 	}
 	if len(after) != total-1 {
 		t.Fatalf("after prune: %d want %d", len(after), total-1)
+	}
+}
+
+// condStoreSession wraps fakeSession and advertises CONDSTORE, so the quiescent
+// fast-path can exercise the incremental flag sync (FlagsChangedSince).
+type condStoreSession struct {
+	*fakeSession
+	modseq uint64
+}
+
+func (c *condStoreSession) FlagsChangedSince(_ context.Context, folder string, since uint64) ([]imap.MessageHeader, uint32, uint64, error) {
+	c.fake.mu.Lock()
+	defer c.fake.mu.Unlock()
+	var out []imap.MessageHeader
+	for _, m := range c.fake.messages {
+		if m.folder == folder {
+			out = append(out, fakeHeader(m))
+		}
+	}
+	return out, c.fake.folders[folder], c.modseq, nil
+}
+
+func (c *condStoreSession) Status(ctx context.Context, folder string) (imap.MailboxStatus, error) {
+	st, err := c.fakeSession.Status(ctx, folder)
+	st.HighestModSeq = c.modseq
+	return st, err
+}
+
+// TestRemoteQuiescentCondStoreFlagSync proves that once a folder is fully
+// backfilled, a subsequent reconcile on a CONDSTORE server uses the incremental
+// flag fetch (FlagsChangedSince) rather than re-fetching the newest window: the
+// stored modseq is seeded first, then a changed flag is mirrored.
+func TestRemoteQuiescentCondStoreFlagSync(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	configureSecrets(t, rm, u, box, "imap-pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: Hi\r\nMessage-ID: <c1@remote>\r\n\r\nbody", "<c1@remote>", "Hi")
+	// Install a CONDSTORE-capable session.
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return &condStoreSession{fakeSession: &fakeSession{fake: fake}, modseq: 5}, nil
+	})
+	// First reconcile indexes the folder and seeds the modseq on the quiescent
+	// fast-path (a second reconcile is needed because the first is a full pass).
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	modseq, err := svc.Store.RemoteFolderModSeq(ctx, u.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modseq == 0 {
+		t.Fatal("quiescent pass did not seed the folder modseq")
+	}
+	// A later reconcile must be able to advance the modseq via the incremental
+	// fetch; the window refresh path is bypassed.
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

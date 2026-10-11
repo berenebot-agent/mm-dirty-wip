@@ -2174,6 +2174,16 @@ function clearUrlParams(names) {
     if (settingsLink) {
       settingsLink.setAttribute('href', '/ui/inboxes/' + encodeURIComponent(inboxID) + '/remote');
     }
+    var pollSeconds = document.getElementById('inbox-remote-poll-seconds');
+    var fullSync = document.getElementById('inbox-remote-full-sync-minutes');
+    if (pollSeconds) {
+      pollSeconds.value = cfg.poll_seconds || '';
+      pollSeconds.placeholder = '60';
+    }
+    if (fullSync) {
+      fullSync.value = cfg.full_sync_minutes || '';
+      fullSync.placeholder = '15';
+    }
   }
 
   function connectorLabel(c) {

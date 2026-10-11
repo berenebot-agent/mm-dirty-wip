@@ -744,21 +744,25 @@ func appExtractAttachment(path string, partIndex int, w io.Writer) error {
 // binding, for the API and the UI. It reports whether each secret is present but
 // never returns it.
 type remoteConfigResponse struct {
-	Provider        string             `json:"provider"`
-	Host            string             `json:"host,omitempty"`
-	Port            int                `json:"port,omitempty"`
-	Username        string             `json:"username,omitempty"`
-	Security        string             `json:"security,omitempty"`
-	Namespace       string             `json:"namespace,omitempty"`
-	SMTPHost        string             `json:"smtp_host,omitempty"`
-	SMTPPort        int                `json:"smtp_port,omitempty"`
-	SMTPUsername    string             `json:"smtp_username,omitempty"`
-	SMTPSecurity    string             `json:"smtp_security,omitempty"`
-	IMAPPasswordSet bool               `json:"imap_password_set"`
-	SMTPPasswordSet bool               `json:"smtp_password_set"`
-	Configured      bool               `json:"configured"`
-	SentCopyEnabled bool               `json:"sent_copy_enabled"`
-	SentCopyFolder  string             `json:"sent_copy_folder,omitempty"`
+	Provider        string `json:"provider"`
+	Host            string `json:"host,omitempty"`
+	Port            int    `json:"port,omitempty"`
+	Username        string `json:"username,omitempty"`
+	Security        string `json:"security,omitempty"`
+	Namespace       string `json:"namespace,omitempty"`
+	SMTPHost        string `json:"smtp_host,omitempty"`
+	SMTPPort        int    `json:"smtp_port,omitempty"`
+	SMTPUsername    string `json:"smtp_username,omitempty"`
+	SMTPSecurity    string `json:"smtp_security,omitempty"`
+	IMAPPasswordSet bool   `json:"imap_password_set"`
+	SMTPPasswordSet bool   `json:"smtp_password_set"`
+	Configured      bool   `json:"configured"`
+	SentCopyEnabled bool   `json:"sent_copy_enabled"`
+	SentCopyFolder  string `json:"sent_copy_folder,omitempty"`
+	// PollSeconds/FullSyncMinutes are the effective per-inbox sync cadence
+	// (resolved through the model defaults when unset), for the settings form.
+	PollSeconds     int                `json:"poll_seconds"`
+	FullSyncMinutes int                `json:"full_sync_minutes"`
 	Capabilities    model.Capabilities `json:"capabilities"`
 	MissingRoles    []string           `json:"missing_roles,omitempty"`
 }
@@ -796,6 +800,8 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 		Configured:      inbox.RemoteConfigured && inbox.Remote != nil && strings.TrimSpace(inbox.Remote.Host) != "",
 		SentCopyEnabled: inbox.RemoteSentCopyEnabled,
 		SentCopyFolder:  inbox.RemoteSentCopyFolder,
+		PollSeconds:     model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds),
+		FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes),
 		Capabilities:    caps,
 	}
 	if inbox.Remote != nil {

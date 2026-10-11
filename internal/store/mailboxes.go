@@ -553,7 +553,7 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 // fullInboxSelectCols is the projection every full-inbox read shares. It uses
 // the domain name only for a domain inbox; a standalone inbox carries its own
 // address, so the domain join is a LEFT JOIN and d.name may be NULL.
-const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured,i.remote_sent_copy_enabled,i.remote_sent_copy_folder`
+const fullInboxSelectCols = `i.id,i.account_id,i.kind,i.domain_id,i.local_part,COALESCE(d.name,''),i.address,i.display_name,i.enabled,i.allowed_senders_json,i.sender_restricted,i.require_authenticated,i.approver_email,i.default_sender,i.trash_retention_days,i.auto_mark_read_on_delivery,i.auto_trash_after_delivery_hours,i.delivery_trigger,i.created_at,i.storage_quota_bytes,i.storage_used_bytes,i.namespace,i.remote_host,i.remote_port,i.remote_username,i.remote_security,i.smtp_host,i.smtp_port,i.smtp_username,i.smtp_security,i.remote_configured,i.remote_sent_copy_enabled,i.remote_sent_copy_folder,i.remote_poll_seconds,i.remote_full_sync_minutes`
 
 // scanFullInbox reads one row projected by fullInboxSelectCols. It resolves the
 // address and remote description and never queries further tables. storageKnown
@@ -566,7 +566,8 @@ func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, erro
 	var rport, sport int
 	var domainID sql.NullString
 	var trashRetention, autoTrashHours, storageQuota, storageUsed sql.NullInt64
-	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured, &sentCopyEnabled, &sentCopyFolder); err != nil {
+	var remotePollSeconds, remoteFullSyncMinutes sql.NullInt64
+	if err := row.Scan(&i.ID, &i.AccountID, &i.Kind, &domainID, &i.LocalPart, &domain, &i.Address, &i.DisplayName, &enabled, &allowed, &restricted, &requireAuth, &i.ApproverEmail, &i.DefaultSender, &trashRetention, &autoMarkRead, &autoTrashHours, &i.DeliveryTrigger, &created, &storageQuota, &storageUsed, &ns, &rhost, &rport, &ruser, &rsec, &shost, &sport, &suser, &ssec, &remoteConfigured, &sentCopyEnabled, &sentCopyFolder, &remotePollSeconds, &remoteFullSyncMinutes); err != nil {
 		return model.Inbox{}, false, err
 	}
 	i.DomainID = domainID.String
@@ -607,6 +608,14 @@ func scanFullInbox(row interface{ Scan(...any) error }) (model.Inbox, bool, erro
 	if autoTrashHours.Valid {
 		hours := int(autoTrashHours.Int64)
 		i.AutoTrashAfterDeliveryHours = &hours
+	}
+	if remotePollSeconds.Valid {
+		v := int(remotePollSeconds.Int64)
+		i.RemotePollSeconds = &v
+	}
+	if remoteFullSyncMinutes.Valid {
+		v := int(remoteFullSyncMinutes.Int64)
+		i.RemoteFullSyncMinutes = &v
 	}
 	i.CreatedAt = parseTime(created)
 	return i, storageUsed.Valid, nil
@@ -809,6 +818,29 @@ func (s *Store) SetInboxTrashRetention(ctx context.Context, accountID, inboxID s
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetInboxRemoteSync sets a standalone inbox's remote sync cadence overrides. A
+// nil pointer clears the matching override so the inbox inherits the process
+// default; a positive value is seconds (quick poll) or minutes (full sync). A
+// non-positive value clears the override rather than storing it, so a bogus
+// zero cannot reach the clamp path.
+func (s *Store) SetInboxRemoteSync(ctx context.Context, accountID, inboxID string, pollSeconds, fullSyncMinutes *int) error {
+	var poll, full any
+	if pollSeconds != nil && *pollSeconds > 0 {
+		poll = *pollSeconds
+	}
+	if fullSyncMinutes != nil && *fullSyncMinutes > 0 {
+		full = *fullSyncMinutes
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET remote_poll_seconds=?,remote_full_sync_minutes=? WHERE id=? AND account_id=?`, poll, full, inboxID, accountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
 	return nil
