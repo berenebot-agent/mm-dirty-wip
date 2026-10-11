@@ -194,31 +194,45 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 			}
 		}
 	}
-	// Prune remote-owned folders that are no longer in scope. A folder that still
-	// holds cached message rows is only pruned with them (FK cascade); a folder
-	// whose messages are not cached is dropped cleanly.
-	rows, err := tx.QueryContext(ctx, `SELECT id,path FROM inbox_folders WHERE inbox_id=? AND origin='remote'`, inboxID)
-	if err != nil {
-		return nil, err
-	}
-	var prune []string
-	for rows.Next() {
-		var id, path string
-		if err = rows.Scan(&id, &path); err != nil {
-			rows.Close()
+	// Prune remote-owned folders that are no longer in scope. This is deliberately
+	// conservative: a reduced or partial folder discovery must never delete cached
+	// mail. A folder that still holds cached message rows is NEVER pruned here (it
+	// is left for a later pass to re-confirm), and the prune is skipped entirely
+	// when the discovery is empty. Only a genuinely empty remote folder row that
+	// discovery no longer lists is dropped. This keeps message metadata durable
+	// across a transient NAMESPACE/LIST/scope shortfall.
+	if len(keep) > 0 {
+		rows, err := tx.QueryContext(ctx, `SELECT id,path FROM inbox_folders WHERE inbox_id=? AND origin='remote'`, inboxID)
+		if err != nil {
 			return nil, err
 		}
-		if !keep[path] {
+		var prune []string
+		for rows.Next() {
+			var id, path string
+			if err = rows.Scan(&id, &path); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if keep[path] {
+				continue
+			}
+			var cached int
+			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, path).Scan(&cached); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if cached > 0 {
+				// Keep the folder and its messages; a later pass re-confirms
+				// membership before anything is removed.
+				continue
+			}
 			prune = append(prune, id)
 		}
-	}
-	rows.Close()
-	for _, id := range prune {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE inbox_id=? AND folder_path IN (SELECT path FROM inbox_folders WHERE id=?)`, inboxID, id); err != nil {
-			return nil, err
-		}
-		if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE id=? AND origin='remote'`, id); err != nil {
-			return nil, err
+		rows.Close()
+		for _, id := range prune {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE id=? AND origin='remote'`, id); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -338,22 +352,24 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 	defer tx.Rollback()
 	now := nowText()
 
-	// Invalidate stale rows when UIDVALIDITY changed: a UID from a prior
-	// generation no longer names the same message. Reset the backfill cursor too.
+	// A UIDVALIDITY change means every cached row belongs to a stale generation:
+	// a UID from the prior generation no longer names the same message. We must
+	// NOT delete those rows here, because this pass may only supply a bounded
+	// window of the new generation — deleting now would transiently empty the
+	// folder and make recent mail vanish from the list until a later pass. The
+	// stale rows are instead removed by the generation-aware prune below, which
+	// runs only against a COMPLETE snapshot of the new generation. Until then the
+	// old rows stay visible (metadata preserved) while the batch upserts below
+	// add the new-generation rows.
 	var storedValidity uint32
-	var haveStored bool
-	err = tx.QueryRowContext(ctx, `SELECT remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? LIMIT 1`, inboxID, folderPath).Scan(&storedValidity)
+	err = tx.QueryRowContext(ctx, `SELECT remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? ORDER BY remote_uid_validity DESC LIMIT 1`, inboxID, folderPath).Scan(&storedValidity)
 	switch {
 	case err == sql.ErrNoRows:
 	case err != nil:
 		return 0, err
-	default:
-		haveStored = true
-	}
-	if haveStored && storedValidity != uidValidity {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath); err != nil {
-			return 0, err
-		}
+	case storedValidity != uidValidity:
+		// Reset the backfill cursor for the new generation; the stale rows are
+		// pruned later, only once a complete snapshot proves them obsolete.
 		backfillBefore = 0
 		backfillComplete = false
 	}
@@ -392,19 +408,23 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		for _, u := range keepUIDs {
 			keep[u] = true
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? AND remote_uid_validity=?`, inboxID, folderPath, uidValidity)
+		// Prune against the complete snapshot of the CURRENT generation: drop any
+		// row not in keep. When the generation changed, this same complete
+		// snapshot is the proof that the stale-generation rows are obsolete, so
+		// they are dropped here too (never earlier, on a partial pass).
+		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
 		if err != nil {
 			return 0, err
 		}
 		var drop []string
 		for rows.Next() {
 			var id string
-			var uid uint32
-			if err = rows.Scan(&id, &uid); err != nil {
+			var uid, rowValidity uint32
+			if err = rows.Scan(&id, &uid, &rowValidity); err != nil {
 				rows.Close()
 				return 0, err
 			}
-			if !keep[uid] {
+			if rowValidity != uidValidity || !keep[uid] {
 				drop = append(drop, id)
 			}
 		}
@@ -415,6 +435,10 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 			}
 		}
 	}
+	// When the generation changed but the snapshot was only partial (prune
+	// false), no row is deleted here: the stale-generation rows stay visible
+	// until a later pass supplies a complete snapshot and prunes them above. This
+	// is what prevents a manual sync from transiently emptying a folder.
 	res, err := tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_uid_validity=?,remote_indexed_at=?,backfill_before_uid=?,backfill_complete=?,updated_at=? WHERE inbox_id=? AND path=?`,
 		uidValidity, now, backfillBefore, boolInt(backfillComplete), now, inboxID, folderPath)
 	if err != nil {
@@ -461,24 +485,10 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	defer tx.Rollback()
 	now := nowText()
 
-	// Invalidate stale rows when UIDVALIDITY changed: a UID from a prior
-	// UIDVALIDITY generation no longer names the same message.
-	var storedValidity uint32
-	var haveStored bool
-	err = tx.QueryRowContext(ctx, `SELECT remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? LIMIT 1`, inboxID, folderPath).Scan(&storedValidity)
-	switch {
-	case err == sql.ErrNoRows:
-	case err != nil:
-		return 0, err
-	default:
-		haveStored = true
-	}
-	if haveStored && storedValidity != uidValidity {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath); err != nil {
-			return 0, err
-		}
-	}
-
+	// A UIDVALIDITY change makes every cached row stale, but we do not delete them
+	// here: a windowed (partial) enumeration of the new generation must not
+	// transiently empty the folder. The generation-aware prune below removes the
+	// stale rows only when messages is a COMPLETE enumeration.
 	keep := map[uint32]bool{}
 	written := 0
 	for _, m := range messages {
@@ -508,21 +518,23 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	}
 	// Prune cached rows in this folder whose UID is no longer present, but only
 	// from a complete enumeration. A partial window must not delete metadata for
-	// messages outside it.
+	// messages outside it. When the generation changed, the complete enumeration
+	// is also the proof that the stale-generation rows are obsolete, so they are
+	// dropped here too (never earlier, on a partial pass).
 	if prune {
-		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? AND remote_uid_validity=?`, inboxID, folderPath, uidValidity)
+		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
 		if err != nil {
 			return 0, err
 		}
 		var drop []string
 		for rows.Next() {
 			var id string
-			var uid uint32
-			if err = rows.Scan(&id, &uid); err != nil {
+			var uid, rowValidity uint32
+			if err = rows.Scan(&id, &uid, &rowValidity); err != nil {
 				rows.Close()
 				return 0, err
 			}
-			if !keep[uid] {
+			if rowValidity != uidValidity || !keep[uid] {
 				drop = append(drop, id)
 			}
 		}

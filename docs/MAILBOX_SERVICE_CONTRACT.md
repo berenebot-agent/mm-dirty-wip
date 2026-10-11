@@ -283,10 +283,20 @@ section.
 
 `POST /ui/inboxes/{id}/sync` is the toolbar's square reload button. It runs the
 fast new-mail detection/index, re-syncs the headers of the messages currently on
-screen (so read/flag changes show immediately), schedules the deep reconcile in
-the background, and redirects back to the same view. It requires only Read on the
-inbox (it performs no remote mutation) and is shown to every user on a standalone
-inbox.
+screen (so read/flag changes show immediately), and redirects back to the same
+view. It requires only Read on the inbox (it performs no remote mutation) and is
+shown to every user on a standalone inbox. It deliberately does **not** schedule
+the deep reconcile: that concurrent rebuild could transiently empty a folder.
+The deep reconcile runs on the worker's own cadence.
+
+### Conservative prune (metadata durability)
+A reconcile never deletes cached message metadata against a partial view. A
+`UIDVALIDITY` change does not delete a folder's rows up front; the stale-
+generation rows are removed only once a **complete** new-generation snapshot
+proves them obsolete (they remain visible, and readable, until then). Folder
+discovery never prunes a remote folder that still holds cached messages, and an
+empty discovery prunes nothing. This keeps recent mail in the list across a
+transient scope/`LIST` shortfall or a generation flip.
 
 ### Assistant handling modes, drafts, notify (`internal/app/draft_workflow.go`,
 `draft_handoff.go`, `remote_worker.go`, `control.go`)

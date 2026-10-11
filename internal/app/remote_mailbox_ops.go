@@ -213,6 +213,11 @@ func (m *RemoteMailboxService) reconcileIMAPPass(ctx context.Context, accountID,
 	if _, err := m.Service.Store.ReconcileRemoteFolders(ctx, accountID, inboxID, folderSync); err != nil {
 		return store.RemoteIndexStatus{}, mapStoreError(err)
 	}
+	// Diagnostic: a reduced or empty folder discovery is the trigger for a folder
+	// prune, so log the count and scope on every pass to make a transient
+	// shortfall visible (the symptom was recent mail vanishing during a sync).
+	m.Service.Log.Debug("remote reconcile discovered folders",
+		"inbox_id", inboxID, "folders", len(folderSync), "scope_root", discoveredScope.Root, "scope_personal", discoveredScope.Personal)
 
 	// Index the header metadata of each selectable folder progressively. A folder
 	// index failure is reported partial rather than aborting the whole reconcile.
@@ -281,6 +286,17 @@ func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess Remot
 	allUIDs := fullSearch.UIDs // ascending
 	tooLarge := len(allUIDs) > remoteUIDSetCap
 	fullKnown := fullSearch.Completeness == imap.CompletenessComplete && !tooLarge
+	// Diagnostic: a UIDVALIDITY change (bf.Generation != validity) or a non-empty
+	// cache that this pass does not fully cover is what used to transiently empty
+	// a folder. Log the folder's cached index vs the live snapshot so a
+	// generation flip or a windowed pass is visible when mail appears to vanish.
+	if sum, serr := m.Service.Store.GetRemoteFolderIndexSummary(ctx, accountID, inboxID, folderPath, validity); serr == nil {
+		m.Service.Log.Debug("remote index folder pass",
+			"inbox_id", inboxID, "folder", folderPath,
+			"stored_generation", bf.Generation, "live_validity", validity,
+			"generation_changed", bf.Known && bf.Generation != validity,
+			"cached_rows", sum.Count, "live_uids", len(allUIDs), "full_known", fullKnown, "too_large", tooLarge)
+	}
 	if tooLarge {
 		// Too large to hold in full: index the newest window only, skip prune, and
 		// never advance the backfill cursor or claim completeness (the cursor is
