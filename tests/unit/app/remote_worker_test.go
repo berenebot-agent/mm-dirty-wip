@@ -188,12 +188,18 @@ func TestWatchIntervalPushAware(t *testing.T) {
 	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
 		t.Fatalf("no-push interval = %s, want 60s", got)
 	}
-	// Per-inbox quick override is honored when push is not active (clamped to the
-	// 15s model minimum).
+	// Per-inbox quick override is honored when push is not active.
+	slower := 120
+	inbox.RemotePollSeconds = &slower
+	if got := w.WatchIntervalForTest(inbox); got != 120*time.Second {
+		t.Fatalf("override interval = %s, want 120s", got)
+	}
+	// The quick floor is one minute, so a sub-minute override (stored before the
+	// floor moved off 15s) is clamped up rather than hammering the server.
 	thirty := 30
 	inbox.RemotePollSeconds = &thirty
-	if got := w.WatchIntervalForTest(inbox); got != 30*time.Second {
-		t.Fatalf("override interval = %s, want 30s", got)
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("sub-minute override interval = %s, want the 60s floor", got)
 	}
 	// Active push: the quick poll is dropped for the full-sync safety net.
 	if err := svc.Store.SaveMicrosoftPush(ctx, store.MicrosoftPush{AccountID: box.AccountID, InboxID: box.ID, EncryptedState: "x", StateHash: "h", Status: "push active", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
