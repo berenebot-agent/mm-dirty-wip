@@ -172,6 +172,43 @@ const (
 	RemoteDefaultSMTPPlainPort = 25
 )
 
+// Remote sync cadence defaults and bounds for a standalone inbox. The quick
+// interval governs the fallback poll when IDLE is unavailable; the full interval
+// governs the deep index reconcile. Both are clamped to their minimum so a
+// misconfigured value cannot hammer the remote server. IDLE-capable servers
+// still deliver new mail instantly regardless of the quick interval.
+const (
+	RemotePollSecondsDefault     = 60
+	RemotePollSecondsMin         = 15
+	RemoteFullSyncMinutesDefault = 15
+	RemoteFullSyncMinutesMin     = 1
+)
+
+// NormalizeRemotePollSeconds resolves a per-inbox quick-poll override to an
+// effective value, applying the default and the minimum bound. A nil or
+// non-positive value uses the default.
+func NormalizeRemotePollSeconds(v *int) int {
+	if v == nil || *v <= 0 {
+		return RemotePollSecondsDefault
+	}
+	if *v < RemotePollSecondsMin {
+		return RemotePollSecondsMin
+	}
+	return *v
+}
+
+// NormalizeRemoteFullSyncMinutes resolves a per-inbox full-sync override to an
+// effective value, applying the default and the minimum bound.
+func NormalizeRemoteFullSyncMinutes(v *int) int {
+	if v == nil || *v <= 0 {
+		return RemoteFullSyncMinutesDefault
+	}
+	if *v < RemoteFullSyncMinutesMin {
+		return RemoteFullSyncMinutesMin
+	}
+	return *v
+}
+
 // Capabilities describes what a mailbox can do, so workflow and UI code can
 // branch on a declared surface rather than on the inbox kind. A domain inbox and
 // a standalone inbox differ in which capabilities are true.

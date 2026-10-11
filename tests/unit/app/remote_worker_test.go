@@ -52,6 +52,40 @@ func drainEvents(ch <-chan model.Event) []model.Event {
 	}
 }
 
+// TestRemoteWorkerQuickIndexesNewMail proves the detection pass upserts a new
+// arrival's header into the read index (inbox_remote_messages) so the message is
+// visible in the inbox list immediately, without waiting for a full reconcile.
+func TestRemoteWorkerQuickIndexesNewMail(t *testing.T) {
+	svc, box, _, fake, w := workerEnv(t)
+	ctx := context.Background()
+	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old@remote>\r\n\r\nbody", "<old@remote>", "old")
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.DetectInbox(ctx, inbox) // baseline
+	// No metadata is indexed for the pre-existing backlog by detection alone.
+	before, err := svc.Store.ListRemoteMessages(ctx, box.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("detection indexed %d backlog rows; want 0 (baseline only)", len(before))
+	}
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: fresh\r\nMessage-ID: <fresh@remote>\r\n\r\nbody", "<fresh@remote>", "fresh")
+	w.DetectInbox(ctx, inbox)
+	after, err := svc.Store.ListRemoteMessages(ctx, box.AccountID, box.ID, "INBOX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("quick index rows = %d want 1", len(after))
+	}
+	if after[0].RFCMessageID != "<fresh@remote>" || after[0].Subject != "fresh" {
+		t.Fatalf("quick-indexed row wrong: %+v", after[0])
+	}
+}
+
 // TestRemoteWorkerBaselineNoFlood proves the first detection pass establishes the
 // baseline without emitting any arrival event for pre-existing mail.
 func TestRemoteWorkerBaselineNoFlood(t *testing.T) {

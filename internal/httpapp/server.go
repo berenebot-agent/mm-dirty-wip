@@ -255,6 +255,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/{id}/remote", s.withSession(s.uiInboxRemoteSettings))
 	m.HandleFunc("POST /ui/inboxes/{id}/remote/settings", s.withSession(s.withCSRF(s.uiInboxRemoteSettingsSave)))
 	m.HandleFunc("POST /ui/inboxes/{id}/remote/roles/{role}", s.withSession(s.withCSRF(s.uiInboxRemoteRoleCreate)))
+	// Quick, user-triggered sync of a standalone inbox (the reload button).
+	m.HandleFunc("POST /ui/inboxes/{id}/sync", s.withSession(s.withCSRF(s.uiInboxSync)))
 	// Approvals (authoring) settings: the type selector and notify override.
 	m.HandleFunc("POST /ui/inboxes/{id}/authoring", s.withSession(s.withCSRF(s.uiInboxAuthoringSave)))
 	m.HandleFunc("POST /ui/inboxes/{id}/auto-actions", s.withSession(s.withCSRF(s.uiInboxAutoActions)))

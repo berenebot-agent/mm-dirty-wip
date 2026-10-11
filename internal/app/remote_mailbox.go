@@ -55,6 +55,9 @@ type RemoteDialer func(ctx context.Context, cfg imap.Config) (RemoteSession, err
 // production implementation is the real *imap.Adapter.
 type RemoteSession interface {
 	DiscoverFolders(ctx context.Context, explicitRoot string) ([]imap.RemoteFolder, imap.RootScope, error)
+	// Status reads a mailbox's live status (message count, UIDNEXT, UIDVALIDITY
+	// and unseen count) without selecting it. It is the cheap poll surface.
+	Status(ctx context.Context, folder string) (imap.MailboxStatus, error)
 	Search(ctx context.Context, folder string, q imap.SearchQuery) (imap.SearchResult, error)
 	ListHeaders(ctx context.Context, folder string, uids []uint32, max int) ([]imap.MessageHeader, uint32, error)
 	FetchHeader(ctx context.Context, loc imap.Locator) (imap.MessageHeader, error)

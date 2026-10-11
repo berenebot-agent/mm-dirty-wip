@@ -191,8 +191,15 @@ func (w *RemoteWorker) run() {
 		want := map[string]model.Inbox{}
 		for _, ib := range inboxes {
 			want[ib.ID] = ib
-			if status, err := w.svc.Store.GetRemoteIndexStatus(context.Background(), ib.AccountID, ib.ID); err == nil && (status.Status != store.RemoteIndexComplete || time.Since(status.IndexedAt) > time.Minute) {
-				w.remote.ScheduleRefresh(ib.AccountID, ib.ID)
+			// Full index reconcile on the inbox's own cadence, not every tick:
+			// a folder is deep-refreshed only when its last index is older than
+			// the full-sync interval. New mail is handled far faster by the
+			// detection pass's quick INBOX index, so the deep pass is reserved
+			// for read/flag changes, non-INBOX folders and backfill.
+			if status, err := w.svc.Store.GetRemoteIndexStatus(context.Background(), ib.AccountID, ib.ID); err == nil {
+				if fullSyncDue(status, ib.RemoteFullSyncMinutes) {
+					w.remote.ScheduleRefresh(ib.AccountID, ib.ID)
+				}
 			}
 		}
 		// Stop watchers for inboxes that are gone or disabled.
@@ -253,6 +260,21 @@ func (w *RemoteWorker) run() {
 			}
 		}
 	}
+}
+
+// fullSyncDue reports whether a standalone inbox's deep index reconcile is due:
+// it has never completed a pass, or its last pass is older than the inbox's
+// full-sync interval. A completed pass younger than the interval is skipped, so
+// the deep pass runs on a configurable cadence rather than every worker tick.
+func fullSyncDue(status store.RemoteIndexStatus, fullMinutes *int) bool {
+	if status.Status != store.RemoteIndexComplete {
+		return true
+	}
+	if status.IndexedAt.IsZero() {
+		return true
+	}
+	interval := time.Duration(model.NormalizeRemoteFullSyncMinutes(fullMinutes)) * time.Minute
+	return time.Since(status.IndexedAt) >= interval
 }
 
 // watchInbox observes one inbox's INBOX folder until ctx is cancelled. It prefers a
@@ -370,10 +392,11 @@ func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, fold
 
 // runPollWatch runs the bounded polling fallback when IDLE is unavailable.
 func (w *RemoteWorker) runPollWatch(ctx context.Context, inbox model.Inbox, poller watchSessionPoll) error {
+	interval := w.pollIntervalFor(inbox)
 	if poller == nil {
 		// The adapter has no poll surface: fall back to a plain ticker that runs
 		// detection through a fresh session each period.
-		ticker := time.NewTicker(w.pollInterval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -386,7 +409,7 @@ func (w *RemoteWorker) runPollWatch(ctx context.Context, inbox model.Inbox, poll
 			}
 		}
 	}
-	notify, stop, errCh, err := poller.Poll(ctx, inboxFolder(inbox), w.pollInterval, 8)
+	notify, stop, errCh, err := poller.Poll(ctx, inboxFolder(inbox), interval, 8)
 	if err != nil {
 		return err
 	}
@@ -511,6 +534,17 @@ func inboxFolder(inbox model.Inbox) string {
 	return f
 }
 
+// pollIntervalFor resolves the fallback poll cadence for one inbox: its
+// per-inbox override when positive, else the worker's configured default. The
+// override is clamped to the model minimum so a bad value cannot hammer the
+// remote server.
+func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
+	if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
+		return time.Duration(model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds)) * time.Second
+	}
+	return w.pollInterval
+}
+
 // detectInbox runs one durable detection pass for one inbox. It opens a session,
 // reads the live UID set of the selected folder, and:
 //
@@ -629,6 +663,11 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	for _, h := range headers {
 		byUID[h.UID] = h
 	}
+	// Quick index: upsert the new UIDs' header metadata into the read index so
+	// new mail appears in the inbox list immediately, without waiting for the
+	// slower deep reconcile. This is the standard client "fetch only new"
+	// behaviour; the deep pass later reconciles flags, other folders and prune.
+	w.quickIndexHeaders(ctx, inbox, headers)
 	highestRecorded := cursor.LastUID
 	for _, uid := range newUIDs {
 		h, ok := byUID[uid]
@@ -663,6 +702,23 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	if highestRecorded > cursor.LastUID {
 		if err := w.svc.Store.AdvanceRemoteCursor(ctx, inbox.AccountID, inbox.ID, folder, validity, highestRecorded); err != nil {
 			w.log.Error("remote cursor advance", "inbox_id", inbox.ID, "error", err)
+		}
+	}
+}
+
+// quickIndexHeaders upserts fetched INBOX header metadata into the read index
+// (inbox_remote_messages) so a newly-detected message is visible in the list
+// immediately, rather than only after the next deep reconcile. It is metadata
+// only (no body), and a per-header failure is logged and skipped so one bad row
+// cannot stall detection. The deep reconcile later upserts the same rows in
+// place, so this is idempotent.
+func (w *RemoteWorker) quickIndexHeaders(ctx context.Context, inbox model.Inbox, headers []imap.MessageHeader) {
+	for _, h := range headers {
+		if h.UID == 0 {
+			continue
+		}
+		if _, err := w.svc.Store.UpsertRemoteMessage(ctx, inbox.AccountID, inbox.ID, remoteMessageInputFromHeader(h)); err != nil {
+			w.log.Warn("remote quick index", "inbox_id", inbox.ID, "uid", h.UID, "error", err)
 		}
 	}
 }

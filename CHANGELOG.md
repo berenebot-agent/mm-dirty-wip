@@ -33,7 +33,23 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   background sync; read-only IMAP selection is reused within a session, and
   polling-client cancellation no longer interrupts durable arrival persistence.
 
+- New standalone mail now appears in the inbox list immediately: a detection
+  pass indexes the new INBOX headers into the read index rather than only
+  recording an arrival event. The deep reconcile no longer runs for every inbox
+  every minute; once a folder is fully backfilled, an unchanged folder costs a
+  single `STATUS` read plus a newest-window header refresh instead of a full UID
+  snapshot. The poll fallback uses `STATUS` instead of `EXAMINE`.
+
 ### Added
+
+- A square **reload button** on a standalone (IMAP) inbox toolbar, shown to
+  every user. It quick-syncs the current view: new-mail detection, a header
+  refresh of the messages on screen, and a background full sync — so new mail
+  and read/flag changes appear without a page reload. Requires only read access.
+
+- Per-inbox **sync schedule** for standalone inboxes (Identity tab): how often
+  to check for new mail and how often to run a full sync. Unset values inherit
+  the defaults (60s / 15m); entries are clamped to safe minimums.
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
   `standalone`). A standalone mailbox owns an address independent of any managed

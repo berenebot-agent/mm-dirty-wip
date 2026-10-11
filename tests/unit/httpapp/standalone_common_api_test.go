@@ -388,6 +388,23 @@ func (f *fakeIMAP) Search(_ context.Context, folder string, q imap.SearchQuery) 
 	return res, nil
 }
 
+func (f *fakeIMAP) Status(_ context.Context, folder string) (imap.MailboxStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var count uint32
+	var lastUID uint32
+	for _, m := range f.messages {
+		if m.folder != folder {
+			continue
+		}
+		count++
+		if m.uid > lastUID {
+			lastUID = m.uid
+		}
+	}
+	return imap.MailboxStatus{NumMessages: count, UIDValidity: f.folders[folder], UIDNext: lastUID + 1}, nil
+}
+
 func (f *fakeIMAP) Close() error { return nil }
 
 // adminKey mints an account-admin bearer key for the fixture user.
