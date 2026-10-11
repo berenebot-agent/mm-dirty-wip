@@ -181,6 +181,10 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 	if wrong.Code != 400 {
 		t.Fatal("accepted wrong redirect")
 	}
+	denied := post("/ui/oauth/google/finish", url.Values{"callback_url": {q.Get("redirect_uri") + "?error=access_denied&state=" + q.Get("state")}})
+	if denied.Code != 400 || !strings.Contains(denied.Body.String(), "denied access") {
+		t.Fatalf("access_denied not handled: %d %s", denied.Code, denied.Body.String())
+	}
 	finish := post("/ui/oauth/google/finish", url.Values{"callback_url": {callback}})
 	if finish.Code != 200 {
 		t.Fatalf("finish %d %s", finish.Code, finish.Body.String())
