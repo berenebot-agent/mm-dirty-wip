@@ -810,6 +810,9 @@ func inboxReadiness(domains []model.Domain, boxes []model.Inbox) (sendingReady, 
 			// a configured remote connector. An empty DomainID must not read as
 			// "domain not configured".
 			inboxSendingReady[b.ID] = b.Remote != nil && b.Remote.SMTP != nil
+			if b.Capabilities != nil && b.Capabilities.Outbound {
+				inboxSendingReady[b.ID] = true
+			}
 			inboxReceivingReady[b.ID] = b.RemoteConfigured && b.Remote != nil
 			continue
 		}

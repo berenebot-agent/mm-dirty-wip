@@ -671,6 +671,14 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 			out[i].AliasNames = aliasNames(aliases[out[i].ID])
 		}
 	}
+	for n := range out {
+		if out[n].Kind == model.InboxKindStandalone && s.IsGoogle(ctx, p.AccountID, out[n].ID) {
+			caps := model.StandaloneCapabilities()
+			caps.HierarchicalFolders = false
+			caps.Outbound = true
+			out[n].Capabilities = &caps
+		}
+	}
 	return out, nil
 }
 

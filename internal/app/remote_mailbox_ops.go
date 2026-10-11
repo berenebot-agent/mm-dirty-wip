@@ -21,32 +21,33 @@ import (
 // metadata the store holds, plus its local labels. It carries no body; a body is
 // fetched transiently on demand by FetchRemoteRaw and is never archived.
 type RemoteMessageView struct {
-	ID           string        `json:"id"`
-	InboxID      string        `json:"inbox_id"`
-	FolderPath   string        `json:"folder_path"`
-	UIDValidity  uint32        `json:"uid_validity"`
-	UID          uint32        `json:"uid"`
-	RFCMessageID string        `json:"message_id,omitempty"`
-	InReplyTo    string        `json:"in_reply_to,omitempty"`
-	References   []string      `json:"references,omitempty"`
-	ThreadKey    string        `json:"thread_id,omitempty"`
-	From         model.Address `json:"from"`
-	To           []string      `json:"to,omitempty"`
-	CC           []string      `json:"cc,omitempty"`
-	Subject      string        `json:"subject"`
-	Snippet      string        `json:"snippet,omitempty"`
-	SizeBytes    int64         `json:"size_bytes"`
-	HasAttach    bool          `json:"has_attachments"`
-	Read         bool          `json:"read"`
-	Flagged      bool          `json:"flagged"`
-	Answered     bool          `json:"answered"`
-	Draft        bool          `json:"draft"`
-	Flags        []string      `json:"flags,omitempty"`
-	Labels       []string      `json:"labels,omitempty"`
-	ReceivedAt   *string       `json:"received_at,omitempty"`
-	SentAt       *string       `json:"sent_at,omitempty"`
-	InternalDate *string       `json:"internal_date,omitempty"`
-	IndexedAt    time.Time     `json:"indexed_at,omitempty"`
+	ProviderCursor string        `json:"-"`
+	ID             string        `json:"id"`
+	InboxID        string        `json:"inbox_id"`
+	FolderPath     string        `json:"folder_path"`
+	UIDValidity    uint32        `json:"uid_validity"`
+	UID            uint32        `json:"uid"`
+	RFCMessageID   string        `json:"message_id,omitempty"`
+	InReplyTo      string        `json:"in_reply_to,omitempty"`
+	References     []string      `json:"references,omitempty"`
+	ThreadKey      string        `json:"thread_id,omitempty"`
+	From           model.Address `json:"from"`
+	To             []string      `json:"to,omitempty"`
+	CC             []string      `json:"cc,omitempty"`
+	Subject        string        `json:"subject"`
+	Snippet        string        `json:"snippet,omitempty"`
+	SizeBytes      int64         `json:"size_bytes"`
+	HasAttach      bool          `json:"has_attachments"`
+	Read           bool          `json:"read"`
+	Flagged        bool          `json:"flagged"`
+	Answered       bool          `json:"answered"`
+	Draft          bool          `json:"draft"`
+	Flags          []string      `json:"flags,omitempty"`
+	Labels         []string      `json:"labels,omitempty"`
+	ReceivedAt     *string       `json:"received_at,omitempty"`
+	SentAt         *string       `json:"sent_at,omitempty"`
+	InternalDate   *string       `json:"internal_date,omitempty"`
+	IndexedAt      time.Time     `json:"indexed_at,omitempty"`
 }
 
 // remoteView projects a store.RemoteMessage onto the read DTO.
@@ -138,6 +139,9 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if m.IsGoogle(ctx, accountID, inboxID) {
+		return m.reconcileGoogle(ctx, accountID, inboxID)
+	}
 	sess, resolved, err := m.open(ctx, accountID, inboxID)
 	if err != nil {
 		_ = m.Service.Store.SetRemoteIndexStatus(context.WithoutCancel(ctx), accountID, inboxID, store.RemoteIndexError, "could not open the remote connection")
@@ -433,6 +437,9 @@ func (m *RemoteMailboxService) ListRemoteMessagesCached(ctx context.Context, p m
 }
 
 func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.Principal, inboxID, folderPath string, limit int, before string, cachedOnly bool) (RemoteListResult, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.listGoogle(ctx, p, inboxID, folderPath, limit, before, cachedOnly)
+	}
 	inbox, err := m.authorizeRead(ctx, p, inboxID)
 	if err != nil {
 		return RemoteListResult{}, err
@@ -516,6 +523,9 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 // refreshes the header from the live server when the cached row is stale; a live
 // refresh never marks the message seen (BODY.PEEK).
 func (m *RemoteMailboxService) GetRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID string) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.getGoogle(ctx, p, inboxID, messageID)
+	}
 	inbox, err := m.authorizeRead(ctx, p, inboxID)
 	if err != nil {
 		return RemoteMessageView{}, err
@@ -601,6 +611,9 @@ func (m *RemoteMailboxService) authorizeAssist(ctx context.Context, p model.Prin
 // that has never been admitted (for example a shared namespace) is out of scope.
 // This is the single place folder scoping is enforced for remote operations.
 func (m *RemoteMailboxService) folderInScope(inbox model.Inbox, folderPath string) bool {
+	if m.IsGoogle(context.Background(), inbox.AccountID, inbox.ID) {
+		return true
+	}
 	folderPath = strings.TrimSpace(folderPath)
 	if folderPath == "" {
 		return false
@@ -659,6 +672,9 @@ func (m *RemoteMailboxService) InScope(accountID, inboxID, folderPath string) bo
 // local labels. It performs no provider call, so an arrival-resolved read never
 // touches the network.
 func (m *RemoteMailboxService) ViewOf(rec store.RemoteMessage) RemoteMessageView {
+	if m.IsGoogle(context.Background(), rec.AccountID, rec.InboxID) {
+		return m.googleView(context.Background(), rec)
+	}
 	view := remoteView(rec)
 	labels, err := m.Service.Store.RemoteMessageLabels(context.WithoutCancel(context.Background()), rec.AccountID, rec.InboxID, rec.ID)
 	if err == nil {
@@ -688,6 +704,9 @@ func (m *RemoteMailboxService) FetchRemoteRaw(ctx context.Context, p model.Princ
 }
 
 func (m *RemoteMailboxService) fetchRemoteRawFor(ctx context.Context, accountID, inboxID, messageID string, rec *store.RemoteMessage) (string, int64, error) {
+	if m.IsGoogle(ctx, accountID, inboxID) {
+		return m.googleRaw(ctx, accountID, inboxID, messageID)
+	}
 	if rec == nil {
 		loaded, err := m.Service.Store.GetRemoteMessage(ctx, accountID, inboxID, messageID)
 		if err != nil {
@@ -780,6 +799,9 @@ func (m *RemoteMailboxService) FetchRemoteAttachment(ctx context.Context, p mode
 }
 
 func (m *RemoteMailboxService) fetchRemoteAttachmentFor(ctx context.Context, accountID, inboxID, messageID string, part []int, filename, contentType string) (RemoteAttachment, error) {
+	if m.IsGoogle(ctx, accountID, inboxID) {
+		return m.googleAttachment(ctx, accountID, inboxID, messageID, part, filename, contentType)
+	}
 	rec, err := m.Service.Store.GetRemoteMessage(ctx, accountID, inboxID, messageID)
 	if err != nil {
 		return RemoteAttachment{}, mapStoreError(err)
@@ -826,6 +848,9 @@ func (m *RemoteMailboxService) fetchRemoteAttachmentFor(ctx context.Context, acc
 // Trash role). When the cached metadata is already gone the purge is a no-op
 // success (idempotent), because the server may have expunged it already.
 func (m *RemoteMailboxService) PurgeRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID string) error {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return model.NewMailboxError(model.ErrKindUnsupported, "Permanent deletion is not enabled for Google inboxes; use Gmail", false, nil)
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return err
@@ -1029,6 +1054,12 @@ func (m *RemoteMailboxService) trashFolder(ctx context.Context, accountID, inbox
 // change into the cached metadata. Reading a message is a state change, so it
 // requires Assistant or Owner.
 func (m *RemoteMailboxService) SetRemoteRead(ctx context.Context, p model.Principal, inboxID, messageID string, read bool) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		if read {
+			return m.modifyGoogle(ctx, p, inboxID, messageID, nil, []string{"UNREAD"})
+		}
+		return m.modifyGoogle(ctx, p, inboxID, messageID, []string{"UNREAD"}, nil)
+	}
 	if _, err := m.authorizeAssist(ctx, p, inboxID); err != nil {
 		return RemoteMessageView{}, err
 	}
@@ -1059,6 +1090,12 @@ func (m *RemoteMailboxService) SetRemoteRead(ctx context.Context, p model.Princi
 
 // SetRemoteFlagged sets or clears \Flagged on a remote message and mirrors it.
 func (m *RemoteMailboxService) SetRemoteFlagged(ctx context.Context, p model.Principal, inboxID, messageID string, flagged bool) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		if flagged {
+			return m.modifyGoogle(ctx, p, inboxID, messageID, []string{"STARRED"}, nil)
+		}
+		return m.modifyGoogle(ctx, p, inboxID, messageID, nil, []string{"STARRED"})
+	}
 	if _, err := m.authorizeAssist(ctx, p, inboxID); err != nil {
 		return RemoteMessageView{}, err
 	}
@@ -1094,6 +1131,9 @@ func (m *RemoteMailboxService) SetRemoteFlagged(ctx context.Context, p model.Pri
 // Message-ID; if that is ambiguous the message is left cached in its source until
 // the next reconcile, never falsely located.
 func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID, destPath string) (RemoteMessageView, error) {
+	if m.IsGoogle(ctx, p.AccountID, inboxID) {
+		return m.moveGoogle(ctx, p, inboxID, messageID, destPath)
+	}
 	inbox, err := m.authorizeAssist(ctx, p, inboxID)
 	if err != nil {
 		return RemoteMessageView{}, err

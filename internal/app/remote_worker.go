@@ -261,6 +261,20 @@ func (w *RemoteWorker) run() {
 // backs off and retries; it never advances the cursor past unrecorded mail, so no
 // arrival is lost.
 func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		ticker := time.NewTicker(w.pollInterval)
+		defer ticker.Stop()
+		for {
+			w.detectInbox(ctx, inbox)
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stop:
+				return
+			case <-ticker.C:
+			}
+		}
+	}
 	folder := w.inboxFolder(inbox)
 	// Run one detection pass up front so a fresh watcher reports mail that
 	// arrived while the process was down.
@@ -526,6 +540,10 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		delete(w.detecting, key)
 		w.detectionMu.Unlock()
 	}()
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		w.detectGoogle(ctx, inbox)
+		return
+	}
 	folder := w.inboxFolder(inbox)
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {
@@ -820,6 +838,15 @@ const maxArrivalClassifyAttempts = 8
 // fetchArrivalRaw fetches an arrival's raw MIME to a transient temp file and reads
 // it back. It never marks the message seen (BODY.PEEK). The temp file is removed.
 func (w *RemoteWorker) fetchArrivalRaw(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) ([]byte, bool) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		path, _, e := w.remote.fetchArrivalRawToTemp(ctx, inbox, arrival)
+		if e != nil {
+			return nil, false
+		}
+		defer w.remote.CleanupRemoteRaw(path)
+		b, e := os.ReadFile(path)
+		return b, e == nil
+	}
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {
 		return nil, false
@@ -903,6 +930,17 @@ func (w *RemoteWorker) reconcileRemoteActions() {
 // folder. A failure is retried (the action stays due); it never marks the message
 // locally deleted (there is no local message row for a remote arrival).
 func (w *RemoteWorker) applyRemoteTrash(ctx context.Context, a store.RemoteAction) {
+	if w.remote.IsGoogle(ctx, a.AccountID, a.InboxID) {
+		id, e := w.svc.Store.GoogleLocalID(ctx, a.AccountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "gmail:"))
+		if e != nil {
+			return
+		}
+		_, e = w.remote.MoveRemoteMessage(ctx, model.Principal{AccountID: a.AccountID, Admin: true}, a.InboxID, id, "TRASH")
+		if e == nil {
+			_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		}
+		return
+	}
 	inbox, err := w.svc.Store.GetInboxInternal(ctx, a.AccountID, a.InboxID)
 	if err != nil {
 		// The inbox is gone (or unreadable). Record the reason so the skipped
@@ -971,6 +1009,12 @@ func (w *RemoteWorker) MarkRemoteArrivalRead(ctx context.Context, accountID, inb
 	if arrival.InboxID != inboxID {
 		return store.ErrForbidden
 	}
+	if w.remote.IsGoogle(ctx, accountID, inboxID) {
+		if e := w.googleArrivalRead(ctx, accountID, inboxID, arrival); e != nil {
+			return e
+		}
+		return w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+	}
 	inbox, err := w.svc.Store.GetInboxInternal(ctx, accountID, inboxID)
 	if err != nil {
 		return err
@@ -1021,6 +1065,13 @@ func (m *RemoteMailboxService) openRemoteSession(ctx context.Context, inbox mode
 // forwarding, never by a live read. The caller must CleanupRemoteRaw. The message
 // is never marked seen (BODY.PEEK).
 func (m *RemoteMailboxService) fetchArrivalRawToTemp(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (string, int64, error) {
+	if m.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+		id, e := m.Service.Store.GoogleLocalID(ctx, inbox.AccountID, inbox.ID, strings.TrimPrefix(arrival.FolderPath, "gmail:"))
+		if e != nil {
+			return "", 0, e
+		}
+		return m.googleRaw(ctx, inbox.AccountID, inbox.ID, id)
+	}
 	sess, err := m.openRemoteSession(ctx, inbox)
 	if err != nil {
 		return "", 0, err
