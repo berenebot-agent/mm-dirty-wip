@@ -17,6 +17,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   "Syncing messages…" strip and the "Updating messages…" refresh spinner are
   removed in favour of the flag; a failed background list refresh still appears
   in place with its Retry button, and the message-body loader is unchanged.
+  Page navigation loading (link clicks and form submits) on these pages also
+  reports through the flag instead of the floating "Loading…" banner, so no
+  pop-up loading banner appears over the inbox view; other pages keep the
+  banner.
 
 - Microsoft / Outlook connections now have a **personal + shared** flow: the
   wizard offers a "Connect personal mailbox" and a "Connect personal + shared"

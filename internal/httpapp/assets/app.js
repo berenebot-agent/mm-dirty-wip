@@ -17,8 +17,8 @@
   }
   var label = node.querySelector('.conn-label');
   var BUSY_DELAY_MS = 250;
-  var BUSY_ORDER = ['sync', 'body', 'list'];
-  var BUSY_LABELS = { sync: 'Syncing messages…', body: 'Loading message body…', list: 'Updating messages…' };
+  var BUSY_ORDER = ['nav', 'sync', 'body', 'list'];
+  var BUSY_LABELS = { nav: 'Loading…', sync: 'Syncing messages…', body: 'Loading message body…', list: 'Updating messages…' };
   var conn = 'connecting';
   var syncError = '';
   var busy = {};
@@ -5638,9 +5638,22 @@ function hideInboxSubview(dlg) {
   var style = document.createElement('style');
   style.textContent = '.load-status{padding:10px 14px;background:#eef4ff;color:#174ea6;border-radius:6px;margin:8px 0}.load-status[hidden]{display:none}.load-status.pending:before{content:"";display:inline-block;width:16px;height:16px;border:2px solid #b8c9e8;border-top-color:#174ea6;border-radius:50%;margin-right:10px;vertical-align:middle;animation:mail-load-spin .8s linear infinite}.navigation-load{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;box-shadow:0 2px 12px #0003}@keyframes mail-load-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.load-status.pending:before{animation:none}}';
   document.head.appendChild(style);
+  // Pages that carry the header status flag report navigation loading through
+  // it rather than a floating banner; the flag delays a brief spinner, so a
+  // fast navigation never flashes one. Other pages keep the banner, since they
+  // have no flag to show.
+  var hasFlag = !!document.querySelector('[data-conn-status]');
   var notice;
   var watchdog;
   function loading(text) {
+    if (hasFlag) {
+      window.mailmooseStatus.busy('nav', true);
+      window.clearTimeout(watchdog);
+      watchdog = window.setTimeout(function () {
+        window.mailmooseStatus.busy('nav', false);
+      }, 60000);
+      return;
+    }
     if (!notice) {
       notice = document.createElement('div');
       notice.className = 'load-status pending navigation-load';
@@ -5672,6 +5685,9 @@ function hideInboxSubview(dlg) {
   });
   window.addEventListener('pageshow', function () {
     window.clearTimeout(watchdog);
+    // A page restored from the bfcache (browser Back) never navigated away, so
+    // any pending navigation loading state is stale.
+    window.mailmooseStatus.busy('nav', false);
     if (notice) { notice.hidden = true; }
   });
 }());
