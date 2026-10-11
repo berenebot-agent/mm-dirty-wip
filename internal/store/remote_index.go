@@ -1249,6 +1249,109 @@ func (s *Store) CountRemoteFolderMessages(ctx context.Context, accountID, inboxI
 	return out, rows.Err()
 }
 
+// RemoteInboxRoots returns, for each standalone inbox in the account, the folder
+// path that stands in for its Inbox: the explicitly mapped inbox-role folder when
+// one exists (mirrored from the server or locked by the operator), otherwise the
+// inbox's namespace root. It mirrors buildRemoteMessageList's fallback so the
+// unread count agrees with the messages the Inbox view lists.
+func (s *Store) RemoteInboxRoots(ctx context.Context, accountID string) (map[string]string, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id, COALESCE(namespace,'') FROM inboxes WHERE account_id=? AND kind=?`, accountID, model.InboxKindStandalone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	roots := map[string]string{}
+	for rows.Next() {
+		var id, namespace string
+		if err = rows.Scan(&id, &namespace); err != nil {
+			return nil, err
+		}
+		root := strings.TrimSpace(namespace)
+		if root == "" {
+			root = model.NamespaceINBOX
+		}
+		roots[id] = root
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(roots) == 0 {
+		return roots, nil
+	}
+	// A mapped inbox-role folder wins over the namespace root. Only a real remote
+	// mapping counts: a locally seeded system folder (origin='local', not locked)
+	// is never mistaken for a mapping the server does not have, matching
+	// remoteRoleFolder in the HTTP layer.
+	frows, err := s.read.QueryContext(ctx, `SELECT inbox_id,path FROM inbox_folders WHERE account_id=? AND role=? AND path<>'' AND (origin='remote' OR role_locked=1)`, accountID, model.FolderRoleInbox)
+	if err != nil {
+		return nil, err
+	}
+	defer frows.Close()
+	for frows.Next() {
+		var inboxID, path string
+		if err = frows.Scan(&inboxID, &path); err != nil {
+			return nil, err
+		}
+		if _, ok := roots[inboxID]; ok {
+			roots[inboxID] = path
+		}
+	}
+	return roots, frows.Err()
+}
+
+// RemoteInboxUnreadCounts returns, per standalone inbox, the unread count of the
+// inbox-role folder from the cached remote index. It mirrors the local unread
+// definition (inbound, not spam, not deleted) by counting only the folder the
+// Inbox view lists, so a Sent/Drafts/Trash/Spam unread never inflates the Inbox
+// badge. The result is restricted to the principal's readable inboxes and is keyed
+// by inbox id, matching UnreadCounts.
+func (s *Store) RemoteInboxUnreadCounts(ctx context.Context, p model.Principal) (map[string]int, error) {
+	roots, err := s.RemoteInboxRoots(ctx, p.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	if len(roots) == 0 {
+		return out, nil
+	}
+	allowed := map[string]bool{}
+	if p.Admin {
+		for id := range roots {
+			allowed[id] = true
+		}
+	} else {
+		for _, id := range principalInboxIDs(p) {
+			if _, ok := roots[id]; ok {
+				allowed[id] = true
+			}
+		}
+	}
+	for inboxID, root := range roots {
+		if !allowed[inboxID] {
+			continue
+		}
+		q := `SELECT count(*) FROM inbox_remote_messages m WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0`
+		args := []any{p.AccountID, inboxID}
+		if s.IsGoogle(ctx, p.AccountID, inboxID) {
+			q = `SELECT count(*) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.label_id=?`
+			args = append(args, inboxID, root)
+		} else if s.IsMicrosoft(ctx, p.AccountID, inboxID) {
+			q = `SELECT count(*) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? AND m.is_read=0 AND g.inbox_id=? AND g.folder_id=?`
+			args = append(args, inboxID, root)
+		} else {
+			q += ` AND m.folder_path=?`
+			args = append(args, root)
+		}
+		var n int
+		if err = s.read.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+			return nil, err
+		}
+		out[inboxID] = n
+	}
+	return out, nil
+}
+
 // RemoteLabelsForInbox returns every distinct local label in use across an inbox's
 // cached remote messages, ordered case-insensitively.
 func (s *Store) RemoteLabelsForInbox(ctx context.Context, accountID, inboxID string) ([]string, error) {

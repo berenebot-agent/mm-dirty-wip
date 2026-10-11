@@ -332,7 +332,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
@@ -535,7 +535,7 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		folder = "sent"
 	}
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)

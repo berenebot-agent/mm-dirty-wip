@@ -1897,10 +1897,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			domainParentCandidate[d.ID] = candidates[0].Name
 		}
 	}
-	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
-	if unread == nil {
-		unread = map[string]int{}
-	}
+	unread := s.inboxUnreadCounts(ctx, p)
 	draftCounts, _ := s.Service.Store.PendingDraftCountsByInbox(ctx, p)
 	if draftCounts == nil {
 		draftCounts = map[string]int{}
@@ -3548,7 +3545,7 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 	var labelUnread map[string]int
 	var folderSidebar []folderSidebarItem
 	if box != nil {
-		unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+		unread := s.inboxUnreadCounts(r.Context(), p)
 		unreadCount = unread[box.ID]
 		spamCount, _ = s.Service.Store.CountSpam(r.Context(), p, box.ID)
 		trashCount, _ = s.Service.Store.CountTrash(r.Context(), p, box.ID)
