@@ -14,6 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/mailparse"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 const inboxPageSize = 50
@@ -52,6 +53,7 @@ const (
 	iconForward     = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 3.5 4 3.7-4 3.7"/><path d="M13.5 7.2H7.2a4.7 4.7 0 0 0-4.7 4.7v.6"/></svg>`
 	iconSettingsSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`
 	iconReloadSvg   = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>`
+	iconFolderSvg   = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1.8 4.5a1 1 0 0 1 1-1h2.9l1.4 1.6h5.1a1 1 0 0 1 1 1v5.4a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z"/></svg>`
 )
 
 // syncButton is the square reload control shown to every user on a standalone
@@ -62,20 +64,20 @@ const (
 // rendered only when StandaloneMode is set.
 const syncButton = `{{if .StandaloneMode}}<button type="submit" formaction="/ui/inboxes/{{.Inbox.ID}}/sync" formmethod="post" formnovalidate class="secondary icon-btn" title="Sync now" aria-label="Sync now">` + iconReloadSvg + `</button>{{end}}`
 
-// syncViewFields carries the current view (incoming pagination boundary and
-// custom-folder id) on the bulk form so the sync button's formaction redirect
-// can return the user to exactly where they were. It deliberately submits
-// CurrentPageBefore (the page the browser requested), not Before (the outgoing
-// next-page cursor): submitting Before would make the reload act like "Load
-// older". The folder and label already travel in the bulk form's hidden fields.
-const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before" value="{{.CurrentPageBefore}}"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}">{{end}}`
+// syncViewFields carries the incoming pagination boundary on the bulk form so
+// the sync button's formaction redirect can return the user to exactly where
+// they were. It deliberately submits CurrentPageBefore (the page the browser
+// requested), not Before (the outgoing next-page cursor): submitting Before
+// would make the reload act like "Load older". The folder, label and
+// custom-folder id already travel in the bulk form's own hidden fields.
+const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before" value="{{.CurrentPageBefore}}">{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
 // Labels section listing the inbox's labels one level in. It relies on
 // .Inbox, .Folder, .ActiveLabel, .Labels and the count fields being populated
 // on pageData.
-const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Folders}}{{range .Folders}}<a class="folder{{if eq $.ActiveFolderID .ID}} active{{end}}" data-folder="folder" href="/ui/inboxes/{{$.Inbox.ID}}/folder?folder={{.ID | querystring}}">{{.Name}}{{if .Count}} <span class="count">{{.Count}}</span>{{end}}</a>{{end}}{{end}}{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a><details class="navfolders"><summary>Manage folders</summary><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/folders" class="folder-create"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input name="path" placeholder="New folder" aria-label="New folder path" required><button class="btn-sm">Create</button></form>{{range .Folders}}<span class="folder-manage" data-folder-id="{{.ID}}"><span class="labelname">{{.Name}}</span><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/folders/{{.ID}}/rename"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input name="name" value="{{.Name}}" aria-label="Rename folder"><button class="btn-sm">Rename</button></form><form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/folders/{{.ID}}/delete" data-confirm="Delete this folder? It must be empty."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" title="Delete folder" aria-label="Delete folder">` + iconTrash + `</button></form></span>{{end}}</details></aside>`
+const mailSidebar = `<aside class="mailnav" data-sidebar data-inbox="{{.Inbox.ID}}"><a class="btn compose" href="/ui/inboxes/{{.Inbox.ID}}/compose">Compose</a><a class="folder{{if eq .Folder "inbox"}} active{{end}}" data-folder="inbox" href="/ui/inboxes/{{.Inbox.ID}}">Inbox{{if .UnreadCount}} <span class="count unread" data-count="unread">{{.UnreadCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "drafts"}} active{{end}}" data-folder="drafts" href="/ui/inboxes/{{.Inbox.ID}}/drafts">Drafts{{if .DraftCount}} <span class="count" data-count="drafts">{{.DraftCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "sent"}} active{{end}}" data-folder="sent" href="/ui/inboxes/{{.Inbox.ID}}/sent">Sent</a><a class="folder{{if eq .Folder "outbox"}} active{{end}}" data-folder="outbox" href="/ui/inboxes/{{.Inbox.ID}}/outbox">Outbox{{if .OutboxCount}} <span class="count" data-count="outbox">{{.OutboxCount}}</span>{{end}}</a>{{if .Folders}}{{range .Folders}}<div class="folder-row"><a class="folder{{if eq $.ActiveFolderID .ID}} active{{end}}" data-folder="folder" href="/ui/inboxes/{{$.Inbox.ID}}/folder?folder={{.ID | querystring}}">{{.Name}}{{if .Count}} <span class="count">{{.Count}}</span>{{end}}</a>{{if $.Principal.CanAssist $.Inbox.ID}}<button type="button" class="folder-manage" data-folder-manage data-folder-id="{{.ID}}" data-folder-name="{{.Name}}" title="Manage folder" aria-label="Manage folder {{.Name}}">` + iconFolderSvg + `</button>{{end}}</div>{{end}}{{end}}{{if .Labels}}<div class="navgroup">Labels</div>{{range .Labels}}<a class="folder label{{if eq $.ActiveLabel .}} active{{end}}" data-folder="label" data-label="{{.}}" href="/ui/inboxes/{{$.Inbox.ID}}/label?name={{querystring .}}"><span class="labelname">{{.}}</span>{{with index $.LabelUnread .}} <span class="count unread" data-count="label">{{.}}</span>{{end}}</a>{{end}}{{end}}<a class="folder{{if eq .Folder "trash"}} active{{end}}" data-folder="trash" href="/ui/inboxes/{{.Inbox.ID}}/trash">Trash{{if .TrashCount}} <span class="count" data-count="trash">{{.TrashCount}}</span>{{end}}</a><a class="folder{{if eq .Folder "spam"}} active{{end}}" data-folder="spam" href="/ui/inboxes/{{.Inbox.ID}}/spam">Spam{{if .SpamCount}} <span class="count" data-count="spam">{{.SpamCount}}</span>{{end}}</a>{{if .Principal.CanAssist .Inbox.ID}}<button type="button" class="btn secondary newfolder" data-folder-new>+ New folder</button><dialog id="folder-new-dialog" class="folder-dialog" aria-labelledby="folder-new-title"><h2 id="folder-new-title">New folder</h2><form method="post" action="/ui/inboxes/{{.Inbox.ID}}/folders"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Folder name</label><input name="path" required autocomplete="off"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Create</button></div></form></dialog><dialog id="folder-manage-dialog" class="folder-dialog" aria-labelledby="folder-manage-title"><h2 id="folder-manage-title">Manage folder</h2><form method="post" action="" data-folder-rename-form><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>Name</label><input name="name" data-folder-rename-input required autocomplete="off"><div class="dialog-actions"><button type="button" class="secondary" data-close-dialog>Cancel</button><button>Rename</button></div></form><form method="post" action="" data-folder-delete-form><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger" data-confirm="Delete this folder? It must be empty.">Delete folder</button></form></dialog>{{end}}</aside>`
 
 // selectBanner is the Gmail-style two-state "select all" bar. Its two spans are
 // toggled by app.js: the first (after checking the header box on a paginated
@@ -798,10 +800,24 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 		// what the rendered banner promised. An unknown folder is refused.
 		folder := r.Form.Get("folder")
 		label := r.Form.Get("label")
-		f, _, ok := mailboxFilter(box.ID, folder, label)
-		if !ok {
-			http.Error(w, "unknown folder", 400)
-			return
+		var f store.MessageFilter
+		if folder == "folder" {
+			// A custom folder is addressed by its id; mailboxFilter only knows
+			// the system views. Resolve it within this inbox so a crafted id
+			// cannot name another inbox's folder.
+			target, ok := s.findInboxFolder(r.Context(), p.AccountID, box.ID, r.Form.Get("folder_id"))
+			if !ok {
+				http.Error(w, "unknown folder", 400)
+				return
+			}
+			f = store.MessageFilter{InboxID: box.ID, MailboxID: target.ID, FolderScoped: true}
+		} else {
+			var ok bool
+			f, _, ok = mailboxFilter(box.ID, folder, label)
+			if !ok {
+				http.Error(w, "unknown folder", 400)
+				return
+			}
 		}
 		// Every bulk action here (including purge) requires Assistant; only
 		// sending needs Owner, and none of these actions sends.
@@ -837,6 +853,17 @@ func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Pr
 	}
 	folder := r.Form.Get("folder")
 	rolePath := s.remoteFolderPathForView(r, p, box, folder)
+	if folder == "folder" {
+		// A custom folder is addressed by its id; remoteFolderPathForView only
+		// knows the system role views and would otherwise fall back to the
+		// namespace root (the Inbox), acting on the wrong messages.
+		target, ok := s.findInboxFolder(r.Context(), p.AccountID, box.ID, r.Form.Get("folder_id"))
+		if !ok || !s.remoteMailbox().InScope(p.AccountID, box.ID, target.Path) {
+			http.Error(w, "unknown folder", 400)
+			return
+		}
+		rolePath = target.Path
+	}
 	var ids []string
 	if r.Form.Get("scope") == "all" {
 		res, err := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, rolePath, remoteBulkMax, "")
@@ -957,6 +984,12 @@ func (s *Server) redirectBulkResult(w http.ResponseWriter, r *http.Request, box 
 		base += "/trash"
 	case "spam":
 		base += "/spam"
+	case "folder":
+		// Return to the custom folder the action was taken from, not the Inbox.
+		if fid := strings.TrimSpace(r.Form.Get("folder_id")); fid != "" {
+			http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/folder?folder="+url.QueryEscape(fid)+"&notice="+url.QueryEscape(notice), 303)
+			return
+		}
 	}
 	http.Redirect(w, r, base+"?notice="+url.QueryEscape(notice), 303)
 }

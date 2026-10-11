@@ -43,6 +43,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Folder management in the mailbox sidebar is simplified. The **Manage folders**
+  disclosure is gone: custom folders now carry a small folder glyph that opens a
+  dialog with **Rename** and **Delete** for that folder, and a **New folder**
+  button sits at the bottom of the sidebar and opens a name field. Folder
+  management controls are shown only to users who may change folders (Assistant
+  or Owner).
+
 - The Microsoft / Outlook sign-in now opens in a centred **partial-screen
   window** instead of a full browser tab, so the wizard stays visible behind it,
   and the wizard flashes a **Paste the resulting URL here** prompt above the
@@ -73,6 +80,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   so a bulk delete of hundreds of messages no longer floods the pop-up.
 
 ### Fixed
+
+- Bulk actions taken from a custom folder view now stay in that folder and act
+  on the right messages. Mark read/unread, Move to trash and Move used to drop
+  the user back in the Inbox; "all N in this folder" acted on the Inbox's remote
+  messages for a standalone (Microsoft/Gmail/IMAP) inbox, or was refused with
+  "unknown folder" for a domain inbox. Renaming a folder also returns to the
+  renamed folder, and creating one opens it.
 
 - The header action queue now stays hidden until opened and closes correctly.
   Successful actions disappear from the popup as soon as the worker completes

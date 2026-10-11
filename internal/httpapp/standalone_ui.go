@@ -39,13 +39,18 @@ func (s *Server) uiInboxFolderCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder path is required"), 303)
 		return
 	}
+	var created model.Folder
 	if mb.routed {
-		if _, cerr := mb.remote.CreateRemoteFolder(r.Context(), p, mb.inbox.ID, path, name); cerr != nil {
-			s.uiError(w, cerr, 400)
-			return
-		}
-	} else if _, cerr := s.Service.Store.CreateFolder(r.Context(), p, mb.inbox.ID, store.FolderCreate{Path: path, Name: name}); cerr != nil {
-		s.uiError(w, cerr, 400)
+		created, err = mb.remote.CreateRemoteFolder(r.Context(), p, mb.inbox.ID, path, name)
+	} else {
+		created, err = s.Service.Store.CreateFolder(r.Context(), p, mb.inbox.ID, store.FolderCreate{Path: path, Name: name})
+	}
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	if created.ID != "" {
+		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"/folder?folder="+url.QueryEscape(created.ID)+"&notice="+url.QueryEscape("Folder created"), 303)
 		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder created"), 303)
@@ -64,16 +69,18 @@ func (s *Server) uiInboxFolderRename(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder name is required"), 303)
 		return
 	}
+	folderID := r.PathValue("folderId")
 	if mb.routed {
-		if _, rerr := mb.remote.RenameRemoteFolder(r.Context(), p, mb.inbox.ID, r.PathValue("folderId"), name); rerr != nil {
+		if _, rerr := mb.remote.RenameRemoteFolder(r.Context(), p, mb.inbox.ID, folderID, name); rerr != nil {
 			s.uiError(w, rerr, 400)
 			return
 		}
-	} else if _, rerr := s.Service.Store.RenameFolder(r.Context(), p, mb.inbox.ID, r.PathValue("folderId"), name); rerr != nil {
+	} else if _, rerr := s.Service.Store.RenameFolder(r.Context(), p, mb.inbox.ID, folderID, name); rerr != nil {
 		s.uiError(w, rerr, 400)
 		return
 	}
-	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape("Folder renamed"), 303)
+	// Return to the renamed folder rather than dropping the user in the Inbox.
+	http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"/folder?folder="+url.QueryEscape(folderID)+"&notice="+url.QueryEscape("Folder renamed"), 303)
 }
 
 // uiInboxFolderDelete deletes a folder.
@@ -268,6 +275,28 @@ func (s *Server) buildFolderSidebar(ctx context.Context, accountID, inboxID stri
 	return out
 }
 
+// findInboxFolder resolves a custom folder id within one inbox. Both the local
+// bulk path and the remote bulk path use it to turn the folder id carried on the
+// folder view's bulk form into the folder's store row (id for the local filter,
+// path for the remote one). It returns false for an unknown id or a folder that
+// belongs to a different inbox, so a crafted id is refused rather than acted on.
+func (s *Server) findInboxFolder(ctx context.Context, accountID, inboxID, folderID string) (model.Folder, bool) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return model.Folder{}, false
+	}
+	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
+	if err != nil {
+		return model.Folder{}, false
+	}
+	for i := range folders {
+		if folders[i].ID == folderID {
+			return folders[i], true
+		}
+	}
+	return model.Folder{}, false
+}
+
 // folderMailboxView renders the messages in one custom folder of an inbox (both
 // kinds). A domain inbox lists the local messages whose mailbox_id is the folder;
 // a standalone inbox lists the cached remote messages in the folder's path. It
@@ -447,7 +476,7 @@ func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.M
 // message list template and the mailbox sidebar (with custom folder management),
 // so a domain inbox and a standalone inbox render identically.
 const folderBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
-<div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{if .MoveTargets}}<select name="dest" aria-label="Move to folder" class="move-select"><option value="">Move to…</option>{{range .MoveTargets}}<option value="{{.Path}}">{{.Name}}</option>{{end}}</select><button name="action" value="move" class="secondary" title="Move to folder">Move</button>{{end}}</form></div>
+<div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{if .MoveTargets}}<select name="dest" aria-label="Move to folder" class="move-select"><option value="">Move to…</option>{{range .MoveTargets}}<option value="{{.Path}}">{{.Name}}</option>{{end}}</select><button name="action" value="move" class="secondary" title="Move to folder">Move</button>{{end}}</form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{template "select-banner" .}}
