@@ -157,6 +157,8 @@ type Config struct {
 	DedicatedReceiverEnable bool
 	DedicatedReceiverPort   int
 	DedicatedReceiverURL    string
+	MicrosoftClientID       string
+	MicrosoftTenantID       string
 	// baseHost is the canonical host (with explicit port) parsed from BaseURL.
 	// It is the only host the HTTPS redirect may target; request Host headers
 	// are attacker-controlled and never used for redirects.
@@ -301,6 +303,8 @@ func Load() (Config, error) {
 		DedicatedReceiverEnable: receiverEnabled,
 		DedicatedReceiverPort:   receiverPort,
 		DedicatedReceiverURL:    receiverURL,
+		MicrosoftClientID:       strings.TrimSpace(os.Getenv("MICROSOFT_CLIENT_ID")),
+		MicrosoftTenantID:       env("MICROSOFT_TENANT_ID", "common"),
 		baseHost:                baseHost,
 		DataDir:                 env("DATA_DIR", "/data"),
 		Mode:                    strings.ToLower(env("MODE", "selfhosted")),

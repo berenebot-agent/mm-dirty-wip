@@ -532,7 +532,7 @@ func (m *RemoteMailboxService) googleFolderMutation(ctx context.Context, p model
 	return m.Service.Store.GetFolder(ctx, p.AccountID, inbox, l.ID)
 }
 func (m *RemoteMailboxService) googleAttachment(ctx context.Context, account, inbox, id string, part []int, filename, ct string) (RemoteAttachment, error) {
-	path, _, e := m.googleRaw(ctx, account, inbox, id)
+	path, _, e := m.fetchRemoteRawFor(ctx, account, inbox, id, nil)
 	if e != nil {
 		return RemoteAttachment{}, e
 	}

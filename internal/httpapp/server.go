@@ -242,6 +242,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/inboxes", s.withSession(s.withCSRF(s.uiCreateInbox)))
 	m.HandleFunc("POST /ui/inboxes/standalone", s.withSession(s.withCSRF(s.uiCreateStandalone)))
 	m.HandleFunc("GET /ui/inboxes/standalone/new", s.withSession(s.uiStandaloneWizard))
+	m.HandleFunc("POST /ui/oauth/microsoft/begin", s.withSession(s.withCSRF(s.uiMicrosoftBegin)))
+	m.HandleFunc("POST /ui/oauth/microsoft/finish", s.withSession(s.withCSRF(s.uiMicrosoftFinish)))
 	m.HandleFunc("GET /ui/oauth/google/info", s.withSession(s.uiGoogleInfo))
 	m.HandleFunc("POST /ui/oauth/google/begin", s.withSession(s.withCSRF(s.uiGoogleBegin)))
 	m.HandleFunc("POST /ui/oauth/google/finish", s.withSession(s.withCSRF(s.uiGoogleFinish)))

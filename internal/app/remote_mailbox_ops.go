@@ -139,6 +139,9 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	if m.IsMicrosoft(ctx, accountID, inboxID) {
+		return m.reconcileMicrosoft(ctx, accountID, inboxID)
+	}
 	if m.IsGoogle(ctx, accountID, inboxID) {
 		return m.reconcileGoogle(ctx, accountID, inboxID)
 	}
@@ -570,6 +573,9 @@ func (m *RemoteMailboxService) ListRemoteMessagesCached(ctx context.Context, p m
 }
 
 func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.Principal, inboxID, folderPath string, limit int, before string, cachedOnly bool) (RemoteListResult, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return m.listMicrosoft(ctx, p, inboxID, folderPath, limit, before, cachedOnly)
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		return m.listGoogle(ctx, p, inboxID, folderPath, limit, before, cachedOnly)
 	}
@@ -656,6 +662,9 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 // refreshes the header from the live server when the cached row is stale; a live
 // refresh never marks the message seen (BODY.PEEK).
 func (m *RemoteMailboxService) GetRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID string) (RemoteMessageView, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return m.getMicrosoft(ctx, p, inboxID, messageID)
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		return m.getGoogle(ctx, p, inboxID, messageID)
 	}
@@ -671,6 +680,9 @@ func (m *RemoteMailboxService) GetRemoteMessage(ctx context.Context, p model.Pri
 		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindNotFound, "message is not in this mailbox's scope", false, nil)
 	}
 	view := remoteView(rec)
+	if m.IsMicrosoft(context.Background(), rec.AccountID, rec.InboxID) {
+		view.FolderPath, _ = m.Service.Store.MicrosoftMessageFolder(context.Background(), rec.AccountID, rec.InboxID, rec.ID)
+	}
 	// Best-effort live refresh: a fetch failure returns the cached view rather
 	// than failing the read, because the cache is the durable source of truth.
 	m.refreshRemoteHeader(ctx, p.AccountID, inboxID, &view)
@@ -807,7 +819,7 @@ func (m *RemoteMailboxService) authorizeAssist(ctx context.Context, p model.Prin
 // that has never been admitted (for example a shared namespace) is out of scope.
 // This is the single place folder scoping is enforced for remote operations.
 func (m *RemoteMailboxService) folderInScope(inbox model.Inbox, folderPath string) bool {
-	if m.IsGoogle(context.Background(), inbox.AccountID, inbox.ID) {
+	if m.IsGoogle(context.Background(), inbox.AccountID, inbox.ID) || m.IsMicrosoft(context.Background(), inbox.AccountID, inbox.ID) {
 		return true
 	}
 	folderPath = strings.TrimSpace(folderPath)
@@ -900,6 +912,9 @@ func (m *RemoteMailboxService) FetchRemoteRaw(ctx context.Context, p model.Princ
 }
 
 func (m *RemoteMailboxService) fetchRemoteRawFor(ctx context.Context, accountID, inboxID, messageID string, rec *store.RemoteMessage) (string, int64, error) {
+	if m.IsMicrosoft(ctx, accountID, inboxID) {
+		return m.microsoftRaw(ctx, accountID, inboxID, messageID)
+	}
 	if m.IsGoogle(ctx, accountID, inboxID) {
 		return m.googleRaw(ctx, accountID, inboxID, messageID)
 	}
@@ -995,7 +1010,7 @@ func (m *RemoteMailboxService) FetchRemoteAttachment(ctx context.Context, p mode
 }
 
 func (m *RemoteMailboxService) fetchRemoteAttachmentFor(ctx context.Context, accountID, inboxID, messageID string, part []int, filename, contentType string) (RemoteAttachment, error) {
-	if m.IsGoogle(ctx, accountID, inboxID) {
+	if m.IsGoogle(ctx, accountID, inboxID) || m.IsMicrosoft(ctx, accountID, inboxID) {
 		return m.googleAttachment(ctx, accountID, inboxID, messageID, part, filename, contentType)
 	}
 	rec, err := m.Service.Store.GetRemoteMessage(ctx, accountID, inboxID, messageID)
@@ -1044,6 +1059,9 @@ func (m *RemoteMailboxService) fetchRemoteAttachmentFor(ctx context.Context, acc
 // Trash role). When the cached metadata is already gone the purge is a no-op
 // success (idempotent), because the server may have expunged it already.
 func (m *RemoteMailboxService) PurgeRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID string) error {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return m.purgeMicrosoft(ctx, p, inboxID, messageID)
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		return model.NewMailboxError(model.ErrKindUnsupported, "Permanent deletion is not enabled for Google inboxes; use Gmail", false, nil)
 	}
@@ -1250,6 +1268,9 @@ func (m *RemoteMailboxService) trashFolder(ctx context.Context, accountID, inbox
 // change into the cached metadata. Reading a message is a state change, so it
 // requires Assistant or Owner.
 func (m *RemoteMailboxService) SetRemoteRead(ctx context.Context, p model.Principal, inboxID, messageID string, read bool) (RemoteMessageView, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return m.modifyMicrosoft(ctx, p, inboxID, messageID, map[string]any{"isRead": read})
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		if read {
 			return m.modifyGoogle(ctx, p, inboxID, messageID, nil, []string{"UNREAD"})
@@ -1286,6 +1307,13 @@ func (m *RemoteMailboxService) SetRemoteRead(ctx context.Context, p model.Princi
 
 // SetRemoteFlagged sets or clears \Flagged on a remote message and mirrors it.
 func (m *RemoteMailboxService) SetRemoteFlagged(ctx context.Context, p model.Principal, inboxID, messageID string, flagged bool) (RemoteMessageView, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		status := "notFlagged"
+		if flagged {
+			status = "flagged"
+		}
+		return m.modifyMicrosoft(ctx, p, inboxID, messageID, map[string]any{"flag": map[string]string{"flagStatus": status}})
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		if flagged {
 			return m.modifyGoogle(ctx, p, inboxID, messageID, []string{"STARRED"}, nil)
@@ -1327,6 +1355,9 @@ func (m *RemoteMailboxService) SetRemoteFlagged(ctx context.Context, p model.Pri
 // Message-ID; if that is ambiguous the message is left cached in its source until
 // the next reconcile, never falsely located.
 func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Principal, inboxID, messageID, destPath string) (RemoteMessageView, error) {
+	if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
+		return m.moveMicrosoft(ctx, p, inboxID, messageID, destPath)
+	}
 	if m.IsGoogle(ctx, p.AccountID, inboxID) {
 		return m.moveGoogle(ctx, p, inboxID, messageID, destPath)
 	}

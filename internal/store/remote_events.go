@@ -231,6 +231,13 @@ func (s *Store) RemoteMessageForArrival(ctx context.Context, accountID, arrivalI
 	if err != nil {
 		return RemoteMessage{}, err
 	}
+	if s.IsMicrosoft(ctx, accountID, a.InboxID) {
+		id, e := s.MicrosoftLocalID(ctx, accountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "microsoft:"))
+		if e != nil {
+			return RemoteMessage{}, e
+		}
+		return s.GetRemoteMessage(ctx, accountID, a.InboxID, id)
+	}
 	if s.IsGoogle(ctx, accountID, a.InboxID) {
 		id, e := s.GoogleLocalID(ctx, accountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "gmail:"))
 		if e != nil {
