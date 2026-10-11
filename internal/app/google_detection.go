@@ -114,6 +114,18 @@ func (w *RemoteWorker) detectGooglePass(ctx context.Context, inbox model.Inbox) 
 			for _, added := range history.MessagesAdded {
 				g, e := client.Get(ctx, t, added.Message.ID, "metadata")
 				if e != nil {
+					var mb *model.MailboxError
+					if errors.As(e, &mb) && mb.Kind == model.ErrKindNotFound {
+						// message deleted since the durable history snapshot: drop
+						// any stale cached row and continue rather than failing the
+						// pass and stalling the detection cursor.
+						if local, le := w.svc.Store.GoogleLocalID(ctx, inbox.AccountID, inbox.ID, added.Message.ID); le == nil {
+							if de := w.svc.Store.DeleteRemoteMessage(ctx, inbox.AccountID, inbox.ID, local); de != nil && !errors.Is(de, store.ErrNotFound) {
+								return arrived, "partial", de
+							}
+						}
+						continue
+					}
 					return arrived, "partial", e
 				}
 				if !containsFoldApp(g.LabelIDs, "INBOX") {

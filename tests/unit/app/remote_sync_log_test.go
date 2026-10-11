@@ -313,6 +313,59 @@ func TestGmailSyncIsLogged(t *testing.T) {
 	}
 }
 
+// TestGmailDetectionToleratesVanishedMessage proves a history entry whose
+// messages.get returns 404 (the message vanished between the history snapshot
+// and the fetch) does not fail the detection pass: the pass completes, the stale
+// cached row is dropped, and the detection cursor still advances.
+func TestGmailDetectionToleratesVanishedMessage(t *testing.T) {
+	svc, box, rm, fixture := googleLogEnv(t)
+	ctx := context.Background()
+	sink := newSyncLogSink()
+	svc.Log = slog.New(sink)
+
+	w := app.NewRemoteWorker(svc, rm, slog.New(sink))
+	w.SetMaxInboxConnections(1)
+	w.SetDemandInterval(-1)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Baseline the history cursor.
+	w.DetectInbox(ctx, inbox)
+
+	// Index a message first, so a stale cached row exists when the next pass
+	// discovers the message is gone.
+	fixture.add("msg-gone")
+	w.DetectInbox(ctx, inbox)
+	local, err := svc.Store.GoogleLocalID(ctx, box.AccountID, box.ID, "msg-gone")
+	if err != nil {
+		t.Fatalf("expected the cached row for msg-gone: %v", err)
+	}
+
+	// The next pass names msg-gone in history, but messages.get now 404s.
+	fixture.vanish("msg-gone")
+	w.DetectInbox(ctx, inbox)
+
+	final := sink.syncRecords()
+	last := final[len(final)-1]
+	if last["status"] != "complete" {
+		t.Fatalf("pass after a vanished message = %#v, want status=complete", last)
+	}
+	if _, ok := last["error"]; ok {
+		t.Fatalf("pass after a vanished message logged an error: %#v", last)
+	}
+	// The stale cached row is dropped.
+	if _, err := svc.Store.GetRemoteMessage(ctx, box.AccountID, box.ID, local); err == nil {
+		t.Fatal("stale cached row for the vanished message was not removed")
+	}
+	// The detection cursor still advances, so the same window is not re-walked.
+	w.DetectInbox(ctx, inbox)
+	again := sink.syncRecords()
+	if lastAgain := again[len(again)-1]; lastAgain["status"] != "complete" || lastAgain["new"] != "0" {
+		t.Fatalf("re-pass = %#v, want status=complete new=0", lastAgain)
+	}
+}
+
 // ---- fixtures ----
 
 // microsoftLogEnv builds a service with a Microsoft-connected standalone inbox
@@ -391,12 +444,26 @@ type googleLogFixture struct {
 	mu       sync.Mutex
 	url      string
 	messages []string
+	// gone holds message ids that history still names but whose fetch must 404,
+	// simulating a message deleted between the history snapshot and the get.
+	gone map[string]bool
 }
 
 func (f *googleLogFixture) add(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.messages = append(f.messages, id)
+}
+
+// vanish makes every messages.get for id return a 404 while history still names
+// it, so a detection pass must tolerate the vanished message.
+func (f *googleLogFixture) vanish(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gone == nil {
+		f.gone = map[string]bool{}
+	}
+	f.gone[id] = true
 }
 
 func (f *googleLogFixture) handle(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +481,11 @@ func (f *googleLogFixture) handle(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"history": hist, "historyId": "200"})
 	case strings.Contains(r.URL.Path, "/messages/"):
 		id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		if f.gone[id] {
+			w.WriteHeader(404)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": 404, "status": "NOT_FOUND", "errors": []any{map[string]any{"reason": "notFound"}}}})
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{"id": id, "threadId": "t", "labelIds": []string{"INBOX"}, "internalDate": "1700000000000", "payload": map[string]any{"headers": []any{map[string]any{"name": "From", "value": "a@b.test"}, map[string]any{"name": "Subject", "value": "hello"}}}})
 	case strings.Contains(r.URL.Path, "/labels"):
 		json.NewEncoder(w).Encode(map[string]any{"labels": []any{}})
