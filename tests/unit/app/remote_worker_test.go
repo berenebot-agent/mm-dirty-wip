@@ -15,6 +15,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/imap"
+	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 )
 
 // workerEnv builds a full app service, standalone inbox with a configured remote
@@ -30,6 +31,9 @@ func workerEnv(t *testing.T) (*app.Service, model.Inbox, *app.RemoteMailboxServi
 	// report its UIDVALIDITY; the production fake already does.
 	w := app.NewRemoteWorker(svc, rm, nil)
 	w.SetMaxInboxConnections(2)
+	// Disable demand coalescing: these tests call DetectInbox directly and
+	// expect every call to run a pass. The coalescing behaviour has its own test.
+	w.SetDemandInterval(-1)
 	return svc, box, rm, fake, w
 }
 
@@ -119,6 +123,84 @@ func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
 	w.DetectInbox(ctx, inbox)
 	if evs := drainEvents(ch); len(evs) != 0 {
 		t.Fatalf("repeat detect emitted %d events", len(evs))
+	}
+}
+
+// TestDetectInboxDemandCoalesced proves the public demand entry runs at most one
+// detection pass per inbox within the quick interval, no matter how many clients
+// ask, and that a manual sync always runs. It counts passes through the dialer,
+// which the detection path invokes exactly once per pass.
+func TestDetectInboxDemandCoalesced(t *testing.T) {
+	svc, box, rm, fake, w := workerEnv(t)
+	ctx := context.Background()
+	// Re-enable the real time-based gate (workerEnv disables it for determinism)
+	// and set a long interval so the second automatic call is skipped.
+	w.SetDemandInterval(time.Hour)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dials int
+	var mu sync.Mutex
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		mu.Lock()
+		dials++
+		mu.Unlock()
+		return &fakeSession{fake: fake}, nil
+	})
+	count := func() int { mu.Lock(); defer mu.Unlock(); return dials }
+
+	// Baseline (first demand call): runs.
+	w.DetectInbox(ctx, inbox)
+	if got := count(); got != 1 {
+		t.Fatalf("baseline passes = %d, want 1", got)
+	}
+	// A burst of automatic demand calls within the interval: all skipped.
+	for i := 0; i < 5; i++ {
+		w.DetectInbox(ctx, inbox)
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("burst coalesced to %d passes, want 1", got)
+	}
+	// A manual sync bypasses the gate even inside the interval.
+	w.DetectInbox(app.WithManualRemoteSync(ctx), inbox)
+	if got := count(); got != 2 {
+		t.Fatalf("manual sync did not bypass coalescing: passes = %d, want 2", got)
+	}
+}
+
+// TestWatchIntervalPushAware proves a Microsoft inbox with active push watches on
+// the full-sync safety-net cadence instead of the quick poll, and an inbox
+// without push uses the quick cadence (honoring its per-inbox override).
+func TestWatchIntervalPushAware(t *testing.T) {
+	svc, _, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetPollInterval(60 * time.Second)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Microsoft-connected inbox, no push: quick cadence.
+	if err := rm.SaveMicrosoftGrant(ctx, store.MicrosoftConnection{AccountID: box.AccountID, InboxID: box.ID, ClientID: "c", Tenant: "common", IdentityID: "id", Mailbox: box.Address}, microsoft.Token{AccessToken: "a", RefreshToken: "r", ExpiresIn: 3600, Scope: microsoft.Scope(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("no-push interval = %s, want 60s", got)
+	}
+	// Per-inbox quick override is honored when push is not active (clamped to the
+	// 15s model minimum).
+	thirty := 30
+	inbox.RemotePollSeconds = &thirty
+	if got := w.WatchIntervalForTest(inbox); got != 30*time.Second {
+		t.Fatalf("override interval = %s, want 30s", got)
+	}
+	// Active push: the quick poll is dropped for the full-sync safety net.
+	if err := svc.Store.SaveMicrosoftPush(ctx, store.MicrosoftPush{AccountID: box.AccountID, InboxID: box.ID, EncryptedState: "x", StateHash: "h", Status: "push active", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != time.Duration(model.NormalizeRemoteFullSyncMinutes(nil))*time.Minute {
+		t.Fatalf("push-active interval = %s, want the 15m full-sync fallback", got)
 	}
 }
 
@@ -214,6 +296,7 @@ func TestRemoteWorkerOutsideScopeNotDetected(t *testing.T) {
 	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: out\r\nMessage-ID: <out@remote>\r\n\r\nbody", "<out@remote>", "out")
 	installFake(t, rm, fake)
 	w := app.NewRemoteWorker(st, rm, nil)
+	w.SetDemandInterval(-1)
 	ch, cancel := collectEvents(st)
 	defer cancel()
 	inbox, _ := st.Store.GetInboxInternal(ctx, box.AccountID, box.ID)

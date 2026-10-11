@@ -168,6 +168,51 @@ func TestMicrosoftDeltaSyncIsLogged(t *testing.T) {
 	}
 }
 
+// TestMicrosoftQuickDetectionLogsAndCheap proves the demand/watcher Microsoft
+// detection path runs the cheap Inbox-only delta: it logs one provider=microsoft
+// line, detects a new Inbox arrival, and does NOT re-enumerate the folder tree
+// (the full reconcile owns that).
+func TestMicrosoftQuickDetectionLogsAndCheap(t *testing.T) {
+	svc, box, rm, fixture := microsoftLogEnv(t)
+	ctx := context.Background()
+	sink := newSyncLogSink()
+	svc.Log = slog.New(sink)
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Full reconcile first, so the Inbox folder row and its delta baseline exist.
+	if _, err := rm.ReconcileRemote(ctx, box.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	enumerationsAfterFull := fixture.folderEnumerations
+	fixture.mu.Unlock()
+	if enumerationsAfterFull == 0 {
+		t.Fatal("full reconcile did not enumerate folders")
+	}
+
+	fixture.add("QuickID", "inbox-id", "Quick")
+	w.DetectInbox(ctx, inbox)
+
+	recs := sink.syncRecords()
+	if len(recs) != 2 {
+		t.Fatalf("logged %d remote sync lines, want 2 (full + quick)", len(recs))
+	}
+	last := recs[len(recs)-1]
+	if last["provider"] != "microsoft" || last["new"] != "1" || last["status"] != "complete" {
+		t.Fatalf("quick pass = %#v, want provider=microsoft new=1 complete", last)
+	}
+	fixture.mu.Lock()
+	enumerationsAfterQuick := fixture.folderEnumerations
+	fixture.mu.Unlock()
+	if enumerationsAfterQuick != enumerationsAfterFull {
+		t.Fatalf("quick detection re-enumerated folders (%d -> %d); it must use the cache", enumerationsAfterFull, enumerationsAfterQuick)
+	}
+}
+
 // TestGmailSyncIsLogged proves the Gmail history detection pass emits a "remote
 // sync" line with provider=gmail, and reports the added-message count.
 func TestGmailSyncIsLogged(t *testing.T) {
@@ -178,6 +223,7 @@ func TestGmailSyncIsLogged(t *testing.T) {
 
 	w := app.NewRemoteWorker(svc, rm, slog.New(sink))
 	w.SetMaxInboxConnections(1)
+	w.SetDemandInterval(-1)
 	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +277,9 @@ type microsoftLogFixture struct {
 	mu       sync.Mutex
 	url      string
 	messages []map[string]any
+	// folderEnumerations counts /mailFolders list calls, so a test can prove the
+	// quick detection path does not re-enumerate the folder tree.
+	folderEnumerations int
 }
 
 // add appends a message to the inbox that the next delta pass will report.
@@ -252,6 +301,7 @@ func (f *microsoftLogFixture) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"value": value, "@odata.deltaLink": f.url + r.URL.Path + "?cursor=1"})
 	case strings.HasSuffix(r.URL.Path, "/mailFolders"):
+		f.folderEnumerations++
 		json.NewEncoder(w).Encode(map[string]any{"value": []any{map[string]any{"id": "inbox-id", "displayName": "Inbox"}}})
 	case strings.HasSuffix(r.URL.Path, "/mailFolders/inbox"):
 		json.NewEncoder(w).Encode(map[string]any{"id": "inbox-id", "displayName": "Inbox"})

@@ -126,7 +126,19 @@ notifications trigger reauthorization, subscription recreation, or delta catch-u
 Queued work survives restarts; lost subscription-create responses are reconciled
 against Graph's subscription list. Inbox deletion/disable retains only an
 encrypted cleanup grant until the subscription is removed or expires, then
-deletes that state. Ordinary delta polling remains active as a recovery fallback.
+deletes that state.
+
+Detection is split into a cheap quick pass and a deep reconcile. The quick pass
+(the watcher poll and every on-demand read) applies only the Inbox folder's stored
+delta cursor and does not enumerate the folder tree. The deep reconcile (every
+folder, the folder tree, prune/backfill) runs on the inbox's own full-sync
+cadence. While a subscription is active, the quick poll is dropped: a notification
+wakes the quick pass immediately and only the full-sync safety-net remains, so a
+missed or expired notification is still caught. If push is unavailable
+(unconfigured receiver, shared mailboxes), ordinary quick delta polling applies.
+In all cases client-driven freshness is coalesced onto the inbox's quick interval,
+so several open tabs or polling clients cannot outpace the worker; a manual reload
+always runs.
 
 Connection settings show push setup/active/retrying status; the API realtime
 capability is true only while a recorded push subscription is active and unexpired.

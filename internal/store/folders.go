@@ -203,6 +203,20 @@ func (s *Store) EnsureSystemFolders(ctx context.Context, accountID, inboxID stri
 	return s.ListFolders(ctx, accountID, inboxID)
 }
 
+// RemoteFolderByRole resolves an inbox's remote-owned folder (origin='remote')
+// of a role, without seeding and without touching a locally-owned system folder.
+// It is used by the cheap provider quick-detect path, which needs the provider's
+// own folder identifier (for Microsoft, the Graph folder id stored as the path)
+// rather than a seeded local folder. It returns ErrNotFound when the provider's
+// folder has not been discovered yet.
+func (s *Store) RemoteFolderByRole(ctx context.Context, accountID, inboxID, role string) (model.Folder, error) {
+	f, err := scanFolder(s.read.QueryRowContext(ctx, `SELECT `+folderColumns+` FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote' AND role=? ORDER BY path LIMIT 1`, accountID, inboxID, role))
+	if err == sql.ErrNoRows {
+		return f, ErrNotFound
+	}
+	return f, err
+}
+
 // GetSystemFolder resolves the seeded system folder of an inbox by role, seeding
 // the system set first if needed. It returns ErrNotFound when the inbox has no
 // such folder (which cannot happen after seeding, but callers must not assume).
