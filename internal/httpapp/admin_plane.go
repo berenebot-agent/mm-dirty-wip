@@ -801,10 +801,7 @@ func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	domains, _ := s.Service.Store.ListDomains(ctx, p.AccountID)
 	_, receivingReady, inboxSendingReady, _ := inboxReadiness(domains, inboxes)
-	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
-	if unread == nil {
-		unread = map[string]int{}
-	}
+	unread := s.inboxUnreadCounts(ctx, p)
 	draftCounts, _ := s.Service.Store.PendingDraftCountsByInbox(ctx, p)
 	if draftCounts == nil {
 		draftCounts = map[string]int{}

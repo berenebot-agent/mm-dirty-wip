@@ -31,6 +31,25 @@ func (s *Server) uiState(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// inboxUnreadCounts returns the merged per-inbox unread counts for a principal:
+// the local messages-table counts plus, for every standalone (remote) inbox, the
+// count from the cached remote index. Standalone mail never lands in the local
+// messages table, so without the remote merge a standalone inbox would always
+// report zero unread on the dashboard and the sidebar. A standalone id present in
+// the remote result overrides any (necessarily zero) local count.
+func (s *Server) inboxUnreadCounts(ctx context.Context, p model.Principal) map[string]int {
+	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
+	if unread == nil {
+		unread = map[string]int{}
+	}
+	if remote, err := s.Service.Store.RemoteInboxUnreadCounts(ctx, p); err == nil {
+		for id, n := range remote {
+			unread[id] = n
+		}
+	}
+	return unread
+}
+
 // uiStateDashboard returns per-inbox unread and pending-send counts plus, when
 // includeLights is set, the per-domain inbound traffic light. It is keyed by
 // inbox/domain id so the browser can update one cell without re-rendering the
@@ -39,10 +58,7 @@ func (s *Server) uiState(w http.ResponseWriter, r *http.Request) {
 // receiver-health notification.
 func (s *Server) uiStateDashboard(w http.ResponseWriter, r *http.Request, p model.Principal, includeLights bool) {
 	ctx := r.Context()
-	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
-	if unread == nil {
-		unread = map[string]int{}
-	}
+	unread := s.inboxUnreadCounts(ctx, p)
 	pending, _ := s.Service.Store.PendingDraftCountsByInbox(ctx, p)
 	if pending == nil {
 		pending = map[string]int{}
@@ -102,7 +118,7 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 		writeError(w, 404, "not found")
 		return
 	}
-	unread, _ := s.Service.Store.UnreadCounts(ctx, p)
+	unread := s.inboxUnreadCounts(ctx, p)
 	drafts, _ := s.Service.Store.CountDrafts(ctx, p, id)
 	outbox, _ := s.Service.Store.CountOutbox(ctx, p, id)
 	spam, _ := s.Service.Store.CountSpam(ctx, p, id)
