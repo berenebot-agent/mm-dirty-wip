@@ -701,7 +701,7 @@ func (p *RemoteHandoffPublisher) Append(ctx context.Context, inboxID string, raw
 		if e != nil {
 			return HandoffOutcome{}, e
 		}
-		d, e := p.Service.Microsoft.CreateDraft(ctx, t, c.Mailbox, bytes.NewReader(raw))
+		d, e := p.Service.Microsoft.CreateVerifiedDraft(ctx, t, c.Mailbox, raw)
 		if e != nil {
 			if transport.AsAmbiguous(e) {
 				return HandoffOutcome{RemoteFolder: "drafts"}, nil
