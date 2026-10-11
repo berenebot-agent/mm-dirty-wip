@@ -6,6 +6,18 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A global **status flag** in the header on the dashboard and inbox views.
+  It is green "Live" while the event stream is connected, red "Disconnected"
+  when the stream drops (reconnecting with backoff), amber "Sync problem" when
+  the remote index reports an error, and a spinner "Loading…" while a UI
+  background action is in flight (an IMAP sync, a remote message body load or a
+  background list refresh). A dropped connection outranks Loading. The IMAP
+  "Syncing messages…" strip and the "Updating messages…" refresh spinner are
+  removed in favour of the flag; a failed background list refresh still appears
+  in place with its Retry button, and the message-body loader is unchanged.
+
 ### Fixed
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest

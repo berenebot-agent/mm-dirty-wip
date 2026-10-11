@@ -1,4 +1,105 @@
 (function () {
+  'use strict';
+  // Global Live/Loading status flag in the header. It is only rendered on the
+  // pages that hold an event stream (dashboard and inbox views), where it shows
+  // the SSE connection state: green "Live" while the stream is open, red
+  // "Disconnected" when it drops and reconnects, amber "Sync problem" when the
+  // remote index reports an error, and a spinner "Loading…" while a UI
+  // background action is in flight (a remote message body load, an IMAP sync, a
+  // background list reconcile). A dropped connection outranks Loading: it is the
+  // more important signal. Short actions are delayed briefly before the spinner
+  // shows, so a fast background refresh never flashes it.
+  var node = document.querySelector('[data-conn-status]');
+  var noop = function () {};
+  if (!node) {
+    window.mailmooseStatus = { connecting: noop, connected: noop, disconnected: noop, error: noop, busy: noop };
+    return;
+  }
+  var label = node.querySelector('.conn-label');
+  var BUSY_DELAY_MS = 250;
+  var BUSY_ORDER = ['sync', 'body', 'list'];
+  var BUSY_LABELS = { sync: 'Syncing messages…', body: 'Loading message body…', list: 'Updating messages…' };
+  var conn = 'connecting';
+  var syncError = '';
+  var busy = {};
+  var busyLabel = '';
+  var showBusy = false;
+  var showTimer = null;
+
+  function activeBusy() {
+    for (var i = 0; i < BUSY_ORDER.length; i++) {
+      if (busy[BUSY_ORDER[i]]) {
+        return BUSY_ORDER[i];
+      }
+    }
+    return '';
+  }
+
+  function render() {
+    var state, text, title;
+    if (conn === 'disconnected') {
+      state = 'disconnected';
+      text = 'Disconnected';
+      title = 'Live updates disconnected — reconnecting.';
+    } else if (conn === 'connecting') {
+      state = 'connecting';
+      text = 'Connecting…';
+      title = 'Connecting to live updates…';
+    } else if (syncError) {
+      state = 'error';
+      text = 'Sync problem';
+      title = syncError;
+    } else if (showBusy) {
+      state = 'loading';
+      text = 'Loading…';
+      title = busyLabel || 'Loading…';
+    } else {
+      state = 'live';
+      text = 'Live';
+      title = 'Live updates connected.';
+    }
+    node.setAttribute('data-state', state);
+    node.setAttribute('title', title);
+    node.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+    if (label) {
+      label.textContent = text;
+    }
+  }
+
+  function refreshBusy() {
+    var key = activeBusy();
+    busyLabel = key ? BUSY_LABELS[key] : '';
+    if (key) {
+      if (!showBusy && !showTimer) {
+        showTimer = window.setTimeout(function () {
+          showTimer = null;
+          showBusy = !!activeBusy();
+          render();
+        }, BUSY_DELAY_MS);
+      } else if (showBusy) {
+        render();
+      }
+      return;
+    }
+    if (showTimer) {
+      window.clearTimeout(showTimer);
+      showTimer = null;
+    }
+    showBusy = false;
+    render();
+  }
+
+  window.mailmooseStatus = {
+    connecting: function () { conn = 'connecting'; render(); },
+    connected: function () { conn = 'live'; render(); },
+    disconnected: function () { conn = 'disconnected'; render(); },
+    error: function (text) { syncError = text || ''; render(); },
+    busy: function (key, on) { busy[key] = !!on; refreshBusy(); }
+  };
+  render();
+})();
+
+(function () {
   var dlg = document.getElementById('key-dialog');
   if (!dlg) {
     return;
@@ -3425,6 +3526,7 @@ function hideInboxSubview(dlg) {
   function load() {
     if (active) { return; }
     active = true;
+    window.mailmooseStatus.busy('body', true);
     host.replaceChildren();
     var status = document.createElement('div');
     status.className = 'load-status pending';
@@ -3519,6 +3621,7 @@ function hideInboxSubview(dlg) {
       status.appendChild(retry);
     }).finally(function () {
       window.clearTimeout(timeout);
+      window.mailmooseStatus.busy('body', false);
       active = false;
     });
   }
@@ -5077,19 +5180,15 @@ function hideInboxSubview(dlg) {
       return;
     }
     if (data.page === 'inbox') {
-      var sync = document.querySelector('[data-sync-status]');
-      if (!sync && data.remote) {
-        sync = el('div', 'load-status');
-        sync.setAttribute('data-sync-status', '');
-        sync.setAttribute('role', 'status');
-        var host = document.querySelector('.mailcontent');
-        if (host) { host.insertBefore(sync, host.firstChild); }
-      }
-      if (sync) {
-        sync.hidden = !data.remote_syncing && data.remote_status !== 'error';
-        sync.classList.toggle('pending', !!data.remote_syncing);
-        sync.textContent = data.remote_syncing ? 'Syncing messages… Cached mail remains available.' : 'Mail sync failed. Retry by refreshing the remote connector.';
-        sync.setAttribute('aria-busy', data.remote_syncing ? 'true' : 'false');
+      // A standalone inbox's sync state is reported by the header status flag
+      // rather than an in-list strip; the cached mail stays usable throughout.
+      if (data.remote) {
+        var syncing = !!data.remote_syncing;
+        window.mailmooseStatus.busy('sync', syncing);
+        window.mailmooseStatus.error(!syncing && data.remote_status === 'error' ? 'Mail sync failed. Retry by refreshing the remote connector.' : '');
+      } else {
+        window.mailmooseStatus.busy('sync', false);
+        window.mailmooseStatus.error('');
       }
       if (data.remote_syncing) {
         window.setTimeout(schedule, 1500);
@@ -5229,13 +5328,9 @@ function hideInboxSubview(dlg) {
       return;
     }
     listInFlight = true;
-    var feedback = el('div', 'load-status pending', 'Updating messages…');
-    feedback.setAttribute('role', 'status');
-    feedback.setAttribute('aria-busy', 'true');
-    var feedbackTimer = window.setTimeout(function () {
-      var host = listHost();
-      if (host) { host.insertBefore(feedback, host.firstChild); }
-    }, 200);
+    // The refresh itself is reported by the header status flag, which delays a
+    // brief spinner so a fast reconcile never flashes one.
+    window.mailmooseStatus.busy('list', true);
     var jobs = [];
     if (wantList) {
       jobs.push(fetchFragment(liveURL('list'), '[data-live-list]').then(swapFragment));
@@ -5259,18 +5354,18 @@ function hideInboxSubview(dlg) {
       }));
     }
     Promise.all(jobs).catch(function () {
-      feedback.classList.remove('pending');
-      feedback.textContent = 'Could not update messages. ';
-      feedback.setAttribute('aria-busy', 'false');
+      // A failed background refresh is surfaced in place with a Retry, since the
+      // header flag is transient state and cannot offer an action.
+      var feedback = el('div', 'load-status', 'Could not update messages. ');
+      feedback.setAttribute('role', 'status');
       var retry = el('button', 'secondary', 'Retry');
       retry.type = 'button';
       retry.onclick = function () { feedback.remove(); reconcileLists(); };
       feedback.appendChild(retry);
       var host = listHost();
-      if (host && !feedback.parentNode) { host.insertBefore(feedback, host.firstChild); }
+      if (host) { host.insertBefore(feedback, host.firstChild); }
     }).then(function () {
-      window.clearTimeout(feedbackTimer);
-      if (feedback.classList.contains('pending')) { feedback.remove(); }
+      window.mailmooseStatus.busy('list', false);
       listInFlight = false;
     });
   }
@@ -5363,15 +5458,22 @@ function hideInboxSubview(dlg) {
     if (source || document.hidden) {
       return;
     }
+    var wasClosed = closedForHidden;
     closedForHidden = false;
+    if (wasClosed) {
+      // Reopening after a deliberate hidden-tab close is not a drop.
+      window.mailmooseStatus.connecting();
+    }
     try {
       source = new EventSource('/ui/events/stream');
     } catch (err) {
       source = null;
+      window.mailmooseStatus.disconnected();
       return;
     }
     source.onopen = function () {
       retryDelay = 1000;
+      window.mailmooseStatus.connected();
       // A reconnect may have missed a light change, so re-ask for lights.
       wantLights = true;
       refresh();
@@ -5398,6 +5500,7 @@ function hideInboxSubview(dlg) {
       if (closedForHidden || document.hidden) {
         return;
       }
+      window.mailmooseStatus.disconnected();
       // Reconnect manually so we control backoff and catch up with a snapshot.
       var delay = retryDelay;
       retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS);
