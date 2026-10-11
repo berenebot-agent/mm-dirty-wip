@@ -39,10 +39,10 @@ change. Keep their app registrations operational for refresh/reconnection.
 ## Connecting
 
 Choose **Add inbox → Standalone inbox → Microsoft / Outlook**, then pick
-**Connect personal mailbox**
-(signing in as the mailbox itself) or **Connect personal + shared** (the extra
-shared scopes are requested before sign-in, because Microsoft fixes granted
-scope in the authorization request). Sign in and approve delegated access.
+**Connect Microsoft · Personal Inbox only** (signing in as the mailbox itself)
+or **Connect Microsoft · Personal Inbox and Shared Inbox** (the extra shared
+scopes are requested before sign-in, because Microsoft fixes granted scope in
+the authorization request). Sign in and approve delegated access.
 Microsoft redirects to `http://localhost`; a browser connection failure is
 expected because no local listener runs. Copy the complete final address-bar URL
 and paste it into MailMoose. Use another desktop browser if the URL is hidden.
@@ -53,9 +53,9 @@ shared mailboxes by enumerating a bounded window of the tenant directory and
 probing each one's Inbox, so only mailboxes the account can actually open are
 offered. Manual address entry is the fallback when the directory is unavailable
 or the mailbox lies outside the enumerated window. The choice is validated
-before the connection is stored. The inbox label defaults to the operator's
-optional label, else the provider display name (personal) or address (shared),
-and is editable from the inbox' Identity tab later.
+before the connection is stored. The inbox label defaults to the provider
+display name (personal) or address (shared), and is editable from the inbox'
+Identity tab later.
 
 The callback is sensitive. MailMoose validates the exact localhost destination,
 state and PKCE verifier and does not log or retain its code or pasted URL.

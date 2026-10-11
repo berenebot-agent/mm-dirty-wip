@@ -23,14 +23,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   banner.
 
 - Microsoft / Outlook connections now have a **personal + shared** flow: the
-  wizard offers a "Connect personal mailbox" and a "Connect personal + shared"
-  button, and after sign-in the shared mailbox is picked from a list of
-  mailboxes the signed-in account can actually open, with manual address entry
-  as a fallback. The mailbox address is never typed before sign-in.
+  wizard offers a **Connect Microsoft · Personal Inbox only** and a **Connect
+  Microsoft · Personal Inbox and Shared Inbox** button, and after sign-in the
+  shared mailbox is picked from a list of mailboxes the signed-in account can
+  actually open, with manual address entry as a fallback. The mailbox address is
+  never typed before sign-in.
 
 - The Google / Gmail and Microsoft / Outlook wizard steps label the inbox
-  automatically — the operator's optional label, else the provider's display
-  name or the connected address — so the identity tab can rename it later.
+  automatically — the provider's display name or the connected address — so the
+  identity tab can rename it later.
 
 ### Changed
 
@@ -41,6 +42,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   directly (no separate Next), and IMAP opens the in-dialog IMAP/SMTP form.
   The stale "(coming later)" Google and Microsoft buttons on that form are
   gone.
+
+- The Google / Gmail and Microsoft / Outlook wizard steps are tidied: the
+  provider logo heads the step, each connection form sits in a bordered box with
+  its own heading, and the "Inbox label" prompt is gone — the inbox is labelled
+  from the provider display name or the connected address, then renamed from its
+  Identity tab. Picking **Personal Inbox and Shared Inbox** now replaces both
+  halves of the Microsoft connect flow with the shared-mailbox picker.
 
 ### Fixed
 
