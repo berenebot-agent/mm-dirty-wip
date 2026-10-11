@@ -111,10 +111,17 @@ func (s *Store) DeleteRemoteFolderRow(ctx context.Context, accountID, inboxID, p
 		return err
 	}
 	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, path); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE account_id=? AND inbox_id=? AND path=? AND origin='remote'`, accountID, inboxID, path); err != nil {
+		return err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -152,6 +159,10 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 	}
 	defer tx.Rollback()
 	now := nowText()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
 	keep := map[string]bool{}
 	for _, f := range folders {
 		path := strings.TrimSpace(f.Path)
@@ -234,6 +245,9 @@ func (s *Store) ReconcileRemoteFolders(ctx context.Context, accountID, inboxID s
 				return nil, err
 			}
 		}
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
@@ -374,6 +388,32 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		backfillComplete = false
 	}
 
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return 0, err
+	}
+	// Cap awareness is opt-in and additive: when neither the account nor the
+	// inbox sets a cap, no metadata read is needed and every row is admitted as
+	// before. When a cap is set, an update to an already-cached UID replaces
+	// bytes rather than growing usage and is always admitted; only a genuinely
+	// new UID is subject to the headroom check, and once the cap is reached the
+	// remaining rows are skipped (the caller reports the folder partial). The
+	// reconcile never returns ErrQuota: metadata is a derivative cache.
+	accountRoom, accountLimited, inboxRoom, inboxLimited, err := remoteMetadataHeadroomTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return 0, err
+	}
+	capped := accountLimited || inboxLimited
+	var known map[uint32]bool
+	if capped {
+		known, err = existingRemoteUIDsTx(ctx, tx, inboxID, folderPath, uidValidity)
+		if err != nil {
+			return 0, err
+		}
+	}
+	usedThisBatch := int64(0)
+	truncated := false
+
 	written := 0
 	for _, m := range messages {
 		if m.UID == 0 {
@@ -383,6 +423,14 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		in.FolderPath = folderPath
 		in.UIDValidity = uidValidity
 		threadKey := remoteThreadKeyTx(ctx, tx, inboxID, in)
+		if capped && !known[in.UID] {
+			add := remoteMessageInputBytes(in)
+			if !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, usedThisBatch+add) {
+				truncated = true
+				break
+			}
+			usedThisBatch += add
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
@@ -402,6 +450,13 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		if err = mergeRemoteThreadTx(ctx, tx, inboxID, in); err != nil {
 			return 0, err
 		}
+	}
+	// A truncated batch means the snapshot it represents is not fully indexed:
+	// never claim completeness or advance the backfill cursor, so the next pass
+	// resumes rather than silently marking the folder done.
+	if truncated {
+		backfillComplete = false
+		backfillBefore = 0
 	}
 	if prune {
 		keep := make(map[uint32]bool, len(keepUIDs))
@@ -451,6 +506,9 @@ func (s *Store) ReconcileRemoteFolderBatch(ctx context.Context, accountID, inbox
 		// pass partial and retries after the next folder reconcile.
 		return 0, fmt.Errorf("remote folder %q is not indexed for inbox %s", folderPath, inboxID)
 	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return 0, err
+	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -489,16 +547,42 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	// here: a windowed (partial) enumeration of the new generation must not
 	// transiently empty the folder. The generation-aware prune below removes the
 	// stale rows only when messages is a COMPLETE enumeration.
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return 0, err
+	}
+	accountRoom, accountLimited, inboxRoom, inboxLimited, err := remoteMetadataHeadroomTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return 0, err
+	}
+	capped := accountLimited || inboxLimited
+	var known map[uint32]bool
+	if capped {
+		known, err = existingRemoteUIDsTx(ctx, tx, inboxID, folderPath, uidValidity)
+		if err != nil {
+			return 0, err
+		}
+	}
+	usedThisBatch := int64(0)
 	keep := map[uint32]bool{}
 	written := 0
+	truncated := false
 	for _, m := range messages {
 		if m.UID == 0 {
 			continue
 		}
-		keep[m.UID] = true
 		in := m
 		in.FolderPath = folderPath
 		in.UIDValidity = uidValidity
+		if capped && !known[in.UID] {
+			add := remoteMessageInputBytes(in)
+			if !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, usedThisBatch+add) {
+				truncated = true
+				break
+			}
+			usedThisBatch += add
+		}
+		keep[m.UID] = true
 		threadKey := remoteThreadKeyTx(ctx, tx, inboxID, in)
 		_, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -520,8 +604,10 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	// from a complete enumeration. A partial window must not delete metadata for
 	// messages outside it. When the generation changed, the complete enumeration
 	// is also the proof that the stale-generation rows are obsolete, so they are
-	// dropped here too (never earlier, on a partial pass).
-	if prune {
+	// dropped here too (never earlier, on a partial pass). A cap-truncated pass
+	// never prunes: its keep set is incomplete, so pruning would delete rows for
+	// messages outside the admitted window.
+	if prune && !truncated {
 		rows, err := tx.QueryContext(ctx, `SELECT id,remote_uid,remote_uid_validity FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=?`, inboxID, folderPath)
 		if err != nil {
 			return 0, err
@@ -548,6 +634,9 @@ func (s *Store) ReconcileRemoteFolderMessages(ctx context.Context, accountID, in
 	// Record the folder's UIDVALIDITY and index time on the folder row so a
 	// scoped read knows its metadata is current for this generation.
 	if _, err = tx.ExecContext(ctx, `UPDATE inbox_folders SET remote_uid_validity=?,remote_indexed_at=?,updated_at=? WHERE inbox_id=? AND path=?`, uidValidity, now, now, inboxID, folderPath); err != nil {
+		return 0, err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -857,6 +946,10 @@ func (s *Store) SetRemoteMessageLabels(ctx context.Context, accountID, inboxID, 
 		return nil, err
 	}
 	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id=?`, accountID, inboxID, messageID); err != nil {
 		return nil, err
 	}
@@ -868,6 +961,9 @@ func (s *Store) SetRemoteMessageLabels(ctx context.Context, accountID, inboxID, 
 			idgen.New("rlb"), accountID, inboxID, messageID, label, now); err != nil {
 			return nil, err
 		}
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
@@ -943,7 +1039,16 @@ func containsFold(list []string, v string) bool {
 // RemoteMessageFlags updates the flag-derived metadata of a cached remote message
 // after a live flag change, so the local mirror matches what was just applied.
 func (s *Store) UpdateRemoteMessageFlags(ctx context.Context, accountID, inboxID, id string, read, flagged, answered, draft bool, flags []string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_messages SET is_read=?,is_flagged=?,is_answered=?,is_draft=?,flags_json=?,indexed_at=?,updated_at=? WHERE account_id=? AND inbox_id=? AND id=?`,
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET is_read=?,is_flagged=?,is_answered=?,is_draft=?,flags_json=?,indexed_at=?,updated_at=? WHERE account_id=? AND inbox_id=? AND id=?`,
 		boolInt(read), boolInt(flagged), boolInt(answered), boolInt(draft), jsonString(flags), nowText(), nowText(), accountID, inboxID, id)
 	if err != nil {
 		return err
@@ -951,7 +1056,10 @@ func (s *Store) UpdateRemoteMessageFlags(ctx context.Context, accountID, inboxID
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // MoveRemoteMessageMetadata relocates a cached remote message's metadata row to a
@@ -973,6 +1081,10 @@ func (s *Store) MoveRemoteMessageMetadata(ctx context.Context, accountID, inboxI
 	}
 	defer tx.Rollback()
 	now := nowText()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return RemoteMessage{}, err
+	}
 	// Preserve local labels across the relocation: the message row's DELETE
 	// cascades the label rows, so capture them first and restore afterwards.
 	labels, err := s.RemoteMessageLabels(ctx, accountID, inboxID, id)
@@ -999,6 +1111,9 @@ func (s *Store) MoveRemoteMessageMetadata(ctx context.Context, accountID, inboxI
 			idgen.New("rlb"), accountID, inboxID, m.ID, label, now); err != nil {
 			return RemoteMessage{}, err
 		}
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return RemoteMessage{}, err
 	}
 	if err = tx.Commit(); err != nil {
 		return RemoteMessage{}, err
@@ -1166,6 +1281,10 @@ func (s *Store) ResetRemoteInboxState(ctx context.Context, accountID, inboxID st
 		return err
 	}
 	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
 	stmts := []string{
 		`DELETE FROM inbox_remote_actions WHERE account_id=? AND inbox_id=?`,
 		`DELETE FROM inbox_remote_arrivals WHERE account_id=? AND inbox_id=?`,
@@ -1181,6 +1300,9 @@ func (s *Store) ResetRemoteInboxState(ctx context.Context, accountID, inboxID st
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET remote_index_status='',remote_index_error='',remote_indexed_at='' WHERE id=? AND account_id=?`, inboxID, accountID); err != nil {
+		return err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
 		return err
 	}
 	return tx.Commit()

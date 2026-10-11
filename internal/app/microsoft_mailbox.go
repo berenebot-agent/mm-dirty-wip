@@ -203,10 +203,14 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 		return store.RemoteIndexStatus{}, 0, e
 	}
 	complete := true
+	quotaHit := false
 	arrived := 0
 	for _, f := range fs {
 		if f.Origin != "remote" {
 			continue
+		}
+		if quotaHit {
+			break
 		}
 		cursor, initialized, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
 		if e != nil {
@@ -228,7 +232,10 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 			if g.Removed != nil {
 				live, ge := m.Microsoft.Message(ctx, t, c.Mailbox, g.ID)
 				if ge == nil {
-					if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); ge != nil {
+					if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); errors.Is(ge, store.ErrRemoteMetadataQuota) {
+						quotaHit = true
+						break
+					} else if ge != nil {
 						return store.RemoteIndexStatus{}, arrived, ge
 					}
 				} else {
@@ -259,12 +266,21 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 					arrived++
 				}
 			}
-			if _, e = m.cacheMicrosoft(ctx, account, inbox, g); e != nil {
+			if _, e = m.cacheMicrosoft(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
+				quotaHit = true
+				break
+			} else if e != nil {
 				return store.RemoteIndexStatus{}, arrived, e
 			}
 			if e = m.Service.Store.MarkMicrosoftDetected(ctx, inbox, g.ID); e != nil {
 				return store.RemoteIndexStatus{}, arrived, e
 			}
+		}
+		if quotaHit {
+			// Do not advance the delta cursor or prune: the page was not fully
+			// indexed, so the next pass must replay it to stay consistent.
+			complete = false
+			break
 		}
 		next := page.NextLink
 		if next == "" {
@@ -288,7 +304,7 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 		}
 	}
 	status := store.RemoteIndexPartial
-	if complete {
+	if complete && !quotaHit {
 		status = store.RemoteIndexComplete
 	}
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")

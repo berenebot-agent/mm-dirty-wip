@@ -3417,6 +3417,60 @@ and one serialized process-owned worker loop with bounded per-inbox timeouts.
 Existing Go process, SQLite and polling; no new dependency or runtime service.
 See `docs/MICROSOFT.md` for operator routing and provider latency constraints.
 
+## D102 — Remote metadata counts toward the storage quota
+
+**Requirement:** A standalone (remote) inbox caches header/thread/folder/label
+metadata but archives no bodies, and that metadata was not charged to storage:
+`inbox_remote_messages`, remote-owned `inbox_folders` and `inbox_remote_labels`
+grew unbounded with no cap. The quota is meant to bound what we store per inbox
+and per account, so a large remote mailbox could squat local SQLite footprint for
+free.
+
+**Decision (2026-10-11, human approved):**
+
+- **What counts.** The bytes we actually persist for remote metadata: the text
+  fields of `inbox_remote_messages` (folder path, Message-ID, In-Reply-To,
+  References, thread key, from name/address, To/CC JSON, subject, snippet, flags
+  JSON, plus a small fixed row overhead), remote-owned `inbox_folders` rows
+  (path/name/parent/role/remote metadata), and `inbox_remote_labels` rows. The
+  row's `size_bytes` **column value** is the remote server's claim about a body we
+  did not store and is deliberately **excluded**.
+- **Where it is charged.** Both the account counter (`accounts.storage_used_bytes`)
+  and the per-inbox counter (`inboxes.storage_used_bytes`), exactly like a stored
+  message. The authoritative definition is the SQL byte sum in
+  `internal/store/storage.go`; the Go mirror `storedRemoteMessageBytes` is pinned
+  to it by test.
+- **Best-effort, never blocks the reconcile.** Remote metadata is a derivative
+  cache, so a cap is not enforced with `ErrQuota`. A reconcile batch checks
+  headroom per message, admits updates to already-cached UIDs unconditionally
+  (they replace bytes), admits new UIDs only while room remains, and once the cap
+  is reached **stops indexing**: the batch returns partial, does not prune, and
+  does not advance the folder's backfill cursor, so the next pass resumes when
+  room frees up. A single-message `UpsertRemoteMessage`/`UpsertGoogleMessage`/
+  `UpsertMicrosoftMessage` returns the new sentinel `store.ErrRemoteMetadataQuota`
+  (mapped to the `quota` mailbox error) when its new row would exceed the cap.
+- **No eviction.** Existing cached rows are never removed to make room; the
+  index stays partial until usage falls via purge, reset or message deletion.
+- **Self-correcting counters.** Every remote-metadata mutation transaction reads
+  the sum before and after and applies the difference to the counters
+  (`syncRemoteMetadataStorageTx`), so the counters track the stored sum and any
+  drift is corrected on the next mutation. `recomputeInboxStorage(Tx)` (lazy-init
+  and the `InboxStorageUsed` fallback) and the `PurgeInbox`/`PurgeDomain` refunds
+  include the same remote sums.
+- **No backfill.** Existing installs accrue the charge from the next remote write;
+  counters are not recomputed at start-up (mirroring D079's lazy-init stance).
+
+**Reason:** The quota's purpose is to bound what we store. Cached remote metadata
+is stored bytes, so it should count; but it is a rebuildable cache, so exceeding
+the cap must degrade to "partial index" rather than a hard delivery/quota error
+that would break the read surface. Excluding the remote-reported `size_bytes`
+keeps the charge about our footprint, not the remote mailbox's body volume.
+
+**Complexity/resource budget:** No migration; a storage helper set (byte SQL,
+Go mirror, headroom/room check, delta apply, per-mutation sync), instrumentation
+of the existing remote write paths, sentinel mapping, one new unit-test file.
+No new dependency or runtime service. See `docs/MAILBOX_SERVICE_CONTRACT.md` §5.
+
 ## Future extension register
 
 - additional inbound transport adapters

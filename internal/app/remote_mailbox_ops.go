@@ -398,7 +398,11 @@ func (m *RemoteMailboxService) refreshQuiescent(ctx context.Context, sess Remote
 					if h.UID == 0 {
 						continue
 					}
-					if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr != nil {
+					if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); errors.Is(uerr, store.ErrRemoteMetadataQuota) {
+						// Metadata cap reached: stop this refresh; the folder stays
+						// partial and a later pass resumes once room frees up.
+						return false, nil
+					} else if uerr != nil {
 						return false, mapStoreError(uerr)
 					}
 				}
@@ -456,7 +460,11 @@ func (m *RemoteMailboxService) refreshNewestWindow(ctx context.Context, sess Rem
 		if h.UID == 0 {
 			continue
 		}
-		if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr != nil {
+		if _, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); errors.Is(uerr, store.ErrRemoteMetadataQuota) {
+			// Metadata cap reached mid-window: report the folder incomplete so a
+			// later pass resumes rather than treating this window as indexed.
+			return false, nil
+		} else if uerr != nil {
 			return false, mapStoreError(uerr)
 		}
 	}
