@@ -35,6 +35,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The Microsoft / Outlook sign-in now opens in a centred **partial-screen
+  window** instead of a full browser tab, so the wizard stays visible behind it,
+  and the wizard flashes a **Paste the resulting URL here** prompt above the
+  completion field as soon as that window is open. The pasted URL is still the
+  only way to finish, because the callback lands on a `http://localhost` URL
+  where no listener runs. Google sign-in is unchanged.
+
 - Adding a standalone inbox now picks the provider with one button per
   provider instead of a radio list. **Add inbox → Standalone inbox** shows
   **Google / Gmail**, **Microsoft / Outlook** and **IMAP + SMTP** as logo

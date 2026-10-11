@@ -44,8 +44,11 @@ or **Connect Microsoft · Personal Inbox and Shared Inbox** (the extra shared
 scopes are requested before sign-in, because Microsoft fixes granted scope in
 the authorization request). Sign in and approve delegated access.
 Microsoft redirects to `http://localhost`; a browser connection failure is
-expected because no local listener runs. Copy the complete final address-bar URL
-and paste it into MailMoose. Use another desktop browser if the URL is hidden.
+expected because no local listener runs. The sign-in opens in a centred
+partial-screen window so this wizard stays visible behind it, and the wizard
+flashes its paste prompt above the completion field as soon as that window is
+open. Copy the complete final address-bar URL out of the sign-in window and
+paste it into that field. Use another desktop browser if the URL is hidden.
 The attempt expires after ten minutes and completion is single-use.
 
 A shared connection then shows a **mailbox picker**: MailMoose lists candidate
