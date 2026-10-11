@@ -44,12 +44,14 @@ type GoogleConnection struct {
 	ExpiresAt                                                     time.Time
 	HistoryID, BackfillPage                                       string
 	BackfillDone                                                  bool
+	BackfillOffset                                                int
+	BackfillSnapshot                                              string
 }
 
 func (s *Store) GoogleConnection(ctx context.Context, accountID, inboxID string) (GoogleConnection, error) {
 	var c GoogleConnection
 	var expiry string
-	e := s.read.QueryRowContext(ctx, `SELECT inbox_id,account_id,client_id,encrypted_secret,encrypted_token,expires_at,history_id,backfill_page,backfill_done FROM inbox_google_connections WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&c.InboxID, &c.AccountID, &c.ClientID, &c.EncryptedSecret, &c.EncryptedToken, &expiry, &c.HistoryID, &c.BackfillPage, &c.BackfillDone)
+	e := s.read.QueryRowContext(ctx, `SELECT c.inbox_id,c.account_id,c.client_id,c.encrypted_secret,c.encrypted_token,c.expires_at,g.history_id,g.backfill_page,g.backfill_done FROM inbox_google_connections c JOIN inbox_gmail_sync g ON g.inbox_id=c.inbox_id WHERE c.account_id=? AND c.inbox_id=?`, accountID, inboxID).Scan(&c.InboxID, &c.AccountID, &c.ClientID, &c.EncryptedSecret, &c.EncryptedToken, &expiry, &c.HistoryID, &c.BackfillPage, &c.BackfillDone)
 	if e == sql.ErrNoRows {
 		return c, ErrNotFound
 	}
@@ -58,7 +60,7 @@ func (s *Store) GoogleConnection(ctx context.Context, accountID, inboxID string)
 }
 func (s *Store) IsGoogle(ctx context.Context, accountID, inboxID string) bool {
 	_, e := s.GoogleConnection(ctx, accountID, inboxID)
-	return e == nil
+	return e == nil || s.IsOne(ctx, accountID, inboxID)
 }
 
 func (s *Store) BeginGoogleRefresh(ctx context.Context, account, inbox string) error {
@@ -71,8 +73,18 @@ func (s *Store) SaveGoogleConnection(ctx context.Context, c GoogleConnection) er
 		return e
 	}
 	defer tx.Rollback()
+	var one int
+	if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_one_bindings WHERE inbox_id=?`, c.InboxID).Scan(&one); e != nil {
+		return e
+	}
+	if one != 0 {
+		return ErrConflict
+	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO inbox_google_connections(inbox_id,account_id,client_id,encrypted_secret,encrypted_token,expires_at) SELECT id,account_id,?,?,?,? FROM inboxes WHERE id=? AND account_id=? AND kind='standalone' ON CONFLICT(inbox_id) DO UPDATE SET client_id=excluded.client_id,encrypted_secret=excluded.encrypted_secret,encrypted_token=excluded.encrypted_token,expires_at=excluded.expires_at`, c.ClientID, c.EncryptedSecret, c.EncryptedToken, c.ExpiresAt.UTC().Format(time.RFC3339Nano), c.InboxID, c.AccountID)
 	if e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_gmail_sync(inbox_id,account_id) SELECT id,account_id FROM inboxes WHERE id=? AND account_id=?`, c.InboxID, c.AccountID); e != nil {
 		return e
 	}
 	_, e = tx.ExecContext(ctx, `UPDATE inboxes SET remote_configured=1,remote_host='gmail.googleapis.com',remote_username=address,remote_security='tls',remote_sent_copy_enabled=0 WHERE id=? AND account_id=? AND kind='standalone'`, c.InboxID, c.AccountID)
@@ -82,7 +94,7 @@ func (s *Store) SaveGoogleConnection(ctx context.Context, c GoogleConnection) er
 	return tx.Commit()
 }
 func (s *Store) SaveGoogleProgress(ctx context.Context, accountID, inboxID, history, page string, done bool) error {
-	_, e := s.write.ExecContext(ctx, `UPDATE inbox_google_connections SET history_id=?,backfill_page=?,backfill_done=? WHERE account_id=? AND inbox_id=?`, history, page, done, accountID, inboxID)
+	_, e := s.write.ExecContext(ctx, `UPDATE inbox_gmail_sync SET history_id=?,backfill_offset=CASE WHEN backfill_page<>? OR ? THEN 0 ELSE backfill_offset END,backfill_snapshot=CASE WHEN backfill_page<>? OR ? THEN '' ELSE backfill_snapshot END,backfill_page=?,backfill_done=? WHERE account_id=? AND inbox_id=?`, history, page, done, page, done, page, done, accountID, inboxID)
 	return e
 }
 
@@ -183,7 +195,7 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 		return RemoteMessage{}, e
 	}
 	b, _ := json.Marshal(labels)
-	_, e = tx.ExecContext(ctx, `INSERT INTO google_message_ids(inbox_id,message_id,provider_id,thread_id,labels_json,sync_generation) VALUES(?,?,?,?,?,COALESCE((SELECT sync_generation FROM inbox_google_connections WHERE inbox_id=?),'')) ON CONFLICT(inbox_id,provider_id) DO UPDATE SET labels_json=excluded.labels_json,thread_id=excluded.thread_id,sync_generation=excluded.sync_generation`, inbox, id, provider, thread, string(b), inbox)
+	_, e = tx.ExecContext(ctx, `INSERT INTO google_message_ids(inbox_id,message_id,provider_id,thread_id,labels_json,sync_generation) VALUES(?,?,?,?,?,COALESCE((SELECT sync_generation FROM inbox_gmail_sync WHERE inbox_id=?),'')) ON CONFLICT(inbox_id,provider_id) DO UPDATE SET labels_json=excluded.labels_json,thread_id=excluded.thread_id,sync_generation=excluded.sync_generation`, inbox, id, provider, thread, string(b), inbox)
 	if e != nil {
 		return RemoteMessage{}, e
 	}
@@ -207,7 +219,7 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 }
 
 func (s *Store) StartGoogleResync(ctx context.Context, account, inbox, history string) error {
-	_, e := s.write.ExecContext(ctx, `UPDATE inbox_google_connections SET history_id=?,backfill_page='',backfill_done=0,sync_generation=? WHERE account_id=? AND inbox_id=?`, history, nowText(), account, inbox)
+	_, e := s.write.ExecContext(ctx, `UPDATE inbox_gmail_sync SET history_id=?,backfill_page='',backfill_done=0,backfill_offset=0,backfill_snapshot='',sync_generation=? WHERE account_id=? AND inbox_id=?`, history, nowText(), account, inbox)
 	return e
 }
 
@@ -223,7 +235,7 @@ func (s *Store) PruneGoogleResync(ctx context.Context, account, inbox string) er
 	if e != nil {
 		return e
 	}
-	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT g.message_id FROM google_message_ids g JOIN inbox_google_connections c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation)`, account, inbox, inbox); e != nil {
+	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT g.message_id FROM google_message_ids g JOIN inbox_gmail_sync c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation)`, account, inbox, inbox); e != nil {
 		return e
 	}
 	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {

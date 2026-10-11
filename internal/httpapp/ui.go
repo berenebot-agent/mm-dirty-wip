@@ -567,6 +567,11 @@ type pageData struct {
 	StandaloneConfigured bool
 	StandalonePlain      bool
 	RemoteConnectorURL   string
+	OneConfigured        bool
+	OneConfigStatus      string
+	OneChoices           []app.OneMailboxChoice
+	OneMailboxes         []oneMailboxStatus
+	OneImportResults     []app.OneImportResult
 	RemoteConfig         remoteConfigResponse
 	// RemoteFolders is the standalone inbox's full folder tree, for the
 	// connection-settings role selectors (map an existing folder to a role).
@@ -1678,7 +1683,7 @@ func (s *Server) uiSettingsPersonalBatch(w http.ResponseWriter, r *http.Request)
 	s.settingsRedirect(w, r, "Personal settings updated", "")
 }
 
-const dashboardBody = `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error notice" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
+const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error notice" role="alert" aria-live="assertive">{{.Error}}</div>{{end}}{{if .Secret}}<div class="secret"><b>{{.SecretLabel}}</b><pre>{{.Secret}}</pre></div>{{end}}
   {{if .DomainWorkerCode}}<dialog id="cf-setup-dialog" class="cf-setup-dialog" data-open="1"><div id="cf-worker-step"><h2>Cloudflare setup code</h2><p class="muted">Paste this into Cloudflare. It contains the generated shared secret and is shown only once.</p><ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Start with Hello World</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li></ol><pre class="cf-code" id="cf-code">{{.DomainWorkerCode}}</pre><p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><button type="button" class="btn" id="cf-next">Next</button></div></div><div id="cf-routing-step" hidden><h2>Email Routing</h2><p class="muted">Now point this domain's mail at the Worker.</p><ol class="steps"><li>In Cloudflare, open <b>Email Routing</b> for this domain and onboard it, adding the <b>DNS records</b> Cloudflare lists.</li><li>In <b>Email Routing</b>, edit the <b>catch-all</b> rule, choose <b>Send to a Worker</b>, and select this Worker.</li><li><b>Enable</b> the catch-all rule.</li></ol><div class="dialog-actions"><button type="button" class="btn" id="cf-done">Done</button></div></div></dialog>{{end}}
   {{if .DomainCredentialSecret}}<dialog id="domain-credential-dialog" class="domain-dialog" data-open="1"><h2>{{.DomainCredentialTitle}}</h2><p class="muted">{{.DomainCredentialInstructions}}</p><label>Webhook URL (with credentials)</label><div class="secret"><pre id="domain-credential-url">{{.DomainCredentialWebhookURL}}</pre></div><p class="copy-note" id="domain-credential-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the URL above and copy it manually.</p><div class="dialog-actions"><button type="button" class="secondary" id="domain-credential-copy">Copy URL</button><button type="button" class="btn" data-close-dialog>Done</button></div></dialog>{{end}}
 <div class="tab-panel"{{if ne .Tab "home"}} hidden{{end}}>

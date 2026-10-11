@@ -111,7 +111,7 @@ func (c *Client) streamRaw(ctx context.Context, op, endpoint, token string, r io
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.execute(ctx, op, req)
 	// Ensure the producer is unblocked whether or not the transport closed the
 	// request body.
 	_ = pr.Close()
@@ -119,6 +119,9 @@ func (c *Client) streamRaw(ctx context.Context, op, endpoint, token string, r io
 	if err != nil {
 		if writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 			return bodyError(op, writeErr)
+		}
+		if c.Executor != nil {
+			return err
 		}
 		return ambiguousSend(op, err)
 	}

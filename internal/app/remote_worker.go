@@ -621,6 +621,13 @@ func inboxFolder(inbox model.Inbox) string {
 // remote server. This is the quick cadence the demand side (client presence,
 // long-polls, list reads) also coalesces onto.
 func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
+	if w.svc.Store.IsOne(context.Background(), inbox.AccountID, inbox.ID) {
+		seconds := 300
+		if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
+			seconds = *inbox.RemotePollSeconds
+		}
+		return time.Duration(max(120, min(seconds, 1800))) * time.Second
+	}
 	if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
 		return time.Duration(model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds)) * time.Second
 	}
