@@ -278,7 +278,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
@@ -376,7 +376,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, box.ID)
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
@@ -696,7 +696,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	if f, _, ok := mailboxFilter(id, folder, label); ok {
 		totalCount, _ = s.Service.Store.CountMessages(r.Context(), p, f)
 	}
-	unread, _ := s.Service.Store.UnreadCounts(r.Context(), p)
+	unread := s.inboxUnreadCounts(r.Context(), p)
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, id)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, id)
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
