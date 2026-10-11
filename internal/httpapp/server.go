@@ -542,6 +542,7 @@ func (s *Server) InboundHandler() http.Handler {
 }
 
 func (s *Server) registerInbound(m *http.ServeMux) {
+	m.HandleFunc("POST "+app.MicrosoftPushPath, s.microsoftPush)
 	m.HandleFunc("GET /healthz", s.health)
 	m.HandleFunc("GET /health", s.health)
 	// Canonical Mailgun receive endpoint. The suffix selects raw MIME delivery.
