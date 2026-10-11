@@ -146,7 +146,24 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 		return RemoteMessage{}, e
 	}
 	defer tx.Rollback()
+	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
+	// A new Microsoft message is a genuinely new metadata row: refuse it when a
+	// cap is set and there is no room. An existing row updates in place.
+	accountRoom, accountLimited, inboxRoom, inboxLimited, e := remoteMetadataHeadroomTx(ctx, tx, account, inbox)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
 	id := "ms_" + provider + "_" + inbox
+	var existing int
+	if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_remote_messages WHERE id=? AND account_id=? AND inbox_id=?`, id, account, inbox).Scan(&existing); e != nil {
+		return RemoteMessage{}, e
+	}
+	if existing == 0 && (accountLimited || inboxLimited) && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
+		return RemoteMessage{}, ErrRemoteMetadataQuota
+	}
 	_, e = tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid,created_at,updated_at) SELECT ?,account_id,inbox_id,?,0,?,? FROM inbox_microsoft_connections WHERE account_id=? AND inbox_id=?`, id, "microsoft:"+provider, nowText(), nowText(), account, inbox)
 	if e != nil {
 		return RemoteMessage{}, e
@@ -158,6 +175,9 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO microsoft_message_ids(inbox_id,message_id,provider_id,folder_id,generation) VALUES(?,?,?,?,COALESCE((SELECT generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?),'')) ON CONFLICT(inbox_id,provider_id) DO UPDATE SET folder_id=excluded.folder_id,generation=excluded.generation`, inbox, id, provider, folder, inbox, folder)
 	if e != nil {
+		return RemoteMessage{}, e
+	}
+	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
 		return RemoteMessage{}, e
 	}
 	if e = tx.Commit(); e != nil {
@@ -197,6 +217,20 @@ func (s *Store) MarkMicrosoftDetected(ctx context.Context, inbox, provider strin
 	return e
 }
 func (s *Store) PruneMicrosoftResync(ctx context.Context, account, inbox, folder string) error {
-	_, e := s.write.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT m.message_id FROM microsoft_message_ids m JOIN microsoft_delta d ON d.inbox_id=m.inbox_id AND d.folder_id=m.folder_id WHERE m.inbox_id=? AND m.folder_id=? AND d.generation<>'' AND m.generation<>d.generation)`, account, inbox, inbox, folder)
-	return e
+	tx, e := s.write.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	if e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT m.message_id FROM microsoft_message_ids m JOIN microsoft_delta d ON d.inbox_id=m.inbox_id AND d.folder_id=m.folder_id WHERE m.inbox_id=? AND m.folder_id=? AND d.generation<>'' AND m.generation<>d.generation)`, account, inbox, inbox, folder); e != nil {
+		return e
+	}
+	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+		return e
+	}
+	return tx.Commit()
 }

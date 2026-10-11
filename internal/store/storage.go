@@ -106,7 +106,169 @@ func recomputeInboxStorageTx(ctx context.Context, tx *sql.Tx, accountID, inboxID
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(da.size_bytes),0) FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id WHERE d.account_id=? AND d.inbox_id=?`, accountID, inboxID).Scan(&draftAtts); err != nil {
 		return 0, err
 	}
-	return total + draftBodies + draftAtts, nil
+	remoteBytes, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return 0, err
+	}
+	return total + draftBodies + draftAtts + remoteBytes, nil
+}
+
+// Remote metadata counts toward storage exactly like a stored message does: the
+// bytes we actually persist for a standalone (remote) inbox. A remote body is
+// never archived, so a row's size_bytes column is a claim about the remote
+// server and is deliberately excluded; only the header/thread/folder/label text
+// we store is charged.
+//
+// The SQL expressions below are the authoritative definition (they read the
+// stored values, so an update to any stored field is reflected immediately).
+// storedRemoteMessageBytes is a Go mirror used only for the best-effort cap
+// admission estimate; it need not match the SQL exactly, because the committed
+// counter is always reconciled from the SQL sum. The per-row overheads cover the
+// integer ids, timestamps and small flag columns that are not summed explicitly.
+const (
+	// remoteMessageRowOverhead is the fixed per-message-row allowance baked into
+	// remoteMetadataMessageBytesSQL (integer ids, timestamps, small flag columns).
+	remoteMessageRowOverhead = 96
+
+	remoteMetadataMessageBytesSQL = `(
+		LENGTH(CAST(folder_path AS BLOB)) + LENGTH(CAST(rfc_message_id AS BLOB)) +
+		LENGTH(CAST(in_reply_to AS BLOB)) + LENGTH(CAST(references_json AS BLOB)) +
+		LENGTH(CAST(thread_key AS BLOB)) + LENGTH(CAST(from_name AS BLOB)) +
+		LENGTH(CAST(from_address AS BLOB)) + LENGTH(CAST(to_json AS BLOB)) +
+		LENGTH(CAST(cc_json AS BLOB)) + LENGTH(CAST(subject AS BLOB)) +
+		LENGTH(CAST(snippet AS BLOB)) + LENGTH(CAST(flags_json AS BLOB)) + 96)`
+
+	remoteMetadataFolderBytesSQL = `(
+		LENGTH(CAST(path AS BLOB)) + LENGTH(CAST(name AS BLOB)) +
+		LENGTH(CAST(parent_path AS BLOB)) + LENGTH(CAST(role AS BLOB)) +
+		LENGTH(CAST(remote_metadata_json AS BLOB)) + 64)`
+
+	remoteMetadataLabelBytesSQL = `(LENGTH(CAST(label AS BLOB)) + 32)`
+)
+
+// storedRemoteMessageBytes is the Go mirror of remoteMetadataMessageBytesSQL: the
+// local footprint of one inbox_remote_messages row from its stored text fields.
+func storedRemoteMessageBytes(folderPath, rfcMessageID, inReplyTo, referencesJSON, threadKey, fromName, fromAddress, toJSON, ccJSON, subject, snippet, flagsJSON string) int64 {
+	return int64(len(folderPath)+len(rfcMessageID)+len(inReplyTo)+len(referencesJSON)+len(threadKey)+
+		len(fromName)+len(fromAddress)+len(toJSON)+len(ccJSON)+len(subject)+len(snippet)+len(flagsJSON)) +
+		remoteMessageRowOverhead
+}
+
+// remoteMessageInputBytes estimates the stored footprint of a message about to be
+// written. ThreadKey is resolved by the caller and may differ from in.ThreadKey,
+// so this is an estimate used only for the best-effort cap check; the committed
+// counter is always reconciled from the authoritative SQL sum.
+func remoteMessageInputBytes(in RemoteMessageInput) int64 {
+	return storedRemoteMessageBytes(in.FolderPath, in.RFCMessageID, in.InReplyTo,
+		jsonString(in.References), in.ThreadKey, in.FromName, in.FromAddress,
+		jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, jsonString(in.Flags))
+}
+
+// remoteMetadataBytesTx sums the stored bytes of an inbox's remote metadata: its
+// cached header/thread rows, its remote-owned folders and its local labels.
+func remoteMetadataBytesTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string) (int64, error) {
+	var messageBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&messageBytes); err != nil {
+		return 0, err
+	}
+	var folderBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote'`, accountID, inboxID).Scan(&folderBytes); err != nil {
+		return 0, err
+	}
+	var labelBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&labelBytes); err != nil {
+		return 0, err
+	}
+	return messageBytes + folderBytes + labelBytes, nil
+}
+
+// remoteMetadataHeadroomTx reports how many remote-metadata bytes an inbox can
+// still take before either the account or its own cap is reached. A room value is
+// only meaningful when its limited flag is true; when false the corresponding cap
+// is absent (NULL, 0 = unlimited) and growth is unbounded.
+func remoteMetadataHeadroomTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string) (accountRoom int64, accountLimited bool, inboxRoom int64, inboxLimited bool, err error) {
+	var accountQuota, accountUsed int64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes,storage_used_bytes FROM accounts WHERE id=?`, accountID).Scan(&accountQuota, &accountUsed); err != nil {
+		return 0, false, 0, false, err
+	}
+	if accountQuota > 0 {
+		accountLimited = true
+		accountRoom = accountQuota - accountUsed
+	}
+	var inboxQuota, inboxUsed sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT storage_quota_bytes,storage_used_bytes FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&inboxQuota, &inboxUsed); err != nil {
+		return 0, false, 0, false, err
+	}
+	if inboxQuota.Valid && inboxQuota.Int64 > 0 {
+		inboxLimited = true
+		inboxRoom = inboxQuota.Int64 - inboxUsed.Int64
+	}
+	return accountRoom, accountLimited, inboxRoom, inboxLimited, nil
+}
+
+// roomForRemoteMetadata reports whether extra more bytes fit under both caps. A
+// room value is only consulted when its cap is present; a negative room (already
+// over cap) refuses growth, so an over-cap inbox stays over but never grows.
+func roomForRemoteMetadata(accountRoom int64, accountLimited bool, inboxRoom int64, inboxLimited bool, extra int64) bool {
+	return (!accountLimited || extra <= accountRoom) && (!inboxLimited || extra <= inboxRoom)
+}
+
+// applyRemoteMetadataDeltaTx applies a remote-metadata byte delta to the account
+// and inbox storage counters. Unlike adjustStorageTx it never fails on cap:
+// remote metadata is a derivative cache, so growth past the cap is recorded and
+// the caller stops indexing rather than erroring. Negative deltas refund, floored
+// at zero. It does not lazily initialise a NULL inbox counter: a standalone inbox
+// is seeded at 0 at creation, so its remote bytes are accounted purely by deltas.
+func applyRemoteMetadataDeltaTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string, delta int64) error {
+	if delta == 0 {
+		return nil
+	}
+	if inboxID != "" {
+		if _, err := tx.ExecContext(ctx, `UPDATE inboxes SET storage_used_bytes=MAX(0,COALESCE(storage_used_bytes,0)+?) WHERE id=? AND account_id=?`, delta, inboxID, accountID); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE accounts SET storage_used_bytes=MAX(0,storage_used_bytes+?) WHERE id=?`, delta, accountID)
+	return err
+}
+
+// syncRemoteMetadataStorageTx reconciles the storage counters for an inbox's
+// remote metadata after a mutation. before is the byte total captured at the
+// start of the transaction; the difference is applied to the counters. This is
+// self-correcting: the counters track the authoritative stored sum every time a
+// remote mutation commits, so drift from a missed write is corrected on the next
+// one. Callers that need a hard cap check fetch headroom separately.
+func syncRemoteMetadataStorageTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string, before int64) error {
+	if inboxID == "" {
+		return nil
+	}
+	after, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
+	return applyRemoteMetadataDeltaTx(ctx, tx, accountID, inboxID, after-before)
+}
+
+// existingRemoteUIDsTx returns the set of UIDs already cached for a folder
+// generation. It is used only when a storage cap is in play, so the reconcile
+// can admit updates to rows that already exist (which replace bytes rather than
+// grow usage) while refusing brand-new rows once the cap is reached. It is a
+// single indexed read scoped to the folder and generation.
+func existingRemoteUIDsTx(ctx context.Context, tx *sql.Tx, inboxID, folderPath string, uidValidity uint32) (map[uint32]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT remote_uid FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? AND remote_uid_validity=?`, inboxID, folderPath, uidValidity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uint32]bool{}
+	for rows.Next() {
+		var uid uint32
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out[uid] = true
+	}
+	return out, rows.Err()
 }
 
 func draftBodyBytes(d model.Draft) int64 { return int64(len(d.Text) + len(d.HTML)) }

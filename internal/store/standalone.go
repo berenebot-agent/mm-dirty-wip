@@ -461,6 +461,10 @@ func (s *Store) UpsertFolders(ctx context.Context, accountID, inboxID string, fo
 	}
 	defer tx.Rollback()
 	now := nowText()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return nil, err
+	}
 	keep := map[string]bool{}
 	for _, f := range folders {
 		path := strings.TrimSpace(f.Path)
@@ -527,6 +531,9 @@ func (s *Store) UpsertFolders(ctx context.Context, accountID, inboxID string, fo
 		if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_folders WHERE id=?`, id); err != nil {
 			return nil, err
 		}
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
@@ -677,6 +684,27 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		return RemoteMessage{}, err
 	}
 	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return RemoteMessage{}, err
+	}
+	// Best-effort cap on a single-message upsert: an update to an already-cached
+	// UID replaces bytes and is always admitted; only a genuinely new UID is
+	// refused when neither the account nor the inbox has room. Metadata is a
+	// derivative cache, so a refusal is a distinct sentinel, never ErrQuota.
+	accountRoom, accountLimited, inboxRoom, inboxLimited, err := remoteMetadataHeadroomTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return RemoteMessage{}, err
+	}
+	if accountLimited || inboxLimited {
+		var exists int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_remote_messages WHERE inbox_id=? AND folder_path=? AND remote_uid_validity=? AND remote_uid=?`, inboxID, in.FolderPath, in.UIDValidity, in.UID).Scan(&exists); err != nil {
+			return RemoteMessage{}, err
+		}
+		if exists == 0 && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
+			return RemoteMessage{}, ErrRemoteMetadataQuota
+		}
+	}
 	threadKey := remoteThreadKeyTx(ctx, tx, inboxID, in)
 	id := idgen.New("rm")
 	if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,in_reply_to,references_json,thread_key,from_name,from_address,to_json,cc_json,subject,snippet,size_bytes,has_attachments,is_read,is_flagged,is_answered,is_draft,flags_json,received_at,sent_at,internal_date,indexed_at,created_at,updated_at)
@@ -693,6 +721,9 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		return RemoteMessage{}, err
 	}
 	if err = mergeRemoteThreadTx(ctx, tx, inboxID, in); err != nil {
+		return RemoteMessage{}, err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
 		return RemoteMessage{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -766,14 +797,26 @@ func (s *Store) ListRemoteMessages(ctx context.Context, accountID, inboxID, fold
 // DeleteRemoteMessage removes a remote message's metadata row. The body lives on
 // the remote server and is untouched.
 func (s *Store) DeleteRemoteMessage(ctx context.Context, accountID, inboxID, id string) error {
-	res, err := s.write.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, id)
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	metaBefore, err := remoteMetadataBytesTx(ctx, tx, accountID, inboxID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func nullStringPtr(v *string) any {

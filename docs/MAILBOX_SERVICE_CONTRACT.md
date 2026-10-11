@@ -130,7 +130,11 @@ and never rewrite a historical migration's SQL. Key tables:
 - `inbox_remote_messages` (header/thread metadata cache only), `inbox_remote_labels`,
   `inbox_remote_cursors`, `inbox_remote_arrivals`, `inbox_remote_notifications`,
   `inbox_remote_actions`, `remote_sent_copies`, `assistant_handling_requests`,
-  and the durable `pending_file_cleanup` queue.
+  and the durable `pending_file_cleanup` queue. The stored remote metadata
+  (`inbox_remote_messages`, remote-owned `inbox_folders`, `inbox_remote_labels`)
+  counts toward the account and per-inbox storage quota exactly like a stored
+  message: the charged bytes are the text we persist, **not** the row's
+  `size_bytes` claim about the remote body. See D102 in `DECISIONS.md`.
 
 ### Folder and message membership (`internal/store/folders.go`)
 - A message is in exactly one folder (`MoveMessageToFolder`); a move emits a
@@ -433,6 +437,14 @@ transient scope/`LIST` shortfall or a generation flip.
   live per request and never archived; if the connector is unreachable the common
   single-message GET answers `503` rather than serving cached metadata as the
   body.
+- **Remote metadata is quota-charged, and the cap stops indexing rather than
+  erroring.** The stored metadata bytes count against the account and per-inbox
+  storage quota (the remote-reported `size_bytes` is excluded). Because metadata
+  is a derivative cache, reaching the cap does **not** return `ErrQuota`: the
+  reconcile stops admitting new rows, leaves the folder `partial`, and resumes
+  once room frees up (purge/reset). Existing cached rows are never evicted.
+  Single-message upserts return `store.ErrRemoteMetadataQuota` when they would
+  grow past the cap.
 - **Shared/Other namespaces are excluded, and an empty-prefix namespace is
   conservative.** A personal scope never reaches the server's Shared or Other
   namespaces. On a server with no discoverable personal namespace the scope falls

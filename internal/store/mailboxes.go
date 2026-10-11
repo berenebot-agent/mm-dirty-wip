@@ -909,7 +909,19 @@ func (s *Store) recomputeInboxStorage(ctx context.Context, accountID, inboxID st
 	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(da.size_bytes),0) FROM draft_attachments da JOIN drafts d ON d.id=da.draft_id WHERE d.account_id=? AND d.inbox_id=?`, accountID, inboxID).Scan(&draftAtts); err != nil {
 		return 0, err
 	}
-	return total + draftBodies + draftAtts, nil
+	var remoteMessages int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataMessageBytesSQL+`),0) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&remoteMessages); err != nil {
+		return 0, err
+	}
+	var remoteFolders int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataFolderBytesSQL+`),0) FROM inbox_folders WHERE account_id=? AND inbox_id=? AND origin='remote'`, accountID, inboxID).Scan(&remoteFolders); err != nil {
+		return 0, err
+	}
+	var remoteLabels int64
+	if err := s.read.QueryRowContext(ctx, `SELECT COALESCE(SUM(`+remoteMetadataLabelBytesSQL+`),0) FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, accountID, inboxID).Scan(&remoteLabels); err != nil {
+		return 0, err
+	}
+	return total + draftBodies + draftAtts + remoteMessages + remoteFolders + remoteLabels, nil
 }
 
 // SetInboxAllowedSenders replaces an inbox's allowed-senders allowlist. An
@@ -1249,6 +1261,11 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 		return nil, err
 	}
 	attRows.Close()
+	remoteBytes, err := remoteMetadataBytesTx(ctx, tx, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	total += remoteBytes
 	wfRows, err := tx.QueryContext(ctx, `SELECT raw_path FROM outbound_workflow WHERE account_id=? AND inbox_id=?`, accountID, id)
 	if err != nil {
 		return nil, err

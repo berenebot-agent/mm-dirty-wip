@@ -148,12 +148,26 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 		return RemoteMessage{}, e
 	}
 	defer tx.Rollback()
+	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
+	accountRoom, accountLimited, inboxRoom, inboxLimited, e := remoteMetadataHeadroomTx(ctx, tx, account, inbox)
+	if e != nil {
+		return RemoteMessage{}, e
+	}
 	var id string
 	e = tx.QueryRowContext(ctx, `SELECT message_id FROM google_message_ids WHERE inbox_id=? AND provider_id=?`, inbox, provider).Scan(&id)
 	if e != nil && e != sql.ErrNoRows {
 		return RemoteMessage{}, e
 	}
 	if e == sql.ErrNoRows {
+		// A new Gmail message is a genuinely new metadata row: refuse it when a
+		// cap is set and there is no room, so indexing stops rather than growing
+		// past the cap. An existing message (e == nil) updates in place.
+		if (accountLimited || inboxLimited) && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
+			return RemoteMessage{}, ErrRemoteMetadataQuota
+		}
 		// The legacy unique IMAP tuple must not alias distinct Gmail messages.
 		// An opaque provider-specific path namespaces it; label views use the
 		// membership table, never this storage locator.
@@ -183,6 +197,9 @@ func (s *Store) UpsertGoogleMessage(ctx context.Context, account, inbox, provide
 			return RemoteMessage{}, e
 		}
 	}
+	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+		return RemoteMessage{}, e
+	}
 	if e = tx.Commit(); e != nil {
 		return RemoteMessage{}, e
 	}
@@ -197,8 +214,22 @@ func (s *Store) StartGoogleResync(ctx context.Context, account, inbox, history s
 // Prune only after a complete enumeration. An interrupted resync retains old
 // metadata and partial completeness, rather than deleting unseen messages.
 func (s *Store) PruneGoogleResync(ctx context.Context, account, inbox string) error {
-	_, e := s.write.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT g.message_id FROM google_message_ids g JOIN inbox_google_connections c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation)`, account, inbox, inbox)
-	return e
+	tx, e := s.write.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	if e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT g.message_id FROM google_message_ids g JOIN inbox_google_connections c ON c.inbox_id=g.inbox_id WHERE g.inbox_id=? AND c.sync_generation<>'' AND g.sync_generation<>c.sync_generation)`, account, inbox, inbox); e != nil {
+		return e
+	}
+	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RefreshGoogleLabelNames(ctx context.Context, account, inbox string) error {
@@ -207,11 +238,18 @@ func (s *Store) RefreshGoogleLabelNames(ctx context.Context, account, inbox stri
 		return e
 	}
 	defer tx.Rollback()
+	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
+	if e != nil {
+		return e
+	}
 	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=?`, account, inbox); e != nil {
 		return e
 	}
 	_, e = tx.ExecContext(ctx, `INSERT INTO inbox_remote_labels(id,account_id,inbox_id,remote_message_id,label,created_at) SELECT 'gl_'||g.message_id||'_'||g.label_id,?,?,g.message_id,f.name,? FROM google_label_memberships g JOIN inbox_folders f ON f.inbox_id=g.inbox_id AND f.path=g.label_id WHERE g.inbox_id=? AND f.role='folder'`, account, inbox, nowText(), inbox)
 	if e != nil {
+		return e
+	}
+	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
 		return e
 	}
 	return tx.Commit()

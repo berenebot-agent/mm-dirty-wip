@@ -118,6 +118,8 @@ func mapStoreError(err error) error {
 		return model.NewMailboxError(model.ErrKindConflict, "conflicting change", false, err)
 	case errors.Is(err, store.ErrQuota):
 		return model.NewMailboxError(model.ErrKindQuota, "storage quota exceeded", false, err)
+	case errors.Is(err, store.ErrRemoteMetadataQuota):
+		return model.NewMailboxError(model.ErrKindQuota, "remote metadata storage quota exceeded", false, err)
 	case errors.Is(err, store.ErrStandaloneRequired):
 		return model.NewMailboxError(model.ErrKindUnsupported, "operation requires a standalone inbox", false, err)
 	default:

@@ -227,8 +227,9 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	}
 	// Catch up history fully before committing its anchor. Bounded passes retain
 	// the old anchor on interruption, making replay safe and idempotent.
+	quotaHit := false
 	page := ""
-	for n := 0; n < 20; n++ {
+	for n := 0; n < 20 && !quotaHit; n++ {
 		h, e := m.Google.History(ctx, t, c.HistoryID, page)
 		if e != nil {
 			var mb *model.MailboxError
@@ -274,7 +275,10 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			if e != nil {
 				return store.RemoteIndexStatus{}, e
 			}
-			if _, e = m.cacheGoogle(ctx, account, inbox, g); e != nil {
+			if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
+				quotaHit = true
+				break
+			} else if e != nil {
 				return store.RemoteIndexStatus{}, e
 			}
 		}
@@ -283,11 +287,11 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			c.HistoryID = h.HistoryID
 			break
 		}
-		if n == 19 {
+		if n == 19 && !quotaHit {
 			return store.RemoteIndexStatus{}, model.NewMailboxError(model.ErrKindUnavailable, "Google history catch-up is still in progress", true, nil)
 		}
 	}
-	if !c.BackfillDone {
+	if !c.BackfillDone && !quotaHit {
 		p, e := m.Google.List(ctx, t, "", "", c.BackfillPage, 100)
 		if e != nil {
 			return store.RemoteIndexStatus{}, e
@@ -297,7 +301,10 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			if e != nil {
 				return store.RemoteIndexStatus{}, e
 			}
-			if _, e = m.cacheGoogle(ctx, account, inbox, g); e != nil {
+			if _, e = m.cacheGoogle(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
+				quotaHit = true
+				break
+			} else if e != nil {
 				return store.RemoteIndexStatus{}, e
 			}
 		}
@@ -307,13 +314,15 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 	if e = m.Service.Store.SaveGoogleProgress(ctx, account, inbox, c.HistoryID, c.BackfillPage, c.BackfillDone); e != nil {
 		return store.RemoteIndexStatus{}, e
 	}
-	if c.BackfillDone {
+	// A cap-truncated pass must not prune (its enumeration is incomplete) nor
+	// claim completeness; the index stays partial until room frees up.
+	if c.BackfillDone && !quotaHit {
 		if e = m.Service.Store.PruneGoogleResync(ctx, account, inbox); e != nil {
 			return store.RemoteIndexStatus{}, e
 		}
 	}
 	status := store.RemoteIndexPartial
-	if c.BackfillDone {
+	if c.BackfillDone && !quotaHit {
 		status = store.RemoteIndexComplete
 	}
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")
