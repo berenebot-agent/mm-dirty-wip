@@ -7,17 +7,26 @@ default full-message archive. Bodies and attachments are fetched when opened.
 
 ## Create your Google app
 
-1. Open [Google Cloud Console](https://console.cloud.google.com/) and create or
-   select a project.
+1. Open [Google Cloud Console](https://console.cloud.google.com/) and sign in
+   with the account you are connecting. Create a project (or select one) and
+   keep it selected.
 2. Enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
-3. Configure **Google Auth Platform**: Branding, Audience and Data Access.
-   Choose Internal when the project and intended users belong to your Workspace
-   organisation. Otherwise choose External. In Testing, add your Google account
-   as a test user.
-4. Add `https://www.googleapis.com/auth/gmail.modify` to Data Access. This permits
+3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview).
+   If you see **Get started**, click it, then set **App name** (any name, e.g.
+   MailMoose), **User support email** and **Contact email** (your Google
+   address), and **Audience**: choose **Internal** when the project and intended
+   users belong to your Workspace organisation, otherwise choose **External**.
+   Accept the policy and finish. If you chose External and remain in Testing,
+   add your Google account as a test user.
+4. Open [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or
+   remove scopes** and add `https://www.googleapis.com/auth/gmail.modify` (use
+   manual scope entry if it is not listed), then save. This single scope permits
    reading, labels, read/unread, drafts and sending, including moving mail to
-   Trash. MailMoose does not request the broader permanent-delete scope.
-5. Create a client under **Clients**, choosing **Web application**.
+   Trash. No separate `gmail.send` scope is needed, and MailMoose does not
+   request the broader permanent-delete scope.
+5. Open [Clients](https://console.cloud.google.com/auth/clients) → **Create
+   client**, choosing **Web application**. Leave **Authorised JavaScript
+   origins** empty.
 6. Under **Authorised redirect URIs**, add the exact URL shown in the MailMoose
    wizard. For example:
 
