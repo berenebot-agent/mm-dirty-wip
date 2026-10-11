@@ -14,20 +14,25 @@ default full-message archive. Bodies and attachments are fetched when opened.
 3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview).
    If you see **Get started**, click it, then set **App name** (any name, e.g.
    MailMoose), **User support email** and **Contact email** (your Google
-   address), and **Audience**: choose **Internal** when the project and intended
-   users belong to your Workspace organisation, otherwise choose **External**.
-   Accept the policy and finish. If you chose External and remain in Testing,
-   add your Google account as a test user.
-4. Open [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or
+   address), and **Audience**: choose **External** for a normal `@gmail.com`
+   account. **Internal** is only available to Google Workspace organisations.
+   Accept the policy and finish.
+4. Keep the app in **Testing** and add your Google account as a test user.
+   Open [Audience](https://console.cloud.google.com/auth/audience) and, under
+   **Test users**, click **Add users** and add the exact address you are
+   connecting. Do **not** click **Publish app** — for a restricted Gmail scope,
+   an unverified External app in production is hard-blocked (see
+   [Long-lived access](#long-lived-access-and-troubleshooting)).
+5. Open [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or
    remove scopes** and add `https://www.googleapis.com/auth/gmail.modify` (use
    manual scope entry if it is not listed), then save. This single scope permits
    reading, labels, read/unread, drafts and sending, including moving mail to
    Trash. No separate `gmail.send` scope is needed, and MailMoose does not
    request the broader permanent-delete scope.
-5. Open [Clients](https://console.cloud.google.com/auth/clients) → **Create
+6. Open [Clients](https://console.cloud.google.com/auth/clients) → **Create
    client**, choosing **Web application**. Leave **Authorised JavaScript
    origins** empty.
-6. Under **Authorised redirect URIs**, add the exact URL shown in the MailMoose
+7. Under **Authorised redirect URIs**, add the exact URL shown in the MailMoose
    wizard. For example:
 
    ```text
@@ -37,8 +42,10 @@ default full-message archive. Bodies and attachments are fetched when opened.
    This is based on MailMoose's configured `BASE_URL`; spelling, scheme, port
    and path must match. JavaScript origins are not needed for this server-side
    authorization flow.
-7. Enter the client ID and client secret in the wizard. Click **Connect Google**,
-   select the mailbox account and approve access.
+8. Enter the client ID and client secret in the wizard. Click **Connect Google**,
+   select the mailbox account and approve access. Google will show a **"Google
+   hasn't verified this app"** screen; click **Advanced → Go to <app name>** to
+   continue.
 
 Google's browser return goes to your installation. Google servers do not need
 inbound access: a private/VPN hostname works when your browser can reach it and
@@ -62,15 +69,45 @@ proxy's access logs to omit callback query strings as well.
 
 ## Long-lived access and troubleshooting
 
-- External apps left in **Testing** issue refresh tokens for Gmail scopes that
-  expire after **seven days**. Configure the appropriate production audience for
-  ongoing use. Publishing is distinct from verification; personal/internal uses
-  may qualify for exemptions, while wider use of restricted Gmail scopes has
-  Google's verification and assessment requirements.
+### Personal Gmail: stay in Testing
+
+For a normal `@gmail.com` account the OAuth app must be **External** (Internal is
+Workspace-only) and should be left in **Testing** with your address added as a
+test user. `gmail.modify` is a Google *restricted* scope, so:
+
+- Apps that request restricted scopes in production must complete Google's
+  verification (which includes a third-party security assessment). Until then,
+  Google shows the **"Google hasn't verified this app"** warning in Testing —
+  click **Advanced → Go to <app name>** to proceed.
+- In Testing, authorizations and their refresh tokens expire **seven days** after
+  consent. When MailMoose reports expired access, reconnect from the inbox
+  settings' **Google / Gmail — reconnect account** link; it preserves the inbox
+  and stable IDs.
+
+Publishing an unverified External app does **not** remove the seven-day limit —
+it replaces the click-through warning with a hard block (below). The only way to
+remove the limit is to complete Google's verification, so for personal use the
+seven-day reconnect is the intended trade-off.
+
+### Access blocked: has not completed the Google verification process
+
+This error means the OAuth app is **In production** but has not completed
+verification, so Google refuses the restricted Gmail scope outright. Revert it:
+
+1. Open [Audience](https://console.cloud.google.com/auth/audience).
+2. Under **Publishing status**, click **Back to testing**.
+3. Ensure the address you sign in with is listed under **Test users**.
+4. Save, wait a few minutes for propagation, then retry **Connect Google** and
+   click through the **"Google hasn't verified this app"** screen.
+
+### Other issues
+
 - `redirect_uri_mismatch`: register the exact URL shown in the wizard, and use
   a Web application OAuth client.
-- Access blocked by Workspace: ask your organisation administrator to allow the
-  OAuth app and its requested Gmail permission.
+- `org_internal` / access blocked by Workspace: the app's audience is **Internal**
+  but the account is outside the project's organisation. Use **External** for a
+  personal `@gmail.com` account, or ask your organisation administrator to allow
+  the OAuth app and its requested Gmail permission.
 - Missing offline access, revoked access, expired tokens or changed passwords:
   reconnect from the inbox settings' **Google / Gmail — reconnect account** link.
   Choose the same mailbox account. Reconnection preserves the inbox and stable IDs.
