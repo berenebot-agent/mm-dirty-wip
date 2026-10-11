@@ -115,6 +115,8 @@ var attachmentSchema = obj(map[string]any{
 }, "filename", "content")
 
 var schemas = map[string]any{
+	"MessageActionControl": obj(map[string]any{"action": str("retry or dismiss")}, "action"),
+	"MessageActionResult":  obj(map[string]any{"queued": boolean("Whether the durable action is still pending."), "action": obj(map[string]any{"id": str("Action handle."), "inbox_id": str(""), "message_id": str(""), "state": str("pending, running, done, failed or ambiguous"), "error": str("Public failure detail."), "attempts": integer("Attempts made.")})}),
 	"Error": obj(map[string]any{
 		"error": str("Human-readable error message."),
 		"code":  str("Stable machine-readable error code."),

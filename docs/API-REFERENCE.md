@@ -62,11 +62,14 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/messages | List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before, trashed) | read |
 | GET | /v1/messages/wait | Long-poll for a new message | read |
 | POST | /v1/messages/wait | Long-poll for a new message (compat) | read |
+| GET | /v1/actions | List scoped mailbox action queue | read |
+| GET | /v1/actions/{id} | Get mailbox action status | read |
+| POST | /v1/actions/{id} | Retry or dismiss a mailbox action | assistant |
 | GET | /v1/messages/{id} | Get a message | read |
 | PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
-| DELETE | /v1/messages/{id} | Move a message to Trash (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id} | Queue a move to Trash (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
-| DELETE | /v1/messages/{id}/purge | Permanently delete a trashed message (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id}/purge | Queue permanent deletion of a trashed message (Assistant/Owner) | assistant |
 | POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
 
 ## Attachments
