@@ -3372,6 +3372,37 @@ Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency
 service or runtime. Separate Online Archive mailboxes are outside this release.
 See `docs/MICROSOFT.md` for setup and real-account rollout checks.
 
+## D101 — Microsoft own-mailbox push with durable delta catch-up
+
+**Decision (2026-10-11, human approved):** Extend D100 with automatic Graph Inbox
+subscriptions for signed-in users' own Outlook.com/Microsoft 365 mailboxes.
+Polling alone imposes the worker's detection delay; a public HTTPS webhook can
+wake the worker promptly on an arrival while retaining delta cursors as truth.
+Shared delegated connections keep polling, because Graph requires application
+permissions for shared-mailbox subscriptions. No authentication-model expansion.
+
+Use basic notifications (no resource-data certificates), immutable IDs, and the
+existing encrypted delegated grant. The callback uses `Config.ReceiverURL()` and
+shared inbound route registration on both listeners. Match subscription ID and
+the hash of a random encrypted `clientState`, persist an inbox sync generation in
+SQLite before acknowledging, and wake process-owned work. Never log callback
+secrets or grants. Delta catch-up reuses normal deduplicated arrival/event
+delivery; baseline indexing emits no historical arrivals. Polling remains a
+fallback for unavailable webhooks and missed notifications.
+
+Renew six-day subscriptions with a day remaining; process lifecycle notifications
+for reauthorization, removal and missed changes. Persist create intent and recover
+ambiguous outcomes by listing matching subscriptions. Retain an encrypted cleanup
+grant after inbox removal/disable only until deletion succeeds or the subscription
+expires. Connection settings expose setup/active/retry status; realtime capability
+reflects active, unexpired subscriptions.
+
+**Complexity/resource budget:** One additive migration and coalesced durable work
+row per eligible inbox, narrow Graph subscription methods, one shared callback,
+and one serialized process-owned worker loop with bounded per-inbox timeouts.
+Existing Go process, SQLite and polling; no new dependency or runtime service.
+See `docs/MICROSOFT.md` for operator routing and provider latency constraints.
+
 ## Future extension register
 
 - additional inbound transport adapters

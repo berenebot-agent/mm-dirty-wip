@@ -86,11 +86,13 @@ type RemoteSession interface {
 // metadata reconciliation and the live operations. The local/remote routing
 // decision is the MailboxRouter's; this service performs the remote side.
 type RemoteMailboxService struct {
-	Service     *Service
-	Google      *gmail.Client
-	Microsoft   *microsoft.Client
-	microsoftMu sync.Mutex
-	googleMu    sync.Mutex
+	Service         *Service
+	Google          *gmail.Client
+	Microsoft       *microsoft.Client
+	microsoftMu     sync.Mutex
+	microsoftPushMu sync.Mutex
+	pushWake        chan struct{}
+	googleMu        sync.Mutex
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
 	dial           RemoteDialer
@@ -112,7 +114,7 @@ type remoteReconcileCall struct {
 // NewRemoteMailboxService builds the remote surface over the app service.
 func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs

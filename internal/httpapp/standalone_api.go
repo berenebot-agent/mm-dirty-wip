@@ -786,7 +786,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
 	if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inboxID) {
 		caps.Outbound = true
-		caps.Realtime = false
+		caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, inboxID)
 		return remoteConfigResponse{Provider: "microsoft", Configured: true, Host: "Microsoft / Outlook", Capabilities: caps}, nil
 	}
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {

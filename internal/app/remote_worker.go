@@ -175,6 +175,15 @@ func (w *RemoteWorker) run() {
 	if err := w.svc.Store.RecoverAbandonedRemoteSentCopyClaims(context.Background()); err != nil {
 		w.log.Error("remote sent-copy claim recovery", "error", err)
 	}
+	if w.remote != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w.runMicrosoftPush(ctx)
+		}()
+		defer func() { cancel(); <-done }()
+	}
 
 	type watcher struct {
 		cancel context.CancelFunc

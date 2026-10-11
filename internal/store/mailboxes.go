@@ -690,7 +690,7 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		if out[n].Kind == model.InboxKindStandalone && s.IsMicrosoft(ctx, p.AccountID, out[n].ID) {
 			caps := model.StandaloneCapabilities()
 			caps.Outbound = true
-			caps.Realtime = false
+			caps.Realtime = s.MicrosoftPushActive(ctx, p.AccountID, out[n].ID)
 			out[n].Capabilities = &caps
 		}
 	}
