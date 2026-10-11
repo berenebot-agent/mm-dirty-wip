@@ -191,6 +191,48 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 	return status, err
 }
 
+// reconcileMicrosoftQuick runs the cheap Microsoft detection pass: the Inbox
+// folder's delta from its stored cursor only, with the folder tree taken from the
+// cache (no Graph folder enumeration, no other folders, no prune). It emits the
+// same completion line as the full pass and wakes the push worker when it finds
+// new mail. The whole-mailbox reconcile (every folder, folder tree, prune)
+// remains on the full-sync cadence. The caller ignores the returned status.
+func (m *RemoteMailboxService) reconcileMicrosoftQuick(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
+	start := time.Now()
+	arrived, err := m.reconcileMicrosoftQuickPass(ctx, account, inbox)
+	status := "complete"
+	if err != nil {
+		status = "error"
+	}
+	result := remoteSyncResult{started: start, new: arrived, status: status, err: err}
+	m.logRemoteSync(ctx, account, inbox, result)
+	if arrived > 0 {
+		m.WakeMicrosoftPush()
+	}
+	return store.RemoteIndexStatus{IndexedAt: time.Now()}, err
+}
+
+// reconcileMicrosoftQuickPass resolves the Inbox folder from the cache and
+// applies its delta. A missing Inbox folder or an uninitialised cursor is a
+// no-op that leaves the full reconcile to establish the baseline.
+func (m *RemoteMailboxService) reconcileMicrosoftQuickPass(ctx context.Context, account, inbox string) (int, error) {
+	t, c, e := m.microsoftAccess(ctx, account, inbox)
+	if e != nil {
+		return 0, e
+	}
+	f, e := m.Service.Store.RemoteFolderByRole(ctx, account, inbox, model.FolderRoleInbox)
+	if e != nil {
+		if errors.Is(e, store.ErrNotFound) {
+			// The provider's Inbox folder has not been discovered yet; the full
+			// reconcile establishes it and the delta baseline first.
+			return 0, nil
+		}
+		return 0, e
+	}
+	arrived, _, _, e := m.syncMicrosoftFolderDelta(ctx, t, c, account, inbox, f)
+	return arrived, e
+}
+
 // reconcileMicrosoftPass is the timed body of a Microsoft delta reconcile. It
 // returns the index status, the count of newly-recorded arrivals, and any error.
 func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, int, error) {
@@ -206,101 +248,23 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 	quotaHit := false
 	arrived := 0
 	for _, f := range fs {
-		if f.Origin != "remote" {
-			continue
-		}
 		if quotaHit {
 			break
 		}
-		cursor, initialized, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
+		a, folderComplete, qh, e := m.syncMicrosoftFolderDelta(ctx, t, c, account, inbox, f)
+		arrived += a
 		if e != nil {
 			return store.RemoteIndexStatus{}, arrived, e
 		}
-		page, e := m.Microsoft.Delta(ctx, t, c.Mailbox, f.Path, cursor)
-		if e != nil {
-			var mb *model.MailboxError
-			if errors.As(e, &mb) && mb.Kind == model.ErrKindConflict {
-				if e = m.Service.Store.StartMicrosoftResync(ctx, inbox, f.Path); e != nil {
-					return store.RemoteIndexStatus{}, arrived, e
-				}
-				complete = false
-				continue
-			}
-			return store.RemoteIndexStatus{}, arrived, e
-		}
-		for _, g := range page.Messages {
-			if g.Removed != nil {
-				live, ge := m.Microsoft.Message(ctx, t, c.Mailbox, g.ID)
-				if ge == nil {
-					if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); errors.Is(ge, store.ErrRemoteMetadataQuota) {
-						quotaHit = true
-						break
-					} else if ge != nil {
-						return store.RemoteIndexStatus{}, arrived, ge
-					}
-				} else {
-					var mb *model.MailboxError
-					if !errors.As(ge, &mb) || mb.Kind != model.ErrKindNotFound {
-						return store.RemoteIndexStatus{}, arrived, ge
-					}
-					if id, ie := m.Service.Store.MicrosoftLocalID(ctx, account, inbox, g.ID); ie == nil {
-						if ie = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); ie != nil {
-							return store.RemoteIndexStatus{}, arrived, ie
-						}
-					}
-				}
-				continue
-			}
-			detected, de := m.Service.Store.MicrosoftDetected(ctx, inbox, g.ID)
-			if de != nil {
-				return store.RemoteIndexStatus{}, arrived, de
-			}
-			if initialized && !detected && f.Role == model.FolderRoleInbox && !g.IsDraft {
-				in := microsoftInput(g)
-				date := parseStoreTime(g.ReceivedDateTime)
-				_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date})
-				if ae != nil {
-					return store.RemoteIndexStatus{}, arrived, ae
-				}
-				if inserted {
-					arrived++
-				}
-			}
-			if _, e = m.cacheMicrosoft(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
-				quotaHit = true
-				break
-			} else if e != nil {
-				return store.RemoteIndexStatus{}, arrived, e
-			}
-			if e = m.Service.Store.MarkMicrosoftDetected(ctx, inbox, g.ID); e != nil {
-				return store.RemoteIndexStatus{}, arrived, e
-			}
-		}
-		if quotaHit {
+		if qh {
 			// Do not advance the delta cursor or prune: the page was not fully
 			// indexed, so the next pass must replay it to stay consistent.
+			quotaHit = true
 			complete = false
 			break
 		}
-		next := page.NextLink
-		if next == "" {
-			next = page.DeltaLink
-		}
-		if next == "" {
-			return store.RemoteIndexStatus{}, arrived, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
-		}
-		if page.NextLink != "" {
+		if !folderComplete {
 			complete = false
-		} else {
-			initialized = true
-		}
-		if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized); e != nil {
-			return store.RemoteIndexStatus{}, arrived, e
-		}
-		if page.NextLink == "" {
-			if e = m.Service.Store.PruneMicrosoftResync(ctx, account, inbox, f.Path); e != nil {
-				return store.RemoteIndexStatus{}, arrived, e
-			}
 		}
 	}
 	status := store.RemoteIndexPartial
@@ -309,6 +273,100 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 	}
 	e = m.Service.Store.SetRemoteIndexStatus(ctx, account, inbox, status, "")
 	return store.RemoteIndexStatus{Status: status, IndexedAt: time.Now()}, arrived, e
+}
+
+// syncMicrosoftFolderDelta applies one folder's delta page. It records INBOX
+// arrivals, caches metadata, advances the folder's cursor and prunes on the final
+// page. It returns the newly-recorded INBOX arrivals, whether the folder fully
+// drained (no NextLink), whether a metadata quota stopped it, and any error. A
+// folder the store does not own (origin != remote) is skipped.
+func (m *RemoteMailboxService) syncMicrosoftFolderDelta(ctx context.Context, t string, c store.MicrosoftConnection, account, inbox string, f model.Folder) (arrived int, complete bool, quotaHit bool, err error) {
+	if f.Origin != "remote" {
+		return 0, true, false, nil
+	}
+	cursor, initialized, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
+	if e != nil {
+		return 0, false, false, e
+	}
+	page, e := m.Microsoft.Delta(ctx, t, c.Mailbox, f.Path, cursor)
+	if e != nil {
+		var mb *model.MailboxError
+		if errors.As(e, &mb) && mb.Kind == model.ErrKindConflict {
+			if e = m.Service.Store.StartMicrosoftResync(ctx, inbox, f.Path); e != nil {
+				return 0, false, false, e
+			}
+			return 0, false, false, nil
+		}
+		return 0, false, false, e
+	}
+	complete = true
+	for _, g := range page.Messages {
+		if g.Removed != nil {
+			live, ge := m.Microsoft.Message(ctx, t, c.Mailbox, g.ID)
+			if ge == nil {
+				if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); errors.Is(ge, store.ErrRemoteMetadataQuota) {
+					return arrived, false, true, nil
+				} else if ge != nil {
+					return arrived, false, false, ge
+				}
+			} else {
+				var mb *model.MailboxError
+				if !errors.As(ge, &mb) || mb.Kind != model.ErrKindNotFound {
+					return arrived, false, false, ge
+				}
+				if id, ie := m.Service.Store.MicrosoftLocalID(ctx, account, inbox, g.ID); ie == nil {
+					if ie = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); ie != nil {
+						return arrived, false, false, ie
+					}
+				}
+			}
+			continue
+		}
+		detected, de := m.Service.Store.MicrosoftDetected(ctx, inbox, g.ID)
+		if de != nil {
+			return arrived, false, false, de
+		}
+		if initialized && !detected && f.Role == model.FolderRoleInbox && !g.IsDraft {
+			in := microsoftInput(g)
+			date := parseStoreTime(g.ReceivedDateTime)
+			_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date})
+			if ae != nil {
+				return arrived, false, false, ae
+			}
+			if inserted {
+				arrived++
+			}
+		}
+		if _, e = m.cacheMicrosoft(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
+			return arrived, false, true, nil
+		} else if e != nil {
+			return arrived, false, false, e
+		}
+		if e = m.Service.Store.MarkMicrosoftDetected(ctx, inbox, g.ID); e != nil {
+			return arrived, false, false, e
+		}
+	}
+	next := page.NextLink
+	if next == "" {
+		next = page.DeltaLink
+	}
+	if next == "" {
+		return arrived, false, false, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
+	}
+	if page.NextLink != "" {
+		complete = false
+	} else {
+		initialized = true
+	}
+	if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized); e != nil {
+		return arrived, complete, false, e
+	}
+	if page.NextLink == "" {
+		if e = m.Service.Store.PruneMicrosoftResync(ctx, account, inbox, f.Path); e != nil {
+			return arrived, complete, false, e
+		}
+	}
+	return arrived, complete, false, nil
 }
 func (m *RemoteMailboxService) getMicrosoft(ctx context.Context, p model.Principal, inbox, id string) (RemoteMessageView, error) {
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
@@ -425,11 +483,22 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {
 		return RemoteListResult{}, e
 	}
-	if !cached {
+	// A scoped read bootstraps the index on first use only, then serves the cache:
+	// freshness is the worker's schedule (client presence drives the coalesced
+	// quick pass, never a per-request full reconcile). While the index is still
+	// incomplete a background refresh advances it, but a complete index adds no
+	// work. This mirrors the IMAP read path. The bootstrap runs before folder
+	// resolution so the provider's Inbox folder exists to resolve.
+	status, serr := m.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, inbox)
+	if serr != nil {
+		return RemoteListResult{}, mapStoreError(serr)
+	}
+	switch {
+	case !cached && (status.Status == store.RemoteIndexNeverStarted || status.IndexedAt.IsZero()):
 		if _, e := m.ReconcileRemote(ctx, p.AccountID, inbox); e != nil {
 			return RemoteListResult{}, e
 		}
-	} else {
+	case status.Status != store.RemoteIndexComplete:
 		m.ScheduleRefresh(p.AccountID, inbox)
 	}
 	if folder == "" {

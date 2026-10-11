@@ -285,6 +285,18 @@ The full interval governs how often the deep reconcile runs (previously the work
 re-ran it roughly every minute). Both are set on the inbox Identity tab's remote
 section.
 
+Microsoft uses the same split: the quick pass applies only the Inbox folder's
+stored delta cursor (no folder-tree enumeration), and the deep reconcile runs on
+the full interval. While a Microsoft push subscription is active, the quick poll
+is dropped for the full interval as a safety net (a notification wakes the quick
+pass immediately); if push is unavailable, the quick poll applies.
+
+Client-driven detection (the events stream, events/messages/thread reads, the
+long-poll waits and the reload button) is coalesced onto each inbox's quick
+interval: at most one demand pass per inbox per interval, shared by all callers.
+A manual reload always runs. The stream's own tick is a coarse nudge, not a sync
+rate.
+
 `POST /ui/inboxes/{id}/sync` is the toolbar's square reload button. It runs the
 fast new-mail detection/index, re-syncs the headers of the messages currently on
 screen (so read/flag changes show immediately), and redirects back to the same

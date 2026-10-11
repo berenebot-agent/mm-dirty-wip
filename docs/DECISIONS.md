@@ -3497,6 +3497,51 @@ HTTP adapters, header queue view, and deterministic tests. No dependencies or
 additional runtime service. See `docs/API.md` and
 `docs/proposals/inbox-action-queue.md`.
 
+## D104 — Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** A standalone Microsoft inbox was syncing many times a minute.
+Two causes: (1) the human UI's events stream drove account-wide detection on a
+fixed 5-second tick, and every on-demand read/wait/reload could each launch a full
+Microsoft pass, so client presence set the sync rate; and (2) Microsoft detection
+ran the full mailbox reconcile (folder-tree enumeration plus a delta call per
+folder) on every pass, and the worker still polled every 60s even with an active
+push subscription — contradicting D101's "polling is a fallback" intent.
+
+**Decision:**
+
+- **Microsoft quick pass.** Detection uses a cheap pass that applies only the
+  Inbox folder's stored delta cursor and reads the folder tree from cache (no
+  Graph folder enumeration). The full reconcile (every folder, folder tree,
+  prune/backfill) remains on the inbox's full-sync cadence. This mirrors D099's
+  IMAP quick-versus-deep split.
+- **Push-aware watcher cadence.** The Microsoft/Google watcher resolves its poll
+  interval every pass and honours the per-inbox quick override. While
+  `MicrosoftPushActive`, the redundant quick poll is dropped for the full-sync
+  safety net (so a missed or expired notification is still caught); a
+  notification wakes the quick pass immediately. If push is unavailable, quick
+  polling applies. Subscription state is re-read each pass, so expiry/activation
+  takes effect on the next pass.
+- **Demand coalescing.** The public `DetectInbox` (driven by the SSE stream, the
+  events/messages/threads reads, the long-poll waits and the reload button) runs
+  at most one pass per inbox per quick interval; concurrent callers share the
+  in-flight pass via the existing per-provider guards. A manual sync
+  (`WithManualRemoteSync`) always runs. The SSE tick is a coarse 15s nudge, not a
+  sync rate; the gate governs actual passes and is provider-agnostic (Gmail and
+  IMAP included). The worker's own watcher and startup catch-up are not gated.
+
+**Reason:** New mail is the priority and push/IDLE should deliver it; the deep
+pass exists for read/flag state, non-INBOX folders, the folder tree and backfill
+and belongs on a slow, configurable cadence. Client presence should not create a
+second, faster schedule — it should share the existing one.
+
+**Complexity/resource budget:** No migration or dependency. A shared Microsoft
+per-folder delta helper and a quick pass; a push-aware interval helper and a
+re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox`
+plus one test hook; a coarse SSE tick constant. See
+`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/MICROSOFT.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters
