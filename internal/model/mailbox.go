@@ -173,13 +173,20 @@ const (
 )
 
 // Remote sync cadence defaults and bounds for a standalone inbox. The quick
-// interval governs the fallback poll when IDLE is unavailable; the full interval
-// governs the deep index reconcile. Both are clamped to their minimum so a
-// misconfigured value cannot hammer the remote server. IDLE-capable servers
-// still deliver new mail instantly regardless of the quick interval.
+// interval governs the fallback poll when IDLE is unavailable, and it is the
+// only delivery path for a provider mailbox with no push (a Microsoft delegated
+// shared mailbox has none); the full interval governs the deep index reconcile.
+// Both are clamped to their minimum so a misconfigured value cannot hammer the
+// remote server. IDLE-capable servers still deliver new mail instantly
+// regardless of the quick interval.
+//
+// The quick floor is one minute, equal to the default: the interval is operated
+// in whole minutes, so a quicker poll is not expressible and an override can
+// only ever slow polling down. A sub-minute value stored before the floor moved
+// off 15s is clamped up to the floor on read, so it polls at the floor.
 const (
 	RemotePollSecondsDefault     = 60
-	RemotePollSecondsMin         = 15
+	RemotePollSecondsMin         = 60
 	RemoteFullSyncMinutesDefault = 15
 	RemoteFullSyncMinutesMin     = 1
 )

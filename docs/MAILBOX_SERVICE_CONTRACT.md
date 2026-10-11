@@ -280,9 +280,15 @@ through to the full pass.
 Each standalone inbox carries two optional overrides (`inboxes.remote_poll_seconds`,
 `inboxes.remote_full_sync_minutes`; NULL inherits the process default, clamped to
 the model minimums). The quick interval governs the fallback poll when the server
-does not advertise IDLE; IDLE-capable servers still deliver new mail instantly.
-The full interval governs how often the deep reconcile runs (previously the worker
-re-ran it roughly every minute). Both are set on the inbox Identity tab's remote
+does not advertise IDLE, and it is the only delivery path for a provider mailbox
+with no push; IDLE-capable servers still deliver new mail instantly. Its floor is
+one minute, equal to the process default, so an override can only slow a mailbox
+down (a sub-minute value stored before the floor moved off 15s is clamped up on
+read). The full interval governs how often the deep reconcile runs (previously the
+worker re-ran it roughly every minute). Both are reported by
+`GET /v1/inboxes/{id}/remote` (`poll_seconds`, `full_sync_minutes`) for every
+standalone provider — IMAP, Google and Microsoft — so a client sees one unit per
+field. On the Identity tab they are edited from the remote (IMAP) connector
 section.
 
 Microsoft uses the same split: the quick pass applies only the Inbox folder's

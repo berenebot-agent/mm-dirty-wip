@@ -761,6 +761,8 @@ type remoteConfigResponse struct {
 	SentCopyFolder  string `json:"sent_copy_folder,omitempty"`
 	// PollSeconds/FullSyncMinutes are the effective per-inbox sync cadence
 	// (resolved through the model defaults when unset), for the settings form.
+	// They are reported in seconds and minutes for every standalone provider
+	// (IMAP, Google, Microsoft) so a client sees one unit per field.
 	PollSeconds     int                `json:"poll_seconds"`
 	FullSyncMinutes int                `json:"full_sync_minutes"`
 	Capabilities    model.Capabilities `json:"capabilities"`
@@ -787,12 +789,26 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inboxID) {
 		caps.Outbound = true
 		caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, inboxID)
-		return remoteConfigResponse{Provider: "microsoft", Configured: true, Host: "Microsoft / Outlook", Capabilities: caps}, nil
+		return remoteConfigResponse{
+			Provider:        "microsoft",
+			Configured:      true,
+			Host:            "Microsoft / Outlook",
+			PollSeconds:     model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds),
+			FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes),
+			Capabilities:    caps,
+		}, nil
 	}
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
 		caps.Outbound = true
 		caps.HierarchicalFolders = false
-		return remoteConfigResponse{Provider: "google", Configured: true, Host: "Google / Gmail", Capabilities: caps}, nil
+		return remoteConfigResponse{
+			Provider:        "google",
+			Configured:      true,
+			Host:            "Google / Gmail",
+			PollSeconds:     model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds),
+			FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes),
+			Capabilities:    caps,
+		}, nil
 	}
 	out := remoteConfigResponse{
 		Provider:        "imap",
