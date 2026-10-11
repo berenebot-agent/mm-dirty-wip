@@ -67,6 +67,14 @@ duplicate copy. Microsoft may apply tenant-specific shared Sent Items rules.
 Send acceptance is not proof of delivery. Unknown send outcomes are ambiguous
 and must not be blindly retried.
 
+Graph MIME import is not trusted to preserve recipients. Before submission,
+MailMoose explicitly sets To/Cc/Bcc from the composed envelope and reads the
+draft back to verify all three lists. A mismatch stops submission. Bcc comes
+from the structured envelope for direct sends (the transmitted MIME intentionally
+omits it). Remote-draft handoffs similarly set and verify the reviewed MIME
+recipients before reporting the draft as published. Failures after draft creation
+are treated as ambiguous so an automatic retry cannot create duplicate drafts.
+
 Initial detection uses per-folder delta polling for personal and shared
 mailboxes. Metadata backfill is resumable and does not emit historical arrivals.
 Live reads and on-demand detection use Graph; proactive delivery uses existing

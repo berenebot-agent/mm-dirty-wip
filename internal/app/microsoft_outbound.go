@@ -25,6 +25,11 @@ func (microsoftOutbound) Send(ctx context.Context, cfg map[string]any, msg trans
 	if e != nil {
 		return transport.OutboundResult{}, e
 	}
+	// The transmitted MIME intentionally omits Bcc. Use the structured envelope
+	// for every recipient class, then verify before submitting to Microsoft.
+	if e = c.SetDraftRecipientsVerified(ctx, t, mailbox, d.ID, msg.To, msg.CC, msg.BCC); e != nil {
+		return transport.OutboundResult{ProviderMessageID: d.ID}, &transport.AmbiguousError{Err: e}
+	}
 	if e = c.SendDraft(ctx, t, mailbox, d.ID); e != nil {
 		// A remote draft now exists. Retrying this two-step operation would
 		// create another copy, so require reconciliation even for a send reject.

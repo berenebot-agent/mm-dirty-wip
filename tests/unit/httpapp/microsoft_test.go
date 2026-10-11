@@ -90,6 +90,19 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	if e = rm.SaveMicrosoftGrant(ctx, c, microsoft.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: microsoft.Scope(true)}); e != nil {
 		t.Fatal(e)
 	}
+	boxes, e := svc.Store.ListInboxes(ctx, model.Principal{AccountID: u.AccountID, Admin: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	ready := false
+	for _, b := range boxes {
+		if b.ID == box.ID {
+			ready = b.Capabilities != nil && b.Capabilities.Outbound && !b.Capabilities.Realtime
+		}
+	}
+	if !ready {
+		t.Fatal("Microsoft inbox missing sending capability in dashboard list")
+	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	page, e := rm.ListRemoteMessages(ctx, p, box.ID, "inbox-id", 50, "")
 	if e != nil || len(page.Items) != 1 {
