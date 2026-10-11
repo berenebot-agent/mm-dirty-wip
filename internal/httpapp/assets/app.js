@@ -3397,24 +3397,101 @@ function bindInboxSettingsShell(dlg) {
     });
   });
 	root.querySelectorAll('[data-microsoft-begin], [data-microsoft-finish]').forEach(function (form) {
+		// The begin step carries two submit buttons; keep the hidden default in
+		// sync on click so the chosen type survives browsers that omit the
+		// submitter from FormData.
+		form.querySelectorAll('button[name=mailbox_type]').forEach(function (b) {
+			b.addEventListener('click', function () {
+				var field = form.querySelector('input[name=mailbox_type]');
+				if (field) { field.value = b.value; }
+			});
+		});
 		form.addEventListener('submit', function (event) {
 			event.preventDefault();
 			var status = root.querySelector('[data-microsoft-status]');
-			var submit = form.querySelector('button:last-child');
-			submit.disabled = true;
+			form.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
 			var popup = form.hasAttribute('data-microsoft-begin') ? window.open('about:blank', '_blank') : null;
 			status.textContent = 'Connecting…';
-			fetch(form.action, { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) }).then(function (r) {
+			function submit(body) {
+				fetch(form.action, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) {
+					if (!r.ok) { return r.text().then(function (text) { throw new Error(text); }); }
+					return r.json();
+				}).then(function (result) {
+					if (result.authorization_url) {
+						if (popup) { popup.opener = null; popup.location = result.authorization_url; status.textContent = 'Approve access, then paste the complete localhost URL below.'; }
+						else { var link = document.createElement('a'); link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open Microsoft sign-in'; status.replaceChildren(link); }
+					} else if (result.mailboxes) {
+						form.hidden = true;
+						status.textContent = '';
+						showMicrosoftChoice(form, result.mailboxes, result.selection_state);
+					} else if (result.inbox_id) { form.querySelector('[name=callback_url]').value = ''; window.location.assign('/ui/inboxes/' + encodeURIComponent(result.inbox_id)); }
+				}).catch(function (e) { if (popup) { popup.close(); } status.textContent = e.message; }).finally(function () { form.querySelectorAll('button').forEach(function (b) { b.disabled = false; }); });
+			}
+			var body = new URLSearchParams(new FormData(form));
+			submit(body);
+		});
+	});
+
+	// showMicrosoftChoice renders the shared-mailbox picker after sign-in. The
+	// directory names are untrusted tenant data, so options are built as DOM
+	// nodes rather than markup.
+	function showMicrosoftChoice(form, mailboxes, state) {
+		var status = root.querySelector('[data-microsoft-status]');
+		var box = root.querySelector('[data-microsoft-choice]');
+		box.replaceChildren();
+		var intro = document.createElement('p');
+		intro.textContent = 'Signed in. Choose the shared mailbox to connect.';
+		box.appendChild(intro);
+		var select = null;
+		if (mailboxes.length) {
+			select = document.createElement('select');
+			select.appendChild(new Option('Select a mailbox', ''));
+			mailboxes.forEach(function (m) {
+				select.appendChild(new Option(m.name ? m.name + ' <' + m.address + '>' : m.address, m.address));
+			});
+			var selectLabel = document.createElement('label');
+			selectLabel.textContent = 'Accessible shared mailboxes';
+			box.appendChild(selectLabel);
+			box.appendChild(select);
+		}
+		var manual = document.createElement('input');
+		manual.type = 'email';
+		manual.placeholder = 'shared@example.com';
+		var manualLabel = document.createElement('label');
+		manualLabel.textContent = mailboxes.length ? 'Or enter the shared mailbox address' : 'Shared mailbox address';
+		var connect = document.createElement('button');
+		connect.type = 'button';
+		connect.textContent = 'Connect shared mailbox';
+		var back = document.createElement('button');
+		back.type = 'button';
+		back.className = 'secondary';
+		back.textContent = 'Back';
+		box.appendChild(manualLabel);
+		box.appendChild(manual);
+		box.appendChild(connect);
+		box.appendChild(back);
+		box.hidden = false;
+		back.addEventListener('click', function () {
+			// The sign-in attempt was spent completing the callback, so the
+			// only honest reset is to reload the wizard and start over.
+			window.location.reload();
+		});
+		connect.addEventListener('click', function () {
+			var address = manual.value.trim();
+			if (!address && select && select.value) { address = select.value; }
+			if (!address) { status.textContent = 'Choose or enter the shared mailbox address.'; return; }
+			connect.disabled = true;
+			status.textContent = 'Connecting…';
+			var csrf = form.querySelector('[name=_csrf]');
+			var body = new URLSearchParams({ _csrf: csrf ? csrf.value : '', state: state, mailbox: address });
+			fetch(form.action, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) {
 				if (!r.ok) { return r.text().then(function (text) { throw new Error(text); }); }
 				return r.json();
 			}).then(function (result) {
-				if (result.authorization_url) {
-					if (popup) { popup.opener = null; popup.location = result.authorization_url; status.textContent = 'Approve access, then paste the complete localhost URL below.'; }
-					else { var link = document.createElement('a'); link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open Microsoft sign-in'; status.replaceChildren(link); }
-				} else if (result.inbox_id) { form.querySelector('[name=callback_url]').value = ''; window.location.assign('/ui/inboxes/' + encodeURIComponent(result.inbox_id)); }
-			}).catch(function (e) { if (popup) { popup.close(); } status.textContent = e.message; }).finally(function () { submit.disabled = false; });
+				if (result.inbox_id) { window.location.assign('/ui/inboxes/' + encodeURIComponent(result.inbox_id)); }
+			}).catch(function (e) { status.textContent = e.message; }).finally(function () { connect.disabled = false; });
 		});
-	});
+	}
 })();
 
 // showInboxSubview switches the whole panels area to a sub-view (the connector

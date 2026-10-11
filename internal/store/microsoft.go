@@ -31,6 +31,14 @@ CREATE TABLE microsoft_oauth_attempts (
  encrypted_pending TEXT NOT NULL, expires_at TEXT NOT NULL
 );`
 
+// migration063 adds the encrypted exchanged token a shared-mailbox selection
+// phase holds between sign-in and mailbox choice. Presence of the column is the
+// applied marker: SQLite appends it after expires_at on both fresh and upgraded
+// databases, so every query names its columns explicitly.
+const migration063 = `
+ALTER TABLE microsoft_oauth_attempts ADD COLUMN encrypted_token TEXT NOT NULL DEFAULT '';
+`
+
 func (s *Store) MicrosoftMessageFolder(ctx context.Context, account, inbox, id string) (string, error) {
 	var folder string
 	e := s.read.QueryRowContext(ctx, `SELECT g.folder_id FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND g.inbox_id=? AND g.message_id=?`, account, inbox, id).Scan(&folder)
@@ -75,9 +83,9 @@ func (s *Store) SaveMicrosoftConnection(ctx context.Context, c MicrosoftConnecti
 }
 
 type MicrosoftAttempt struct {
-	StateHash, AccountID, UserID, InboxID, DisplayName, ClientID, Tenant, Mailbox, EncryptedPending string
-	Shared                                                                                          bool
-	ExpiresAt                                                                                       time.Time
+	StateHash, AccountID, UserID, InboxID, DisplayName, ClientID, Tenant, Mailbox, EncryptedPending, EncryptedToken string
+	Shared                                                                                                          bool
+	ExpiresAt                                                                                                       time.Time
 }
 
 func (s *Store) SaveMicrosoftAttempt(ctx context.Context, a MicrosoftAttempt) error {
@@ -85,13 +93,29 @@ func (s *Store) SaveMicrosoftAttempt(ctx context.Context, a MicrosoftAttempt) er
 	if e != nil {
 		return e
 	}
-	_, e = s.write.ExecContext(ctx, `INSERT INTO microsoft_oauth_attempts VALUES(?,?,?,?,?,?,?,?,?,?,?)`, a.StateHash, a.AccountID, a.UserID, a.InboxID, a.DisplayName, a.ClientID, a.Tenant, a.Mailbox, a.Shared, a.EncryptedPending, a.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	_, e = s.write.ExecContext(ctx, `INSERT INTO microsoft_oauth_attempts(state_hash,account_id,user_id,inbox_id,display_name,client_id,tenant,mailbox,shared,encrypted_pending,expires_at,encrypted_token) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, a.StateHash, a.AccountID, a.UserID, a.InboxID, a.DisplayName, a.ClientID, a.Tenant, a.Mailbox, a.Shared, a.EncryptedPending, a.ExpiresAt.UTC().Format(time.RFC3339Nano), a.EncryptedToken)
 	return e
 }
+
+// PeekMicrosoftAttempt reads an unexpired attempt without consuming it, so a
+// rejected shared-mailbox selection can be retried with the same sign-in. The
+// caller must still ConsumeMicrosoftAttempt before acting, which is the
+// single-use gate.
+func (s *Store) PeekMicrosoftAttempt(ctx context.Context, hash, account, user string) (MicrosoftAttempt, error) {
+	var a MicrosoftAttempt
+	var expiry string
+	e := s.read.QueryRowContext(ctx, `SELECT state_hash,account_id,user_id,inbox_id,display_name,client_id,tenant,mailbox,shared,encrypted_pending,expires_at,encrypted_token FROM microsoft_oauth_attempts WHERE state_hash=? AND account_id=? AND user_id=? AND expires_at>?`, hash, account, user, nowText()).Scan(&a.StateHash, &a.AccountID, &a.UserID, &a.InboxID, &a.DisplayName, &a.ClientID, &a.Tenant, &a.Mailbox, &a.Shared, &a.EncryptedPending, &expiry, &a.EncryptedToken)
+	if e == sql.ErrNoRows {
+		e = ErrNotFound
+	}
+	a.ExpiresAt = parseTime(expiry)
+	return a, e
+}
+
 func (s *Store) ConsumeMicrosoftAttempt(ctx context.Context, hash, account, user string) (MicrosoftAttempt, error) {
 	var a MicrosoftAttempt
 	var expiry string
-	e := s.write.QueryRowContext(ctx, `DELETE FROM microsoft_oauth_attempts WHERE state_hash=? AND account_id=? AND user_id=? AND expires_at>? RETURNING state_hash,account_id,user_id,inbox_id,display_name,client_id,tenant,mailbox,shared,encrypted_pending,expires_at`, hash, account, user, nowText()).Scan(&a.StateHash, &a.AccountID, &a.UserID, &a.InboxID, &a.DisplayName, &a.ClientID, &a.Tenant, &a.Mailbox, &a.Shared, &a.EncryptedPending, &expiry)
+	e := s.write.QueryRowContext(ctx, `DELETE FROM microsoft_oauth_attempts WHERE state_hash=? AND account_id=? AND user_id=? AND expires_at>? RETURNING state_hash,account_id,user_id,inbox_id,display_name,client_id,tenant,mailbox,shared,encrypted_pending,expires_at,encrypted_token`, hash, account, user, nowText()).Scan(&a.StateHash, &a.AccountID, &a.UserID, &a.InboxID, &a.DisplayName, &a.ClientID, &a.Tenant, &a.Mailbox, &a.Shared, &a.EncryptedPending, &expiry, &a.EncryptedToken)
 	if e == sql.ErrNoRows {
 		e = ErrNotFound
 	}
