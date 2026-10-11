@@ -100,6 +100,9 @@
 })();
 
 // The existing header status flag is also the durable action queue entry point.
+// The queue opens as a small bubble anchored under the flag, in the same 13px
+// system font as the flag itself, so slow provider work (a delete, a move, a
+// purge) stays visible without a modal covering the mailbox behind it.
 (function () {
   'use strict';
   if (!document.querySelector('header .menu-right')) { return; }
@@ -113,65 +116,225 @@
   flag.setAttribute('role', 'button');
   flag.setAttribute('tabindex', '0');
   flag.setAttribute('aria-haspopup', 'dialog');
+  flag.setAttribute('aria-expanded', 'false');
   var badge = document.createElement('span');
+  badge.className = 'conn-badge';
   badge.setAttribute('aria-live', 'polite');
   flag.appendChild(badge);
-  var dialog = document.createElement('dialog');
-  var heading = document.createElement('h2');
-  heading.textContent = 'Mailbox action queue';
-  var list = document.createElement('div');
-  var close = document.createElement('button');
-  close.textContent = 'Close';
-  close.onclick = function () { dialog.close(); };
-  dialog.append(heading, list, close);
-  document.body.appendChild(dialog);
+  var style = document.createElement('style');
+  style.textContent = '#action-queue{position:absolute;left:0;top:0;right:auto;bottom:auto;margin:0;z-index:60;display:flex;flex-direction:column;max-height:min(70vh,420px);padding:8px 10px;border:1px solid #dadce0;border-radius:12px;background:#fff;color:#202124;box-shadow:0 10px 28px rgba(0,0,0,.16);font-size:13px;line-height:1.35;box-sizing:border-box;outline:none}#action-queue::before{content:"";position:absolute;top:-6px;left:var(--aq-caret,18px);width:10px;height:10px;background:#fff;border-left:1px solid #dadce0;border-top:1px solid #dadce0;transform:rotate(45deg)}.aq-head{display:flex;align-items:center;gap:8px;padding:2px 0 6px;border-bottom:1px solid #f1f3f4;flex:0 0 auto}.aq-title{font-weight:600}.aq-summary{margin-left:auto;font-size:12px;color:#5f6368}.aq-close{width:22px;height:22px;padding:0;flex:0 0 auto;border:0;background:transparent;color:#5f6368;font-size:16px;line-height:1;border-radius:50%}.aq-close:hover{background:#f1f3f4;color:#202124;border:0}.aq-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}.aq-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;gap:2px 8px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f3f4}.aq-row:last-child{border-bottom:0}.aq-dot{grid-column:1;grid-row:1;width:8px;height:8px;border-radius:50%;background:#9aa0a6}.aq-row[data-state=running] .aq-dot{background:#1a73e8}.aq-row[data-state=done] .aq-dot{background:#137333}.aq-row[data-state=failed] .aq-dot{background:#b3261e}.aq-row[data-state=ambiguous] .aq-dot{background:#e6c34a}.aq-main{grid-column:2;grid-row:1;min-width:0}.aq-kind{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.aq-meta{display:block;font-size:12px;color:#5f6368;overflow-wrap:anywhere}.aq-row[data-error] .aq-meta{color:#b3261e}.aq-chip{grid-column:3;grid-row:1;border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600;line-height:1.6;white-space:nowrap;background:#f1f3f4;color:#5f6368}.aq-row[data-state=running] .aq-chip{background:#e8f0fe;color:#174ea6}.aq-row[data-state=done] .aq-chip{background:#e6f4ea;color:#137333}.aq-row[data-state=failed] .aq-chip{background:#fce8e6;color:#b3261e}.aq-row[data-state=ambiguous] .aq-chip{background:#fff8e1;color:#8a6d00}.aq-acts{grid-column:2 / 4;grid-row:2;display:flex;gap:6px}.aq-btn{height:24px;padding:0 10px;font-size:12px;line-height:1;border-radius:999px;background:#fff;color:#202124;border:1px solid #bbb}.aq-btn:hover{background:#f2f3f5;border-color:#999}#action-queue .aq-btn:disabled:hover{background:#fff;border-color:#bbb}.aq-btn.aq-primary{background:#111;color:#fff;border-color:#111}.aq-btn.aq-primary:hover{background:#000;border-color:#000}.aq-empty,.aq-more{margin:8px 0 2px;font-size:12px;color:#5f6368;text-align:center}.aq-foot{margin:6px 0 0;padding-top:6px;border-top:1px solid #f1f3f4;font-size:11px;color:#80868b;flex:0 0 auto}.aq-foot[data-error]{color:#b3261e}.aq-btn:focus-visible,.aq-close:focus-visible{outline:2px solid #1557b0;outline-offset:1px}';
+  document.head.appendChild(style);
+  // A bulk delete queues one action per message, so the bubble renders only the
+  // most urgent few and summarises the rest.
+  var MAX_ROWS = 6;
+  var RANK = { ambiguous: 0, failed: 1, running: 2, pending: 3, done: 4 };
+  var STATE_TEXT = { pending: 'Queued', running: 'Working…', done: 'Done', failed: 'Failed', ambiguous: 'Check provider' };
+  var FOOT_TEXT = 'Actions run in the background.';
   var csrf = '', items = [], active = false;
+  var bubble = document.createElement('dialog');
+  bubble.id = 'action-queue';
+  bubble.tabIndex = -1;
+  bubble.setAttribute('aria-label', 'Mailbox action queue');
+  var head = document.createElement('div');
+  head.className = 'aq-head';
+  var heading = document.createElement('span');
+  heading.className = 'aq-title';
+  heading.textContent = 'Action queue';
+  var summary = document.createElement('span');
+  summary.className = 'aq-summary';
+  var close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'aq-close';
+  close.setAttribute('aria-label', 'Close action queue');
+  close.textContent = '\u00d7';
+  var list = document.createElement('div');
+  list.className = 'aq-list';
+  var foot = document.createElement('p');
+  foot.className = 'aq-foot';
+  foot.textContent = FOOT_TEXT;
+  head.append(heading, summary, close);
+  bubble.append(head, list, foot);
+  document.body.appendChild(bubble);
+
+  function kindText(a) {
+    var input = a.input || {};
+    if (input.kind === 'patch') {
+      if (input.read === true) { return 'Mark read'; }
+      if (input.read === false) { return 'Mark unread'; }
+      if (input.spam === true) { return 'Move to spam'; }
+      if (input.spam === false) { return 'Move to inbox'; }
+      if (input.labels) { return 'Update labels'; }
+      return 'Update message';
+    }
+    if (input.kind === 'delete') { return 'Move to trash'; }
+    if (input.kind === 'purge') { return 'Delete permanently'; }
+    if (input.kind === 'restore') { return 'Restore'; }
+    if (input.kind === 'move') { return 'Move'; }
+    return input.kind ? input.kind : 'Action';
+  }
+
+  function shortID(id) {
+    if (!id) { return ''; }
+    return id.length > 12 ? id.slice(0, 12) + '…' : id;
+  }
+
+  function counts() {
+    var queued = 0, attention = 0;
+    items.forEach(function (a) {
+      if (a.state === 'pending' || a.state === 'running') { queued++; }
+      if (a.state === 'failed' || a.state === 'ambiguous') { attention++; }
+    });
+    return { queued: queued, attention: attention };
+  }
+
+  function control(a, label, action, failed) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'aq-btn' + (action === 'retry' ? ' aq-primary' : '');
+    button.textContent = label;
+    button.onclick = function () {
+      button.disabled = true;
+      fetch('/ui/actions/' + encodeURIComponent(a.id), {method:'POST',credentials:'same-origin',body:new URLSearchParams({_csrf:csrf,action:action})})
+        .then(function (r) { if (!r.ok) { throw new Error('Could not update the action'); } return r.json(); })
+        .then(update).catch(function (e) { button.disabled = false; failed(e.message); });
+    };
+    return button;
+  }
+
+  function actionRow(a) {
+    var row = document.createElement('div');
+    row.className = 'aq-row';
+    row.setAttribute('data-state', a.state);
+    var dot = document.createElement('span');
+    dot.className = 'aq-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    var main = document.createElement('div');
+    main.className = 'aq-main';
+    var kind = document.createElement('span');
+    kind.className = 'aq-kind';
+    kind.textContent = kindText(a);
+    var meta = document.createElement('span');
+    meta.className = 'aq-meta';
+    meta.textContent = a.error ? a.error : shortID(a.message_id);
+    main.append(kind, meta);
+    var chip = document.createElement('span');
+    chip.className = 'aq-chip';
+    chip.textContent = STATE_TEXT[a.state] || a.state;
+    row.append(dot, main, chip);
+    function showError(message) {
+      row.setAttribute('data-error', '1');
+      meta.textContent = message;
+    }
+    var acts = document.createElement('div');
+    acts.className = 'aq-acts';
+    if (a.state === 'failed') { acts.appendChild(control(a, 'Retry', 'retry', showError)); }
+    if (a.state === 'failed' || a.state === 'ambiguous' || a.state === 'done') {
+      acts.appendChild(control(a, 'Dismiss', 'dismiss', showError));
+    }
+    if (acts.childNodes.length) { row.appendChild(acts); }
+    return row;
+  }
+
+  function render() {
+    list.replaceChildren();
+    var ordered = items.slice().sort(function (a, b) {
+      var ra = RANK[a.state] === undefined ? 3 : RANK[a.state];
+      var rb = RANK[b.state] === undefined ? 3 : RANK[b.state];
+      return ra - rb;
+    });
+    if (!ordered.length) {
+      var empty = document.createElement('p');
+      empty.className = 'aq-empty';
+      empty.textContent = 'Nothing queued.';
+      list.appendChild(empty);
+      return;
+    }
+    ordered.slice(0, MAX_ROWS).forEach(function (a) { list.appendChild(actionRow(a)); });
+    var rest = ordered.length - MAX_ROWS;
+    if (rest > 0) {
+      var more = document.createElement('p');
+      more.className = 'aq-more';
+      more.textContent = 'and ' + rest + ' more';
+      list.appendChild(more);
+    }
+  }
+
   function update(data) {
     csrf = data.csrf;
     items = data.items || [];
-    var pending = items.filter(function (a) { return a.state === 'pending' || a.state === 'running'; }).length;
-    var failed = items.some(function (a) { return a.state === 'failed' || a.state === 'ambiguous'; });
-    badge.textContent = failed ? ' !' : pending ? ' (' + pending + ')' : '';
-    badge.style.color = failed ? '#b3261e' : '';
+    var n = counts();
+    badge.textContent = n.attention ? ' !' : n.queued ? ' (' + n.queued + ')' : '';
+    badge.style.color = n.attention ? '#b3261e' : '';
     badge.style.fontWeight = 'bold';
-    badge.setAttribute('aria-label', failed ? 'Mailbox action failed. Click to view queue.' : pending + ' pending actions');
-    if (!dialog.open) { return; }
-    list.replaceChildren();
-    if (!items.length) { list.textContent = 'No queued actions.'; }
-    items.forEach(function (a) {
-      var row = document.createElement('div');
-      row.style.cssText = 'padding:10px 0;border-bottom:1px solid #ddd;overflow-wrap:anywhere';
-      var title = document.createElement('p');
-      title.textContent = a.input.kind + ' · ' + a.message_id + ' · ' + a.state;
-      row.appendChild(title);
-      if (a.error) { var error = document.createElement('p'); error.textContent = a.error; error.style.color = '#b3261e'; row.appendChild(error); }
-      function control(label, action) {
-        var button = document.createElement('button');
-        button.textContent = label;
-        button.onclick = function () {
-          button.disabled = true;
-          fetch('/ui/actions/' + encodeURIComponent(a.id), {method:'POST',credentials:'same-origin',body:new URLSearchParams({_csrf:csrf,action:action})})
-            .then(function (r) { if (!r.ok) { throw new Error('Could not update action'); } return r.json(); })
-            .then(update).catch(function (e) { title.textContent = e.message; button.disabled = false; });
-        };
-        row.appendChild(button);
-      }
-      if (a.state === 'failed') { control('Retry', 'retry'); }
-      if (a.state === 'failed' || a.state === 'ambiguous' || a.state === 'done') { control('Dismiss', 'dismiss'); }
-      list.appendChild(row);
-    });
+    badge.setAttribute('aria-label', n.attention ? 'Mailbox action needs attention. Open the action queue.' : n.queued + ' queued actions');
+    summary.textContent = n.attention ? (n.attention === 1 ? '1 needs attention' : n.attention + ' need attention') : n.queued ? n.queued + ' queued' : 'Up to date';
+    foot.removeAttribute('data-error');
+    foot.textContent = FOOT_TEXT;
+    if (bubble.open) { render(); }
   }
+
   function refresh() {
     if (active || document.hidden) { return; }
     active = true;
     fetch('/ui/actions', {credentials:'same-origin'}).then(function (r) { if (!r.ok) { throw new Error('Queue unavailable'); } return r.json(); })
-      .then(update).catch(function () { if (dialog.open) { list.textContent = 'Queue unavailable. Please retry.'; } })
-      .finally(function () { active = false; });
+      .then(update).catch(function () {
+        foot.setAttribute('data-error', '1');
+        foot.textContent = 'Queue unavailable. Please retry.';
+      }).finally(function () { active = false; });
   }
-  function open() { dialog.showModal(); update({items:items,csrf:csrf}); refresh(); }
-  flag.addEventListener('click', open);
-  flag.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
-	window.mailmooseRefreshActions = refresh;
+
+  function place() {
+    var width = Math.min(320, document.documentElement.clientWidth - 24);
+    var pageX = window.pageXOffset || 0;
+    var pageY = window.pageYOffset || 0;
+    var rect = flag.getBoundingClientRect();
+    var left = rect.right + pageX - width;
+    var far = pageX + document.documentElement.clientWidth - width - 8;
+    if (left > far) { left = far; }
+    if (left < pageX + 8) { left = pageX + 8; }
+    var caret = Math.round(rect.left + rect.width / 2 - left - 5);
+    if (caret < 10) { caret = 10; }
+    if (caret > width - 20) { caret = width - 20; }
+    bubble.style.width = width + 'px';
+    bubble.style.left = Math.round(left) + 'px';
+    bubble.style.top = Math.round(rect.bottom + pageY + 8) + 'px';
+    bubble.style.setProperty('--aq-caret', caret + 'px');
+  }
+
+  function show() {
+    if (bubble.open) { return; }
+    place();
+    render();
+    bubble.show();
+    flag.setAttribute('aria-expanded', 'true');
+    refresh();
+  }
+
+  function hide() {
+    if (!bubble.open) { return; }
+    bubble.close();
+    flag.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggle() {
+    if (bubble.open) { hide(); flag.focus(); return; }
+    show();
+  }
+
+  close.onclick = function () { hide(); flag.focus(); };
+  flag.addEventListener('click', toggle);
+  flag.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  });
+  bubble.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { e.preventDefault(); hide(); flag.focus(); }
+  });
+  document.addEventListener('click', function (e) {
+    if (!bubble.open || bubble.contains(e.target) || flag.contains(e.target)) { return; }
+    hide();
+  });
+  window.addEventListener('resize', function () { if (bubble.open) { place(); } });
+  window.mailmooseRefreshActions = refresh;
   window.setInterval(refresh, 10000);
   document.addEventListener('visibilitychange', refresh);
   refresh();
