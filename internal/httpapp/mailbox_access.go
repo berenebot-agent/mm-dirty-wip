@@ -55,6 +55,10 @@ func (s *Server) resolveMailbox(ctx context.Context, p model.Principal, inboxID 
 	if inbox.Kind == model.InboxKindStandalone {
 		caps := model.StandaloneCapabilities()
 		caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
+		if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inbox.ID) {
+			caps.Outbound = true
+			caps.Realtime = false
+		}
 		if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inbox.ID) {
 			caps.Outbound = true
 			caps.HierarchicalFolders = false
@@ -164,6 +168,10 @@ func (s *Server) readableInboxes(ctx context.Context, p model.Principal) ([]mail
 		if box.Kind == model.InboxKindStandalone {
 			caps := model.StandaloneCapabilities()
 			caps.Outbound = box.Remote != nil && box.Remote.SMTP != nil
+			if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID) {
+				caps.Outbound = true
+				caps.Realtime = false
+			}
 			if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
 				caps.Outbound = true
 				caps.HierarchicalFolders = false

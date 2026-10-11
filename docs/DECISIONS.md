@@ -3336,6 +3336,34 @@ and capability flags; one HTTP route plus a toolbar button and two settings
 fields. No new dependency or runtime service. See
 `docs/MAILBOX_SERVICE_CONTRACT.md` §5.
 
+## D100 — Microsoft connected mailboxes with public-client OAuth and delta polling
+
+**Decision (2026-10-11, human approved):** Add Microsoft Graph as the third
+standalone provider, for personal and explicitly selected delegated shared
+mailboxes. Scope is the entire selected mailbox, using existing per-inbox roles
+and remote-draft/approval/direct-send modes. Upstream messages remain authoritative;
+the local store holds the existing metadata/thread index, encrypted tokens,
+immutable provider IDs and per-folder change cursors.
+
+Quick Connect uses a deployment-configured public-client Entra app ID, supplied
+at rollout; advanced self-hosters can configure their own client ID and tenant.
+Authorization-code + PKCE uses the registered `http://localhost` redirect, pasted
+by the human into MailMoose. No secret, callback relay or token broker. Existing
+connections retain their app ID/tenant. Reconnect preserves identity/mailbox.
+
+**Amendment to Phase 2 planning:** Start with delta polling for both personal and
+shared mailboxes; personal push subscriptions are deferred. When added, use the
+existing receiver public-origin selection and shared callback registration on
+dedicated/core listeners. This supports private self-hosted instances immediately
+and reuses existing demand/proactive detection rather than requiring public HTTPS
+for every connection. Shared delegated mailboxes remain delta-polled.
+
+**Complexity/resource budget:** One additive migration, a standard-library Graph
+transport, provider-specific app orchestration and wizard/settings integration.
+Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency,
+service or runtime. Separate Online Archive mailboxes are outside this release.
+See `docs/MICROSOFT.md` for setup and real-account rollout checks.
+
 ## Future extension register
 
 - additional inbound transport adapters

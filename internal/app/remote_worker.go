@@ -283,7 +283,7 @@ func fullSyncDue(status store.RemoteIndexStatus, fullMinutes *int) bool {
 // backs off and retries; it never advances the cursor past unrecorded mail, so no
 // arrival is lost.
 func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
-	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
 		ticker := time.NewTicker(w.pollInterval)
 		defer ticker.Stop()
 		for {
@@ -574,6 +574,10 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 		delete(w.detecting, key)
 		w.detectionMu.Unlock()
 	}()
+	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		_, _ = w.remote.ReconcileRemote(ctx, inbox.AccountID, inbox.ID)
+		return
+	}
 	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
 		w.detectGoogle(ctx, inbox)
 		return
@@ -894,7 +898,7 @@ const maxArrivalClassifyAttempts = 8
 // fetchArrivalRaw fetches an arrival's raw MIME to a transient temp file and reads
 // it back. It never marks the message seen (BODY.PEEK). The temp file is removed.
 func (w *RemoteWorker) fetchArrivalRaw(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) ([]byte, bool) {
-	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
+	if w.remote.IsGoogle(ctx, inbox.AccountID, inbox.ID) || w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
 		path, _, e := w.remote.fetchArrivalRawToTemp(ctx, inbox, arrival)
 		if e != nil {
 			return nil, false
@@ -986,6 +990,21 @@ func (w *RemoteWorker) reconcileRemoteActions() {
 // folder. A failure is retried (the action stays due); it never marks the message
 // locally deleted (there is no local message row for a remote arrival).
 func (w *RemoteWorker) applyRemoteTrash(ctx context.Context, a store.RemoteAction) {
+	if w.remote.IsMicrosoft(ctx, a.AccountID, a.InboxID) {
+		id, e := w.svc.Store.MicrosoftLocalID(ctx, a.AccountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "microsoft:"))
+		if e != nil {
+			return
+		}
+		f, e := w.svc.Store.GetSystemFolder(ctx, a.AccountID, a.InboxID, model.FolderRoleTrash)
+		if e != nil {
+			return
+		}
+		_, e = w.remote.MoveRemoteMessage(ctx, model.Principal{AccountID: a.AccountID, Admin: true}, a.InboxID, id, f.Path)
+		if e == nil {
+			_ = w.svc.Store.MarkRemoteActionTrashDone(ctx, a.AccountID, a.ArrivalID)
+		}
+		return
+	}
 	if w.remote.IsGoogle(ctx, a.AccountID, a.InboxID) {
 		id, e := w.svc.Store.GoogleLocalID(ctx, a.AccountID, a.InboxID, strings.TrimPrefix(a.FolderPath, "gmail:"))
 		if e != nil {
@@ -1065,6 +1084,17 @@ func (w *RemoteWorker) MarkRemoteArrivalRead(ctx context.Context, accountID, inb
 	if arrival.InboxID != inboxID {
 		return store.ErrForbidden
 	}
+	if w.remote.IsMicrosoft(ctx, accountID, inboxID) {
+		id, e := w.svc.Store.MicrosoftLocalID(ctx, accountID, inboxID, strings.TrimPrefix(arrival.FolderPath, "microsoft:"))
+		if e != nil {
+			return e
+		}
+		_, e = w.remote.SetRemoteRead(ctx, model.Principal{AccountID: accountID, Admin: true}, inboxID, id, true)
+		if e != nil {
+			return e
+		}
+		return w.svc.Store.SetRemoteActionMarkReadDone(ctx, accountID, arrivalID)
+	}
 	if w.remote.IsGoogle(ctx, accountID, inboxID) {
 		if e := w.googleArrivalRead(ctx, accountID, inboxID, arrival); e != nil {
 			return e
@@ -1121,6 +1151,13 @@ func (m *RemoteMailboxService) openRemoteSession(ctx context.Context, inbox mode
 // forwarding, never by a live read. The caller must CleanupRemoteRaw. The message
 // is never marked seen (BODY.PEEK).
 func (m *RemoteMailboxService) fetchArrivalRawToTemp(ctx context.Context, inbox model.Inbox, arrival store.RemoteArrival) (string, int64, error) {
+	if m.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
+		id, e := m.Service.Store.MicrosoftLocalID(ctx, inbox.AccountID, inbox.ID, strings.TrimPrefix(arrival.FolderPath, "microsoft:"))
+		if e != nil {
+			return "", 0, e
+		}
+		return m.microsoftRaw(ctx, inbox.AccountID, inbox.ID, id)
+	}
 	if m.IsGoogle(ctx, inbox.AccountID, inbox.ID) {
 		id, e := m.Service.Store.GoogleLocalID(ctx, inbox.AccountID, inbox.ID, strings.TrimPrefix(arrival.FolderPath, "gmail:"))
 		if e != nil {

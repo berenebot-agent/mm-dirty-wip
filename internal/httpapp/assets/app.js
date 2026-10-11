@@ -2116,7 +2116,8 @@ function clearUrlParams(names) {
       cfg = {};
     }
     var host = document.getElementById('inbox-remote-host');
-    var google = standalone && cfg.provider === 'google';
+    var microsoft = standalone && cfg.provider === 'microsoft';
+    var google = standalone && (cfg.provider === 'google' || microsoft);
     dlg.querySelectorAll('[data-standalone-only]').forEach(function (el) {
       el.hidden = !standalone || google;
       el.querySelectorAll('input, select').forEach(function (field) { field.disabled = google; });
@@ -2129,8 +2130,8 @@ function clearUrlParams(names) {
       dlg.querySelector('[data-inbox-panel=basic]').appendChild(googleLink);
     }
     googleLink.hidden = !google;
-    googleLink.textContent = 'Google / Gmail — reconnect account';
-    googleLink.href = '/ui/inboxes/standalone/new?google_inbox=' + encodeURIComponent(inboxID);
+    googleLink.textContent = microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account';
+    googleLink.href = '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
     var port = document.getElementById('inbox-remote-port');
     var username = document.getElementById('inbox-remote-username');
     var security = document.getElementById('inbox-remote-security');
@@ -3237,6 +3238,8 @@ function bindInboxSettingsShell(dlg) {
     });
   }
   var reconnect = new URLSearchParams(window.location.search).get('google_inbox');
+	var microsoftReconnect = new URLSearchParams(window.location.search).get('microsoft_inbox');
+	if (microsoftReconnect) { root.querySelector('[data-microsoft-inbox]').value = microsoftReconnect; show('microsoft'); }
   if (reconnect) {
     root.querySelector('[data-google-inbox]').value = reconnect;
     show('google');
@@ -3292,6 +3295,25 @@ function bindInboxSettingsShell(dlg) {
       }).finally(function () { submit.disabled = false; });
     });
   });
+	root.querySelectorAll('[data-microsoft-begin], [data-microsoft-finish]').forEach(function (form) {
+		form.addEventListener('submit', function (event) {
+			event.preventDefault();
+			var status = root.querySelector('[data-microsoft-status]');
+			var submit = form.querySelector('button:last-child');
+			submit.disabled = true;
+			var popup = form.hasAttribute('data-microsoft-begin') ? window.open('about:blank', '_blank') : null;
+			status.textContent = 'Connecting…';
+			fetch(form.action, { method: 'POST', credentials: 'same-origin', body: new URLSearchParams(new FormData(form)) }).then(function (r) {
+				if (!r.ok) { return r.text().then(function (text) { throw new Error(text); }); }
+				return r.json();
+			}).then(function (result) {
+				if (result.authorization_url) {
+					if (popup) { popup.opener = null; popup.location = result.authorization_url; status.textContent = 'Approve access, then paste the complete localhost URL below.'; }
+					else { var link = document.createElement('a'); link.href = result.authorization_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open Microsoft sign-in'; status.replaceChildren(link); }
+				} else if (result.inbox_id) { form.querySelector('[name=callback_url]').value = ''; window.location.assign('/ui/inboxes/' + encodeURIComponent(result.inbox_id)); }
+			}).catch(function (e) { if (popup) { popup.close(); } status.textContent = e.message; }).finally(function () { submit.disabled = false; });
+		});
+	});
 })();
 
 // showInboxSubview switches the whole panels area to a sub-view (the connector

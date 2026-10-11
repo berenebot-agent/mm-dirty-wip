@@ -741,6 +741,9 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
 				args = append(args, inboxID, f.FolderPath)
 			}
+		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
+			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
+			args = append(args, inboxID, f.FolderPath)
 		} else {
 			q += ` AND folder_path=?`
 			args = append(args, f.FolderPath)
@@ -1022,6 +1025,9 @@ func (s *Store) ListRemoteThreads(ctx context.Context, accountID, inboxID, folde
 				q += ` AND id IN (SELECT message_id FROM google_label_memberships WHERE inbox_id=? AND label_id=?)`
 				args = append(args, inboxID, folderPath)
 			}
+		} else if s.IsMicrosoft(ctx, accountID, inboxID) {
+			q += ` AND id IN (SELECT message_id FROM microsoft_message_ids WHERE inbox_id=? AND folder_id=?)`
+			args = append(args, inboxID, folderPath)
 		} else {
 			q += ` AND folder_path=?`
 			args = append(args, folderPath)
@@ -1096,6 +1102,8 @@ func (s *Store) CountRemoteFolderMessages(ctx context.Context, accountID, inboxI
 	query := `SELECT folder_path, count(*), sum(CASE WHEN is_read=0 THEN 1 ELSE 0 END) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? GROUP BY folder_path`
 	if s.IsGoogle(ctx, accountID, inboxID) {
 		query = `SELECT g.label_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM google_label_memberships g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.label_id`
+	} else if s.IsMicrosoft(ctx, accountID, inboxID) {
+		query = `SELECT g.folder_id,count(*),sum(CASE WHEN m.is_read=0 THEN 1 ELSE 0 END) FROM microsoft_message_ids g JOIN inbox_remote_messages m ON m.id=g.message_id WHERE m.account_id=? AND m.inbox_id=? GROUP BY g.folder_id`
 	}
 	rows, err := s.read.QueryContext(ctx, query, accountID, inboxID)
 	if err != nil {

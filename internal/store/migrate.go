@@ -237,6 +237,7 @@ func migrations(dataDir string) []migration {
 			columnAdded("inboxes", "remote_full_sync_minutes"),
 			columnAdded("inbox_folders", "remote_highest_modseq"),
 		)},
+		{version: "061", sql: migration061, detect: stateOf(tableExists("inbox_microsoft_connections"))},
 	}
 }
 

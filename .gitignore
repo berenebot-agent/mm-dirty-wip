@@ -10,6 +10,9 @@
 *.prof
 .DS_Store
 tests/logs/
+# Built on demand by `make build` (go build ./cmd/server writes ./server when
+# run via the Docker wrapper; lands root-owned in the working tree).
+/server
 # Built on demand by `make mx-fixture` (used by the launcher RSS test).
 tests/fixtures/mailmoose-mx
 repo.zip
