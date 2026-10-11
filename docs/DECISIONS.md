@@ -3571,6 +3571,31 @@ re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox
 plus one test hook; a coarse SSE tick constant. See
 `docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/MICROSOFT.md`.
 
+## D105 — Preserve and expose remote arrival source provenance
+
+**Date:** 2026-10-11. **Approved by:** Ben.
+
+**Requirement:** Operators and event consumers need to distinguish incoming
+remote mail from local inbound transports, and Microsoft webhook-triggered
+arrivals from fallback delta polling, just as inbound deliveries expose their
+provider.
+
+**Decision:** Persist a source label with each remote arrival, because arrival
+delivery runs asynchronously and may resume after a process restart. Use
+`imap`, `gmail`, and `microsoft` for the provider/source labels of polling-based
+arrivals, and `microsoft push` for arrivals caught up from durable Graph
+notification work. Include both `provider` and `source` in remote
+`message.received` event payloads, and emit one `remote received` INFO line per
+newly emitted remote arrival. Log each authenticated Microsoft callback at INFO
+with inbox, event type and subscription ID; unmatched notifications and
+validation challenges are Debug-only. Never log `clientState` or validation
+tokens. Remote arrivals are not added to the UI activity log in this change.
+
+**Complexity:** Migration 065 adds source provenance to remote arrivals and
+pending Microsoft push work. The pending-work marker carries push provenance
+across the asynchronous queue and restarts. No new dependency or service.
+See `docs/MICROSOFT.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

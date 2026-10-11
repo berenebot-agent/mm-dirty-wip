@@ -65,6 +65,7 @@ type RemoteArrival struct {
 	ClaimExpiresAt time.Time
 	LastError      string
 	Control        bool
+	Source         string
 	CreatedAt      time.Time
 	DetectedAt     time.Time
 	SettledAt      *time.Time
@@ -142,6 +143,7 @@ type RemoteArrivalInput struct {
 	SizeBytes    int64
 	InternalDate *time.Time
 	Control      bool
+	Source       string
 }
 
 // RecordRemoteArrival durably records a detected arrival and returns it plus
@@ -162,9 +164,9 @@ func (s *Store) RecordRemoteArrival(ctx context.Context, accountID, inboxID stri
 	defer tx.Rollback()
 	now := nowText()
 	id := idgen.New("rar")
-	res, err := tx.ExecContext(ctx, `INSERT INTO inbox_remote_arrivals(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,from_name,from_address,subject,size_bytes,internal_date,delivery_state,delivery_attempts,next_attempt_at,claim_owner,claim_expires_at,last_error,control,created_at,detected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'','','','',?,?,?)
+	res, err := tx.ExecContext(ctx, `INSERT INTO inbox_remote_arrivals(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,from_name,from_address,subject,size_bytes,internal_date,delivery_state,delivery_attempts,next_attempt_at,claim_owner,claim_expires_at,last_error,control,created_at,detected_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'','','','',?,?,?,?)
 		ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO NOTHING`,
-		id, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID, in.RFCMessageID, in.FromName, in.FromAddress, in.Subject, in.SizeBytes, nullTimePtr(in.InternalDate), RemoteArrivalPending, boolInt(in.Control), now, now)
+		id, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID, in.RFCMessageID, in.FromName, in.FromAddress, in.Subject, in.SizeBytes, nullTimePtr(in.InternalDate), RemoteArrivalPending, boolInt(in.Control), now, now, in.Source)
 	if err != nil {
 		return RemoteArrival{}, false, err
 	}
@@ -179,13 +181,13 @@ func (s *Store) RecordRemoteArrival(ctx context.Context, accountID, inboxID stri
 	return row, n > 0, nil
 }
 
-const remoteArrivalSelect = `SELECT id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,from_name,from_address,subject,size_bytes,internal_date,delivery_state,delivery_attempts,next_attempt_at,claim_owner,claim_expires_at,last_error,control,created_at,detected_at,settled_at FROM inbox_remote_arrivals`
+const remoteArrivalSelect = `SELECT id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,from_name,from_address,subject,size_bytes,internal_date,delivery_state,delivery_attempts,next_attempt_at,claim_owner,claim_expires_at,last_error,control,created_at,detected_at,settled_at,source FROM inbox_remote_arrivals`
 
 func scanRemoteArrival(row interface{ Scan(...any) error }) (RemoteArrival, error) {
 	var a RemoteArrival
 	var internal, next, claimExp, created, detected, settled sql.NullString
 	var control int
-	err := row.Scan(&a.ID, &a.AccountID, &a.InboxID, &a.FolderPath, &a.UIDValidity, &a.UID, &a.RFCMessageID, &a.FromName, &a.FromAddress, &a.Subject, &a.SizeBytes, &internal, &a.DeliveryState, &a.Attempts, &next, &a.ClaimOwner, &claimExp, &a.LastError, &control, &created, &detected, &settled)
+	err := row.Scan(&a.ID, &a.AccountID, &a.InboxID, &a.FolderPath, &a.UIDValidity, &a.UID, &a.RFCMessageID, &a.FromName, &a.FromAddress, &a.Subject, &a.SizeBytes, &internal, &a.DeliveryState, &a.Attempts, &next, &a.ClaimOwner, &claimExp, &a.LastError, &control, &created, &detected, &settled, &a.Source)
 	if err == sql.ErrNoRows {
 		return a, ErrNotFound
 	}
@@ -603,9 +605,22 @@ func (s *Store) RecordRemoteArrivalEvent(ctx context.Context, accountID, inboxID
 		// emit a second event.
 		return model.Event{}, false, nil
 	}
+	provider := "imap"
+	switch {
+	case strings.HasPrefix(a.FolderPath, "microsoft:") || s.IsMicrosoft(ctx, accountID, inboxID):
+		provider = "microsoft"
+	case strings.HasPrefix(a.FolderPath, "gmail:") || s.IsGoogle(ctx, accountID, inboxID):
+		provider = "gmail"
+	}
+	source := strings.TrimSpace(a.Source)
+	if source == "" {
+		source = provider
+	}
 	payload := map[string]any{
 		"message_id":     a.ID,
 		"inbox_id":       a.InboxID,
+		"provider":       provider,
+		"source":         source,
 		"remote":         true,
 		"remote_uid":     a.UID,
 		"uid_validity":   a.UIDValidity,

@@ -3,6 +3,7 @@ package httpapp_test
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,9 +20,65 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/microsoft"
 )
 
+type microsoftPushLogEntry struct {
+	message string
+	attrs   map[string]string
+}
+
+type microsoftPushLogSink struct {
+	mu      sync.Mutex
+	entries []microsoftPushLogEntry
+}
+
+func (h *microsoftPushLogSink) Enabled(context.Context, slog.Level) bool { return true }
+func (h *microsoftPushLogSink) Handle(_ context.Context, r slog.Record) error {
+	entry := microsoftPushLogEntry{message: r.Message, attrs: map[string]string{}}
+	r.Attrs(func(a slog.Attr) bool {
+		entry.attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	h.entries = append(h.entries, entry)
+	h.mu.Unlock()
+	return nil
+}
+func (h *microsoftPushLogSink) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *microsoftPushLogSink) WithGroup(string) slog.Handler      { return h }
+
+func (h *microsoftPushLogSink) records(message string) []microsoftPushLogEntry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []microsoftPushLogEntry
+	for _, entry := range h.entries {
+		if entry.message == message {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func (h *microsoftPushLogSink) containsValue(value string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, entry := range h.entries {
+		if strings.Contains(entry.message, value) {
+			return true
+		}
+		for _, attr := range entry.attrs {
+			if strings.Contains(attr, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	svc, _, user, _, _, fake := standaloneFixture(t)
 	ctx := context.Background()
+	logSink := &microsoftPushLogSink{}
+	logger := slog.New(logSink)
+	svc.Log = logger
 	svc.Config.BaseURL = "https://ui.example.net"
 	svc.Config.DedicatedReceiverURL = "https://receiver.example.net"
 	box, err := svc.Store.CreateStandaloneInbox(ctx, user.AccountID, store.StandaloneCreate{Address: "outlook@example.net"})
@@ -122,7 +179,7 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	if _, err = svc.Store.MicrosoftPush(ctx, "other-account", box.ID); err != store.ErrNotFound {
 		t.Fatal("cross-account push access")
 	}
-	srv := httpapp.New(svc, nil)
+	srv := httpapp.New(svc, logger)
 	srv.SetRemoteMailbox(rm)
 	for _, handler := range []http.Handler{srv.Handler(), srv.InboundHandler()} {
 		r := httptest.NewRequest("POST", app.MicrosoftPushPath+"?validationToken="+url.QueryEscape("opaque + challenge"), nil)
@@ -143,6 +200,9 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	}
 	notify(sub.ID, "forged", "")
 	notify("wrong-subscription", sub.ClientState, "")
+	if got := len(logSink.records("microsoft push ignored")); got != 2 {
+		t.Fatalf("logged %d unmatched callbacks at debug, want 2", got)
+	}
 	p, _ := svc.Store.MicrosoftPush(ctx, user.AccountID, box.ID)
 	if p.Requested != push.Requested {
 		t.Fatal("forged notification queued")
@@ -153,6 +213,23 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	mu.Unlock()
 	notify("subscription", state, "")
 	notify("subscription", state, "")
+	createdLogs := logSink.records("microsoft push received")
+	createdCount := 0
+	for _, entry := range createdLogs {
+		if entry.attrs["event"] == "created" && entry.attrs["provider"] == "microsoft" && entry.attrs["inbox"] == box.Address && entry.attrs["subscription_id"] == sub.ID {
+			createdCount++
+		}
+	}
+	if createdCount != 2 {
+		t.Fatalf("accepted created callback logs = %d, want 2: %#v", createdCount, createdLogs)
+	}
+	p, _ = svc.Store.MicrosoftPush(ctx, user.AccountID, box.ID)
+	if p.RequestedSource != "microsoft push" {
+		t.Fatalf("queued source = %q, want microsoft push", p.RequestedSource)
+	}
+	if logSink.containsValue(state) || logSink.containsValue("opaque + challenge") {
+		t.Fatal("Microsoft push log included callback secret or validation token")
+	}
 	// Restart the process-owned surface; queued work survives without a poll.
 	rm = newRemote()
 	if err = rm.ReconcileMicrosoftPush(ctx); err != nil {
@@ -162,9 +239,15 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	if err != nil || len(arrivals) != 1 {
 		t.Fatalf("push arrival dedup: %v %v", arrivals, err)
 	}
+	if arrivals[0].Source != "microsoft push" {
+		t.Fatalf("push arrival source = %q, want microsoft push", arrivals[0].Source)
+	}
 	p, _ = svc.Store.MicrosoftPush(ctx, user.AccountID, box.ID)
 	if p.Requested != p.Completed {
 		t.Fatal("durable work not completed")
+	}
+	if p.RequestedSource != "" {
+		t.Fatalf("completed work retained source %q", p.RequestedSource)
 	}
 	// The generation completion cannot consume a later callback.
 	notify("subscription", state, "missed")
@@ -208,9 +291,9 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	// With an hour-long fallback poll, only the push wake-up can deliver this
 	// second live arrival promptly through the durable event pipeline.
 	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
-	srv = httpapp.New(svc, nil)
+	srv = httpapp.New(svc, logger)
 	srv.SetRemoteMailbox(rm)
-	worker := app.NewRemoteWorker(svc, rm, nil)
+	worker := app.NewRemoteWorker(svc, rm, logger)
 	worker.SetPeriod(time.Hour)
 	worker.SetPollInterval(time.Hour)
 	worker.Start()
@@ -251,6 +334,41 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 			t.Fatalf("push wake-up did not deliver: %#v", as)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	receivedLogs := logSink.records("remote received")
+	if len(receivedLogs) != 2 {
+		t.Fatalf("remote received logs = %d, want 2: %#v", len(receivedLogs), receivedLogs)
+	}
+	events, err := svc.Store.ListEvents(ctx, model.Principal{AccountID: user.AccountID, Admin: true}, 0, box.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteEvents := 0
+	eventSources := map[string]string{}
+	sawPushEvent := false
+	for _, event := range events {
+		if event.Type != store.EventRemoteMessageReceived {
+			continue
+		}
+		remoteEvents++
+		source, _ := event.Payload["source"].(string)
+		if event.Payload["provider"] != "microsoft" || (source != "microsoft" && source != "microsoft push") {
+			t.Fatalf("remote event provenance = %#v", event.Payload)
+		}
+		eventSources[event.EntityID] = source
+		sawPushEvent = sawPushEvent || source == "microsoft push"
+	}
+	if remoteEvents != 2 {
+		t.Fatalf("remote message events = %d, want 2", remoteEvents)
+	}
+	if !sawPushEvent {
+		t.Fatal("push-triggered arrival did not retain its source")
+	}
+	for _, entry := range receivedLogs {
+		messageID := entry.attrs["message_id"]
+		if entry.attrs["provider"] != "microsoft" || entry.attrs["to"] != box.Address || eventSources[messageID] != entry.attrs["source"] {
+			t.Fatalf("remote received attrs = %#v, event source=%q", entry.attrs, eventSources[messageID])
+		}
 	}
 	worker.Stop()
 	stopped = true

@@ -178,6 +178,7 @@ func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, in
 // completion line. The pass reports the number of newly-detected INBOX arrivals
 // so the log's "new" count is the genuinely new mail, not folder churn.
 func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
+	ctx = m.withPendingMicrosoftPush(ctx, account, inbox)
 	start := time.Now()
 	status, arrived, err := m.reconcileMicrosoftPass(ctx, account, inbox)
 	result := remoteSyncResult{started: start, new: arrived, status: syncStatus(status.Status), err: err}
@@ -198,6 +199,7 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 // new mail. The whole-mailbox reconcile (every folder, folder tree, prune)
 // remains on the full-sync cadence. The caller ignores the returned status.
 func (m *RemoteMailboxService) reconcileMicrosoftQuick(ctx context.Context, account, inbox string) (store.RemoteIndexStatus, error) {
+	ctx = m.withPendingMicrosoftPush(ctx, account, inbox)
 	start := time.Now()
 	arrived, err := m.reconcileMicrosoftQuickPass(ctx, account, inbox)
 	status := "complete"
@@ -329,7 +331,7 @@ func (m *RemoteMailboxService) syncMicrosoftFolderDelta(ctx context.Context, t s
 		if initialized && !detected && f.Role == model.FolderRoleInbox && !g.IsDraft {
 			in := microsoftInput(g)
 			date := parseStoreTime(g.ReceivedDateTime)
-			_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date})
+			_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date, Source: m.microsoftArrivalSource(ctx, account, inbox)})
 			if ae != nil {
 				return arrived, false, false, ae
 			}

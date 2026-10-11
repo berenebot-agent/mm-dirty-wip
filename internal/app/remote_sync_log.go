@@ -23,6 +23,7 @@ import (
 // background deep reconcile that ScheduleRefresh runs off its own long-lived
 // context) is always reported as automatic.
 type remoteSyncTriggerKey struct{}
+type pushRemoteSyncKey struct{}
 
 // WithManualRemoteSync marks ctx as an explicit, user-initiated sync (the UI
 // reload button or the blocking refresh API). The marker does not survive a
@@ -33,13 +34,47 @@ func WithManualRemoteSync(ctx context.Context) context.Context {
 	return context.WithValue(ctx, remoteSyncTriggerKey{}, true)
 }
 
-// remoteSyncTrigger reports "manual" for a user-triggered sync and "auto"
-// otherwise.
+// WithPushRemoteSync marks a sync pass driven by durable Microsoft webhook work.
+func WithPushRemoteSync(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pushRemoteSyncKey{}, true)
+}
+
+func remotePushSync(ctx context.Context) bool {
+	v, _ := ctx.Value(pushRemoteSyncKey{}).(bool)
+	return v
+}
+
+// remoteSyncTrigger reports the source of a sync pass.
 func remoteSyncTrigger(ctx context.Context) string {
 	if v, _ := ctx.Value(remoteSyncTriggerKey{}).(bool); v {
 		return "manual"
 	}
+	if remotePushSync(ctx) {
+		return "push"
+	}
 	return "auto"
+}
+
+func remoteArrivalSource(ctx context.Context, provider string) string {
+	if provider == "microsoft" && remotePushSync(ctx) {
+		return "microsoft push"
+	}
+	return provider
+}
+
+func (m *RemoteMailboxService) withPendingMicrosoftPush(ctx context.Context, accountID, inboxID string) context.Context {
+	if remotePushSync(ctx) {
+		return ctx
+	}
+	p, err := m.Service.Store.MicrosoftPush(ctx, accountID, inboxID)
+	if err == nil && p.Requested > p.Completed && p.RequestedSource == "microsoft push" {
+		return WithPushRemoteSync(ctx)
+	}
+	return ctx
+}
+
+func (m *RemoteMailboxService) microsoftArrivalSource(ctx context.Context, accountID, inboxID string) string {
+	return remoteArrivalSource(m.withPendingMicrosoftPush(ctx, accountID, inboxID), "microsoft")
 }
 
 // remoteSyncResult carries the outcome of one pass to the completion log.
@@ -89,6 +124,9 @@ func (m *RemoteMailboxService) logRemoteSync(ctx context.Context, accountID, inb
 	ctx = context.WithoutCancel(ctx)
 	// Address identifies the mailbox to an operator far better than the opaque
 	// id; fall back to the id only if the inbox row cannot be read.
+	if m.IsMicrosoft(ctx, accountID, inboxID) {
+		ctx = m.withPendingMicrosoftPush(ctx, accountID, inboxID)
+	}
 	address := inboxID
 	if inbox, err := m.Service.Store.GetInboxInternal(ctx, accountID, inboxID); err == nil && strings.TrimSpace(inbox.Address) != "" {
 		address = inbox.Address
