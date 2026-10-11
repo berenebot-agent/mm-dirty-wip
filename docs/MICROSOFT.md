@@ -75,19 +75,48 @@ omits it). Remote-draft handoffs similarly set and verify the reviewed MIME
 recipients before reporting the draft as published. Failures after draft creation
 are treated as ambiguous so an automatic retry cannot create duplicate drafts.
 
-Initial detection uses per-folder delta polling for personal and shared
+Detection uses per-folder delta cursors for personal and shared
 mailboxes. Metadata backfill is resumable and does not emit historical arrivals.
 Live reads and on-demand detection use Graph; proactive delivery uses existing
 remote workers. Search uses Graph and explicitly reports partial completeness
 for provider search, which has a capped result set.
 
-Personal Graph push subscriptions are deferred. When added, their callback URL
-must use `Config.ReceiverURL()`: `DEDICATED_RECEIVER_URL` when supplied, otherwise
-`BASE_URL`. Callback routes belong in the shared inbound registration, available
-on the optional dedicated listener and the core listener, matching other inbound
-providers. URL selection is independent of listener enablement; the reverse
-proxy must route it correctly. Shared delegated mailboxes retain delta polling.
-The localhost OAuth redirect is unrelated to this public push URL.
+### Automatic push setup
+
+Own-mailbox connections (Outlook.com and Microsoft 365) automatically subscribe
+to Inbox changes once the initial metadata baseline completes. Existing eligible
+connections are provisioned by the worker too. The existing delegated permissions
+are sufficient; no client secret or additional service is required.
+
+The public HTTPS callback is `/internal/ingest/microsoft/notifications`, using
+`Config.ReceiverURL()`: `DEDICATED_RECEIVER_URL` when supplied, otherwise
+`BASE_URL`. It is registered on both the optional dedicated inbound listener and
+the core listener. Route this path through the reverse proxy to an active
+listener, permitting Microsoft's POST validation requests and notifications.
+URL selection is independent of listener enablement. Local HTTP-only deployments
+continue polling. The localhost OAuth redirect is unrelated to this public URL.
+
+Notifications contain change hints, not message bodies. A per-subscription
+random `clientState` is encrypted at rest; callbacks match its SHA-256 hash and
+the subscription ID before persisting a coalesced SQLite sync request. The
+callback acknowledges only after persistence, then wakes the existing worker.
+Delta sync and the normal durable arrival/event pipeline fetch and deliver mail;
+duplicate notifications cannot create duplicate arrival events. Microsoft
+controls notification latency, so delivery is near-real-time rather than a
+guaranteed instant SLA.
+
+Subscriptions last six days and renew with less than a day remaining. Lifecycle
+notifications trigger reauthorization, subscription recreation, or delta catch-up.
+Queued work survives restarts; lost subscription-create responses are reconciled
+against Graph's subscription list. Inbox deletion/disable retains only an
+encrypted cleanup grant until the subscription is removed or expires, then
+deletes that state. Ordinary delta polling remains active as a recovery fallback.
+
+Connection settings show push setup/active/retrying status; the API realtime
+capability is true only while a recorded push subscription is active and unexpired.
+Shared delegated mailboxes retain polling: Graph does not support change
+subscriptions with delegated shared-mailbox permissions. Shared push would
+require a separately approved application-permission integration.
 
 ## Rollout acceptance
 

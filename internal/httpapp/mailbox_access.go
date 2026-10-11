@@ -57,7 +57,7 @@ func (s *Server) resolveMailbox(ctx context.Context, p model.Principal, inboxID 
 		caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
 		if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inbox.ID) {
 			caps.Outbound = true
-			caps.Realtime = false
+			caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, inbox.ID)
 		}
 		if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inbox.ID) {
 			caps.Outbound = true
@@ -170,7 +170,7 @@ func (s *Server) readableInboxes(ctx context.Context, p model.Principal) ([]mail
 			caps.Outbound = box.Remote != nil && box.Remote.SMTP != nil
 			if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID) {
 				caps.Outbound = true
-				caps.Realtime = false
+				caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, box.ID)
 			}
 			if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
 				caps.Outbound = true

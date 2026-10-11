@@ -46,6 +46,20 @@ func (s *Server) uiStandaloneWizard(w http.ResponseWriter, r *http.Request) {
 	d := pageData{Title: "Connect standalone inbox", Principal: principal(r), CSRF: csrf(r), Notice: r.URL.Query().Get("notice")}
 	body := strings.Replace(standaloneWizardBody, `<button type="button" class="secondary" disabled>Microsoft / Outlook — Coming next</button>`, `<label><input type="radio" name="standalone_provider" value="microsoft"> Microsoft / Outlook</label>`, 1)
 	body = strings.TrimSuffix(body, "</section>") + microsoftWizardBody + "</section>"
+	if id := r.URL.Query().Get("microsoft_inbox"); id != "" {
+		if _, err := s.Service.Store.GetInbox(r.Context(), principal(r), id); err == nil && s.remoteMailbox().IsMicrosoft(r.Context(), principal(r).AccountID, id) {
+			status := "Push setup pending; polling fallback."
+			if c, err := s.Service.Store.MicrosoftConnection(r.Context(), principal(r).AccountID, id); err == nil && c.Shared {
+				status = "Shared delegated mailbox: delta polling (Microsoft does not support delegated shared-mailbox push)."
+			} else if push, err := s.Service.Store.MicrosoftPush(r.Context(), principal(r).AccountID, id); err == nil {
+				status = push.Status
+				if push.Status == "push active" && !push.ExpiresAt.After(time.Now()) {
+					status = "Push expired; polling fallback."
+				}
+			}
+			d.Notice = "Microsoft incoming delivery: " + status
+		}
+	}
 	s.render(w, r, body, d)
 }
 func (s *Server) uiGoogleInfo(w http.ResponseWriter, r *http.Request) {

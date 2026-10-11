@@ -84,7 +84,11 @@ func (m *RemoteMailboxService) SaveMicrosoftGrant(ctx context.Context, c store.M
 		return e
 	}
 	c.ExpiresAt = time.Now().Add(time.Duration(t.ExpiresIn) * time.Second)
-	return m.Service.Store.SaveMicrosoftConnection(ctx, c)
+	err := m.Service.Store.SaveMicrosoftConnection(ctx, c)
+	if err == nil {
+		m.WakeMicrosoftPush()
+	}
+	return err
 }
 func microsoftInput(g microsoft.Message) store.RemoteMessageInput {
 	in := store.RemoteMessageInput{RFCMessageID: g.InternetMessageID, FromName: g.From.EmailAddress.Name, FromAddress: g.From.EmailAddress.Address, Subject: g.Subject, Snippet: g.BodyPreview, Read: g.IsRead, Flagged: g.Flag.FlagStatus == "flagged", Draft: g.IsDraft, HasAttach: g.HasAttachments}
@@ -181,6 +185,9 @@ func (m *RemoteMailboxService) reconcileMicrosoft(ctx context.Context, account, 
 		result.status = "error"
 	}
 	m.logRemoteSync(ctx, account, inbox, result)
+	if arrived > 0 {
+		m.WakeMicrosoftPush()
+	}
 	return status, err
 }
 
