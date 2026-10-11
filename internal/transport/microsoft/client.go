@@ -11,6 +11,7 @@ import (
 	"net/mail"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ type Token struct {
 	ExpiresIn    int    `json:"expires_in"`
 	Scope        string `json:"scope"`
 }
-type User struct{ ID, Mail, UserPrincipalName string }
+type User struct{ ID, Mail, UserPrincipalName, DisplayName string }
 type Recipient struct {
 	EmailAddress struct{ Name, Address string }
 }
@@ -72,7 +73,7 @@ func NewClient(h *http.Client) *Client {
 func Scope(shared bool) string {
 	s := "offline_access User.Read Mail.ReadWrite Mail.Send"
 	if shared {
-		s += " Mail.ReadWrite.Shared Mail.Send.Shared"
+		s += " Mail.ReadWrite.Shared Mail.Send.Shared User.ReadBasic.All"
 	}
 	return s
 }
@@ -236,8 +237,85 @@ func (c *Client) json(ctx context.Context, t, method, path string, v, out any, a
 }
 func (c *Client) Identity(ctx context.Context, t string) (User, error) {
 	var u User
-	e := c.json(ctx, t, "GET", "/me?$select=id,mail,userPrincipalName", nil, &u, false)
+	e := c.json(ctx, t, "GET", "/me?$select=id,mail,userPrincipalName,displayName", nil, &u, false)
 	return u, e
+}
+
+// maxDirectoryUsers bounds how many directory entries a shared-mailbox
+// discovery pass considers, so a large tenant cannot turn one wizard step
+// into an unbounded request volume.
+const maxDirectoryUsers = 100
+
+// sharedProbeConcurrency bounds in-flight access probes during shared-mailbox
+// discovery.
+const sharedProbeConcurrency = 8
+
+// DirectoryUsers returns up to maxDirectoryUsers directory users that carry a
+// mail address. The User.ReadBasic.All scope covers the selected properties;
+// callers treat a failure as "no directory available" and fall back to manual
+// entry.
+func (c *Client) DirectoryUsers(ctx context.Context, t string) ([]User, error) {
+	var all []User
+	cursor := ""
+	for len(all) < maxDirectoryUsers {
+		var page struct {
+			Value []User
+			Next  string `json:"@odata.nextLink"`
+		}
+		if e := c.request(ctx, t, "GET", "/users?$select=id,displayName,mail,userPrincipalName&$top=100", cursor, nil, "", &page, nil, false); e != nil {
+			return nil, e
+		}
+		for _, u := range page.Value {
+			if u.Mail == "" {
+				continue
+			}
+			all = append(all, u)
+			if len(all) >= maxDirectoryUsers {
+				break
+			}
+		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+	return all, nil
+}
+
+// SharedMailboxes lists candidate shared mailboxes the signed-in user can open
+// by probing each directory entry's Inbox. Graph exposes no delegation
+// directory, so discovery is best-effort: entries the user cannot open (or
+// that the token cannot see) are omitted, and the caller always offers manual
+// address entry as a fallback. exclude is the signed-in user's own address.
+func (c *Client) SharedMailboxes(ctx context.Context, t, exclude string) ([]User, error) {
+	users, e := c.DirectoryUsers(ctx, t)
+	if e != nil {
+		return nil, e
+	}
+	var mu sync.Mutex
+	var found []User
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, sharedProbeConcurrency)
+	for _, u := range users {
+		if strings.EqualFold(u.Mail, exclude) {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(u User) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if _, err := c.Folder(ctx, t, u.Mail, "inbox"); err != nil {
+				return
+			}
+			mu.Lock()
+			found = append(found, u)
+			mu.Unlock()
+		}(u)
+	}
+	wg.Wait()
+	sort.Slice(found, func(i, j int) bool { return strings.ToLower(found[i].Mail) < strings.ToLower(found[j].Mail) })
+	return found, nil
 }
 func (c *Client) Folder(ctx context.Context, t, mailbox, id string) (Folder, error) {
 	var f Folder

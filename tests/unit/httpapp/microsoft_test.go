@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,7 +188,7 @@ func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/me" {
-			w.Write([]byte(`{"id":"identity","mail":"personal@example.net"}`))
+			w.Write([]byte(`{"id":"identity","mail":"personal@example.net","displayName":"Personal Owner"}`))
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/mailFolders/inbox") {
@@ -243,5 +244,127 @@ func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 	rr = post("/ui/oauth/microsoft/finish", url.Values{"callback_url": {callback}})
 	if rr.Code != 400 {
 		t.Fatal("callback replay accepted")
+	}
+	boxes, e := svc.Store.ListStandaloneInboxes(context.Background(), u.AccountID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(boxes) != 2 {
+		t.Fatalf("personal inbox missing: %#v", boxes)
+	}
+	if boxes[1].DisplayName != "Personal Owner" || boxes[1].Address != "personal@example.net" {
+		t.Fatalf("personal label not defaulted from the identity: %#v", boxes[1])
+	}
+}
+
+// TestMicrosoftSharedMailboxSelection covers the two-phase shared flow: the
+// sign-in returns before mailbox choice, accessible shared mailboxes are
+// discovered from the directory, and the chosen address completes the inbox.
+func TestMicrosoftSharedMailboxSelection(t *testing.T) {
+	svc, _, u, _, _, _ := standaloneFixture(t)
+	svc.Config.MicrosoftClientID = "client"
+	svc.Config.MicrosoftTenantID = "common"
+	var probeMu sync.Mutex
+	probes := map[string]bool{}
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/token"):
+			json.NewEncoder(w).Encode(microsoft.Token{AccessToken: "access", RefreshToken: "refresh", ExpiresIn: 3600, Scope: microsoft.Scope(true)})
+		case r.URL.Path == "/me":
+			w.Write([]byte(`{"id":"identity","mail":"owner@example.net","displayName":"Owner"}`))
+		case r.URL.Path == "/users":
+			if got := r.URL.Query().Get("$select"); !strings.Contains(got, "displayName") {
+				t.Errorf("directory select missing displayName: %s", got)
+			}
+			w.Write([]byte(`{"value":[{"id":"u2","displayName":"Team Box","mail":"shared@example.net"},{"id":"u3","displayName":"Other","mail":"other@example.net"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/mailFolders/inbox"):
+			probeMu.Lock()
+			probes[r.URL.Path] = true
+			probeMu.Unlock()
+			if r.URL.Path != "/users/shared@example.net/mailFolders/inbox" {
+				w.WriteHeader(403)
+				return
+			}
+			w.Write([]byte(`{"id":"inbox-id"}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer fixture.Close()
+	rm := app.NewRemoteMailboxService(svc)
+	defer rm.Stop()
+	rm.Microsoft = microsoft.NewClient(fixture.Client())
+	rm.Microsoft.BaseURL = fixture.URL
+	rm.Microsoft.AuthBaseURL = fixture.URL
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	session, csrf, e := svc.Store.CreateSession(context.Background(), u.ID, time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	post := func(path string, v url.Values) *httptest.ResponseRecorder {
+		v.Set("_csrf", csrf)
+		r := httptest.NewRequest("POST", path, strings.NewReader(v.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: "mmm_session", Value: session})
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, r)
+		return rr
+	}
+	begin := post("/ui/oauth/microsoft/begin", url.Values{"mailbox_type": {"shared"}, "display": {"Shared Team"}})
+	if begin.Code != 200 {
+		t.Fatalf("begin %d %s", begin.Code, begin.Body)
+	}
+	var started map[string]string
+	json.Unmarshal(begin.Body.Bytes(), &started)
+	auth, _ := url.Parse(started["authorization_url"])
+	if !strings.Contains(auth.Query().Get("scope"), "Mail.ReadWrite.Shared") || !strings.Contains(auth.Query().Get("scope"), "User.ReadBasic.All") {
+		t.Fatalf("shared scopes missing: %s", auth.Query().Get("scope"))
+	}
+	callback := "http://localhost/?state=" + url.QueryEscape(auth.Query().Get("state")) + "&code=secret"
+	phase1 := post("/ui/oauth/microsoft/finish", url.Values{"callback_url": {callback}})
+	if phase1.Code != 200 {
+		t.Fatalf("shared finish %d %s", phase1.Code, phase1.Body)
+	}
+	var choice struct {
+		State     string `json:"selection_state"`
+		Mailboxes []struct{ Address, Name string }
+	}
+	if json.Unmarshal(phase1.Body.Bytes(), &choice); choice.State == "" || len(choice.Mailboxes) != 1 || choice.Mailboxes[0].Address != "shared@example.net" || choice.Mailboxes[0].Name != "Team Box" {
+		t.Fatalf("shared discovery %s", phase1.Body)
+	}
+	probeMu.Lock()
+	otherProbed := probes["/users/other@example.net/mailFolders/inbox"]
+	probeMu.Unlock()
+	if !otherProbed {
+		t.Fatal("inaccessible candidate was not probed")
+	}
+	if rr := post("/ui/oauth/microsoft/finish", url.Values{"state": {choice.State}, "mailbox": {"not-an-address"}}); rr.Code != 400 {
+		t.Fatal("invalid shared address accepted")
+	}
+	if rr := post("/ui/oauth/microsoft/finish", url.Values{"state": {choice.State}, "mailbox": {"other@example.net"}}); rr.Code != 400 {
+		t.Fatal("inaccessible shared mailbox accepted")
+	}
+	done := post("/ui/oauth/microsoft/finish", url.Values{"state": {choice.State}, "mailbox": {"shared@example.net"}})
+	if done.Code != 200 {
+		t.Fatalf("selection %d %s", done.Code, done.Body)
+	}
+	var finished map[string]string
+	json.Unmarshal(done.Body.Bytes(), &finished)
+	if finished["inbox_id"] == "" {
+		t.Fatal("no inbox returned")
+	}
+	if rr := post("/ui/oauth/microsoft/finish", url.Values{"state": {choice.State}, "mailbox": {"shared@example.net"}}); rr.Code != 400 {
+		t.Fatal("selection replay accepted")
+	}
+	c, e := svc.Store.MicrosoftConnection(context.Background(), u.AccountID, finished["inbox_id"])
+	if e != nil || !c.Shared || c.Mailbox != "shared@example.net" {
+		t.Fatalf("shared connection %#v %v", c, e)
+	}
+	box, e := svc.Store.GetInbox(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, finished["inbox_id"])
+	if e != nil || box.DisplayName != "Shared Team" {
+		t.Fatalf("typed label not kept: %#v %v", box, e)
 	}
 }

@@ -18,6 +18,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   removed in favour of the flag; a failed background list refresh still appears
   in place with its Retry button, and the message-body loader is unchanged.
 
+- Microsoft / Outlook connections now have a **personal + shared** flow: the
+  wizard offers a "Connect personal mailbox" and a "Connect personal + shared"
+  button, and after sign-in the shared mailbox is picked from a list of
+  mailboxes the signed-in account can actually open, with manual address entry
+  as a fallback. The mailbox address is never typed before sign-in.
+
+- The Google / Gmail and Microsoft / Outlook wizard steps label the inbox
+  automatically — the operator's optional label, else the provider's display
+  name or the connected address — so the identity tab can rename it later.
+
 ### Fixed
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest

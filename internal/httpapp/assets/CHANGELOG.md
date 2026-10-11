@@ -6,6 +6,28 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A global **status flag** in the header on the dashboard and inbox views.
+  It is green "Live" while the event stream is connected, red "Disconnected"
+  when the stream drops (reconnecting with backoff), amber "Sync problem" when
+  the remote index reports an error, and a spinner "Loading…" while a UI
+  background action is in flight (an IMAP sync, a remote message body load or a
+  background list refresh). A dropped connection outranks Loading. The IMAP
+  "Syncing messages…" strip and the "Updating messages…" refresh spinner are
+  removed in favour of the flag; a failed background list refresh still appears
+  in place with its Retry button, and the message-body loader is unchanged.
+
+- Microsoft / Outlook connections now have a **personal + shared** flow: the
+  wizard offers a "Connect personal mailbox" and a "Connect personal + shared"
+  button, and after sign-in the shared mailbox is picked from a list of
+  mailboxes the signed-in account can actually open, with manual address entry
+  as a fallback. The mailbox address is never typed before sign-in.
+
+- The Google / Gmail and Microsoft / Outlook wizard steps label the inbox
+  automatically — the operator's optional label, else the provider's display
+  name or the connected address — so the identity tab can rename it later.
+
 ### Fixed
 
 - The reload button on a standalone (IMAP) inbox no longer hides the newest

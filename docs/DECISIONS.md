@@ -3375,6 +3375,17 @@ Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency
 service or runtime. Separate Online Archive mailboxes are outside this release.
 See `docs/MICROSOFT.md` for setup and real-account rollout checks.
 
+**Amendment (2026-10-11, human approved):** The wizard no longer asks for a
+mailbox type and shared address before sign-in. Two begin buttons choose
+personal or personal + shared (Microsoft fixes granted scope at the authorization
+request, so the choice must precede sign-in); a shared connection then stops
+after token exchange and offers the accessible shared mailboxes discovered by
+bounded directory enumeration plus per-candidate Inbox probes, with manual entry
+as fallback. The exchanged token is encrypted in the attempt row for the
+selection phase and is single-use. Shared connections therefore add
+`User.ReadBasic.All`. Inbox labels default from the operator's optional label,
+else the provider display name or connected address, and are editable later.
+
 ## D101 — Microsoft own-mailbox push with durable delta catch-up
 
 **Decision (2026-10-11, human approved):** Extend D100 with automatic Graph Inbox

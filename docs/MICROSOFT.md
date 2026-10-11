@@ -26,25 +26,41 @@ tenant ID/domain instead of `common` when restricting to that tenant.
 
 Delegated permissions: `User.Read`, `Mail.ReadWrite`, `Mail.Send`, and
 `offline_access`. Shared connections additionally request
-`Mail.ReadWrite.Shared` and `Mail.Send.Shared`. Tenant consent policy may require
-administrator approval. Exchange mailbox delegation must also grant access to
-the selected shared mailbox; sending requires Send As or Send on Behalf rights.
+`Mail.ReadWrite.Shared`, `Mail.Send.Shared` and `User.ReadBasic.All` (the last
+only to enumerate candidate shared mailboxes in the wizard); all three must be
+added to the app registration or the shared consent request fails. Tenant
+consent policy may require administrator approval. Exchange mailbox delegation
+must also grant access to the selected shared mailbox; sending requires Send As
+or Send on Behalf rights.
 
 Existing connections retain their original client ID and tenant when defaults
 change. Keep their app registrations operational for refresh/reconnection.
 
 ## Connecting
 
-Choose Microsoft in the standalone wizard, choose Personal or Shared, and supply
-the shared address when applicable. Sign in and approve delegated access.
+Choose Microsoft in the standalone wizard and pick **Connect personal mailbox**
+(signing in as the mailbox itself) or **Connect personal + shared** (the extra
+shared scopes are requested before sign-in, because Microsoft fixes granted
+scope in the authorization request). Sign in and approve delegated access.
 Microsoft redirects to `http://localhost`; a browser connection failure is
 expected because no local listener runs. Copy the complete final address-bar URL
 and paste it into MailMoose. Use another desktop browser if the URL is hidden.
 The attempt expires after ten minutes and completion is single-use.
 
+A shared connection then shows a **mailbox picker**: MailMoose lists candidate
+shared mailboxes by enumerating a bounded window of the tenant directory and
+probing each one's Inbox, so only mailboxes the account can actually open are
+offered. Manual address entry is the fallback when the directory is unavailable
+or the mailbox lies outside the enumerated window. The choice is validated
+before the connection is stored. The inbox label defaults to the operator's
+optional label, else the provider display name (personal) or address (shared),
+and is editable from the inbox' Identity tab later.
+
 The callback is sensitive. MailMoose validates the exact localhost destination,
 state and PKCE verifier and does not log or retain its code or pasted URL.
-Tokens are encrypted using `APP_ENCRYPTION_KEY` and bound to account/inbox.
+Tokens are encrypted using `APP_ENCRYPTION_KEY` and bound to account/inbox. The
+exchanged token held between sign-in and mailbox choice is encrypted the same
+way and is single-use.
 
 Each connection is restricted to its selected mailbox. Shared delegated scopes
 can grant broader upstream access, but MailMoose never exposes another mailbox
