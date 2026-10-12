@@ -429,13 +429,14 @@ standalone, and whether the approver is enabled for the effective mode. See
   Antler receiver also publishes MX records that are not Antler receivers, the
   dashboard aggregate light turns **amber** (individual connectors stay green) and
   the status dialog lists the offending servers with a suggestion to remove them,
-  since mail may not be delivered via Antler. The dashboard re-checks on load,
-  reconnect, a receiver-health change, and a 15-minute background tick, so a rogue
-  record (which emits no receiver event) is still surfaced. The verdict is a single
-  **top-level `unexpected_mx`** field on the receiving response, computed once and
-  read by both the dashboard light and the status dialog, so the two surfaces
-  never disagree (and the dialog warning no longer disappears when the copy-ready
-  `instructions` object is omitted).
+  since mail may not be delivered via Antler. The verdict is **one shared value
+  owned by a background watcher**: it re-checks each ready Dial MX domain on a
+  fixed 60-second interval and pushes a transient `mx.extra_mx_changed` event only
+  when the set changes, so the dashboard light and an open status dialog always
+  agree and neither runs DNS on a render. The warning is exposed as a top-level
+  `unexpected_mx` field on the receiving response (independent of `instructions`),
+  so a dialog opened from an amber dashboard row shows it immediately and keeps it
+  current live.
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
   folded `steps` string) instead of one INFO `dialmx domain proof` record per

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
@@ -172,10 +173,9 @@ func TestModelEventMessageStateChangedValue(t *testing.T) {
 }
 
 // TestUIStateDashboardLightReflectsExtraMX proves the dashboard lights snapshot
-// runs the bounded published-MX check while a receiver is ready, so an extra MX
-// record (which emits no receiver event) turns the aggregate light amber, and
-// that the check is uncached: repeated snapshots each re-resolve, so a change is
-// reflected on the next snapshot.
+// reads the watcher's shared extra-MX verdict — so an extra MX record turns the
+// aggregate light amber — and performs no resolver lookup of its own (the
+// watcher owns every check).
 func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -187,17 +187,18 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
-	// Mark the receiver ready so the aggregate reaches the MX-check branch.
+	// Mark the receiver ready so the aggregate reaches the extra-MX branch.
 	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, AllowPrivateDestinations: true})
 	m.SetStatusForTest(domain.Name, []mxdial.Status{{
 		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
 	}})
 	svc.DialMX = m
-	// Only the Antler receiver is published: green.
-	res := &switchableResolver{}
-	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	// The shared resolver the watcher checks with, and the HTTP resolver, are
+	// separate: the HTTP snapshot must never consult one.
+	httpRes := &switchableResolver{}
+	httpRes.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(res)
+	srv.SetDNSResolver(httpRes)
 	h := srv.Handler()
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -220,18 +221,21 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 		}
 		return out.Domains[domain.ID].Light
 	}
+
+	// Only the Antler receiver is published: green.
+	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test."}})
+	svc.ExtraMX.CheckOnce(ctx)
 	if got := light(); got != "ok" {
 		t.Fatalf("light with only the Antler receiver = %q, want ok", got)
 	}
-	// An extra MX record appears: amber, and the check re-resolves (uncached).
-	res.set([]*net.MX{
-		{Host: "antler1.example.test.", Pref: 10},
-		{Host: "old.example.test.", Pref: 20},
-	}, nil)
+	// An extra MX record appears and the watcher republishes: amber.
+	svc.ExtraMX.SetExtraMXResolver(fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
+	svc.ExtraMX.CheckOnce(ctx)
 	if got := light(); got != "amber" {
 		t.Fatalf("light with an extra MX record = %q, want amber", got)
 	}
-	if mxHits, _ := res.counts(); mxHits < 2 {
-		t.Fatalf("lights snapshots ran %d MX lookups, want >=2 (checks must not be cached)", mxHits)
+	// The HTTP snapshot never ran a resolver lookup: the verdict is the watcher's.
+	if mxHits, txHits := httpRes.counts(); mxHits != 0 || txHits != 0 {
+		t.Fatalf("lights snapshot ran resolver lookups: mx=%d txt=%d", mxHits, txHits)
 	}
 }

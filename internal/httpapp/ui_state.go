@@ -160,15 +160,12 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 
 // domainInboundLight computes a domain's aggregate inbound traffic light. It
 // reads the in-memory receiver statuses (each receiver reports ready only after
-// proving both domain authority and MX routing), and — because a rogue MX record
-// changes with no receiver event, so SSE alone cannot surface it — also runs the
-// bounded published-MX check to detect extra MX records that are not Antler
-// receivers. That check is resolver-bound and only runs when the caller asked for
-// lights (load, reconnect, a receiver-health notification, or the slow
-// tab-open refresh); it is never on a mail-event path. It returns an empty light
-// for a domain that does not receive by Dial MX (those have no dashboard light)
-// or when no manager is wired. A rotated-away key's authorization is excluded so
-// a stale row cannot present as current readiness.
+// proving both domain authority and MX routing), and folds in the domain's
+// shared "extra MX" verdict — the watcher's single value, not a fresh lookup — so
+// an amber light and the status dialog's warning always agree. It returns an
+// empty light for a domain that does not receive by Dial MX (those have no
+// dashboard light) or when no manager is wired. A rotated-away key's
+// authorization is excluded so a stale row cannot present as current readiness.
 func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, domainName, receivingProvider string) (string, string) {
 	if normalizeDomainProvider(receivingProvider) != "dialmx" || s.Service.DialMX == nil {
 		return "", ""
@@ -191,11 +188,11 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		views = append(views, v)
 	}
 	// Only a domain with an active receiver can be amber-on-extra-MX; a red
-	// domain stays red, so skip the lookup then. The verdict itself comes from
-	// the one shared helper so the light and the status dialog never disagree.
+	// domain stays red. The verdict itself is the watcher's single shared value,
+	// so the light and the status dialog never disagree.
 	var unexpected []string
 	if anyReady(views) {
-		unexpected = s.dialMXExtraMX(ctx, accountID, domainID, domainName, keyID)
+		unexpected = s.dialMXExtraMX(domainID)
 	}
 	return dialMXHealth(views, unexpected, time.Now())
 }
