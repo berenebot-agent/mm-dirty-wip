@@ -2064,6 +2064,8 @@ function aliasNameByAddress(list) {
   var input = document.getElementById('domain-delete-input');
   var submit = document.getElementById('domain-delete-submit');
   var nameEl = document.getElementById('domain-delete-name');
+  var inboxSummary = document.getElementById('domain-delete-inbox-summary');
+  var inboxList = document.getElementById('domain-delete-inbox-list');
   var expected = '';
   function matches() {
     return input.value.trim().toLowerCase() === expected.toLowerCase();
@@ -2071,11 +2073,36 @@ function aliasNameByAddress(list) {
   function sync() {
     submit.disabled = !matches();
   }
+  function renderInboxes(btn) {
+    var boxes = [];
+    try {
+      boxes = JSON.parse(btn.getAttribute('data-inboxes') || '[]') || [];
+    } catch (err) {
+      boxes = [];
+    }
+    inboxList.textContent = '';
+    if (!boxes.length) {
+      if (inboxSummary) {
+        inboxSummary.textContent = 'This domain has no mailboxes.';
+      }
+      inboxList.hidden = true;
+      return;
+    }
+    if (inboxSummary) {
+      inboxSummary.textContent = 'This deletes ' + boxes.length + (boxes.length === 1 ? ' mailbox:' : ' mailboxes:');
+    }
+    inboxList.hidden = false;
+    inboxList.textContent = boxes.map(function (b) {
+      return b.name ? b.name + ' — ' + b.address : b.address;
+    }).join('\n');
+  }
   document.querySelectorAll('.open-delete-domain').forEach(function (btn) {
     btn.addEventListener('click', function () {
       expected = btn.getAttribute('data-name') || '';
       form.setAttribute('action', '/ui/domains/' + btn.getAttribute('data-domain') + '/delete');
       nameEl.textContent = expected;
+      dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
+      renderInboxes(btn);
       input.value = '';
       sync();
       dlg.showModal();
@@ -2112,6 +2139,7 @@ function aliasNameByAddress(list) {
       expected = btn.getAttribute('data-address') || '';
       form.setAttribute('action', '/ui/inboxes/' + btn.getAttribute('data-id') + '/delete');
       addressEl.textContent = expected;
+      dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
       input.value = '';
       sync();
       dlg.showModal();
@@ -2127,21 +2155,58 @@ function aliasNameByAddress(list) {
   });
 })();
 
+// Client delete: one confirmation dialog shared by the dashboard Clients card
+// and the inbox Connectors sub-view (whose rows are rendered dynamically), so
+// the trigger is delegated on the document.
 (function () {
   var dlg = document.getElementById('client-delete-dialog');
   if (!dlg) {
     return;
   }
   var form = document.getElementById('client-delete-form');
-  var label = document.getElementById('client-delete-label');
-  document.querySelectorAll('.open-delete-client').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      form.setAttribute('action', '/ui/' + btn.getAttribute('data-kind') + '/' + btn.getAttribute('data-id') + '/delete');
-      var type = btn.getAttribute('data-type') || '';
-      var name = btn.getAttribute('data-name') || '';
-      label.textContent = name ? name + ' (' + type + ')' : type;
-      dlg.showModal();
-    });
+  var input = document.getElementById('client-delete-input');
+  var submit = document.getElementById('client-delete-submit');
+  var nameEl = document.getElementById('client-delete-name');
+  var typeEl = document.getElementById('client-delete-type');
+  var inboxField = form.querySelector('input[name=inbox]');
+  var expected = '';
+  function matches() {
+    return input.value.trim().toLowerCase() === expected.toLowerCase();
+  }
+  function sync() {
+    submit.disabled = !matches();
+  }
+  function open(btn) {
+    expected = btn.getAttribute('data-name') || '';
+    var type = btn.getAttribute('data-type') || '';
+    form.setAttribute('action', '/ui/' + btn.getAttribute('data-kind') + '/' + btn.getAttribute('data-id') + '/delete');
+    nameEl.textContent = expected;
+    if (typeEl) {
+      typeEl.textContent = type ? '(' + type + ')' : '';
+    }
+    if (inboxField) {
+      inboxField.value = btn.getAttribute('data-inbox') || '';
+    }
+    dlg.querySelectorAll('[data-copy]').forEach(function (el) { el.setAttribute('data-copy', expected); });
+    input.value = '';
+    sync();
+    dlg.showModal();
+    input.focus();
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.open-delete-client') : null;
+    if (btn) {
+      e.preventDefault();
+      e.stopPropagation();
+      open(btn);
+    }
+  });
+  input.addEventListener('input', sync);
+  form.addEventListener('submit', function (e) {
+    if (!matches()) {
+      e.preventDefault();
+      sync();
+    }
   });
 })();
 
@@ -2824,13 +2889,13 @@ function clearUrlParams(names) {
       var label = isOpenClaw ? 'OpenClaw' : 'Hermes Relay';
       fields += '<label>Outbound authority</label><select name="role"><option value="owner"' + (c.Role === 'owner' ? ' selected' : '') + '>Owner — ' + (isOpenClaw ? 'agent' : 'relay') + ' sends directly</option><option value="assistant"' + (c.Role === 'assistant' ? ' selected' : '') + '>Assistant — ' + (isOpenClaw ? 'agent' : 'relay') + ' drafts and requests approval</option></select>';
        actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>';
-       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><form method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form>';
+       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || label) + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/' + (isOpenClaw ? 'openclaw' : 'hermes') + '/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><button type="button" class="secondary danger open-delete-client" data-kind="' + (isOpenClaw ? 'openclaw' : 'hermes') + '" data-id="' + escapeConnector(c.ID) + '" data-name="' + escapeConnector(c.Name) + '" data-type="' + label + '" data-inbox="' + inbox + '">Remove connector</button>';
     } else {
       fields += '<label>Destination URL</label><input name="url" type="url" required value="' + escapeConnector(c.URL) + '"><label>Payload</label><select name="mode"><option value="notify"' + (c.Mode === 'notify' ? ' selected' : '') + '>Notify — small JSON with the message id</option><option value="forward"' + (c.Mode === 'forward' ? ' selected' : '') + '>Forward — full raw MIME</option></select><label>Authentication</label><select name="auth" data-inline-webhook-auth><option value="signature"' + (c.AuthMode === 'signature' ? ' selected' : '') + '>Signature — signed HMAC-SHA256 header</option><option value="bearer"' + (c.AuthMode === 'bearer' ? ' selected' : '') + '>Bearer — static token</option></select><div data-inline-bearer' + (c.AuthMode === 'bearer' ? '' : ' hidden') + '><label>Bearer secret <span class="muted small">(leave blank to keep current)</span></label><input name="bearer_secret" type="password" autocomplete="new-password"></div>';
        actions = '<a class="btn secondary" href="/ui/clients/' + id + '/log">Delivery log</a>' + (c.AuthMode === 'signature' ? '<button type="button" class="secondary" data-rotate-webhook="' + escapeConnector(c.ID) + '">Rotate signing secret</button>' : '');
       var toggleText = c.Enabled ? 'Pause webhook' : 'Enable webhook';
       var nextEnabled = c.Enabled ? '0' : '1';
-       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><form method="post" action="/ui/webhooks/' + id + '/delete" data-inline-connector-delete>' + common + '<button class="secondary danger">Remove connector</button></form></div>';
+       connectorEditor.innerHTML = '<div class="card-head"><h3>' + escapeConnector(c.Name || 'Webhook') + '</h3></div><form id="inbox-connector-edit-form" method="post" action="/ui/webhooks/' + id + '/edit">' + common + fields + '<div class="dialog-actions">' + actions + '</div></form><div class="row"><form method="post" action="/ui/webhooks/' + id + '/toggle">' + common + '<input type="hidden" name="enabled" value="' + nextEnabled + '"><button class="secondary">' + toggleText + '</button></form><button type="button" class="secondary danger open-delete-client" data-kind="webhooks" data-id="' + escapeConnector(c.ID) + '" data-name="' + escapeConnector(c.Name) + '" data-type="Webhook" data-inbox="' + inbox + '">Remove connector</button></div>';
     }
     setConnectorEditorMode(true);
     var connectorEditForm = connectorEditor.querySelector('#inbox-connector-edit-form');
@@ -2839,13 +2904,6 @@ function clearUrlParams(names) {
         inboxSubmitting = true;
       });
     }
-    connectorEditor.querySelectorAll('[data-inline-connector-delete]').forEach(function (deleteForm) {
-      deleteForm.addEventListener('submit', function (e) {
-        if (!window.confirm('Remove this connector?')) {
-          e.preventDefault();
-        }
-      });
-    });
     var auth = connectorEditor.querySelector('[data-inline-webhook-auth]');
     if (auth) {
       auth.addEventListener('change', function () {
@@ -2950,36 +3008,13 @@ function clearUrlParams(names) {
       log.innerHTML = logSVG;
       row.appendChild(log);
 
-      var deleteForm = document.createElement('form');
-      deleteForm.method = 'post';
-      deleteForm.action = c.Kind === 'hermes'
-        ? '/ui/hermes/' + encodeURIComponent(c.ID || '') + '/delete'
-        : (c.Kind === 'openclaw'
-          ? '/ui/openclaw/' + encodeURIComponent(c.ID || '') + '/delete'
-          : '/ui/webhooks/' + encodeURIComponent(c.ID || '') + '/delete');
-      deleteForm.style.margin = '0';
-
-      var csrf = document.createElement('input');
-      csrf.type = 'hidden';
-      csrf.name = '_csrf';
-      csrf.value = csrfValue;
-      deleteForm.appendChild(csrf);
-
-      var inbox = document.createElement('input');
-      inbox.type = 'hidden';
-      inbox.name = 'inbox';
-      inbox.value = editInboxID;
-      deleteForm.appendChild(inbox);
-
-      var remove = iconButton('Delete', deleteSVG, 'danger');
-      remove.type = 'submit';
-      deleteForm.appendChild(remove);
-      deleteForm.addEventListener('submit', function (e) {
-        if (!window.confirm('Remove this connector?')) {
-          e.preventDefault();
-        }
-      });
-      row.appendChild(deleteForm);
+      var remove = iconButton('Delete', deleteSVG, 'danger open-delete-client');
+      remove.setAttribute('data-kind', c.Kind === 'hermes' ? 'hermes' : (c.Kind === 'openclaw' ? 'openclaw' : 'webhooks'));
+      remove.setAttribute('data-id', c.ID || '');
+      remove.setAttribute('data-name', c.Name || '');
+      remove.setAttribute('data-type', connectorLabel(c));
+      remove.setAttribute('data-inbox', editInboxID);
+      row.appendChild(remove);
 
       connectorList.appendChild(row);
     });
