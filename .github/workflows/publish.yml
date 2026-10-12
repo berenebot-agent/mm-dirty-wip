@@ -26,8 +26,6 @@ name: publish
 # public in the repository's package settings, or authenticate on the host:
 #   echo "$TOKEN" | docker login ghcr.io -u <user> --password-stdin
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       reason:
