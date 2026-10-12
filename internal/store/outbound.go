@@ -253,7 +253,8 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	defer tx.Rollback()
 	var attempts int
 	var domainNull sql.NullString
-	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id) FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull); err != nil {
+	var inboxID, fromAddress, subject, toJSON string
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id),m.inbox_id,m.from_address,m.subject,m.to_json FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull, &inboxID, &fromAddress, &subject, &toJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
@@ -288,6 +289,26 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 		} else if dev != nil {
 			events = append(events, *dev)
 		}
+		// A terminal failure is surfaced as a local delivery-failure notice in
+		// the inbox: a real inbound message the user (and any agent reading the
+		// mailbox) will see, rather than only a row in the outbox queue. The
+		// failed original is trashed as part of the same write.
+		_, noticeEvents, nerr := s.writeDeliveryFailureTx(ctx, tx, deliveryFailure{
+			AccountID:   accountID,
+			InboxID:     inboxID,
+			MessageID:   id,
+			Provider:    provider,
+			FromAddress: fromAddress,
+			To:          decodeStrings(toJSON),
+			Subject:     subject,
+			LastError:   errText,
+			Attempts:    attempts,
+			domainID:    domainID,
+		})
+		if nerr != nil {
+			return model.Message{}, nil, nerr
+		}
+		events = append(events, noticeEvents...)
 	}
 	m, err := s.getMessageTx(ctx, tx, accountID, id)
 	if err != nil {
@@ -370,7 +391,10 @@ func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID
 	return n, nil
 }
 
-// RequeueFailed resets a failed message to pending for a manual retry.
+// RequeueFailed resets a failed message to pending for a manual retry. A
+// terminal failure is trashed as part of writing its delivery-failure notice, so
+// the retry also restores the message to the mailbox (clearing deleted_at) and
+// lets it rejoin the outbox queue.
 func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string) error {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
@@ -382,7 +406,7 @@ func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string)
 	if !p.CanOwn(m.InboxID) {
 		return ErrForbidden
 	}
-	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, id, p.AccountID)
+	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID)
 	return err
 }
 
