@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- A metadata sync row now reads **Downloading metadata N / ~M** with a live
+  count and percentage while it runs. Gmail and One show their provider's
+  message count as an approximate denominator (marked `~`, because the provider
+  counts every label while MailMoose indexes a folder subset); the fraction is
+  normalised so it can never exceed the total or stall below it, and it snaps to
+  `M / M` on completion. Outlook and IMAP keep their authoritative totals. The
+  queue row's dot and status also align to the mailbox name's line.
+
 - Standalone mailbox metadata syncs now share a global concurrency limit,
   configurable with `REMOTE_SYNC_CONCURRENCY` (default `2`, range 1–32). This
   staggers startup indexing and also bounds simultaneous scheduled, push-triggered
@@ -128,6 +136,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   so a bulk delete of hundreds of messages no longer floods the pop-up.
 
 ### Fixed
+
+- An active Gmail or One metadata sync no longer reports **Waiting for provider
+  request slot**. That label appeared for the whole sync because One paces
+  requests at 15/minute, so it read as a fault when it was normal pacing. The row
+  now shows the download in progress instead.
 
 - Bulk actions taken from a custom folder view now stay in that folder and act
   on the right messages. Mark read/unread, Move to trash and Move used to drop

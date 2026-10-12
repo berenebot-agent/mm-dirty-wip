@@ -168,9 +168,19 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		"metadata-sync-spin",
 		"Inbox-wide",
 		"prefers-reduced-motion",
+		// Downloading wording and the estimate marker for Gmail/One totals.
+		"Downloading metadata",
+		"estimated_total",
+		"syncDenominator",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing sync wiring %q", want)
+		}
+	}
+	// The old wait-for-slot phrasing and the "Indexing…" chip are gone.
+	for _, gone := range []string{"Waiting for provider request slot", "'Indexing…'"} {
+		if strings.Contains(script, gone) {
+			t.Fatalf("app.js still contains %q", gone)
 		}
 	}
 }
