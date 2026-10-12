@@ -79,6 +79,14 @@ type dkimInlineView struct {
 	RecordValue string
 	// PublicKey is the SPKI public key, for reference and backup.
 	PublicKey string
+	// HasKey reports whether a signing key is stored. Before the first save
+	// with signing on there is none, so the panel shows a "save to generate"
+	// note instead of a record.
+	HasKey bool
+	// Enabled mirrors the domain's DKIM signing toggle, so the record panel is
+	// rendered already visible when signing is on instead of relying on the
+	// client to unhide it.
+	Enabled bool
 	// RevealURL posts to show the private key in a dialog.
 	RevealURL string
 }
@@ -100,53 +108,52 @@ func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, p
 }
 
 // dkimInlineView builds the DNS record panel for the Direct MX editor. It
-// returns nil for other providers and for a domain that has no generated key
-// yet, so the panel appears only once there is a record to publish.
+// returns nil for other providers. For Direct MX it always returns a view: the
+// signing key lives on the domain row and is generated when the domain is
+// created, so the record is ready the moment the provider is selected, before
+// any save. HasKey distinguishes "here is the record to publish" from the rare
+// case where the startup backfill has not yet filled the key in.
 func (s *Server) dkimInlineView(ctx context.Context, accountID, domainID, provider string) *dkimInlineView {
 	if provider != mx.Provider {
 		return nil
 	}
-	d, err := s.Service.Store.GetDomain(ctx, accountID, domainID)
-	if err != nil {
-		return nil
+	view := &dkimInlineView{
+		Selector:  dkimsign.DefaultSelector,
+		RevealURL: "/ui/domains/" + domainID + "/sending/dkim/reveal",
 	}
-	cfg, err := s.Service.Store.GetDomainSendingConfig(ctx, accountID, domainID)
+	key, err := s.Service.ServiceDomainDKIM(ctx, accountID, domainID)
 	if err != nil {
-		return nil
+		return view
 	}
-	dec, err := s.Service.DecryptDomainSendingConfig(cfg)
-	if err != nil {
-		return nil
+	if key.Domain != "" {
+		view.Domain = key.Domain
 	}
-	key, err := dkimsign.ParsePrivateKey(asConfigString(dec, mx.FieldDKIMPrivateKey))
-	if err != nil {
-		return nil
+	if key.Selector != "" {
+		view.Selector = key.Selector
 	}
-	pubPEM, err := dkimsign.PublicKeyPEM(key)
+	// The enabled flag still lives on the sending configuration.
+	if cfg, err := s.Service.Store.GetDomainSendingConfig(ctx, accountID, domainID); err == nil {
+		if dec, derr := s.Service.DecryptDomainSendingConfig(cfg); derr == nil {
+			view.Enabled = strings.EqualFold(strings.TrimSpace(asConfigString(dec, mx.FieldDKIMEnabled)), "on")
+		}
+	}
+	parsed, err := dkimsign.ParsePrivateKey(key.PrivateKey)
 	if err != nil {
-		return nil
+		return view
+	}
+	pubPEM, err := dkimsign.PublicKeyPEM(parsed)
+	if err != nil {
+		return view
 	}
 	pubB64, err := dkimsign.PublicKeyBase64(pubPEM)
 	if err != nil {
-		return nil
+		return view
 	}
-	selector := strings.TrimSpace(asConfigString(dec, mx.FieldDKIMSelector))
-	if selector == "" {
-		selector = dkimsign.DefaultSelector
-	}
-	domain := strings.TrimSpace(asConfigString(dec, mx.FieldDKIMDomain))
-	if domain == "" {
-		domain = d.Name
-	}
-	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-	return &dkimInlineView{
-		Selector:    selector,
-		Domain:      domain,
-		RecordName:  dkimsign.RecordName(selector, domain),
-		RecordValue: dkimsign.TXTRecordValue(pubB64),
-		PublicKey:   pubPEM,
-		RevealURL:   "/ui/domains/" + domainID + "/sending/dkim/reveal",
-	}
+	view.HasKey = true
+	view.RecordName = dkimsign.RecordName(view.Selector, view.Domain)
+	view.RecordValue = dkimsign.TXTRecordValue(pubB64)
+	view.PublicKey = pubPEM
+	return view
 }
 
 // asConfigString reads a decrypted config value as a string.
@@ -368,6 +375,9 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Saving closes the dialog like every other provider: the Direct MX DKIM
+	// record is always available (the key lives on the domain), so there is
+	// nothing that only appears after a save that would justify reopening it.
 	s.domainNotice(w, r, "Sending configuration saved")
 }
 
@@ -440,6 +450,39 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.domainNotice(w, r, "Sending configuration removed")
+}
+
+// uiDomainSendingRotateDKIM mints a fresh Direct MX DKIM signing key for the
+// domain, keeping the rest of its sending configuration. The selector is
+// unchanged, so the operator must republish the same DKIM TXT record with the
+// new value; until that is done receivers cannot verify the signature. It is
+// only meaningful when the domain already signs with Direct MX.
+func (s *Server) uiDomainSendingRotateDKIM(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	ctx := r.Context()
+	d, err := s.Service.Store.GetDomain(ctx, p.AccountID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "domain not found", 404)
+		return
+	}
+	if _, err := s.Service.RotateDomainDKIMKey(ctx, p.AccountID, d.ID); err != nil {
+		s.domainSaveError(w, r, d.ID, "sending", "mx", err)
+		return
+	}
+	// Return to the sending editor rather than the bare dashboard, so the
+	// operator lands back on the tab they rotated from and sees the new record
+	// value (and can reveal the new key) without hunting for the domain again.
+	q := url.Values{
+		"domain":   {d.ID},
+		"kind":     {"sending"},
+		"provider": {"mx"},
+		"notice":   {"DKIM signing key rotated — publish the new value in the DKIM TXT record for this domain so receivers can verify its mail"},
+	}
+	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 }
 
 // uiAntlerSettings updates only the hosted setup's editable settings (contact

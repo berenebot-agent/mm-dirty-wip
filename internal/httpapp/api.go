@@ -2272,6 +2272,10 @@ func (s *Server) apiDomains(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, err)
 			return
 		}
+		if _, err := s.Service.EnsureDomainDKIMKey(r.Context(), p.AccountID, v.ID); err != nil {
+			// Not fatal: the startup backfill retries a missing key.
+			s.Log.Warn("could not generate DKIM key for new domain", "domain_id", v.ID, "error", err)
+		}
 		writeJSON(w, 201, v)
 	}
 }

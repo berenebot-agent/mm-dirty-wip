@@ -148,6 +148,12 @@ func main() {
 	mxrt := startMXRuntime(svc, edge, log)
 	remoteMXrt := startRemoteMXRuntime(svc, log)
 	ensureSystemAdmin(svc, log)
+	// Give every existing domain a DKIM signing key once, so the Direct MX record
+	// is ready the moment an operator selects the provider. New domains get one
+	// at creation; this covers domains that predate the column.
+	if err := svc.BackfillDomainDKIMKeys(context.Background()); err != nil {
+		log.Warn("domain DKIM key backfill failed", "error", err)
+	}
 	worker := app.NewOutboxWorker(svc, log)
 	// A send nudges the worker for an immediate delivery pass; the periodic
 	// poll remains the backstop. Wire before serving so no request can enqueue

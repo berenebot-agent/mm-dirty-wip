@@ -204,11 +204,12 @@ func TestBlankPrivateKeyRetainsStoredKey(t *testing.T) {
 	}
 }
 
-// TestDisablingDKIMDropsStoredKey proves turning signing off removes the key
-// material at rest, so it cannot reappear later against DNS that has since been
-// republished for a different key.
-func TestDisablingDKIMDropsStoredKey(t *testing.T) {
-	svc, u, d, _ := testService(t)
+// TestDisablingDKIMKeepsStoredKey pins the chosen behaviour: turning signing off
+// keeps the domain's key material, so the record to publish is ready the moment
+// signing is switched back on without a save. Signing itself is governed by the
+// enabled flag, not by whether a key is stored.
+func TestDisablingDKIMKeepsStoredKey(t *testing.T) {
+	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":         "mail.example.com",
@@ -226,8 +227,13 @@ func TestDisablingDKIMDropsStoredKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := dec["dkim_private_key"].(string); strings.TrimSpace(got) != "" {
-		t.Error("disabling DKIM left the private key stored")
+	if got, _ := dec["dkim_private_key"].(string); strings.TrimSpace(got) == "" {
+		t.Error("disabling DKIM dropped the stored key")
+	}
+	// The key still does not sign: signing is off, so the message is unsigned.
+	msg := sendOne(t, svc, u.AccountID, box.ID)
+	if bytes.Contains(storedRaw(t, svc, u.AccountID, msg), []byte("DKIM-Signature:")) {
+		t.Error("message was signed despite signing being off")
 	}
 }
 

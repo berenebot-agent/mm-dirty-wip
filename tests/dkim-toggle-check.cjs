@@ -3,6 +3,9 @@
 // hides the dependent block immediately, and keeps hidden inputs disabled so a
 // switched-off block is not submitted.
 //
+// The Direct MX editor has no "Next" step: its save always reads "Save", because
+// the DNS record it shows is rendered inline the moment signing is switched on.
+//
 // Run: node tests/dkim-toggle-check.cjs
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -125,7 +128,8 @@ function buildDialog(toggleValue) {
 
   const providerSel = el('SELECT', { name: 'provider', class: 'provider-select' });
   providerSel.value = 'mx';
-  const opt = el('OPTION', { 'data-next': '1' });
+  // The Direct MX option carries no data-next: its save always reads "Save".
+  const opt = el('OPTION', {});
   providerSel.options = [opt];
   providerSel.selectedIndex = 0;
   dlg.appendChild(providerSel);
@@ -154,7 +158,7 @@ function buildDialog(toggleValue) {
   group.appendChild(plainWrap);
 
   const save = el('BUTTON', { 'data-save-provider': '1' });
-  save.textContent = 'Next';
+  save.textContent = 'Save';
   dlg.appendChild(save);
 
   return { dlg, toggle, depWrap, depInput, plainWrap, plainInput, save };
@@ -175,7 +179,7 @@ function run(dlg) {
   run(d.dlg);
   assert.equal(d.depWrap.hidden, true, 'dependents must be hidden while signing is off');
   assert.equal(d.depInput.disabled, true, 'a hidden dependent input must be disabled so it is not submitted');
-  assert.equal(d.save.textContent, 'Save', 'with signing off the Direct MX button must read Save');
+  assert.equal(d.save.textContent, 'Save', 'the Direct MX button must read Save with signing off');
 }
 
 // 2. Signing on: the dependent field appears immediately, enabled.
@@ -184,7 +188,7 @@ function run(dlg) {
   run(d.dlg);
   assert.equal(d.depWrap.hidden, false, 'dependents must be visible while signing is on');
   assert.equal(d.depInput.disabled, false, 'a visible dependent input must be enabled');
-  assert.equal(d.save.textContent, 'Next', 'with signing on the Direct MX button must offer the next step');
+  assert.equal(d.save.textContent, 'Save', 'the Direct MX button must read Save with signing on (no Next step)');
 }
 
 // 3. Toggling off then on re-hides and re-shows, keeping disabled in step.
@@ -195,13 +199,13 @@ function run(dlg) {
   d.toggle.emit('change');
   assert.equal(d.depWrap.hidden, true, 'turning signing off must hide the dependents');
   assert.equal(d.depInput.disabled, true, 'turning signing off must disable the dependents');
-  assert.equal(d.save.textContent, 'Save', 'turning signing off must revert the button to Save');
+  assert.equal(d.save.textContent, 'Save', 'the button must stay Save while signing is off');
 
   d.toggle.value = 'on';
   d.toggle.emit('change');
   assert.equal(d.depWrap.hidden, false, 'turning signing back on must show the dependents again');
   assert.equal(d.depInput.disabled, false, 'turning signing back on must re-enable the dependents');
-  assert.equal(d.save.textContent, 'Next', 'turning signing back on must restore the Next step');
+  assert.equal(d.save.textContent, 'Save', 'the button must stay Save while signing is on');
 }
 
 // 4. The dependency only affects the fields that declare it.

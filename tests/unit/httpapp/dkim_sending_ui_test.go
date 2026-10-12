@@ -23,10 +23,14 @@ func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	// Before enabling, there is no record to publish.
+	// Before enabling, the panel is present (so it can appear the moment signing
+	// is switched on) but there is no record to publish yet.
 	before := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
-	if strings.Contains(before, "Publish this DNS record") {
-		t.Error("the DKIM record is shown before signing is enabled")
+	if !strings.Contains(before, "data-dkim-panel") {
+		t.Fatal("the DKIM panel is missing before signing is enabled")
+	}
+	if strings.Contains(before, "dns-remediation-value") {
+		t.Error("a DKIM record is shown before any key exists")
 	}
 
 	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
@@ -65,9 +69,9 @@ func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
 	}
 }
 
-// TestDKIMSigningOffHidesTheRecord proves the panel is dependent: once a key
-// exists, turning signing off leaves the panel in the markup but hidden, so the
-// record is neither shown nor submitted.
+// TestDKIMSigningOffHidesTheRecord proves the panel is dependent: the signing
+// key is kept whether signing is on or off (so the record is ready the moment it
+// is switched back on), but the panel is hidden while signing is off.
 func TestDKIMSigningOffHidesTheRecord(t *testing.T) {
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -77,18 +81,26 @@ func TestDKIMSigningOffHidesTheRecord(t *testing.T) {
 		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
 		"cfg_mx_dkim_enabled": {"on"},
 	})
-	if !strings.Contains(mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID), "data-dkim-panel") {
-		t.Fatal("the DKIM panel is not in the markup after a key exists")
+	on := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
+	if !strings.Contains(on, "data-dkim-panel") || !strings.Contains(on, "dns-remediation-value") {
+		t.Fatal("the DKIM record is not in the markup after a key exists")
+	}
+	if strings.Contains(on, `data-show-field="cfg_mx_dkim_enabled" data-show-values="on" hidden`) {
+		t.Error("the panel is hidden while signing is on")
 	}
 
-	// Turning signing off removes the key, so there is no record to show.
+	// Turning signing off keeps the key, so the record stays in the markup but
+	// the panel is hidden.
 	domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
 		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
 		"cfg_mx_dkim_enabled": {"off"},
 	})
 	group := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
-	if strings.Contains(group, "Publish this DNS record") {
-		t.Error("the record is shown with signing off")
+	if !strings.Contains(group, "dns-remediation-value") {
+		t.Error("the record should stay available so switching signing back on shows it immediately")
+	}
+	if !strings.Contains(group, `data-show-values="on" hidden`) {
+		t.Error("the panel is not hidden with signing off")
 	}
 }
 
