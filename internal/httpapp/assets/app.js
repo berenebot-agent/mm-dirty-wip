@@ -6509,3 +6509,40 @@ function hideInboxSubview(dlg) {
     b.addEventListener('click', function () { dlg.close(); });
   });
 })();
+
+// The One import screen lets the operator tick whole rows. A row toggles its
+// checkbox on click, highlights while selected, and keeps its Index-history
+// select disabled until the row is actually selected, so an unselected row can
+// never carry a window.
+(function () {
+  document.querySelectorAll('table.one-import-table').forEach(function (table) {
+    table.querySelectorAll('tbody tr').forEach(function (row) {
+      var box = row.querySelector('input[type=checkbox]');
+      var select = row.querySelector('select');
+      if (!box) {
+        return;
+      }
+      function sync() {
+        var on = box.checked;
+        row.classList.toggle('selected', on);
+        if (select) {
+          // An unusable row keeps its select permanently disabled.
+          select.disabled = !on || box.disabled;
+        }
+      }
+      box.addEventListener('change', sync);
+      row.addEventListener('click', function (e) {
+        if (box.disabled) {
+          return;
+        }
+        // Let the real controls handle their own clicks.
+        if (e.target.closest('a,button,input,select,textarea,label,form')) {
+          return;
+        }
+        box.checked = !box.checked;
+        sync();
+      });
+      sync();
+    });
+  });
+})();

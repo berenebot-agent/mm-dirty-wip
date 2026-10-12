@@ -8,6 +8,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- The One / Gmail import screen now shows a best-effort **Messages** count per
+  mailbox and offers a per-mailbox **Index history** window — **Everything**
+  (default), **Last year**, **Last 90 days** or **Last 30 days**. A shorter
+  window bounds that inbox's progressive metadata backfill, because a full
+  build spends roughly one provider request per message against One's
+  account-wide quota. The count is non-critical: a mailbox whose profile cannot
+  be read shows **unknown** rather than a misleading zero.
+
 - Provider connection health is now surfaced per inbox. A revoked or expired
   One/Gmail/Microsoft authorization renders a red flag in the dashboard's flags
   column, linked straight to the inbox's Identity tab, and a red prompt at the
@@ -58,6 +66,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   identity tab can rename it later.
 
 ### Changed
+
+- The One / Gmail import screen is tidied: the mailbox table is a compact,
+  vertically aligned table, and a whole row can be clicked to select or
+  deselect it, highlighting the row. Each row's **Index history** control is
+  disabled until that row is selected, so an unselected mailbox can never carry
+  a history window.
 
 - Folder management in the mailbox sidebar is simplified. The **Manage folders**
   disclosure is gone: custom folders now carry a small folder glyph that opens a
