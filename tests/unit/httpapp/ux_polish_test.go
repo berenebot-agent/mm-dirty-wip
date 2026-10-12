@@ -65,6 +65,53 @@ func TestUIDeleteInboxRequiresServerTypedConfirmation(t *testing.T) {
 	}
 }
 
+// TestUIDeleteClientRequiresServerTypedConfirmation proves the client delete
+// guard is enforced server-side: the typed value is the client's name.
+func TestUIDeleteClientRequiresServerTypedConfirmation(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	key, _, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "Deletable key", false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "Hooks", "https://example.net/hook", "notify", "signature", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A wrong confirmation is refused and the key survives.
+	rr := domainPost(t, h, cookie, "/ui/keys/"+key.ID+"/delete", url.Values{"_csrf": {csrf}, "confirm": {"nope"}})
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "error=") {
+		t.Fatalf("wrong key confirm should redirect with an error, got %q", loc)
+	}
+	if keys, _ := svc.Store.ListAPIKeys(ctx, u.AccountID); len(keys) != 1 {
+		t.Fatal("key deleted despite a wrong confirmation")
+	}
+	// The exact name deletes it.
+	rr = domainPost(t, h, cookie, "/ui/keys/"+key.ID+"/delete", url.Values{"_csrf": {csrf}, "confirm": {key.Name}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("key delete status = %d", rr.Code)
+	}
+	if keys, _ := svc.Store.ListAPIKeys(ctx, u.AccountID); len(keys) != 0 {
+		t.Fatal("key survived a correct confirmation")
+	}
+
+	// The same guard covers a webhook client.
+	rr = domainPost(t, h, cookie, "/ui/webhooks/"+hook.ID+"/delete", url.Values{"_csrf": {csrf}, "confirm": {"not-the-name"}})
+	if loc := rr.Header().Get("Location"); !strings.Contains(loc, "error=") {
+		t.Fatalf("wrong webhook confirm should redirect with an error, got %q", loc)
+	}
+	rr = domainPost(t, h, cookie, "/ui/webhooks/"+hook.ID+"/delete", url.Values{"_csrf": {csrf}, "confirm": {"hooks"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("webhook delete status = %d", rr.Code)
+	}
+	if clients, _ := svc.Store.ListWebhookClients(ctx, u.AccountID); len(clients) != 0 {
+		t.Fatal("webhook survived a correct confirmation")
+	}
+}
+
 // TestUICreateDomainInvalidShowsError proves an invalid Add Domain input
 // redirects back to the dashboard with an error notice instead of a bare 400
 // page, so the user is not stranded.
