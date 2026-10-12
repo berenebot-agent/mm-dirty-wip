@@ -2,7 +2,6 @@ package httpapp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -748,11 +747,10 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	if cerr != nil && !errors.Is(cerr, store.ErrNotFound) {
 		return remoteConfigResponse{}, cerr
 	}
-	caps := model.StandaloneCapabilities()
-	caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
+	// Capabilities come from the one authoritative calculation in the store, so
+	// this view cannot drift from the read API's.
+	caps := s.Service.Store.MailboxCapabilities(ctx, inbox)
 	if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inboxID) {
-		caps.Outbound = true
-		caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, inboxID)
 		return remoteConfigResponse{
 			Provider:        "microsoft",
 			Configured:      true,
@@ -764,13 +762,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 		}, nil
 	}
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
-		caps.Outbound = true
-		caps.HierarchicalFolders = false
-		// Gmail (native or via One) has no push subscription: the worker polls,
-		// so the mailbox never reports instant push.
-		caps.Realtime = false
 		if s.Service.Store.IsOne(ctx, p.AccountID, inboxID) {
-			caps.Outbound = inbox.RemoteConfigured
 			poll := 300
 			if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
 				poll = max(120, min(*inbox.RemotePollSeconds, 1800))
@@ -1234,8 +1226,8 @@ func (s *Server) apiInboxRemoteRole(w http.ResponseWriter, r *http.Request) {
 		Path     string `json:"path"`
 		FolderID string `json:"folder_id"`
 	}
-	if r.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&in)
+	if !decodeJSONOptionalLimit(w, r, &in, 16<<10) {
+		return
 	}
 	// Mapping an existing folder: an explicit folder_id (a folder already in the
 	// inbox tree) is mapped to the role and persisted with role_locked, so a later

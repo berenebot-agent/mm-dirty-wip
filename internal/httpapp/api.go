@@ -895,8 +895,8 @@ func (s *Server) apiSeen(w http.ResponseWriter, r *http.Request) {
 		Address string `json:"address"`
 		Seen    *bool  `json:"seen"`
 	}
-	if r.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in)
+	if !decodeJSONOptionalLimit(w, r, &in, 64<<10) {
+		return
 	}
 	if in.Seen != nil {
 		seen = *in.Seen
@@ -2113,7 +2113,9 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			TimeoutSec      int    `json:"timeoutSec"`
 			IncludeSpam     *bool  `json:"include_spam"`
 		}
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in)
+		if !decodeJSONOptionalLimit(w, r, &in, 64<<10) {
+			return
+		}
 		if in.After != "" {
 			rawAfter = strings.TrimSpace(in.After)
 		}
