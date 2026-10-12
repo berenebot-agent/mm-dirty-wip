@@ -212,11 +212,47 @@ func TestWatchIntervalPushAware(t *testing.T) {
 	}
 }
 
-// TestIdleWatchLogsPushReceived proves an IMAP IDLE mailbox update is logged the
-// same way a Microsoft Graph push is ("... push received"), at Info, with the
-// provider, inbox address and event kind. Detection is independent: the signal is
-// logged even when the update turns out to carry no new message.
-func TestIdleWatchLogsPushReceived(t *testing.T) {
+// TestQuickPollDisabled proves an explicit stored 0 turns the new-mail poll off:
+// the watcher and the demand coalescing both fall back to the full-sync cadence,
+// while a nil override still inherits the one-minute quick poll.
+func TestQuickPollDisabled(t *testing.T) {
+	svc, _, box, rm := remoteTestEnv(t)
+	ctx := context.Background()
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetPollInterval(60 * time.Second)
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := time.Duration(model.NormalizeRemoteFullSyncMinutes(nil)) * time.Minute
+	// A nil override inherits the one-minute quick poll.
+	if got := w.WatchIntervalForTest(inbox); got != 60*time.Second {
+		t.Fatalf("default interval = %s, want 60s", got)
+	}
+	// An explicit 0 disables the quick poll: watcher and demand both use the
+	// full-sync cadence instead.
+	zero := 0
+	if err := svc.Store.SetInboxRemoteSync(ctx, box.AccountID, box.ID, &zero, nil); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.WatchIntervalForTest(inbox); got != full {
+		t.Fatalf("disabled watch interval = %s, want the full-sync fallback %s", got, full)
+	}
+	if got := w.DemandIntervalForTest(inbox); got != full {
+		t.Fatalf("disabled demand interval = %s, want the full-sync fallback %s", got, full)
+	}
+}
+
+// TestIdleWatchPushMarksArrivalSource proves an IMAP IDLE mailbox update drives a
+// detection pass that records arrivals with source "imap push", mirroring the
+// Microsoft Graph "microsoft push" source. The bare IDLE signal is logged at
+// Debug only, so there is a single operator-facing "remote received" line whose
+// source reports the push.
+func TestIdleWatchPushMarksArrivalSource(t *testing.T) {
 	svc, box, rm, fake, _ := workerEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -224,9 +260,16 @@ func TestIdleWatchLogsPushReceived(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Establish the detection baseline first, so the pushed message is a fresh
+	// arrival rather than backlog swallowed by the baseline or the watcher's
+	// up-front catch-up pass.
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	w.DetectInbox(ctx, inbox)
+
 	sink := &pushLogSink{}
-	w := app.NewRemoteWorker(svc, rm, slog.New(slog.NewJSONHandler(sink, nil)))
-	sess := &idleFakeSession{fake: fake, notes: make(chan imap.Notification, 4)}
+	w = app.NewRemoteWorker(svc, rm, slog.New(slog.NewJSONHandler(sink, nil)))
+	sess := &idleFakeSession{fake: fake, notes: make(chan imap.Notification, 4), watching: make(chan struct{})}
 	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
 		return sess, nil
 	})
@@ -235,20 +278,59 @@ func TestIdleWatchLogsPushReceived(t *testing.T) {
 		defer close(done)
 		w.WatchInboxForTest(ctx, inbox)
 	}()
-	// Push one server-side mailbox update and wait for it to be logged.
+	// Wait until the IDLE watch is actually live, so the message below arrives
+	// while watching rather than being picked up by the up-front catch-up pass.
+	select {
+	case <-sess.watching:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("watcher never entered IDLE; logs %q", sink.text())
+	}
+	fake.addMessage("INBOX", "From: c@d.test\r\nSubject: pushed\r\nMessage-ID: <pushed@remote>\r\n\r\nbody", "<pushed@remote>", "pushed")
+	// Push one server-side mailbox update and wait for the arrival to be recorded.
 	sess.notes <- imap.Notification{Folder: "INBOX", Kind: "idle", NumMessages: 1, HasNumMessages: true}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if entry, ok := sink.entry("imap push received"); ok {
-			if entry["provider"] != "imap" || entry["inbox"] != box.Address || entry["event"] != "idle" {
-				t.Fatalf("imap push log fields = %#v", entry)
+		arrivals, aerr := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
+		if aerr != nil {
+			t.Fatal(aerr)
+		}
+		if len(arrivals) == 1 {
+			if arrivals[0].Source != "imap push" {
+				t.Fatalf("arrival source = %q, want imap push", arrivals[0].Source)
+			}
+			// The preview must be queued for a push-discovered arrival exactly as it
+			// is for a poll-discovered one. Matching the arrival source against the
+			// single label "imap" skipped every push arrival, so no IDLE message ever
+			// got a preview while polled ones did. This asserts the family match.
+			rec, rerr := svc.Store.GetRemoteMessageByUID(ctx, box.AccountID, box.ID,
+				arrivals[0].FolderPath, arrivals[0].UIDValidity, arrivals[0].UID)
+			if rerr != nil {
+				t.Fatalf("resolve pushed arrival: %v", rerr)
+			}
+			pending, perr := svc.Store.PendingRemotePreviews(ctx, 10)
+			if perr != nil {
+				t.Fatalf("list pending previews: %v", perr)
+			}
+			queued := false
+			for _, p := range pending {
+				if p.ID == rec.ID {
+					queued = true
+					break
+				}
+			}
+			if !queued {
+				t.Fatalf("push arrival %s queued no preview; pending=%d, logs %q", rec.ID, len(pending), sink.text())
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no imap push log; got %q", sink.text())
+			t.Fatalf("no pushed arrival recorded; logs %q", sink.text())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// The operator-facing arrival line carries the push source.
+	if entry, ok := sink.entry("remote received"); !ok || entry["source"] != "imap push" {
+		t.Fatalf("remote received source = %#v", entry)
 	}
 	cancel()
 	<-done
@@ -302,6 +384,9 @@ func (s *pushLogSink) entry(msg string) (map[string]any, bool) {
 type idleFakeSession struct {
 	fakeSession
 	notes chan imap.Notification
+	// watching is closed once Watch is entered, so a test can add mail only after
+	// the watch is live (otherwise the watcher's up-front catch-up pass sees it).
+	watching chan struct{}
 }
 
 func (s *idleFakeSession) IdleCapable() bool { return true }
@@ -309,6 +394,13 @@ func (s *idleFakeSession) IdleCapable() bool { return true }
 func (s *idleFakeSession) Watch(ctx context.Context, folder string, _ int) (<-chan imap.Notification, func(), <-chan error, error) {
 	out := make(chan imap.Notification)
 	errCh := make(chan error, 1)
+	if s.watching != nil {
+		select {
+		case <-s.watching:
+		default:
+			close(s.watching)
+		}
+	}
 	go func() {
 		defer close(out)
 		defer close(errCh)

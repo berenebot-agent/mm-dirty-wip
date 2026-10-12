@@ -184,28 +184,48 @@ const (
 // in whole minutes, so a quicker poll is not expressible and an override can
 // only ever slow polling down. A sub-minute value stored before the floor moved
 // off 15s is clamped up to the floor on read, so it polls at the floor.
+//
+// A stored 0 is an explicit "no quick poll": the inbox relies on instant push
+// (IMAP IDLE or a Microsoft webhook) and the periodic full sync instead of the
+// new-mail poll. This is opt-in only; a blank field inherits the default.
 const (
 	RemotePollSecondsDefault     = 60
 	RemotePollSecondsMin         = 60
+	RemotePollSecondsDisabled    = 0
 	RemoteFullSyncMinutesDefault = 15
 	RemoteFullSyncMinutesMin     = 1
 	// RemotePollMinutesMin is the new-mail poll as the settings form states it:
 	// whole minutes, mirroring RemotePollSecondsMin. The form's minutes are
-	// converted to the column's seconds at the save boundary.
+	// converted to the column's seconds at the save boundary. Zero is accepted by
+	// the form as an explicit "no quick poll" (RemotePollSecondsDisabled).
 	RemotePollMinutesMin = RemotePollSecondsMin / 60
 )
 
 // NormalizeRemotePollSeconds resolves a per-inbox quick-poll override to an
-// effective value, applying the default and the minimum bound. A nil or
-// non-positive value uses the default.
+// effective value. A nil override inherits the default. An explicit 0 means "no
+// quick poll" and is returned as 0 (callers treat a non-positive result as
+// disabled). A negative value is treated as the default, and a positive value
+// below the floor is clamped up to it.
 func NormalizeRemotePollSeconds(v *int) int {
-	if v == nil || *v <= 0 {
+	if v == nil {
+		return RemotePollSecondsDefault
+	}
+	if *v == RemotePollSecondsDisabled {
+		return RemotePollSecondsDisabled
+	}
+	if *v < 0 {
 		return RemotePollSecondsDefault
 	}
 	if *v < RemotePollSecondsMin {
 		return RemotePollSecondsMin
 	}
 	return *v
+}
+
+// RemotePollDisabled reports whether an effective quick-poll value (from
+// NormalizeRemotePollSeconds) means the new-mail poll is switched off.
+func RemotePollDisabled(effectiveSeconds int) bool {
+	return effectiveSeconds <= 0
 }
 
 // NormalizeRemoteFullSyncMinutes resolves a per-inbox full-sync override to an

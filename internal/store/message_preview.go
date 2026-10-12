@@ -21,8 +21,22 @@ func cacheLocalPreview(ctx context.Context, tx *sql.Tx, id, text, markup string)
 // QueueRemotePreview queues only a newly classified ordinary IMAP arrival. No
 // scan of historic messages is performed, and refreshing headers cannot queue it.
 func (s *Store) QueueRemotePreview(ctx context.Context, account, inbox, id string) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_messages SET snippet_pending=1 WHERE account_id=? AND inbox_id=? AND id=? AND snippet='' AND remote_uid>0`, account, inbox, id)
+	_, err := s.QueueRemotePreviewRows(ctx, account, inbox, id)
 	return err
+}
+
+// QueueRemotePreviewRows queues a remote preview and reports how many rows the
+// update matched, so a caller can tell "queued" from "declined" (the row was
+// missing, already had a snippet, or carried no remote UID). A decline is a
+// legitimate outcome — a refresh re-write, a re-detection — but silently
+// swallowing it hid a real gap: every IMAP arrival was declined and no caller
+// could see it.
+func (s *Store) QueueRemotePreviewRows(ctx context.Context, account, inbox, id string) (int64, error) {
+	res, err := s.write.ExecContext(ctx, `UPDATE inbox_remote_messages SET snippet_pending=1 WHERE account_id=? AND inbox_id=? AND id=? AND snippet='' AND remote_uid>0`, account, inbox, id)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) PendingRemotePreviews(ctx context.Context, limit int) ([]RemoteMessage, error) {

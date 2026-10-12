@@ -284,13 +284,16 @@ does not advertise IDLE, and it is the only delivery path for a provider mailbox
 with no push; IDLE-capable servers still deliver new mail instantly. Its floor is
 one minute, equal to the process default, so an override can only slow a mailbox
 down (a sub-minute value stored before the floor moved off 15s is clamped up on
-read). The full interval governs how often the deep reconcile runs (previously the
+read). A stored 0 is an explicit "no quick poll": the inbox relies on push (IMAP
+IDLE or an active Microsoft webhook) and the full sync, and the worker skips both
+its watcher quick poll and the demand coalescing onto it. The full interval governs
+how often the deep reconcile runs (previously the
 worker re-ran it roughly every minute). Both are reported by
 `GET /v1/inboxes/{id}/remote` (`poll_seconds`, `full_sync_minutes`) for every
 standalone provider — IMAP, Google and Microsoft — so a client sees one unit per
 field. On the Identity tab they are edited from the sync schedule block, which is
 shown for every standalone inbox — including a provider-connected one — as whole
-minutes for the poll and minutes for the full sync.
+minutes for the poll and minutes for the full sync; entering 0 turns the poll off.
 
 Microsoft uses the same split: the quick pass applies only the Inbox folder's
 stored delta cursor (no folder-tree enumeration), and the deep reconcile runs on

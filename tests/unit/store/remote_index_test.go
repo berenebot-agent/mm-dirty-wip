@@ -342,6 +342,23 @@ func TestSetInboxRemoteSyncRoundTrip(t *testing.T) {
 	if got.RemotePollSeconds != nil || got.RemoteFullSyncMinutes != nil {
 		t.Fatalf("cleared overrides persisted: %v %v", got.RemotePollSeconds, got.RemoteFullSyncMinutes)
 	}
+	// An explicit 0 poll persists as 0 ("no quick poll"), distinct from nil
+	// (inherit), and a negative poll is rejected.
+	zero := 0
+	if err := st.SetInboxRemoteSync(ctx, acct, in.ID, &zero, &full); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetInboxInternal(ctx, acct, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RemotePollSeconds == nil || *got.RemotePollSeconds != 0 {
+		t.Fatalf("disabled poll = %v want an explicit 0", got.RemotePollSeconds)
+	}
+	neg := -1
+	if err := st.SetInboxRemoteSync(ctx, acct, in.ID, &neg, nil); err == nil {
+		t.Fatal("negative poll override was accepted")
+	}
 }
 
 // TestSetFolderRolePersistsThroughReconcile proves an explicit role mapping of an
