@@ -3596,6 +3596,35 @@ pending Microsoft push work. The pending-work marker carries push provenance
 across the asynchronous queue and restarts. No new dependency or service.
 See `docs/MICROSOFT.md`.
 
+## D106 — One import shows a message count and offers a bounded history window
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** A One Gmail import builds metadata progressively and spends
+roughly one provider request per message against One's **account-wide** quota
+(the free plan advertises ~1M requests/month at ~15–20 requests/min per
+account, shared by every inbox imported with the same key). Importing a large
+mailbox can therefore consume a big share of the quota with no warning at the
+point of decision. Operators need to see how large each mailbox is and be able
+to cap how much history is indexed.
+
+**Decision:** On the One import screen, surface a best-effort `messagesTotal`
+for each usable Gmail connection and a short note explaining the quota
+arithmetic. Add a per-connection **Index history** selector
+(`Everything` — default — / `Last year` / `Last 90 days` / `Last 30 days`).
+A non-default window is stored per inbox (migration 070 adds
+`inbox_gmail_sync.backfill_after`) and applied by prefixing the progressive
+backfill's Gmail `messages.list` query with `after:YYYY/MM/DD`. `Everything`
+stores an empty horizon and keeps the existing unbounded behaviour. The count
+is deliberately non-critical: a failed profile call shows `unknown`, never a
+misleading zero, and never blocks import. An unknown or missing window key
+defaults to unbounded, so a bad form value can never silently narrow a mailbox.
+Incremental history catch-up and new-mail detection are unaffected.
+
+**Complexity:** Migration 070 adds one nullable text column and one store
+getter/setter. `List` already accepts a Gmail query string, so no transport
+change is needed. No new dependency or service. See `docs/ONE.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

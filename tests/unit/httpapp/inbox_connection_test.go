@@ -36,7 +36,7 @@ func oneReconnectFixture(t *testing.T) (http.Handler, *app.Service, model.User, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := rm.ImportOne(context.Background(), p, setup, []string{onefixture.ConnectionID})
+	results, err := rm.ImportOne(context.Background(), p, setup, []string{onefixture.ConnectionID}, nil)
 	if err != nil || len(results) != 1 || results[0].Error != "" {
 		t.Fatalf("import: %+v %v", results, err)
 	}

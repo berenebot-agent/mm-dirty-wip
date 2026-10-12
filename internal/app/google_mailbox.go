@@ -350,11 +350,18 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 		if one {
 			limit = 10
 		}
+		// An optional history horizon keeps a bounded backfill inside One's
+		// account-wide request quota. An empty horizon indexes everything.
+		after, _ := m.Service.Store.GmailBackfillAfter(ctx, account, inbox)
+		query := ""
+		if after != "" {
+			query = "after:" + after
+		}
 		var p gmail.MessagePage
 		if one && c.BackfillSnapshot != "" {
 			e = json.Unmarshal([]byte(c.BackfillSnapshot), &p)
 		} else {
-			p, e = client.List(ctx, t, "", "", c.BackfillPage, limit)
+			p, e = client.List(ctx, t, query, "", c.BackfillPage, limit)
 			if e == nil && one {
 				b, err := json.Marshal(p)
 				if err != nil {

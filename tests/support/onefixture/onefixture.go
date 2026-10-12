@@ -38,6 +38,12 @@ type Fixture struct {
 	Keys         []string
 	SenderNames  map[string]string
 	SentFrom     string
+	// ProfileTotal is returned as messagesTotal by the fixture /profile call,
+	// exercising the import screen's best-effort count.
+	ProfileTotal int
+	// ListQuery records the q parameter of the last /messages list call, so
+	// tests can assert the history horizon is applied.
+	ListQuery string
 }
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -112,10 +118,11 @@ func New(t *testing.T) *Fixture {
 		case "/settings/sendAs":
 			_ = json.NewEncoder(w).Encode(map[string]any{"sendAs": []any{map[string]string{"sendAsEmail": "other-alias@example.test", "displayName": "Wrong alias name"}, map[string]string{"sendAsEmail": profileEmail, "displayName": f.SenderNames[profileEmail]}}})
 		case "/profile":
-			_ = json.NewEncoder(w).Encode(map[string]string{"emailAddress": profileEmail, "historyId": "10"})
+			_ = json.NewEncoder(w).Encode(map[string]any{"emailAddress": profileEmail, "historyId": "10", "messagesTotal": f.ProfileTotal})
 		case "/labels":
 			_ = json.NewEncoder(w).Encode(map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "DRAFT", "name": "DRAFT", "type": "system"}, map[string]string{"id": "SENT", "name": "SENT", "type": "system"}}})
 		case "/messages":
+			f.ListQuery = r.URL.Query().Get("q")
 			if r.URL.Query().Get("labelIds") == "SENT" && f.SentFrom != "" {
 				_ = json.NewEncoder(w).Encode(map[string]any{"messages": []map[string]string{{"id": "sent-name"}}})
 				return

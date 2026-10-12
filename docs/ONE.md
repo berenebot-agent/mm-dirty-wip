@@ -179,6 +179,16 @@ The next wizard page shows mailbox selection only, with **Cancel** and
 hidden and empty imported-mailbox sections are not displayed. Successful import
 shows a completion panel with the imported inbox names, addresses and **Open
 inbox** links, plus a right-aligned **Close** button back to the dashboard.
+The selection table shows a best-effort **Messages** count per mailbox (from
+Gmail's `messagesTotal`, shown as `unknown` when the profile call fails) and
+an **Index history** selector per connection — `Everything` (default),
+`Last year`, `Last 90 days` or `Last 30 days`. This is deliberate: a full
+metadata build spends roughly one provider request per message against One's
+account-wide quota, so a large mailbox can consume a big share of the monthly
+allowance. A shorter window stores an `after:YYYY/MM/DD` horizon on that inbox
+and stops the progressive backfill at it; `Everything` leaves the backfill
+unbounded. The horizon is per inbox and never affects incremental history
+catch-up or new-mail detection.
 API keys are visible during entry only; saved credentials are never redisplayed.
 Successful multi-import creates an independently encrypted key and connection
 for every selected inbox, then removes the temporary setup. Partial failures

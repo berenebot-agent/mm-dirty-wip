@@ -40,12 +40,12 @@ func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
 	if err != nil || len(choices) != 3 || choices[0].Email != onefixture.Email || !choices[0].Available || choices[1].Available || choices[2].Available {
 		t.Fatalf("discovery %+v %v", choices, err)
 	}
-	results, err := rm.ImportOne(ctx, p, setupID, []string{onefixture.ConnectionID, "fixture-outlook"})
+	results, err := rm.ImportOne(ctx, p, setupID, []string{onefixture.ConnectionID, "fixture-outlook"}, nil)
 	if err != nil || len(results) != 2 || results[0].InboxID == "" || results[1].Error == "" {
 		t.Fatalf("selective import %+v %v", results, err)
 	}
 	inbox := results[0].InboxID
-	again, err := rm.ImportOne(ctx, p, setupID, []string{onefixture.ConnectionID})
+	again, err := rm.ImportOne(ctx, p, setupID, []string{onefixture.ConnectionID}, nil)
 	if err != nil || again[0].InboxID != inbox {
 		t.Fatal("duplicate import not idempotent", err)
 	}
@@ -291,5 +291,90 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 		if strings.Contains(complete.Body.String(), extra) {
 			t.Fatalf("completion screen retains extra content: %s", extra)
 		}
+	}
+}
+
+// TestOneImportHistoryWindowBoundsBackfill covers the import-screen count and
+// the optional per-inbox horizon: a chosen window is stored and applied to the
+// progressive backfill as a Gmail "after:" boundary, while the default indexes
+// everything.
+func TestOneImportHistoryWindowBoundsBackfill(t *testing.T) {
+	svc, _, u, _, _, _ := standaloneFixture(t)
+	ctx := context.Background()
+	f := onefixture.New(t)
+	rm := app.NewRemoteMailboxService(svc)
+	defer rm.Stop()
+	rm.OneHTTP, rm.OneInterval = f.Client(t), time.Nanosecond
+	rm.InstallRemoteBridges()
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+
+	// A surfaced count is best-effort and must never block import.
+	f.Change(func(f *onefixture.Fixture) { f.ProfileTotal = 12345 })
+	setupID, err := rm.PrepareOneImport(ctx, p, onefixture.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	choices, err := rm.DiscoverOne(ctx, p, setupID)
+	if err != nil || len(choices) != 3 {
+		t.Fatalf("discovery %+v %v", choices, err)
+	}
+	if choices[0].MessagesTotal != 12345 {
+		t.Fatalf("message total not surfaced: %+v", choices[0])
+	}
+	// Unavailable connections report no estimate rather than a misleading zero.
+	if choices[1].MessagesTotal != 0 || choices[2].MessagesTotal != 0 {
+		t.Fatalf("unusable connection reported a count: %+v", choices)
+	}
+
+	// Default (unknown window key) imports the full history.
+	results, err := rm.ImportOne(ctx, p, setupID, []string{onefixture.ConnectionID}, nil)
+	if err != nil || len(results) != 1 || results[0].InboxID == "" {
+		t.Fatalf("import %+v %v", results, err)
+	}
+	inbox := results[0].InboxID
+	if after, err := svc.Store.GmailBackfillAfter(ctx, u.AccountID, inbox); err != nil || after != "" {
+		t.Fatalf("default horizon should be unbounded: %q %v", after, err)
+	}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, inbox); err != nil {
+		t.Fatal(err)
+	}
+	f.Change(func(f *onefixture.Fixture) {
+		if f.ListQuery != "" {
+			t.Errorf("unbounded backfill sent a query: %q", f.ListQuery)
+		}
+	})
+
+	// A second mailbox with a bounded window records and applies the horizon.
+	f.Change(func(f *onefixture.Fixture) {
+		f.Connections = append(f.Connections, map[string]any{"id": "fixture-one-second", "key": "fixture-second-selector", "platform": "gmail", "active": true, "state": "operational", "environment": "live", "email": "second-one@example.test"})
+		f.SenderNames["second-one@example.test"] = "Second Owner"
+		f.Calls = nil
+	})
+	setup2, err := rm.PrepareOneImport(ctx, p, onefixture.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounded, err := rm.ImportOne(ctx, p, setup2, []string{"fixture-one-second"}, map[string]string{"fixture-one-second": "90d"})
+	if err != nil || len(bounded) != 1 || bounded[0].InboxID == "" {
+		t.Fatalf("bounded import %+v %v", bounded, err)
+	}
+	second := bounded[0].InboxID
+	after, err := svc.Store.GmailBackfillAfter(ctx, u.AccountID, second)
+	if err != nil || !strings.HasPrefix(after, "20") {
+		t.Fatalf("horizon not stored: %q %v", after, err)
+	}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, second); err != nil {
+		t.Fatal(err)
+	}
+	f.Change(func(f *onefixture.Fixture) {
+		if !strings.HasPrefix(f.ListQuery, "after:") {
+			t.Errorf("bounded backfill missing horizon query: %q", f.ListQuery)
+		}
+	})
+
+	// The window options are stable and start with the unbounded default.
+	options := app.OneHistoryWindowOptions()
+	if len(options) == 0 || options[0].Key != "all" || options[0].Days != 0 {
+		t.Fatalf("unexpected window options: %+v", options)
 	}
 }
