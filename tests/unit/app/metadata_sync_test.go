@@ -119,7 +119,7 @@ func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID})
+	results, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID}, nil)
 	if err != nil || len(results) != 1 || results[0].Error != "" {
 		t.Fatalf("import: %+v %v", results, err)
 	}

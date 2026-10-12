@@ -20,15 +20,53 @@ type oneCachedClient struct {
 	client   *one.Client
 }
 type OneMailboxChoice struct {
-	ID          string `json:"id"`
-	Email       string `json:"email,omitempty"`
-	Provider    string `json:"provider"`
-	OneStatus   string `json:"one_status"`
-	Environment string `json:"environment"`
-	InboxID     string `json:"inbox_id,omitempty"`
-	Status      string `json:"status"`
-	Available   bool   `json:"available"`
+	ID            string `json:"id"`
+	Email         string `json:"email,omitempty"`
+	Provider      string `json:"provider"`
+	OneStatus     string `json:"one_status"`
+	Environment   string `json:"environment"`
+	InboxID       string `json:"inbox_id,omitempty"`
+	Status        string `json:"status"`
+	Available     bool   `json:"available"`
+	MessagesTotal int    `json:"messages_total,omitempty"`
 }
+
+// One history windows offered on the import screen. Everything is the default;
+// the shorter windows exist because a full metadata build spends roughly one
+// provider request per message against One's account-wide quota.
+type OneHistoryWindow struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Days  int    `json:"days"`
+}
+
+var oneHistoryWindows = []OneHistoryWindow{
+	{Key: "all", Label: "Everything", Days: 0},
+	{Key: "365d", Label: "Last year", Days: 365},
+	{Key: "90d", Label: "Last 90 days", Days: 90},
+	{Key: "30d", Label: "Last 30 days", Days: 30},
+}
+
+// OneHistoryWindowOptions returns the import-screen history windows in display
+// order, with Everything first.
+func OneHistoryWindowOptions() []OneHistoryWindow {
+	out := make([]OneHistoryWindow, len(oneHistoryWindows))
+	copy(out, oneHistoryWindows)
+	return out
+}
+
+// oneBackfillAfter maps a window key to a Gmail "after:" boundary. The empty
+// string means no boundary (index everything). Unknown keys default to
+// unbounded so a bad form value can never silently narrow a mailbox.
+func oneBackfillAfter(key string, now time.Time) string {
+	for _, w := range oneHistoryWindows {
+		if w.Key == key && w.Days > 0 {
+			return now.UTC().AddDate(0, 0, -w.Days).Format("2006/01/02")
+		}
+	}
+	return ""
+}
+
 type OneImportResult struct {
 	ConnectionID string `json:"connection_id"`
 	InboxID      string `json:"inbox_id,omitempty"`
@@ -196,6 +234,9 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 				}
 				if e == nil {
 					row.Status, row.Available = "Not imported", true
+					// MessagesTotal is an estimate of the full-history import
+					// cost; it is deliberately best-effort and never blocks import.
+					row.MessagesTotal = profile.MessagesTotal
 				} else {
 					row.Status = "Cannot verify Gmail identity/permissions; reconnect in One"
 				}
@@ -226,7 +267,11 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 	return out, nil
 }
 
-func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal, setupID string, ids []string) ([]OneImportResult, error) {
+// ImportOne imports the selected Gmail connections. windows maps a connection
+// ID to a history-window key from oneHistoryWindows; a missing or unknown key
+// indexes the full history. Each imported inbox stores its own horizon so the
+// progressive backfill stops at the chosen boundary.
+func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal, setupID string, ids []string, windows map[string]string) ([]OneImportResult, error) {
 	ctx = store.WithInboxLogOperation(ctx, "one_import")
 	ctx = store.WithInboxLogActor(ctx, "", p)
 	s, c, key, err := m.oneSetup(ctx, p, setupID)
@@ -283,6 +328,13 @@ func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal,
 				if e != nil {
 					result.Error = "Import failed; address already exists or configuration changed"
 				} else {
+					if after := oneBackfillAfter(windows[id], time.Now()); after != "" {
+						if e = m.Service.Store.SetGmailBackfillAfter(ctx, p.AccountID, result.InboxID, after); e != nil {
+							result.Error = "Import failed; history window could not be recorded"
+						}
+					}
+				}
+				if e == nil {
 					m.ScheduleRefresh(p.AccountID, result.InboxID)
 				}
 			}
