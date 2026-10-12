@@ -316,6 +316,27 @@ func statusListed(rows []Status, url string) bool {
 	return false
 }
 
+// SetStatusForTest injects a domain's receiver status rows directly, bypassing
+// the dialer's handshake. It exists so tests can present a settled "ready" (or
+// any other) state without standing up a live receiver; production never calls
+// it. The domain is canonicalized exactly as Status does.
+func (m *Manager) SetStatusForTest(domain string, rows []Status) {
+	d, err := mxwire.CanonicalDomain(domain)
+	if err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k := range m.status {
+		if strings.HasPrefix(k, d+"\x00") {
+			delete(m.status, k)
+		}
+	}
+	for _, row := range rows {
+		m.status[statusKey(d, row.ReceiverURL)] = row
+	}
+}
+
 // connectionRow normalizes the single-mode connection row: an unset row means
 // the dialer has not completed an attempt yet, which is "connecting" — never a
 // fabricated ready or disconnected state.
