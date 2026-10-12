@@ -3440,6 +3440,45 @@ function clearUrlParams(names) {
     });
   }
 
+  // loadDashboardGroup fills the Identity tab's Dashboard group field from the
+  // signed-in user's dashboard preferences (a personal display preference, not
+  // inbox policy). A group is read from groups.inboxes[id]. The datalist is
+  // refreshed from the same payload so the field offers existing group names.
+  function loadDashboardGroup(inboxID) {
+    var field = document.getElementById('inbox-dashboard-group');
+    var input = document.getElementById('inbox-dashboard-group-input');
+    var options = document.getElementById('inbox-dashboard-group-options');
+    if (!field || !input) {
+      return;
+    }
+    field.hidden = false;
+    input.value = '';
+    fetch('/ui/dashboard/preferences', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if (!r.ok) { throw new Error('preferences unavailable'); } return r.json(); })
+      .then(function (prefs) {
+        var groups = (prefs && prefs.groups && prefs.groups.inboxes) || {};
+        input.value = groups[inboxID] || '';
+        if (options) {
+          options.textContent = '';
+          var seen = Object.create(null);
+          Object.keys(groups).forEach(function (key) {
+            var name = groups[key];
+            if (name && !seen[name]) {
+              seen[name] = true;
+              var opt = document.createElement('option');
+              opt.value = name;
+              options.appendChild(opt);
+            }
+          });
+        }
+      })
+      .catch(function () {
+        // Preferences are display-only here: a failure leaves the field empty and
+        // the save simply writes whatever the admin typed.
+        input.value = '';
+      });
+  }
+
   // populateRemoteTabs fills the Identity tab's collapsible IMAP/SMTP sections
   // from the inbox row's embedded secret-free remote config, and shows or hides
   // them by inbox kind. Passwords are never shown: the fields stay blank and
@@ -4214,6 +4253,7 @@ function clearUrlParams(names) {
       address.value = btn.dataset.address || '';
       dlg._inboxKind = btn.dataset.kind || 'domain';
       populateRemoteTabs(btn);
+      loadDashboardGroup(btn.dataset.id || '');
       editor.setApprover(btn.dataset.approverEmail || '');
       editor.setRestricted(btn.dataset.restricted === '1');
       editor.setRequireAuth(btn.dataset.requireAuth === '1');
