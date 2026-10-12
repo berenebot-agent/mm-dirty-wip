@@ -211,6 +211,12 @@ func TestSidebarFolderManagementMarkup(t *testing.T) {
 		`id="folder-new-dialog"`,
 		`id="folder-manage-dialog"`,
 		`New folder`,
+		// The manage dialog keeps Delete on the same actions row as
+		// Cancel/Rename, left-aligned via .dialog-actions>form: the delete
+		// form is the row's first child and Rename submits the external
+		// rename form through its form attribute.
+		`<div class="dialog-actions"><form method="post" action="" data-folder-delete-form>`,
+		`<button form="folder-rename-form">Rename</button>`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("folder sidebar missing %q", want)
