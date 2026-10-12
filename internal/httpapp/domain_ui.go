@@ -358,7 +358,7 @@ func (s *Server) uiAntlerContactEmail(w http.ResponseWriter, r *http.Request) {
 		mapDomainConfigError(w, err)
 		return
 	}
-	response, err := s.domainReceivingResponse(r.Context(), id, cfg)
+	response, err := s.domainReceivingResponse(r.Context(), id, cfg, includeDNSRequested(r))
 	if err != nil {
 		mapDomainConfigError(w, err)
 		return
