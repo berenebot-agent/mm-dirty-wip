@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -313,6 +315,52 @@ func TestGmailSyncIsLogged(t *testing.T) {
 	}
 }
 
+func TestConcurrentGmailDetectionRunsOnePass(t *testing.T) {
+	svc, box, rm, fixture := googleLogEnv(t)
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1)
+	inbox, err := svc.Store.GetInboxInternal(context.Background(), box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	profileStarted := make(chan struct{}, 1)
+	releaseProfile := make(chan struct{})
+	fixture.profileStarted = profileStarted
+	fixture.releaseProfile = releaseProfile
+
+	firstDone := make(chan struct{})
+	go func() {
+		w.DetectInbox(context.Background(), inbox)
+		close(firstDone)
+	}()
+	select {
+	case <-profileStarted:
+	case <-time.After(5 * time.Second):
+		close(releaseProfile)
+		t.Fatal("first Gmail detection did not reach profile request")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		w.DetectInbox(context.Background(), inbox)
+		close(secondDone)
+	}()
+	select {
+	case <-secondDone:
+	case <-time.After(5 * time.Second):
+		close(releaseProfile)
+		<-firstDone
+		t.Fatal("overlapping Gmail detection did not return promptly")
+	}
+	close(releaseProfile)
+	<-firstDone
+
+	if got := fixture.profileRequests.Load(); got != 1 {
+		t.Fatalf("profile requests = %d, want 1 concurrent Gmail detection pass", got)
+	}
+}
+
 // TestGmailDetectionToleratesVanishedMessage proves a history entry whose
 // messages.get returns 404 (the message vanished between the history snapshot
 // and the fetch) does not fail the detection pass: the pass completes, the stale
@@ -441,9 +489,12 @@ func googleLogEnv(t *testing.T) (*app.Service, model.Inbox, *app.RemoteMailboxSe
 }
 
 type googleLogFixture struct {
-	mu       sync.Mutex
-	url      string
-	messages []string
+	mu              sync.Mutex
+	url             string
+	messages        []string
+	profileStarted  chan struct{}
+	releaseProfile  chan struct{}
+	profileRequests atomic.Int32
 	// gone holds message ids that history still names but whose fetch must 404,
 	// simulating a message deleted between the history snapshot and the get.
 	gone map[string]bool
@@ -467,11 +518,21 @@ func (f *googleLogFixture) vanish(id string) {
 }
 
 func (f *googleLogFixture) handle(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.URL.Path, "/profile") {
+		f.profileRequests.Add(1)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case strings.Contains(r.URL.Path, "/profile"):
+		if f.profileStarted != nil {
+			select {
+			case f.profileStarted <- struct{}{}:
+			default:
+			}
+			<-f.releaseProfile
+		}
 		json.NewEncoder(w).Encode(map[string]any{"historyId": "100", "emailAddress": "agent@remote.example"})
 	case strings.Contains(r.URL.Path, "/history"):
 		var hist []any
