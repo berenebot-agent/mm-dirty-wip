@@ -251,6 +251,7 @@ func migrations(dataDir string) []migration {
 		{version: "069", sql: migration069, detect: stateOf(tableExists("inbox_metadata_sync"))},
 		{version: "070", sql: migration070, detect: stateOf(columnAdded("inbox_gmail_sync", "backfill_after"))},
 		{version: "071", sql: migration071, detect: stateOf(columnAdded("users", "dashboard_preferences"))},
+		{version: "072", sql: migration072, detect: allOf(columnAdded("messages", "snippet"), columnAdded("inbox_remote_messages", "snippet_pending"))},
 	}
 }
 

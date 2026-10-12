@@ -112,8 +112,8 @@ type Folder struct {
 // a locator is only meaningful while its UIDValidity still matches the folder.
 type RemoteLocator struct {
 	FolderPath  string `json:"folder_path,omitempty"`
-	UIDValidity uint32 `json:"uid_validity,omitempty"`
-	UID         uint32 `json:"uid,omitempty"`
+	UIDValidity uint32 `json:"-"`
+	UID         uint32 `json:"-"`
 	// MessageID is the RFC5322 Message-ID when one is known. It is the fallback
 	// locator when UIDValidity has changed and the UID is no longer trustworthy.
 	MessageID string `json:"message_id,omitempty"`

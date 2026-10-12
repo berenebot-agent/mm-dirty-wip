@@ -126,7 +126,7 @@ func (m *RemoteMailboxService) cacheMicrosoft(ctx context.Context, account, inbo
 		return RemoteMessageView{}, e
 	}
 	r.Labels = g.Categories
-	v := remoteView(r)
+	v := m.remoteView(ctx, r)
 	v.FolderPath = g.ParentFolderID
 	return v, nil
 }
@@ -527,7 +527,7 @@ func (m *RemoteMailboxService) listMicrosoft(ctx context.Context, p model.Princi
 		out.Completeness = model.CompletenessComplete
 	}
 	for _, r := range rows {
-		v := remoteView(r)
+		v := m.remoteView(ctx, r)
 		v.FolderPath = folder
 		v.Labels, _ = m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inbox, r.ID)
 		out.Items = append(out.Items, v)

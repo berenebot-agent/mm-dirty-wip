@@ -78,7 +78,7 @@ func (m *RemoteMailboxService) GetRemoteThread(ctx context.Context, p model.Prin
 		if !msg.Read {
 			unread++
 		}
-		v := remoteView(msg)
+		v := m.remoteView(ctx, msg)
 		if m.IsMicrosoft(ctx, p.AccountID, inboxID) {
 			v.FolderPath, _ = m.Service.Store.MicrosoftMessageFolder(ctx, p.AccountID, inboxID, msg.ID)
 		}
@@ -287,7 +287,7 @@ func (m *RemoteMailboxService) viewsForUIDs(ctx context.Context, accountID, inbo
 			}
 			rec.Labels = labels
 		}
-		out = append(out, remoteView(rec))
+		out = append(out, m.remoteView(ctx, rec))
 	}
 	return out, nil
 }

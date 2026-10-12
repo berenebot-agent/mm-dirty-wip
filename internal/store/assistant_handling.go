@@ -311,7 +311,6 @@ func handoffPayload(r model.AssistantHandlingRequest) map[string]any {
 		"mode":          r.Mode,
 		"publication":   r.Publication,
 		"handoff_id":    r.HandoffID,
-		"remote_uid":    r.RemoteUID,
 		"remote_folder": r.RemoteFolder,
 	}
 	if r.MessageID != "" {

@@ -78,11 +78,12 @@ func standaloneFixture(t *testing.T) (*app.Service, http.Handler, model.User, mo
 // fakeIMAP is a minimal deterministic IMAP session used to exercise the HTTP
 // dispatch without a live server.
 type fakeIMAP struct {
-	mu       sync.Mutex
-	folders  map[string]uint32
-	messages []*fakeIMAPMsg
-	nextUID  uint32
-	failOpen bool
+	mu           sync.Mutex
+	folders      map[string]uint32
+	messages     []*fakeIMAPMsg
+	nextUID      uint32
+	failOpen     bool
+	previewCalls int
 }
 
 type fakeIMAPMsg struct {
@@ -253,6 +254,22 @@ func (f *fakeIMAP) FetchBodyPart(ctx context.Context, loc imap.Locator, _ []int,
 	return f.FetchRawMIME(ctx, loc, w)
 }
 
+func (f *fakeIMAP) FetchPreview(_ context.Context, loc imap.Locator, limit int64, w io.Writer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.previewCalls++
+	m := f.find(loc)
+	if m == nil {
+		return imap.ErrNotFound
+	}
+	raw := m.raw
+	if int64(len(raw)) > limit {
+		raw = raw[:limit]
+	}
+	_, err := io.WriteString(w, raw)
+	return err
+}
+
 func (f *fakeIMAP) SetFlags(_ context.Context, loc imap.Locator, _, _ []string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -358,6 +375,9 @@ func (f *fakeIMAP) Search(_ context.Context, folder string, q imap.SearchQuery) 
 			continue
 		}
 		if q.BeforeUID > 0 && m.uid >= q.BeforeUID {
+			continue
+		}
+		if q.AfterUID > 0 && m.uid <= q.AfterUID {
 			continue
 		}
 		uids = append(uids, m.uid)
