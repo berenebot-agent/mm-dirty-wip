@@ -58,8 +58,9 @@ func (s *Server) SetDNSResolver(r DNSResolver) {
 // points MX at a single Antler receiver is not dragged to a mismatch by the
 // other advertised receivers. Matched lists which expected hostnames were found
 // (it is what the per-connector status lights read); Found is the published set
-// shown to the operator. The state is "mismatch" only when MX records exist but
-// none of them is one of our receivers.
+// shown to the operator; Unexpected lists the published hostnames that are not
+// one of our receivers, which the aggregate light turns amber on. The state is
+// "mismatch" only when MX records exist but none of them is one of our receivers.
 func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) domainDNSView {
 	return c.view(func(resolver DNSResolver, ctx context.Context) domainDNSView {
 		view := domainDNSView{Kind: "mx", Name: domain, Expected: formatMXExpected(expected)}
@@ -69,11 +70,22 @@ func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) doma
 			return view
 		}
 		hosts := make([]string, 0, len(records))
+		known := map[string]bool{}
+		for _, want := range expected {
+			known[strings.ToLower(strings.TrimSuffix(want.Hostname, "."))] = true
+		}
 		found := map[string]bool{}
 		for _, mx := range records {
 			host := strings.TrimSuffix(strings.ToLower(mx.Host), ".")
 			hosts = append(hosts, host)
 			found[host] = true
+			if !known[host] {
+				view.Unexpected = append(view.Unexpected, host)
+			}
+		}
+		sort.Strings(view.Unexpected)
+		if len(view.Unexpected) > dnsMaxFound {
+			view.Unexpected = view.Unexpected[:dnsMaxFound]
 		}
 		sort.Strings(hosts)
 		if len(hosts) > dnsMaxFound {
@@ -81,7 +93,7 @@ func (c *dnsChecker) checkMX(domain string, expected []dialMXMXInstruction) doma
 		}
 		view.Found = hosts
 		for _, want := range expected {
-			if found[strings.ToLower(want.Hostname)] {
+			if found[strings.ToLower(strings.TrimSuffix(want.Hostname, "."))] {
 				view.Matched = append(view.Matched, want.Hostname)
 			}
 		}
