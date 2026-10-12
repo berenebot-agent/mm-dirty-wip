@@ -7,23 +7,26 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
-	"github.com/dellarb/mailmoose/internal/transport/one"
 )
 
 // MetadataSyncStatus is inbox-wide metadata progress for the signed-in user's
 // visible inboxes. Zero Total means unknown, not an empty mailbox. Running and
 // queued are process-owned; restart never leaves a durable false spinner.
 type MetadataSyncStatus struct {
-	InboxID   string    `json:"inbox_id"`
-	Name      string    `json:"name"`
-	Address   string    `json:"address"`
-	Provider  string    `json:"provider"`
-	State     string    `json:"state"`
-	Phase     string    `json:"phase"`
-	Indexed   int64     `json:"indexed"`
-	Total     int64     `json:"total"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Error     string    `json:"error,omitempty"`
+	InboxID  string `json:"inbox_id"`
+	Name     string `json:"name"`
+	Address  string `json:"address"`
+	Provider string `json:"provider"`
+	State    string `json:"state"`
+	Phase    string `json:"phase"`
+	Indexed  int64  `json:"indexed"`
+	Total    int64  `json:"total"`
+	// EstimatedTotal marks Total as approximate: Gmail/One report a count over
+	// every label while MailMoose indexes a folder subset, so the denominator is
+	// an estimate and the UI shows it as such.
+	EstimatedTotal bool      `json:"estimated_total,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Error          string    `json:"error,omitempty"`
 }
 
 func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model.Principal) ([]MetadataSyncStatus, error) {
@@ -54,7 +57,6 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		// folder open. metadataChecking still marks the action queue's activity;
 		// it just no longer claims the index is being rebuilt.
 		running, queued := m.reconciling[key] != nil, m.refreshing[key]
-		waiting := m.metadataWaiting[key] > 0
 		m.refreshMu.Unlock()
 		if !running && !queued && index.Status == store.RemoteIndexComplete && (snapshot.State == "" || snapshot.State == "done") {
 			continue
@@ -76,10 +78,6 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		if running {
 			state = "running"
 		}
-		if running && waiting {
-			state = "waiting"
-			snapshot.Error = "Waiting for provider request slot"
-		}
 		if index.Status == store.RemoteIndexComplete && (running || queued) {
 			phase = "refresh"
 		}
@@ -91,14 +89,23 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		} else if m.IsMicrosoft(ctx, p.AccountID, box.ID) {
 			provider = "Outlook"
 		}
-		// Total is the provider's own count for the inbox. It is only withheld
-		// when it is internally inconsistent (a pass indexed more rows than the
-		// provider reports), because a smaller numerator than denominator would
-		// render a nonsense percentage. A refresh pass of an already-complete
-		// inbox still re-reads and re-saves a valid total, so it must keep its
-		// percentage rather than being flattened to a bare "N indexed" count.
-		if snapshot.Total < snapshot.Indexed {
-			snapshot.Total = 0
+		// Total is the provider's own count for the inbox; Indexed is the rows
+		// we have actually cached. For Gmail/One these are different populations
+		// (the provider counts every label; we index a folder subset), so the
+		// denominator is an estimate and the UI marks it as such.
+		//
+		// Normalise so the pair can never render a nonsense fraction, but only
+		// when the provider actually reported a total:
+		//  - raise the denominator to meet the numerator, so a pass that indexed
+		//    more rows than the provider reported shows N/N rather than N/M with
+		//    M<N ("110/100" becomes "110/110");
+		//  - when the index is complete, snap the denominator to the indexed
+		//    count so the final paint reads M/M instead of a sub-100 plateau.
+		// Total 0 still means "unknown" and is left for the UI's bare count.
+		if snapshot.Total > 0 {
+			if index.Status == store.RemoteIndexComplete || snapshot.Total < snapshot.Indexed {
+				snapshot.Total = snapshot.Indexed
+			}
 		}
 		if snapshot.UpdatedAt.IsZero() {
 			snapshot.UpdatedAt = index.IndexedAt
@@ -107,7 +114,7 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		if name == "" {
 			name = box.Address
 		}
-		out = append(out, MetadataSyncStatus{InboxID: box.ID, Name: name, Address: box.Address, Provider: provider, State: state, Phase: phase, Indexed: snapshot.Indexed, Total: snapshot.Total, UpdatedAt: snapshot.UpdatedAt, Error: snapshot.Error})
+		out = append(out, MetadataSyncStatus{InboxID: box.ID, Name: name, Address: box.Address, Provider: provider, State: state, Phase: phase, Indexed: snapshot.Indexed, Total: snapshot.Total, EstimatedTotal: snapshot.Total > 0 && (provider == "One" || provider == "Gmail"), UpdatedAt: snapshot.UpdatedAt, Error: snapshot.Error})
 	}
 	return out, nil
 }
@@ -200,23 +207,4 @@ func (m *RemoteMailboxService) metadataCheck(account, inbox string) func() {
 		}
 		m.refreshMu.Unlock()
 	}
-}
-
-func (m *RemoteMailboxService) withMetadataWait(ctx context.Context, account, inbox string) context.Context {
-	key := account + ":" + inbox
-	return one.WithWaitStatus(ctx, func(waiting bool) {
-		m.refreshMu.Lock()
-		defer m.refreshMu.Unlock()
-		if m.metadataWaiting == nil {
-			m.metadataWaiting = make(map[string]int)
-		}
-		if waiting {
-			m.metadataWaiting[key]++
-		} else {
-			m.metadataWaiting[key]--
-		}
-		if m.metadataWaiting[key] <= 0 {
-			delete(m.metadataWaiting, key)
-		}
-	})
 }

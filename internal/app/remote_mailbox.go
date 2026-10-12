@@ -113,7 +113,6 @@ type RemoteMailboxService struct {
 	reconciling      map[string]*remoteReconcileCall
 	metadataTotals   map[string]map[string]int64
 	metadataChecking map[string]int
-	metadataWaiting  map[string]int
 }
 
 type remoteReconcileCall struct {

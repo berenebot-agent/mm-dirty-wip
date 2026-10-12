@@ -228,6 +228,12 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 			return store.RemoteIndexStatus{}, e
 		}
 		c.HistoryID = p.HistoryID
+		// Record the provider's own message count as the metadata denominator.
+		// For One it is an estimate (it counts every label, while we index a
+		// folder subset), so the UI clamps and frames it as approximate.
+		if p.MessagesTotal > 0 {
+			_ = m.Service.Store.SaveMetadataSyncTotal(ctx, account, inbox, int64(p.MessagesTotal))
+		}
 	}
 	// Catch up history fully before committing its anchor. Bounded passes retain
 	// the old anchor on interruption, making replay safe and idempotent.

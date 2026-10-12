@@ -3671,6 +3671,43 @@ dashboard render run the bounded MX check on the existing lights cadence; the
 setup GET gates DNS behind `?dns=1`; the dialog's JS drops its timer/button for an
 SSE listener + 60s fallback and adds one warning block. See `docs/DIALMX.md`.
 
+## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** An active One metadata sync showed the row state **Waiting** with
+the notice "Waiting for provider request slot" for essentially its whole duration.
+That was misleading: One paces requests at 15/minute (one every ~4s), so the sync
+is legitimately waiting on its own pacer, not stalled behind other work. The row
+also showed a bare "18 indexed" with no denominator, while the provider's own
+`messagesTotal` — a real, useful denominator — was already being fetched during
+sync but discarded. Operators read "Waiting" as a fault.
+
+**Decision:** (1) Gmail/One persist the provider profile's `messagesTotal` as the
+metadata total and the UI renders **Downloading metadata N / ~M**, marking the
+denominator as an estimate (the profile counts every label while the backfill
+indexes a folder subset). (2) The fraction is normalised so it can never read
+nonsense: the denominator is raised to meet the indexed count (110/100 becomes
+110/110), the percentage is clamped to 0-100, and a completed pass snaps the
+denominator to the indexed count so the final paint reads M/M rather than a sub-100
+plateau. A total of 0 still means unknown. (3) Provider pacing is presented as
+progress, never as a separate state: the running+pacing case no longer emits
+`state="waiting"` + "Waiting for provider request slot". Genuine retry/paused/error
+wording is unchanged. (4) The now-unused wait-status plumbing
+(`one.WithWaitStatus`, `RemoteMailboxService.metadataWaiting`, `withMetadataWait`)
+is removed rather than left as dead signal.
+
+**Reason:** A normalised estimate is more honest and more useful than a bare count
+and a scary "Waiting" label, and it needs no extra provider requests beyond the
+profile call already made. Removing the wait-status plumbing avoids a second,
+unused source of truth for the same UI.
+
+**Complexity:** No new dependency, service, table or migration. `google_mailbox.go`
+saves an existing value via the existing `SaveMetadataSyncTotal`; `metadata_sync.go`
+normalises and stops emitting the waiting state; `app.js` gains a
+`Downloading metadata` line and an estimate marker and loses one dead code path.
+See `docs/METADATA_SYNC.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters
