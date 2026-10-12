@@ -96,9 +96,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   include `provider` and `source` in their durable event payload. Source is
   persisted through asynchronous delivery: Microsoft delta polling reports
   `microsoft`, Graph-notification-triggered delivery reports `microsoft push`,
-  and IMAP/Gmail report `imap`/`gmail`. Accepted Microsoft push notifications
-  also log one INFO line each; unmatched notifications are Debug-only, and
-  callback secrets are never logged.
+  and IMAP/Gmail report `imap`/`gmail`. Microsoft push notifications are not
+  logged at INFO: each is a fetch hint, and a push-triggered delivery is already
+  visible as a `remote sync` line with `trigger=push` followed by the
+  `remote received` line. Unmatched notifications are Debug-only, and callback
+  secrets are never logged.
 
 - A global **status flag** in the header on the dashboard and inbox views.
   It is green "Live" while the event stream is connected, red "Disconnected"

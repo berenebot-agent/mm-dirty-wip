@@ -3618,6 +3618,12 @@ with inbox, event type and subscription ID; unmatched notifications and
 validation challenges are Debug-only. Never log `clientState` or validation
 tokens. Remote arrivals are not added to the UI activity log in this change.
 
+> **Amended** by D107: the per-callback INFO line described in the paragraph above
+> was removed. An authenticated callback is a fetch hint, not an arrival; the
+> `remote sync` line with `trigger=push` and the `remote received` line with
+> `source=microsoft push` already prove delivery, so the callback line was
+> redundant. The provenance decisions recorded here are unchanged.
+
 **Complexity:** Migration 065 adds source provenance to remote arrivals and
 pending Microsoft push work. The pending-work marker carries push provenance
 across the asynchronous queue and restarts. No new dependency or service.
@@ -3848,6 +3854,33 @@ bytes participate in existing remote-metadata quota accounting. One bounded
 processor in the existing worker, one shared direction classifier, explicit API
 projection changes, and deterministic migration/MIME/protocol/HTTP tests. No new
 module dependency, service, runtime, or historical body storage.
+
+## D107 — Microsoft push callbacks are silent fetch hints
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** One Microsoft webhook delivery produced four INFO lines for a
+single message: two `microsoft push received` lines (Graph sends a `created` and
+an `updated` notification for the same item, and each accepted notification was
+logged individually), one `remote sync` line, and one `remote received` line. The
+first two carry no information an operator cannot get from the other two, and
+they obscure the arrival.
+
+**Decision:** Remove the per-callback INFO line from the Microsoft notification
+handler. An authenticated callback is a fetch hint: it persists durable work and
+wakes the push worker, and is not itself an arrival. A push-triggered delivery is
+reported by the worker's `remote sync` line (`trigger=push`) followed by the
+arrival's `remote received` line (`source="microsoft push"`), which is the same
+two-line shape a Cloudflare or Mailgun inbound delivery presents. Unmatched
+callbacks and validation challenges remain Debug-only, and `clientState` and
+validation tokens remain unlogged. This amends D105's logging decision only; its
+provenance decisions (`source` on arrivals, `provider`/`source` in
+`message.received` payloads, the pending-work marker across restarts) are
+unchanged.
+
+**Complexity/resource budget:** Deletion of one log call and one dead attribute
+computation in `internal/httpapp/microsoft_push.go`; no migration, dependency,
+service, or schema change. See `docs/MICROSOFT.md`.
 
 ## Future extension register
 

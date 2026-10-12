@@ -125,14 +125,15 @@ duplicate notifications cannot create duplicate arrival events. Microsoft
 controls notification latency, so delivery is near-real-time rather than a
 guaranteed instant SLA.
 
-Each authenticated notification is logged at INFO as `microsoft push received`
-with its inbox, event type and subscription ID; validation challenges and
-unmatched notifications are Debug-only. Callback `clientState` and validation
-tokens are never logged. A delivered arrival is logged as `remote received` and
-its durable `message.received` event includes `provider=microsoft` and
-`source=microsoft push`. Poll-detected Microsoft arrivals use
-`source=microsoft`; IMAP and Gmail arrivals identify their own source. No UI
-activity-log entry is added for remote arrivals.
+An authenticated notification is a fetch hint, not an arrival, so it is not
+logged at INFO: it persists durable work and wakes the push worker, nothing more.
+A push-triggered delivery is visible as the worker's `remote sync` line with
+`trigger=push`, followed by the arrival's `remote received` line; its durable
+`message.received` event includes `provider=microsoft` and
+`source=microsoft push`. Poll-detected Microsoft arrivals use `source=microsoft`;
+IMAP and Gmail arrivals identify their own source. Unmatched notifications and
+validation challenges are Debug-only, and callback `clientState` and validation
+tokens are never logged. No UI activity-log entry is added for remote arrivals.
 
 Subscriptions last six days and renew with less than a day remaining. Lifecycle
 notifications trigger reauthorization, subscription recreation, or delta catch-up.
