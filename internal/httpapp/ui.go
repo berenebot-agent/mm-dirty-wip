@@ -577,6 +577,7 @@ type pageData struct {
 	OneChoices           []app.OneMailboxChoice
 	OneMailboxes         []oneMailboxStatus
 	OneImportResults     []app.OneImportResult
+	OneHistoryWindows    []app.OneHistoryWindow
 	RemoteConfig         remoteConfigResponse
 	// RemoteFolders is the standalone inbox's full folder tree, for the
 	// connection-settings role selectors (map an existing folder to a role).

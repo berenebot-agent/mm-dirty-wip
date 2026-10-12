@@ -34,7 +34,7 @@ func TestOneMultiImportIndependentKeysAndSingleDeletion(t *testing.T) {
 	if _, err := rm.DiscoverOne(ctx, model.Principal{AccountID: u.AccountID, UserID: "different-user", Admin: true}, setup); err == nil {
 		t.Fatal("import setup leaked across users")
 	}
-	results, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID, secondID})
+	results, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID, secondID}, nil)
 	if err != nil || len(results) != 2 || results[0].Error != "" || results[1].Error != "" {
 		t.Fatalf("multi import: %+v %v", results, err)
 	}

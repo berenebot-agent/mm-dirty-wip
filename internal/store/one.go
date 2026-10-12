@@ -44,6 +44,11 @@ CREATE TABLE gmail_history_pages (
 );
 `
 
+// Migration 070 records an optional history horizon for a One/Google inbox's
+// progressive metadata backfill. An empty value keeps the unbounded behaviour;
+// a YYYY-MM-DD value stops the backfill walk at that Gmail search boundary.
+const migration070 = `ALTER TABLE inbox_gmail_sync ADD COLUMN backfill_after TEXT NOT NULL DEFAULT '';`
+
 type OneBinding struct {
 	DisplayName                                                                             string
 	InboxID, AccountID, ConnectionID, EncryptedConnectionKey, GmailEmail, Status, LastError string
@@ -87,6 +92,25 @@ func (s *Store) SaveGmailBackfillOffset(ctx context.Context, account, inbox stri
 func (s *Store) SaveGmailBackfillSnapshot(ctx context.Context, account, inbox, snapshot string) error {
 	_, err := s.write.ExecContext(ctx, `UPDATE inbox_gmail_sync SET backfill_snapshot=?,backfill_offset=0 WHERE account_id=? AND inbox_id=?`, snapshot, account, inbox)
 	return err
+}
+
+// SetGmailBackfillAfter records the inbox's metadata backfill horizon. An empty
+// value means unbounded (index everything). Widening an existing horizon is the
+// caller's decision; this writes whatever it is given.
+func (s *Store) SetGmailBackfillAfter(ctx context.Context, account, inbox, after string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_gmail_sync SET backfill_after=? WHERE account_id=? AND inbox_id=?`, after, account, inbox)
+	return err
+}
+
+// GmailBackfillAfter returns the stored horizon, or "" when the inbox indexes
+// its full history.
+func (s *Store) GmailBackfillAfter(ctx context.Context, account, inbox string) (string, error) {
+	var after string
+	err := s.read.QueryRowContext(ctx, `SELECT backfill_after FROM inbox_gmail_sync WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&after)
+	if err == sql.ErrNoRows {
+		err = ErrNotFound
+	}
+	return after, err
 }
 
 type GmailHistoryPage struct {
