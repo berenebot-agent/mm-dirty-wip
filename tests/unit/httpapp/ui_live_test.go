@@ -171,10 +171,12 @@ func TestModelEventMessageStateChangedValue(t *testing.T) {
 	}
 }
 
-// TestUIStateDashboardLightIsCached proves the live snapshot's published-MX
-// lookup is cached briefly, so repeated dashboard snapshots do not each run a
-// fresh resolver lookup, while the traffic light is still correct.
-func TestUIStateDashboardLightIsCached(t *testing.T) {
+// TestUIStateDashboardLightReflectsExtraMX proves the dashboard lights snapshot
+// runs the bounded published-MX check while a receiver is ready, so an extra MX
+// record (which emits no receiver event) turns the aggregate light amber, and
+// that the check is uncached: repeated snapshots each re-resolve, so a change is
+// reflected on the next snapshot.
+func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -185,6 +187,13 @@ func TestUIStateDashboardLightIsCached(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
+	// Mark the receiver ready so the aggregate reaches the MX-check branch.
+	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, AllowPrivateDestinations: true})
+	m.SetStatusForTest(domain.Name, []mxdial.Status{{
+		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
+	}})
+	svc.DialMX = m
+	// Only the Antler receiver is published: green.
 	res := &switchableResolver{}
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
 	srv := httpapp.New(svc, nil)
@@ -192,7 +201,7 @@ func TestUIStateDashboardLightIsCached(t *testing.T) {
 	h := srv.Handler()
 	cookie, _ := uiSession(t, svc, u.ID)
 
-	snapshot := func() {
+	light := func() string {
 		req := httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
 		req.AddCookie(cookie)
 		rr := httptest.NewRecorder()
@@ -200,13 +209,29 @@ func TestUIStateDashboardLightIsCached(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Fatalf("lights snapshot = %d body=%s", rr.Code, rr.Body.String())
 		}
+		var out struct {
+			Domains map[string]struct {
+				Light string `json:"light"`
+				Title string `json:"title"`
+			} `json:"domains"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v body=%s", err, rr.Body.String())
+		}
+		return out.Domains[domain.ID].Light
 	}
-	snapshot()
-	_, after := res.counts()
-	for i := 0; i < 4; i++ {
-		snapshot()
+	if got := light(); got != "ok" {
+		t.Fatalf("light with only the Antler receiver = %q, want ok", got)
 	}
-	if mxHits, _ := res.counts(); mxHits > after {
-		t.Fatalf("cached dashboard snapshots ran extra MX lookups: %d -> %d", after, mxHits)
+	// An extra MX record appears: amber, and the check re-resolves (uncached).
+	res.set([]*net.MX{
+		{Host: "antler1.example.test.", Pref: 10},
+		{Host: "old.example.test.", Pref: 20},
+	}, nil)
+	if got := light(); got != "amber" {
+		t.Fatalf("light with an extra MX record = %q, want amber", got)
+	}
+	if mxHits, _ := res.counts(); mxHits < 2 {
+		t.Fatalf("lights snapshots ran %d MX lookups, want >=2 (checks must not be cached)", mxHits)
 	}
 }
