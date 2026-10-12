@@ -50,6 +50,12 @@ type ConfigField struct {
 	Name, Label, Type string
 	Required, Secret  bool
 	Generated         bool
+	// ReadOnly marks a field that is displayed but never submitted: the value is
+	// derived server-side and returned for the operator to copy (for example a
+	// DKIM public key to publish in DNS). It is not a secret; the whole point is
+	// that it is shown. A submitted value is ignored, so this is a display
+	// channel, not an input.
+	ReadOnly bool
 	// Overridable marks a Generated field the caller may also supply: the value
 	// is auto-generated when left blank, but a non-blank submission is stored
 	// verbatim (for example a shared Cloudflare Worker secret reused across

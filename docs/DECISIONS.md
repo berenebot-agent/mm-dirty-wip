@@ -1303,9 +1303,16 @@ claiming success for recipients that were not accepted when one SMTP
 transaction partially succeeds.
 
 **Operational requirements:** Operators are responsible for port 25 egress,
-forward and reverse DNS for the HELO identity, SPF, DKIM if desired, DMARC
-alignment, and IP reputation. A future extension may add durable per-recipient
-delivery state and signing support.
+forward and reverse DNS for the HELO identity, SPF, DMARC alignment, and IP
+reputation. A future extension may add durable per-recipient delivery state and
+signing support.
+
+> **Update (`D069`):** DKIM signing is now implemented for this path. MailMoose
+> generates an RSA-2048 signing key by default (an operator may paste their own
+> RSA key instead) and signs each queued message at queue time. The
+> operator-arranges-DKIM wording above is superseded for the signing key; the
+> remaining operational requirements stand, and per-recipient durable delivery
+> state is still deferred.
 
 ## D058 — Strix security review remediation
 
@@ -3962,6 +3969,86 @@ reused instead of a manifest fetch; the settings update and its handler replace 
 contact-email-only equivalents with no new table or migration; one `Settings`
 section in the dialog's markup and a small field-placement helper. No new
 dependency or service. See `docs/DIALMX.md`, `docs/API.md`.
+
+## D069 — DKIM signing on the Direct MX outbound path
+
+**Decision:** MailMoose signs outbound messages with DKIM on the Direct MX
+sending path, and only there. `internal/dkimsign` wraps
+`github.com/emersion/go-msgauth/dkim` (already approved under `D031`) and applies
+`relaxed/relaxed` canonicalisation, SHA-256, and an explicit header list that
+always includes `From`. The signature carries no expiry (`x=`) tag.
+
+Signing happens at **queue time**, in `SendMessage`, after the raw MIME is built
+and before the message-size and storage-quota checks, so the signature is part of
+the frozen `RawPath` artifact. The provider adapter therefore transmits an
+already-signed message, and a retry after a lost success response re-sends the
+identical bytes rather than stacking a second signature.
+
+The configuration lives in the Direct MX outbound provider schema
+(`internal/transport/mx`) and is edited on the Direct MX sending tab:
+
+- `dkim_enabled` — `off` (default) or `on`;
+- `dkim_selector` — defaults to `mailmoose`;
+- `dkim_domain` — defaults to the sending address's domain;
+- `dkim_private_key` — secret, generated, overridable;
+- `dkim_public_key` — derived, read-only, returned on every read.
+
+**MailMoose generates an RSA-2048 key by default**, but the private key field is
+overridable: an operator may paste their own RSA key (PKCS#1 or PKCS#8 PEM) and
+it is stored verbatim in canonical PEM form. Enabling signing with no usable key
+is a save error, never a silent unsigned send; a non-RSA pasted key is rejected.
+Turning signing off deletes the stored key material.
+
+The public key is never accepted from a caller and is never stored as an
+independent value: it is derived from the stored private key on read, so a
+displayed public key can never disagree with what MailMoose signs with, and the
+private key never appears in a config response.
+
+**Reason:** Direct MX has no upstream provider to sign on the domain's behalf, so
+without this every Direct MX operator had to arrange signing out of band —
+`D057` recorded signing as a deliberate future extension and `docs/PROVIDERS.md`
+told operators to "arrange DKIM signing separately". DMARC alignment for a domain
+that publishes `p=quarantine` or `p=reject` is effectively unachievable without an
+aligned signature, so the gap made Direct MX unusable for many domains.
+
+Two aspects deliberately depart from `D057`'s stated rationale, which assigned key
+arrangement to the operator:
+
+1. **MailMoose generates the keypair.** A self-hosted operator should not need
+   `openssl` and a hand-assembled DNS record to send aligned mail. The overridable
+   field keeps the operator's own key material a first-class option, so the
+   departure removes a barrier without removing control.
+2. **MailMoose owns the record name.** The selector defaults to `mailmoose` and
+   the TXT value is derived from the stored key, rather than being documented as
+   operator-supplied.
+
+This is a recorded decision, not an accident: `D057`'s operator-arranges-DKIM
+text is superseded for the signing key only. Its other operational requirements
+(port 25 egress, forward/reverse DNS for the HELO identity, SPF, DMARC alignment,
+IP reputation) are unchanged and remain the operator's responsibility.
+
+**Consequences:**
+
+- Only `mx` is signed. Every other provider either signs with its own key or
+  submits through its own authenticated infrastructure, so signing there would
+  double-sign or contradict the provider's own authentication.
+- DKIM DNS validation and a published-record indicator are **not** part of this
+  change and remain future work.
+- ed25519 keys are not accepted, from the generator or on paste. The signing
+  library supports them, but a uniform RSA key type is simpler to validate and is
+  understood by every verifier in the field.
+- Per-recipient durable delivery state, the other half of `D057`'s deferred item,
+  remains unimplemented.
+- Signing happens at queue time, so a message already queued when signing is
+  enabled is delivered unsigned. This is deliberate: rewriting a stored message
+  that a worker may already be delivering would break the byte-identical retry
+  property that delivery depends on.
+
+**Complexity:** One new leaf package (`internal/dkimsign`), five schema fields on
+an existing provider, one hook in `SendMessage`, and one provider-specific step in
+`SaveDomainSendingConfig`. No new dependency, no new table, no migration, and no
+new service: the key rides in the existing encrypted per-domain sending config
+blob under `APP_ENCRYPTION_KEY`. See `docs/PROVIDERS.md`, `CHANGELOG.md`.
 
 ## Future extension register
 

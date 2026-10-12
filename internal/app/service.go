@@ -38,7 +38,7 @@ import (
 	_ "github.com/dellarb/mailmoose/internal/transport/cloudflare"
 	"github.com/dellarb/mailmoose/internal/transport/gmail"
 	_ "github.com/dellarb/mailmoose/internal/transport/mailgun"
-	_ "github.com/dellarb/mailmoose/internal/transport/mx"
+	"github.com/dellarb/mailmoose/internal/transport/mx"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 	_ "github.com/dellarb/mailmoose/internal/transport/postmark"
@@ -682,6 +682,12 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	}
 	merged, err := validateConfig(fields, cfg, old, sameProvider)
 	if err != nil {
+		return store.DomainSendingConfig{}, err
+	}
+	// Direct MX signs with a key MailMoose generates (or one the operator pasted
+	// to override). This runs here rather than in validateConfig because it is
+	// provider-specific key material, not generic field coercion.
+	if err := s.applyDKIMSendingKey(ctx, accountID, domainID, provider, merged); err != nil {
 		return store.DomainSendingConfig{}, err
 	}
 	if err := s.validateProviderBase(merged); err != nil {
@@ -1749,6 +1755,9 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	// worker holds it until a provider is configured for the sending domain.
 	sending, cfgErr := s.Store.SendingConfigForTarget(ctx, accountID, inbox.ID, sendingTarget)
 	queuedReason := ""
+	// sendingCfg is the decrypted provider config, needed at this point only to
+	// decide whether the message must be DKIM-signed before it is stored.
+	var sendingCfg map[string]any
 	if cfgErr != nil {
 		if !errors.Is(cfgErr, store.ErrNoProvider) {
 			return SendResult{}, cfgErr
@@ -1760,6 +1769,15 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 			if limit := transport.MaxEnvelopeRecipients(outboundProvider); limit > 0 && len(uniqueEnvelopeRecipients(to, cc, bcc)) > limit {
 				return SendResult{}, fmt.Errorf("selected provider supports at most %d envelope recipient", limit)
 			}
+		}
+		dec, derr := s.DecryptDomainSendingConfig(sending)
+		if derr != nil {
+			// The message is still queued: a decryption failure would otherwise
+			// lose mail the caller has already composed. The delivery path
+			// re-reads and re-decrypts, and reports the failure there.
+			s.Log.Warn("could not decrypt sending config at queue time", "provider", sending.Provider, "error", derr)
+		} else {
+			sendingCfg = dec
 		}
 	}
 	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), strings.SplitN(fromAddress, "@", 2)[1])
@@ -1775,6 +1793,20 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	raw, err := mailparse.BuildMessage(mailparse.Address{Name: from.Name, Address: from.Address}, to, cc, bcc, subject, in.Text, html, msgID, inReply, refs, now, attachmentParts(attachments))
 	if err != nil {
 		return SendResult{}, err
+	}
+	// DKIM-sign the stored message, not the transmitted copy. RawPath is the
+	// frozen artifact: it is replayed into the Sent folder, served for download
+	// and reused on every retry. Signing in the provider adapter would leave the
+	// stored copy unsigned and stack a second signature on each retry.
+	//
+	// This runs before the size and quota checks below so the signature's bytes
+	// are accounted for against the message limit and the account quota.
+	if sendingCfg != nil && strings.EqualFold(sending.Provider, mx.Provider) {
+		signed, serr := signMXMessage(sendingCfg, fromAddress, raw)
+		if serr != nil {
+			return SendResult{}, serr
+		}
+		raw = signed
 	}
 	// The earlier attachment check is a fast preflight; base64 encoding, MIME
 	// boundaries and headers can expand the final message, so enforce the limit

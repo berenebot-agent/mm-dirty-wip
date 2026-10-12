@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/dkimsign"
 	"github.com/dellarb/mailmoose/internal/transport"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
@@ -45,7 +46,27 @@ func (outboundTransport) Description() string        { return "Direct MX" }
 func (outboundTransport) PreferRawMIME() bool        { return true }
 func (outboundTransport) MaxEnvelopeRecipients() int { return 1 }
 func (outboundTransport) ConfigFields() []transport.ConfigField {
-	return []transport.ConfigField{{Name: "helo", Label: "HELO hostname", Type: "text", Required: true, Placeholder: "mail.example.com"}}
+	return []transport.ConfigField{
+		{Name: "helo", Label: "HELO hostname", Type: "text", Required: true, Placeholder: "mail.example.com"},
+		// DKIM signing. Direct MX has no upstream provider to sign on its
+		// behalf, so MailMoose signs the message itself before delivery. Every
+		// other outbound provider either signs with its own key or submits
+		// through its own authenticated infrastructure, so these fields are
+		// specific to this provider.
+		{Name: "dkim_enabled", Label: "DKIM signing", Type: "select", Default: "off", Options: []transport.ConfigOption{
+			{Value: "off", Label: "Off"},
+			{Value: "on", Label: "On (sign each message with the key below)"},
+		}},
+		{Name: "dkim_selector", Label: "DKIM selector", Type: "text", Placeholder: dkimsign.DefaultSelector},
+		// A blank signing domain takes the sending domain, so the common case
+		// (sign as the address mail is sent from) needs no input at all.
+		{Name: "dkim_domain", Label: "Signing domain", Type: "text", Placeholder: "defaults to the sending domain"},
+		{Name: "dkim_public_key", Label: "Public key (publish in DNS)", Type: "text", ReadOnly: true},
+		// Generated means "blank is filled in for you"; Overridable means a
+		// pasted value is stored verbatim instead. So an operator may either let
+		// MailMoose mint a key or paste their own.
+		{Name: "dkim_private_key", Label: "Private key (PEM)", Type: "password", Secret: true, Generated: true, Overridable: true, Placeholder: "Leave blank to generate an RSA-2048 key"},
+	}
 }
 
 func (outboundTransport) Send(ctx context.Context, cfg map[string]any, m transport.OutboundMessage) (transport.OutboundResult, error) {

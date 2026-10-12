@@ -56,8 +56,8 @@ func (Transport) ConfigFields() []transport.ConfigField {
 		{Name: "contact_email", Label: "Contact email (Antler MX)", Type: "text", Placeholder: "you@example.com"},
 		{Name: "receiver_urls", Label: "Receiver URLs (custom service only, comma separated HTTPS base URLs)", Type: "text"},
 		{Name: "enforcement", Label: "Authentication enforcement", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
-			{Value: "moderate", Label: "Moderate"},
-			{Value: "hard", Label: "Hard"},
+			{Value: "moderate", Label: "Moderate (Spam on definitive DMARC failure, or SPF and DKIM both failed)"},
+			{Value: "hard", Label: "Hard (Spam on any one of SPF, DKIM or definitive DMARC failure)"},
 		}},
 	}
 }
