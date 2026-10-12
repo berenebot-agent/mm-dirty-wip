@@ -986,12 +986,18 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   at least one expected hostname is published (the receiver set is redundancy),
   and `mismatch` only when MX records exist but none belongs to a receiver. The
   TXT check remains exact. These checks are the local "has the record propagated
-  yet?" feed behind the setup wizard's record table and the dashboard's extra-MX
-  warning; routing itself is the receiver's `status[]` verdict, not a second
-  core-side decision.
+  yet?" feed behind the setup wizard's record table; the extra-MX verdict itself
+  is surfaced separately as the top-level `unexpected_mx[]` (see below), and
+  routing is the receiver's `status[]` verdict, not a second core-side decision.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
-  custom service, the TXT record only.
+  custom service, the TXT record only. It is omitted entirely for a domain with
+  no copy-ready records.
+- `unexpected_mx[]` — published MX hostnames that are not one of the domain's
+  configured Antler receivers, returned only with `?dns=1`. It is a **top-level**
+  field, independent of `instructions`, and is the single verdict behind both the
+  dashboard's amber light and the status dialog's "additional MX servers" warning,
+  so the two surfaces cannot disagree. Empty when no rogue records exist.
 
 Generated secrets (`cloudflare.webhook_secret`) are created only when missing,
 preserved by a normal same-provider save, and replaced only by an explicit

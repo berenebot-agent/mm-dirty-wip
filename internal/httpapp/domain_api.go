@@ -38,6 +38,12 @@ type domainConfigResponse struct {
 	DNS []domainDNSView `json:"dns,omitempty"`
 	// Instructions are the copy-ready DNS records for the setup (Dial MX only).
 	Instructions *dialMXDNSInstructions `json:"instructions,omitempty"`
+	// UnexpectedMX lists published MX hostnames that are not one of the domain's
+	// configured Antler receivers (Dial MX only). It is returned only when the
+	// caller asked for the published-record checks (?dns=1) and is independent of
+	// Instructions, so the dashboard's amber warning and the status dialog's
+	// warning are driven by the same single verdict.
+	UnexpectedMX []string `json:"unexpected_mx,omitempty"`
 }
 
 // mxdialStatusView mirrors mxdial.Status for JSON without importing its shape
@@ -79,10 +85,6 @@ type dialMXDNSInstructions struct {
 	MX       []dialMXMXInstruction `json:"mx,omitempty"`
 	Hostname string                `json:"smtp_hostname,omitempty"`
 	Receiver []mxdialStatusView    `json:"receivers,omitempty"`
-	// UnexpectedMX lists published MX hostnames that are not one of the
-	// configured Antler receivers, so the status page can warn that mail may not
-	// be delivered via Antler.
-	UnexpectedMX []string `json:"unexpected_mx,omitempty"`
 }
 
 // dialMXMXInstruction is one MX record the operator must publish.
@@ -354,7 +356,8 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 		if derr == nil {
 			view := s.dialMXLiveView(domain.Name, credential.KeyID, pub, cfg)
 			if includeDNS {
-				view.DNS, view.UnexpectedMX = s.dialMXDNS(domain.Name, credential.KeyID, pub, view)
+				view.DNS = s.dialMXDNS(domain.Name, credential.KeyID, pub, view)
+				resp.UnexpectedMX = s.dialMXExtraMX(ctx, cfg.AccountID, domainID, domain.Name, credential.KeyID)
 			}
 			resp.Status = view.Statuses
 			resp.DNS = view.DNS

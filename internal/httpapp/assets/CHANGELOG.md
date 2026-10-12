@@ -431,7 +431,11 @@ standalone, and whether the approver is enabled for the effective mode. See
   the status dialog lists the offending servers with a suggestion to remove them,
   since mail may not be delivered via Antler. The dashboard re-checks on load,
   reconnect, a receiver-health change, and a 15-minute background tick, so a rogue
-  record (which emits no receiver event) is still surfaced.
+  record (which emits no receiver event) is still surfaced. The verdict is a single
+  **top-level `unexpected_mx`** field on the receiving response, computed once and
+  read by both the dashboard light and the status dialog, so the two surfaces
+  never disagree (and the dialog warning no longer disappears when the copy-ready
+  `instructions` object is omitted).
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
   folded `steps` string) instead of one INFO `dialmx domain proof` record per

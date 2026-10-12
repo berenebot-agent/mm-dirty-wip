@@ -1911,9 +1911,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		// The aggregate light runs the bounded published-MX check so a rogue MX
 		// record turns it amber on the initial paint; the live refresh then keeps
 		// it current. It is skipped for a domain with no active receiver (red).
+		// The verdict comes from the one shared helper so the light and the
+		// status dialog cannot disagree.
 		var unexpected []string
 		if haveCfg && anyReady(setup.Statuses) {
-			unexpected = s.unexpectedMXForDomain(ctx, p.AccountID, d.ID, d.Name, credential.KeyID)
+			unexpected = s.dialMXExtraMX(ctx, p.AccountID, d.ID, d.Name, credential.KeyID)
 		}
 		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, unexpected, time.Now())
 		dialMXSetup[d.ID] = setup

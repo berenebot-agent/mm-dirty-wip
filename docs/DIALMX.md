@@ -332,9 +332,16 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
   which is the receiver's. The checks are returned only when the caller asks for
   them with `?dns=1`, so the status page's self-reported read never runs a
   resolver lookup.
-- `instructions` — the copy-ready MX and TXT records for an Antler MX setup, plus
-  `unexpected_mx`: published MX hostnames that are not Antler receivers, so the
-  status page can warn that mail may not be delivered via Antler.
+- `instructions` — the copy-ready MX and TXT records for an Antler MX setup. It is
+  omitted for a domain with no copy-ready records.
+- `unexpected_mx[]` — a top-level field (independent of `instructions`) listing
+  published MX hostnames that are not Antler receivers, returned with `?dns=1`.
+  It is the single verdict behind both the dashboard's amber light and the status
+  dialog's "additional MX servers" warning.
+
+The extra-MX verdict is computed once per read by one helper and read by both
+surfaces, so the dashboard light and the status dialog cannot disagree about
+whether a rogue record exists.
 
 The checks resolve DNS live on every request, bounded by a four-second timeout,
 and never block a save for longer than that. Nothing is cached in the core, so a
