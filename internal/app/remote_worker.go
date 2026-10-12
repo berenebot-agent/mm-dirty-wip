@@ -163,6 +163,12 @@ func (w *RemoteWorker) WatchIntervalForTest(inbox model.Inbox) time.Duration {
 	return w.watchIntervalFor(inbox)
 }
 
+// WatchInboxForTest exposes the per-inbox watch loop for tests, which need to
+// observe the realtime IDLE path and its logging without starting the full worker.
+func (w *RemoteWorker) WatchInboxForTest(ctx context.Context, inbox model.Inbox) {
+	w.watchInbox(ctx, inbox)
+}
+
 // Start launches the worker. It returns immediately.
 func (w *RemoteWorker) Start() { go w.run() }
 
@@ -402,7 +408,10 @@ func watcherPoll(sess RemoteSession) watchSessionPoll {
 }
 
 // runIdleWatch runs the realtime IDLE watch, running detection on each signal and
-// reconnecting (returning) on a watch error.
+// reconnecting (returning) on a watch error. Each server-pushed update is logged
+// at Info, matching the Microsoft push notification log: it records that the
+// mailbox signalled a change, not that a message was found (detection decides
+// that and logs "remote received" itself).
 func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, folder string, watcher watchSession) error {
 	notify, stop, errCh, err := watcher.Watch(ctx, folder, 16)
 	if err != nil {
@@ -424,10 +433,20 @@ func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, fold
 			return nil
 		case <-errCh:
 			return errors.New("remote watch ended")
-		case _, ok := <-notify:
+		case n, ok := <-notify:
 			if !ok {
 				return errors.New("remote watch closed")
 			}
+			event := strings.TrimSpace(n.Kind)
+			if event == "" {
+				event = "idle"
+			}
+			w.log.Info("imap push received",
+				"provider", "imap",
+				"inbox", inbox.Address,
+				"event", event,
+				"folder", folder,
+			)
 			debounce.Reset(250 * time.Millisecond)
 		case <-debounce.C:
 			w.detectInbox(ctx, inbox)

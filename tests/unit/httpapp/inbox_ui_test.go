@@ -768,6 +768,52 @@ func TestUIDraftSendDeletesDraft(t *testing.T) {
 	}
 }
 
+// TestUISyncScheduleInlineUnderAddress locks in the inbox Identity panel layout:
+// the standalone sync schedule is no longer a separate disclosure/tab. It renders
+// inline directly below the email address, as a two-column grid holding "Check for
+// new mail" and "Full sync", and keeps the push-status note.
+func TestUISyncScheduleInlineUnderAddress(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+
+	// The schedule block is inline (a div, not a collapsible details/summary) and
+	// sits immediately after the email-address input, before the IMAP connector.
+	inline := `<input id="inbox-edit-address" value="" disabled><div class="inbox-schedule" id="inbox-sync-schedule" data-remote-schedule hidden>`
+	if !strings.Contains(body, inline) {
+		t.Fatal("sync schedule is not inline directly below the email address")
+	}
+	if strings.Contains(body, `id="inbox-sync-schedule" data-remote-schedule`) && strings.Contains(body, `<summary>Sync schedule</summary>`) {
+		t.Fatal("sync schedule still renders as a collapsible disclosure")
+	}
+	for _, want := range []string{
+		`id="inbox-schedule-note"`,
+		`class="inbox-schedule-grid"`,
+		`id="inbox-remote-poll-minutes"`,
+		`id="inbox-remote-full-sync-minutes"`,
+		`Check for new mail every (minutes)`,
+		`Full sync every (minutes)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	// The two interval inputs share the same grid row (side by side).
+	grid := body[strings.Index(body, `class="inbox-schedule-grid"`):]
+	grid = grid[:strings.Index(grid, "</div></div>")]
+	if !strings.Contains(grid, `id="inbox-remote-poll-minutes"`) || !strings.Contains(grid, `id="inbox-remote-full-sync-minutes"`) {
+		t.Fatal("poll and full-sync inputs are not both inside the schedule grid")
+	}
+}
+
 // TestUIDeleteInboxConfirmDialog locks in that the dashboard renders the
 // type-to-confirm inbox delete modal, that every delete entry point carries the
 // inbox address so the dialog can display it, and that the existing delete
