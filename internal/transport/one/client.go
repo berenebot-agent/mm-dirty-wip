@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -171,11 +172,12 @@ func (l *Limiter) Backoff(d time.Duration) {
 }
 
 type Client struct {
-	http    *http.Client
-	secret  string
-	limiter *Limiter
-	mu      sync.Mutex
-	actions map[string]Action
+	http             *http.Client
+	secret           string
+	limiter          *Limiter
+	mu               sync.Mutex
+	actions          map[string]Action
+	senderNameAction *Action
 }
 
 func NewClient(secret string, h *http.Client, limiter *Limiter) *Client {
@@ -356,6 +358,8 @@ func (c *Client) ValidateActions(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	mapping := make(map[string]Action)
+	var senderNameAction *Action
+	senderNameMatches := 0
 	for page := 1; page <= 100; page++ {
 		var result struct {
 			Page  int      `json:"page"`
@@ -369,6 +373,13 @@ func (c *Client) ValidateActions(ctx context.Context) error {
 			return safe(model.ErrKindUnavailable, "One returned invalid action pagination", false)
 		}
 		for _, a := range result.Rows {
+			if a.Method == "GET" && a.Path == prefix+"/settings/sendAs" {
+				senderNameMatches++
+				if a.ID != "" && !strings.ContainsAny(a.ID, "\r\n") {
+					copy := a
+					senderNameAction = &copy
+				}
+			}
 			for _, wanted := range Operations() {
 				if a.Method == wanted.Method && a.Path == wanted.Path {
 					key := a.Method + " " + a.Path
@@ -387,7 +398,93 @@ func (c *Client) ValidateActions(ctx context.Context) error {
 		return safe(model.ErrKindUnsupported, "One lacks a mandatory Gmail action; connector unavailable", false)
 	}
 	c.actions = mapping
+	c.senderNameAction = nil
+	if senderNameMatches == 1 {
+		c.senderNameAction = senderNameAction
+	}
 	return nil
+}
+
+// SenderName resolves the configured Gmail display name for the already
+// verified mailbox address. This optional action may lack settings permission.
+// Never treat another alias's display name as the mailbox identity.
+func (c *Client) SenderName(ctx context.Context, selector, email string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	name, settingsErr := c.settingsSenderName(ctx, selector, email)
+	if name != "" {
+		return name, nil
+	}
+	// Gmail can inherit the Google account name while returning an empty
+	// sendAs displayName. Sent metadata exposes the name actually used, without
+	// requiring a Google userinfo token or downloading message bodies.
+	client := c.Gmail(selector, nil, nil)
+	page, err := client.List(ctx, "", "", "SENT", "", 3)
+	if err != nil {
+		return "", err
+	}
+	for i, item := range page.Messages {
+		if i >= 3 {
+			break
+		}
+		message, err := client.Get(ctx, "", item.ID, "metadata")
+		if err != nil || message.Payload == nil {
+			continue
+		}
+		for _, header := range message.Payload.Headers {
+			if !strings.EqualFold(header.Name, "From") {
+				continue
+			}
+			sender, err := mail.ParseAddress(header.Value)
+			if err == nil && strings.EqualFold(sender.Address, email) {
+				name := strings.TrimSpace(sender.Name)
+				if name != "" && len(name) <= 256 {
+					return name, nil
+				}
+			}
+		}
+	}
+	return "", settingsErr
+}
+
+func (c *Client) settingsSenderName(ctx context.Context, selector, email string) (string, error) {
+	if err := c.ensureActions(ctx); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	action := c.senderNameAction
+	c.mu.Unlock()
+	if action == nil {
+		return "", safe(model.ErrKindUnsupported, "One Gmail sender-name lookup unavailable", false)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := c.request(ctx, "GET", "/v1/passthrough/gmail/v1/users/me/settings/sendAs", action.ID, selector, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", safe(model.ErrKindUnsupported, "Gmail sender-name lookup unavailable", false)
+	}
+	var result struct {
+		SendAs []struct {
+			Email string `json:"sendAsEmail"`
+			Name  string `json:"displayName"`
+		} `json:"sendAs"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil {
+		return "", safe(model.ErrKindUnavailable, "Invalid Gmail sender identity", false)
+	}
+	for _, sender := range result.SendAs {
+		if strings.EqualFold(strings.TrimSpace(sender.Email), email) {
+			name := strings.TrimSpace(sender.Name)
+			if len(name) <= 256 {
+				return name, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func (c *Client) ensureActions(ctx context.Context) error {

@@ -2526,7 +2526,7 @@ function clearUrlParams(names) {
     }
     googleLink.hidden = !google;
     googleLink.textContent = one ? 'Gmail via One — connection settings' : (microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account');
-    googleLink.href = one ? '/ui/connections/one' : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
+    googleLink.href = one ? '/ui/connections/one?inbox=' + encodeURIComponent(inboxID) : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
     var port = document.getElementById('inbox-remote-port');
     var username = document.getElementById('inbox-remote-username');
     var security = document.getElementById('inbox-remote-security');
