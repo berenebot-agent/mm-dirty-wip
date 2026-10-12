@@ -2,22 +2,26 @@ package app_test
 
 import (
 	"context"
+	"encoding/base64"
 	"net"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// switchMXResolver serves a settable MX set to the extra-MX watcher.
-type switchMXResolver struct {
+// switchDNSResolver serves a settable MX set and TXT set to the watcher.
+type switchDNSResolver struct {
 	hosts []string
+	txt   []string
 }
 
-func (s *switchMXResolver) set(hosts ...string) { s.hosts = hosts }
+func (s *switchDNSResolver) setMX(hosts ...string) { s.hosts = hosts }
+func (s *switchDNSResolver) setTXT(txt ...string)  { s.txt = txt }
 
-func (s *switchMXResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
+func (s *switchDNSResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
 	out := make([]*net.MX, 0, len(s.hosts))
 	for _, h := range s.hosts {
 		out = append(out, &net.MX{Host: h, Pref: 10})
@@ -25,11 +29,15 @@ func (s *switchMXResolver) LookupMX(context.Context, string) ([]*net.MX, error) 
 	return out, nil
 }
 
-// TestExtraMXWatcherPublishesChangesOnReadyDomain proves the watcher is the single
-// owner of a domain's extra-MX verdict: it resolves once, publishes a transient
-// mx.extra_mx_changed event only when the set changes, and shares that verdict via
-// ExtraMXState so the dashboard light and status dialog read the same value.
-func TestExtraMXWatcherPublishesChangesOnReadyDomain(t *testing.T) {
+func (s *switchDNSResolver) LookupTXT(context.Context, string) ([]string, error) {
+	return s.txt, nil
+}
+
+// TestExtraMXWatcherPublishesDNSChanges proves the watcher is the single owner of
+// a domain's published-record verdict: it computes the TXT and MX checks, publishes
+// a transient mx.dns_changed event only when the verdict changes, and shares it via
+// DNSState so the dashboard light and the status dialog read the same value.
+func TestExtraMXWatcherPublishesDNSChanges(t *testing.T) {
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
@@ -38,19 +46,19 @@ func TestExtraMXWatcherPublishesChangesOnReadyDomain(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
-	// A ready receiver, or the domain is not a candidate and no verdict is made.
-	m := mxdial.New(core.svc.DialMXBackend(), mxdial.Config{DataDir: core.svc.Config.DataDir, AllowPrivateDestinations: true})
-	m.SetStatusForTest(core.domain.Name, []mxdial.Status{{
-		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
-	}})
-	core.svc.DialMX = m
+	cred, err := core.svc.Store.GetDialMXCredential(ctx, core.user.AccountID, core.domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
 
-	res := &switchMXResolver{}
-	res.set("antler1.example.test.")
+	res := &switchDNSResolver{}
+	res.setMX("antler1.example.test.")
+	res.setTXT(mxwire.DomainTXT(cred.KeyID, pub))
 	w := app.NewExtraMXWatcher(core.svc, res)
 	core.svc.ExtraMX = w
 
-	_, ch, cancel := core.svc.Hub.Subscribe(16)
+	_, ch, cancel := core.svc.Hub.Subscribe(64)
 	defer cancel()
 	drain := func() []model.Event {
 		var out []model.Event
@@ -64,53 +72,62 @@ func TestExtraMXWatcherPublishesChangesOnReadyDomain(t *testing.T) {
 		}
 	}
 
-	// First pass: only the Antler receiver is published, so no event (the set is
-	// empty) and the shared verdict is empty.
+	// First pass: TXT and MX both clean, so the verdict is clean and no event is
+	// published (there is nothing to announce).
 	w.CheckOnce(ctx)
-	if hosts, ok := core.svc.ExtraMXState(core.domain.ID); !ok || len(hosts) != 0 {
-		t.Fatalf("initial verdict = %v (resolved=%v), want empty resolved", hosts, ok)
+	if v, ok := core.svc.DNSState(core.domain.ID); !ok || v.TXT == nil || v.TXT.State != "ok" || v.MX == nil || v.MX.State != "ok" {
+		t.Fatalf("initial verdict = %+v (ok=%v), want clean TXT+MX", v, ok)
 	}
 	for _, ev := range drain() {
-		if ev.Type == model.EventMXExtraMXChanged {
-			t.Fatalf("no event expected when the verdict is unchanged/empty: %+v", ev)
+		if ev.Type == model.EventMXDNSChanged {
+			t.Fatalf("no event expected for a clean first verdict: %+v", ev)
 		}
 	}
 
-	// A rogue record appears: amber, and one transient event names it.
-	res.set("antler1.example.test.", "old.example.test.")
+	// A rogue MX record appears: the MX verdict gains an unexpected host and one
+	// transient event carries it.
+	res.setMX("antler1.example.test.", "old.example.test.")
 	w.CheckOnce(ctx)
 	hosts, ok := core.svc.ExtraMXState(core.domain.ID)
 	if !ok || len(hosts) != 1 || hosts[0] != "old.example.test" {
-		t.Fatalf("verdict after rogue record = %v, want [old.example.test]", hosts)
+		t.Fatalf("extra-MX after rogue record = %v, want [old.example.test]", hosts)
 	}
 	events := drain()
-	var found bool
+	var sawEvent bool
 	for _, ev := range events {
-		if ev.Type != model.EventMXExtraMXChanged {
+		if ev.Type != model.EventMXDNSChanged {
 			continue
 		}
-		found = true
+		sawEvent = true
 		if !ev.Transient {
-			t.Fatalf("extra-MX event must be transient so the stream emits no id: line")
+			t.Fatalf("dns event must be transient so the stream emits no id: line")
 		}
 		if ev.AccountID != core.user.AccountID {
 			t.Fatalf("event account = %q, want %q", ev.AccountID, core.user.AccountID)
 		}
-		got, _ := ev.Payload["unexpected_mx"].([]string)
-		if len(got) != 1 || got[0] != "old.example.test" {
-			t.Fatalf("event payload unexpected_mx = %v, want [old.example.test]", ev.Payload["unexpected_mx"])
-		}
 	}
-	if !found {
-		t.Fatal("no mx.extra_mx_changed event published for a changed verdict")
+	if !sawEvent {
+		t.Fatal("no mx.dns_changed event published for a changed verdict")
 	}
 
 	// A repeat pass with the same DNS publishes nothing (diffed).
 	w.CheckOnce(ctx)
 	for _, ev := range drain() {
-		if ev.Type == model.EventMXExtraMXChanged {
+		if ev.Type == model.EventMXDNSChanged {
 			t.Fatalf("unchanged verdict must not republish: %+v", ev)
 		}
+	}
+
+	// The TXT record breaks: the verdict now flags the TXT mismatch even though the
+	// receiver's own single reason (if it reported one) could not show both.
+	res.setTXT("v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub))
+	w.CheckOnce(ctx)
+	v, ok := core.svc.DNSState(core.domain.ID)
+	if !ok || v.TXT == nil || v.TXT.State != "mismatch" {
+		t.Fatalf("TXT verdict after break = %+v, want mismatch", v.TXT)
+	}
+	if v.MX == nil || v.MX.State != "ok" || len(v.MX.Unexpected) != 1 {
+		t.Fatalf("MX verdict should still flag the rogue host: %+v", v.MX)
 	}
 }
 

@@ -419,34 +419,35 @@ standalone, and whether the approver is enabled for the effective mode. See
   `ALLOW_PRIVATE_OUTBOUND=false`; that global policy now also governs the
   per-account Remote MX receiver, so a tenant's `allow_private` opt-in is
   honoured only when the operator allows private outbound (D086, amends D028).
-- Dial MX / Antler MX setup: the published MX and `_mailmoose-mx` TXT checks now
-  resolve DNS live on every refresh (bounded by a four-second timeout) and are no
-  longer cached in the core. Editing a TXT record is reflected on the next poll or
-  **Check now** instead of waiting out a one-minute TTL, so the domain-auth
-  traffic light and the wizard agree with what the receivers actually resolve.
 - Dial MX / Antler MX status is now **self-reported, live over SSE**. The saved
   status dialog no longer polls DNS or shows a **Check now** button: it reconciles
   the instant a receiver's readiness changes (the transient `mx.health_changed`
-  event), with a 60-second fallback refresh while it is open. The published-record
-  checks are now a **setup-wizard-only** concern (fetched with `?dns=1`), so a
-  plain status read never runs a resolver lookup.
+  event), with a 60-second fallback refresh while it is open.
 - Dial MX / Antler MX gains an **extra-MX warning**: when a domain with a ready
   Antler receiver also publishes MX records that are not Antler receivers, the
   dashboard aggregate light turns **amber** (individual connectors stay green) and
   the status dialog lists the offending servers with a suggestion to remove them,
-  since mail may not be delivered via Antler. The verdict is **one shared value
-  owned by a background watcher**: it re-checks each ready Dial MX domain on a
-  fixed 60-second interval and pushes a transient `mx.extra_mx_changed` event only
-  when the set changes, so the dashboard light and an open status dialog always
-  agree and neither runs DNS on a render. The warning is exposed as a top-level
+  since mail may not be delivered via Antler. The warning is exposed as a top-level
   `unexpected_mx` field on the receiving response (independent of `instructions`),
   so a dialog opened from an amber dashboard row shows it immediately and keeps it
   current live.
+- Dial MX / Antler MX published-record checks are now **owned by one background
+  watcher** and shared, not re-run per render. Every 60 seconds it computes each
+  Dial MX domain's `_mailmoose-mx` TXT check and MX routing check, diffs the verdict
+  against the last one, and pushes a transient **`mx.dns_changed`** event only when
+  it changes; both the dashboard light and an open status dialog read that one
+  verdict, so they can never disagree and no render runs DNS. Because the receiver
+  stops at its first failing gate (authority before routing) and so reports only the
+  TXT reason, a domain whose TXT *and* MX are both wrong now shows **both** fix
+  prompts: the status view is driven by the per-check DNS verdict — not the
+  receiver's single reason — and each receiver row shows its specific Antler reason
+  (`not in MX`, `key unavailable`, `authentication failed`, receiver unreachable, …)
+  inline next to its traffic light instead of a generic "rejected".
 - The Dial MX / Antler MX status view now opens **complete**: the receiving form
-  embeds the copy-ready DNS records and the shared extra-MX verdict alongside the
-  connector and status sets, so the rejection fix prompts (publish this TXT record
-  / this MX record) and the "additional MX servers" warning paint on open — the
-  same picture the dashboard light was drawn from — instead of appearing only
+  embeds the copy-ready DNS records, the shared DNS checks and the extra-MX verdict
+  alongside the connector and status sets, so the fix prompts (publish this TXT
+  record / these MX records) and the "additional MX servers" warning paint on open —
+  the same picture the dashboard light was drawn from — instead of appearing only
   after the first refresh lands.
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
