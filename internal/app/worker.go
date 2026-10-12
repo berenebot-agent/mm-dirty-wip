@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -19,6 +21,18 @@ import (
 // MIME) is kept before the sweep removes it. It matches the outbound delivery
 // log's 30-day floor.
 const workflowRetention = 30 * 24 * time.Hour
+
+// orphanSweepInterval is how often the raw-MIME orphan sweep walks the messages
+// tree. A purge normally unlinks its own file, so this sweep is only a safety
+// net for a failed unlink; once a day is ample and keeps the walk off the hot
+// path.
+const orphanSweepInterval = 24 * time.Hour
+
+// orphanGracePeriod is how young a raw MIME file must be before the sweep will
+// consider it. A message's file is moved to its final path just before the
+// message row is committed, so a file can briefly exist with no referencing row;
+// the grace period keeps the sweep clear of that window.
+const orphanGracePeriod = time.Hour
 
 // maxSendConcurrency bounds the outbox sender pool. Each in-flight delivery
 // holds its reconstructed attachments in memory, so this caps peak memory as
@@ -40,6 +54,10 @@ type OutboxWorker struct {
 	// sendConcurrency is the number of sender goroutines per delivery pass. It
 	// is set before Start (from the config) and never changed concurrently.
 	sendConcurrency int
+	// lastOrphanSweep gates the raw-MIME orphan sweep so the filesystem walk
+	// runs once a day rather than on every maintenance pass. It is touched only
+	// from the worker goroutine.
+	lastOrphanSweep time.Time
 }
 
 func NewOutboxWorker(svc *Service, log *slog.Logger) *OutboxWorker {
@@ -189,6 +207,7 @@ func (w *OutboxWorker) maintain() {
 		{"trashDeliveredMail", w.trashDeliveredMail},
 		{"purgeExpiredTrash", w.purgeExpiredTrash},
 		{"sweepRemoteTerminal", w.sweepRemoteTerminal},
+		{"sweepOrphanedMIME", w.sweepOrphanedMIME},
 	} {
 		_ = w.recoverUnit(step.name, step.fn)
 	}
@@ -318,6 +337,80 @@ func (w *OutboxWorker) purgeExpiredTrash() {
 	}
 	if len(paths) > 0 {
 		w.log.Info("purged expired trash", "count", len(paths))
+	}
+}
+
+// sweepOrphanedMIME removes raw MIME files that no message row references. A
+// purge deletes its row and its file, but if the unlink fails the file is left
+// with no row to find it by later, so nothing else would ever reclaim it. This
+// sweep is that safety net.
+//
+// It is deliberately narrow: it walks only the messages tree (never the
+// workflow, handoff or sentshare trees, which hold different artefacts), skips
+// the staging .tmp directory (files there are live by definition), and skips any
+// file younger than orphanGracePeriod, so it cannot race the moment between a
+// file reaching its final path and its row being committed. When that leaves the
+// count ambiguous it prefers to keep a file: a later sweep reclaims a real
+// orphan, but a wrong unlink loses data.
+func (w *OutboxWorker) sweepOrphanedMIME() {
+	now := time.Now()
+	if now.Sub(w.lastOrphanSweep) < orphanSweepInterval {
+		return
+	}
+	w.lastOrphanSweep = now
+	root := filepath.Join(w.svc.Config.DataDir, "messages")
+	live, err := w.svc.Store.MessageRawPaths(context.Background())
+	if err != nil {
+		w.log.Error("orphan MIME sweep", "error", err)
+		return
+	}
+	cutoff := now.Add(-orphanGracePeriod)
+	removed := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			// A missing root (nothing stored yet) is not an error.
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			w.log.Warn("orphan MIME sweep walk", "path", path, "error", walkErr)
+			return nil
+		}
+		if d.IsDir() {
+			// Never descend into the staging area; its files are in flight.
+			if d.Name() == ".tmp" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			w.log.Warn("orphan MIME sweep stat", "path", path, "error", ierr)
+			return nil
+		}
+		if info.ModTime().After(cutoff) {
+			return nil
+		}
+		rel, rerr := filepath.Rel(w.svc.Config.DataDir, path)
+		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if _, ok := live[rel]; ok {
+			return nil
+		}
+		if rerr = os.Remove(path); rerr != nil && !os.IsNotExist(rerr) {
+			w.log.Warn("orphan MIME sweep remove", "path", rel, "error", rerr)
+			return nil
+		}
+		removed++
+		return nil
+	})
+	if err != nil {
+		w.log.Error("orphan MIME sweep", "error", err)
+		return
+	}
+	if removed > 0 {
+		w.log.Info("removed orphaned raw MIME files", "count", removed)
 	}
 }
 

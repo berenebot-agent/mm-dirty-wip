@@ -53,22 +53,9 @@ func (s *Server) resolveMailbox(ctx context.Context, p model.Principal, inboxID 
 	}
 	mb := mailboxBackend{srv: s, inbox: inbox, p: p}
 	if inbox.Kind == model.InboxKindStandalone {
-		caps := model.StandaloneCapabilities()
-		caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
-		if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, inbox.ID) {
-			caps.Outbound = true
-			caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, inbox.ID)
-		}
-		if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inbox.ID) {
-			caps.Outbound = true
-			caps.HierarchicalFolders = false
-			// Gmail (native or via One) has no push subscription: the worker
-			// polls, so the mailbox never reports instant push.
-			caps.Realtime = false
-			if s.Service.Store.IsOne(ctx, p.AccountID, inbox.ID) {
-				caps.Outbound = inbox.RemoteConfigured
-			}
-		}
+		// Capabilities come from the one authoritative calculation in the store,
+		// so every API and UI path reports the same surface for an inbox.
+		caps := s.Service.Store.MailboxCapabilities(ctx, inbox)
 		inbox.Capabilities = &caps
 		mb.inbox = inbox
 		mb.remote = s.remoteMailbox()
@@ -172,22 +159,7 @@ func (s *Server) readableInboxes(ctx context.Context, p model.Principal) ([]mail
 	for _, box := range boxes {
 		mb := mailboxBackend{srv: s, inbox: box, p: p}
 		if box.Kind == model.InboxKindStandalone {
-			caps := model.StandaloneCapabilities()
-			caps.Outbound = box.Remote != nil && box.Remote.SMTP != nil
-			if s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID) {
-				caps.Outbound = true
-				caps.Realtime = s.Service.Store.MicrosoftPushActive(ctx, p.AccountID, box.ID)
-			}
-			if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
-				caps.Outbound = true
-				caps.HierarchicalFolders = false
-				// Gmail (native or via One) has no push subscription: the worker
-				// polls, so the mailbox never reports instant push.
-				caps.Realtime = false
-				if s.Service.Store.IsOne(ctx, p.AccountID, box.ID) {
-					caps.Outbound = box.RemoteConfigured
-				}
-			}
+			caps := s.Service.Store.MailboxCapabilities(ctx, box)
 			box.Capabilities = &caps
 			mb.inbox = box
 			mb.remote = s.remoteMailbox()

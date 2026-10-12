@@ -1094,6 +1094,27 @@ func (s *Store) PurgeExpiredTrash(ctx context.Context) ([]string, error) {
 	return paths, nil
 }
 
+// MessageRawPaths returns every non-empty raw MIME path still referenced by a
+// message row. The orphan sweep reads it as one snapshot and compares it against
+// the files under the messages tree, so a file with no referencing row can be
+// identified without one query per file.
+func (s *Store) MessageRawPaths(ctx context.Context) (map[string]struct{}, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT raw_path FROM messages WHERE raw_path<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var path string
+		if err = rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		out[path] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 // CountTrash returns the number of trashed messages in an inbox, used by the
 // mailbox Trash tab count.
 func (s *Store) CountTrash(ctx context.Context, p model.Principal, inboxID string) (int, error) {

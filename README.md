@@ -67,7 +67,16 @@ services:
 **2. Create** `.env`:
 
 ```bash
-APP_ENCRYPTION_KEY=$(openssl rand -hex 32)   # back this up — it decrypts provider secrets
+# Generate the key separately — Compose does NOT run shell commands inside .env,
+# so the value must already be generated before you paste it in:
+openssl rand -hex 32
+```
+
+Paste that output as the value of `APP_ENCRYPTION_KEY` (back it up — it decrypts
+provider secrets), alongside the rest:
+
+```bash
+APP_ENCRYPTION_KEY=<paste the 64-character hex value from above>
 BASE_URL=https://mail.example.com            # where you'll reach this instance
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=a-long-random-password

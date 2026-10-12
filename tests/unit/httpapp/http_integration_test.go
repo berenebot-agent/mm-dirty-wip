@@ -371,3 +371,54 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 		t.Fatalf("calls=%d", calls.Load())
 	}
 }
+
+// TestMalformedJSONIsRejected guards the handlers that used to ignore a JSON
+// decode error. apiSeen defaulted to seen=true, so a malformed body silently
+// marked a message read; it must now be a 400 and must not touch the message.
+func TestMalformedJSONIsRejected(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := "From: sender@example.net\r\nTo: hermes@example.com\r\nSubject: Malformed\r\nMessage-ID: <malformed@test>\r\n\r\nbody"
+	m, _, err := svc.IngestInbound(ctx, "mailgun", signedMGRequest(t, testMailgunKey, "malformed-d1", "hermes@example.com", raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A malformed body must be rejected, not interpreted as the default.
+	req := httptest.NewRequest("POST", "/v1/messages/"+m.ID+"/seen", strings.NewReader(`{"seen":`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 400 {
+		t.Fatalf("malformed seen body accepted: %d %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.Store.GetMessage(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Read {
+		t.Fatal("malformed body marked the message read")
+	}
+	// A malformed wait body is likewise rejected rather than defaulted.
+	req = httptest.NewRequest("POST", "/v1/messages/wait", strings.NewReader(`{"timeout":`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 400 {
+		t.Fatalf("malformed wait body accepted: %d %s", rr.Code, rr.Body.String())
+	}
+	// An absent body keeps its all-defaults behaviour: a plain POST marks read.
+	req = httptest.NewRequest("POST", "/v1/messages/"+m.ID+"/seen", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("empty seen body rejected: %d %s", rr.Code, rr.Body.String())
+	}
+	_ = box
+}
