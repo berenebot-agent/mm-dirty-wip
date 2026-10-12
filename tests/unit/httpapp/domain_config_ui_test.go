@@ -189,8 +189,8 @@ func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
 		t.Fatalf("save receiving %d %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.Contains(loc, "_flash=") {
-		t.Fatalf("generated worker redirect missing flash: %q", loc)
+	if !strings.HasPrefix(loc, "/ui/domains/"+d.ID+"/receiving/worker") || !strings.Contains(loc, "_flash=") {
+		t.Fatalf("generated worker redirect wrong: %q", loc)
 	}
 	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID)
 	if err != nil || cfg.Provider != "cloudflare" {
@@ -211,13 +211,75 @@ func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
 		}
 	}
 
-	// The secret is shown once: a refresh of the same flash URL, and a plain
+	// The secret is shown once: a refresh of the same setup URL, and a plain
 	// domain page, no longer contain the Worker code.
 	if body = domainGet(t, h, cookie, loc).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("worker code must not be shown after the first view")
 	}
 	if body = domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=receiving").Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("worker code must not persist on the dashboard")
+	}
+}
+
+// TestUIDomainReceivingWorkerPageErrors proves the setup page is scoped: an
+// unknown domain is a 404 and a non-Cloudflare receive path is a 400.
+func TestUIDomainReceivingWorkerPageErrors(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	ctx := context.Background()
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	if rr := domainGet(t, h, cookie, "/ui/domains/dom_missing/receiving/worker"); rr.Code != 404 {
+		t.Fatalf("unknown domain = %d, want 404", rr.Code)
+	}
+
+	// A configured non-Cloudflare receive path must not render the wizard.
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "mailgun", map[string]any{"signing_key": "k"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if rr := domainGet(t, h, cookie, "/ui/domains/"+d.ID+"/receiving/worker"); rr.Code != 400 {
+		t.Fatalf("non-cloudflare provider = %d, want 400", rr.Code)
+	}
+
+	// With no receive path at all the domain is not Cloudflare yet: still 400.
+	empty, err := svc.Store.CreateDomain(ctx, u.AccountID, "empty.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := domainGet(t, h, cookie, "/ui/domains/"+empty.ID+"/receiving/worker"); rr.Code != 400 {
+		t.Fatalf("unconfigured domain = %d, want 400", rr.Code)
+	}
+}
+
+// TestUIDomainReceivingWorkerSuppliedSecretReused proves an operator can paste
+// an existing shared secret to reuse one Worker across domains: the value is
+// stored verbatim, nothing is generated, and no one-time code page is shown.
+func TestUIDomainReceivingWorkerSuppliedSecretReused(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	ctx := context.Background()
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/receiving", url.Values{
+		"_csrf": {csrf}, "provider": {"cloudflare"}, "cfg_cloudflare_webhook_secret": {"shared-worker-secret"},
+	})
+	if rr.Code != 303 {
+		t.Fatalf("save with supplied secret %d %s", rr.Code, rr.Body.String())
+	}
+	// A supplied secret is not generated, so there is no one-time Worker page
+	// to redirect to; the save lands back on the domain.
+	if loc := rr.Header().Get("Location"); strings.Contains(loc, "/receiving/worker") {
+		t.Fatalf("supplied secret must not redirect to the generated-code page: %q", loc)
+	}
+
+	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec, err := svc.DecryptDomainReceivingConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec["webhook_secret"] != "shared-worker-secret" {
+		t.Fatalf("supplied secret not stored verbatim: %#v", dec["webhook_secret"])
 	}
 }
 
@@ -367,15 +429,18 @@ func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
 	if amp := strings.Index(tok, "&"); amp >= 0 {
 		tok = tok[:amp]
 	}
-	flash := "&_flash=" + tok
-	dash := func(domainID string) string { return "/?domain=" + domainID + "&kind=receiving" + flash }
+	flash := "?_flash=" + tok
+	worker := func(domainID string) string { return "/ui/domains/" + domainID + "/receiving/worker" + flash }
 
 	// Same user, different domain: no leak, and the flash must survive.
 	d2, err := svc.Store.CreateDomain(ctx, u.AccountID, "second.example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body := domainGet(t, h, cookie, dash(d2.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d2.ID, "cloudflare", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if body := domainGet(t, h, cookie, worker(d2.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("flash leaked to another domain")
 	}
 
@@ -388,23 +453,27 @@ func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, b.AccountID, db.ID, "cloudflare", nil, false); err != nil {
+		t.Fatal(err)
+	}
 	cookieB, _ := uiSession(t, svc, b.ID)
-	if body := domainGet(t, h, cookieB, dash(db.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookieB, worker(db.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("flash leaked across accounts")
 	}
 
 	// The owner still gets the one-time code, exactly once.
-	if body := domainGet(t, h, cookie, dash(d.ID)).Body.String(); !strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookie, worker(d.ID)).Body.String(); !strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("owner flash was consumed by a wrong principal or domain")
 	}
-	if body := domainGet(t, h, cookie, dash(d.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
+	if body := domainGet(t, h, cookie, worker(d.ID)).Body.String(); strings.Contains(body, `id="cf-code"`) {
 		t.Fatalf("worker flash shown more than once")
 	}
 }
 
 // TestUIDomainCloudflareSelectableAfterConfigured proves Cloudflare remains a
-// selectable change target after it is configured, its generated secret never
-// renders an input, and viewing the page never rotates the stored secret.
+// selectable change target after it is configured, its overridable shared
+// secret renders a blank input that never echoes the stored value, and viewing
+// the page never rotates the stored secret.
 func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
@@ -420,8 +489,8 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 	if !strings.Contains(body, `<option value="cloudflare" selected`) {
 		t.Fatalf("cloudflare editor not reachable after configure")
 	}
-	if strings.Contains(body, `name="cfg_cloudflare_webhook_secret"`) {
-		t.Fatalf("generated secret must not render an input")
+	if !strings.Contains(body, `name="cfg_cloudflare_webhook_secret"`) {
+		t.Fatalf("overridable shared secret must render an input so it can be reused")
 	}
 	if strings.Contains(body, "known-cf-secret") {
 		t.Fatalf("stored secret leaked on the dashboard")
@@ -455,6 +524,37 @@ func TestUIDomainReceivingSetupBeforeSaved(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("pre-save receiving setup missing %q", want)
 		}
+	}
+	if _, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID); !errors.Is(err, store.ErrNoProvider) {
+		t.Fatalf("viewing setup must not persist a config: %v", err)
+	}
+}
+
+// TestUIDomainCloudflarePresaveShowsOptionalSecret proves the Cloudflare
+// editor renders the shared secret as an optional, blank, non-required input
+// before a config exists, so an operator can paste an existing one.
+func TestUIDomainCloudflarePresaveShowsOptionalSecret(t *testing.T) {
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "fresh.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	body := domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=receiving&provider=cloudflare").Body.String()
+
+	dialog := dialogHTML(t, body, "domain-receiving-dialog-"+d.ID)
+	group := providerGroupHTML(t, dialog, "cloudflare")
+	start := strings.Index(group, `name="cfg_cloudflare_webhook_secret"`)
+	if start < 0 {
+		t.Fatalf("overridable shared secret input missing before save")
+	}
+	tag := group[start:]
+	if end := strings.Index(tag, ">"); end >= 0 {
+		tag = tag[:end]
+	}
+	if strings.Contains(tag, "required") {
+		t.Fatalf("overridable secret must not be required (blank means generate): %s", tag)
 	}
 	if _, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID); !errors.Is(err, store.ErrNoProvider) {
 		t.Fatalf("viewing setup must not persist a config: %v", err)
@@ -709,7 +809,7 @@ func TestUIDomainWorkerFlashConcurrentSingleUse(t *testing.T) {
 		if rr.Code != 303 {
 			t.Fatalf("round %d regenerate %d %s", round, rr.Code, rr.Body.String())
 		}
-		path := "/?domain=" + d.ID + "&kind=receiving&_flash=" + flashToken(rr)
+		path := "/ui/domains/" + d.ID + "/receiving/worker?_flash=" + flashToken(rr)
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
