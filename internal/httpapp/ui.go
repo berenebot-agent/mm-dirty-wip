@@ -1603,10 +1603,10 @@ func (s *Server) uiSettingsAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // uiSettingsTrashRetention updates the account's Trash auto-purge window. It
-// requires an account Owner (or Admin).
+// requires an account Admin (see apiAccountSettings).
 func (s *Server) uiSettingsTrashRetention(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.OwnsAccount() {
+	if !p.CanAdministerAccount() {
 		s.settingsRedirect(w, r, "", "You do not have permission to change this setting")
 		return
 	}
@@ -1720,8 +1720,8 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // uiSettingsAccountBatch applies the Account tab's rows (name, default time
-// zone and Trash retention) in one save. It requires an account Admin; Trash
-// retention additionally requires account ownership, enforced by the store.
+// zone and Trash retention) in one save. It requires an account Admin; every
+// row is account-wide state, so a mailbox Owner is not sufficient.
 func (s *Server) uiSettingsAccountBatch(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {

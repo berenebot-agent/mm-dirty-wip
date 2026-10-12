@@ -16,3 +16,7 @@ tests/logs/
 # Built on demand by `make mx-fixture` (used by the launcher RSS test).
 tests/fixtures/mailmoose-mx
 repo.zip
+# Scratch/agent working files (ad-hoc test harnesses, probe results). Never
+# committed: they carry live mailbox addresses, inbox identifiers and message
+# ids from real runs.
+.hermes-tmp/

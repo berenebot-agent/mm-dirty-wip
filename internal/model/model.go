@@ -788,8 +788,13 @@ func (p Principal) CanAssist(inboxID string) bool {
 func (p Principal) CanOwn(inboxID string) bool { return p.Role(inboxID) == "owner" }
 
 // OwnsAccount reports whether the principal holds Owner on every mailbox it can
-// reach (and at least one). Account-level preferences are exposed to such a
-// principal in addition to an account Admin.
+// reach (and at least one).
+//
+// Deprecated for authorization: this predicate is satisfied by a mailbox-scoped
+// credential (for example an API key scoped to a single inbox) that has no
+// access to the account's other inboxes, so it must NEVER gate account-wide
+// state or settings. Use CanAdministerAccount for that. It is retained only as
+// a descriptive convenience.
 func (p Principal) OwnsAccount() bool {
 	if p.Admin {
 		return true
@@ -804,3 +809,11 @@ func (p Principal) OwnsAccount() bool {
 	}
 	return true
 }
+
+// CanAdministerAccount reports whether the principal may change account-wide
+// state: settings whose effect spans every inbox (trash retention, account
+// timezone, account name). Only an account Admin qualifies. A mailbox Owner is
+// deliberately excluded even when it owns every mailbox it can reach: a
+// credential scoped to a subset of the account's inboxes must not alter state
+// that is applied to the inboxes it cannot see.
+func (p Principal) CanAdministerAccount() bool { return p.Admin }

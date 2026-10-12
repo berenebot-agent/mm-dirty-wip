@@ -309,10 +309,11 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 	single := len(targets) == 1
 
 	var (
-		first     model.Message
-		anyDup    bool
-		delivered int
-		firstErr  error
+		first        model.Message
+		anyDup       bool
+		delivered    int
+		firstErr     error
+		retryableErr error
 	)
 	seen := map[string]bool{}
 	for _, rcpt := range targets {
@@ -349,8 +350,17 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 		target.Recipient = rcpt
 		m, dup, derr := s.deliverStaged(ctx, provider, target, inbox, parsed, single, nil)
 		if derr != nil {
+			// A terminal per-target outcome (unknown/unauthorized recipient,
+			// permanent parse/content failure) must not force a provider retry:
+			// the same recipient would fail identically forever. Only a
+			// *retryable* failure is recorded, and it changes the outcome only
+			// when another target succeeded (see below); when nothing was
+			// delivered the single firstErr path handles it as before.
 			if firstErr == nil {
 				firstErr = derr
+			}
+			if retryableErr == nil && isRetryableInboundError(derr) {
+				retryableErr = derr
 			}
 			continue
 		}
@@ -368,7 +378,48 @@ func (s *Service) ingestStaged(ctx context.Context, provider string, msg transpo
 		}
 		return model.Message{}, false, store.ErrNotFound
 	}
+	// At least one inbox was persisted. If any *other* target failed
+	// retryably, report a partial failure so the provider retries the whole
+	// delivery: the inboxes already stored deduplicate on retry, so only the
+	// missing recipient is actually delivered. Acknowledging 200 here would
+	// leave the failed recipient without a copy forever (fan-out providers such
+	// as Resend carry every recipient in one event and never retry a 200).
+	if retryableErr != nil {
+		return first, anyDup, fmt.Errorf("%w: %v", ErrPartialIngest, retryableErr)
+	}
 	return first, anyDup, nil
+}
+
+// ErrPartialIngest marks a fan-out delivery that persisted at least one
+// recipient while another recipient failed retryably. The provider must retry
+// the delivery: already-stored recipients deduplicate per
+// (provider, envelope_recipient, provider_delivery_id), so the retry delivers
+// only the missing inboxes. It is deliberately distinct from a terminal
+// per-recipient rejection (unknown/unauthorized recipient), which must not be
+// retried.
+var ErrPartialIngest = errors.New("partial multi-recipient delivery")
+
+// isRetryableInboundError reports whether a per-target delivery failure is
+// transient (worth a provider retry) rather than a permanent outcome. Quota,
+// storage and database faults are retryable; unknown/unauthorized recipients
+// and malformed content are not.
+//
+// Quota is deliberately retryable here even though the single-recipient HTTP
+// path answers 406 (terminal, no retry): in a fan-out the other recipients have
+// already been stored, and retrying is safe (per-recipient dedup), so surfacing
+// the failure for a retry is strictly better than silently dropping the inbox
+// that was rejected. The provider's own retry budget bounds it.
+func isRetryableInboundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, transport.ErrInboundUnauthorized) || errors.Is(err, transport.ErrInboundIgnored) || errors.Is(err, transport.ErrUnknownProvider) {
+		return false
+	}
+	if isTerminalAppError(err) {
+		return false
+	}
+	return true
 }
 
 // mxDeliverAuth carries the MX-only disposition through the shared delivery

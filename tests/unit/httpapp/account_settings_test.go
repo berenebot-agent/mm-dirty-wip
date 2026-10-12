@@ -239,8 +239,80 @@ func TestAccountSettingsBatch(t *testing.T) {
 	_ = op
 }
 
+// TestAccountSettingsScopedOwnerForbidden verifies the account-wide settings
+// boundary: a mailbox-scoped API key that holds Owner on one inbox (but cannot
+// reach the account's other inboxes) must not read or change account-wide
+// settings such as trash_retention_days. Only an account Admin may. This is the
+// regression guard for the authorization hole where OwnsAccount() treated a
+// single-inbox owner credential as an account owner.
+func TestAccountSettingsScopedOwnerForbidden(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	ctx := context.Background()
+
+	// A second inbox the scoped key cannot see.
+	d, err := svc.Store.GetDomain(ctx, u.AccountID, box.DomainID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "other", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = other
+
+	// A non-admin key scoped to only the first inbox with owner role.
+	_, scopedKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "scoped", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An account-admin key for the positive control.
+	_, adminKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	do := func(key, method, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/v1/account/settings", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Establish an account-wide retention the scoped key must not touch.
+	if rr := do(adminKey, "PATCH", `{"trash_retention_days":30}`); rr.Code != 200 {
+		t.Fatalf("admin set retention = %d %s", rr.Code, rr.Body.String())
+	}
+
+	// The scoped owner key is forbidden from reading and writing.
+	if rr := do(scopedKey, "GET", ""); rr.Code != http.StatusForbidden {
+		t.Fatalf("scoped GET account settings = %d, want 403", rr.Code)
+	}
+	if rr := do(scopedKey, "PATCH", `{"trash_retention_days":1}`); rr.Code != http.StatusForbidden {
+		t.Fatalf("scoped PATCH account settings = %d, want 403", rr.Code)
+	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if days, _ := svc.Store.GetTrashRetention(ctx, p); days != 30 {
+		t.Fatalf("scoped key changed account retention to %d, want 30", days)
+	}
+
+	// The scoped key still owns its own inbox: the per-inbox override is its
+	// legitimate mailbox-scoped control, and it must keep working.
+	req := httptest.NewRequest("PATCH", "/v1/inboxes/"+box.ID, strings.NewReader(`{"trash_retention_days":7}`))
+	req.Header.Set("Authorization", "Bearer "+scopedKey)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("scoped key inbox override = %d %s", rr.Code, rr.Body.String())
+	}
+	if got, _ := svc.Store.GetInboxInternal(ctx, u.AccountID, box.ID); got.TrashRetentionDays == nil || *got.TrashRetentionDays != 7 {
+		t.Fatalf("inbox override = %v, want 7", got.TrashRetentionDays)
+	}
+}
+
 // TestPersonalSettingsBatch verifies the Personal tab's single Save applies the
-// time zone and, when filled in, the sign-in email and password in one POST.
 func TestPersonalSettingsBatch(t *testing.T) {
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()

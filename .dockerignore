@@ -10,3 +10,4 @@ tests/strix/accounts.txt
 tests/logs
 *.log
 **/__pycache__
+.hermes-tmp
