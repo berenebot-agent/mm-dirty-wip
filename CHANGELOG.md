@@ -6,6 +6,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Durable inbox actions now use a single-worker round-robin scheduler, processing
+  one eligible action per inbox per turn so a busy inbox's backlog cannot
+  monopolize the queue. Same-message ordering and retry safety are preserved;
+  individual slow actions still delay other inboxes while they execute.
+
 ### Added
 
 - A metadata sync row now reads **Downloading metadata N / ~M** with a live
