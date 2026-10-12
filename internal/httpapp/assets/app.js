@@ -6680,10 +6680,10 @@ function hideInboxSubview(dlg) {
   });
 })();
 
-// The One import screen lets the operator tick whole rows. A row toggles its
-// checkbox on click, highlights while selected, and keeps its Index-history
-// select disabled until the row is actually selected, so an unselected row can
-// never carry a window.
+// The One import screen lets the operator tick whole rows. Any click in a row
+// toggles its checkbox, highlights while selected, and shows None in the
+// Index-history select until the row is actually selected, so an unselected
+// row can never carry a window.
 (function () {
   document.querySelectorAll('table.one-import-table').forEach(function (table) {
     table.querySelectorAll('tbody tr').forEach(function (row) {
@@ -6692,21 +6692,50 @@ function hideInboxSubview(dlg) {
       if (!box) {
         return;
       }
+      if (!box.disabled) {
+        row.style.cursor = 'pointer';
+      }
+      function hasNoneOption() {
+        return !!select && !!select.querySelector('option[value=""]');
+      }
       function sync() {
         var on = box.checked;
         row.classList.toggle('selected', on);
         if (select) {
           // An unusable row keeps its select permanently disabled.
           select.disabled = !on || box.disabled;
+          if (hasNoneOption()) {
+            if (!on) {
+              if (select.value !== '') {
+                select.setAttribute('data-chosen', select.value);
+              }
+              select.value = '';
+            } else if (!box.disabled && select.value === '') {
+              select.value = select.getAttribute('data-chosen') || 'all';
+            }
+          }
         }
       }
       box.addEventListener('change', sync);
+      if (select) {
+        select.addEventListener('change', function () {
+          if (select.value !== '') {
+            select.setAttribute('data-chosen', select.value);
+          }
+        });
+      }
       row.addEventListener('click', function (e) {
         if (box.disabled) {
           return;
         }
-        // Let the real controls handle their own clicks.
-        if (e.target.closest('a,button,input,select,textarea,label,form')) {
+        // The checkbox itself toggles natively; anything else in the row
+        // toggles via the row, except an enabled select which needs its
+        // clicks to open the dropdown. A disabled select still selects.
+        if (e.target.closest('input,textarea,label,form,a,button')) {
+          return;
+        }
+        var sel = e.target.closest('select');
+        if (sel && !sel.disabled) {
           return;
         }
         box.checked = !box.checked;
