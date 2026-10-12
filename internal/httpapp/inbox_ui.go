@@ -78,8 +78,9 @@ const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before"
 // filled/toggled in place by app.js from the shared action-queue poll, so it
 // tracks the same refresh as the queue popup and never blocks the first paint.
 // Only a standalone inbox has remote metadata to sync, so it renders only in
-// StandaloneMode; app.js shows it for any status the service reports (queued,
-// running, waiting, paused or error) and hides it when there is none.
+// StandaloneMode; app.js shows initial indexing and attention states (paused,
+// error) there, while routine refreshes of an already-complete index stay
+// background-only behind the header spinner.
 const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-sync-banner hidden role="status" aria-live="polite"></div>{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
