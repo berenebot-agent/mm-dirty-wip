@@ -330,6 +330,16 @@ async function statusView() {
   h.world.dns = [{ kind: 'txt', state: 'ok' }, { kind: 'mx', state: 'ok' }];
   await h.fireTimer(t => t.delay === 60000);
   assert.equal(remediation().children.length, 0, 'a healthy domain has no remediation');
+
+  // A check that could not be completed is not a fix prompt: nothing is known
+  // about the record, so the view says so and offers no publish instruction.
+  h.world.dns = [{ kind: 'txt', state: 'unavailable', reason: 'TXT lookup failed; retrying' }, { kind: 'mx', state: 'ok' }];
+  h.world.statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }];
+  await h.fireTimer(t => t.delay === 60000);
+  const unverified = h.collect(remediation());
+  assert.match(unverified, /Record check unavailable/, 'an unavailable check is reported as unverified');
+  assert.doesNotMatch(unverified, /Publish this TXT record/, 'an unavailable check prompts for no record');
+  assert.doesNotMatch(unverified, /Record value/, 'an unavailable check shows no record to copy');
 }
 
 // --- edit settings in place ---------------------------------------------

@@ -320,17 +320,30 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
   mail will be delivered and no separate core MX check is needed.
 - `dns[]` — the watcher's shared published-record checks: the domain's MX
   hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
-  against the domain's exact key. `state` is `ok`, `pending` (not published yet) or
-  `mismatch`. The MX check is `ok` as soon as any one expected receiver hostname is
+  against the domain's exact key. `state` is `ok` (published and matching),
+  `pending` (definitively not published yet), `mismatch` (published but wrong) or
+  `unavailable` (the lookup could not be completed, so nothing is known). The MX
+  check is `ok` as soon as any one expected receiver hostname is
   published and lists those in `matched`; an operator who points MX at a single
   receiver is not failed by the others in the advertised set. It is `mismatch` only
   when MX records exist but none belongs to a receiver, and it lists in `unexpected`
   any published hostname that is not one of our receivers. The TXT check stays
-  exact. These checks are the local verification feed for the setup wizard's record
-  table and the status view's fix prompts — they answer "has the record propagated
-  yet?" so the operator can watch a fix land — not an independent routing verdict,
-  which is the receiver's. They are read from the watcher's cache, not resolved on a
-  render.
+  exact, and is parsed by the same MM1 validator the receiver applies
+  (`mxwire.ParseDomainTXT`), so a record the local check calls matching is one the
+  receiver accepts. These checks are the local verification feed for the setup
+  wizard's record table and the status view's fix prompts — they answer "has the
+  record propagated yet?" so the operator can watch a fix land — not an independent
+  routing verdict, which is the receiver's. They are read from the watcher's cache,
+  not resolved on a render.
+
+  `pending` and `unavailable` are deliberately distinct, and the fix prompts treat
+  them differently: a definitely-absent record is one the operator must publish,
+  while a lookup that could not be completed is something to retry, so an
+  `unavailable` check renders a retry notice instead of a publish instruction and
+  never claims the record is missing. On an `unavailable` MX check the watcher
+  carries forward the `unexpected` hosts a previous completed check observed, so a
+  known extra-MX warning cannot disappear merely because the resolver stopped
+  answering; only a completed check clears it.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup. It is
   omitted for a domain with no copy-ready records.
 - `unexpected_mx[]` — a top-level field (independent of `instructions`) listing

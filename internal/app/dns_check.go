@@ -1,12 +1,15 @@
 package app
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
+	"errors"
 	"net"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // DNSResolver is the small resolver surface the published-record checks need.
@@ -23,9 +26,11 @@ const dnsCheckTimeout = 4 * time.Second
 // dnsMaxFound caps the published records reported per check.
 const dnsMaxFound = 4
 
-// DNSRecordView is one published-record check. State is "ok", "pending" (nothing
-// published yet) or "mismatch" (published but wrong). It is the shared shape the
-// status view, the wizard and the API all render.
+// DNSRecordView is one published-record check. State is "ok" (published and
+// matching), "pending" (definitively not published yet), "mismatch" (published
+// but wrong) or "unavailable" (the lookup could not be completed, so nothing is
+// known). It is the shared shape the status view, the wizard and the API all
+// render.
 type DNSRecordView struct {
 	Kind     string `json:"kind"` // "mx" | "txt"
 	Name     string `json:"name"`
@@ -40,6 +45,18 @@ type DNSRecordView struct {
 	State      string   `json:"state"`
 	Reason     string   `json:"reason,omitempty"`
 }
+
+// Check states. "pending" and "unavailable" are deliberately distinct: a record
+// that is definitely absent is something the operator must publish, while a
+// lookup that could not be completed is something to retry. Presenting the
+// second as the first tells the operator to create a record they may already
+// have published correctly.
+const (
+	StateOK          = "ok"
+	StatePending     = "pending"
+	StateMismatch    = "mismatch"
+	StateUnavailable = "unavailable"
+)
 
 // DNSVerdict is the combined published-record picture for one domain. Either
 // check is nil when it does not apply (no Antler receivers → no MX check).
@@ -83,15 +100,22 @@ func equalStrings(a, b []string) bool {
 // points MX at a single Antler receiver is not dragged to a mismatch by the
 // others. Matched lists which expected hostnames were found; Found is the
 // published set; Unexpected lists published hostnames that are not our receivers.
-// The state is "mismatch" only when MX records exist but none is one of ours, and
-// "pending" when none are published (or the lookup fails).
+// The state is "mismatch" only when MX records exist but none is one of ours,
+// "pending" when the domain definitively has no MX records, and "unavailable"
+// when the lookup itself could not be completed.
 func CheckMX(parent context.Context, resolver DNSResolver, domain string, expected []string) DNSRecordView {
 	view := DNSRecordView{Kind: "mx", Name: domain, Expected: strings.Join(expected, ", ")}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
 	records, err := resolver.LookupMX(ctx, domain)
-	if err != nil || len(records) == 0 {
-		view.State, view.Reason = "pending", "no MX records published yet"
+	if err != nil && !dnsNotFound(err) {
+		view.State, view.Reason = StateUnavailable, "MX lookup failed; retrying"
+		return view
+	}
+	// A definitive "no such records" answer and an empty record set are the same
+	// fact to the operator: nothing is published yet.
+	if len(records) == 0 {
+		view.State, view.Reason = StatePending, "no MX records published yet"
 		return view
 	}
 	known := map[string]bool{}
@@ -123,10 +147,10 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 		}
 	}
 	if len(view.Matched) == 0 {
-		view.State, view.Reason = "mismatch", "no expected MX hostname is published"
+		view.State, view.Reason = StateMismatch, "no expected MX hostname is published"
 		return view
 	}
-	view.State = "ok"
+	view.State = StateOK
 	return view
 }
 
@@ -134,14 +158,25 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 // against the exact key the receiver will require. expectedValue is the copy-ready
 // record shown to the operator. The check is exact: exactly one MM1 record must be
 // published for keyID with a public key equal to want.
+//
+// The record is parsed by the same mxwire.ParseDomainTXT the receiver applies, so
+// the local check and the Antler receiver cannot disagree about whether a
+// published record is valid: an extra field, a duplicate MM1 record or an
+// oversized record fails here exactly as it fails there. A divergent second
+// implementation is what let the dialog show a green "matching" record next to a
+// receiver refusing with "key unavailable".
 func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string, want []byte, expectedValue string) DNSRecordView {
 	name := "_mailmoose-mx." + domain
 	view := DNSRecordView{Kind: "txt", Name: name, Expected: expectedValue}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
 	records, err := resolver.LookupTXT(ctx, name)
-	if err != nil || len(records) == 0 {
-		view.State, view.Reason = "pending", "TXT record not published yet"
+	if err != nil && !dnsNotFound(err) {
+		view.State, view.Reason = StateUnavailable, "TXT lookup failed; retrying"
+		return view
+	}
+	if len(records) == 0 {
+		view.State, view.Reason = StatePending, "TXT record not published yet"
 		return view
 	}
 	kept := records
@@ -149,11 +184,12 @@ func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string
 		kept = kept[:dnsMaxFound]
 	}
 	view.Found = kept
-	if !txtMatches(records, keyID, want) {
-		view.State, view.Reason = "mismatch", "the published TXT record does not match this key"
+	pub, err := mxwire.ParseDomainTXT(records, keyID)
+	if err != nil || len(want) == 0 || !bytes.Equal(pub, want) {
+		view.State, view.Reason = StateMismatch, "the published TXT record does not match this key"
 		return view
 	}
-	view.State = "ok"
+	view.State = StateOK
 	return view
 }
 
@@ -164,46 +200,12 @@ func withTimeout(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(parent, dnsCheckTimeout)
 }
 
-// txtMatches reports whether exactly one MM1 key is published for keyID and its
-// public key equals want. It is the same rule the receiver applies.
-func txtMatches(records []string, keyID string, want []byte) bool {
-	if keyID == "" || len(want) == 0 {
-		return false
-	}
-	var found []byte
-	matched := 0
-	for _, raw := range records {
-		fields := parseMM1(raw)
-		if fields == nil || fields["v"] != "MM1" {
-			continue
-		}
-		matched++
-		if fields["id"] != keyID || fields["k"] != "ed25519" {
-			return false
-		}
-		pub, err := base64.StdEncoding.Strict().DecodeString(fields["p"])
-		if err != nil || len(pub) == 0 {
-			return false
-		}
-		found = pub
-	}
-	return matched == 1 && string(found) == string(want)
-}
-
-// parseMM1 parses a single MM1 TXT record into its fields; nil when malformed.
-func parseMM1(raw string) map[string]string {
-	fields := map[string]string{}
-	for _, part := range strings.Split(raw, ";") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		k, v, ok := strings.Cut(part, "=")
-		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if !ok || k == "" || v == "" || fields[k] != "" {
-			return nil
-		}
-		fields[k] = v
-	}
-	return fields
+// dnsNotFound reports whether a lookup error is a definitive "this name has no
+// such records" answer (NODATA or NXDOMAIN) rather than a lookup that could not
+// be completed. It mirrors the receiver's own mxNotFound test, so the local check
+// and the receiver agree on when an absent record is a fact and when it is an
+// unanswered question.
+func dnsNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
 }
