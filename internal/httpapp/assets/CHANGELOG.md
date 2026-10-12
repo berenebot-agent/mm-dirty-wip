@@ -173,6 +173,29 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The Antler MX status view and setup wizard no longer tell you to publish a
+  record when the DNS lookup simply failed. A record that is definitely absent
+  still shows its publish prompt, but a lookup that could not be completed reads
+  **Unverified** with a retry notice, and a previously seen "additional MX
+  servers" warning stays put instead of clearing while the resolver is down.
+- The wizard's TXT check now agrees with the receiver: a record it calls
+  **Matching** is one Antler accepts, so you no longer see a green record beside a
+  receiver refusing with "key unavailable".
+- Saving an Antler MX setup no longer re-points the domain at a different receiver
+  set. A re-save keeps the receivers the domain's MX records already point at, so
+  a manifest change during setup cannot leave you with records that no longer
+  match. The setup wizard also shows a visible 10-second countdown while you are
+  on its DNS or receivers step, and each suggested MX record carries its own
+  status rather than sharing one.
+- The saved Antler MX status view now lets you change the authentication
+  enforcement policy and the contact email in place, in a **Settings** section
+  below the status records. A subdomain that inherits its setup shows these
+  read-only, naming the domain to edit.
+- The dashboard's Antler MX light now clears an "extra MX records" warning as soon
+  as the records are removed, instead of staying amber until a much later refresh.
+  A status dialog also follows the shared live connection across a reconnect, and
+  a domain with more than one dialog open updates the right one.
+
 - A Dial MX / Antler MX published-record check that could not be completed no
   longer reads as "no record is published yet". A NODATA/NXDOMAIN answer stays
   `pending` (publish the record), while a timeout, SERVFAIL or refused lookup is

@@ -3924,6 +3924,45 @@ existing last-verdict map; and a net deletion of `txtMatches`/`parseMM1`. One
 imported helper (`mxwire.ParseDomainTXT`) already used by the receiver. No new
 dependency, service, table or migration. See `docs/DIALMX.md`, `docs/API.md`.
 
+## D112 — Antler setup keeps its receiver snapshot, and its settings are editable in place
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Two problems with editing a saved Antler MX setup. (1) Every save
+re-resolved the live receiver manifest, so the wizard — which saves the
+configuration more than once while an operator works through its steps — could
+select a different receiver set at Finish from the one whose DNS records the
+operator had just been told to publish, contradicting the documented promise that
+an existing setup keeps the receivers its MX records already point at. (2) The
+saved status view could edit the contact email but not the authentication
+enforcement policy, and offered no non-destructive route to either once the setup
+wizard had been left.
+
+**Decision:** (1) `fillAntlerReceivingConfig` reuses a valid stored receiver
+snapshot and only resolves the live manifest when there is none (a new setup, a
+legacy config, or a corrupt snapshot). A re-save therefore keeps the domain's
+receiver set; changing it is an explicit new setup, not a side effect of saving.
+(2) `UpdateAntlerSettings` (replacing the contact-email-only update) applies the
+contact email and the enforcement policy together, preserving the receiver
+snapshot, setup identity and domain credential; enforcement values come from
+`mxdial.ValidEnforcement`, so the settings path and the config schema share one
+list. The status view renders a **Settings** section below its status records with
+both fields and a single "Save settings" action, and a subdomain that inherits its
+configuration shows them read-only, naming the ancestor to edit.
+
+**Reason:** A receiver set is what a domain's published MX records already point
+at; changing it silently while an operator is copying DNS records is the worst
+possible moment for it to move. Making the settings editable in place removes the
+need to re-enter the setup wizard to change an enforcement policy, and the
+read-only inherited view prevents a child domain from forking onto its own config
+(a change it cannot see) when the operator meant to edit the parent.
+
+**Complexity:** One store read already performed on save (the existing config) is
+reused instead of a manifest fetch; the settings update and its handler replace the
+contact-email-only equivalents with no new table or migration; one `Settings`
+section in the dialog's markup and a small field-placement helper. No new
+dependency or service. See `docs/DIALMX.md`, `docs/API.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

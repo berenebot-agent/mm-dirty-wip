@@ -337,8 +337,9 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 	s.domainNotice(w, r, "Sending configuration removed")
 }
 
-// uiAntlerContactEmail updates only the hosted setup's contact metadata.
-func (s *Server) uiAntlerContactEmail(w http.ResponseWriter, r *http.Request) {
+// uiAntlerSettings updates only the hosted setup's editable settings (contact
+// email and authentication enforcement), preserving the receiver snapshot.
+func (s *Server) uiAntlerSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !adminOnly(w, p) {
 		return
@@ -347,13 +348,17 @@ func (s *Server) uiAntlerContactEmail(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 		Config   struct {
 			ContactEmail string `json:"contact_email"`
+			Enforcement  string `json:"enforcement"`
 		} `json:"config"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
 	id := r.PathValue("id")
-	cfg, err := s.Service.UpdateAntlerContactEmail(r.Context(), p.AccountID, id, in.Config.ContactEmail)
+	cfg, err := s.Service.UpdateAntlerSettings(r.Context(), p.AccountID, id, app.AntlerSettings{
+		ContactEmail: in.Config.ContactEmail,
+		Enforcement:  in.Config.Enforcement,
+	})
 	if err != nil {
 		mapDomainConfigError(w, err)
 		return
