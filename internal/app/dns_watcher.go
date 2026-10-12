@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/dkimsign"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/mxwire"
+	"github.com/dellarb/mailmoose/internal/transport/mx"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
@@ -19,12 +22,14 @@ import (
 // see it land within seconds.
 const dnsDemandFloor = 10 * time.Second
 
-// ExtraMXWatcher is the single owner of every Dial MX domain's published-record
-// verdict: the `_mailmoose-mx` TXT check and the MX routing check (including the
-// "extra MX" hosts that are not one of the domain's Antler receivers). It diffs
-// each verdict against the last one it published and publishes a transient
-// mx.dns_changed event only when it changes. The dashboard light and the status
-// dialog both read the same verdict, so they can never disagree, and neither runs
+// DNSWatcher is the single owner of every domain's published-record verdict:
+// the receiving checks for a Dial MX domain (the `_mailmoose-mx` TXT check and
+// the MX routing check, including the "extra MX" hosts that are not one of the
+// domain's Antler receivers) and the sending check for a Direct MX domain that
+// signs outbound mail (its `_domainkey` public-key record). It diffs each
+// verdict against the last one it published and publishes a transient
+// mx.dns_changed event only when it changes. The dashboard lights and the setup
+// dialogs all read the same verdict, so they can never disagree, and none runs
 // a DNS lookup on a render.
 //
 // Checks are demand-driven with a slow background pass: an idle instance re-checks
@@ -34,11 +39,13 @@ const dnsDemandFloor = 10 * time.Second
 // (force) or RequestCheckIfStale (subject to dnsDemandFloor). Requests are
 // coalesced into the watcher's own loop, so no HTTP request ever runs a lookup.
 //
-// It checks a domain whenever it has at least one receiver configured (ready or
-// not): a ready receiver needs the extra-MX verdict for the amber warning, and a
-// non-ready receiver needs the TXT/MX checks to explain *why* it is red — the
-// receiver's own single reason cannot, because it stops at the first failing gate.
-type ExtraMXWatcher struct {
+// A Dial MX domain is checked whenever it has at least one receiver configured
+// (ready or not): a ready receiver needs the extra-MX verdict for the amber
+// warning, and a non-ready receiver needs the TXT/MX checks to explain *why* it
+// is red — the receiver's own single reason cannot, because it stops at the
+// first failing gate. A Direct MX sending domain is checked only when it signs
+// outbound mail, so a non-signing sender costs no lookup and renders no light.
+type DNSWatcher struct {
 	svc      *Service
 	resolver DNSResolver
 
@@ -60,15 +67,15 @@ type ExtraMXWatcher struct {
 // whether it has ever resolved one. It is the read side the HTTP layer uses so
 // both the light and the dialog surface agree.
 func (s *Service) DNSState(domainID string) (DNSVerdict, bool) {
-	if s.ExtraMX == nil {
+	if s.DNS == nil {
 		return DNSVerdict{}, false
 	}
-	s.ExtraMX.mu.Lock()
-	defer s.ExtraMX.mu.Unlock()
-	if !s.ExtraMX.resolved[domainID] {
+	s.DNS.mu.Lock()
+	defer s.DNS.mu.Unlock()
+	if !s.DNS.resolved[domainID] {
 		return DNSVerdict{}, false
 	}
-	return s.ExtraMX.last[domainID], true
+	return s.DNS.last[domainID], true
 }
 
 // ExtraMXState returns just the unexpected-MX host list from the shared verdict:
@@ -82,13 +89,13 @@ func (s *Service) ExtraMXState(domainID string) ([]string, bool) {
 	return append([]string(nil), v.MX.Unexpected...), true
 }
 
-// NewExtraMXWatcher builds the watcher. A nil resolver defaults to the system
+// NewDNSWatcher builds the watcher. A nil resolver defaults to the system
 // resolver; tests inject a deterministic one via SetDNSResolver.
-func NewExtraMXWatcher(svc *Service, resolver DNSResolver) *ExtraMXWatcher {
+func NewDNSWatcher(svc *Service, resolver DNSResolver) *DNSWatcher {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
-	return &ExtraMXWatcher{
+	return &DNSWatcher{
 		svc:       svc,
 		resolver:  resolver,
 		last:      map[string]DNSVerdict{},
@@ -101,7 +108,7 @@ func NewExtraMXWatcher(svc *Service, resolver DNSResolver) *ExtraMXWatcher {
 
 // wake nudges the Run loop to service an outstanding demand request without
 // blocking; a pending wake absorbs a concurrent one.
-func (w *ExtraMXWatcher) wake() {
+func (w *DNSWatcher) wake() {
 	select {
 	case w.demand <- struct{}{}:
 	default:
@@ -110,7 +117,7 @@ func (w *ExtraMXWatcher) wake() {
 
 // SetDNSResolver replaces the resolver the checks use. It exists for tests;
 // production always uses the system resolver.
-func (w *ExtraMXWatcher) SetDNSResolver(r DNSResolver) {
+func (w *DNSWatcher) SetDNSResolver(r DNSResolver) {
 	if r == nil {
 		return
 	}
@@ -119,7 +126,7 @@ func (w *ExtraMXWatcher) SetDNSResolver(r DNSResolver) {
 	w.mu.Unlock()
 }
 
-func (w *ExtraMXWatcher) currentResolver() DNSResolver {
+func (w *DNSWatcher) currentResolver() DNSResolver {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.resolver
@@ -129,7 +136,7 @@ func (w *ExtraMXWatcher) currentResolver() DNSResolver {
 // so a light is correct on startup, then a full pass on `every` (the slow
 // background refresh), and a targeted pass whenever a read requests one. A zero
 // or negative interval selects a one-minute background pass.
-func (w *ExtraMXWatcher) Run(ctx context.Context, every time.Duration) {
+func (w *DNSWatcher) Run(ctx context.Context, every time.Duration) {
 	if every <= 0 {
 		every = time.Minute
 	}
@@ -156,7 +163,7 @@ func (w *ExtraMXWatcher) Run(ctx context.Context, every time.Duration) {
 // RequestCheck forces a re-check of one domain as soon as the watcher can run it.
 // It is used by a save or a key rotation, where the verdict is known to be stale.
 // It never blocks and coalesces with an outstanding request.
-func (w *ExtraMXWatcher) RequestCheck(domainID string) {
+func (w *DNSWatcher) RequestCheck(domainID string) {
 	if w == nil || domainID == "" {
 		return
 	}
@@ -171,7 +178,7 @@ func (w *ExtraMXWatcher) RequestCheck(domainID string) {
 // lights tick, an open status dialog, a wizard step): cheap when repeated, a real
 // lookup when the cached verdict has gone stale. It never blocks and never runs a
 // lookup on the caller's goroutine.
-func (w *ExtraMXWatcher) RequestCheckIfStale(domainID string) {
+func (w *DNSWatcher) RequestCheckIfStale(domainID string) {
 	if w == nil || domainID == "" {
 		return
 	}
@@ -187,7 +194,7 @@ func (w *ExtraMXWatcher) RequestCheckIfStale(domainID string) {
 }
 
 // takeDemanded returns the domains a read asked to re-check and clears the set.
-func (w *ExtraMXWatcher) takeDemanded() map[string]bool {
+func (w *DNSWatcher) takeDemanded() map[string]bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.demanded) == 0 {
@@ -200,14 +207,14 @@ func (w *ExtraMXWatcher) takeDemanded() map[string]bool {
 
 // CheckOnce runs a single full pass. It is used on startup and by tests. A full
 // pass supersedes any outstanding demand requests, so it clears them.
-func (w *ExtraMXWatcher) CheckOnce(ctx context.Context) {
+func (w *DNSWatcher) CheckOnce(ctx context.Context) {
 	w.takeDemanded()
 	w.checkDomains(ctx, nil)
 }
 
 // CheckDemandedOnce runs the pending demand requests only, as the Run loop does on
 // a demand wake. It exists for tests, which cannot easily drive Run's channels.
-func (w *ExtraMXWatcher) CheckDemandedOnce(ctx context.Context) {
+func (w *DNSWatcher) CheckDemandedOnce(ctx context.Context) {
 	demanded := w.takeDemanded()
 	if len(demanded) == 0 {
 		return
@@ -215,17 +222,32 @@ func (w *ExtraMXWatcher) CheckDemandedOnce(ctx context.Context) {
 	w.checkDomains(ctx, demanded)
 }
 
-// checkDomains evaluates Dial MX domains and publishes changes. A nil filter
-// checks every domain; a non-nil filter checks only the domains it names. The
-// stale-verdict sweep runs only on a full pass, so a targeted check cannot decide
-// a domain has left the Dial MX set.
-func (w *ExtraMXWatcher) checkDomains(ctx context.Context, filter map[string]bool) {
-	domains, err := w.svc.Store.ListDialMXDomains(ctx)
+// checkDomains evaluates the domains the watcher tracks and publishes changes. A
+// nil filter checks every domain; a non-nil filter checks only the domains it
+// names. The stale-verdict sweep runs only on a full pass, so a targeted check
+// cannot decide a domain has left the tracked set.
+//
+// Two sets are tracked: Dial MX receiving domains (TXT + MX checks) and Direct MX
+// sending domains (the DKIM check, only when signing is on). They are unioned by
+// id so a domain that is in both is checked once.
+func (w *DNSWatcher) checkDomains(ctx context.Context, filter map[string]bool) {
+	byID := map[string]model.Domain{}
+	receiving, err := w.svc.Store.ListDialMXDomains(ctx)
 	if err != nil {
 		return
 	}
+	for _, d := range receiving {
+		byID[d.ID] = d
+	}
+	sending, err := w.svc.Store.ListDirectMXSendingDomains(ctx)
+	if err != nil {
+		return
+	}
+	for _, d := range sending {
+		byID[d.ID] = d
+	}
 	seen := map[string]bool{}
-	for _, d := range domains {
+	for _, d := range byID {
 		seen[d.ID] = true
 		if filter != nil && !filter[d.ID] {
 			continue
@@ -239,8 +261,9 @@ func (w *ExtraMXWatcher) checkDomains(ctx context.Context, filter map[string]boo
 	if filter != nil {
 		return
 	}
-	// A domain that is no longer Dial MX drops its stale verdict so the light
-	// cannot stay amber or red from an old record set.
+	// A domain that is no longer receiving by Dial MX or sending by Direct MX
+	// drops its stale verdict so a light cannot stay amber or red from an old
+	// record set.
 	w.mu.Lock()
 	var stale []string
 	for id := range w.resolved {
@@ -254,20 +277,33 @@ func (w *ExtraMXWatcher) checkDomains(ctx context.Context, filter map[string]boo
 	}
 }
 
-// verdictForDomain resolves a domain's config and credential and computes the TXT
-// and MX checks. ok is false when the domain has no resolvable config or
-// credential (nothing to check).
-func (w *ExtraMXWatcher) verdictForDomain(ctx context.Context, accountID, domainID, domainName string) (DNSVerdict, bool) {
+// verdictForDomain resolves a domain's receiving and sending configs and
+// computes whichever checks apply: the receiving TXT and MX checks for a Dial MX
+// domain, and the DKIM check for a Direct MX domain that signs. ok is false when
+// no check applies (nothing to publish or watch).
+func (w *DNSWatcher) verdictForDomain(ctx context.Context, accountID, domainID, domainName string) (DNSVerdict, bool) {
+	resolver := w.currentResolver()
+	var verdict DNSVerdict
+	w.addReceivingChecks(ctx, &verdict, accountID, domainID, domainName, resolver)
+	w.addDKIMCheck(ctx, &verdict, accountID, domainID, resolver)
+	if verdict.TXT == nil && verdict.MX == nil && verdict.DKIM == nil {
+		return DNSVerdict{}, false
+	}
+	return verdict, true
+}
+
+// addReceivingChecks fills in the receiving TXT and MX checks for a Dial MX
+// domain. It leaves the verdict untouched for a domain that does not receive by
+// Dial MX.
+func (w *DNSWatcher) addReceivingChecks(ctx context.Context, verdict *DNSVerdict, accountID, domainID, domainName string, resolver DNSResolver) {
 	cfg, err := w.svc.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, mxdial.Provider)
 	if err != nil {
-		return DNSVerdict{}, false
+		return
 	}
 	values, err := w.svc.DecryptDomainReceivingConfig(cfg)
 	if err != nil {
-		return DNSVerdict{}, false
+		return
 	}
-	resolver := w.currentResolver()
-	var verdict DNSVerdict
 
 	// The TXT check needs the domain's exact key. A missing credential means the
 	// domain has never minted one; skip rather than report a spurious mismatch.
@@ -302,16 +338,70 @@ func (w *ExtraMXWatcher) verdictForDomain(ctx context.Context, accountID, domain
 		}
 		verdict.MX = &mx
 	}
-	if verdict.TXT == nil && verdict.MX == nil {
-		return DNSVerdict{}, false
+}
+
+// addDKIMCheck fills in the DKIM published-record check for a Direct MX sending
+// domain that signs outbound mail. It leaves the verdict untouched for a domain
+// that does not send via Direct MX or that has signing off, so a non-signing
+// sender costs no lookup and renders no light.
+//
+// The signing key lives on the domain row, so it is read there rather than from
+// the sending configuration's copy; the sending configuration only supplies the
+// enabled flag (and is the reason a domain with no Direct MX config is skipped
+// entirely).
+func (w *DNSWatcher) addDKIMCheck(ctx context.Context, verdict *DNSVerdict, accountID, domainID string, resolver DNSResolver) {
+	cfg, err := w.svc.Store.ResolveDomainSendingConfig(ctx, accountID, domainID)
+	if err != nil || !strings.EqualFold(cfg.Provider, mx.Provider) {
+		return
 	}
-	return verdict, true
+	values, err := w.svc.DecryptDomainSendingConfig(cfg)
+	if err != nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(dkimString(values[mx.FieldDKIMEnabled])), "on") {
+		return
+	}
+	key, err := w.svc.ServiceDomainDKIM(ctx, accountID, domainID)
+	if err != nil {
+		return
+	}
+	selector := strings.TrimSpace(key.Selector)
+	if selector == "" {
+		selector = dkimsign.DefaultSelector
+	}
+	domain := strings.TrimSpace(key.Domain)
+	if domain == "" {
+		return
+	}
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	parsed, err := dkimsign.ParsePrivateKey(key.PrivateKey)
+	if err != nil {
+		return
+	}
+	pubPEM, err := dkimsign.PublicKeyPEM(parsed)
+	if err != nil {
+		return
+	}
+	pubB64, err := dkimsign.PublicKeyBase64(pubPEM)
+	if err != nil {
+		return
+	}
+	check := CheckDKIM(ctx, resolver, dkimsign.RecordName(selector, domain), dkimsign.TXTRecordValue(pubB64), pubB64)
+	verdict.DKIM = &check
+}
+
+// dkimString reads a config value as a string, tolerant of a missing or
+// non-string value (which yields ""), matching the assertion style used for the
+// other provider config reads in this package.
+func dkimString(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // carriedUnexpected returns the unexpected-MX host list from the domain's last
 // published verdict, so an MX check that could not be completed keeps the warning
 // a previous completed check established instead of clearing it.
-func (w *ExtraMXWatcher) carriedUnexpected(domainID string) []string {
+func (w *DNSWatcher) carriedUnexpected(domainID string) []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	prev := w.last[domainID]
@@ -324,7 +414,7 @@ func (w *ExtraMXWatcher) carriedUnexpected(domainID string) []string {
 // setVerdict stores a domain's verdict and, when it changed, publishes the
 // transient event to the owning account. An empty accountID clears the record
 // without publishing (the domain left the Dial MX set).
-func (w *ExtraMXWatcher) setVerdict(domainID, accountID string, verdict DNSVerdict) {
+func (w *DNSWatcher) setVerdict(domainID, accountID string, verdict DNSVerdict) {
 	w.mu.Lock()
 	prev, had := w.last[domainID]
 	changed := !had || !prev.Equal(verdict)

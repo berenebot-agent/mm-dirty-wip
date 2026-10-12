@@ -46,7 +46,7 @@ func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
 	}
 
 	group := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
-	if !strings.Contains(group, "Publish this DNS record") {
+	if !strings.Contains(group, "DNS record") {
 		t.Fatal("the DKIM record is not shown after enabling signing")
 	}
 	if !strings.Contains(group, "TXT") {

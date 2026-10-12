@@ -4030,7 +4030,7 @@ operator's responsibility.
   submits through its own authenticated infrastructure, so signing there would
   double-sign or contradict the provider's own authentication.
 - DKIM DNS validation and a published-record indicator are **not** part of this
-  change and remain future work.
+  change and remain future work. (Implemented later as `D113`.)
 - ed25519 keys are not accepted. The signing library supports them, but a uniform
   RSA key type is simpler and is understood by every verifier in the field.
 - Per-recipient durable delivery state, the other half of `D057`'s deferred item,
@@ -4045,6 +4045,78 @@ existing provider, one hook in `SendMessage`, and one provider-specific step in
 `SaveDomainSendingConfig`. No new dependency, no new table, no migration, and no
 new service: the key rides in the existing encrypted per-domain sending config
 blob under `APP_ENCRYPTION_KEY`. See `docs/PROVIDERS.md`, `CHANGELOG.md`.
+
+## D113 — DKIM published-record indicator on the Direct MX sending side
+
+**Decision:** A Direct MX domain that signs outbound mail (`dkim_enabled=on`,
+`D069`) gets a published-record indicator for its DKIM TXT record
+(`<selector>._domainkey.<domain>`): a traffic light in the dashboard Domains
+table's **Sending** column, and the same `dns-light` dot next to the record in
+the sending dialog's DNS-record panel. The panel header reads **DNS record**
+with the light and its worded state (green → "DNS valid", red → "DNS invalid",
+grey → "DNS not present") immediately to the right of the title, so the verdict
+is read rather than decoded from a colour. When signing is off there is no light
+anywhere, no check, and no resolver lookup.
+
+The check is owned by the same shared watcher that already owns the receiving
+published-record verdict (`DNSWatcher`, previously `ExtraMXWatcher`; `D107`). The
+watcher now tracks the **union** of two domain sets — Dial MX receiving domains
+(TXT + MX checks) and Direct MX sending domains (the DKIM check) — so a domain in
+both is checked once, and its verdict (`DNSVerdict.DKIM`) rides the same cached,
+demand-refreshed, `mx.dns_changed`-publishing path. No render runs a resolver
+lookup.
+
+The states map onto the existing `dns-light` vocabulary with one addition:
+
+- **green** (`ok`) — a record is published and its `p=` value equals the key
+  MailMoose signs with;
+- **red** (`danger`) — a record is published but the key differs (a stale record
+  from a rotated key, or another operator's record on the same name);
+- **grey** (`grey`, new token) — not yet published, or the lookup could not be
+  completed. Both read as "not confirmed" rather than a settled bad verdict.
+
+The check runs **only** for a Direct MX sending domain whose configuration has
+signing on. The signing key itself lives on the domain row (generated when the
+domain is created, backfilled at startup) and is independent of the enabled flag;
+the enabled flag on the domain's Direct MX sending configuration is what decides
+whether a check runs. A domain with signing off therefore costs no lookup and
+renders no light.
+
+`internal/dkimsign` gains `ParseTXTRecordValue`, which extracts `p=` from
+published TXT strings tolerating tag reordering and inserted whitespace. It is
+the read side of the same value `TXTRecordValue` writes, so a record the local
+check calls green is one a verifier accepts.
+
+**Reason:** `D069` shipped DKIM signing but explicitly deferred "DKIM DNS
+validation and a published-record indicator". Without it an operator who enabled
+signing had no way to see whether the record they were told to publish had
+propagated, whether it matched the key MailMoose actually signs with, or whether
+a key rotation had left a stale record behind — the exact failure modes the
+signing feature's value depends on. The receiving side already answers the
+equivalent question ("will mail arrive?") with a watcher-owned traffic light, so
+the sending side is the obvious and symmetric gap to close.
+
+**Consequences:**
+
+- The DNS watcher is renamed from `ExtraMXWatcher` to `DNSWatcher` (field
+  `Service.DNS`), reflecting that it now owns both receiving and sending
+  published-record verdicts. Comments and identifiers are neutral, not
+  Dial-MX-specific.
+- A new `grey` `dns-light` token is introduced. The base `.dns-light` background
+  is already grey, so `grey` is an explicit alias for a state that is neither a
+  settled pass nor a settled failure.
+- The sending dialog polls the record light while open
+  (`GET /ui/domains/{id}/sending/dkim/status`), mirroring the Antler status poll,
+  so an operator watching DNS propagate sees the dot turn green without
+  reopening. The endpoint reads the watcher's cached verdict and asks for a
+  stale-triggered re-check, so a poll never blocks on a lookup.
+- Only Direct MX is affected; every other outbound provider signs with its own
+  key, so it has no MailMoose-published record to check.
+
+**Complexity:** One new `CheckDKIM` in `internal/app`, one parser in
+`internal/dkimsign`, one store query (`ListDirectMXSendingDomains`), a union in
+the watcher's domain pass, one dashboard column light, one dialog dot plus a
+small poll endpoint. No new dependency, table, or migration.
 
 ## Future extension register
 

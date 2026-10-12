@@ -133,8 +133,8 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 // value, so the wizard, the status view and the dashboard light all read the same
 // picture and no render blocks on DNS.
 func (s *Server) dialMXDNS(domainID string) []domainDNSView {
-	if s.Service.ExtraMX != nil {
-		s.Service.ExtraMX.RequestCheckIfStale(domainID)
+	if s.Service.DNS != nil {
+		s.Service.DNS.RequestCheckIfStale(domainID)
 	}
 	verdict, _ := s.Service.DNSState(domainID)
 	return dnsViewsFromVerdict(verdict)
@@ -142,12 +142,12 @@ func (s *Server) dialMXDNS(domainID string) []domainDNSView {
 
 // dialMXExtraMX returns a domain's "extra MX" verdict: the published MX
 // hostnames that are not one of its configured Antler receivers. It reads the
-// single shared verdict owned by the ExtraMXWatcher, so the dashboard light and
+// single shared verdict owned by the DNS watcher, so the dashboard light and
 // the status dialog always agree and neither runs its own DNS lookup on a render.
 // A domain the watcher has not resolved yet reads as an empty verdict.
 func (s *Server) dialMXExtraMX(domainID string) []string {
-	if s.Service.ExtraMX != nil {
-		s.Service.ExtraMX.RequestCheckIfStale(domainID)
+	if s.Service.DNS != nil {
+		s.Service.DNS.RequestCheckIfStale(domainID)
 	}
 	hosts, _ := s.Service.ExtraMXState(domainID)
 	return hosts

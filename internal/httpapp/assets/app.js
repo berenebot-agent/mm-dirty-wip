@@ -5301,6 +5301,67 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  // Live DKIM published-record light on the sending dialog, mirroring the Antler
+  // status poll: while the dialog is open, refresh the record dot so an operator
+  // watching DNS propagate sees it turn green without closing and reopening. The
+  // server reads the watcher's shared cached verdict, so a poll is cheap and
+  // never runs a resolver lookup on the request. The interval matches the
+  // dashboard lights tick's intent (seconds-scale, coalesced server-side).
+  var POLL_MS = 15000;
+  document.querySelectorAll('form[data-sending-domain]').forEach(function (form) {
+    var dlg = form.closest('dialog');
+    if (!dlg) {
+      return;
+    }
+    var url = '/ui/domains/' + encodeURIComponent(form.getAttribute('data-sending-domain')) + '/sending/dkim/status';
+    var timer = null;
+    function statusText(light) {
+      if (light === 'ok') { return 'DNS valid'; }
+      if (light === 'danger') { return 'DNS invalid'; }
+      if (light === 'grey') { return 'DNS not present'; }
+      return '';
+    }
+    function paint(light, title) {
+      form.querySelectorAll('[data-dkim-record-light]').forEach(function (dot) {
+        dot.className = 'dns-light ' + (light || 'grey');
+        dot.setAttribute('title', title || '');
+        dot.setAttribute('aria-label', title || '');
+      });
+      form.querySelectorAll('[data-dkim-record-text]').forEach(function (el) {
+        el.textContent = statusText(light);
+      });
+    }
+    function refresh() {
+      if (!dlg.open) {
+        return;
+      }
+      fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) { paint(d.light, d.title); } })
+        .catch(function () {});
+    }
+    function schedule() {
+      if (timer) {
+        window.clearTimeout(timer);
+      }
+      timer = window.setTimeout(function () {
+        refresh();
+        schedule();
+      }, POLL_MS);
+    }
+    dlg.addEventListener('toggle', function () {
+      if (dlg.open) {
+        refresh();
+        schedule();
+      } else if (timer) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    });
+  });
+})();
+
+(function () {
   document.querySelectorAll('.setup-copy').forEach(function (btn) {
     var dlg = btn.closest('dialog') || document;
     // Each provider group owns its own webhook URL and note. Resolve them from
@@ -7033,11 +7094,16 @@ function hideInboxSubview(dlg) {
     td.appendChild(el('span', 'pill unread-pill', String(value)));
   }
 
-  function setTrafficLight(row, light, title) {
+  // setTrafficLight patches a dashboard Domain row's light dot in place. It is
+  // parameterised by the dot's data attribute and its owning button's data
+  // attribute so the receiving light (data-receiving-light) and the sending DKIM
+  // light (data-sending-light) share one implementation. A falsy light removes
+  // the dot, so a light that no longer applies (signing turned off) disappears.
+  function setTrafficLight(row, light, title, attr, buttonAttr) {
     if (!row) {
       return;
     }
-    var dot = row.querySelector('[data-receiving-light]');
+    var dot = row.querySelector('[' + attr + ']');
     if (!light) {
       if (dot) {
         dot.remove();
@@ -7045,12 +7111,12 @@ function hideInboxSubview(dlg) {
       return;
     }
     if (!dot) {
-      var btn = row.querySelector('[data-receiving-button]');
+      var btn = row.querySelector('[' + buttonAttr + ']');
       if (!btn) {
         return;
       }
       dot = el('span', 'dns-light');
-      dot.setAttribute('data-receiving-light', '');
+      dot.setAttribute(attr, '');
       btn.insertBefore(dot, btn.firstChild);
     }
     dot.className = 'dns-light ' + light;
@@ -7089,7 +7155,13 @@ function hideInboxSubview(dlg) {
       if (data.domains) {
         document.querySelectorAll('tbody[data-domain-rows] tr[data-domain-id]').forEach(function (row) {
           var info = data.domains[row.getAttribute('data-domain-id')];
-          setTrafficLight(row, info ? info.light : '', info ? info.title : '');
+          setTrafficLight(row, info ? info.light : '', info ? info.title : '', 'data-receiving-light', 'data-receiving-button');
+        });
+      }
+      if (data.sending) {
+        document.querySelectorAll('tbody[data-domain-rows] tr[data-domain-id]').forEach(function (row) {
+          var info = data.sending[row.getAttribute('data-domain-id')];
+          setTrafficLight(row, info ? info.light : '', info ? info.title : '', 'data-sending-light', 'data-sending-button');
         });
       }
       if (window.mailmooseDashboardGroups) {

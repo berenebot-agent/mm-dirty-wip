@@ -79,10 +79,6 @@ func (s *Server) uiStateDashboard(w http.ResponseWriter, r *http.Request, p mode
 		c.Pending = n
 		counts[id] = c
 	}
-	type domainLight struct {
-		Light string `json:"light"`
-		Title string `json:"title"`
-	}
 	var lights map[string]domainLight
 	if includeLights {
 		lights = map[string]domainLight{}
@@ -96,10 +92,29 @@ func (s *Server) uiStateDashboard(w http.ResponseWriter, r *http.Request, p mode
 			}
 		}
 	}
+	// The sending light is the DKIM published-record check for a Direct MX
+	// domain that signs. It is scoped to the principal's account: the watcher
+	// tracks every account's sending domains, so a foreign domain must never
+	// leak into this snapshot.
+	var sending map[string]domainLight
+	if includeLights {
+		sending = map[string]domainLight{}
+		if domains, err := s.Service.Store.ListDirectMXSendingDomains(ctx); err == nil {
+			for _, d := range domains {
+				if d.AccountID != p.AccountID {
+					continue
+				}
+				if light, title := s.dkimSendingLight(d.ID); light != "" {
+					sending[d.ID] = domainLight{Light: light, Title: title}
+				}
+			}
+		}
+	}
 	writeJSON(w, 200, map[string]any{
 		"page":    "dashboard",
 		"inboxes": counts,
 		"domains": lights,
+		"sending": sending,
 	})
 }
 

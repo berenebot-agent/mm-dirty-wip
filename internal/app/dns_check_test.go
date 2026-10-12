@@ -158,3 +158,44 @@ func TestCheckTXTAgreesWithReceiverParser(t *testing.T) {
 		t.Fatalf("timeout state = %q, want unavailable", unavailable.State)
 	}
 }
+
+// TestCheckDKIM proves the Direct MX sending-side record check: green when the
+// published p= value equals the signing key, grey (pending) when nothing usable
+// is published, red (mismatch) when a different key is published, and
+// unavailable when the lookup cannot be completed.
+func TestCheckDKIM(t *testing.T) {
+	const name = "mailmoose._domainkey.example.test"
+	const want = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"
+	for _, tc := range []struct {
+		name    string
+		records []string
+		want    string
+	}{
+		{"the exact record matches", []string{"v=DKIM1; k=rsa; p=" + want}, StateOK},
+		{"tags may be reordered", []string{"k=rsa; p=" + want + "; v=DKIM1"}, StateOK},
+		{"whitespace inside the key is ignored", []string{"v=DKIM1; k=rsa; p=" + want[:10] + " " + want[10:]}, StateOK},
+		{"a different key is a mismatch", []string{"v=DKIM1; k=rsa; p=DIFFERENTKEY"}, StateMismatch},
+		{"a record with no p= is pending", []string{"v=DKIM1; k=rsa"}, StatePending},
+		{"an unrelated TXT record is pending", []string{"v=spf1 -all"}, StatePending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view := CheckDKIM(context.Background(), staticResolver{txt: tc.records}, name, "v=DKIM1; k=rsa; p="+want, want)
+			if view.State != tc.want {
+				t.Fatalf("state = %q, want %q (%+v)", view.State, tc.want, view)
+			}
+			if view.Kind != "dkim" {
+				t.Fatalf("kind = %q, want dkim", view.Kind)
+			}
+		})
+	}
+
+	// An absent record and an unanswered lookup are different facts.
+	absent := CheckDKIM(context.Background(), staticResolver{txtE: &net.DNSError{IsNotFound: true}}, name, "", want)
+	if absent.State != StatePending {
+		t.Fatalf("NXDOMAIN state = %q, want pending", absent.State)
+	}
+	unavailable := CheckDKIM(context.Background(), staticResolver{txtE: errors.New("timeout")}, name, "", want)
+	if unavailable.State != StateUnavailable {
+		t.Fatalf("timeout state = %q, want unavailable", unavailable.State)
+	}
+}

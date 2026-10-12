@@ -125,19 +125,20 @@ func main() {
 	}()
 	defer dialCancel()
 
-	// The published-record watcher is the single owner of every Dial MX domain's
-	// DNS verdict. It re-checks on demand (a read asks for a check when the cached
-	// verdict is stale) and on a slow background pass, and pushes changes over
-	// SSE, so the dashboard light and an open status dialog stay in sync without
-	// either running a lookup on a render. The background pass only needs to catch
-	// a record that changes with nobody looking; anything an operator is watching
-	// arrives through a demand read. It shares the dial context, so it stops with
-	// the dial manager.
-	svc.ExtraMX = app.NewExtraMXWatcher(svc, nil)
-	extraMXDone := make(chan struct{})
+	// The published-record watcher is the single owner of every domain's DNS
+	// verdict: the receiving TXT/MX checks for a Dial MX domain and the DKIM
+	// check for a Direct MX sender that signs. It re-checks on demand (a read
+	// asks for a check when the cached verdict is stale) and on a slow background
+	// pass, and pushes changes over SSE, so the dashboard lights and an open
+	// setup dialog stay in sync without either running a lookup on a render. The
+	// background pass only needs to catch a record that changes with nobody
+	// looking; anything an operator is watching arrives through a demand read. It
+	// shares the dial context, so it stops with the dial manager.
+	svc.DNS = app.NewDNSWatcher(svc, nil)
+	dnsWatchDone := make(chan struct{})
 	go func() {
-		defer close(extraMXDone)
-		svc.ExtraMX.Run(dialCtx, 15*time.Minute)
+		defer close(dnsWatchDone)
+		svc.DNS.Run(dialCtx, 15*time.Minute)
 	}()
 
 	// Transition the legacy environment MX configuration into the store once,
@@ -270,9 +271,9 @@ func main() {
 		log.Warn("Dial MX shutdown timed out")
 	}
 	select {
-	case <-extraMXDone:
+	case <-dnsWatchDone:
 	case <-ctx.Done():
-		log.Warn("extra-MX watcher shutdown timed out")
+		log.Warn("DNS watcher shutdown timed out")
 	}
 	// Stop the MX receiver and wait (bounded) for the included child to drain
 	// and the private dialer to stop, before the deferred store close runs. The

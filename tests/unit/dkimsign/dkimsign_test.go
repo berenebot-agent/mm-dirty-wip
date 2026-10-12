@@ -203,6 +203,34 @@ func TestRecordNameAndTXTValue(t *testing.T) {
 	}
 }
 
+// TestParseTXTRecordValue proves the published-record check reads the p= value a
+// verifier derives, tolerating tag reordering and the whitespace a DNS provider
+// may insert inside a long base64 value, and reports absence honestly.
+func TestParseTXTRecordValue(t *testing.T) {
+	const key = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"
+	for _, tc := range []struct {
+		name    string
+		records []string
+		want    string
+		ok      bool
+	}{
+		{"the canonical record", []string{"v=DKIM1; k=rsa; p=" + key}, key, true},
+		{"tags may be reordered", []string{"k=rsa; p=" + key + "; v=DKIM1"}, key, true},
+		{"whitespace inside the key collapses", []string{"v=DKIM1; k=rsa; p=" + key[:8] + " \n " + key[8:]}, key, true},
+		{"another record in the set is skipped", []string{"v=spf1 -all", "p=" + key}, key, true},
+		{"no p= tag yields not-ok", []string{"v=DKIM1; k=rsa"}, "", false},
+		{"an empty p= yields not-ok", []string{"v=DKIM1; p="}, "", false},
+		{"no records yields not-ok", nil, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := dkimsign.ParseTXTRecordValue(tc.records)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseTXTRecordValue(%q) = (%q, %v), want (%q, %v)", tc.records, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func mustGenerate(t *testing.T) string {
 	t.Helper()
 	privPEM, _, err := dkimsign.GenerateRSA2048()
