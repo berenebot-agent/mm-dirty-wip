@@ -105,8 +105,10 @@ func TestDashboardRendersClientDeleteDialog(t *testing.T) {
 	for _, want := range []string{
 		`id="client-delete-dialog"`,
 		`id="client-delete-form"`,
-		`id="client-delete-label"`,
+		`id="client-delete-name"`,
+		`id="client-delete-input"`,
 		`id="client-delete-submit"`,
+		`id="client-delete-copy"`,
 		`class="secondary icon-btn danger open-delete-client" data-kind="keys" data-id="` + key.ID + `" data-name="Agent" data-type="API key"`,
 	} {
 		if !strings.Contains(body, want) {
@@ -114,13 +116,17 @@ func TestDashboardRendersClientDeleteDialog(t *testing.T) {
 		}
 	}
 
+	// The delete now requires the client's name to be retyped.
 	post := httptest.NewRecorder()
-	delReq := httptest.NewRequest("POST", "/ui/keys/"+key.ID+"/delete", strings.NewReader("_csrf="+csrf))
+	delReq := httptest.NewRequest("POST", "/ui/keys/"+key.ID+"/delete", strings.NewReader("_csrf="+csrf+"&confirm=Agent"))
 	delReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	delReq.AddCookie(cookie)
 	h.ServeHTTP(post, delReq)
 	if post.Code != http.StatusSeeOther {
 		t.Fatalf("delete key %d: %s", post.Code, post.Body.String())
+	}
+	if keys, _ := svc.Store.ListAPIKeys(context.Background(), u.AccountID); len(keys) != 0 {
+		t.Fatal("key survived a correct confirmation")
 	}
 }
 

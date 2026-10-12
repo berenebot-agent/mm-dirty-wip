@@ -815,3 +815,41 @@ func TestUIDeleteInboxConfirmDialog(t *testing.T) {
 		t.Fatalf("inbox still present after delete: %v", err)
 	}
 }
+
+// TestUIDeleteDialogsRenderCopyAndInboxList locks in the delete-dialog
+// affordances: the name is copy-able in the domain, inbox and client dialogs,
+// the client dialog carries a typed-confirm input, and the domain dialog is
+// fed the mailboxes the delete will destroy (plus a subdomain note).
+func TestUIDeleteDialogsRenderCopyAndInboxList(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("dashboard %d: %s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`id="domain-delete-inboxes"`,
+		`<div class="confirm-inbox-list" id="domain-delete-inbox-list" hidden>`,
+		`id="domain-delete-copy"`,
+		`id="inbox-delete-copy"`,
+		`id="client-delete-dialog"`,
+		`id="client-delete-input"`,
+		`id="client-delete-submit"`,
+		`id="client-delete-copy"`,
+		"Subdomains added under this domain are not deleted",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
+	}
+	// The domain delete button carries its mailbox payload.
+	i := strings.Index(body, `data-inboxes="`)
+	if i < 0 || !strings.Contains(body[i:], box.Address) {
+		t.Fatal("domain delete button missing its mailbox payload")
+	}
+}
