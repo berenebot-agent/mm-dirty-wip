@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -33,6 +34,14 @@ type domainEditorView struct {
 	WebhookURL  string
 	Steps       []string
 	Generated   bool
+	// HasOverridable is true when the provider has a generated field the
+	// operator may supply instead (for example the Cloudflare shared secret).
+	// Such a field is rendered even though the provider is Generated.
+	HasOverridable bool
+	// GeneratedOverridable holds just the overridable generated fields, which
+	// are rendered inside the provider box so a shared secret can be reused
+	// across domains. It is empty for every other provider.
+	GeneratedOverridable []transport.ConfigField
 	// KeepSecrets is true when the stored config already uses this provider, so
 	// a blank secret retains the stored value ("leave blank to keep"). It is
 	// false for a create or provider switch, where required secrets must be
@@ -687,11 +696,96 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WorkerCode: code,
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
-	dest := "/?domain=" + url.PathEscape(domainID)
+	dest := "/ui/domains/" + url.PathEscape(domainID) + "/receiving/worker"
 	if tok := s.flashes.put(f, len(code)+128); tok != "" {
-		dest += "&_flash=" + tok
+		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
+}
+
+// domainWorkerSetupView drives the dedicated one-time Cloudflare Worker setup
+// page. WorkerCode is empty once the one-time flash has been consumed (a
+// refresh, a bookmark, or a return visit), so the page then offers
+// regeneration instead.
+type domainWorkerSetupView struct {
+	DomainID   string
+	WebhookURL string
+	WorkerCode string
+	// Warning is a user-safe note shown when the receiver host cannot be
+	// reached by a Cloudflare Worker (for example a private address).
+	Warning string
+}
+
+// uiDomainReceivingWorker shows the full-page, one-time Cloudflare Worker setup
+// wizard for a domain's receiving configuration. The generated code contains
+// the shared secret and is only available while its bound flash is unconsumed.
+func (s *Server) uiDomainReceivingWorker(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	if !p.Admin {
+		http.Error(w, "admin required", 403)
+		return
+	}
+	ctx := r.Context()
+	d, err := s.Service.Store.GetDomain(ctx, p.AccountID, r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "domain not found", 404)
+		return
+	}
+	if d.ReceivingProvider != "cloudflare" {
+		http.Error(w, "not a Cloudflare receive path", 400)
+		return
+	}
+	base := s.Service.Config.ReceiverURL()
+	view := &domainWorkerSetupView{
+		DomainID:   d.ID,
+		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
+		Warning:    cloudflareReachabilityWarning(base),
+	}
+	if tok := r.URL.Query().Get("_flash"); tok != "" {
+		if v, ok := s.flashes.peek(tok); ok {
+			if f, ok := v.(domainWorkerFlash); ok && f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == d.ID {
+				var cfgID string
+				var rev int64
+				if cur, err := s.Service.Store.GetDomainReceivingConfig(ctx, p.AccountID, d.ID); err == nil {
+					cfgID, rev = cur.ID, cur.Revision
+				}
+				if f.ConfigID == cfgID && f.Revision == rev {
+					// Consume only a matching flash, so a foreign or stale
+					// attempt leaves the owner's code intact.
+					if taken, ok := s.flashes.take(tok); ok {
+						if tf, ok := taken.(domainWorkerFlash); ok {
+							view.WorkerCode = tf.WorkerCode
+						}
+					}
+				}
+			}
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.render(w, r, domainWorkerBody, pageData{Title: "Cloudflare Worker setup", Page: "worker-setup", Principal: p, CSRF: csrf(r), DomainWorkerSetup: view})
+}
+
+// cloudflareReachabilityWarning returns a user-safe warning when the receiver
+// origin is a host a Cloudflare Worker cannot fetch (a loopback, link-local or
+// private address, or a bare non-public name). It is purely syntactic: it never
+// performs a DNS lookup, so rendering the setup page stays cheap and offline.
+func cloudflareReachabilityWarning(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return "Cloudflare Workers cannot reach " + host + ": it is a local hostname. Set DEDICATED_RECEIVER_URL (or BASE_URL) to a publicly reachable hostname, then regenerate."
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return ""
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return "Cloudflare Workers cannot reach " + host + ": it is a private address, and Worker fetches to private addresses fail with error 1002. Set DEDICATED_RECEIVER_URL (or fix its DNS record) to a public hostname, then regenerate."
+	}
+	return ""
 }
 
 // flashDomainCredential stores a freshly generated receiving credential (for
@@ -755,7 +849,9 @@ func outboundSchemaFields(provider string) ([]transport.ConfigField, bool) {
 func configFromForm(provider string, fields []transport.ConfigField, r *http.Request) (map[string]any, error) {
 	cfg := map[string]any{}
 	for _, f := range fields {
-		if f.Generated {
+		// Generated fields are server-produced and not submitted, except an
+		// overridable one, which the operator may supply (blank = generate).
+		if f.Generated && !f.Overridable {
 			continue
 		}
 		raw := strings.TrimSpace(r.Form.Get("cfg_" + provider + "_" + f.Name))
@@ -799,6 +895,10 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 	for _, f := range e.Fields {
 		if f.Generated {
 			e.Generated = true
+			if f.Overridable {
+				e.HasOverridable = true
+				e.GeneratedOverridable = append(e.GeneratedOverridable, f)
+			}
 		}
 	}
 	return e, true
@@ -903,7 +1003,7 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "cloudflare":
 		return []string{
-			"Save this form to generate a shared secret and Worker code.",
+			"Save this form to generate a shared secret and Worker code, or paste an existing shared secret to reuse one Worker across several of your domains.",
 			"In Cloudflare, create a Worker (Workers & Pages, Create application, Start with Hello World, Deploy).",
 			"Open the Worker, choose Edit code, replace the stub with the generated snippet, then Deploy.",
 			"Onboard Email Routing for this domain, edit the catch-all rule to Send to a Worker, select this Worker and enable it.",
@@ -948,6 +1048,19 @@ func domainReceivingSteps(provider string) []string {
 		return []string{"Register the webhook URL above with the provider, then fill in the fields below and save."}
 	}
 }
+
+const domainWorkerBody = `<div class="toolbar"><a class="btn secondary" href="/?domain={{.DomainWorkerSetup.DomainID}}">← Domain</a></div>
+<section class="card"><h1>Cloudflare Worker setup</h1>
+{{if .DomainWorkerSetup.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your shared secret, which is shown only on this page.</p>
+<ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Start with Hello World</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In the domain, open <b>Email</b> → <b>Email Routing</b>, onboard it, and apply the <b>DNS records</b> Cloudflare lists (the MX record, and any SPF/TXT records).</li><li>Under <b>Routing rules</b>, add one <b>catch-all</b> rule set to <b>Send to a Worker</b>, select this Worker, and <b>Enable</b> the catch-all rule. A single catch-all rule covers every address, so new inboxes need no further Cloudflare changes.</li></ol>
+{{if .DomainWorkerSetup.Warning}}<div class="banner warn">{{.DomainWorkerSetup.Warning}}</div>{{end}}
+<pre class="cf-code" id="cf-code">{{.DomainWorkerSetup.WorkerCode}}</pre>
+<p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p>
+<div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><a class="btn" href="/?domain={{.DomainWorkerSetup.DomainID}}">Done</a></div>
+{{else}}<p class="muted">The shared secret is shown only once, so the Worker code is no longer available. Regenerate to get a new secret and fresh code. The current Worker stops working as soon as you regenerate.</p>
+<form method="post" action="/ui/domains/{{.DomainWorkerSetup.DomainID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="amber">Regenerate secret</button></form>
+{{end}}<p class="muted small">Ingest URL: <code>{{.DomainWorkerSetup.WebhookURL}}</code>. Saving a receiving configuration alone does not establish delivery; Email Routing and DNS setup happen in Cloudflare.</p>
+</section>`
 
 const clientDeliveriesBody = `<div class="toolbar"><a href="/">← Clients</a></div>
 <section class="card"><h1>{{.ClientLogClient.Name}} · Log</h1><p class="muted">{{if eq .ClientLogClient.Kind "webhook"}}Events delivered to this Webhook client, newest first. “Acknowledged” means the endpoint returned 2xx; queued and retrying rows are still being attempted. Completed history is retained for about 30 days.{{else}}Events delivered to this Hermes relay, newest first. “Acknowledged” means the gateway accepted the event — not that the agent finished processing it. Completed history is retained for about 30 days.{{end}}</p>{{if .ClientLogEntries}}<div class="table-wrap"><table class="log-table"><thead><tr><th>When</th><th>Status</th><th>Event</th><th>Message</th><th>Detail</th><th></th></tr></thead><tbody>{{range .ClientLogEntries}}<tr><td style="white-space:nowrap">{{localDateTime .At}}</td><td><span class="pill{{if eq .Status "failed"}} danger{{else if or (eq .Status "pending") (eq .Status "skipped")}} amber{{end}}">{{deliveryStatus .Status .Attempts .LastError}}</span></td><td>{{if .EventType}}{{.EventType}}{{else}}<span class="muted">—</span>{{end}}</td><td>{{if .Detail}}{{.Detail}}{{else}}<span class="muted">—</span>{{end}}</td><td class="muted log-detail">attempt {{.Attempts}}{{if .NextAttemptAt}} · next {{.NextAttemptAt}}{{end}}{{if .LastError}} · {{.LastError}}{{end}}</td><td>{{if .MessageID}}<a href="/ui/messages/{{.MessageID}}">Open</a>{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody></table></div>{{if .ClientLogHasMore}}<p><a href="/ui/clients/{{.ClientLogClient.ID}}/log?before={{.ClientLogBefore}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No deliveries yet.</p>{{end}}</section>`

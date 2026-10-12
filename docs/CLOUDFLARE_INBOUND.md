@@ -22,14 +22,21 @@ on the domain:
 
 1. On the dashboard, click **Receiving** for the domain you receive on.
 2. Choose **Cloudflare Worker** and save the form.
-3. MailMoose generates the shared secret, stores it encrypted on that domain,
-   and shows the complete Worker code (the generated
-   secret is already embedded) and the Cloudflare steps below in a one-time
-   dialog. The generated
-   secret is shown only once; use **Regenerate secret** in the domain's
-   receiving dialog if you lose it, then paste the new Worker code.
+3. MailMoose opens a **one-time setup page** showing the complete Worker code
+   (with a freshly generated shared secret already embedded), the four
+   Cloudflare steps, a **Copy code** button, and a reachability warning when
+   the receiver host is not public. The generated secret is shown only once;
+   use **Regenerate secret** (from that page or the domain's receiving dialog)
+   if you lose it, then paste the new Worker code.
 4. Repeat for each domain you receive on. Each domain has its own configuration;
    a normal re-save keeps its existing secret.
+
+**Reusing one Worker across several domains.** The shared secret field is
+optional: leave it blank to have MailMoose generate one, or paste an existing
+secret to reuse the same Worker (and the same secret) across multiple domains.
+Supplying a secret stores it verbatim and skips the generated-code page; the
+Worker code itself only ever contains a generated secret and is never shown for
+a reused one.
 
 The generated Worker uses `DEDICATED_RECEIVER_URL`, falling back to `BASE_URL`
 when omitted or blank (even when the dedicated listener is enabled). That hostname must resolve to a
@@ -97,7 +104,7 @@ as an external credential and regenerate it if it leaks.
 
 ## 2. Copy the generated Worker code
 
-The one-time dialog shows the complete Worker code for your instance. It already
+The one-time setup page shows the complete Worker code for your instance. It already
 contains the ingest URL and the generated shared secret, so you can paste it
 as-is:
 
@@ -115,7 +122,7 @@ Walk through the Cloudflare navigation:
 3. In the top navigation, open **Workers & Pages**.
 4. Click **Create application** -> **Start with Hello World** -> **Deploy**.
 5. Open the new Worker and click **Edit code**.
-6. Replace the default stub with the generated code from the dialog.
+6. Replace the default stub with the generated code from the setup page.
 7. Click **Deploy** (top-right) to publish the new code.
 
 ## 4. Enable Email Routing for your domain

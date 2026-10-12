@@ -47,9 +47,14 @@ type RawMIMEProvider interface {
 type ConfigOption struct{ Value, Label string }
 
 type ConfigField struct {
-	Name, Label, Type    string
-	Required, Secret     bool
-	Generated            bool
+	Name, Label, Type string
+	Required, Secret  bool
+	Generated         bool
+	// Overridable marks a Generated field the caller may also supply: the value
+	// is auto-generated when left blank, but a non-blank submission is stored
+	// verbatim (for example a shared Cloudflare Worker secret reused across
+	// domains). It only has meaning together with Generated.
+	Overridable          bool
 	Placeholder, Default string
 	Options              []ConfigOption
 }
