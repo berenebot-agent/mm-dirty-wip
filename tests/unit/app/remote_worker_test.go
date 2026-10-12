@@ -1,11 +1,13 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -208,6 +210,123 @@ func TestWatchIntervalPushAware(t *testing.T) {
 	if got := w.WatchIntervalForTest(inbox); got != time.Duration(model.NormalizeRemoteFullSyncMinutes(nil))*time.Minute {
 		t.Fatalf("push-active interval = %s, want the 15m full-sync fallback", got)
 	}
+}
+
+// TestIdleWatchLogsPushReceived proves an IMAP IDLE mailbox update is logged the
+// same way a Microsoft Graph push is ("... push received"), at Info, with the
+// provider, inbox address and event kind. Detection is independent: the signal is
+// logged even when the update turns out to carry no new message.
+func TestIdleWatchLogsPushReceived(t *testing.T) {
+	svc, box, rm, fake, _ := workerEnv(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inbox, err := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &pushLogSink{}
+	w := app.NewRemoteWorker(svc, rm, slog.New(slog.NewJSONHandler(sink, nil)))
+	sess := &idleFakeSession{fake: fake, notes: make(chan imap.Notification, 4)}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) {
+		return sess, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.WatchInboxForTest(ctx, inbox)
+	}()
+	// Push one server-side mailbox update and wait for it to be logged.
+	sess.notes <- imap.Notification{Folder: "INBOX", Kind: "idle", NumMessages: 1, HasNumMessages: true}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if entry, ok := sink.entry("imap push received"); ok {
+			if entry["provider"] != "imap" || entry["inbox"] != box.Address || entry["event"] != "idle" {
+				t.Fatalf("imap push log fields = %#v", entry)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no imap push log; got %q", sink.text())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
+// pushLogSink is a race-safe slog sink: the logger writes on the worker's
+// goroutine while the test reads, so every access is mutex-guarded.
+type pushLogSink struct {
+	mu    sync.Mutex
+	lines []string
+	part  []byte
+}
+
+func (s *pushLogSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.part = append(s.part, p...)
+	for {
+		i := bytes.IndexByte(s.part, '\n')
+		if i < 0 {
+			break
+		}
+		s.lines = append(s.lines, string(s.part[:i]))
+		s.part = s.part[i+1:]
+	}
+	return len(p), nil
+}
+
+func (s *pushLogSink) text() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.lines, "\n")
+}
+
+// entry returns the first captured JSON record whose msg matches.
+func (s *pushLogSink) entry(msg string) (map[string]any, bool) {
+	for _, line := range strings.Split(s.text(), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == msg {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
+// idleFakeSession is a fakeRemoteServer that also implements the IDLE watch
+// surface, so the worker takes the realtime path instead of polling.
+type idleFakeSession struct {
+	fakeSession
+	notes chan imap.Notification
+}
+
+func (s *idleFakeSession) IdleCapable() bool { return true }
+
+func (s *idleFakeSession) Watch(ctx context.Context, folder string, _ int) (<-chan imap.Notification, func(), <-chan error, error) {
+	out := make(chan imap.Notification)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(out)
+		defer close(errCh)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case n := <-s.notes:
+				n.Folder = folder
+				select {
+				case out <- n:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, func() {}, errCh, nil
 }
 
 func TestRemoteDetectionSurvivesPollingRequestCancellation(t *testing.T) {

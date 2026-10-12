@@ -281,7 +281,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   Unset values inherit the defaults (1 minute / 15 minutes); the new-mail poll is
   floored at one minute. The schedule is shown for a provider-connected inbox too,
   not only a hand-configured IMAP one — a Microsoft delegated shared mailbox is
-  poll-only, since Graph has no change subscriptions for it.
+  poll-only, since Graph has no change subscriptions for it. It renders inline
+  directly below the email address, with the two intervals side by side, rather
+  than as a separate collapsible section.
+
+- The remote watcher logs each IMAP IDLE mailbox update (`imap push received`,
+  provider `imap`) at Info, mirroring the Microsoft Graph push log, so a
+  server-pushed change is visible without waiting for the arrival log.
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
   `standalone`). A standalone mailbox owns an address independent of any managed
