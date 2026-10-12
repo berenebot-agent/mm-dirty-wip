@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -83,25 +84,24 @@ func TestDomainSendingDKIMResponse(t *testing.T) {
 	}
 }
 
-// TestDomainSendingDKIMPublicKeyIsDerived proves the config read path reports a
-// public key derived from the stored private key, so a stored pair can never
-// disagree and send an operator to a DNS record that does not match what
-// MailMoose signs with.
-func TestDomainSendingDKIMPublicKeyIsDerived(t *testing.T) {
+// TestDomainSendingDKIMKeyIsGeneratedAndDerived proves the key is MailMoose's:
+// a caller cannot supply one (the field is not settable), the generated key is
+// used, and the reported public key is derived from it so the record an operator
+// publishes always matches what MailMoose signs with.
+func TestDomainSendingDKIMKeyIsGeneratedAndDerived(t *testing.T) {
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privPEM, pubPEM, err := dkimsign.GenerateRSA2048()
+	attackerPEM, _, err := dkimsign.GenerateRSA2048()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Submit an explicit pair; the public half is not accepted from the caller,
-	// so the response must report the one derived from this private key.
-	body := `{"provider":"mx","config":{"helo":"mail.example.com","dkim_enabled":"on","dkim_selector":"sel1","dkim_private_key":` +
-		jsonString(privPEM) + `}}`
+	// A caller may post a key, but it must be ignored: the key is generated.
+	body := `{"provider":"mx","config":{"helo":"mail.example.com","dkim_enabled":"on","dkim_private_key":` +
+		jsonString(attackerPEM) + `}}`
 	req := httptest.NewRequest("PUT", "/v1/admin/domains/"+dom.ID+"/sending", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
@@ -111,15 +111,43 @@ func TestDomainSendingDKIMPublicKeyIsDerived(t *testing.T) {
 		t.Fatalf("put %d %s", rr.Code, rr.Body.String())
 	}
 	resp := decodeDomainConfig(t, rr)
-	if strings.TrimSpace(resp.PublicKey) != strings.TrimSpace(pubPEM) {
-		t.Error("reported public key is not the public half of the stored private key")
+	// The reported public key must be derived from a generated key, not the
+	// submitted one.
+	attackerPub, err := dkimsign.PublicKeyPEM(mustParse(t, attackerPEM))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if resp.KeyID != "sel1" {
-		t.Errorf("selector = %q, want sel1", resp.KeyID)
+	if strings.TrimSpace(resp.PublicKey) == strings.TrimSpace(attackerPub) {
+		t.Fatal("a submitted private key was used")
 	}
-	if want := dkimsign.RecordName("sel1", dom.Name); resp.DKIMRecordName != want {
+	if !strings.Contains(resp.PublicKey, "PUBLIC KEY") {
+		t.Errorf("public key is not an SPKI key: %q", resp.PublicKey)
+	}
+	if resp.KeyID != dkimsign.DefaultSelector {
+		t.Errorf("selector = %q, want the default %q", resp.KeyID, dkimsign.DefaultSelector)
+	}
+	if want := dkimsign.RecordName(dkimsign.DefaultSelector, dom.Name); resp.DKIMRecordName != want {
 		t.Errorf("record name = %q, want %q", resp.DKIMRecordName, want)
 	}
+	// The record value must be the derived public key, so publishing what is
+	// shown verifies what is signed.
+	b64, err := dkimsign.PublicKeyBase64(resp.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := dkimsign.TXTRecordValue(b64); resp.TXTRecord != want {
+		t.Error("the TXT record does not match the reported public key")
+	}
+}
+
+// mustParse parses a PEM private key or fails the test.
+func mustParse(t *testing.T, pemText string) crypto.Signer {
+	t.Helper()
+	k, err := dkimsign.ParsePrivateKey(pemText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 // decodeDomainConfig decodes a sending/receiving config response.

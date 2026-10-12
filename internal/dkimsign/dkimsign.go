@@ -181,3 +181,39 @@ func RecordName(selector, domain string) string {
 func TXTRecordValue(publicKeyBase64 string) string {
 	return "v=DKIM1; k=rsa; p=" + strings.TrimSpace(publicKeyBase64)
 }
+
+// txtChunkBytes is the maximum length of one DNS TXT character-string. A TXT
+// record is a sequence of length-prefixed strings, each at most 255 bytes, so a
+// value longer than this cannot be published as a single quoted string.
+const txtChunkBytes = 255
+
+// TXTRecordStrings splits a record value into the 255-byte character-strings a
+// DNS provider that exposes them expects. An RSA-2048 public key makes the value
+// longer than one string, so providers such as Route 53 require the value to be
+// entered as several quoted parts; others accept the single long value and split
+// it themselves. Returned as a slice so a caller can render either form.
+func TXTRecordStrings(value string) []string {
+	if len(value) <= txtChunkBytes {
+		return []string{value}
+	}
+	var out []string
+	for len(value) > txtChunkBytes {
+		out = append(out, value[:txtChunkBytes])
+		value = value[txtChunkBytes:]
+	}
+	if value != "" {
+		out = append(out, value)
+	}
+	return out
+}
+
+// TXTRecordQuoted renders a record value in the multi-string form a DNS provider
+// expects when the value is too long for one character-string, each part quoted.
+func TXTRecordQuoted(value string) string {
+	parts := TXTRecordStrings(value)
+	quoted := make([]string, 0, len(parts))
+	for _, part := range parts {
+		quoted = append(quoted, `"`+part+`"`)
+	}
+	return strings.Join(quoted, " ")
+}

@@ -161,50 +161,6 @@ func TestNonMXProviderIsNotSigned(t *testing.T) {
 
 // TestPastedDKIMKeyIsUsedVerbatim proves an operator can supply their own key
 // instead of a generated one, and that the message is signed with it.
-func TestPastedDKIMKeyIsUsedVerbatim(t *testing.T) {
-	svc, u, d, box := testService(t)
-	privPEM, pubPEM, err := dkimsign.GenerateRSA2048()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
-		"helo":             "mail.example.com",
-		"dkim_enabled":     "on",
-		"dkim_selector":    "custom",
-		"dkim_private_key": privPEM,
-	})
-
-	stored, err := svc.Store.GetDomainSendingConfig(context.Background(), u.AccountID, d.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := svc.DecryptDomainSendingConfig(stored)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := dec["dkim_private_key"].(string); got != dkimsign.CanonicalPEM(privPEM) {
-		t.Error("the pasted key was replaced or altered beyond canonical PEM form")
-	}
-
-	msg := sendOne(t, svc, u.AccountID, box.ID)
-	raw := storedRaw(t, svc, u.AccountID, msg)
-	pubB64, err := dkimsign.PublicKeyBase64(pubPEM)
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifs, err := dkim.VerifyWithOptions(bytes.NewReader(raw), &dkim.VerifyOptions{
-		LookupTXT: func(string) ([]string, error) {
-			return []string{dkimsign.TXTRecordValue(pubB64)}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("verify: %v", err)
-	}
-	if len(verifs) != 1 || verifs[0].Err != nil {
-		t.Fatalf("pasted-key signature did not verify: %+v", verifs)
-	}
-}
-
 // TestBlankPrivateKeyRetainsStoredKey proves a re-save that does not re-send the
 // key keeps signing with the existing key, so an unrelated settings change does
 // not silently rotate the key out from under published DNS.
@@ -275,20 +231,35 @@ func TestDisablingDKIMDropsStoredKey(t *testing.T) {
 	}
 }
 
-// TestPastedNonRSAKeyIsRejected proves an unusable pasted key is a save error
-// rather than a silently unsigned domain.
-func TestPastedNonRSAKeyIsRejected(t *testing.T) {
+// TestOperatorSuppliedKeyIsIgnored proves the signing key is MailMoose-generated
+// and not operator-controlled: a submitted key is not used, so the key shown for
+// DNS is always the one that signs.
+func TestOperatorSuppliedKeyIsIgnored(t *testing.T) {
 	svc, u, d, _ := testService(t)
-	_, err := svc.SaveDomainSendingConfig(context.Background(), u.AccountID, d.ID, "mx", map[string]any{
+	ctx := context.Background()
+	attackerPEM, _, err := dkimsign.GenerateRSA2048()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":             "mail.example.com",
 		"dkim_enabled":     "on",
-		"dkim_private_key": "not a key at all",
+		"dkim_private_key": attackerPEM,
 	})
-	if err == nil {
-		t.Fatal("expected a save error for an unusable pasted key")
+	stored, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "private key") && !strings.Contains(err.Error(), "Private key") {
-		t.Errorf("error does not point at the key field: %v", err)
+	dec, err := svc.DecryptDomainSendingConfig(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := dec["dkim_private_key"].(string)
+	if got == dkimsign.CanonicalPEM(attackerPEM) {
+		t.Fatal("an operator-supplied key was stored")
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("no key was generated")
 	}
 }
 
@@ -329,34 +300,14 @@ func TestGeneratedKeyNeverAppearsInReadConfig(t *testing.T) {
 	}
 }
 
-// TestSigningDomainMustBelongToAccount proves an account cannot configure
-// signing as a domain it does not own, which would let it claim another
-// account's identity in the DKIM d= tag.
-func TestSigningDomainMustBelongToAccount(t *testing.T) {
-	svc, u, d, _ := testService(t)
+// TestSigningDomainIsTheSendingDomain proves signing uses the domain mail is
+// sent from, so an aligned signature needs no operator input.
+func TestSigningDomainIsTheSendingDomain(t *testing.T) {
+	svc, u, d, box := testService(t)
 	ctx := context.Background()
-
-	// A non-owned domain is rejected.
-	_, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "mx", map[string]any{
-		"helo":         "mail.example.com",
-		"dkim_enabled": "on",
-		"dkim_domain":  "someone-else.example.org",
-	})
-	if err == nil {
-		t.Fatal("expected a save error for a signing domain the account does not own")
-	}
-	if !strings.Contains(err.Error(), "not a domain on this account") {
-		t.Errorf("error does not explain the ownership problem: %v", err)
-	}
-
-	// A domain the account does own is accepted, and is used for signing.
-	if _, err := svc.Store.CreateDomain(ctx, u.AccountID, "signer.example.com"); err != nil {
-		t.Fatal(err)
-	}
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":         "mail.example.com",
 		"dkim_enabled": "on",
-		"dkim_domain":  "signer.example.com",
 	})
 	stored, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
 	if err != nil {
@@ -366,8 +317,17 @@ func TestSigningDomainMustBelongToAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := dec["dkim_domain"].(string); got != "signer.example.com" {
-		t.Errorf("stored signing domain = %q, want signer.example.com", got)
+	if got, _ := dec["dkim_domain"].(string); got != d.Name {
+		t.Errorf("signing domain = %q, want the sending domain %q", got, d.Name)
+	}
+	if got, _ := dec["dkim_selector"].(string); got != dkimsign.DefaultSelector {
+		t.Errorf("selector = %q, want %q", got, dkimsign.DefaultSelector)
+	}
+
+	msg := sendOne(t, svc, u.AccountID, box.ID)
+	raw := storedRaw(t, svc, u.AccountID, msg)
+	if !bytes.Contains(raw, []byte("d="+d.Name+";")) {
+		t.Error("the signature does not claim the sending domain")
 	}
 }
 

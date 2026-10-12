@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/dkimsign"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
@@ -48,9 +49,6 @@ type domainEditorView struct {
 	// across domains, while a DKIM signing key is replaced to use the operator's
 	// own key material.
 	OverridableHint string
-	// ReadOnlyFields are shown but never submitted: the value is derived
-	// server-side and returned for the operator to copy (a DKIM public key).
-	ReadOnlyFields []transport.ConfigField
 	// KeepSecrets is true when the stored config already uses this provider, so
 	// a blank secret retains the stored value ("leave blank to keep"). It is
 	// false for a create or provider switch, where required secrets must be
@@ -62,6 +60,27 @@ type domainEditorView struct {
 	Error string
 	// Selected marks the provider whose field group is shown and enabled.
 	Selected bool
+	// DKIM is the inline DKIM panel for the Direct MX editor: the DNS record to
+	// publish, built from the stored key. It is nil for every other provider and
+	// for a configured domain with no key yet.
+	DKIM *dkimInlineView
+}
+
+// dkimInlineView is the inline DKIM panel shown in the Direct MX sending editor
+// once signing is on. It carries the record to publish and the domain the key
+// record belongs to, in the same shape as the Antler MX setup records so both
+// read identically.
+type dkimInlineView struct {
+	Selector string
+	Domain   string
+	// RecordName is the fully-qualified DNS name to publish.
+	RecordName string
+	// RecordValue is the copy-ready TXT value.
+	RecordValue string
+	// PublicKey is the SPKI public key, for reference and backup.
+	PublicKey string
+	// RevealURL posts to show the private key in a dialog.
+	RevealURL string
 }
 
 // domainSendingEditor builds the prefilled sending editor for one provider,
@@ -76,7 +95,64 @@ func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, p
 	}
 	e.Values, e.KeepSecrets = s.sendingEditorState(ctx, accountID, domainID, provider, e.Fields)
 	e.OverridableHint = sendingOverridableHint(provider)
+	e.DKIM = s.dkimInlineView(ctx, accountID, domainID, provider)
 	return e, true
+}
+
+// dkimInlineView builds the DNS record panel for the Direct MX editor. It
+// returns nil for other providers and for a domain that has no generated key
+// yet, so the panel appears only once there is a record to publish.
+func (s *Server) dkimInlineView(ctx context.Context, accountID, domainID, provider string) *dkimInlineView {
+	if provider != mx.Provider {
+		return nil
+	}
+	d, err := s.Service.Store.GetDomain(ctx, accountID, domainID)
+	if err != nil {
+		return nil
+	}
+	cfg, err := s.Service.Store.GetDomainSendingConfig(ctx, accountID, domainID)
+	if err != nil {
+		return nil
+	}
+	dec, err := s.Service.DecryptDomainSendingConfig(cfg)
+	if err != nil {
+		return nil
+	}
+	key, err := dkimsign.ParsePrivateKey(asConfigString(dec, mx.FieldDKIMPrivateKey))
+	if err != nil {
+		return nil
+	}
+	pubPEM, err := dkimsign.PublicKeyPEM(key)
+	if err != nil {
+		return nil
+	}
+	pubB64, err := dkimsign.PublicKeyBase64(pubPEM)
+	if err != nil {
+		return nil
+	}
+	selector := strings.TrimSpace(asConfigString(dec, mx.FieldDKIMSelector))
+	if selector == "" {
+		selector = dkimsign.DefaultSelector
+	}
+	domain := strings.TrimSpace(asConfigString(dec, mx.FieldDKIMDomain))
+	if domain == "" {
+		domain = d.Name
+	}
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	return &dkimInlineView{
+		Selector:    selector,
+		Domain:      domain,
+		RecordName:  dkimsign.RecordName(selector, domain),
+		RecordValue: dkimsign.TXTRecordValue(pubB64),
+		PublicKey:   pubPEM,
+		RevealURL:   "/ui/domains/" + domainID + "/sending/dkim/reveal",
+	}
+}
+
+// asConfigString reads a decrypted config value as a string.
+func asConfigString(cfg map[string]any, key string) string {
+	v, _ := cfg[key].(string)
+	return v
 }
 
 // sendingOverridableHint explains a sending provider's overridable generated
@@ -897,11 +973,6 @@ func configFromForm(provider string, fields []transport.ConfigField, r *http.Req
 		if f.Generated && !f.Overridable {
 			continue
 		}
-		// Read-only fields are display-only: the value is derived server-side, so
-		// a submitted one is ignored rather than trusted.
-		if f.ReadOnly {
-			continue
-		}
 		raw := strings.TrimSpace(r.Form.Get("cfg_" + provider + "_" + f.Name))
 		if raw == "" {
 			continue
@@ -959,9 +1030,6 @@ func applyGeneratedFields(e *domainEditorView) {
 				e.HasOverridable = true
 				e.GeneratedOverridable = append(e.GeneratedOverridable, f)
 			}
-		}
-		if f.ReadOnly {
-			e.ReadOnlyFields = append(e.ReadOnlyFields, f)
 		}
 	}
 }

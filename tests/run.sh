@@ -217,8 +217,12 @@ for t in "${SELECTED[@]}"; do
         js)
             # The dialog interaction checks drive the real app.js closure against
             # a DOM stand-in; they cover what the Go suite cannot (timers, SSE
-            # listeners, footer payloads). Node is required on the host.
+            # listeners, footer payloads, dependent-field visibility). Node is
+            # required on the host.
             node tests/antler-wizard-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
             ;;
         smoke)
             # Slow gated tests: the process-level receiver binary smoke and the

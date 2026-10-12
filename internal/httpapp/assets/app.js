@@ -5195,6 +5195,35 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  // Copy button for the one-time DKIM private-key pop-up.
+  var btn = document.getElementById('dkim-key-copy');
+  if (!btn) {
+    return;
+  }
+  var val = document.getElementById('dkim-private-key');
+  var note = document.getElementById('dkim-key-copy-note');
+  btn.addEventListener('click', function () {
+    var text = val ? val.textContent : '';
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.textContent = 'Copy key';
+        }, 1500);
+      }).catch(function () {
+        if (note) {
+          note.hidden = false;
+        }
+      });
+      return;
+    }
+    if (note) {
+      note.hidden = false;
+    }
+  });
+})();
+
+(function () {
   var btn = document.getElementById('domain-credential-copy');
   if (!btn) {
     return;
@@ -5248,6 +5277,26 @@ function hideInboxSubview(dlg) {
     if (note) {
       note.hidden = false;
     }
+  });
+})();
+
+(function () {
+  // Copy-to-clipboard for a value the server rendered into an attribute, used by
+  // the DKIM record's Copy name / Copy value buttons.
+  document.querySelectorAll('[data-copy-value]').forEach(function (btn) {
+    var label = btn.textContent;
+    btn.addEventListener('click', function () {
+      var text = btn.getAttribute('data-copy-value') || '';
+      if (!(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText)) {
+        return;
+      }
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.textContent = label;
+        }, 1500);
+      });
+    });
   });
 })();
 
@@ -5351,6 +5400,44 @@ function hideInboxSubview(dlg) {
       injected.parentNode.removeChild(injected);
     }
   }
+  // syncDependentFields shows a panel only while the field it depends on holds a
+  // listed value. The DKIM record panel appears the moment signing is switched
+  // on, without a save, so the operator sees the record they must publish while
+  // they are still in the editor. A hidden panel's inputs are disabled so a
+  // switched-off block is never submitted.
+  function syncDependentFields(scope) {
+    scope.querySelectorAll('[data-show-field]').forEach(function (el) {
+      var dep = el.getAttribute('data-show-field');
+      var control = scope.querySelector('[name="' + dep + '"]');
+      var wanted = (el.getAttribute('data-show-values') || '').split(',').map(function (v) {
+        return v.trim().toLowerCase();
+      });
+      var shown = !control || wanted.indexOf((control.value || '').toLowerCase()) !== -1;
+      el.hidden = !shown;
+      el.querySelectorAll('input,select,textarea,button').forEach(function (input) {
+        input.disabled = !shown;
+      });
+    });
+  }
+  // syncSaveLabel picks the submit label. The Direct MX editor normally offers
+  // "Next" because saving reveals the DNS record; with signing off there is no
+  // record, so it reads "Save".
+  function syncSaveLabel(dlg) {
+    var sel = dlg.querySelector('.provider-select');
+    var save = dlg.querySelector('[data-save-provider]');
+    if (!sel || !save) {
+      return;
+    }
+    var opt = sel.options[sel.selectedIndex];
+    var next = !!(opt && opt.getAttribute('data-next'));
+    if (next && dlg.querySelector('[data-dkim-panel]')) {
+      var toggle = dlg.querySelector('[name="cfg_mx_dkim_enabled"]');
+      if (toggle) {
+        next = (toggle.value || '').toLowerCase() === 'on';
+      }
+    }
+    save.textContent = next ? 'Next' : 'Save';
+  }
   function sync(dlg) {
     var sel = dlg.querySelector('.provider-select');
     if (!sel) {
@@ -5379,13 +5466,13 @@ function hideInboxSubview(dlg) {
       });
       if (active) {
         syncDialMXService(group);
+        syncDependentFields(group);
       }
     });
     var save = dlg.querySelector('[data-save-provider]');
     if (save) {
       save.disabled = !value;
-      var opt = sel.options[sel.selectedIndex];
-      save.textContent = opt && opt.getAttribute('data-next') ? 'Next' : 'Save';
+      syncSaveLabel(dlg);
     }
     var hint = dlg.querySelector('.provider-hint');
     if (hint) {
@@ -5403,6 +5490,18 @@ function hideInboxSubview(dlg) {
     dlg.querySelectorAll('select[name="cfg_dialmx_service"]').forEach(function (service) {
       service.addEventListener('change', function () {
         syncDialMXService(service.closest('.provider-fields'));
+      });
+    });
+    // Switching a field another field depends on re-runs the dependent-field
+    // sync, so the DKIM record appears or disappears immediately.
+    dlg.querySelectorAll('[data-provider] select, [data-provider] input').forEach(function (control) {
+      control.addEventListener('change', function () {
+        var group = control.closest('[data-provider]');
+        if (!group) {
+          return;
+        }
+        syncDependentFields(group);
+        syncSaveLabel(dlg);
       });
     });
     sync(dlg);
