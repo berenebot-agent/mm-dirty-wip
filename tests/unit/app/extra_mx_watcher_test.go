@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/app"
@@ -32,6 +33,106 @@ func (s *switchDNSResolver) LookupMX(context.Context, string) ([]*net.MX, error)
 
 func (s *switchDNSResolver) LookupTXT(context.Context, string) ([]string, error) {
 	return s.txt, nil
+}
+
+// countingResolver counts lookups so a test can prove a read runs no resolver
+// work itself and that a demand read coalesces.
+type countingResolver struct {
+	mu    sync.Mutex
+	mx    int
+	txt   int
+	hosts []string
+}
+
+func (c *countingResolver) setMX(hosts ...string) {
+	c.mu.Lock()
+	c.hosts = hosts
+	c.mu.Unlock()
+}
+
+func (c *countingResolver) counts() (int, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mx, c.txt
+}
+
+func (c *countingResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mx++
+	out := make([]*net.MX, 0, len(c.hosts))
+	for _, h := range c.hosts {
+		out = append(out, &net.MX{Host: h, Pref: 10})
+	}
+	return out, nil
+}
+
+func (c *countingResolver) LookupTXT(context.Context, string) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.txt++
+	return nil, nil
+}
+
+// TestExtraMXWatcherDemandCoalesces proves a repeated demand read inside the
+// floor does not force repeated lookups: the wizard's own 10s poll plus a
+// dashboard tick must not turn one domain into a resolver burst, while a read
+// past the floor does ask for a fresh check.
+func TestExtraMXWatcherDemandCoalesces(t *testing.T) {
+	core, _ := dialMXDomain(t, "example.test", "hermes")
+	ctx := context.Background()
+	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
+	if _, _, err := core.svc.SaveDomainReceivingConfig(ctx, core.user.AccountID, core.domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+
+	res := &countingResolver{}
+	res.setMX("antler1.example.test.")
+	w := app.NewExtraMXWatcher(core.svc, res)
+	core.svc.ExtraMX = w
+	// The save already requested a check; run it so checkedAt is set.
+	w.CheckOnce(ctx)
+	if mx, _ := res.counts(); mx == 0 {
+		t.Fatal("no MX lookup on the first pass")
+	}
+
+	// Repeated demand reads immediately after settle must not add lookups: the
+	// request is coalesced behind the floor and no domain is left demanded.
+	beforeMX, _ := res.counts()
+	for i := 0; i < 20; i++ {
+		w.RequestCheckIfStale(core.domain.ID)
+	}
+	w.CheckDemandedOnce(ctx)
+	if afterMX, _ := res.counts(); afterMX != beforeMX {
+		t.Fatalf("a demand read inside the floor forced a lookup: %d -> %d", beforeMX, afterMX)
+	}
+}
+
+// TestExtraMXWatcherRequestCheckForces proves a forced request re-checks a domain
+// even inside the floor, so a save or a key rotation is reflected at once.
+func TestExtraMXWatcherRequestCheckForces(t *testing.T) {
+	core, _ := dialMXDomain(t, "example.test", "hermes")
+	ctx := context.Background()
+	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
+	if _, _, err := core.svc.SaveDomainReceivingConfig(ctx, core.user.AccountID, core.domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	res := &countingResolver{}
+	res.setMX("antler1.example.test.")
+	w := app.NewExtraMXWatcher(core.svc, res)
+	core.svc.ExtraMX = w
+	w.CheckOnce(ctx)
+
+	beforeMX, _ := res.counts()
+	w.RequestCheck(core.domain.ID)
+	w.CheckDemandedOnce(ctx)
+	if afterMX, _ := res.counts(); afterMX == beforeMX {
+		t.Fatalf("a forced request did not re-check: %d -> %d", beforeMX, afterMX)
+	}
 }
 
 // TestExtraMXWatcherPublishesDNSChanges proves the watcher is the single owner of

@@ -552,7 +552,7 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 		{ID: "new", SessionURL: "https://new.example.test", SMTPHostname: "new.example.test", MXPriority: 10},
 	}}
 	update := func(token string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"provider":"dialmx","config":{"contact_email":"changed@example.test"}}`))
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"provider":"dialmx","config":{"contact_email":"changed@example.test","enforcement":"hard"}}`))
 		req.AddCookie(cookie)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-CSRF-Token", token)
@@ -577,9 +577,12 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 	if afterValues["contact_email"] != "changed@example.test" {
 		t.Fatalf("email not saved: %v", afterValues)
 	}
-	for _, field := range []string{"receiver_urls", "antler_receivers", "setup_id", "enforcement"} {
+	if afterValues["enforcement"] != "hard" {
+		t.Fatalf("enforcement not saved in the same request: %v", afterValues["enforcement"])
+	}
+	for _, field := range []string{"receiver_urls", "antler_receivers", "setup_id"} {
 		if afterValues[field] != beforeValues[field] {
-			t.Fatalf("email save changed %s", field)
+			t.Fatalf("settings save changed %s", field)
 		}
 	}
 	afterCredential, err := svc.Store.GetDialMXCredential(context.Background(), u.AccountID, domain.ID)

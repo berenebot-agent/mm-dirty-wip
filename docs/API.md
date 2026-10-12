@@ -1080,8 +1080,9 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   surfaced separately as the top-level `unexpected_mx[]` (see below), and routing is
   the receiver's `status[]` verdict, not a second core-side decision.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
-  `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
-  custom service, the TXT record only. It is omitted entirely for a domain with
+  `mx[]` list (`hostname`, `priority`) to publish, plus the contact email, the
+  current `enforcement` policy and, for a domain that inherits its setup,
+  `inherited_from`. It is omitted entirely for a domain with
   no copy-ready records.
 - `unexpected_mx[]` — published MX hostnames that are not one of the domain's
   configured Antler receivers. It is a **top-level** field, independent of

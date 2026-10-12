@@ -125,16 +125,19 @@ func main() {
 	}()
 	defer dialCancel()
 
-	// The extra-MX watcher is the single owner of every Dial MX domain's "extra
-	// MX" verdict. It re-checks on a fixed interval and pushes changes over SSE,
-	// so the dashboard light and an open status dialog stay in sync without
-	// either running a lookup on a render. It shares the dial context, so it
-	// stops with the dial manager.
+	// The published-record watcher is the single owner of every Dial MX domain's
+	// DNS verdict. It re-checks on demand (a read asks for a check when the cached
+	// verdict is stale) and on a slow background pass, and pushes changes over
+	// SSE, so the dashboard light and an open status dialog stay in sync without
+	// either running a lookup on a render. The background pass only needs to catch
+	// a record that changes with nobody looking; anything an operator is watching
+	// arrives through a demand read. It shares the dial context, so it stops with
+	// the dial manager.
 	svc.ExtraMX = app.NewExtraMXWatcher(svc, nil)
 	extraMXDone := make(chan struct{})
 	go func() {
 		defer close(extraMXDone)
-		svc.ExtraMX.Run(dialCtx, time.Minute)
+		svc.ExtraMX.Run(dialCtx, 15*time.Minute)
 	}()
 
 	// Transition the legacy environment MX configuration into the store once,

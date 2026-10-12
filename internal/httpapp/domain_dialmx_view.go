@@ -18,6 +18,7 @@ import (
 type dialMXLiveView struct {
 	Service      string
 	ContactEmail string
+	Enforcement  string
 	TXTName      string
 	TXTValue     string
 	MX           []dialMXMXInstruction
@@ -45,6 +46,7 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	if service, _ := values["service"].(string); service == mxdial.ServiceAntler {
 		view.Service = mxdial.ServiceAntler
 		view.ContactEmail, _ = values["contact_email"].(string)
+		view.Enforcement, _ = values["enforcement"].(string)
 		for _, r := range app.AntlerReceiversFromConfig(values) {
 			view.MX = append(view.MX, dialMXMXInstruction{Hostname: r.SMTPHostname, Priority: r.MXPriority})
 		}
@@ -125,21 +127,28 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 }
 
 // dialMXDNS returns the domain's published-record checks from the watcher's
-// single shared verdict. It runs no resolver lookup of its own: the watcher
-// re-checks on a fixed interval and pushes changes over SSE, so the wizard, the
-// status view and the dashboard light all read the same in-memory value.
+// single shared verdict. It runs no resolver lookup of its own: reading asks the
+// watcher to re-check when the cached verdict has gone stale (RequestCheckIfStale,
+// coalesced into the watcher's own loop), and otherwise returns the in-memory
+// value, so the wizard, the status view and the dashboard light all read the same
+// picture and no render blocks on DNS.
 func (s *Server) dialMXDNS(domainID string) []domainDNSView {
+	if s.Service.ExtraMX != nil {
+		s.Service.ExtraMX.RequestCheckIfStale(domainID)
+	}
 	verdict, _ := s.Service.DNSState(domainID)
 	return dnsViewsFromVerdict(verdict)
 }
 
 // dialMXExtraMX returns a domain's "extra MX" verdict: the published MX
 // hostnames that are not one of its configured Antler receivers. It reads the
-// single shared verdict owned by the ExtraMXWatcher (which re-checks on a fixed
-// interval and pushes changes over SSE), so the dashboard light and the status
-// dialog always agree and neither runs its own DNS lookup on a render. A domain
-// the watcher has not resolved yet reads as an empty verdict.
+// single shared verdict owned by the ExtraMXWatcher, so the dashboard light and
+// the status dialog always agree and neither runs its own DNS lookup on a render.
+// A domain the watcher has not resolved yet reads as an empty verdict.
 func (s *Server) dialMXExtraMX(domainID string) []string {
+	if s.Service.ExtraMX != nil {
+		s.Service.ExtraMX.RequestCheckIfStale(domainID)
+	}
 	hosts, _ := s.Service.ExtraMXState(domainID)
 	return hosts
 }
@@ -193,12 +202,13 @@ func (v dialMXLiveView) instructionView() *dialMXDNSInstructions {
 		return nil
 	}
 	out := &dialMXDNSInstructions{
-		Service:  v.Service,
-		Contact:  v.ContactEmail,
-		TXTName:  v.TXTName,
-		TXTValue: v.TXTValue,
-		MX:       v.MX,
-		Receiver: v.Statuses,
+		Service:     v.Service,
+		Contact:     v.ContactEmail,
+		Enforcement: v.Enforcement,
+		TXTName:     v.TXTName,
+		TXTValue:    v.TXTValue,
+		MX:          v.MX,
+		Receiver:    v.Statuses,
 	}
 	return out
 }

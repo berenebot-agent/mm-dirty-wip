@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/app"
@@ -76,6 +77,95 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 	}
 	if again["contact_email"] != "ops@example.test" || again["setup_id"] != setupID {
 		t.Fatalf("resave changed registration: %v %v", again["contact_email"], again["setup_id"])
+	}
+}
+
+// TestDialMXAntlerResaveKeepsReceiverSnapshot proves an existing setup keeps the
+// receiver set its MX records already point at, even when the live manifest has
+// changed since. The wizard saves the configuration more than once while an
+// operator works through its steps, so a re-save must not silently re-point the
+// domain at a different receiver.
+func TestDialMXAntlerResaveKeepsReceiverSnapshot(t *testing.T) {
+	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
+	stub := &stubAntler{receivers: antlerReceivers()}
+	svc.AntlerEndpoints = stub
+	ctx := context.Background()
+
+	saved, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false)
+	if err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	original, _ := svc.DecryptDomainReceivingConfig(saved)
+	originalURLs := original["receiver_urls"]
+
+	// The live manifest now lists a different receiver set.
+	stub.receivers = []mxdial.AntlerReceiver{{ID: "antler-9", SessionURL: "https://antler9.example.test", SMTPHostname: "antler9.example.test", MXPriority: 10}}
+	resaved, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "new@example.test", "enforcement": "hard",
+	}, false)
+	if err != nil {
+		t.Fatalf("resave: %v", err)
+	}
+	again, _ := svc.DecryptDomainReceivingConfig(resaved)
+	if again["receiver_urls"] != originalURLs {
+		t.Fatalf("resave re-pointed the receiver set: %v -> %v", originalURLs, again["receiver_urls"])
+	}
+	if again["contact_email"] != "new@example.test" {
+		t.Fatalf("resave did not apply the new contact: %v", again["contact_email"])
+	}
+	// The new setup must not have been created from the changed manifest.
+	if strings.Contains(again["receiver_urls"].(string), "antler9") {
+		t.Fatalf("resave adopted a changed manifest: %v", again["receiver_urls"])
+	}
+}
+
+// TestUpdateAntlerSettingsEditsInPlace proves the status view's settings action
+// updates the contact email and the enforcement policy while preserving the
+// receiver snapshot, setup identity and the domain credential.
+func TestUpdateAntlerSettingsEditsInPlace(t *testing.T) {
+	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
+	stub := &stubAntler{receivers: antlerReceivers()}
+	svc.AntlerEndpoints = stub
+	ctx := context.Background()
+
+	saved, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false)
+	if err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	before, _ := svc.DecryptDomainReceivingConfig(saved)
+
+	updated, err := svc.UpdateAntlerSettings(ctx, u.AccountID, d.ID, app.AntlerSettings{
+		ContactEmail: "new@example.test", Enforcement: "hard",
+	})
+	if err != nil {
+		t.Fatalf("update settings: %v", err)
+	}
+	after, _ := svc.DecryptDomainReceivingConfig(updated)
+	if after["contact_email"] != "new@example.test" || after["enforcement"] != "hard" {
+		t.Fatalf("settings not applied: %v %v", after["contact_email"], after["enforcement"])
+	}
+	for _, key := range []string{"receiver_urls", "setup_id", "antler_receivers"} {
+		if after[key] != before[key] {
+			t.Fatalf("settings update changed %s: %v -> %v", key, before[key], after[key])
+		}
+	}
+
+	// An invalid enforcement is rejected rather than stored.
+	if _, err := svc.UpdateAntlerSettings(ctx, u.AccountID, d.ID, app.AntlerSettings{Enforcement: "bogus"}); err == nil {
+		t.Fatal("a bogus enforcement must be rejected")
+	}
+	// An empty field leaves the stored value unchanged.
+	partial, err := svc.UpdateAntlerSettings(ctx, u.AccountID, d.ID, app.AntlerSettings{Enforcement: "moderate"})
+	if err != nil {
+		t.Fatalf("partial update: %v", err)
+	}
+	partialValues, _ := svc.DecryptDomainReceivingConfig(partial)
+	if partialValues["contact_email"] != "new@example.test" {
+		t.Fatalf("an empty field overwrote the contact: %v", partialValues["contact_email"])
 	}
 }
 

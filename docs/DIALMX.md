@@ -388,21 +388,33 @@ changes with no receiver event.
 
 The published-record verdict — the `_mailmoose-mx` TXT check, the MX routing check
 and the extra-MX host list — is **one shared value owned by a background watcher**,
-not a per-render lookup. Every 60 seconds the watcher checks every Dial MX domain
-that has a receiver configured (ready or not), diffs the verdict against the last
-one it published, and — only when it changes — pushes a transient `mx.dns_changed`
-event carrying it to the domain's owning account. The dashboard light and an open
-status dialog both read that single verdict (the HTTP read is an in-memory lookup),
-so they can never disagree and neither runs DNS on a render. A dialog opened from a
-red or amber dashboard row shows the relevant fix prompt or warning immediately,
-matching the light, and updates live when the watcher republishes.
+not a per-render lookup. The watcher re-checks a domain **on demand and on a slow
+background pass**: an idle instance checks every Dial MX domain that has a receiver
+configured (ready or not) every 15 minutes, while a read that needs to be current —
+opening the status dialog or the wizard, the dashboard's lights tick, a save, a key
+rotation — asks the watcher to re-check. A forced request (save, rotation) always
+re-checks; a read request only re-checks when the cached verdict is older than
+10 seconds, so several open tabs (or a wizard timer plus a dashboard tick) coalesce
+into one lookup instead of a burst. Requests run in the watcher's own loop, never on
+the HTTP goroutine, so no render blocks on DNS and the HTTP read stays an in-memory
+lookup. After each pass the watcher diffs the verdict and — only when it changes —
+pushes a transient `mx.dns_changed` event to the domain's owning account. The
+dashboard light and an open status dialog both read that single verdict, so they can
+never disagree. A dialog opened from a red or amber dashboard row shows the relevant
+fix prompt or warning immediately, matching the light, and updates live when the
+watcher republishes.
 
 The receiving dialog renders one light per receiver (Connector | Status), each
 labelled with its specific Antler reason, and — driven by the per-check DNS
 verdict — an inline remediation block for whichever checks are failing: the TXT
 record and/or the MX records to publish, each with a copy button, on the same
 screen, flipping green once the watcher sees the records land — no jump to a
-separate repair step. When the domain also publishes MX hostnames that are not
+separate repair step. In the setup wizard each **MX row** carries its own light
+keyed off the check's `matched` list, so a domain that names several receivers does
+not paint every row "Matching" the moment one is published; an unpublished row reads
+amber "Not published yet". A check the resolver could not answer renders as
+**Unverified** with a retry notice, never a publish prompt. When the domain also
+publishes MX hostnames that are not
 Antler receivers, the dialog adds a separate warning listing those servers and
 suggesting their removal. In a redundant Antler set where MX names only some
 receivers, the unnamed ones show red while the aggregate stays green, because a
@@ -410,6 +422,14 @@ ready sibling will accept mail. A receiver the core cannot reach reports no
 advertised hostname, so the status view keeps the configured `smtp_hostname` for it
 — the row names the receiver and shows the real failure instead of an indeterminate
 wait.
+
+The saved status view also carries an editable **Settings** section below the status
+records: the inbound authentication enforcement policy and the contact email, saved
+in one action. Editing these never changes the receiver set a domain's MX records
+already point at (see the snapshot note above), and the domain credential is
+untouched. A subdomain that *inherits* its receiving configuration shows the same
+settings read-only, naming the ancestor to edit instead, so a child cannot silently
+fork onto its own configuration.
 
 ## 4. DNS authorisation flow
 

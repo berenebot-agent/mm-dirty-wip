@@ -841,6 +841,11 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 	if s.DialMX != nil {
 		s.DialMX.Wake()
 	}
+	// The domain's DNS verdict is now stale (a fresh receiver set, a new contact or
+	// a new service), so re-check it rather than waiting out the background pass.
+	if s.ExtraMX != nil {
+		s.ExtraMX.RequestCheck(domainID)
+	}
 	return saved, nil, nil
 }
 
@@ -908,10 +913,17 @@ func dialMXService(incoming, old map[string]any) string {
 	return mxdial.ServiceAntler
 }
 
-// fillAntlerReceivingConfig validates the contact email, resolves the live
-// Antler MX receiver set and snapshots it into the configuration. The snapshot
-// is what the DNS instructions and MX-record checks read, so a later manifest
-// change never silently re-points an existing setup.
+// fillAntlerReceivingConfig validates the contact email and settles the Antler MX
+// receiver set into the configuration.
+//
+// The receiver set is the one already snapshotted on the domain whenever there is
+// a valid one: an existing setup keeps the receivers its MX records already point
+// at, so a later manifest change never silently re-points it. Only a new setup (or
+// a legacy/invalid snapshot) resolves the live manifest. This matters because the
+// wizard saves the configuration more than once while an operator works through
+// its steps: without it, a manifest change between two saves would select a
+// different receiver set from the one whose DNS records the operator just
+// published.
 func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map[string]any) error {
 	email, _ := merged["contact_email"].(string)
 	email = strings.TrimSpace(email)
@@ -925,13 +937,17 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	if !mxwire.ValidSetupID(setupID) {
 		setupID = idgen.New("setup")
 	}
-	resolver := s.AntlerEndpoints
-	if resolver == nil {
-		resolver = mxdial.DefaultAntlerResolver()
-	}
-	receivers, err := resolver.Receivers(ctx)
-	if err != nil {
-		return invalidConfig("Antler MX endpoints are unavailable right now; try again shortly")
+	receivers := AntlerReceiversFromConfig(old)
+	if len(receivers) == 0 {
+		resolver := s.AntlerEndpoints
+		if resolver == nil {
+			resolver = mxdial.DefaultAntlerResolver()
+		}
+		fetched, err := resolver.Receivers(ctx)
+		if err != nil {
+			return invalidConfig("Antler MX endpoints are unavailable right now; try again shortly")
+		}
+		receivers = fetched
 	}
 	snapshot, err := json.Marshal(receivers)
 	if err != nil {
@@ -949,9 +965,20 @@ func (s *Service) fillAntlerReceivingConfig(ctx context.Context, merged, old map
 	return nil
 }
 
-// UpdateAntlerContactEmail changes only the contact metadata, preserving the
-// saved receiver snapshot, setup identity, enforcement and domain credential.
-func (s *Service) UpdateAntlerContactEmail(ctx context.Context, accountID, domainID, email string) (store.DomainReceivingConfig, error) {
+// AntlerSettings is the mutable, non-credential half of an Antler MX setup: the
+// contact metadata and the inbound authentication-enforcement policy. An empty
+// field leaves the stored value unchanged, so a caller can update one.
+type AntlerSettings struct {
+	ContactEmail string
+	Enforcement  string
+}
+
+// UpdateAntlerSettings changes the editable Antler MX settings in place,
+// preserving the saved receiver snapshot, setup identity and domain credential.
+// It is the status view's "Save settings" action: the receiver set a domain's MX
+// records already point at must not change because an operator edited the contact
+// email or the enforcement policy.
+func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID string, in AntlerSettings) (store.DomainReceivingConfig, error) {
 	cfg, err := s.Store.GetDomainReceivingConfig(ctx, accountID, domainID)
 	if err != nil {
 		return store.DomainReceivingConfig{}, err
@@ -961,20 +988,32 @@ func (s *Service) UpdateAntlerContactEmail(ctx context.Context, accountID, domai
 		return store.DomainReceivingConfig{}, err
 	}
 	if cfg.Provider != "dialmx" || values["service"] != mxdial.ServiceAntler {
-		return store.DomainReceivingConfig{}, invalidConfig("contact email is only available for hosted Antler MX")
+		return store.DomainReceivingConfig{}, invalidConfig("settings are only available for hosted Antler MX")
 	}
-	email = strings.TrimSpace(email)
-	if !mxwire.ValidContactEmail(email) {
-		return store.DomainReceivingConfig{}, invalidConfig("a valid contact email is required")
+	if email := strings.TrimSpace(in.ContactEmail); email != "" {
+		if !mxwire.ValidContactEmail(email) {
+			return store.DomainReceivingConfig{}, invalidConfig("a valid contact email is required")
+		}
+		values["contact_email"] = email
 	}
-	values["contact_email"] = email
+	if in.Enforcement != "" {
+		if !mxdial.ValidEnforcement(in.Enforcement) {
+			return store.DomainReceivingConfig{}, invalidConfig("enforcement must be moderate or hard")
+		}
+		values["enforcement"] = in.Enforcement
+	}
 	encrypted, err := s.encryptConfig(configAAD(accountID, domainID), values)
 	if err != nil {
 		return store.DomainReceivingConfig{}, err
 	}
 	saved, err := s.Store.SaveDomainReceivingConfig(ctx, accountID, domainID, cfg.Provider, encrypted, store.ConfigVersion{ID: cfg.ID, Revision: cfg.Revision})
-	if err == nil && s.DialMX != nil {
-		s.DialMX.Wake()
+	if err == nil {
+		if s.DialMX != nil {
+			s.DialMX.Wake()
+		}
+		if s.ExtraMX != nil {
+			s.ExtraMX.RequestCheck(domainID)
+		}
 	}
 	return saved, err
 }
@@ -1306,8 +1345,16 @@ func (s *Service) RotateDialMXCredential(ctx context.Context, accountID, domainI
 		return store.DialMXCredential{}, err
 	}
 	credential, err := s.Store.RotateDialMXCredentialCAS(ctx, accountID, domainID, next.KeyID, next.EncryptedPrivateSeed, next.PublicKey, store.ConfigVersion{ID: current.KeyID, Revision: current.Revision})
-	if err == nil && s.DialMX != nil {
-		s.DialMX.Wake()
+	if err == nil {
+		if s.DialMX != nil {
+			s.DialMX.Wake()
+		}
+		// The authorization TXT record must match the new key, so the cached DNS
+		// verdict is now about a superseded key: re-check it at once rather than
+		// showing the old record as matching.
+		if s.ExtraMX != nil {
+			s.ExtraMX.RequestCheck(domainID)
+		}
 	}
 	return credential, err
 }

@@ -12,13 +12,27 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
+// dnsDemandFloor bounds how often a demand read may force a re-check of the same
+// domain. It is a coalescing guard, not a polling rate: it stops N open tabs (or
+// a wizard's own timer plus a dashboard tick) from turning one domain into a
+// burst of resolver lookups, while still letting an operator watching a repair
+// see it land within seconds.
+const dnsDemandFloor = 10 * time.Second
+
 // ExtraMXWatcher is the single owner of every Dial MX domain's published-record
 // verdict: the `_mailmoose-mx` TXT check and the MX routing check (including the
-// "extra MX" hosts that are not one of the domain's Antler receivers). It
-// re-checks each Dial MX domain on a fixed interval, diffs the result against the
-// last one it published, and publishes a transient mx.dns_changed event only when
-// it changes. The dashboard light and the status dialog both read the same
-// verdict, so they can never disagree, and neither runs a DNS lookup on a render.
+// "extra MX" hosts that are not one of the domain's Antler receivers). It diffs
+// each verdict against the last one it published and publishes a transient
+// mx.dns_changed event only when it changes. The dashboard light and the status
+// dialog both read the same verdict, so they can never disagree, and neither runs
+// a DNS lookup on a render.
+//
+// Checks are demand-driven with a slow background pass: an idle instance re-checks
+// every domain every `Run` interval (15 minutes in production), while a read that
+// needs to be current — opening the status dialog or the wizard, the dashboard's
+// lights tick, a save or a key rotation — asks for a check through RequestCheck
+// (force) or RequestCheckIfStale (subject to dnsDemandFloor). Requests are
+// coalesced into the watcher's own loop, so no HTTP request ever runs a lookup.
 //
 // It checks a domain whenever it has at least one receiver configured (ready or
 // not): a ready receiver needs the extra-MX verdict for the amber warning, and a
@@ -28,9 +42,18 @@ type ExtraMXWatcher struct {
 	svc      *Service
 	resolver DNSResolver
 
-	mu       sync.Mutex
-	last     map[string]DNSVerdict // domainID -> last published verdict
-	resolved map[string]bool       // domainID -> whether last is populated
+	mu sync.Mutex
+	// last is the most recent published verdict per domain; resolved records
+	// whether one has ever been published, so a never-checked domain is
+	// distinguishable from one whose verdict is empty.
+	last     map[string]DNSVerdict
+	resolved map[string]bool
+	// checkedAt is when each domain's verdict was last computed, and demanded is
+	// the set of domains a read has asked to re-check. Both are owned by mu.
+	checkedAt map[string]time.Time
+	demanded  map[string]bool
+	// demand wakes the Run loop to service a targeted re-check.
+	demand chan struct{}
 }
 
 // DNSState returns the last verdict the watcher published for a domain, and
@@ -66,10 +89,22 @@ func NewExtraMXWatcher(svc *Service, resolver DNSResolver) *ExtraMXWatcher {
 		resolver = net.DefaultResolver
 	}
 	return &ExtraMXWatcher{
-		svc:      svc,
-		resolver: resolver,
-		last:     map[string]DNSVerdict{},
-		resolved: map[string]bool{},
+		svc:       svc,
+		resolver:  resolver,
+		last:      map[string]DNSVerdict{},
+		resolved:  map[string]bool{},
+		checkedAt: map[string]time.Time{},
+		demanded:  map[string]bool{},
+		demand:    make(chan struct{}, 1),
+	}
+}
+
+// wake nudges the Run loop to service an outstanding demand request without
+// blocking; a pending wake absorbs a concurrent one.
+func (w *ExtraMXWatcher) wake() {
+	select {
+	case w.demand <- struct{}{}:
+	default:
 	}
 }
 
@@ -90,13 +125,15 @@ func (w *ExtraMXWatcher) currentResolver() DNSResolver {
 	return w.resolver
 }
 
-// Run re-checks every Dial MX domain on a fixed interval until ctx is cancelled.
-// It runs one pass immediately so a light is correct on startup.
+// Run re-checks domains until ctx is cancelled. It runs one full pass immediately
+// so a light is correct on startup, then a full pass on `every` (the slow
+// background refresh), and a targeted pass whenever a read requests one. A zero
+// or negative interval selects a one-minute background pass.
 func (w *ExtraMXWatcher) Run(ctx context.Context, every time.Duration) {
 	if every <= 0 {
 		every = time.Minute
 	}
-	w.checkAll(ctx)
+	w.checkDomains(ctx, nil)
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -104,16 +141,85 @@ func (w *ExtraMXWatcher) Run(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.checkAll(ctx)
+			w.checkDomains(ctx, nil)
+			w.wake()
+		case <-w.demand:
+			demanded := w.takeDemanded()
+			if len(demanded) == 0 {
+				continue
+			}
+			w.checkDomains(ctx, demanded)
 		}
 	}
 }
 
-// CheckOnce runs a single pass. It is used on startup and by tests.
-func (w *ExtraMXWatcher) CheckOnce(ctx context.Context) { w.checkAll(ctx) }
+// RequestCheck forces a re-check of one domain as soon as the watcher can run it.
+// It is used by a save or a key rotation, where the verdict is known to be stale.
+// It never blocks and coalesces with an outstanding request.
+func (w *ExtraMXWatcher) RequestCheck(domainID string) {
+	if w == nil || domainID == "" {
+		return
+	}
+	w.mu.Lock()
+	w.demanded[domainID] = true
+	w.mu.Unlock()
+	w.wake()
+}
 
-// checkAll evaluates every Dial MX domain and publishes changes.
-func (w *ExtraMXWatcher) checkAll(ctx context.Context) {
+// RequestCheckIfStale asks for a re-check of one domain unless its verdict was
+// computed less than dnsDemandFloor ago. It is the read-side signal (a dashboard
+// lights tick, an open status dialog, a wizard step): cheap when repeated, a real
+// lookup when the cached verdict has gone stale. It never blocks and never runs a
+// lookup on the caller's goroutine.
+func (w *ExtraMXWatcher) RequestCheckIfStale(domainID string) {
+	if w == nil || domainID == "" {
+		return
+	}
+	w.mu.Lock()
+	fresh := !w.checkedAt[domainID].IsZero() && time.Since(w.checkedAt[domainID]) < dnsDemandFloor
+	if !fresh {
+		w.demanded[domainID] = true
+	}
+	w.mu.Unlock()
+	if !fresh {
+		w.wake()
+	}
+}
+
+// takeDemanded returns the domains a read asked to re-check and clears the set.
+func (w *ExtraMXWatcher) takeDemanded() map[string]bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.demanded) == 0 {
+		return nil
+	}
+	out := w.demanded
+	w.demanded = map[string]bool{}
+	return out
+}
+
+// CheckOnce runs a single full pass. It is used on startup and by tests. A full
+// pass supersedes any outstanding demand requests, so it clears them.
+func (w *ExtraMXWatcher) CheckOnce(ctx context.Context) {
+	w.takeDemanded()
+	w.checkDomains(ctx, nil)
+}
+
+// CheckDemandedOnce runs the pending demand requests only, as the Run loop does on
+// a demand wake. It exists for tests, which cannot easily drive Run's channels.
+func (w *ExtraMXWatcher) CheckDemandedOnce(ctx context.Context) {
+	demanded := w.takeDemanded()
+	if len(demanded) == 0 {
+		return
+	}
+	w.checkDomains(ctx, demanded)
+}
+
+// checkDomains evaluates Dial MX domains and publishes changes. A nil filter
+// checks every domain; a non-nil filter checks only the domains it names. The
+// stale-verdict sweep runs only on a full pass, so a targeted check cannot decide
+// a domain has left the Dial MX set.
+func (w *ExtraMXWatcher) checkDomains(ctx context.Context, filter map[string]bool) {
 	domains, err := w.svc.Store.ListDialMXDomains(ctx)
 	if err != nil {
 		return
@@ -121,11 +227,17 @@ func (w *ExtraMXWatcher) checkAll(ctx context.Context) {
 	seen := map[string]bool{}
 	for _, d := range domains {
 		seen[d.ID] = true
+		if filter != nil && !filter[d.ID] {
+			continue
+		}
 		verdict, ok := w.verdictForDomain(ctx, d.AccountID, d.ID, d.Name)
 		if !ok {
 			continue
 		}
 		w.setVerdict(d.ID, d.AccountID, verdict)
+	}
+	if filter != nil {
+		return
 	}
 	// A domain that is no longer Dial MX drops its stale verdict so the light
 	// cannot stay amber or red from an old record set.
@@ -218,6 +330,9 @@ func (w *ExtraMXWatcher) setVerdict(domainID, accountID string, verdict DNSVerdi
 	changed := !had || !prev.Equal(verdict)
 	w.last[domainID] = verdict
 	w.resolved[domainID] = true
+	if accountID != "" {
+		w.checkedAt[domainID] = time.Now()
+	}
 	w.mu.Unlock()
 	// Publish only on a real change. The first verdict for a domain that is clean
 	// (nothing published to fix) has nothing to announce; only a first verdict

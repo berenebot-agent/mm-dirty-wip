@@ -80,13 +80,15 @@ type domainDNSView struct {
 // TXT verification record; for a custom service it lists the TXT record and
 // leaves the MX hostnames to the operator.
 type dialMXDNSInstructions struct {
-	Service  string                `json:"service"` // "antler" | "custom"
-	Contact  string                `json:"contact_email,omitempty"`
-	TXTName  string                `json:"txt_name"`
-	TXTValue string                `json:"txt_value"`
-	MX       []dialMXMXInstruction `json:"mx,omitempty"`
-	Hostname string                `json:"smtp_hostname,omitempty"`
-	Receiver []mxdialStatusView    `json:"receivers,omitempty"`
+	Service       string                `json:"service"` // "antler" | "custom"
+	Contact       string                `json:"contact_email,omitempty"`
+	Enforcement   string                `json:"enforcement,omitempty"`
+	InheritedFrom string                `json:"inherited_from,omitempty"`
+	TXTName       string                `json:"txt_name"`
+	TXTValue      string                `json:"txt_value"`
+	MX            []dialMXMXInstruction `json:"mx,omitempty"`
+	Hostname      string                `json:"smtp_hostname,omitempty"`
+	Receiver      []mxdialStatusView    `json:"receivers,omitempty"`
 }
 
 // dialMXMXInstruction is one MX record the operator must publish.

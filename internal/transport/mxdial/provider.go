@@ -15,7 +15,19 @@ const (
 	// operator-supplied receiver URLs.
 	ServiceAntler = "antler"
 	ServiceCustom = "custom"
+	// EnforcementModerate and EnforcementHard are the inbound authentication
+	// enforcement policies. Moderate marks mail as spam when DMARC fails, or both
+	// SPF and DKIM fail; hard marks it when any of SPF, DKIM or DMARC fails.
+	EnforcementModerate = "moderate"
+	EnforcementHard     = "hard"
 )
+
+// ValidEnforcement reports whether a string is an enforcement policy this
+// provider accepts. It is the single source of allowed values, so the settings
+// update path and the config schema cannot drift.
+func ValidEnforcement(v string) bool {
+	return v == EnforcementModerate || v == EnforcementHard
+}
 
 type Transport struct{}
 
