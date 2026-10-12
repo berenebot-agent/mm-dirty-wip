@@ -350,7 +350,12 @@ reconciles the instant a receiver's readiness changes (the transient
 `mx.health_changed` event). There is no **Check now** button and no counter — the
 receiver is the authority and reports itself; the published-record DNS table
 belongs to the setup wizard, which fetches it once on open and after a key
-rotation.
+rotation. The saved status view opens **complete**: the receiving form embeds the
+copy-ready DNS records and the shared extra-MX verdict alongside the connector and
+status sets, so its rejection fix prompts (publish this TXT record / this MX
+record) and its "additional MX servers" warning paint on open — the same picture
+the dashboard light was drawn from — rather than appearing only after the first
+refresh lands.
 
 The dashboard's Domains table shows one aggregate connector light per Dial MX
 domain: **green** when at least one receiver is `ready` and no rogue MX records

@@ -442,6 +442,12 @@ standalone, and whether the approver is enabled for the effective mode. See
   `unexpected_mx` field on the receiving response (independent of `instructions`),
   so a dialog opened from an amber dashboard row shows it immediately and keeps it
   current live.
+- The Dial MX / Antler MX status view now opens **complete**: the receiving form
+  embeds the copy-ready DNS records and the shared extra-MX verdict alongside the
+  connector and status sets, so the rejection fix prompts (publish this TXT record
+  / this MX record) and the "additional MX servers" warning paint on open — the
+  same picture the dashboard light was drawn from — instead of appearing only
+  after the first refresh lands.
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
   folded `steps` string) instead of one INFO `dialmx domain proof` record per

@@ -91,10 +91,21 @@ type dialMXSetupView struct {
 	// matching the dashboard light it was opened from rather than flashing an
 	// amber "Pending" until the first status poll returns. It carries no secret.
 	StatusesJSON string
+	// InstructionsJSON is the copy-ready DNS records (Antler MX/TXT names, values
+	// and priorities) embedded on the receiving form, so the status view can draw
+	// its fix prompts (an unauthorized TXT record, or a receiver missing from MX)
+	// the instant it opens rather than waiting for the first fetch to return. It
+	// carries no secret — the TXT value is the domain's public key already shown in
+	// the panel.
+	InstructionsJSON string
+	// UnexpectedJSON is the watcher's shared extra-MX verdict embedded on the form,
+	// so the status view opens already showing its "additional MX servers" warning
+	// in step with the dashboard's amber light. It carries no secret.
+	UnexpectedJSON string
 	// Light is the aggregate traffic light for the domain's receiving setup
-	// ("ok" or "danger"), and LightTitle its tooltip. It is green only when at
-	// least one receiver is both authorized and published in the domain's MX
-	// records, so the dashboard answers "will inbound mail be accepted?" at a
+	// ("ok", "amber" or "danger"), and LightTitle its tooltip. It is green only
+	// when at least one receiver is both authorized and published in the domain's
+	// MX records, so the dashboard answers "will inbound mail be accepted?" at a
 	// glance without opening the dialog.
 	Light      string
 	LightTitle string
@@ -199,6 +210,38 @@ func dialMXStatusesJSON(statuses []mxdialStatusView) string {
 		return "[]"
 	}
 	b, err := json.Marshal(statuses)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// dialMXInstructionsJSON marshals the setup's copy-ready DNS records to the
+// secret-free JSON embedded on the receiving form. The status view reads it to
+// draw its fix prompts (an unauthorized TXT record, or a receiver missing from
+// MX) on open, before the first fetch returns, so it never shows rows without
+// their remediation. A nil instructions object (no copy-ready records) is
+// marshalled as null so the client falls back to the fetched value.
+func dialMXInstructionsJSON(instructions *dialMXDNSInstructions) string {
+	if instructions == nil {
+		return "null"
+	}
+	b, err := json.Marshal(instructions)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
+}
+
+// dialMXUnexpectedJSON marshals the watcher's shared extra-MX verdict to the
+// secret-free JSON embedded on the receiving form, so the status view opens
+// already showing its "additional MX servers" warning in step with the amber
+// dashboard light.
+func dialMXUnexpectedJSON(hosts []string) string {
+	if len(hosts) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(hosts)
 	if err != nil {
 		return "[]"
 	}
@@ -1746,7 +1789,7 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
 .antler-record-table th:nth-child(6){width:14%!important}
 .antler-record-table button{padding:4px 8px;font-size:12px;white-space:normal}
 </style>
-<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}" data-antler-status="{{.StatusesJSON}}"{{end}}>
+<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}" data-antler-status="{{.StatusesJSON}}" data-antler-instructions="{{.InstructionsJSON}}" data-antler-unexpected="{{.UnexpectedJSON}}"{{end}}>
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <label>Provider</label>
 <select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainReceivingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{if .SelectLabel}}{{.SelectLabel}}{{else}}{{.ProviderLabel}}{{end}}</option>{{end}}</select>
@@ -1917,6 +1960,11 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			unexpected = s.dialMXExtraMX(d.ID)
 		}
 		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, unexpected, time.Now())
+		// Seed the status view with the same picture the dashboard light was drawn
+		// from, so its fix prompts and extra-MX warning paint on open instead of
+		// waiting for the first fetch. The instructions carry only public records.
+		setup.InstructionsJSON = dialMXInstructionsJSON(view.instructionView())
+		setup.UnexpectedJSON = dialMXUnexpectedJSON(unexpected)
 		dialMXSetup[d.ID] = setup
 	}
 	// A root domain may have had an ancestor added after it, so offer "Inherited
