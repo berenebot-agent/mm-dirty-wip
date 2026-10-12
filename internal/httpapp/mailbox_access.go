@@ -62,9 +62,11 @@ func (s *Server) resolveMailbox(ctx context.Context, p model.Principal, inboxID 
 		if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inbox.ID) {
 			caps.Outbound = true
 			caps.HierarchicalFolders = false
+			// Gmail (native or via One) has no push subscription: the worker
+			// polls, so the mailbox never reports instant push.
+			caps.Realtime = false
 			if s.Service.Store.IsOne(ctx, p.AccountID, inbox.ID) {
 				caps.Outbound = inbox.RemoteConfigured
-				caps.Realtime = false
 			}
 		}
 		inbox.Capabilities = &caps
@@ -179,9 +181,11 @@ func (s *Server) readableInboxes(ctx context.Context, p model.Principal) ([]mail
 			if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
 				caps.Outbound = true
 				caps.HierarchicalFolders = false
+				// Gmail (native or via One) has no push subscription: the worker
+				// polls, so the mailbox never reports instant push.
+				caps.Realtime = false
 				if s.Service.Store.IsOne(ctx, p.AccountID, box.ID) {
 					caps.Outbound = box.RemoteConfigured
-					caps.Realtime = false
 				}
 			}
 			box.Capabilities = &caps
