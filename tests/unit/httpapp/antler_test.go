@@ -76,8 +76,8 @@ func (s *switchableResolver) LookupTXT(context.Context, string) ([]string, error
 // watchDNS installs the shared DNS watcher and runs one pass, so the receiving
 // API and dashboard render read a settled verdict.
 func watchDNS(svc *app.Service, res app.DNSResolver) {
-	svc.ExtraMX = app.NewExtraMXWatcher(svc, res)
-	svc.ExtraMX.CheckOnce(context.Background())
+	svc.DNS = app.NewDNSWatcher(svc, res)
+	svc.DNS.CheckOnce(context.Background())
 }
 
 // dnsLights returns the kind→state map from a receiving response body.
@@ -261,7 +261,7 @@ func TestDialMXWatcherRefreshesVerdict(t *testing.T) {
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{
 		"v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub),
 	})
-	svc.ExtraMX.CheckOnce(ctx)
+	svc.DNS.CheckOnce(ctx)
 	if got := dnsLights(t, do())["txt"]; got != "mismatch" {
 		t.Fatalf("second TXT light = %q, want mismatch (a stale verdict would stay ok)", got)
 	}

@@ -226,7 +226,7 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 	}
 	// An extra MX record appears and the watcher republishes: amber.
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}}, nil)
-	svc.ExtraMX.CheckOnce(ctx)
+	svc.DNS.CheckOnce(ctx)
 	if got := light(); got != "amber" {
 		t.Fatalf("light with an extra MX record = %q, want amber", got)
 	}

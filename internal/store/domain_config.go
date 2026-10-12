@@ -108,6 +108,43 @@ func (s *Store) ListDialMXDomains(ctx context.Context) ([]model.Domain, error) {
 	return out, nil
 }
 
+// ListDirectMXSendingDomains returns every domain whose effective sending
+// provider is Direct MX, so the DNS watcher can check the published DKIM record
+// of each one that signs. Inherited sending config resolves to an explicit
+// ancestor config, so listing the explicit rows is sufficient.
+func (s *Store) ListDirectMXSendingDomains(ctx context.Context) ([]model.Domain, error) {
+	rows, err := s.read.QueryContext(ctx, `SELECT id,account_id FROM domains ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	var domains []model.Domain
+	for rows.Next() {
+		var d model.Domain
+		if err := rows.Scan(&d.ID, &d.AccountID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		domains = append(domains, d)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]model.Domain, 0)
+	for _, d := range domains {
+		full, err := s.GetDomain(ctx, d.AccountID, d.ID)
+		if err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(full.SendingProvider, "mx") {
+			out = append(out, full)
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) GetDialMXCredential(ctx context.Context, accountID, domainID string) (DialMXCredential, error) {
 	var c DialMXCredential
 	var created, updated string

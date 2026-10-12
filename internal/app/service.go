@@ -76,10 +76,12 @@ type Service struct {
 	Store  *store.Store
 	Hub    *events.Hub
 	DialMX *mxdial.Manager
-	// ExtraMX is the single owner of every Dial MX domain's "extra MX" verdict.
-	// cmd/server sets it and runs it; when nil (tests, or before startup) the
-	// HTTP layer reads an empty verdict. See ExtraMXState.
-	ExtraMX *ExtraMXWatcher
+	// DNS is the single owner of every domain's published-record verdict: the
+	// receiving TXT/MX checks for a Dial MX domain and the DKIM check for a
+	// Direct MX sender that signs. cmd/server sets it and runs it; when nil
+	// (tests, or before startup) the HTTP layer reads an empty verdict. See
+	// DNSState.
+	DNS *DNSWatcher
 	// AntlerEndpoints resolves the Antler MX receiver manifest at setup-save
 	// time. cmd/server installs the live GitHub resolver; when nil (tests) the
 	// embedded manifest is used.
@@ -854,8 +856,8 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 	}
 	// The domain's DNS verdict is now stale (a fresh receiver set, a new contact or
 	// a new service), so re-check it rather than waiting out the background pass.
-	if s.ExtraMX != nil {
-		s.ExtraMX.RequestCheck(domainID)
+	if s.DNS != nil {
+		s.DNS.RequestCheck(domainID)
 	}
 	return saved, nil, nil
 }
@@ -1022,8 +1024,8 @@ func (s *Service) UpdateAntlerSettings(ctx context.Context, accountID, domainID 
 		if s.DialMX != nil {
 			s.DialMX.Wake()
 		}
-		if s.ExtraMX != nil {
-			s.ExtraMX.RequestCheck(domainID)
+		if s.DNS != nil {
+			s.DNS.RequestCheck(domainID)
 		}
 	}
 	return saved, err
@@ -1363,8 +1365,8 @@ func (s *Service) RotateDialMXCredential(ctx context.Context, accountID, domainI
 		// The authorization TXT record must match the new key, so the cached DNS
 		// verdict is now about a superseded key: re-check it at once rather than
 		// showing the old record as matching.
-		if s.ExtraMX != nil {
-			s.ExtraMX.RequestCheck(domainID)
+		if s.DNS != nil {
+			s.DNS.RequestCheck(domainID)
 		}
 	}
 	return credential, err

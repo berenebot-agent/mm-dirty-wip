@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/dkimsign"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
@@ -59,16 +60,18 @@ const (
 )
 
 // DNSVerdict is the combined published-record picture for one domain. Either
-// check is nil when it does not apply (no Antler receivers → no MX check).
+// receiving check is nil when it does not apply (no Antler receivers → no MX
+// check); DKIM is nil when the domain does not sign outbound mail.
 type DNSVerdict struct {
-	TXT *DNSRecordView `json:"txt,omitempty"`
-	MX  *DNSRecordView `json:"mx,omitempty"`
+	TXT  *DNSRecordView `json:"txt,omitempty"`
+	MX   *DNSRecordView `json:"mx,omitempty"`
+	DKIM *DNSRecordView `json:"dkim,omitempty"`
 }
 
 // Equal reports whether two verdicts are identical, so the watcher publishes only
 // on a real change.
 func (v DNSVerdict) Equal(o DNSVerdict) bool {
-	return equalRecordViews(v.TXT, o.TXT) && equalRecordViews(v.MX, o.MX)
+	return equalRecordViews(v.TXT, o.TXT) && equalRecordViews(v.MX, o.MX) && equalRecordViews(v.DKIM, o.DKIM)
 }
 
 func equalRecordViews(a, b *DNSRecordView) bool {
@@ -187,6 +190,46 @@ func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string
 	pub, err := mxwire.ParseDomainTXT(records, keyID)
 	if err != nil || len(want) == 0 || !bytes.Equal(pub, want) {
 		view.State, view.Reason = StateMismatch, "the published TXT record does not match this key"
+		return view
+	}
+	view.State = StateOK
+	return view
+}
+
+// CheckDKIM returns the current check for a Direct MX sending domain's DKIM
+// public-key TXT record against the key MailMoose signs with. expectedValue is
+// the copy-ready record shown to the operator. The check mirrors CheckMX's
+// shape: "ok" when a record is published and its p= value equals wantBase64,
+// "pending" when the name definitively carries no record yet, "mismatch" when a
+// record is published but its key differs (a stale record from a rotated key, or
+// another operator's record on the same name), and "unavailable" when the lookup
+// could not be completed. It runs only for a signing domain, so a non-signing
+// domain costs no resolver lookup.
+func CheckDKIM(parent context.Context, resolver DNSResolver, recordName, expectedValue, wantBase64 string) DNSRecordView {
+	view := DNSRecordView{Kind: "dkim", Name: recordName, Expected: expectedValue}
+	ctx, cancel := withTimeout(parent)
+	defer cancel()
+	records, err := resolver.LookupTXT(ctx, recordName)
+	if err != nil && !dnsNotFound(err) {
+		view.State, view.Reason = StateUnavailable, "DKIM TXT lookup failed; retrying"
+		return view
+	}
+	if len(records) == 0 {
+		view.State, view.Reason = StatePending, "DKIM record not published yet"
+		return view
+	}
+	kept := records
+	if len(kept) > dnsMaxFound {
+		kept = kept[:dnsMaxFound]
+	}
+	view.Found = kept
+	published, ok := dkimsign.ParseTXTRecordValue(records)
+	if !ok {
+		view.State, view.Reason = StatePending, "DKIM record not published yet"
+		return view
+	}
+	if published != strings.TrimSpace(wantBase64) {
+		view.State, view.Reason = StateMismatch, "the published DKIM record does not match this signing key"
 		return view
 	}
 	view.State = StateOK
