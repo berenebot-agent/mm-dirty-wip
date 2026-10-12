@@ -81,11 +81,23 @@ docker compose up -d
 
 Open `BASE_URL`, sign in with the system administrator credentials, and add your domain. From the **Admin** page you can invite other people, each as their own separate account. Then:
 
-- Wire up **inbound and outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
+- Choose how to **receive email** → options below
+- Configure **outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
 - Connect an **agent or service to an inbox** (Hermes Relay, OpenClaw, webhook, API key) → [docs/CONNECTORS.md](docs/CONNECTORS.md)
 - Add a **standalone inbox** that reads and sends through an existing mailbox over IMAP/SMTP, alongside your managed-domain inboxes → inbox settings (**Add standalone inbox**), or [docs/MAILBOX_SERVICE_CONTRACT.md](docs/MAILBOX_SERVICE_CONTRACT.md)
 - Direct-SMTP (MX) on port 25 — publish `25:2525` explicitly for Included MX, then select it under **Domain → Receiving → Direct MX**. Hardened stacks, reverse-proxy settings → [docs/SELFHOSTING.md](docs/SELFHOSTING.md) and [docs/MX.md](docs/MX.md)
 - Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## Ways to receive email
+
+Choose a receiving option for each domain. Antler MX is the easiest way to get
+direct SMTP receiving without opening an inbound port; the other options let
+you bring an existing provider or run your own receiver.
+
+- **[Antler MX — free hosted relay](docs/SELFHOSTING.md#antler-mx-zero-config-hosted-relay).** MailMoose connects outward to the shared relay, so there’s no SMTP port to open and no receiver to install or maintain. Publish the MX and domain-specific TXT records MailMoose provides. The TXT proof authorizes the relay for your domain, and the relay also verifies its hostname is listed in your MX records before accepting mail. Antler MX delivers to your MailMoose instance; it doesn’t host a mailbox or retain delivered messages.
+- **Provider integrations.** Receive through Mailgun, Cloudflare Email Routing, Resend, or Postmark, using each provider’s inbound webhook integration with MailMoose. See [inbound provider setup](docs/PROVIDERS.md).
+- **Your own SMTP receiver.** Use **Direct MX** with the included receiver or a separate receiver, **Remote MX** with an account-owned receiver, or **Dial MX** with a receiver you operate. These options give you control over the SMTP edge; a receiver still needs to be reachable by sending mail servers on port 25. See [MX deployment options](docs/MX.md) and [Dial MX](docs/DIALMX.md).
+- **An existing mailbox.** Connect an inbox you already use over IMAP/SMTP with a [standalone inbox](docs/MAILBOX_SERVICE_CONTRACT.md). This connects to that mailbox rather than receiving mail for a managed domain.
 
 ## Remote MX receiver (separate container)
 
