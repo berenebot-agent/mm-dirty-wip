@@ -1923,19 +1923,19 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			openID, openKind = "", ""
 		}
 	}
-	// Secondary settings flows can return to a specific inbox tab. Existing
-	// external-alias flows omit inbox_tab and therefore continue to return to
-	// Aliases; connector actions explicitly return to Connectors.
+	// Secondary settings flows can return to a specific inbox tab. Opening inbox
+	// settings without an explicit tab defaults to Identity; connector and alias
+	// flows explicitly return to their respective tabs.
 	inboxOpenID := strings.TrimSpace(r.URL.Query().Get("inbox"))
 	inboxOpenTab := strings.TrimSpace(r.URL.Query().Get("inbox_tab"))
 	inboxOpenAlias := ""
 	if inboxOpenTab == "" {
-		inboxOpenTab = "aliases"
+		inboxOpenTab = "basic"
 	}
 	switch inboxOpenTab {
 	case "basic", "allow", "approver", "quota", "aliases", "connectors", "access":
 	default:
-		inboxOpenTab = "aliases"
+		inboxOpenTab = "basic"
 	}
 	if inboxOpenID != "" {
 		if _, err := s.Service.Store.GetInboxInternal(ctx, p.AccountID, inboxOpenID); err != nil {
