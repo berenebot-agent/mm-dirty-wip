@@ -973,18 +973,22 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
   connector.
-- `dns[]` — published-record checks: `kind` (`mx`/`txt`), `name`, `expected`,
-  bounded `found`, bounded `matched`, `state` (`ok`, `pending`, `mismatch`) and a
-  short `reason`. Checks resolve DNS live on every request (bounded by a
-  four-second timeout); nothing is cached in the core, so a record change is
-  reflected on the next read. A resolver failure is reported as a check state,
-  never an API error. For an MX check `matched` lists the expected receiver
-  hostnames actually published; the check is `ok` once at least one expected
-  hostname is published (the receiver set is redundancy), and `mismatch` only
-  when MX records exist but none belongs to a receiver. The TXT check remains
-  exact. These checks are the local "has the record propagated yet?" feed behind
-  the receiving dialog's remediation block; routing itself is the receiver's
-  `status[]` verdict, not a second core-side decision.
+- `dns[]` — published-record checks, returned only when the request asks for them
+  with `?dns=1`: `kind` (`mx`/`txt`), `name`, `expected`, bounded `found`, bounded
+  `matched`, bounded `unexpected` (published MX hostnames that are not Antler
+  receivers), `state` (`ok`, `pending`, `mismatch`) and a short `reason`. Checks
+  resolve DNS live on each `?dns=1` request (bounded by a four-second timeout);
+  nothing is cached in the core, so a record change is reflected on the next read.
+  A resolver failure is reported as a check state, never an API error. A plain
+  read (no `?dns=1`) omits `dns[]` and runs no resolver lookup, so the status
+  page's self-reported `status[]` read stays cheap. For an MX check `matched`
+  lists the expected receiver hostnames actually published; the check is `ok` once
+  at least one expected hostname is published (the receiver set is redundancy),
+  and `mismatch` only when MX records exist but none belongs to a receiver. The
+  TXT check remains exact. These checks are the local "has the record propagated
+  yet?" feed behind the setup wizard's record table and the dashboard's extra-MX
+  warning; routing itself is the receiver's `status[]` verdict, not a second
+  core-side decision.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
   custom service, the TXT record only.

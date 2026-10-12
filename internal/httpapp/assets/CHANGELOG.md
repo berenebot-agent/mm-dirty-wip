@@ -399,6 +399,19 @@ standalone, and whether the approver is enabled for the effective mode. See
   longer cached in the core. Editing a TXT record is reflected on the next poll or
   **Check now** instead of waiting out a one-minute TTL, so the domain-auth
   traffic light and the wizard agree with what the receivers actually resolve.
+- Dial MX / Antler MX status is now **self-reported, live over SSE**. The saved
+  status dialog no longer polls DNS or shows a **Check now** button: it reconciles
+  the instant a receiver's readiness changes (the transient `mx.health_changed`
+  event), with a 60-second fallback refresh while it is open. The published-record
+  checks are now a **setup-wizard-only** concern (fetched with `?dns=1`), so a
+  plain status read never runs a resolver lookup.
+- Dial MX / Antler MX gains an **extra-MX warning**: when a domain with a ready
+  Antler receiver also publishes MX records that are not Antler receivers, the
+  dashboard aggregate light turns **amber** (individual connectors stay green) and
+  the status dialog lists the offending servers with a suggestion to remove them,
+  since mail may not be delivered via Antler. The dashboard re-checks on load,
+  reconnect, a receiver-health change, and a 15-minute background tick, so a rogue
+  record (which emits no receiver event) is still surfaced.
 - Receiver logging: a domain proof attempt now emits a single INFO
   `dialmx domain auth` record (terminal phase, result, reason, duration and a
   folded `steps` string) instead of one INFO `dialmx domain proof` record per

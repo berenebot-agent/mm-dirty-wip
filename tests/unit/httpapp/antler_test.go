@@ -117,7 +117,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
 	do := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -236,7 +236,7 @@ func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
 	do := func() map[string]any {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -274,6 +274,49 @@ func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
 	}
 }
 
+// TestDialMXReceivingStatusStaysDNSFree proves the status page's receiver read
+// does not run the published-record checks: a plain status GET (no ?dns=1) must
+// perform zero resolver lookups, so the self-reported status path is cheap and
+// the DNS checks belong to the setup wizard and the dashboard light only.
+func TestDialMXReceivingStatusStaysDNSFree(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	res := &switchableResolver{}
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	srv := httpapp.New(svc, nil)
+	srv.SetDNSResolver(res)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := body["dns"]; ok {
+		t.Fatalf("plain status GET must not run DNS checks, got %v", body["dns"])
+	}
+	if mxHits, txHits := res.counts(); mxHits != 0 || txHits != 0 {
+		t.Fatalf("plain status GET ran resolver lookups: mx=%d txt=%d", mxHits, txHits)
+	}
+}
+
 // TestDialMXAntlerPartialMXSetIsHealthy proves the MX check treats the receiver
 // set as redundancy: publishing only one of two advertised receivers is "ok",
 // matched lists the receiver that is actually pointed at, and the other is left
@@ -308,7 +351,7 @@ func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
 	do := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -513,7 +556,7 @@ func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
 	do := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)

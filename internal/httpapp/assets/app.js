@@ -4641,7 +4641,7 @@ function hideInboxSubview(dlg) {
     var close = dlg.querySelector('[data-close-dialog]');
     if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
-    var step = 0, busy = false, ready = false, nextCheck = 0, manualUntil = 0, rotating = false;
+    var step = 0, busy = false, ready = false, rotating = false;
     var state = null, savedEmail = null, timer = null;
     var wizard = document.createElement('section');
     wizard.className = 'antler-wizard';
@@ -4651,7 +4651,7 @@ function hideInboxSubview(dlg) {
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
       '<section data-antler-step="4" hidden><h3>Custom receivers</h3><p class="muted small">Enter comma-separated HTTPS receiver URLs. Your receiver operator must also provide the SMTP hostname to use in your MX records.</p><label>Receiver URLs</label><input class="antler-custom-urls" placeholder="https://mx.example.com"></section>' +
-      '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p><button type="button" class="secondary antler-check">Check now</button></div>' +
+      '<div class="antler-checks" hidden><p class="antler-check-note" role="status"></p></div>' +
       '<p class="antler-error error" role="alert" hidden></p>';
     group.appendChild(wizard);
     function moveField(input, index) {
@@ -4676,7 +4676,6 @@ function hideInboxSubview(dlg) {
     advanced.addEventListener('change', function () { custom = advanced.checked; update(); });
     var panels = wizard.querySelectorAll('[data-antler-step]');
     var checksRow = wizard.querySelector('.antler-checks');
-    var check = wizard.querySelector('.antler-check');
     var note = wizard.querySelector('.antler-check-note');
     var error = wizard.querySelector('.antler-error');
     // Back is part of the dialog's bottom navigation, not the upper form.
@@ -4687,13 +4686,18 @@ function hideInboxSubview(dlg) {
     function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
     function api(method, config, regenerate) {
+      // The published-record checks (the wizard's DNS table and the status
+      // page's extra-MX warning) both need the server's ?dns=1 flag. A GET from
+      // this dialog always asks for them; the dialog only polls while it is
+      // open, so the resolver work is bounded by the open dialog.
+      var url = endpoint + (method === 'GET' ? '?dns=1' : '');
       var options = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
       if (config || regenerate) {
         options.headers['Content-Type'] = 'application/json';
         options.headers['X-CSRF-Token'] = form.querySelector('[name="_csrf"]').value;
         options.body = JSON.stringify(regenerate ? { provider: 'dialmx', regenerate_secret: true } : { provider: 'dialmx', config: config });
       }
-      return fetch(endpoint, options).then(function (response) {
+      return fetch(url, options).then(function (response) {
         if (!response.ok) { throw new Error('Unable to ' + (method === 'GET' ? 'check' : 'save') + ' setup. Please try again.'); }
         return response.json();
       });
@@ -4799,6 +4803,33 @@ function hideInboxSubview(dlg) {
         if (mx.priority) { fields.push(['Priority', mx.priority, true]); }
         fields.push(['Record value', mx.hostname, true]);
         block.appendChild(remediationLine(mx.hostname + ' is not listed as an MX receiver for this domain — publish this MX record:', fields));
+      });
+      return block;
+    }
+    // unexpectedMXBlock warns that the domain's MX records name servers which are
+    // not Antler receivers. Mail may still be delivered via a ready Antler
+    // receiver, but routing is ambiguous, so the dashboard light is amber and this
+    // block names the offending servers and suggests removing them. It is empty
+    // when no extra records are published.
+    function unexpectedMXBlock(data, domainName) {
+      var block = document.createElement('div');
+      var extra = (data.instructions && data.instructions.unexpected_mx) || [];
+      if (!extra.length) { return block; }
+      block.className = 'antler-dns-remediation antler-extra-mx';
+      var p = document.createElement('p');
+      p.textContent = 'Additional MX servers exist for ' + domainName + '. Mail may not be delivered via Antler. Remove these records unless you intend them:';
+      block.appendChild(p);
+      extra.forEach(function (host) {
+        var line = document.createElement('div');
+        line.className = 'dns-remediation-row';
+        var label = document.createElement('span');
+        label.className = 'dns-remediation-label';
+        label.textContent = 'Extra MX';
+        var code = document.createElement('code');
+        code.className = 'dns-remediation-value';
+        code.textContent = host;
+        line.appendChild(label); line.appendChild(code);
+        block.appendChild(line);
       });
       return block;
     }
@@ -4927,6 +4958,7 @@ function hideInboxSubview(dlg) {
       // A connector the poll did not report keeps its "Pending" row.
       if (statusMode) {
         records.appendChild(statusTable(connectors, data.status));
+        records.appendChild(unexpectedMXBlock(data, domainName));
         records.appendChild(remediationBlock(data, instructions, mxName));
         renderReceivers(data.status);
         update();
@@ -5051,25 +5083,21 @@ function hideInboxSubview(dlg) {
       // receiver re-authorizes on its own and the status view shows it as in
       // progress.
       save.disabled = busy || (!statusMode && !rotating && step === 2 && !ready);
-      check.disabled = busy || Date.now() < manualUntil;
-      check.textContent = Date.now() < manualUntil ? 'Check now (' + Math.ceil((manualUntil - Date.now()) / 1000) + 's)' : 'Check now';
       // While a check is in flight, pending amber dots animate as spinners so a
       // not-yet-resolved connector or DNS record reads as "in progress" rather
       // than a settled amber state.
       wizard.querySelector('.antler-records').classList.toggle('antler-checking', busy);
       wizard.querySelector('.antler-receivers').classList.toggle('antler-checking', busy);
     }
-    function refresh(manual) {
+    function refresh() {
       if (busy || !active() || !dlg.open || (!statusMode && (step === 0 || step === 3 || step === 4))) { return; }
       busy = true;
-      if (manual) { manualUntil = Date.now() + 3000; }
       note.textContent = 'Checking…'; note.setAttribute('aria-busy', 'true'); update();
       api('GET').then(function (data) { render(data); fail(''); }).catch(function (err) { fail(err.message); }).finally(function () {
-        busy = false; nextCheck = Date.now() + 10000;
+        busy = false;
         note.removeAttribute('aria-busy'); update();
       });
     }
-    check.addEventListener('click', function () { if (Date.now() >= manualUntil) { refresh(true); } });
     email.addEventListener('input', update);
     if (rotate) {
       rotate.addEventListener('submit', function (event) {
@@ -5084,10 +5112,9 @@ function hideInboxSubview(dlg) {
         api('PUT', null, true).then(function (data) {
           rotating = true; statusMode = false; entered = true; step = 1;
           state = null; ready = false;
-          render(data); nextCheck = Date.now() + 10000;
+          render(data);
         }).catch(function () {
           fail('Unable to confirm key rotation. Check the current DNS instructions before trying again; the key may already have changed.');
-          nextCheck = Date.now();
         }).finally(function () { busy = false; update(); });
       });
     }
@@ -5120,7 +5147,7 @@ function hideInboxSubview(dlg) {
       }
       entered = true;
       if (step === 0 && custom) { step = 4; update(); return; }
-      if (step === 1 || step === 2) { step++; update(); if (step === 2) { refresh(false); } return; }
+      if (step === 1 || step === 2) { step++; update(); if (step === 2) { refresh(); } return; }
       if (!custom && !email.reportValidity()) { return; }
       if (step === 4 && !urls.value.trim()) { fail('Enter at least one receiver URL.'); return; }
       if (step === 0 && savedEmail === email.value && state) { step = 1; update(); return; }
@@ -5147,21 +5174,51 @@ function hideInboxSubview(dlg) {
         if (!finishing) { enforcement.value = data.config.enforcement || 'moderate'; }
         savedEmail = email.value; render(data);
         if (finishing) { statusMode = true; render(data); fail(''); }
-        else { step = 1; nextCheck = Date.now(); }
+        else { step = 1; }
       }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
     });
     provider.addEventListener('change', update);
     service.addEventListener('change', update);
-    // Poll only while this dialog is open; no background checks after dismissal.
-    timer = window.setInterval(function () {
+    // Live status: the receivers self-report their readiness over the shared SSE
+    // stream (mx.health_changed), so the dialog reconciles the instant a
+    // receiver's state changes rather than polling for it. A slow 60s fallback
+    // poll keeps the published-record checks (the extra-MX warning and the
+    // wizard's DNS table) current while the dialog is open, and catches a DNS
+    // change that emits no receiver event. Nothing runs once the dialog closes.
+    var STATUS_POLL_MS = 60000;
+    function onHealthChanged(event) {
       if (!active() || !dlg.open) { return; }
-      update();
-      if ((statusMode || step === 1 || step === 2) && !busy) {
-        if (Date.now() >= nextCheck) { refresh(false); }
-        else { note.textContent = 'Refresh in ' + Math.ceil((nextCheck - Date.now()) / 1000) + 's' + (note.dataset.updated ? ' · Last checked ' + note.dataset.updated : ''); }
-      }
-    }, 1000);
-    window.addEventListener('pagehide', function () { window.clearInterval(timer); });
+      var changed = '';
+      try { changed = (JSON.parse(event.data || '{}') || {}).domain_id || ''; } catch (err) { changed = ''; }
+      if (changed && form.dataset.antlerDomain && changed !== form.dataset.antlerDomain) { return; }
+      refresh();
+    }
+    // Reuse the dashboard's single SSE connection (window.mailmooseEventsSource)
+    // so the status dialog adds a listener rather than a second stream. The
+    // live-update loop that owns that connection runs after this closure, so the
+    // listener is attached lazily on the dialog's next open (and on an immediate
+    // open below) rather than once at parse time.
+    var attachedTo = null;
+    function attachHealthListener() {
+      var shared = window.mailmooseEventsSource || null;
+      if (!shared || shared === attachedTo) { return; }
+      if (attachedTo) { attachedTo.removeEventListener('mx.health_changed', onHealthChanged); }
+      attachedTo = shared;
+      shared.addEventListener('mx.health_changed', onHealthChanged);
+    }
+    window.addEventListener('pagehide', function () {
+      if (attachedTo) { attachedTo.removeEventListener('mx.health_changed', onHealthChanged); attachedTo = null; }
+      if (timer) { window.clearTimeout(timer); }
+    });
+    function scheduleStatusPoll() {
+      if (timer) { window.clearTimeout(timer); }
+      timer = window.setTimeout(function () {
+        if (active() && dlg.open && statusMode) { refresh(); }
+        attachHealthListener();
+        scheduleStatusPoll();
+      }, STATUS_POLL_MS);
+    }
+    scheduleStatusPoll();
     // A status dialog the server marked to open draws its complete connector
     // table synchronously here, before the browser paints the open dialog, so it
     // never flashes thin and then expands when the first poll lands. The auto-
@@ -5169,10 +5226,12 @@ function hideInboxSubview(dlg) {
     // than wait for the (queued) open event.
     if (statusMode && !state) { renderSkeleton(connectors); }
     update();
-    if (statusMode && dlg.open) { refresh(true); }
+    attachHealthListener();
+    if (statusMode && dlg.open) { refresh(); }
     // Reopening a status or wizard dialog later re-checks immediately.
     dlg.addEventListener('open', function () {
-      if (active() && !busy && (statusMode || step === 1 || step === 2)) { refresh(false); }
+      attachHealthListener();
+      if (active() && !busy && (statusMode || step === 1 || step === 2)) { refresh(); }
     });
   });
 })();
@@ -5782,8 +5841,28 @@ function hideInboxSubview(dlg) {
   }
   // The dashboard traffic light needs a server-side published-MX lookup, so it
   // is requested only when it may have changed: on load, on reconnect, and on a
-  // receiver-health notification — never on an ordinary mail event.
+  // receiver-health notification — never on an ordinary mail event. A slow
+  // fallback tick also asks for lights while the dashboard is visible, so a
+  // rogue MX record (which emits no receiver event) is still surfaced within
+  // 15 minutes. Nothing runs once the tab is hidden or closed.
   var wantLights = page === 'dashboard';
+  var LIGHTS_POLL_MS = 15 * 60 * 1000;
+  var lightsTimer = null;
+  function scheduleLightsTick() {
+    if (lightsTimer) {
+      window.clearTimeout(lightsTimer);
+    }
+    lightsTimer = window.setTimeout(function () {
+      if (!document.hidden) {
+        wantLights = true;
+        refresh();
+      }
+      scheduleLightsTick();
+    }, LIGHTS_POLL_MS);
+  }
+  if (page === 'dashboard') {
+    scheduleLightsTick();
+  }
 
   var source = null;
   var debounceTimer = null;
@@ -6205,6 +6284,9 @@ function hideInboxSubview(dlg) {
       window.mailmooseStatus.disconnected();
       return;
     }
+    // Share the one connection so other UI closures (the Antler MX status
+    // dialog) can listen for named events without opening a second stream.
+    window.mailmooseEventsSource = source;
     source.onopen = function () {
       retryDelay = 1000;
       window.mailmooseStatus.connected();
@@ -6251,6 +6333,7 @@ function hideInboxSubview(dlg) {
     if (source) {
       source.close();
       source = null;
+      window.mailmooseEventsSource = null;
     }
   }
 
@@ -6285,6 +6368,10 @@ function hideInboxSubview(dlg) {
     if (hiddenTimer) {
       window.clearTimeout(hiddenTimer);
       hiddenTimer = null;
+    }
+    if (lightsTimer) {
+      window.clearTimeout(lightsTimer);
+      lightsTimer = null;
     }
   });
 
