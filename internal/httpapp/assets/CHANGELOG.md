@@ -137,6 +137,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Standalone mailbox bulk actions (IMAP, Microsoft, Gmail and One) now use the
+  durable action queue instead of holding the browser request open for each
+  remote operation. The notice reports accepted jobs, not completed moves, and
+  separately counts submissions that could not be queued. Duplicate selected
+  IDs are submitted once. Local mailbox bulk actions remain synchronous.
+- A confirmed IMAP move without a reported destination UID is no longer marked
+  failed when Message-ID lookup cannot resolve its new location. The stale source
+  cache entry is removed and the next metadata reconcile indexes the destination;
+  the action is completed rather than inviting another remote move.
+
 - The message reader's action buttons (Reply, Reply all, Forward, mark unread,
   trash) are square and 36×36 like the mailbox toolbar. They had no width rule
   of their own, so the flex row squeezed the five of them into a cramped,
