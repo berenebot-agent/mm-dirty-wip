@@ -410,6 +410,9 @@ func (m *RemoteMailboxService) reconcileGooglePass(ctx context.Context, account,
 		}
 	}
 	status := store.RemoteIndexPartial
+	if quotaHit {
+		m.pauseMetadataSync(ctx, account, inbox)
+	}
 	if c.BackfillDone && !quotaHit {
 		status = store.RemoteIndexComplete
 	}

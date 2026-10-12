@@ -300,6 +300,14 @@ The same queue is available through `GET /v1/actions` and `GET /v1/actions/{id}`
 Owner and are the same core operations the human queue panel uses.
 States are `pending`, `running`, `done`, `failed`, or `ambiguous`.
 
+The queue list also includes a read-only `syncs` array for visible standalone
+inboxes with unsettled metadata sync. Each entry has `inbox_id`, `name`, `address`,
+`provider`, `state`, `phase`, `indexed`, `total`, and an optional `updated_at` and
+safe `error`. Sync states are `queued`, `running`, `waiting`, `paused`, or `error`;
+phase is `initial` or `refresh`. `total: 0` means unknown: use the indexed count,
+not a percentage. Sync rows have no action ID and cannot be retried/dismissed via
+action endpoints. See [Live metadata sync](METADATA_SYNC.md).
+
 Add `?wait=true` to wait up to 30 seconds. Successful PATCH/restore returns the
 updated message; delete/purge returns `204`; seen returns `{id,seen}`.
 A wait timeout returns `504` with the action handle; it does not cancel the job.
