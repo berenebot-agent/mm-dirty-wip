@@ -312,8 +312,79 @@ func TestDialMXReceivingStatusStaysDNSFree(t *testing.T) {
 	if _, ok := body["dns"]; ok {
 		t.Fatalf("plain status GET must not run DNS checks, got %v", body["dns"])
 	}
+	if _, ok := body["unexpected_mx"]; ok {
+		t.Fatalf("plain status GET must not return the extra-MX verdict, got %v", body["unexpected_mx"])
+	}
 	if mxHits, txHits := res.counts(); mxHits != 0 || txHits != 0 {
 		t.Fatalf("plain status GET ran resolver lookups: mx=%d txt=%d", mxHits, txHits)
+	}
+}
+
+// TestDialMXExtraMXVerdictIsSharedAcrossSurfaces proves the status dialog's
+// warning field and the dashboard light's verdict come from the same
+// computation, so the two surfaces cannot disagree about whether a rogue MX
+// record exists. It also pins that the top-level unexpected_mx is returned even
+// when the copy-ready instructions object is omitted.
+func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	// A ready receiver and a rogue MX record appear together: amber, with the
+	// rogue host named.
+	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, AllowPrivateDestinations: true})
+	m.SetStatusForTest(domain.Name, []mxdial.Status{{
+		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
+	}})
+	svc.DialMX = m
+	res := &switchableResolver{}
+	res.set([]*net.MX{
+		{Host: "antler1.example.test.", Pref: 10},
+		{Host: "old.example.test.", Pref: 20},
+	}, nil)
+	srv := httpapp.New(svc, nil)
+	srv.SetDNSResolver(res)
+	h := srv.Handler()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The status dialog's read (which carries the copy-ready instructions).
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving?dns=1", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, _ := body["unexpected_mx"].([]any)
+	if len(got) != 1 || got[0] != "old.example.test" {
+		t.Fatalf("top-level unexpected_mx = %v, want [old.example.test]", body["unexpected_mx"])
+	}
+
+	// The dashboard light's read, from the same DNS state, must agree.
+	cookie, _ := uiSession(t, svc, u.ID)
+	req = httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var snap struct {
+		Domains map[string]struct {
+			Light string `json:"light"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("decode snapshot: %v body=%s", err, rr.Body.String())
+	}
+	if l := snap.Domains[domain.ID].Light; l != "amber" {
+		t.Fatalf("dashboard light = %q, want amber (same verdict as the dialog)", l)
 	}
 }
 

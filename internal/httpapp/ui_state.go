@@ -2,7 +2,6 @@ package httpapp
 
 import (
 	"context"
-	"encoding/base64"
 	"net/http"
 	"time"
 
@@ -192,10 +191,11 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		views = append(views, v)
 	}
 	// Only a domain with an active receiver can be amber-on-extra-MX; a red
-	// domain stays red, so skip the lookup then.
+	// domain stays red, so skip the lookup then. The verdict itself comes from
+	// the one shared helper so the light and the status dialog never disagree.
 	var unexpected []string
 	if anyReady(views) {
-		unexpected = s.unexpectedMXForDomain(ctx, accountID, domainID, domainName, keyID)
+		unexpected = s.dialMXExtraMX(ctx, accountID, domainID, domainName, keyID)
 	}
 	return dialMXHealth(views, unexpected, time.Now())
 }
@@ -210,25 +210,4 @@ func anyReady(statuses []mxdialStatusView) bool {
 		}
 	}
 	return false
-}
-
-// unexpectedMXForDomain runs the bounded published-MX check for a domain and
-// returns the published hostnames that are not one of its configured Antler
-// receivers. It is best-effort: a missing config, credential or resolver failure
-// yields no warning rather than an error, so the light is never failed by DNS.
-func (s *Server) unexpectedMXForDomain(ctx context.Context, accountID, domainID, domainName, keyID string) []string {
-	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
-	if err != nil {
-		return nil
-	}
-	cred, err := s.Service.Store.GetDialMXCredential(ctx, accountID, domainID)
-	if err != nil {
-		return nil
-	}
-	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
-	view := s.dialMXLiveView(domainName, keyID, pub, cfg)
-	if len(view.MX) == 0 {
-		return nil
-	}
-	return s.dns.checkMX(domainName, view.MX).Unexpected
 }
