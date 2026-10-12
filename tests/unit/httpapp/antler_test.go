@@ -397,6 +397,60 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 	}
 }
 
+// TestDialMXStatusViewSeedsFixPrompts proves the receiving form embeds the
+// copy-ready instructions and the extra-MX verdict so the saved status view can
+// paint its fix prompts and warning on open — rather than showing rows without
+// their remediation until the first fetch lands. It is what makes a rejected
+// receiver's full fix prompt appear immediately, matching the dashboard light.
+func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
+	svc, _, u, domain, _ := httpFixture(t)
+	ctx := context.Background()
+	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
+		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
+	}}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	// A ready receiver and a resolved extra-MX verdict: the form must seed both
+	// the copy-ready instructions and the rogue-host warning so the dialog opens
+	// complete.
+	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, AllowPrivateDestinations: true})
+	m.SetStatusForTest(domain.Name, []mxdial.Status{{
+		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
+	}})
+	svc.DialMX = m
+	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
+	svc.ExtraMX.CheckOnce(ctx)
+
+	srv := httpapp.New(svc, nil)
+	h := srv.Handler()
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=dialmx")
+
+	body := page.Body.String()
+	attrValue := func(attr string) string {
+		i := strings.Index(body, attr)
+		if i < 0 {
+			t.Fatalf("receiving form missing %s attribute", attr)
+		}
+		rest := body[i:]
+		if end := strings.IndexByte(rest, '>'); end >= 0 {
+			rest = rest[:end]
+		}
+		return rest
+	}
+	// The copy-ready instructions carry the MX record the operator must publish.
+	if got := attrValue(`data-antler-instructions=`); !strings.Contains(got, "antler1.example.test") {
+		t.Fatalf("seeded instructions missing the MX record: %q", got)
+	}
+	// The shared extra-MX verdict names the rogue host.
+	if got := attrValue(`data-antler-unexpected=`); !strings.Contains(got, "old.example.test") {
+		t.Fatalf("seeded extra-MX verdict missing the rogue host: %q", got)
+	}
+}
+
 // TestDialMXAntlerPartialMXSetIsHealthy proves the MX check treats the receiver
 // set as redundancy: publishing only one of two advertised receivers is "ok",
 // matched lists the receiver that is actually pointed at, and the other is left
