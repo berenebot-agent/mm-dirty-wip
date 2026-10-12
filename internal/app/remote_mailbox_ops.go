@@ -1507,7 +1507,12 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 		if derr := m.Service.Store.DeleteRemoteMessage(ctx, p.AccountID, inboxID, rec.ID); derr != nil {
 			return RemoteMessageView{}, mapStoreError(derr)
 		}
-		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindRetryable, "message moved; its new location will be indexed shortly", true, nil)
+		// MOVE was confirmed by the server. Failure to resolve its destination
+		// locator is a cache limitation, not an uncertain remote write: do not
+		// fail the action or encourage another move. Reconcile fills the cache.
+		view := remoteView(rec)
+		view.FolderPath = destPath
+		return view, nil
 	}
 	updated, err := m.Service.Store.MoveRemoteMessageMetadata(ctx, p.AccountID, inboxID, rec.ID, destPath, destUIDValidity, res.DestinationUID)
 	if err != nil {

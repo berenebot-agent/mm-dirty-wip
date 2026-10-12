@@ -1335,7 +1335,8 @@ func TestRemoteDeleteFolderServerRefusalMapped(t *testing.T) {
 // TestRemoteMoveAmbiguousMessageIDNotMerged proves that when a move reports no
 // destination UID and the destination holds more than one message with the same
 // Message-ID, the service refuses to guess: it does not merge the source onto a
-// duplicate, and reports a retryable outcome so a later reconcile re-indexes it.
+// duplicate, and reports the confirmed move as successful. A later reconcile
+// re-indexes it without inviting a duplicate move.
 func TestRemoteMoveAmbiguousMessageIDNotMerged(t *testing.T) {
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
@@ -1352,10 +1353,9 @@ func TestRemoteMoveAmbiguousMessageIDNotMerged(t *testing.T) {
 	}
 	id := remoteIDForUID(t, rm, u, box, src.uid)
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, MailboxRoles: map[string]string{box.ID: "owner"}, Admin: true}
-	_, err := rm.MoveRemoteMessage(ctx, p, box.ID, id, "Archive")
-	var mb *model.MailboxError
-	if !errors.As(err, &mb) || mb.Kind != model.ErrKindRetryable {
-		t.Fatalf("ambiguous move-id err = %v want retryable", err)
+	view, err := rm.MoveRemoteMessage(ctx, p, box.ID, id, "Archive")
+	if err != nil || view.FolderPath != "Archive" {
+		t.Fatalf("confirmed move = %#v, %v", view, err)
 	}
 	// The source metadata row was dropped rather than merged onto the duplicate.
 	if _, gerr := rm.Service.Store.GetRemoteMessage(ctx, u.AccountID, box.ID, id); !errors.Is(gerr, store.ErrNotFound) {
