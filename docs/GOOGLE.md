@@ -151,7 +151,9 @@ verification, so Google refuses the restricted Gmail scope outright. Revert it:
 - Notification detection has a cursor separate from browsing/backfill. Initial
   connection establishes a baseline rather than notifying about existing mail.
   Proactive connectors use bounded polling; Google Cloud Pub/Sub push is not
-  required for this connector.
+  required for this connector. The mailbox therefore reports
+  `capabilities.realtime` as `false`: the poll interval is the delivery
+  mechanism, not a safety net.
 - Normal OAuth connects the signed-in mailbox. Gmail UI delegation, domain-wide
   delegation and Google Groups require separate integrations.
 

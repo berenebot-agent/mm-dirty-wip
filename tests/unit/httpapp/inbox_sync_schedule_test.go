@@ -209,5 +209,118 @@ func TestInboxSettingsPollMinutesConvertedAndBounded(t *testing.T) {
 	}
 }
 
+// remoteRealtime reads capabilities.realtime from a standalone inbox's
+// secret-free remote view (GET /v1/inboxes/{id}/remote).
+func remoteRealtime(t *testing.T, h http.Handler, inboxID, key string) bool {
+	t.Helper()
+	rr := apiGet(t, h, "/v1/inboxes/"+inboxID+"/remote", key)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("remote config = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Capabilities struct {
+			Realtime bool `json:"realtime"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode remote config: %v", err)
+	}
+	return out.Capabilities.Realtime
+}
+
+// TestRealtimeCapabilityReflectsPush proves capabilities.realtime reports the
+// mailbox's actual push state rather than the standalone default. Gmail has no
+// push subscription — native or via One — and is poll-only, so it must never
+// claim instant push. A Microsoft inbox without an active Graph subscription and
+// a plain IMAP inbox are included for contrast: IMAP keeps the flag because IDLE
+// can deliver immediately, the others do not.
+func TestRealtimeCapabilityReflectsPush(t *testing.T) {
+	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, u)
+
+	// A plain IMAP standalone inbox keeps the default: IDLE can push, so the
+	// capability stays advertised.
+	if !remoteRealtime(t, h, standalone.ID, key) {
+		t.Fatal("imap inbox lost its realtime capability")
+	}
+
+	google, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "gmail@remote.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SaveGoogleConnection(ctx, store.GoogleConnection{
+		InboxID: google.ID, AccountID: u.AccountID, ClientID: "client",
+		EncryptedSecret: "secret", EncryptedToken: "encrypted", ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if remoteRealtime(t, h, google.ID, key) {
+		t.Fatal("gmail inbox claimed instant push")
+	}
+
+	microsoft, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "shared@remote.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Store.SaveMicrosoftConnection(ctx, store.MicrosoftConnection{
+		AccountID: u.AccountID, InboxID: microsoft.ID, ClientID: "client", Tenant: "common",
+		IdentityID: "identity", Mailbox: microsoft.Address, Shared: true, EncryptedToken: "encrypted",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if remoteRealtime(t, h, microsoft.ID, key) {
+		t.Fatal("microsoft inbox without an active subscription claimed instant push")
+	}
+
+	// Gmail via One has no push setup either.
+	oneBinding := store.OneBinding{
+		InboxID: "in_one_realtime", AccountID: u.AccountID, ConnectionID: "conn-one",
+		GmailEmail: "one@remote.test", EncryptedKey: "key", EncryptedConnectionKey: "conn-key",
+		KeyAAD: "aad", Fingerprint: "fp", RateGroup: "group",
+	}
+	if _, err = svc.Store.ImportOneInbox(ctx, oneBinding, "10"); err != nil {
+		t.Fatal(err)
+	}
+	if remoteRealtime(t, h, oneBinding.InboxID, key) {
+		t.Fatal("gmail-via-one inbox claimed instant push")
+	}
+
+	// The account-wide listing (GET /v1/inboxes) attaches capabilities for the
+	// provider-connected inboxes; it must report the same poll-only reality, so an
+	// API client reading inbox capabilities is not told a poll-only mailbox
+	// pushes. (The store attaches no capability block to a plain IMAP standalone
+	// inbox, so only the provider inboxes are checked here.)
+	rr := apiGet(t, h, "/v1/inboxes", key)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list inboxes = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var listed []struct {
+		ID           string `json:"id"`
+		Capabilities *struct {
+			Realtime bool `json:"realtime"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode inbox list: %v", err)
+	}
+	present := map[string]bool{}
+	realtime := map[string]bool{}
+	for _, b := range listed {
+		if b.Capabilities != nil {
+			present[b.ID] = true
+			realtime[b.ID] = b.Capabilities.Realtime
+		}
+	}
+	for _, id := range []string{google.ID, microsoft.ID, oneBinding.InboxID} {
+		if !present[id] {
+			t.Fatalf("list omitted capabilities for %s", id)
+		}
+		if realtime[id] {
+			t.Fatalf("list reported instant push for %s", id)
+		}
+	}
+}
+
 // intPtr returns a pointer to v, for the optional per-inbox cadence overrides.
 func intPtr(v int) *int { return &v }
