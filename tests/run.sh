@@ -8,7 +8,7 @@
 # use --last for the newest one.
 #
 # Usage:
-#   ./tests/run.sh                      # default preset: unit + vet + fmt (CI parity)
+#   ./tests/run.sh                      # default preset: unit + vet + fmt + js (CI parity)
 #   ./tests/run.sh --unit --vet         # pick specific tiers
 #   ./tests/run.sh --all                # every tier
 #   ./tests/run.sh --smoke              # slow gated tests only (opt-in)
@@ -20,6 +20,7 @@
 #   unit     Go unit/integration tests (test -race -count=1 -v ./...)
 #   vet      Go static analysis (vet ./...)
 #   fmt      gofmt gate (gofmt -l cmd internal tests dialmx, fail on output)
+#   js       Antler dialog interaction checks (node tests/antler-wizard-check.cjs)
 #   smoke    slow gated tests (MAILMOOSE_SMOKE=1): the process-level receiver
 #            binary smoke and the production-cost legacy PBKDF2 round-trip.
 #            Deliberately NOT part of the default preset.
@@ -55,7 +56,7 @@ PRUNE_KEEP=""
 
 # --- tier selection -------------------------------------------------------
 declare -A TIER_SELECTED=()
-ALL_TIERS=(unit vet fmt smoke)
+ALL_TIERS=(unit vet fmt js smoke)
 
 args=("$@")
 i=0
@@ -65,6 +66,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
         --unit)     TIER_SELECTED[unit]=1 ;;
         --vet)      TIER_SELECTED[vet]=1 ;;
         --fmt)      TIER_SELECTED[fmt]=1 ;;
+        --js)       TIER_SELECTED[js]=1 ;;
         --smoke)    TIER_SELECTED[smoke]=1 ;;
         --all)      for t in "${ALL_TIERS[@]}"; do TIER_SELECTED[$t]=1; done ;;
         --last)     SHOW_LAST=1 ;;
@@ -79,7 +81,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
             ;;
         --list)
             echo "Tiers: ${ALL_TIERS[*]}"
-            echo "Flags:  --unit --vet --fmt --smoke --all"
+            echo "Flags:  --unit --vet --fmt --js --smoke --all"
             echo "Modes:  --last | --prune [--keep N] | --list"
             exit 0
             ;;
@@ -137,6 +139,7 @@ if [ "${#TIER_SELECTED[@]}" -eq 0 ]; then
     TIER_SELECTED[unit]=1
     TIER_SELECTED[vet]=1
     TIER_SELECTED[fmt]=1
+    TIER_SELECTED[js]=1
 fi
 
 SELECTED=()
@@ -210,6 +213,12 @@ for t in "${SELECTED[@]}"; do
             if [ "$rc" -eq 0 ] && [ -s "$RUN_DIR/fmt/out.log" ]; then
                 rc=1
             fi
+            ;;
+        js)
+            # The dialog interaction checks drive the real app.js closure against
+            # a DOM stand-in; they cover what the Go suite cannot (timers, SSE
+            # listeners, footer payloads). Node is required on the host.
+            node tests/antler-wizard-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             ;;
         smoke)
             # Slow gated tests: the process-level receiver binary smoke and the

@@ -28,6 +28,11 @@ jobs:
         run: go vet ./... 2>&1 | tee ci-logs/vet.log
       - name: build
         run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/... 2>&1 | tee ci-logs/build.log
+      # The Antler dialog interaction checks drive the real app.js closure against
+      # a DOM stand-in: timers, SSE listener attachment and footer payloads are
+      # invisible to the Go suite. ubuntu-latest ships Node.
+      - name: js
+        run: node tests/antler-wizard-check.cjs 2>&1 | tee ci-logs/js.log
       # The default run skips the slow gated tests (see tests/support/smoke);
       # they are run explicitly in the smoke step so CI coverage is never
       # silently lost.
