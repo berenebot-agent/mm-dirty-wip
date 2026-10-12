@@ -2850,6 +2850,17 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 			writeJSON(w, 200, map[string]any{"accepted": true, "ignored": true})
 			return
 		}
+		if errors.Is(err, app.ErrPartialIngest) {
+			// A fan-out delivery stored at least one recipient but another
+			// failed transiently. Answer a retryable failure (not 200) so the
+			// provider resends: the stored recipients deduplicate and only the
+			// missing inbox is delivered. This is never terminal — a provider
+			// that treats it as permanent would silently drop the lost copy.
+			s.Log.Warn("inbound partial fan-out", "provider", provider, "error", err)
+			w.Header().Set("Retry-After", "60")
+			http.Error(w, "partial delivery; retry", http.StatusInternalServerError)
+			return
+		}
 		// Permanently invalid inbound messages (malformed MIME, oversize,
 		// unsupported content type) are terminal: the provider should not
 		// retry them.

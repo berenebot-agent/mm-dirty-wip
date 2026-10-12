@@ -1175,10 +1175,12 @@ func (s *Server) apiLimits(w http.ResponseWriter, r *http.Request) {
 // apiAccountSettings reads or updates account-level mailbox preferences. The
 // only preference today is trash_retention_days (0 = never auto-purge;
 // otherwise trashed messages are permanently purged by the maintenance sweep
-// once older than the window). It requires an account Owner (or Admin).
+// once older than the window). It requires an account Admin: a mailbox Owner
+// scoped to a subset of inboxes must not change a setting that is applied
+// account-wide (a per-inbox override is the mailbox-scoped alternative).
 func (s *Server) apiAccountSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if !p.OwnsAccount() {
+	if !p.CanAdministerAccount() {
 		writeError(w, 403, "forbidden")
 		return
 	}

@@ -185,10 +185,15 @@ type Config struct {
 	// AdminAccountName is the display name for the system administrator's own
 	// account. Defaults to "MailMoose". It is only used when the system
 	// administrator is first created.
-	AdminAccountName       string
-	MaxMessageBytes        int64
-	DefaultQuotaBytes      int64
-	SessionTTL             time.Duration
+	AdminAccountName  string
+	MaxMessageBytes   int64
+	DefaultQuotaBytes int64
+	SessionTTL        time.Duration
+	// RelayRequireBearer (RELAY_REQUIRE_CALLER_AUTH) requires a relay enrolment
+	// request to present an Authorization header with a "Bearer " prefix. It
+	// checks only that such a header is present; the credential's value is not
+	// validated, so this is a minimal deterrent, not authentication. The
+	// single-use enrolment token remains the authority for enrolment.
 	RelayRequireBearer     bool
 	LoginLimitPerMinute    int
 	SendLimitPerMinute     int

@@ -62,6 +62,7 @@ services:
       - ./data:/data        # all persistent state lives here
     ports:
       - "8081:8081"         # API + web UI (webhook ingest also works here)
+                            # expose publicly only behind an HTTPS reverse proxy
 ```
 
 **2. Create** `.env`:
