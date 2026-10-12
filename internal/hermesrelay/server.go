@@ -24,6 +24,12 @@ import (
 	"github.com/dellarb/mailmoose/internal/ws"
 )
 
+// RequireCallerBearer, when set, requires the enrolment request to carry an
+// Authorization header with a "Bearer " prefix. It checks only that a bearer
+// header is *present* — it does NOT validate the credential's value, so it is
+// a minimal spray/scan deterrent and never a substitute for the one-time
+// enrolment token, which remains the sole authority for enrolment. Do not
+// present it to operators as caller authentication.
 type Server struct {
 	Service             *app.Service
 	Store               *store.Store

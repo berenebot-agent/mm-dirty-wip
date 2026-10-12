@@ -4118,6 +4118,75 @@ the sending side is the obvious and symmetric gap to close.
 the watcher's domain pass, one dashboard column light, one dialog dot plus a
 small poll endpoint. No new dependency, table, or migration.
 
+## D114 — Review remediation: partial fan-out acknowledgement, account-settings scope, and config honesty
+
+**Context:** An external review of this codebase confirmed four issues and
+flagged three hygiene items. The confirmed issues were a fan-out acknowledgement
+bug that could lose mail, an authorization boundary that let a mailbox-scoped
+credential change account-wide state, a relay setting that claimed authentication
+it did not perform, and a default Compose file that published optional ports.
+
+**Decision:**
+
+- **Partial fan-out is never acknowledged as success.** `ingestStaged` (the
+  shared webhook fan-out core) previously returned success once *any* recipient
+  was persisted, so a provider event addressing several inboxes and failing one
+  (quota, storage or database fault) still answered `200`; the provider then
+  never retried and the failed inbox lost its copy. It now records a retryable
+  per-target failure and, when at least one inbox was stored, returns a wrapped
+  `app.ErrPartialIngest`. The HTTP ingest layer maps it to a retryable `500` with
+  `Retry-After` instead of `200`. Retry is safe because each recipient's copy
+  deduplicates on `(account_id, provider, envelope_recipient,
+  provider_delivery_id)`: the already-stored inboxes dedupe and only the missing
+  one is delivered. A *terminal* per-target outcome (unknown/unauthorized
+  recipient, malformed content) is not treated as retryable, so it cannot cause
+  an infinite provider retry loop, and a single-recipient message whose only
+  delivery failed is returned as that error unchanged. This mirrors the
+  MX/Dial-MX path, which already returns one result per recipient (`D067`).
+- **Account-wide settings require an account Admin.** `Principal.OwnsAccount()`
+  was true for any credential holding Owner on every mailbox it could *reach*,
+  so an API key scoped to one inbox could change the account-wide
+  `trash_retention_days` (and account timezone) that the maintenance sweep
+  applies to every inbox, including those the key cannot see. A new
+  `Principal.CanAdministerAccount()` (true only for an account Admin) gates the
+  API and UI account-settings routes; `OwnsAccount()` is retained but documented
+  as non-authorizing. Mailbox owners keep the per-inbox retention override,
+  their legitimate mailbox-scoped control.
+- **The relay caller setting is documented honestly.**
+  `RELAY_REQUIRE_CALLER_AUTH` / `RelayRequireBearer` only checks that an
+  `Authorization: Bearer ` header is *present*; the value is not validated. It is
+  a minimal deterrent, not a second authentication factor; the one-time
+  enrolment token remains the sole authority. Code comments and `.env.example`
+  now say so. The env var name is unchanged (a rename is a breaking config
+  change for a setting whose meaning is now documented).
+- **Default Compose publishes only the app port.** The optional dedicated
+  webhook listener (`8082`) and direct SMTP (`25`) mappings are commented out in
+  `docker-compose.yml`, matching `docker-compose.advanced.yml`; the README and
+  the Compose comment note that `8081` should be exposed publicly only behind an
+  HTTPS reverse proxy.
+
+**Accepted / unchanged:**
+
+- `ALLOW_PRIVATE_OUTBOUND` keeps its `true` default. It is a deliberate
+  self-hosting affordance (private SMTP relays, LAN integrations, private MX
+  receivers); a hosted or untrusted multi-account operator sets it to `false`,
+  which then also governs the per-account Remote MX receiver. The default is not
+  changed without a named product decision.
+- The SendGrid inbound connector stays unregistered and is already documented as
+  not offered pending end-to-end provider verification; `cmd/oneprobe` is
+  developer-only and not built into either runtime image.
+
+**Hygiene:** the committed `.hermes-tmp/mmtest/` scratch harness (real mailbox
+addresses, inbox identifiers and message ids) is untracked and added to
+`.gitignore`/`.dockerignore`. Its presence in Git history remains; no API
+credential was found in the tracked files, and history rewriting is a separate
+decision.
+
+**Complexity:** One sentinel error plus a retryable-classification helper in
+`internal/app`, one branch in the ingest HTTP handler, one predicate on
+`Principal` and its two call sites, comment/doc/Compose edits. No new
+dependency, table or migration.
+
 ## Future extension register
 
 - additional inbound transport adapters

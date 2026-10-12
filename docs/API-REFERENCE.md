@@ -8,8 +8,8 @@ Generated from `internal/apispec`; do not edit by hand.
 | --- | --- | --- | --- |
 | GET | /v1/bootstrap | Discover key capabilities and accessible inboxes |  |
 | GET | /v1/limits | Get server pagination, size and rate limits | read |
-| GET | /v1/account/settings | Get account preferences (Owner/Admin) | owner |
-| PATCH | /v1/account/settings | Update account preferences (Owner/Admin) | owner |
+| GET | /v1/account/settings | Get account preferences (Admin) | admin |
+| PATCH | /v1/account/settings | Update account preferences (Admin) | admin |
 
 ## Inboxes
 
