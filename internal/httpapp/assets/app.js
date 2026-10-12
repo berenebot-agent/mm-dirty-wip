@@ -4828,7 +4828,7 @@ function hideInboxSubview(dlg) {
     // when no extra records are published.
     function unexpectedMXBlock(data, domainName) {
       var block = document.createElement('div');
-      var extra = (data.instructions && data.instructions.unexpected_mx) || [];
+      var extra = data.unexpected_mx || [];
       if (!extra.length) { return block; }
       block.className = 'antler-dns-remediation antler-extra-mx';
       var p = document.createElement('p');

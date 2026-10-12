@@ -1,6 +1,8 @@
 package httpapp
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -23,9 +25,6 @@ type dialMXLiveView struct {
 	MX           []dialMXMXInstruction
 	Statuses     []mxdialStatusView
 	DNS          []domainDNSView
-	// UnexpectedMX lists published MX hostnames that are not one of the
-	// configured Antler receivers. It is populated only when DNS is checked.
-	UnexpectedMX []string
 }
 
 // dialMXLiveView builds the view for a domain whose effective receiving
@@ -127,23 +126,45 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	return view
 }
 
-// dialMXDNS runs the domain's published-record checks and returns them, plus the
-// unexpected MX hostnames, resolved fresh on every call. It is the expensive
-// half of the setup picture and is invoked only where the checks are actually
-// rendered: the setup wizard (with ?dns=1) and the dashboard light. The status
-// page never calls it.
-func (s *Server) dialMXDNS(domainName, keyID string, publicKey []byte, view dialMXLiveView) ([]domainDNSView, []string) {
+// dialMXDNS runs the domain's published-record checks and returns them, resolved
+// fresh on every call. It is the expensive half of the setup picture and is
+// invoked only where the checks are actually rendered: the setup wizard (with
+// ?dns=1) and the dashboard light. The status page never calls it.
+func (s *Server) dialMXDNS(domainName, keyID string, publicKey []byte, view dialMXLiveView) []domainDNSView {
 	var dns []domainDNSView
 	if view.TXTValue != "" {
 		dns = append(dns, s.dns.checkTXT(domainName, keyID, publicKey, view.TXTValue))
 	}
-	var unexpected []string
 	if len(view.MX) > 0 {
-		mxView := s.dns.checkMX(domainName, view.MX)
-		dns = append(dns, mxView)
-		unexpected = mxView.Unexpected
+		dns = append(dns, s.dns.checkMX(domainName, view.MX))
 	}
-	return dns, unexpected
+	return dns
+}
+
+// dialMXExtraMX is the single computation of a domain's "extra MX" verdict: the
+// published MX hostnames that are not one of the domain's configured Antler
+// receivers. The dashboard light and the status dialog both read it, so they
+// cannot disagree about whether a rogue record exists — it is one fact, computed
+// once per read. It is best-effort and never fails a caller: a missing config or
+// credential, or a resolver failure, yields no warning. It is not gated on
+// receiver readiness, because the fact is independent of the light's colour; the
+// caller decides whether the verdict matters (the aggregate light applies it only
+// when a receiver is ready).
+func (s *Server) dialMXExtraMX(ctx context.Context, accountID, domainID, domainName, keyID string) []string {
+	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
+	if err != nil {
+		return nil
+	}
+	cred, err := s.Service.Store.GetDialMXCredential(ctx, accountID, domainID)
+	if err != nil {
+		return nil
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+	view := s.dialMXLiveView(domainName, keyID, pub, cfg)
+	if len(view.MX) == 0 {
+		return nil
+	}
+	return s.dns.checkMX(domainName, view.MX).Unexpected
 }
 
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic
@@ -195,13 +216,12 @@ func (v dialMXLiveView) instructionView() *dialMXDNSInstructions {
 		return nil
 	}
 	out := &dialMXDNSInstructions{
-		Service:      v.Service,
-		Contact:      v.ContactEmail,
-		TXTName:      v.TXTName,
-		TXTValue:     v.TXTValue,
-		MX:           v.MX,
-		Receiver:     v.Statuses,
-		UnexpectedMX: v.UnexpectedMX,
+		Service:  v.Service,
+		Contact:  v.ContactEmail,
+		TXTName:  v.TXTName,
+		TXTValue: v.TXTValue,
+		MX:       v.MX,
+		Receiver: v.Statuses,
 	}
 	return out
 }

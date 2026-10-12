@@ -3666,10 +3666,14 @@ the one routing question the receiver's own verdict cannot answer (it only knows
 its *own* hostname is present, not that others are absent).
 
 **Complexity:** No new dependency, service, table or migration. `checkMX` gains
-an `Unexpected` list; `dialMXHealth` takes it; `domainInboundLight` and the
-dashboard render run the bounded MX check on the existing lights cadence; the
-setup GET gates DNS behind `?dns=1`; the dialog's JS drops its timer/button for an
-SSE listener + 60s fallback and adds one warning block. See `docs/DIALMX.md`.
+an `Unexpected` list; `dialMXHealth` takes it; a single `dialMXExtraMX` helper is
+the one computation of the extra-MX verdict, exposed as a **top-level**
+`unexpected_mx` field on the receiving response (independent of `instructions`)
+and read by both the dashboard light and the status dialog, so the two surfaces
+cannot disagree; `domainInboundLight` and the dashboard render run it on the
+existing lights cadence; the setup GET gates DNS behind `?dns=1`; the dialog's JS
+drops its timer/button for an SSE listener + 60s fallback and adds one warning
+block. See `docs/DIALMX.md`.
 
 ## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
 
