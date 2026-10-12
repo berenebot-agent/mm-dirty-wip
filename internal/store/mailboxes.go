@@ -838,16 +838,27 @@ func (s *Store) SetInboxTrashRetention(ctx context.Context, accountID, inboxID s
 }
 
 // SetInboxRemoteSync sets a standalone inbox's remote sync cadence overrides. A
-// nil pointer clears the matching override so the inbox inherits the process
-// default; a positive value is seconds (quick poll) or minutes (full sync). A
-// non-positive value clears the override rather than storing it, so a bogus
-// zero cannot reach the clamp path.
+// nil pollSeconds clears the override so the inbox inherits the process default;
+// an explicit 0 disables the quick poll (the inbox relies on push and the full
+// sync); a positive value is seconds. fullSyncMinutes is nil (inherit) or a
+// positive number of minutes. A negative poll value is rejected rather than
+// stored.
 func (s *Store) SetInboxRemoteSync(ctx context.Context, accountID, inboxID string, pollSeconds, fullSyncMinutes *int) error {
+	if pollSeconds != nil && *pollSeconds < 0 {
+		return fmt.Errorf("new-mail poll must be zero or more minutes")
+	}
 	if s.IsOne(ctx, accountID, inboxID) && pollSeconds != nil && *pollSeconds > 0 && (*pollSeconds < 120 || *pollSeconds > 1800) {
 		return fmt.Errorf("One polling must be between 2 and 30 minutes")
 	}
 	var poll, full any
-	if pollSeconds != nil && *pollSeconds > 0 {
+	switch {
+	case pollSeconds == nil:
+		poll = nil
+	case *pollSeconds == 0:
+		// Persist an explicit 0 so the inbox stays on "no quick poll" rather than
+		// reverting to the inherited default.
+		poll = 0
+	default:
 		poll = *pollSeconds
 	}
 	if fullSyncMinutes != nil && *fullSyncMinutes > 0 {
