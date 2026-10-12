@@ -684,10 +684,12 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 	if err != nil {
 		return store.DomainSendingConfig{}, err
 	}
-	// Direct MX signs with a key MailMoose generates (or one the operator pasted
-	// to override). This runs here rather than in validateConfig because it is
-	// provider-specific key material, not generic field coercion.
-	if err := s.applyDKIMSendingKey(ctx, accountID, domainID, provider, merged); err != nil {
+	// Direct MX signs with a key MailMoose generates. This runs here rather than
+	// in validateConfig because it is provider-specific key material, not
+	// generic field coercion. The previously stored key is the only trusted
+	// source, so a freshly posted value is not used.
+	storedKey := asString(old[mx.FieldDKIMPrivateKey])
+	if err := s.applyDKIMSendingKey(ctx, accountID, domainID, provider, storedKey, merged); err != nil {
 		return store.DomainSendingConfig{}, err
 	}
 	if err := s.validateProviderBase(merged); err != nil {

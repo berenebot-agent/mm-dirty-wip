@@ -244,3 +244,78 @@ func testPublicOnlyPEM(t *testing.T) string {
 	}
 	return pubPEM
 }
+
+// TestTXTRecordSplitsLongValues pins the DNS limit that a real RSA-2048 key
+// hits: a TXT record is a sequence of at most 255-byte character-strings, so a
+// longer value must be offered in the split form some providers require.
+func TestTXTRecordSplitsLongValues(t *testing.T) {
+	// A short value is one string and needs no split.
+	short := dkimsign.TXTRecordValue("QUJDMTIz")
+	if got := dkimsign.TXTRecordStrings(short); len(got) != 1 || got[0] != short {
+		t.Errorf("short value split unexpectedly: %q", got)
+	}
+	if got := dkimsign.TXTRecordQuoted(short); got != `"`+short+`"` {
+		t.Errorf("short value quoted = %q", got)
+	}
+
+	// A real generated key produces a value longer than one string.
+	_, pubPEM, err := dkimsign.GenerateRSA2048()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b64, err := dkimsign.PublicKeyBase64(pubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := dkimsign.TXTRecordValue(b64)
+	if len(value) <= 255 {
+		t.Fatalf("an RSA-2048 record value is %d bytes; the test expects it to exceed one string", len(value))
+	}
+	parts := dkimsign.TXTRecordStrings(value)
+	if len(parts) < 2 {
+		t.Fatalf("long value produced %d parts, want at least 2", len(parts))
+	}
+	for i, p := range parts {
+		if len(p) > 255 {
+			t.Errorf("part %d is %d bytes, over the 255-byte DNS limit", i, len(p))
+		}
+	}
+	// The split must rejoin to exactly the original value: a receiver
+	// concatenates the strings, so any change would break verification.
+	if got := strings.Join(parts, ""); got != value {
+		t.Error("the split parts do not rejoin to the original value")
+	}
+	// Boundaries: exactly 255 stays whole; 256 splits 255+1.
+	if got := dkimsign.TXTRecordStrings(strings.Repeat("a", 255)); len(got) != 1 {
+		t.Errorf("255 bytes produced %d parts, want 1", len(got))
+	}
+	if got := dkimsign.TXTRecordStrings(strings.Repeat("a", 256)); len(got) != 2 || len(got[0]) != 255 || len(got[1]) != 1 {
+		t.Errorf("256 bytes split as %v, want 255+1", got)
+	}
+}
+
+// TestTXTRecordQuotedEscapesNothing proves the quoted form is a faithful
+// wrapping: the value itself is base64 plus fixed ASCII tags, so no part needs
+// escaping and a receiver sees exactly the original bytes.
+func TestTXTRecordQuotedPreservesValue(t *testing.T) {
+	_, pubPEM, err := dkimsign.GenerateRSA2048()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b64, err := dkimsign.PublicKeyBase64(pubPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := dkimsign.TXTRecordValue(b64)
+	quoted := dkimsign.TXTRecordQuoted(value)
+	// Strip the wrapping quotes and separating spaces, then compare.
+	stripped := strings.ReplaceAll(quoted, `" "`, "")
+	stripped = strings.TrimPrefix(stripped, `"`)
+	stripped = strings.TrimSuffix(stripped, `"`)
+	if stripped != value {
+		t.Error("the quoted form does not round-trip to the original value")
+	}
+	if !strings.HasPrefix(quoted, `"`) || !strings.HasSuffix(quoted, `"`) {
+		t.Errorf("quoted form is not quoted: %q", quoted)
+	}
+}

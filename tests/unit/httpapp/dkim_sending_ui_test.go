@@ -1,7 +1,7 @@
 package httpapp_test
 
 import (
-	"context"
+	"html"
 	"net/url"
 	"strings"
 	"testing"
@@ -9,167 +9,119 @@ import (
 	"github.com/dellarb/mailmoose/internal/dkimsign"
 )
 
-// TestUIDirectMXSendingDKIMFieldsRender proves the DKIM controls appear on the
-// Direct MX sending tab and that the generated public key is displayed for the
-// operator to publish.
-func TestUIDirectMXSendingDKIMFieldsRender(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cookie, csrf := uiSession(t, svc, u.ID)
-
-	// Save through the form exactly as the browser would.
-	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
-		"_csrf":                {csrf},
-		"provider":             {"mx"},
-		"cfg_mx_helo":          {"mail.example.com"},
-		"cfg_mx_dkim_enabled":  {"on"},
-		"cfg_mx_dkim_selector": {"mailmoose"},
-	})
-	if rr.Code != 303 {
-		t.Fatalf("save direct mx sending %d %s", rr.Code, rr.Body.String())
-	}
-	cfg, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := svc.DecryptDomainSendingConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := dec["dkim_private_key"].(string); !ok {
-		t.Fatal("no key was generated when DKIM was enabled through the form")
-	}
-
-	// Re-render the domain page: the public key must be shown for DNS, and the
-	// private key must never be rendered into the page.
-	storedPub, _ := dec["dkim_public_key"].(string)
-	page := domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=sending").Body.String()
-	if !strings.Contains(page, "Public key (publish in DNS)") {
-		t.Error("the DKIM public key field is not present on the domain page")
-	}
-	if !strings.Contains(page, strings.SplitN(storedPub, "\n", 2)[0]) {
-		t.Error("the stored public key is not displayed for the operator to publish")
-	}
-	if strings.Contains(page, "PRIVATE KEY") {
-		t.Error("the domain page renders private key material")
-	}
-	if !strings.Contains(page, dkimsign.DefaultSelector) {
-		t.Error("the default selector is not shown on the domain page")
-	}
+// mxSendingGroup returns the Direct MX provider group from the sending dialog.
+func mxSendingGroup(t *testing.T, page, domainID string) string {
+	t.Helper()
+	return providerGroupHTML(t, dialogHTML(t, page, "domain-sending-dialog-"+domainID), "mx")
 }
 
-// TestUIDirectMXSendingAcceptsPastedKey proves an operator's own key survives
-// the form round-trip, exercising the overridable-generated path in
-// configFromForm (which must submit an overridable generated field).
-func TestUIDirectMXSendingAcceptsPastedKey(t *testing.T) {
+// TestDKIMRecordShownInlineWithSigning proves the whole DKIM story lives in one
+// place: switching signing on and saving shows the DNS record to publish inside
+// the sending editor, with the private key available on demand rather than
+// splashed on the page.
+func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
 	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	privPEM, pubPEM, err := dkimsign.GenerateRSA2048()
-	if err != nil {
-		t.Fatal(err)
+	// Before enabling, there is no record to publish.
+	before := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
+	if strings.Contains(before, "Publish this DNS record") {
+		t.Error("the DKIM record is shown before signing is enabled")
 	}
-	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
-		"_csrf":                   {csrf},
-		"provider":                {"mx"},
-		"cfg_mx_helo":             {"mail.example.com"},
-		"cfg_mx_dkim_enabled":     {"on"},
-		"cfg_mx_dkim_selector":    {"ownkey"},
-		"cfg_mx_dkim_private_key": {privPEM},
-	})
-	if rr.Code != 303 {
-		t.Fatalf("save pasted key %d %s", rr.Code, rr.Body.String())
-	}
-	cfg, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dec, err := svc.DecryptDomainSendingConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := dec["dkim_private_key"].(string); got != dkimsign.CanonicalPEM(privPEM) {
-		t.Error("the pasted key was not stored through the form")
-	}
-	// The stored public key must match the pasted private key.
-	if got, _ := dec["dkim_public_key"].(string); strings.TrimSpace(got) != strings.TrimSpace(pubPEM) {
-		t.Error("stored public key does not match the pasted private key")
-	}
-}
-
-// TestUIDirectMXSendingRejectsUnusableKey proves an unusable-key save is
-// rejected and surfaced as a field error, rather than persisting a config that
-// could never sign.
-func TestUIDirectMXSendingRejectsUnusableKey(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cookie, csrf := uiSession(t, svc, u.ID)
 
 	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
-		"_csrf":                   {csrf},
-		"provider":                {"mx"},
-		"cfg_mx_helo":             {"mail.example.com"},
-		"cfg_mx_dkim_enabled":     {"on"},
-		"cfg_mx_dkim_private_key": {"not-a-key"},
-	})
-	// A rejected save redirects back to the dialog carrying the error, so the
-	// config must not have been written.
-	if _, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID); err == nil {
-		t.Fatal("an unusable pasted key was persisted")
-	}
-	// Following the redirect must show the error against the key field.
-	loc := rr.Header().Get("Location")
-	if loc == "" {
-		t.Fatalf("no redirect location on a rejected save: %d %s", rr.Code, rr.Body.String())
-	}
-	page := domainGet(t, h, cookie, loc).Body.String()
-	if !strings.Contains(page, "rivate key") {
-		t.Errorf("the error does not point at the key field: %s", page)
-	}
-}
-
-// TestUIDirectMXSendingReadOnlyPublicKeyIsNotSubmitterControlled proves a
-// submitted public key is ignored: it is derived server-side, so a caller
-// cannot make the UI display a key that does not match what is signed with.
-func TestUIDirectMXSendingReadOnlyPublicKeyIsNotSubmitterControlled(t *testing.T) {
-	svc, h, u, d, _ := httpFixture(t)
-	ctx := context.Background()
-	cookie, csrf := uiSession(t, svc, u.ID)
-
-	privPEM, pubPEM, err := dkimsign.GenerateRSA2048()
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, attackerPEM, err := dkimsign.GenerateRSA2048()
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Submit the real private key but a mismatched public key.
-	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
-		"_csrf":                   {csrf},
-		"provider":                {"mx"},
-		"cfg_mx_helo":             {"mail.example.com"},
-		"cfg_mx_dkim_enabled":     {"on"},
-		"cfg_mx_dkim_private_key": {privPEM},
-		"cfg_mx_dkim_public_key":  {attackerPEM},
+		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
+		"cfg_mx_dkim_enabled": {"on"},
 	})
 	if rr.Code != 303 {
 		t.Fatalf("save %d %s", rr.Code, rr.Body.String())
 	}
-	cfg, err := svc.Store.GetDomainSendingConfig(ctx, u.AccountID, d.ID)
-	if err != nil {
-		t.Fatal(err)
+	// The save returns to the dashboard, not a separate page.
+	if loc := rr.Header().Get("Location"); strings.Contains(loc, "/sending/dkim") {
+		t.Fatalf("saving DKIM navigated to a separate page: %q", loc)
 	}
-	dec, err := svc.DecryptDomainSendingConfig(cfg)
-	if err != nil {
-		t.Fatal(err)
+
+	group := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
+	if !strings.Contains(group, "Publish this DNS record") {
+		t.Fatal("the DKIM record is not shown after enabling signing")
 	}
-	got, _ := dec["dkim_public_key"].(string)
-	if strings.TrimSpace(got) == strings.TrimSpace(attackerPEM) {
-		t.Fatal("a submitted public key was stored instead of the derived one")
+	if !strings.Contains(group, "TXT") {
+		t.Error("the record does not state its type")
 	}
-	if strings.TrimSpace(got) != strings.TrimSpace(pubPEM) {
-		t.Error("stored public key is not the derived public half of the private key")
+	wantName := dkimsign.RecordName(dkimsign.DefaultSelector, d.Name)
+	flat := html.UnescapeString(group)
+	if !strings.Contains(flat, wantName) {
+		t.Errorf("the record name %q is not shown", wantName)
+	}
+	if !strings.Contains(flat, "v=DKIM1; k=rsa; p=") {
+		t.Error("the record value is not shown")
+	}
+	// The private key must not be on the page; it is behind an explicit reveal.
+	if strings.Contains(group, "PRIVATE KEY") {
+		t.Error("the private key is rendered into the sending dialog")
+	}
+	if !strings.Contains(group, "Show private key") {
+		t.Error("the page does not offer the private key on demand")
+	}
+}
+
+// TestDKIMSigningOffHidesTheRecord proves the panel is dependent: once a key
+// exists, turning signing off leaves the panel in the markup but hidden, so the
+// record is neither shown nor submitted.
+func TestDKIMSigningOffHidesTheRecord(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// Generate a key by enabling signing.
+	domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
+		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
+		"cfg_mx_dkim_enabled": {"on"},
+	})
+	if !strings.Contains(mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID), "data-dkim-panel") {
+		t.Fatal("the DKIM panel is not in the markup after a key exists")
+	}
+
+	// Turning signing off removes the key, so there is no record to show.
+	domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
+		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
+		"cfg_mx_dkim_enabled": {"off"},
+	})
+	group := mxSendingGroup(t, domainGet(t, h, cookie, "/?domain="+d.ID).Body.String(), d.ID)
+	if strings.Contains(group, "Publish this DNS record") {
+		t.Error("the record is shown with signing off")
+	}
+}
+
+// TestDKIMRevealIsCSRFProtectedAndSingleUse proves the private key can be
+// retrieved deliberately, but not by a bare navigation and not twice.
+func TestDKIMRevealIsCSRFProtectedAndSingleUse(t *testing.T) {
+	svc, h, u, d, _ := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
+		"_csrf": {csrf}, "provider": {"mx"}, "cfg_mx_helo": {"mail.example.com"},
+		"cfg_mx_dkim_enabled": {"on"},
+	})
+	reveal := "/ui/domains/" + d.ID + "/sending/dkim/reveal"
+
+	// Without CSRF the action is refused.
+	if rr := domainPost(t, h, cookie, reveal, url.Values{}); rr.Code == 303 {
+		t.Fatalf("reveal without CSRF was accepted: %d", rr.Code)
+	}
+
+	rr := domainPost(t, h, cookie, reveal, url.Values{"_csrf": {csrf}})
+	if rr.Code != 303 {
+		t.Fatalf("reveal %d %s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "_flash=") {
+		t.Fatal("reveal did not carry a one-time flash")
+	}
+	first := domainGet(t, h, cookie, loc).Body.String()
+	if !strings.Contains(first, "DKIM private key") || !strings.Contains(first, "PRIVATE KEY") {
+		t.Error("the reveal did not show the private key pop-up")
+	}
+	// The flash is single-use.
+	if again := domainGet(t, h, cookie, loc).Body.String(); strings.Contains(again, "PRIVATE KEY") {
+		t.Error("the revealed private key survived a second read")
 	}
 }

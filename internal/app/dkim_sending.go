@@ -10,36 +10,46 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mx"
 )
 
-// applyDKIMSendingKey resolves the DKIM signing key for a Direct MX sending
+// applyDKIMSendingKey resolves the DKIM signing material for a Direct MX sending
 // configuration, in place.
 //
-// Three cases are handled, in this order:
+// Signing is a single on/off choice: MailMoose generates the key. Two cases are
+// handled:
 //
-//   - Signing off: any stored key is discarded. A key retained while signing is
-//     off would silently reappear if signing were switched back on later,
-//     against DNS that may since have been republished for a different key.
-//   - Signing on with a key already resolved into merged: either the operator
-//     pasted one or validateConfig retained the stored one. A pasted key is
-//     validated; a retained key was validated when it was first stored.
-//   - Signing on with no key: MailMoose mints an RSA-2048 keypair.
+//   - Signing off: every DKIM field is dropped, including any stored key, so a
+//     disabled config carries no key material at rest and a key cannot silently
+//     reappear later against DNS that has since been republished.
+//   - Signing on: the existing key is kept, or a fresh RSA-2048 keypair is
+//     generated when there is none. The selector and signing domain are fixed
+//     here, so the record shown to an operator and the signature that is
+//     produced are always derived from the same values.
 //
-// validateConfig has already applied "blank retains the stored secret", so a
-// key absent from merged means there is genuinely none to reuse.
-func (s *Service) applyDKIMSendingKey(ctx context.Context, accountID, domainID, provider string, merged map[string]any) error {
+// validateConfig has already applied "blank retains the stored secret", so a key
+// absent from merged means there is genuinely none to reuse.
+func (s *Service) applyDKIMSendingKey(ctx context.Context, accountID, domainID, provider, storedKey string, merged map[string]any) error {
 	if !strings.EqualFold(provider, mx.Provider) {
 		return nil
 	}
 	enabled := strings.EqualFold(strings.TrimSpace(asString(merged[mx.FieldDKIMEnabled])), "on")
 	if !enabled {
-		// Drop every DKIM field, including any retained private key, so a
-		// disabled config carries no key material at rest.
-		delete(merged, mx.FieldDKIMPrivateKey)
-		delete(merged, mx.FieldDKIMPublicKey)
+		// Drop the whole set, so a disabled config carries no key material (and
+		// no stale selector or signing domain) at rest.
+		for _, field := range []string{
+			mx.FieldDKIMPrivateKey, mx.FieldDKIMPublicKey,
+			mx.FieldDKIMSelector, mx.FieldDKIMDomain,
+		} {
+			delete(merged, field)
+		}
 		return nil
 	}
 
-	keyPEM := asString(merged[mx.FieldDKIMPrivateKey])
-	if strings.TrimSpace(keyPEM) == "" {
+	// The signing key is always MailMoose-generated. validateConfig has already
+	// merged any previously stored key (blank field) with anything a client
+	// posted, so the only value that may be trusted is the one already stored:
+	// a freshly posted key is discarded, because the key shown for DNS must be
+	// the key that signs.
+	keyPEM := strings.TrimSpace(storedKey)
+	if keyPEM == "" {
 		privPEM, _, err := dkimsign.GenerateRSA2048()
 		if err != nil {
 			return fmt.Errorf("generate DKIM signing key: %w", err)
@@ -48,34 +58,34 @@ func (s *Service) applyDKIMSendingKey(ctx context.Context, accountID, domainID, 
 	}
 	key, err := dkimsign.ParsePrivateKey(keyPEM)
 	if err != nil {
-		// A pasted key that does not parse is the operator's error, reported
-		// against the field rather than as an internal failure.
-		return invalidConfig("Private key (PEM): %s", err.Error())
+		// The key is MailMoose-generated, so a stored key that no longer parses
+		// is a corrupted config rather than operator error. Replacing it is the
+		// only way to keep signing working.
+		privPEM, _, gerr := dkimsign.GenerateRSA2048()
+		if gerr != nil {
+			return fmt.Errorf("regenerate DKIM signing key: %w", gerr)
+		}
+		if key, err = dkimsign.ParsePrivateKey(privPEM); err != nil {
+			return fmt.Errorf("parse regenerated DKIM signing key: %w", err)
+		}
+		keyPEM = privPEM
 	}
-	// Store the key in a canonical form so a save is idempotent: the operator's
-	// paste is preserved, but surrounding whitespace and a missing trailing
-	// newline are normalised, so re-saving without re-pasting does not rewrite
-	// the stored value.
-	keyPEM = dkimsign.CanonicalPEM(keyPEM)
-	// Validate the selector and signing domain now, so a malformed value is
-	// rejected at save rather than failing every delivery later.
-	selector, err := validateDKIMSelector(asString(merged[mx.FieldDKIMSelector]))
+
+	// The signing domain is the domain mail is sent from, so an aligned
+	// signature is produced without the operator choosing anything. The selector
+	// is a fixed label: rotating a key means republishing the record, not
+	// changing the selector.
+	domain, err := s.sendingDomainName(ctx, accountID, domainID)
 	if err != nil {
 		return err
 	}
-	domain, err := s.validateDKIMDomain(ctx, accountID, asString(merged[mx.FieldDKIMDomain]))
-	if err != nil {
-		return err
-	}
-	merged[mx.FieldDKIMPrivateKey] = keyPEM
-	merged[mx.FieldDKIMSelector] = selector
-	if domain != "" {
-		merged[mx.FieldDKIMDomain] = domain
-	}
-	// The public key is derived, never accepted from the caller: a stored public
+	merged[mx.FieldDKIMPrivateKey] = dkimsign.CanonicalPEM(keyPEM)
+	merged[mx.FieldDKIMSelector] = dkimsign.DefaultSelector
+	merged[mx.FieldDKIMDomain] = domain
+
+	// The public key is derived, never accepted from a caller: a stored public
 	// key could disagree with the stored private key and send the operator to a
-	// DNS record that does not match what MailMoose signs with. It is stored so
-	// a read does not have to re-parse the private key, and it is not secret.
+	// DNS record that does not match what MailMoose signs with.
 	publicPEM, err := dkimsign.PublicKeyPEM(key)
 	if err != nil {
 		return fmt.Errorf("derive DKIM public key: %w", err)
@@ -84,67 +94,20 @@ func (s *Service) applyDKIMSendingKey(ctx context.Context, accountID, domainID, 
 	return nil
 }
 
-// validateDKIMSelector applies the default selector when none is given, and
-// otherwise checks the value can form a DNS name. A selector is a DNS label, so
-// spaces, dots and separators would produce a record name that cannot exist.
-func validateDKIMSelector(raw string) (string, error) {
-	selector := strings.TrimSpace(raw)
-	if selector == "" {
-		return dkimsign.DefaultSelector, nil
-	}
-	if len(selector) > 63 {
-		return "", invalidConfig("DKIM selector must be at most 63 characters")
-	}
-	for i := 0; i < len(selector); i++ {
-		c := selector[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			return "", invalidConfig("DKIM selector may contain only letters, digits, hyphens and underscores")
-		}
-	}
-	return selector, nil
-}
-
-// validateDKIMDomain checks an explicit signing domain. A blank value is valid
-// and means "sign as the sending domain", resolved per message at delivery
-// time. An explicit value must be one of the account's own domains: signing as
-// a domain the account does not control produces a signature no receiver can
-// verify, and would let one account claim another's identity.
-func (s *Service) validateDKIMDomain(ctx context.Context, accountID, raw string) (string, error) {
-	domain := strings.TrimSpace(raw)
-	if domain == "" {
-		return "", nil
-	}
-	if len(domain) > 253 || strings.ContainsAny(domain, " \t/@:") {
-		return "", invalidConfig("Signing domain must be a bare DNS name")
-	}
-	for _, label := range strings.Split(strings.TrimSuffix(domain, "."), ".") {
-		if label == "" || len(label) > 63 {
-			return "", invalidConfig("Signing domain has an empty or over-long label")
-		}
-		for i := 0; i < len(label); i++ {
-			c := label[i]
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
-				return "", invalidConfig("Signing domain contains an invalid character")
-			}
-		}
-	}
-	canonical := strings.ToLower(strings.TrimSuffix(domain, "."))
-	domains, err := s.Store.ListDomains(ctx, accountID)
+// sendingDomainName returns the domain's DNS name, which is both the sending
+// domain and the DKIM signing domain.
+func (s *Service) sendingDomainName(ctx context.Context, accountID, domainID string) (string, error) {
+	d, err := s.Store.GetDomain(ctx, accountID, domainID)
 	if err != nil {
 		return "", err
 	}
-	for _, d := range domains {
-		if strings.EqualFold(strings.TrimSuffix(d.Name, "."), canonical) {
-			return canonical, nil
-		}
-	}
-	return "", invalidConfig("Signing domain %s is not a domain on this account", canonical)
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d.Name), ".")), nil
 }
 
 // signMXMessage applies a DKIM signature to a Direct MX message. fromAddress is
-// the address mail is being sent from; when no explicit signing domain is
-// configured the address's domain is used, so a signature aligns with the From
-// header without the operator configuring anything.
+// the address mail is being sent from; a config that stored no signing domain
+// falls back to the address's domain, so a signature still aligns with the From
+// header.
 //
 // A configuration that enables signing but cannot produce a signature is an
 // error, never a silent skip: sending unsigned mail that the operator believes

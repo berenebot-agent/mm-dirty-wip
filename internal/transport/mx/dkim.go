@@ -8,9 +8,10 @@ import (
 	"github.com/dellarb/mailmoose/internal/dkimsign"
 )
 
-// Field names for the DKIM signing settings. They are referenced by the app
-// package when it resolves the effective configuration, so the literals live
-// here rather than being repeated at each call site.
+// Field names for the DKIM signing settings. FieldDKIMSelector and
+// FieldDKIMDomain are fixed rather than operator-supplied, but are still stored
+// so the record shown to an operator and the signature actually produced are
+// derived from the same values.
 const (
 	FieldDKIMEnabled    = "dkim_enabled"
 	FieldDKIMSelector   = "dkim_selector"
@@ -27,15 +28,15 @@ type DKIMConfig struct {
 	Selector string
 	Domain   string
 	// PrivateKey is the PEM text of the signing key. It is populated only for
-	// the delivery path, which must sign; callers that render config for display
-	// must not use this field (the schema marks it secret).
+	// the delivery path, which must sign; the schema marks it secret so it is
+	// never rendered.
 	PrivateKey string
 }
 
 // ResolveDKIM reads the DKIM settings out of a decrypted Direct MX outbound
 // config. defaultDomain is the domain mail is being sent from; it is used when
-// no explicit signing domain is configured, so the common case signs as the
-// domain the message is From.
+// no explicit signing domain is stored, so the common case signs as the domain
+// the message is From.
 //
 // A config with signing off yields Enabled=false and no error. A config with
 // signing on but an unusable key is an error: signing must never be silently
