@@ -8,6 +8,19 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Cloudflare receiving setup is a **full-page one-time wizard** again, instead of
+  a two-step modal. After saving a Cloudflare receive path it opens a dedicated
+  page (`/ui/domains/{id}/receiving/worker`) with the complete Worker code, a
+  four-step Cloudflare walkthrough (create the Worker, paste and deploy, onboard
+  Email Routing with its DNS records, and add one **catch-all Send to a Worker**
+  rule), a **Copy code** button, a **Done** link, a **Regenerate secret** action,
+  and a warning when the receiver host is not publicly reachable.
+
+- The Cloudflare shared secret is now **optional**: leave it blank to have
+  MailMoose generate one, or paste an existing secret to reuse a single Worker
+  across several domains. Supplying a secret stores it verbatim and skips the
+  generated-code page.
+
 - The One / Gmail import screen now shows a best-effort **Messages** count per
   mailbox and offers a per-mailbox **Index history** window — **Everything**
   (default), **Last year**, **Last 90 days** or **Last 30 days**. A shorter

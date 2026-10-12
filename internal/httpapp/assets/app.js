@@ -4417,30 +4417,32 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
-  var dlg = document.getElementById('cf-setup-dialog');
-  if (!dlg) {
+  // Copy-code button on the one-time Cloudflare Worker setup page.
+  var btn = document.getElementById('cf-copy');
+  var code = document.getElementById('cf-code');
+  if (!btn || !code) {
     return;
   }
-  var next = document.getElementById('cf-next');
-  var done = document.getElementById('cf-done');
-  if (next) {
-    next.addEventListener('click', function () {
-      var worker = document.getElementById('cf-worker-step');
-      var routing = document.getElementById('cf-routing-step');
-      if (worker) {
-        worker.hidden = true;
-      }
-      if (routing) {
-        routing.hidden = false;
-      }
-      dlg.scrollTop = 0;
-    });
-  }
-  if (done) {
-    done.addEventListener('click', function () {
-      dlg.close();
-    });
-  }
+  var note = document.getElementById('cf-copy-note');
+  btn.addEventListener('click', function () {
+    var text = code.textContent || '';
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () {
+          btn.textContent = 'Copy code';
+        }, 1500);
+      }).catch(function () {
+        if (note) {
+          note.hidden = false;
+        }
+      });
+      return;
+    }
+    if (note) {
+      note.hidden = false;
+    }
+  });
 })();
 
 (function () {
@@ -4492,7 +4494,7 @@ function hideInboxSubview(dlg) {
   if (openCardEl && openCardEl.getAttribute('data-open-inbox')) {
     inboxReopening = true;
   }
-  document.querySelectorAll('.domain-dialog[data-open="1"], .cf-setup-dialog[data-open="1"]').forEach(function (dlg) {
+  document.querySelectorAll('.domain-dialog[data-open="1"]').forEach(function (dlg) {
     if (inboxReopening) {
       return;
     }
@@ -4512,7 +4514,7 @@ function hideInboxSubview(dlg) {
   // params that reopened it, so a refresh does not bring it back. The
   // external-alias sending dialogs are excluded here: their close handler lives
   // in the inbox settings block, which also restores the suspended inbox.
-  document.querySelectorAll('.domain-dialog[id^="domain-"], .cf-setup-dialog').forEach(function (dlg) {
+  document.querySelectorAll('.domain-dialog[id^="domain-"]').forEach(function (dlg) {
     dlg.addEventListener('close', function () {
       clearUrlParams(['domain', 'kind', 'provider']);
     });
