@@ -3526,6 +3526,17 @@ HTTP adapters, header queue view, and deterministic tests. No dependencies or
 additional runtime service. See `docs/API.md` and
 `docs/proposals/inbox-action-queue.md`.
 
+**Scheduling amendment (2026-10-12, approved by Ben):** Keep one action worker,
+but select one eligible action per inbox per turn in round-robin inbox-ID order.
+Within each inbox, select the oldest eligible action. The worker remembers its
+last claimed inbox across drains; the cursor resets on process restart while
+queued actions remain durable. Empty inboxes, delayed retries and messages
+blocked by an earlier unresolved action are skipped; other messages in the same
+inbox remain eligible. This prevents a bulk-action backlog in one inbox from
+monopolizing execution. It does not isolate other inboxes from the duration of a
+single slow action: execution remains globally serial. No schema migration,
+dependency, additional service or worker-concurrency configuration is introduced.
+
 ## D104 — Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling
 
 **Date:** 2026-10-11. **Approved by:** Ben.

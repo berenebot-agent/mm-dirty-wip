@@ -20,6 +20,8 @@ type ActionWorker struct {
 	wake   chan struct{}
 	stop   chan struct{}
 	done   chan struct{}
+	// Only the worker goroutine accesses the round-robin cursor.
+	lastInbox string
 }
 
 func NewActionWorker(svc *Service, remote *RemoteMailboxService) *ActionWorker {
@@ -64,11 +66,12 @@ func (w *ActionWorker) drain() {
 		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		a, ok, err := w.svc.Store.ClaimMessageAction(ctx, "actions")
+		a, ok, err := w.svc.Store.ClaimMessageActionAfterInbox(ctx, "actions", w.lastInbox)
 		if err != nil || !ok {
 			cancel()
 			return
 		}
+		w.lastInbox = a.InboxID
 		w.execute(ctx, a)
 		cancel()
 	}
