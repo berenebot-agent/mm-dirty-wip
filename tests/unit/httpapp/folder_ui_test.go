@@ -164,6 +164,33 @@ func TestFolderRenameRedirectsToFolder(t *testing.T) {
 	}
 }
 
+// TestToolbarIconButtonsAreUniformWidth guards the toolbar sizing rule. The
+// square icon buttons in a mailbox toolbar used to be pinned by a later
+// `.bulkbar .icon-btn{width:30px}` rule that had the same specificity as
+// `.inboxbar .icon-btn`, so it won on source order and the buttons shrank to
+// slivers in the custom-folder view (whose row also carries the Move select and
+// button). The rule is gone and the sizing rule now pins the width, a min-width
+// and a no-shrink flex basis so Inbox and folder views match.
+func TestToolbarIconButtonsAreUniformWidth(t *testing.T) {
+	svc, h, u, _, box := httpFixture(t)
+	folder, err := svc.Store.CreateFolder(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, store.FolderCreate{Path: "Projects"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+
+	const want = `.inboxbar .icon-btn{height:36px;width:36px;min-width:36px;padding:0;flex:0 0 auto;box-sizing:border-box}`
+	for _, path := range []string{"/ui/inboxes/" + box.ID, "/ui/inboxes/" + box.ID + "/folder?folder=" + folder.ID} {
+		body := uiGet(t, h, cookie, path).Body.String()
+		if !strings.Contains(body, want) {
+			t.Fatalf("%s missing the uniform toolbar icon-button rule", path)
+		}
+		if strings.Contains(body, ".bulkbar .icon-btn") {
+			t.Fatalf("%s still ships the conflicting .bulkbar .icon-btn rule", path)
+		}
+	}
+}
+
 // TestSidebarFolderManagementMarkup proves the sidebar replaced the old
 // "Manage folders" disclosure with a New folder button and a per-folder manage
 // glyph whose dialog is present.
