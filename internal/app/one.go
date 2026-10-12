@@ -227,6 +227,8 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 }
 
 func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal, setupID string, ids []string) ([]OneImportResult, error) {
+	ctx = store.WithInboxLogOperation(ctx, "one_import")
+	ctx = store.WithInboxLogActor(ctx, "", p)
 	s, c, key, err := m.oneSetup(ctx, p, setupID)
 	if err != nil {
 		return nil, err

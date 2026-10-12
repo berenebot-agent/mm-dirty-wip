@@ -149,7 +149,8 @@ func (s *Server) uiCreateStandalone(w http.ResponseWriter, r *http.Request) {
 	// On failure the just-created inbox is removed so nothing is mislabeled.
 	if host != "" {
 		if _, terr := s.remoteMailbox().TestStandaloneRemote(r.Context(), p, box.ID, store.StandaloneRemoteUpdate{}); terr != nil {
-			if paths, perr := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, box.ID); perr == nil {
+			ctx := store.WithInboxLogOperation(r.Context(), "standalone_create")
+			if paths, perr := s.Service.Store.PurgeInbox(store.WithInboxLogReason(ctx, "setup_rollback"), p.AccountID, box.ID); perr == nil {
 				for _, path := range paths {
 					s.removeDataFile(path)
 				}
