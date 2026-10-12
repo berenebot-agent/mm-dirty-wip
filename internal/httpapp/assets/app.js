@@ -5625,6 +5625,7 @@ function hideInboxSubview(dlg) {
           : 'Domain not authorized — the published TXT record does not match this domain\x27s key. Publish this TXT record:';
         block.appendChild(remediationLine(txtPrompt, [
           ['Record name', instructions.txt_name, true],
+          ['Record type', 'TXT', false],
           ['Record value', instructions.txt_value, true]
         ]));
       }
@@ -5632,13 +5633,13 @@ function hideInboxSubview(dlg) {
         var mxPrompt = mx.state === 'pending'
           ? 'No MX records are published for this domain yet. Publish these MX records:'
           : 'This domain\x27s MX records do not name an Antler receiver. Publish these MX records:';
-        var first = true;
-        (instructions.mx || []).forEach(function (record) {
+        var mxRecords = instructions.mx || [];
+        if (mxRecords.length) { block.appendChild(remediationLine(mxPrompt, [])); }
+        mxRecords.forEach(function (record, index) {
           var fields = [['Record name', mxName, true], ['Record type', 'MX', false]];
           if (record.priority) { fields.push(['Priority', String(record.priority), true]); }
           fields.push(['Record value', record.hostname, true]);
-          block.appendChild(remediationLine(first ? mxPrompt : record.hostname + ':', fields));
-          first = false;
+          block.appendChild(remediationLine('MX record ' + (index + 1) + ':', fields));
         });
       }
       return block;

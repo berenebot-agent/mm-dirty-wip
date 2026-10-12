@@ -42,6 +42,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Direct MX outbound delivery can now sign messages with DKIM. Enable it in the
+  domain's **Sending → Direct MX** tab: pick a selector (default `mailmoose`), and
+  MailMoose generates an RSA-2048 signing key — or paste your own RSA private key
+  (PKCS#1 or PKCS#8 PEM) to sign with your own key material. The public key and
+  its copy-ready TXT record (`<selector>._domainkey.<domain>`) are shown on the
+  tab for publishing. Messages are signed once, when they are queued, so the
+  stored message carries the exact signature that is transmitted and a retry
+  re-sends identical bytes rather than stacking a second signature. Enabling
+  signing without a usable key is a save error rather than a silent unsigned
+  send, and turning it off deletes the stored key. Only Direct MX is signed:
+  every other provider signs with its own key or submits through its own
+  authenticated infrastructure. The private key never appears in a config
+  response, and the displayed public key is always derived from the stored
+  private key so the two cannot disagree. See `D069`.
+
 - A metadata sync row now reads **Downloading metadata N / ~M** with a live
   count and percentage while it runs. Gmail and One show their provider's
   message count as an approximate denominator (marked `~`, because the provider

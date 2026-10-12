@@ -262,11 +262,57 @@ Direct MX resolves the recipient domain's MX records and connects directly to
 port 25 without credentials. It accepts one unique envelope recipient per
 message; send separate messages when delivering to multiple domains or
 recipients. The configured HELO hostname should have matching forward and PTR
-DNS where possible. Operators must provide port 25 egress, publish SPF for the
-sending IP, and arrange DKIM signing separately if aligned DKIM is required.
-STARTTLS is used opportunistically when the receiving server advertises it.
-Direct MX requires the operator to control the network identity and reputation
-needed for direct Internet delivery.
+DNS where possible. Operators must provide port 25 egress and publish SPF for the
+sending IP. STARTTLS is used opportunistically when the receiving server
+advertises it. Direct MX requires the operator to control the network identity
+and reputation needed for direct Internet delivery.
+
+### DKIM signing
+
+Direct MX has no upstream provider to sign on your behalf, so MailMoose can sign
+each message itself. Signing is off by default; enable it in the domain's
+**Sending → Direct MX** tab.
+
+```json
+{
+  "helo": "mail.example.com",
+  "dkim_enabled": "on",
+  "dkim_selector": "mailmoose",
+  "dkim_domain": "example.com"
+}
+```
+
+- `dkim_enabled` — `"off"` (default) or `"on"`.
+- `dkim_selector` — optional; defaults to `mailmoose`. It names the DNS record
+  holding the public key.
+- `dkim_domain` — optional; defaults to the domain of the address mail is sent
+  from, which is what keeps the signature aligned for DMARC.
+- `dkim_private_key` — optional. Leave it blank and MailMoose generates an
+  RSA-2048 key. Paste an RSA private key (PKCS#1 or PKCS#8 PEM) to sign with your
+  own key material instead. A non-RSA key is rejected; enabling signing without a
+  usable key is a save error, never a silent unsigned send.
+- `dkim_public_key` — read-only and derived from the stored private key. It is
+  returned on every read so you can publish the record.
+
+Publish the public key as a TXT record. The API and the domain tab both report
+the record name and the copy-ready value:
+
+- Name: `<selector>._domainkey.<domain>` (for example
+  `mailmoose._domainkey.example.com`)
+- Value: `v=DKIM1; k=rsa; p=<public key>`
+
+Messages are signed once, when they are queued, so the stored message carries the
+signature that is actually transmitted. A retry after a failed attempt re-sends
+the identical signed bytes rather than adding a second signature.
+
+Turning signing off deletes the stored key. Rotating the key requires
+re-publishing the DNS record before mail signed with the new key can verify.
+MailMoose does not check the published record for you; a key that is generated but
+not published results in mail that fails DKIM verification at the receiver.
+
+Signing happens when a message is queued, so mail that was already queued before
+signing was enabled keeps its existing (unsigned) stored message and is delivered
+unsigned. Only messages queued after you enable signing carry a signature.
 
 ### Attachments
 
