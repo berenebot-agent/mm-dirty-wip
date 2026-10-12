@@ -214,6 +214,10 @@ reconnect account** control that opens the same in-place API-key **Save and
 check** dialog without leaving for the full import wizard; the dashboard flags
 the inbox with a red connection marker linked to that tab. Deletion clears only
 that inbox's credentials, never its siblings' keys.
+Inbox listings and application capability discovery report `realtime: false`
+for One. The `outbound` capability follows the inbox's configured connection
+marker: deleting its connection reports `outbound: false` while preserving the
+inbox and its cached data.
 New imports resolve the configured Gmail sender display name through the optional
 native `GET /gmail/v1/users/{{userId}}/settings/sendAs` action, matching the
 verified profile address rather than another alias. If One lacks the action or
