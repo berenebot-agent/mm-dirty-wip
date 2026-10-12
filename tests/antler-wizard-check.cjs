@@ -16,9 +16,9 @@ const source = fs.readFileSync('internal/httpapp/assets/app.js', 'utf8');
 // than failing from the start.
 const HAVE = {
   // S5: enforcement + contact email editable in place from the saved status view.
-  statusSettings: false,
+  statusSettings: true,
   // S7: wizard steps 1-2 poll every 10s with a visible countdown.
-  wizardCountdown: false
+  wizardCountdown: true
 };
 if (process.env.ANTLER_CHECK_CAPS) {
   for (const cap of process.env.ANTLER_CHECK_CAPS.split(',')) {
@@ -112,9 +112,16 @@ class Element {
       this.headings.push(panel.nodes['h3'], panel.nodes['p']);
     });
     this.nodes['.antler-custom-urls'] = new Element('INPUT');
-    for (const name of ['progress', 'records', 'note', 'receivers', 'checks', 'check-note', 'error']) {
+    for (const name of ['progress', 'records', 'receivers', 'error']) {
       this.nodes['.antler-' + name] = new Element();
     }
+    // The check row contains its note: the note carries the countdown text and the
+    // row is what the dialog shows or hides.
+    const checks = new Element('DIV');
+    const note = new Element('P');
+    checks.appendChild(note);
+    this.nodes['.antler-checks'] = checks;
+    this.nodes['.antler-check-note'] = note;
   }
 }
 
@@ -130,6 +137,7 @@ function harness(mode) {
     copied: [],
     timers: [],
     nextTimer: 1,
+    windowEvents: {},
     hidden: false,
     saved: null,
     rejectSave: false
@@ -220,14 +228,21 @@ function harness(mode) {
   const window = {
     setTimeout(fn, delay) {
       const id = world.nextTimer++;
-      world.timers.push({ id, fn, delay, at: world.now + (delay || 0) });
+      world.timers.push({ id, fn, delay, at: world.now + (delay || 0), interval: false });
       return id;
     },
     clearTimeout(id) { world.timers = world.timers.filter(t => t.id !== id); },
-    setInterval(fn, delay) { return window.setTimeout(fn, delay); },
-    clearInterval() {},
-    addEventListener: () => {},
+    setInterval(fn, delay) {
+      const id = world.nextTimer++;
+      world.timers.push({ id, fn, delay, at: world.now + (delay || 0), interval: true });
+      return id;
+    },
+    clearInterval(id) { world.timers = world.timers.filter(t => t.id !== id); },
+    addEventListener(name, fn) { (world.windowEvents[name] = world.windowEvents[name] || []).push(fn); },
+    removeEventListener(name, fn) { world.windowEvents[name] = (world.windowEvents[name] || []).filter(f => f !== fn); },
+    dispatchEvent(event) { (world.windowEvents[event.type] || []).slice().forEach(fn => fn(event)); return true; },
     location: { assign() {} },
+    Event: function (type) { this.type = type; },
     mailmooseEventsSource: null
   };
 
@@ -257,7 +272,12 @@ function harness(mode) {
   const fireTimer = async (predicate = () => true) => {
     const timer = world.timers.filter(predicate)[0];
     if (!timer) { return false; }
-    world.timers = world.timers.filter(t => t !== timer);
+    if (!timer.interval) {
+      world.timers = world.timers.filter(t => t !== timer);
+    } else {
+      // An interval reschedules itself; advance its next due time.
+      timer.at += timer.delay;
+    }
     world.now = timer.at;
     timer.fn();
     await settle();
@@ -422,13 +442,15 @@ async function wizard(mode) {
   // is open, so the operator can see the check is still running.
   if (HAVE.wizardCountdown) {
     assert.equal(h.wizard.nodes['.antler-checks'].hidden, false, 'the check row is visible on the DNS step');
-    assert.match(h.collect(h.wizard.nodes['.antler-checks']), /Checking again in 10s/, 'the DNS step shows a 10s countdown');
+    assert.match(h.collect(h.wizard.nodes['.antler-checks']), /checking again in \d+s/, 'the DNS step shows a live countdown');
+    assert.match(h.collect(h.wizard.nodes['.antler-checks']), /Checked /, 'the countdown names when the last check ran');
     assert.ok(h.pends(1000), 'the countdown ticks once a second');
 
-    // A timer-driven refresh advances the check without any user action.
+    // A timer-driven refresh advances the check without any user action: the
+    // per-second countdown reaches zero and the dialog re-reads the server.
     const before = h.gets();
-    await h.fireTimer(t => t.delay === 10000);
-    assert.equal(h.gets(), before + 1, 'the 10s timer refreshes the check');
+    for (let i = 0; i < 10; i++) { await h.fireTimer(t => t.delay === 1000 && t.interval); }
+    assert.equal(h.gets(), before + 1, 'the countdown reaching zero refreshes the check');
   }
 
   // The receivers step gates Next on one ready receiver, and is not gated on all
@@ -438,7 +460,7 @@ async function wizard(mode) {
   assert.equal(h.wizard.panels[2].hidden, false, 'the receivers step is shown');
   assert.equal(h.save.disabled, false, 'one ready receiver unlocks Next');
   if (HAVE.wizardCountdown) {
-    assert.match(h.collect(h.wizard.nodes['.antler-checks']), /Checking again in 10s/, 'the receivers step also counts down');
+    assert.match(h.collect(h.wizard.nodes['.antler-checks']), /checking again in \d+s/, 'the receivers step also counts down');
   }
 
   // Finish is never gated on readiness.
