@@ -115,12 +115,26 @@ func (s *Store) ListMessageActions(ctx context.Context, p model.Principal) ([]Me
 // ClaimMessageAction serializes mutations per message, including across backoff.
 // An uncertain operation blocks its successors until explicitly resolved.
 func (s *Store) ClaimMessageAction(ctx context.Context, owner string) (MessageAction, bool, error) {
+	return s.claimMessageAction(ctx, owner, " ORDER BY rowid LIMIT 1")
+}
+
+// ClaimMessageActionAfterInbox selects one action from the next eligible inbox
+// in ID order, wrapping after the last inbox. Within that inbox, the oldest
+// eligible action wins. Delayed retries and blocked messages do not waste turns.
+// The single action worker supplies its last claimed inbox as an in-memory
+// cursor; restarting resets rotation without changing durable action state.
+func (s *Store) ClaimMessageActionAfterInbox(ctx context.Context, owner, afterInbox string) (MessageAction, bool, error) {
+	return s.claimMessageAction(ctx, owner, " ORDER BY CASE WHEN inbox_id>? THEN 0 ELSE 1 END,inbox_id,rowid LIMIT 1", afterInbox)
+}
+
+func (s *Store) claimMessageAction(ctx context.Context, owner, order string, orderArgs ...any) (MessageAction, bool, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return MessageAction{}, false, err
 	}
 	defer tx.Rollback()
-	a, err := scanAction(tx.QueryRowContext(ctx, actionSelect+` WHERE state='pending' AND claim_owner='' AND next_attempt_at<=? AND NOT EXISTS (SELECT 1 FROM inbox_message_actions prior WHERE prior.account_id=inbox_message_actions.account_id AND prior.inbox_id=inbox_message_actions.inbox_id AND prior.message_id=inbox_message_actions.message_id AND prior.rowid<inbox_message_actions.rowid AND prior.state IN ('pending','running','ambiguous')) ORDER BY rowid LIMIT 1`, nowText()))
+	args := append([]any{nowText()}, orderArgs...)
+	a, err := scanAction(tx.QueryRowContext(ctx, actionSelect+` WHERE state='pending' AND claim_owner='' AND next_attempt_at<=? AND NOT EXISTS (SELECT 1 FROM inbox_message_actions prior WHERE prior.account_id=inbox_message_actions.account_id AND prior.inbox_id=inbox_message_actions.inbox_id AND prior.message_id=inbox_message_actions.message_id AND prior.rowid<inbox_message_actions.rowid AND prior.state IN ('pending','running','ambiguous'))`+order, args...))
 	if err == ErrNotFound {
 		return a, false, nil
 	}
