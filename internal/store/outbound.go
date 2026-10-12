@@ -100,6 +100,9 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 	if err != nil {
 		return model.Message{}, model.Event{}, err
 	}
+	if err := cacheLocalPreview(ctx, tx, id, r.Text, r.HTML); err != nil {
+		return model.Message{}, model.Event{}, err
+	}
 	var attachmentNames []string
 	for _, a := range r.Attachments {
 		aid := idgen.New("att")

@@ -149,6 +149,9 @@ func (s *Store) CommitInbound(ctx context.Context, r InboundRecord) (model.Messa
 	if err != nil {
 		return model.Message{}, model.Event{}, false, err
 	}
+	if err := cacheLocalPreview(ctx, tx, id, r.Text, r.HTML); err != nil {
+		return model.Message{}, model.Event{}, false, err
+	}
 	var names []string
 	for _, a := range r.Attachments {
 		aid := idgen.New("att")
@@ -322,7 +325,7 @@ func scanMessage(row interface{ Scan(...any) error }) (model.Message, error) {
 	var has, internal, spam int
 	var authResults, envelopeFrom, envelopeRecipient, deliveriesJSON string
 	var mailboxID sql.NullString
-	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON, &mailboxID, &m.FolderPath)
+	err := row.Scan(&m.ID, &m.AccountID, &m.InboxID, &m.ThreadID, &m.Direction, &m.Provider, &m.ProviderMessageID, &m.RFCMessageID, &m.InReplyTo, &refs, &m.From.Name, &m.From.Address, &to, &cc, &bcc, &env, &m.Source, &m.Subject, &m.Text, &m.HTML, &m.RawPath, &m.SizeBytes, &read, &deleted, &received, &sent, &created, &has, &m.Status, &m.Attempts, &m.LastError, &m.NextRetry, &m.IdemKey, &internal, &labels, &spam, &authResults, &m.SpamReason, &envelopeFrom, &envelopeRecipient, &deliverDue, &deliveriesJSON, &mailboxID, &m.FolderPath, &m.Snippet)
 	if err != nil {
 		return m, err
 	}
@@ -376,7 +379,7 @@ func decodeMessageDeliveries(raw string) []model.MessageDelivery {
 	return out
 }
 
-const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]'),m.mailbox_id,COALESCE((SELECT f.path FROM inbox_folders f WHERE f.id=m.mailbox_id),'')`
+const messageSelect = `SELECT m.id,m.account_id,m.inbox_id,m.thread_id,m.direction,m.provider,m.provider_message_id,m.rfc_message_id,m.in_reply_to,m.references_json,m.from_name,m.from_address,m.to_json,m.cc_json,m.bcc_json,m.envelope_to_json,m.client_label,m.subject,m.text_body,m.html_body,m.raw_path,m.size_bytes,m.is_read,m.deleted_at,m.received_at,m.sent_at,m.created_at,EXISTS(SELECT 1 FROM attachments a WHERE a.message_id=m.id),m.status,m.attempts,m.last_error,m.next_attempt_at,m.idem_key,m.internal,COALESCE((SELECT json_group_array(label) FROM message_labels WHERE message_id=m.id),'[]'),m.is_spam,m.auth_results_json,m.spam_reason,m.envelope_from,m.envelope_recipient,m.delivery_action_due_at,COALESCE((SELECT json_group_array(json_object('client_id',client_id,'delivered_at',delivered_at)) FROM message_deliveries d WHERE d.message_id=m.id),'[]'),m.mailbox_id,COALESCE((SELECT f.path FROM inbox_folders f WHERE f.id=m.mailbox_id),''),m.snippet`
 
 func (s *Store) GetMessageByID(ctx context.Context, accountID, id string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.id=? AND m.account_id=?`, id, accountID))

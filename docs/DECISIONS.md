@@ -3749,6 +3749,10 @@ See `docs/METADATA_SYNC.md`.
 
 ## D109 — One native API message schema across inbox kinds and routes
 
+> **Amended by D110:** Provider naming, public UID removal, required snippet
+> fallback, and required direction classification replace the corresponding
+> original field rules below. The one-schema and metadata-only-list decisions stand.
+
 **Date:** 2026-10-12. **Approved by:** Ben.
 
 **Requirement:** Domain messages were marshaled directly from `model.Message`,
@@ -3789,6 +3793,61 @@ metadata carried through the existing internal read model, common response
 helpers, and deterministic HTTP/OpenAPI contract tests for all five inbox modes.
 Inbox identity lookups are bounded to once per inbox per response. No migration,
 dependency, service, or additional MIME storage/fetching on list reads.
+
+## D110 — Useful common message metadata, internal-only IMAP locators, and safe direction inference
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** D109 aligned the schema and routes, but public IMAP UIDs were
+unnecessary implementation details; previews were absent for local/IMAP mail;
+provider naming was ambiguous; and remote direction was unavailable for useful
+presentation and safe reply defaults. This is a development-time API correction,
+not a production compatibility migration.
+
+**Decision:** Remove `uid`, `uid_validity`, and handoff `remote_uid` from public
+schemas/responses and event/webhook/relay metadata. Keep transport locators
+internally and use canonical message IDs externally. Legacy stored event
+payloads are projected without these identifiers on replay.
+
+Rename the native Message's old delivery `provider` to `message_transport`.
+Use `provider` for the mailbox implementation (`mailmoose`, `imap`, `google`,
+`microsoft`, `one`) and remove `inbox_provider`. A connected mailbox always
+returns `message_transport` equal to its `provider`; local messages name their
+delivery transport, or `unknown` if unavailable. Both fields are required.
+Connector transport metadata is not an authentication/provenance assertion.
+Other provider-configuration schemas and compatibility adapters are unchanged.
+
+Make `snippet` required, always a plain-text string capped at 200 Unicode
+characters; `"-"` means no usable preview, never `null`. New local messages cache
+previews from their existing bodies at ingestion/enqueue. New ordinary IMAP
+arrivals queue one best-effort bounded background MIME-prefix read after
+control/workflow classification. The existing process-owned remote worker
+attempts at most ten per turn, with bounded byte/time budgets, using PEEK and
+never archiving the body. Header refresh preserves a generated snippet. No
+historic back-generation job or preview fetch in list/detail handlers.
+Provider-connected mail uses its supplied preview.
+
+Make `direction` required with `inbound`, `outbound`, `unknown`. Recorded
+direction wins (including our confirmed remote sends recognized through stable
+provider IDs or confirmed APPENDUID locators, not forged MIME headers). Otherwise
+drafts are unknown; native Sent labels or mapped Sent-role evidence imply
+outbound; Inbox evidence implies inbound only without stronger Sent evidence;
+Archive/arbitrary folders remain unknown. Do not infer from From addresses or
+literal folder names. One policy serves API reads, UI presentation, and reply
+sources. It does not grant authority to send or change local queue eligibility.
+
+An unknown-direction reply without explicit recipients is rejected, not guessed.
+The reply API accepts explicit `to`; UI reply/reply-all leaves recipients blank
+and explains the requirement. Known inbound replies default to the sender;
+known outbound replies default to original To recipients. Folder-path
+normalization is explicitly deferred.
+
+**Complexity/resource budget:** Additive migration 072 adds a local cached
+snippet and a pending-preview bit/index on existing remote metadata rows. Preview
+bytes participate in existing remote-metadata quota accounting. One bounded
+processor in the existing worker, one shared direction classifier, explicit API
+projection changes, and deterministic migration/MIME/protocol/HTTP tests. No new
+module dependency, service, runtime, or historical body storage.
 
 ## Future extension register
 

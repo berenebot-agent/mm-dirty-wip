@@ -715,7 +715,7 @@ func (s *Store) UpsertRemoteMessage(ctx context.Context, accountID, inboxID stri
 		ON CONFLICT(inbox_id,folder_path,remote_uid_validity,remote_uid) DO UPDATE SET
 			rfc_message_id=excluded.rfc_message_id,in_reply_to=excluded.in_reply_to,references_json=excluded.references_json,thread_key=excluded.thread_key,
 			from_name=excluded.from_name,from_address=excluded.from_address,to_json=excluded.to_json,cc_json=excluded.cc_json,subject=excluded.subject,
-			snippet=excluded.snippet,size_bytes=excluded.size_bytes,has_attachments=excluded.has_attachments,is_read=excluded.is_read,is_flagged=excluded.is_flagged,
+			snippet=CASE WHEN excluded.snippet<>'' THEN excluded.snippet ELSE inbox_remote_messages.snippet END,size_bytes=excluded.size_bytes,has_attachments=excluded.has_attachments,is_read=excluded.is_read,is_flagged=excluded.is_flagged,
 			is_answered=excluded.is_answered,is_draft=excluded.is_draft,flags_json=excluded.flags_json,
 			received_at=excluded.received_at,sent_at=excluded.sent_at,internal_date=excluded.internal_date,indexed_at=excluded.indexed_at,updated_at=excluded.updated_at`,
 		id, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID, in.RFCMessageID, in.InReplyTo, jsonString(in.References), threadKey,

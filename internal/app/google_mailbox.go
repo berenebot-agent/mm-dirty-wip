@@ -148,7 +148,7 @@ func (m *RemoteMailboxService) cacheGoogle(ctx context.Context, account, inbox s
 	return m.googleView(ctx, r), nil
 }
 func (m *RemoteMailboxService) googleView(ctx context.Context, r store.RemoteMessage) RemoteMessageView {
-	v := remoteView(r)
+	v := m.remoteView(ctx, r)
 	if v.Labels == nil {
 		v.Labels, _ = m.Service.Store.RemoteMessageLabels(ctx, r.AccountID, r.InboxID, r.ID)
 	}

@@ -1199,10 +1199,7 @@ func (s *Server) composeMessage(w http.ResponseWriter, r *http.Request, kind str
 	}
 	switch kind {
 	case "reply":
-		to := strings.Join(m.To, ", ")
-		if m.Direction == "inbound" {
-			to = m.From.Address
-		}
+		to := strings.Join(model.DefaultReplyRecipients(m), ", ")
 		data.Title = "Reply"
 		data.ComposeTitle = "Reply"
 		data.ComposeTo = to
@@ -1291,6 +1288,9 @@ func replyTitle(kind string) string {
 // reply does not copy the sender's own mailbox. Order is preserved and
 // duplicates (case-insensitive) are dropped.
 func replyAllRecipients(m model.Message, box model.Inbox) (string, string) {
+	if m.Direction != model.DirectionInbound && m.Direction != model.DirectionOutbound {
+		return "", ""
+	}
 	self := map[string]bool{strings.ToLower(box.Address): true}
 	for _, a := range box.Aliases {
 		self[strings.ToLower(a)] = true

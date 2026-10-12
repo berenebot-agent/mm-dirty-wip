@@ -266,6 +266,7 @@ func (w *RemoteWorker) run() {
 	w.reconcileRemoteActions()
 	reconcile()
 	w.detectAll()
+	w.drainRemotePreviews()
 
 	ticker := time.NewTicker(w.period)
 	defer ticker.Stop()
@@ -282,6 +283,7 @@ func (w *RemoteWorker) run() {
 		case <-ticker.C:
 			reconcile()
 			w.drainRemoteArrivals()
+			w.drainRemotePreviews()
 			w.reconcileRemoteActions()
 			w.detectPendingApprovalInboxes()
 			// Drive the durable sent-copy queue (copies of sent mail into a
@@ -929,6 +931,13 @@ func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arri
 		_ = w.svc.Store.MarkRemoteNotified(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID)
 		w.settle(ctx, inbox, arrival, store.RemoteArrivalSkipped, "handoff notification")
 		return
+	}
+	// Queue a preview only after control/workflow classification. The periodic
+	// worker fetches the bounded prefix later; a client read never fetches previews.
+	if arrival.Source == "imap" {
+		if rec, err := w.svc.Store.GetRemoteMessageByUID(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID); err == nil {
+			_ = w.svc.Store.QueueRemotePreview(ctx, inbox.AccountID, inbox.ID, rec.ID)
+		}
 	}
 	// The proactive allowlist gates the notification, not live reads: a message
 	// from a disallowed sender is still readable live, but it never raises a

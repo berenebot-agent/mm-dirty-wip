@@ -285,27 +285,56 @@ All native message responses use the OpenAPI `Message` schema, regardless of
 whether the inbox is domain-backed, IMAP, Google, Microsoft, or Gmail via One.
 Inbox-scoped and account-wide routes use the same projection, including messages
 inside thread responses and search results. Clients must not select a message
-type based on the route, inbox kind, or provider. See decision **D109**.
+type based on the route, inbox kind, or provider. See decisions **D109/D110**.
 
 The required core is `id`, `inbox_id`, `from`, `to`, `cc`, `subject`, `read`,
-`has_attachments`, and `size_bytes`. `to` and `cc` are always arrays (`[]` when
-empty), never `null`. All other fields are optional; unavailable values are
+`has_attachments`, `size_bytes`, `provider`, `message_transport`, `direction`,
+and `snippet`. `to` and `cc` are always arrays (`[]` when empty), never `null`.
+All other fields are optional; unavailable values are
 omitted, not replaced by invented values. A known boolean `false` is distinct
 from an absent/unknown boolean. Empty optional strings and arrays are omitted.
 
-`inbox_kind` identifies the owning inbox (`domain` or `standalone`);
-`inbox_provider` identifies a known mailbox connector (`imap`, `google`,
-`microsoft`, or `one`). These are informational metadata, not schema switches.
-The existing `provider` field identifies the message's delivery transport and
-is not overwritten with the mailbox connector.
+`inbox_kind` identifies the owning inbox (`domain` or `standalone`). `provider`
+identifies the mailbox implementation: `mailmoose` for a domain inbox, or
+`imap`, `google`, `microsoft`, or `one` for a connected inbox. These are
+informational metadata, not schema switches. `message_transport` names the
+message's receive/send transport for a domain inbox (for example `cloudflare`,
+`mx`, or `brevo`), and **equals `provider` for a connected inbox**, even for an
+imported message. It describes the connector, not authenticated provenance of
+the message's original delivery. An unavailable transport is the string
+`unknown`, never `null`. The former `inbox_provider` name is removed. Other
+configuration schemas' `provider` fields are unchanged.
 
-The shared schema preserves optional mailbox metadata: `uid`, `uid_validity`,
-`snippet`, `flagged`, `answered`, `draft`, `flags`, `internal_date`, and
-`indexed_at`. A non-IMAP message is not assigned a fake zero UID. RFC message
-identity, reply references, and known received/sent timestamps survive every
-projection. Unknown `direction`, delivery `status`, `is_spam`, or `created_at`
-remain absent. `created_at` is not synthesized from receipt or indexing time;
-`indexed_at` can advance when a remote header read refreshes the cache.
+IMAP `uid`, `uid_validity`, and handoff `remote_uid` are **internal-only**: they
+are absent from message/handoff responses, event replay, webhook metadata and
+relay notifications. Clients address messages through the canonical `id`.
+Optional mailbox metadata includes `flagged`, `answered`, `draft`, `flags`,
+`internal_date`, and `indexed_at`. RFC identity, reply references, and known
+received/sent timestamps survive every projection. Unknown delivery `status`,
+`is_spam`, or `created_at` remain absent. `created_at` is not synthesized from
+receipt or indexing time; `indexed_at` can advance on a remote header refresh.
+
+`snippet` is always a plain-text string, normalized to at most 200 Unicode
+characters. `"-"` means no usable preview is available: not yet generated,
+generation failed, or the body was empty. New local messages cache previews on
+ingestion/enqueue. New ordinary IMAP arrivals queue a bounded background
+`BODY.PEEK[]<0.65536>` MIME-prefix read; no full body is fetched or archived for a
+preview, and preview failures never block delivery. Control/workflow arrivals
+are not queued. Existing mail is **not** back-generated, and list/detail requests
+never generate missing previews. Google/Microsoft/One use their provider previews.
+
+`direction` is always `inbound`, `outbound`, or `unknown`, using one policy:
+recorded receipt/send direction wins; otherwise drafts are unknown, native Sent
+labels or mapped Sent-role membership imply outbound, and Inbox-role evidence
+implies inbound only when stronger Sent evidence is absent. Archive/arbitrary
+folders otherwise remain unknown. Sender addresses and literal folder names
+are not evidence. Inference affects presentation and reply defaults, never
+authorization or eligibility for the local delivery queue.
+
+Replies without explicit `to` use the original sender for inbound mail or the
+original To recipients for outbound mail. Unknown direction requires explicit
+recipients; the API returns `400` rather than guessing, and the UI leaves reply
+and reply-all recipients blank with an explanation.
 
 Message lists, search results, outbox lists, and messages inside thread responses
 are metadata-only: they omit `text` and `html` for every inbox kind. Single-message
@@ -318,8 +347,10 @@ body just to acknowledge an action.
 
 **Compatibility:** Clients that used list or thread responses to read local
 message bodies must now fetch a message detail. Clients that relied on empty
-remote `direction` or synthesized `created_at` must handle their absence. The
-explicit openagent.email compatibility projections remain separate and unchanged.
+remote direction must now handle `unknown`; synthesized remote `created_at`
+remains absent. This is a development-time contract change: no native aliases
+for old provider names or IMAP identifiers are retained. The explicit
+openagent.email compatibility projections remain separate and unchanged.
 
 ```http
 GET /v1/messages
@@ -429,6 +460,9 @@ Normalized message:
   "id": "msg_01K...",
   "thread_id": "thr_01K...",
   "direction": "inbound",
+  "provider": "mailmoose",
+  "message_transport": "mx",
+  "snippet": "Hi...",
   "inbox_id": "in_01K...",
   "envelope_to": ["hermes@example.com"],
   "envelope_from": "sender@example.org",
@@ -441,7 +475,7 @@ Normalized message:
   "text": "Hi...",
   "has_attachments": true,
   "read": false,
-  "deleted_at": null,
+  "size_bytes": 2048,
   "is_spam": false,
   "labels": ["Invoices", "Unpaid"]
 }
