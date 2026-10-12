@@ -1495,7 +1495,7 @@ func TestRemoteBulkActions(t *testing.T) {
 	if rr.Code != 303 {
 		t.Fatalf("remote bulk read %d: %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Header().Get("Location"), "2+message+actions+queued") {
+	if !strings.Contains(rr.Header().Get("Location"), "2+messages+will+be+marked+read") {
 		t.Fatalf("remote bulk notice missing: %s", rr.Header().Get("Location"))
 	}
 }

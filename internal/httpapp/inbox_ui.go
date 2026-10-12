@@ -904,15 +904,14 @@ func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Pr
 			failed++
 		}
 	}
-	notice := fmt.Sprintf("%d message actions queued", count)
-	if count == 1 {
-		notice = "1 message action queued"
-	}
-	if failed > 0 {
-		notice += fmt.Sprintf("; %d could not be queued", failed)
-	}
+	notice := ""
 	if len(ids) == 0 {
 		notice = "No messages selected"
+	} else {
+		notice = queuedNotice(action, count, s.bulkMoveDestName(r, p, box, action))
+		if failed > 0 {
+			notice += fmt.Sprintf("; %d could not be queued", failed)
+		}
 	}
 	s.redirectBulkNotice(w, r, box, notice)
 }
@@ -947,27 +946,31 @@ func (s *Server) remoteFolderPathForView(r *http.Request, p model.Principal, box
 	return root
 }
 
-// redirectBulkResult redirects to the mailbox folder after a bulk action.
+// redirectBulkResult redirects to the mailbox folder after a bulk action. The
+// notice names the queued action in the future tense, matching the remote bulk
+// path (queuedNotice).
 func (s *Server) redirectBulkResult(w http.ResponseWriter, r *http.Request, box model.Inbox, action string, count int) {
-	notice := fmt.Sprintf("%d message", count)
-	if count != 1 {
-		notice += "s"
+	s.redirectBulkNotice(w, r, box, queuedNotice(action, count, s.bulkMoveDestName(r, principal(r), box, action)))
+}
+
+// bulkMoveDestName resolves a bulk move's destination to a display name for the
+// queued notice. The form posts a folder path; a known folder in this inbox
+// yields its name, an unknown path falls back to the path itself. It returns ""
+// for any action other than move.
+func (s *Server) bulkMoveDestName(r *http.Request, p model.Principal, box model.Inbox, action string) string {
+	if action != "move" {
+		return ""
 	}
-	switch action {
-	case "read":
-		notice += " marked read"
-	case "unread":
-		notice += " marked unread"
-	case "delete":
-		notice += " moved to trash"
-	case "restore":
-		notice += " restored"
-	case "purge":
-		notice += " deleted permanently"
-	case "move":
-		notice += " moved"
+	dest := strings.TrimSpace(r.Form.Get("dest"))
+	if dest == "" {
+		return ""
 	}
-	s.redirectBulkNotice(w, r, box, notice)
+	if folder, err := s.Service.Store.GetFolderByPath(r.Context(), p.AccountID, box.ID, dest); err == nil {
+		if name := strings.TrimSpace(folder.Name); name != "" {
+			return name
+		}
+	}
+	return dest
 }
 
 func (s *Server) redirectBulkNotice(w http.ResponseWriter, r *http.Request, box model.Inbox, notice string) {
