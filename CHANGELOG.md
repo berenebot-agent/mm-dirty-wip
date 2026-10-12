@@ -17,6 +17,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   sanitized HTML and live remote-body failure behavior. OpenAPI documents the
   stable required core, optional fields, and inbox/provider identity metadata.
 
+- Failed durable inbox actions are now reconsidered automatically every ten
+  minutes instead of waiting for a human. A retryable read/label change is
+  requeued and retried; a move, delete, restore or purge is only retried when the
+  message is still observed in its source folder, settles as done when it already
+  reached the destination, and stays failed when its location is unknown. An
+  action is never replayed ahead of a newer unsettled action for the same message,
+  and uncertain (`ambiguous`) actions are never reconsidered.
+
 - Durable inbox actions now use a single-worker round-robin scheduler, processing
   one eligible action per inbox per turn so a busy inbox's backlog cannot
   monopolize the queue. Same-message ordering and retry safety are preserved;

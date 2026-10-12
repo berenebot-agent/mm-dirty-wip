@@ -362,7 +362,14 @@ completed `purged` count. Standalone enumeration covers the cached Trash index.
 
 Actions execute in submission order per message. Transient absolute-state patches
 have bounded retries; moves and purge with uncertain remote outcomes are never
-blindly replayed. The human UI's header status flag opens the shared queue,
+blindly replayed. A background rechecker reconsiders `failed` actions every ten
+minutes: a retryable absolute-state patch returns to the queue and is retried,
+while a location-changing action (move/delete/restore/purge) is only retried when
+the message is still observed in its source folder — if it already reached the
+intended destination the action settles as done, and if its location is unknown it
+stays failed for a human. An action is never replayed out of order behind a newer
+unsettled action for the same message, and `ambiguous` actions are never
+reconsidered. The human UI's header status flag opens the shared queue,
 shows a red exclamation for failures, and offers Retry/Dismiss. An ambiguous
 action must be verified before dismissing it and submitting a new action.
 
