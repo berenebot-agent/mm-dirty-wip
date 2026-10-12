@@ -5560,15 +5560,28 @@ function hideInboxSubview(dlg) {
     // the TXT fix. Here each failing check gets its own prompt, so the operator
     // sees every record to publish at once. The records themselves come from the
     // copy-ready instructions.
+    //
+    // An "unavailable" check is deliberately not a fix prompt: the lookup could
+    // not be completed, so nothing is known about the record and telling the
+    // operator to publish one would be a guess. It renders a retry line instead.
     function remediationBlock(dns, instructions, mxName) {
       var byKind = {};
       (dns || []).forEach(function (entry) { if (entry && entry.kind) { byKind[entry.kind] = entry; } });
       var txt = byKind.txt, mx = byKind.mx;
       var block = document.createElement('div');
-      var needTXT = txt && txt.state !== 'ok';
-      var needMX = mx && mx.state !== 'ok';
-      if (!needTXT && !needMX) { return block; }
+      var unverified = [txt, mx].filter(function (check) { return check && check.state === 'unavailable'; });
+      var needTXT = txt && txt.state !== 'ok' && txt.state !== 'unavailable';
+      var needMX = mx && mx.state !== 'ok' && mx.state !== 'unavailable';
+      if (!needTXT && !needMX && !unverified.length) { return block; }
       block.className = 'antler-dns-remediation';
+      if (unverified.length) {
+        var retry = document.createElement('p');
+        retry.className = 'antler-dns-unverified';
+        retry.textContent = 'Record check unavailable — retrying. The ' +
+          unverified.map(function (check) { return check.kind === 'mx' ? 'MX' : 'TXT'; }).join(' and ') +
+          ' record cannot be verified right now.';
+        block.appendChild(retry);
+      }
       if (needTXT && instructions.txt_value) {
         var txtPrompt = txt.state === 'pending'
           ? 'Domain not authorized — no TXT record is published yet. Publish this TXT record:'
@@ -5769,9 +5782,15 @@ function hideInboxSubview(dlg) {
       }
       function lightFor(entry) {
         var span = document.createElement('span');
-        span.className = 'antler-light ' + (!entry || entry.state === 'pending' ? 'amber' : entry.state === 'ok' ? 'green' : 'red');
+        var state = !entry ? 'pending' : entry.state;
+        var cls = state === 'ok' ? 'green' : state === 'mismatch' ? 'red' : 'amber';
+        span.className = 'antler-light ' + cls;
         var text = document.createElement('span');
-        text.textContent = !entry ? 'Waiting' : entry.state === 'ok' ? 'Matching' : entry.state === 'mismatch' ? 'Mismatch' : 'Pending';
+        text.textContent = !entry ? 'Waiting'
+          : state === 'ok' ? 'Matching'
+          : state === 'mismatch' ? 'Mismatch'
+          : state === 'unavailable' ? 'Unverified'
+          : 'Pending';
         span.title = (entry && entry.reason) || '';
         return { span: span, text: text };
       }

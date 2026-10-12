@@ -173,6 +173,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- A Dial MX / Antler MX published-record check that could not be completed no
+  longer reads as "no record is published yet". A NODATA/NXDOMAIN answer stays
+  `pending` (publish the record), while a timeout, SERVFAIL or refused lookup is
+  the new `unavailable` state, which the wizard shows as **Unverified** with a
+  retry notice instead of a publish instruction. A resolver outage therefore no
+  longer tells an operator to create a record they may already have published
+  correctly, and an `unavailable` MX check carries the previously observed
+  extra-MX hosts forward, so a known amber warning cannot vanish because the
+  resolver stopped answering.
+- The core's local `_mailmoose-mx` TXT check now uses the receiver's own MM1
+  validator (`mxwire.ParseDomainTXT`) instead of a second, looser parser. The old
+  parser accepted records the receiver rejects (an extra field, a duplicate MM1
+  record), so the status view could show a green "matching" record beside a
+  receiver refusing with "key unavailable".
+
 - Standalone mailbox bulk actions (IMAP, Microsoft, Gmail and One) now use the
   durable action queue instead of holding the browser request open for each
   remote operation. The notice reports accepted jobs, not completed moves, and

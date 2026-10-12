@@ -1059,14 +1059,22 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
 - `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
   `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
   (published MX hostnames that are not Antler receivers), `state` (`ok`, `pending`,
-  `mismatch`) and a short `reason`. The checks are computed by a background watcher
+  `mismatch`, `unavailable`) and a short `reason`. The checks are computed by a
+  background watcher
   (bounded by a four-second timeout per lookup), so every read is an in-memory
   lookup and runs no DNS; a verdict change is pushed as the transient
   `mx.dns_changed` event. A resolver failure is reported as a check state, never an
   API error. For an MX check `matched` lists the expected receiver hostnames
   actually published; the check is `ok` once at least one expected hostname is
   published (the receiver set is redundancy), and `mismatch` only when MX records
-  exist but none belongs to a receiver. The TXT check remains exact. These checks
+  exist but none belongs to a receiver. The TXT check remains exact, parsed by the
+  same MM1 validator the receiver applies, so a matching verdict agrees with what
+  the receiver accepts. `pending` means the record is definitively absent (NODATA
+  or NXDOMAIN) and `unavailable` means the lookup could not be completed — the two
+  are distinct so a transient resolver fault is never presented as a missing
+  record. On an `unavailable` MX check the previously observed `unexpected` hosts
+  are carried forward, so a known extra-MX warning survives a resolver outage and
+  is only cleared by a completed check. These checks
   are the local "has the record propagated yet?" feed behind the setup wizard's
   record table and the status view's fix prompts; the extra-MX verdict itself is
   surfaced separately as the top-level `unexpected_mx[]` (see below), and routing is
