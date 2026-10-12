@@ -812,8 +812,10 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
 		caps.Outbound = true
 		caps.HierarchicalFolders = false
+		// Gmail (native or via One) has no push subscription: the worker polls,
+		// so the mailbox never reports instant push.
+		caps.Realtime = false
 		if s.Service.Store.IsOne(ctx, p.AccountID, inboxID) {
-			caps.Realtime = false
 			caps.Outbound = inbox.RemoteConfigured
 			poll := 300
 			if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
