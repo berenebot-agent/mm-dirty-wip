@@ -17,7 +17,9 @@ import (
 
 const oneProviderTile = `<button type="button" class="provider-choice" data-standalone-provider="one"><span class="provider-logo" aria-hidden="true">One</span><span class="provider-text"><span class="provider-title">One (Easy Gmail Setup)</span><span class="provider-desc">Connect Gmail with your own One account. No Google Cloud app required. Email data passes through One.</span></span><svg class="provider-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>`
 
-var dashboardBody = stringsReplaceOneTile(dashboardBaseBody)
+var dashboardBody = stringsReplaceOneTile(strings.Replace(dashboardBaseBody,
+	`<section class="card" style="grid-column:1/-1" data-open-inbox=`,
+	`<section class="card dashboard-inboxes-card" data-group-scope="{{.Principal.AccountID}}:{{.Principal.UserID}}" data-dashboard-csrf="{{.CSRF}}" style="grid-column:1/-1" data-open-inbox=`, 1))
 
 func stringsReplaceOneTile(body string) string {
 	const marker = `</svg></button></div></section><form id="inbox-add-form"`

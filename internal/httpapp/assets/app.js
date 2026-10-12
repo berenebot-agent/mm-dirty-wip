@@ -1209,6 +1209,729 @@
     });
   });
 })();
+(function () {
+  'use strict';
+
+  var inboxCard = document.querySelector('.dashboard-inboxes-card[data-group-scope]');
+  if (!inboxCard) {
+    return;
+  }
+
+  var clientCard = inboxCard.nextElementSibling;
+  var domainCard = clientCard && clientCard.nextElementSibling;
+  var csrfToken = inboxCard.getAttribute('data-dashboard-csrf') || '';
+  var preferencesReady = false;
+  var pendingSave = null;
+  var saving = false;
+  var style = document.createElement('style');
+  style.textContent = [
+    '.dashboard-group-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+    '.dashboard-groups-toggle{display:inline-flex;align-items:center;gap:7px}',
+    '.dashboard-groups-box{width:15px;height:15px;flex:0 0 auto;box-sizing:border-box;border:1px solid #999;border-radius:3px;background:#fff;display:inline-flex;align-items:center;justify-content:center}',
+    '.dashboard-groups-toggle[aria-pressed="true"] .dashboard-groups-box{background:#111;border-color:#111}',
+    '.dashboard-groups-toggle[aria-pressed="true"] .dashboard-groups-box:after{content:"";width:3px;height:7px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);margin-top:-2px}',
+    '.dashboard-row-group{display:inline-flex;align-items:center;gap:5px;max-width:160px;height:26px;padding:0 8px;border-radius:6px;font-size:12px;line-height:1;vertical-align:middle}',
+    '.dashboard-row-group.empty{color:#80868b;border-style:dashed}',
+    '.dashboard-row-group svg{width:13px;height:13px;flex:0 0 auto}',
+    '.dashboard-row-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.dashboard-group-head td{background:#f7f8fa;padding:4px 8px;border-bottom:1px solid #eee}',
+    '.dashboard-group-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:3px 2px;border:0;border-radius:0;background:transparent;color:#202124;text-align:left;font:inherit;cursor:pointer}',
+    '.dashboard-group-toggle:hover,.dashboard-group-toggle:focus-visible{border-color:transparent;background:transparent;color:#202124}',
+    '.dashboard-group-toggle:focus-visible,.dashboard-sortable:focus-visible{outline:2px solid #1557b0;outline-offset:-2px}',
+    '.dashboard-group-chevron{width:0;height:0;flex:0 0 auto;border-top:5px solid transparent;border-bottom:5px solid transparent;border-left:6px solid #5f6368;transition:transform .15s}',
+    '.dashboard-group-toggle[aria-expanded="true"] .dashboard-group-chevron{transform:rotate(90deg)}',
+    '.dashboard-group-name{font-weight:700}',
+    '.dashboard-group-count{font-weight:400}',
+    '.dashboard-sortable{cursor:pointer;user-select:none;white-space:nowrap}',
+    '.dashboard-sortable:hover{background:#f6f9ff}',
+    '.dashboard-sortable:after{content:"";display:inline-block;width:0;height:0;margin-left:6px;border-left:4px solid transparent;border-right:4px solid transparent;vertical-align:middle;opacity:0}',
+    '.dashboard-sortable[aria-sort="ascending"]:after{border-bottom:5px solid #5f6368;opacity:1}',
+    '.dashboard-sortable[aria-sort="descending"]:after{border-top:5px solid #5f6368;opacity:1}',
+    '#dashboard-group-dialog{width:min(420px,92vw)}',
+    '#dashboard-group-dialog h2{margin-top:0}'
+  ].join('');
+  document.head.appendChild(style);
+
+  var tables = {
+    inboxes: {
+      name: 'inboxes',
+      card: inboxCard,
+      tbody: inboxCard.querySelector('tbody[data-inbox-rows]'),
+      rowSelector: 'tr[data-inbox-id]',
+      columns: { 0: 'name', 1: 'address', 3: 'unread', 4: 'pending', 6: 'size' },
+      numeric: { unread: true, pending: true, size: true },
+      grouped: true
+    },
+    clients: {
+      name: 'clients',
+      card: clientCard,
+      tbody: clientCard && clientCard.querySelector('table.dense tbody'),
+      columns: { 0: 'name', 1: 'type' },
+      numeric: {},
+      grouped: true
+    },
+    domains: {
+      name: 'domains',
+      card: domainCard,
+      tbody: domainCard && domainCard.querySelector('tbody[data-domain-rows]'),
+      rowSelector: 'tr[data-domain-id]',
+      columns: { 0: 'domain', 1: 'catchall', 2: 'sending', 3: 'receiving' },
+      numeric: {},
+      grouped: false
+    }
+  };
+
+  function isObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function initialState() {
+    return {
+      groups: { inboxes: Object.create(null), clients: Object.create(null) },
+      collapsed: { inboxes: Object.create(null), clients: Object.create(null) },
+      showGroups: { inboxes: false, clients: false },
+      sort: Object.create(null)
+    };
+  }
+
+  function loadState(saved) {
+    var next = initialState();
+    try {
+      if (!isObject(saved)) {
+        return next;
+      }
+      ['inboxes', 'clients'].forEach(function (table) {
+        if (isObject(saved.groups) && isObject(saved.groups[table])) {
+          Object.keys(saved.groups[table]).forEach(function (id) {
+            if (typeof saved.groups[table][id] === 'string') {
+              next.groups[table][id] = cleanGroup(saved.groups[table][id]);
+            }
+          });
+        }
+        if (isObject(saved.collapsed) && isObject(saved.collapsed[table])) {
+          Object.keys(saved.collapsed[table]).forEach(function (name) {
+            next.collapsed[table][name] = saved.collapsed[table][name] === true;
+          });
+        }
+        if (isObject(saved.showGroups)) {
+          next.showGroups[table] = saved.showGroups[table] === true;
+        }
+      });
+      if (isObject(saved.sort)) {
+        Object.keys(tables).forEach(function (table) {
+          var spec = saved.sort[table];
+          var config = tables[table];
+          if (isObject(spec) && Object.keys(config.columns).some(function (index) { return config.columns[index] === spec.key; }) && (spec.direction === 'asc' || spec.direction === 'desc')) {
+            next.sort[table] = { key: spec.key, direction: spec.direction };
+          }
+        });
+      }
+    } catch (err) {
+      // Ignore malformed preference fields without affecting mailbox content.
+    }
+    return next;
+  }
+
+  var state = initialState();
+  var groupEdit = null;
+  var groupDialog = null;
+  var groupInput = null;
+  var groupTarget = null;
+  var groupOptions = null;
+  var groupRemove = null;
+  var folderIcon = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h3l1.4 1.6h5.2A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8z"/></svg>';
+
+  function cleanGroup(value) {
+    return String(value || '').trim().slice(0, 64);
+  }
+
+  function saveState() {
+    pendingSave = JSON.stringify(state);
+    flushSave();
+  }
+
+  function flushSave() {
+    if (saving || !pendingSave || !preferencesReady) {
+      return;
+    }
+    var snapshot = pendingSave;
+    pendingSave = null;
+    saving = true;
+    fetch('/ui/dashboard/preferences', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: snapshot
+    }).then(function (response) {
+      if (response.status !== 204) {
+        throw new Error('Could not save dashboard preferences');
+      }
+      saving = false;
+      flushSave();
+    }).catch(function () {
+      saving = false;
+      pendingSave = pendingSave || snapshot;
+      window.alert('Could not save dashboard preferences. Your changes are not yet saved. Please try again.');
+    });
+  }
+
+  function rowID(table, row) {
+    if (table === 'inboxes') {
+      return row.getAttribute('data-inbox-id') || '';
+    }
+    if (table === 'domains') {
+      return row.getAttribute('data-domain-id') || '';
+    }
+    var edit = row.querySelector('.edit-credential');
+    var id = edit && edit.getAttribute('data-id');
+    if (!id) {
+      var remove = row.querySelector('.open-delete-client');
+      id = remove && remove.getAttribute('data-id');
+    }
+    if (id) {
+      row.setAttribute('data-dashboard-client-id', id);
+    }
+    return id || '';
+  }
+
+  function rowsFor(table) {
+    var config = tables[table];
+    if (!config || !config.tbody) {
+      return [];
+    }
+    var selector = config.rowSelector || 'tr:not([data-dashboard-group-head])';
+    return Array.prototype.slice.call(config.tbody.querySelectorAll(selector)).filter(function (row) {
+      return !!rowID(table, row);
+    });
+  }
+
+  function groupFor(table, row) {
+    var id = rowID(table, row);
+    return id && state.groups[table][id] ? cleanGroup(state.groups[table][id]) : '';
+  }
+
+  function setSortHeaders(table) {
+    var config = tables[table];
+    if (!config || !config.tbody) {
+      return;
+    }
+    var head = config.tbody.closest('table').querySelector('thead');
+    if (!head || !head.rows.length) {
+      return;
+    }
+    var spec = state.sort[table];
+    Array.prototype.forEach.call(head.rows[0].cells, function (th, index) {
+      var key = config.columns[index];
+      if (!key) {
+        return;
+      }
+      th.classList.add('dashboard-sortable');
+      th.setAttribute('tabindex', '0');
+      th.setAttribute('data-dashboard-sort-table', table);
+      th.setAttribute('data-dashboard-sort-key', key);
+      if (spec && spec.key === key) {
+        th.setAttribute('aria-sort', spec.direction === 'desc' ? 'descending' : 'ascending');
+      } else {
+        th.removeAttribute('aria-sort');
+      }
+    });
+  }
+
+  function setupCardTools(table) {
+    var config = tables[table];
+    if (!config || !config.card || !config.tbody) {
+      return;
+    }
+    var head = config.card.querySelector('.card-head');
+    if (!head) {
+      return;
+    }
+    var addButton = head.querySelector(table === 'inboxes' ? '#add-inbox' : '#add-key');
+    var tools = head.querySelector('.dashboard-group-tools');
+    if (!tools) {
+      tools = document.createElement('div');
+      tools.className = 'dashboard-group-tools';
+      head.appendChild(tools);
+    }
+    if (addButton && addButton.parentNode !== tools) {
+      tools.appendChild(addButton);
+    }
+    if (table === 'domains') {
+      return;
+    }
+
+    var toggle = tools.querySelector('[data-dashboard-groups-toggle]');
+    if (!toggle) {
+      toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'secondary btn-sm dashboard-groups-toggle';
+      toggle.setAttribute('data-dashboard-groups-toggle', table);
+      var box = document.createElement('span');
+      box.className = 'dashboard-groups-box';
+      box.setAttribute('aria-hidden', 'true');
+      var label = document.createElement('span');
+      label.textContent = 'Groups';
+      toggle.appendChild(box);
+      toggle.appendChild(label);
+      tools.insertBefore(toggle, addButton || null);
+    }
+    var collapse = tools.querySelector('[data-dashboard-collapse-all]');
+    if (!collapse) {
+      collapse = document.createElement('button');
+      collapse.type = 'button';
+      collapse.className = 'secondary btn-sm';
+      collapse.setAttribute('data-dashboard-collapse-all', table);
+      tools.insertBefore(collapse, addButton || null);
+    }
+  }
+
+  function setupGroupDialog() {
+    if (groupDialog) {
+      return;
+    }
+    groupDialog = document.createElement('dialog');
+    groupDialog.id = 'dashboard-group-dialog';
+    var form = document.createElement('form');
+    var title = document.createElement('h2');
+    title.textContent = 'Set group';
+    groupTarget = document.createElement('p');
+    groupTarget.className = 'muted';
+    groupTarget.style.cssText = 'margin:4px 0 0';
+    var label = document.createElement('label');
+    label.htmlFor = 'dashboard-group-input';
+    label.textContent = 'Group name';
+    groupInput = document.createElement('input');
+    groupInput.id = 'dashboard-group-input';
+    groupInput.setAttribute('list', 'dashboard-group-options');
+    groupInput.setAttribute('autocomplete', 'off');
+    groupInput.setAttribute('spellcheck', 'false');
+    groupInput.setAttribute('maxlength', '64');
+    groupInput.setAttribute('placeholder', 'e.g. Agents');
+    groupOptions = document.createElement('datalist');
+    groupOptions.id = 'dashboard-group-options';
+    var hint = document.createElement('p');
+    hint.className = 'muted small';
+    hint.textContent = 'Type a new name or choose an existing group. Groups are labels only; they do not affect access, routing, or quota.';
+    var actions = document.createElement('div');
+    actions.className = 'dialog-actions';
+    groupRemove = document.createElement('button');
+    groupRemove.type = 'button';
+    groupRemove.className = 'secondary danger';
+    groupRemove.textContent = 'Remove from group';
+    var cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'secondary';
+    cancel.textContent = 'Cancel';
+    cancel.setAttribute('data-dashboard-group-cancel', '');
+    var save = document.createElement('button');
+    save.type = 'submit';
+    save.textContent = 'Save';
+    actions.appendChild(groupRemove);
+    actions.appendChild(cancel);
+    actions.appendChild(save);
+    form.appendChild(title);
+    form.appendChild(groupTarget);
+    form.appendChild(label);
+    form.appendChild(groupInput);
+    form.appendChild(groupOptions);
+    form.appendChild(hint);
+    form.appendChild(actions);
+    groupDialog.appendChild(form);
+    document.body.appendChild(groupDialog);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      applyGroup(groupInput.value);
+    });
+    cancel.addEventListener('click', closeGroupDialog);
+    groupRemove.addEventListener('click', function () {
+      applyGroup('');
+    });
+    groupDialog.addEventListener('cancel', function () {
+      groupEdit = null;
+    });
+    groupDialog.addEventListener('close', function () {
+      groupEdit = null;
+    });
+  }
+
+  function sortedGroupNames(table) {
+    var names = Object.create(null);
+    rowsFor(table).forEach(function (row) {
+      var name = groupFor(table, row);
+      if (name) {
+        names[name] = true;
+      }
+    });
+    return Object.keys(names).sort(function (a, b) {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }
+
+  function updateGroupOptions(table) {
+    groupOptions.textContent = '';
+    sortedGroupNames(table).forEach(function (name) {
+      var option = document.createElement('option');
+      option.value = name;
+      groupOptions.appendChild(option);
+    });
+  }
+
+  function updateGroupButton(table, row) {
+    var actions = row.querySelector('td.actions');
+    if (!actions) {
+      return;
+    }
+    var id = rowID(table, row);
+    var button = actions.querySelector('.dashboard-row-group');
+    if (!button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary dashboard-row-group';
+      button.setAttribute('data-dashboard-group-edit', table);
+      button.setAttribute('data-group-id', id);
+      button.innerHTML = folderIcon + '<span class="dashboard-row-group-name"></span>';
+      actions.insertBefore(button, actions.firstChild);
+    }
+    var name = groupFor(table, row);
+    button.classList.toggle('empty', !name);
+    button.querySelector('.dashboard-row-group-name').textContent = name || 'Group';
+    var label = table === 'inboxes' ? 'inbox' : 'client';
+    button.setAttribute('aria-label', 'Set group for ' + label + ' ' + (row.cells[0] ? row.cells[0].textContent.trim() : ''));
+    button.title = name ? 'Group: ' + name : 'Set group';
+  }
+
+  function setOriginalOrder(table, rows) {
+    var counter = 0;
+    rows.forEach(function (row) {
+      if (typeof row.__mailmooseOriginalOrder !== 'number') {
+        row.__mailmooseOriginalOrder = counter;
+      }
+      counter++;
+    });
+  }
+
+  function parseCount(text) {
+    var match = String(text || '').replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : 0;
+  }
+
+  function parseSize(text) {
+    var match = String(text || '').replace(/,/g, '').match(/([\d.]+)\s*(B|KB|MB|GB|TB)?/i);
+    if (!match) {
+      return 0;
+    }
+    var powers = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
+    return Number(match[1]) * Math.pow(1024, powers[(match[2] || 'B').toUpperCase()] || 0);
+  }
+
+  function sortValue(table, row, key) {
+    var config = tables[table];
+    if (table === 'inboxes' && (key === 'unread' || key === 'pending')) {
+      var countCell = row.querySelector('[data-cell="' + key + '"]');
+      return parseCount(countCell ? countCell.textContent : '');
+    }
+    var columns = config.columns;
+    var index = -1;
+    Object.keys(columns).some(function (cellIndex) {
+      if (columns[cellIndex] === key) {
+        index = Number(cellIndex);
+        return true;
+      }
+      return false;
+    });
+    var cell = index >= 0 ? row.cells[index] : null;
+    var text = cell ? cell.textContent.replace(/\s+/g, ' ').trim() : '';
+    if (table === 'inboxes' && key === 'size') {
+      return parseSize(text);
+    }
+    return text;
+  }
+
+  function sortedRows(table, rows) {
+    var spec = state.sort[table];
+    var config = tables[table];
+    if (!spec) {
+      return rows.slice().sort(function (a, b) {
+        return a.__mailmooseOriginalOrder - b.__mailmooseOriginalOrder;
+      });
+    }
+    return rows.slice().sort(function (a, b) {
+      var av = sortValue(table, a, spec.key);
+      var bv = sortValue(table, b, spec.key);
+      var result;
+      if (config.numeric[spec.key]) {
+        result = av - bv;
+      } else {
+        result = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      if (!result) {
+        result = a.__mailmooseOriginalOrder - b.__mailmooseOriginalOrder;
+      }
+      return spec.direction === 'desc' ? -result : result;
+    });
+  }
+
+  function groupRows(table, rows) {
+    var grouped = Object.create(null);
+    rows.forEach(function (row) {
+      var name = groupFor(table, row);
+      if (!Object.prototype.hasOwnProperty.call(grouped, name)) {
+        grouped[name] = [];
+      }
+      grouped[name].push(row);
+    });
+    var names = Object.keys(grouped).filter(function (name) { return name !== ''; });
+    names.sort(function (a, b) {
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    if (Object.prototype.hasOwnProperty.call(grouped, '')) {
+      names.push('');
+    }
+    return names.map(function (name) {
+      return { name: name, rows: sortedRows(table, grouped[name]) };
+    });
+  }
+
+  function isCollapsed(table, name) {
+    return state.collapsed[table][name] === true;
+  }
+
+  function groupHead(table, name, count, expanded, columns) {
+    var row = document.createElement('tr');
+    row.className = 'dashboard-group-head';
+    row.setAttribute('data-dashboard-group-head', '');
+    var cell = document.createElement('td');
+    cell.colSpan = columns;
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'dashboard-group-toggle';
+    button.setAttribute('data-dashboard-group-toggle', table);
+    button.setAttribute('data-group-name', name);
+    button.setAttribute('aria-expanded', String(expanded));
+    var chevron = document.createElement('span');
+    chevron.className = 'dashboard-group-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    var label = document.createElement('span');
+    label.className = 'dashboard-group-name';
+    if (name) {
+      label.textContent = name;
+    } else {
+      label.className += ' muted';
+      label.textContent = 'Ungrouped';
+    }
+    var total = document.createElement('span');
+    total.className = 'muted dashboard-group-count';
+    total.textContent = '(' + count + ')';
+    button.appendChild(chevron);
+    button.appendChild(label);
+    button.appendChild(total);
+    cell.appendChild(button);
+    row.appendChild(cell);
+    return row;
+  }
+
+  function updateCardControls(table, groups) {
+    var config = tables[table];
+    if (!config || !config.card) {
+      return;
+    }
+    var toggle = config.card.querySelector('[data-dashboard-groups-toggle]');
+    var collapse = config.card.querySelector('[data-dashboard-collapse-all]');
+    var hasNamed = groups.some(function (group) { return group.name !== ''; });
+    var shown = state.showGroups[table] !== false;
+    if (toggle) {
+      toggle.setAttribute('aria-pressed', shown ? 'true' : 'false');
+    }
+    if (collapse) {
+      collapse.hidden = !shown || !hasNamed;
+      var allCollapsed = hasNamed && groups.length > 0 && groups.every(function (group) { return isCollapsed(table, group.name); });
+      collapse.textContent = allCollapsed ? 'Expand all' : 'Collapse all';
+    }
+  }
+
+  function renderGroupedTable(table, rows) {
+    var config = tables[table];
+    var groups = groupRows(table, rows);
+    var hasNamed = groups.some(function (group) { return group.name !== ''; });
+    var showHeaders = state.showGroups[table] !== false && hasNamed;
+    var columns = config.tbody.closest('table').querySelector('thead').rows[0].cells.length;
+    config.tbody.textContent = '';
+    groups.forEach(function (group) {
+      var collapsed = isCollapsed(table, group.name);
+      if (showHeaders) {
+        config.tbody.appendChild(groupHead(table, group.name, group.rows.length, !collapsed, columns));
+      }
+      group.rows.forEach(function (row) {
+        row.hidden = showHeaders && collapsed;
+        updateGroupButton(table, row);
+        config.tbody.appendChild(row);
+      });
+    });
+    updateCardControls(table, groups);
+  }
+
+  function renderDomainTable(rows) {
+    var config = tables.domains;
+    sortedRows('domains', rows).forEach(function (row) {
+      config.tbody.appendChild(row);
+    });
+  }
+
+  function refresh() {
+    ['inboxes', 'clients'].forEach(function (table) {
+      var config = tables[table];
+      if (!config || !config.tbody) {
+        return;
+      }
+      var rows = rowsFor(table);
+      setOriginalOrder(table, rows);
+      setupCardTools(table);
+      setSortHeaders(table);
+      setupGroupDialog();
+      renderGroupedTable(table, rows);
+    });
+    if (tables.domains && tables.domains.tbody) {
+      var domainRows = rowsFor('domains');
+      setOriginalOrder('domains', domainRows);
+      setSortHeaders('domains');
+      renderDomainTable(domainRows);
+    }
+  }
+
+  function openGroupDialog(table, row) {
+    setupGroupDialog();
+    var id = rowID(table, row);
+    groupEdit = { table: table, id: id };
+    groupTarget.textContent = row.cells[0] ? row.cells[0].textContent.trim() : '';
+    groupInput.value = groupFor(table, row);
+    groupRemove.disabled = !groupInput.value;
+    updateGroupOptions(table);
+    if (typeof groupDialog.showModal === 'function') {
+      groupDialog.showModal();
+    } else {
+      groupDialog.setAttribute('open', 'open');
+    }
+    window.setTimeout(function () { groupInput.focus(); }, 0);
+  }
+
+  function closeGroupDialog() {
+    if (groupDialog && groupDialog.open) {
+      groupDialog.close();
+    } else if (groupDialog) {
+      groupDialog.removeAttribute('open');
+    }
+    groupEdit = null;
+  }
+
+  function applyGroup(value) {
+    if (!groupEdit || !groupEdit.id) {
+      return;
+    }
+    var name = cleanGroup(value);
+    if (name) {
+      state.groups[groupEdit.table][groupEdit.id] = name;
+      if (!Object.prototype.hasOwnProperty.call(state.collapsed[groupEdit.table], name)) {
+        state.collapsed[groupEdit.table][name] = false;
+      }
+    } else {
+      delete state.groups[groupEdit.table][groupEdit.id];
+    }
+    closeGroupDialog();
+    saveState();
+    refresh();
+  }
+
+  function sortByHeader(header) {
+    var table = header.getAttribute('data-dashboard-sort-table');
+    var key = header.getAttribute('data-dashboard-sort-key');
+    var current = state.sort[table];
+    var direction = current && current.key === key && current.direction === 'asc' ? 'desc' : 'asc';
+    state.sort[table] = { key: key, direction: direction };
+    saveState();
+    refresh();
+    var next = tables[table].tbody.closest('table').querySelector('[data-dashboard-sort-key="' + key + '"]');
+    if (next) {
+      next.focus();
+    }
+  }
+
+  function collapseAll(table) {
+    var groups = groupRows(table, rowsFor(table));
+    var named = groups.some(function (group) { return group.name !== ''; });
+    if (!named) {
+      return;
+    }
+    var collapse = groups.some(function (group) { return !isCollapsed(table, group.name); });
+    groups.forEach(function (group) {
+      state.collapsed[table][group.name] = collapse;
+    });
+    saveState();
+    refresh();
+  }
+
+  document.addEventListener('click', function (event) {
+    if (!preferencesReady) {
+      return;
+    }
+    var header = event.target.closest('[data-dashboard-sort-key]');
+    if (header) {
+      sortByHeader(header);
+      return;
+    }
+    var groupToggle = event.target.closest('[data-dashboard-group-toggle]');
+    if (groupToggle) {
+      var table = groupToggle.getAttribute('data-dashboard-group-toggle');
+      var name = groupToggle.getAttribute('data-group-name') || '';
+      state.collapsed[table][name] = !isCollapsed(table, name);
+      saveState();
+      refresh();
+      return;
+    }
+    var collapse = event.target.closest('[data-dashboard-collapse-all]');
+    if (collapse && !collapse.hidden) {
+      collapseAll(collapse.getAttribute('data-dashboard-collapse-all'));
+      return;
+    }
+    var groupsToggle = event.target.closest('[data-dashboard-groups-toggle]');
+    if (groupsToggle) {
+      var showTable = groupsToggle.getAttribute('data-dashboard-groups-toggle');
+      state.showGroups[showTable] = state.showGroups[showTable] === false;
+      saveState();
+      refresh();
+      return;
+    }
+    var editButton = event.target.closest('[data-dashboard-group-edit]');
+    if (editButton) {
+      openGroupDialog(editButton.getAttribute('data-dashboard-group-edit'), editButton.closest('tr'));
+    }
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (preferencesReady && (event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-dashboard-sort-key]')) {
+      event.preventDefault();
+      sortByHeader(event.target);
+    }
+  });
+
+  window.mailmooseDashboardGroups = { refresh: function () {
+    if (preferencesReady) {
+      refresh();
+    }
+  } };
+  fetch('/ui/dashboard/preferences', { credentials: 'same-origin', cache: 'no-store' }).then(function (response) {
+    if (!response.ok || response.redirected) {
+      throw new Error('Could not load dashboard preferences');
+    }
+    return response.json();
+  }).then(function (saved) {
+    state = loadState(saved);
+    preferencesReady = true;
+    refresh();
+  }).catch(function () {
+    // Do not overwrite database preferences with defaults after a failed read.
+    window.alert('Could not load dashboard preferences. Refresh the page to try again.');
+  });
+})();
 
 (function () {
   document.querySelectorAll('tr.row-link[data-href]').forEach(function (row) {
@@ -6055,6 +6778,9 @@ function hideInboxSubview(dlg) {
           var info = data.domains[row.getAttribute('data-domain-id')];
           setTrafficLight(row, info ? info.light : '', info ? info.title : '');
         });
+      }
+      if (window.mailmooseDashboardGroups) {
+        window.mailmooseDashboardGroups.refresh();
       }
       return;
     }
