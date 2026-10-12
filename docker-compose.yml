@@ -37,4 +37,4 @@ services:
       - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
       # :25 = direct SMTP when using this as an Included MX receiver. Uncomment
       # to publish it (and set Admin -> MX receiver to Included).
-      # - "0.0.0.0:25:2525"
+      - "0.0.0.0:25:2525"

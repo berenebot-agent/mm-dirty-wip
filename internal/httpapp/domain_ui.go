@@ -16,6 +16,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/mx"
 )
 
 // domainEditorView drives the save form for a chosen provider. Non-secret
@@ -42,6 +43,14 @@ type domainEditorView struct {
 	// are rendered inside the provider box so a shared secret can be reused
 	// across domains. It is empty for every other provider.
 	GeneratedOverridable []transport.ConfigField
+	// OverridableHint explains the overridable generated field in the provider
+	// box. The wording differs per provider: a shared Worker secret is reused
+	// across domains, while a DKIM signing key is replaced to use the operator's
+	// own key material.
+	OverridableHint string
+	// ReadOnlyFields are shown but never submitted: the value is derived
+	// server-side and returned for the operator to copy (a DKIM public key).
+	ReadOnlyFields []transport.ConfigField
 	// KeepSecrets is true when the stored config already uses this provider, so
 	// a blank secret retains the stored value ("leave blank to keep"). It is
 	// false for a create or provider switch, where required secrets must be
@@ -66,7 +75,18 @@ func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, p
 		return nil, false
 	}
 	e.Values, e.KeepSecrets = s.sendingEditorState(ctx, accountID, domainID, provider, e.Fields)
+	e.OverridableHint = sendingOverridableHint(provider)
 	return e, true
+}
+
+// sendingOverridableHint explains a sending provider's overridable generated
+// field. Only Direct MX has one (the DKIM signing key), which may be left blank
+// to generate or replaced with the operator's own key.
+func sendingOverridableHint(provider string) string {
+	if provider == mx.Provider {
+		return "Leave the private key blank to generate an RSA-2048 key, or paste your own RSA private key (PKCS#1 or PKCS#8 PEM) to sign with it instead."
+	}
+	return ""
 }
 
 // domainReceivingEditor is the receiving counterpart of domainSendingEditor.
@@ -318,7 +338,10 @@ func (s *Server) linkNearestAncestor(ctx context.Context, accountID string, d mo
 	return s.Service.Store.GetDomain(ctx, accountID, d.ID)
 }
 
-// uiDomainSendingClear removes the domain's sending configuration. Mail for the
+// uiDomainSendingClear removes the domain's sending configuration. For a
+// subdomain in inherited mode there is no own config to delete, so the inherit
+// switch is also turned off; otherwise the parent's provider would keep
+// resolving and the removal would appear to do nothing. Mail for the
 // domain then queues until a provider is configured again.
 func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -326,11 +349,17 @@ func (s *Server) uiDomainSendingClear(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
-	if err := s.Service.Store.DeleteDomainSendingConfig(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+	ctx := r.Context()
+	id := r.PathValue("id")
+	if err := s.Service.Store.DeleteDomainSendingConfig(ctx, p.AccountID, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "domain not found", 404)
 			return
 		}
+		s.uiError(w, err, 400)
+		return
+	}
+	if err := s.Service.Store.SetDomainInheritFlag(ctx, p.AccountID, id, true, false); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.uiError(w, err, 400)
 		return
 	}
@@ -467,18 +496,27 @@ func (s *Server) setReceivingInherited(ctx context.Context, accountID string, d 
 	return s.Service.Store.SetDomainInheritFlag(ctx, accountID, d.ID, false, true)
 }
 
-// uiDomainReceivingClear removes the domain's receiving configuration.
+// uiDomainReceivingClear removes the domain's receiving configuration. Like the
+// sending counterpart it also turns off the inherit switch, so removing an
+// inherited subdomain's receiving path actually clears the effective provider
+// instead of leaving the parent's configuration resolving in place.
 func (s *Server) uiDomainReceivingClear(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	if !p.Admin {
 		http.Error(w, "admin required", 403)
 		return
 	}
-	if err := s.Service.Store.DeleteDomainReceivingConfig(r.Context(), p.AccountID, r.PathValue("id")); err != nil {
+	ctx := r.Context()
+	id := r.PathValue("id")
+	if err := s.Service.Store.DeleteDomainReceivingConfig(ctx, p.AccountID, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "domain not found", 404)
 			return
 		}
+		s.uiError(w, err, 400)
+		return
+	}
+	if err := s.Service.Store.SetDomainInheritFlag(ctx, p.AccountID, id, false, false); err != nil && !errors.Is(err, store.ErrNotFound) {
 		s.uiError(w, err, 400)
 		return
 	}
@@ -859,6 +897,11 @@ func configFromForm(provider string, fields []transport.ConfigField, r *http.Req
 		if f.Generated && !f.Overridable {
 			continue
 		}
+		// Read-only fields are display-only: the value is derived server-side, so
+		// a submitted one is ignored rather than trusted.
+		if f.ReadOnly {
+			continue
+		}
 		raw := strings.TrimSpace(r.Form.Get("cfg_" + provider + "_" + f.Name))
 		if raw == "" {
 			continue
@@ -886,7 +929,9 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 		if !ok {
 			return nil, false
 		}
-		return &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: fields}, true
+		e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: fields}
+		applyGeneratedFields(e)
+		return e, true
 	}
 	t, ok := transport.LookupInbound(provider)
 	if !ok {
@@ -897,6 +942,16 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 	// Description(): Antler MX states its zero-config nature, Remote MX states
 	// that the receiver is the account's own.
 	e.SelectLabel = transport.InboundSelectLabel(t)
+	applyGeneratedFields(e)
+	return e, true
+}
+
+// applyGeneratedFields records that a provider has a server-generated field, and
+// which of those the operator may supply instead. It is shared by the sending
+// and receiving editors so both render generated and overridable inputs the
+// same way: the Direct MX signing key is generated but may be replaced by a
+// pasted key, exactly as the Cloudflare shared secret may be.
+func applyGeneratedFields(e *domainEditorView) {
 	for _, f := range e.Fields {
 		if f.Generated {
 			e.Generated = true
@@ -905,8 +960,10 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 				e.GeneratedOverridable = append(e.GeneratedOverridable, f)
 			}
 		}
+		if f.ReadOnly {
+			e.ReadOnlyFields = append(e.ReadOnlyFields, f)
+		}
 	}
-	return e, true
 }
 
 // sendingEditorState returns the non-secret values to prefill a sending editor

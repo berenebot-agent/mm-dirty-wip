@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
+	"github.com/dellarb/mailmoose/internal/dkimsign"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/mx"
 )
 
 // domainConfigResponse is the redacted view of a domain's sending or receiving
@@ -29,6 +31,9 @@ type domainConfigResponse struct {
 	KeyID      string            `json:"key_id,omitempty"`
 	PublicKey  string            `json:"public_key,omitempty"`
 	TXTRecord  string            `json:"txt_record,omitempty"`
+	// DKIMRecordName is the DNS name the sending-side DKIM public key must be
+	// published at (<selector>._domainkey.<domain>). Direct MX only.
+	DKIMRecordName string `json:"dkim_record_name,omitempty"`
 	// Status is the live per-receiver authentication state the core has learned
 	// over its outbound sessions (Dial MX only).
 	Status []mxdialStatusView `json:"status,omitempty"`
@@ -119,7 +124,7 @@ func (s *Server) apiDomainSending(w http.ResponseWriter, r *http.Request) {
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainSendingResponse(id, cfg)
+		resp, err := s.domainSendingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -138,7 +143,7 @@ func (s *Server) apiDomainSending(w http.ResponseWriter, r *http.Request) {
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainSendingResponse(id, cfg)
+		resp, err := s.domainSendingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -146,6 +151,13 @@ func (s *Server) apiDomainSending(w http.ResponseWriter, r *http.Request) {
 		writeDomainConfigJSON(w, 200, resp)
 	case http.MethodDelete:
 		if err := s.Service.Store.DeleteDomainSendingConfig(r.Context(), p.AccountID, id); err != nil {
+			mapDomainConfigError(w, err)
+			return
+		}
+		// Clearing an inherited subdomain must also switch off inherit_sending,
+		// otherwise the parent's provider keeps resolving and the delete
+		// appears to do nothing.
+		if err := s.Service.Store.SetDomainInheritFlag(r.Context(), p.AccountID, id, true, false); err != nil {
 			mapDomainConfigError(w, err)
 			return
 		}
@@ -247,6 +259,13 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			mapDomainConfigError(w, err)
 			return
 		}
+		// Clearing an inherited subdomain must also switch off
+		// inherit_receiving, otherwise the parent's provider keeps resolving
+		// and the delete appears to do nothing.
+		if err := s.Service.Store.SetDomainInheritFlag(r.Context(), p.AccountID, id, false, false); err != nil {
+			mapDomainConfigError(w, err)
+			return
+		}
 		w.WriteHeader(204)
 	}
 }
@@ -312,19 +331,45 @@ func (s *Server) apiDomainReceivingDeliveries(w http.ResponseWriter, r *http.Req
 	writeJSON(w, 200, entries)
 }
 
-func (s *Server) domainSendingResponse(domainID string, cfg store.DomainSendingConfig) (domainConfigResponse, error) {
+func (s *Server) domainSendingResponse(ctx context.Context, domainID string, cfg store.DomainSendingConfig) (domainConfigResponse, error) {
 	dec, err := s.Service.DecryptDomainSendingConfig(cfg)
 	if err != nil {
 		return domainConfigResponse{}, err
 	}
 	updated := cfg.UpdatedAt
-	return domainConfigResponse{
+	resp := domainConfigResponse{
 		DomainID:   domainID,
 		Configured: true,
 		Provider:   cfg.Provider,
 		Config:     outboundNonsecretConfig(cfg.Provider, dec),
 		UpdatedAt:  &updated,
-	}, nil
+	}
+	if strings.EqualFold(cfg.Provider, mx.Provider) {
+		// The DKIM record an operator must publish. The public key is derived
+		// from the stored private key, so a stored key can never be presented
+		// alongside a public key that does not match what MailMoose signs with.
+		if keyPEM, _ := dec[mx.FieldDKIMPrivateKey].(string); strings.TrimSpace(keyPEM) != "" {
+			if key, kerr := dkimsign.ParsePrivateKey(keyPEM); kerr == nil {
+				if pubPEM, perr := dkimsign.PublicKeyPEM(key); perr == nil {
+					if b64, berr := dkimsign.PublicKeyBase64(pubPEM); berr == nil {
+						selector, _ := dec[mx.FieldDKIMSelector].(string)
+						selector = strings.TrimSpace(selector)
+						if selector == "" {
+							selector = dkimsign.DefaultSelector
+						}
+						domain, derr := s.Service.Store.GetDomain(ctx, cfg.AccountID, domainID)
+						if derr == nil {
+							resp.TXTRecord = dkimsign.TXTRecordValue(b64)
+							resp.PublicKey = pubPEM
+							resp.KeyID = selector
+							resp.DKIMRecordName = dkimsign.RecordName(selector, domain.Name)
+						}
+					}
+				}
+			}
+		}
+	}
+	return resp, nil
 }
 
 func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, cfg store.DomainReceivingConfig) (domainConfigResponse, error) {
