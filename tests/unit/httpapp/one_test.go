@@ -224,6 +224,19 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 	if strings.Contains(selection, `name="api_key"`) || strings.Contains(selection, ">Next</button>") || strings.Contains(selection, "Back to inboxes") || strings.Contains(selection, "Imported Gmail mailboxes") || !strings.Contains(selection, "Select mailboxes") {
 		t.Fatal("selection step still shows key entry or imported-mailboxes section")
 	}
+	// The mailbox table is a dense, wrapped table so cells align vertically
+	// against the tall Index-history select.
+	if !strings.Contains(selection, `<table class="dense one-import-table">`) || !strings.Contains(selection, `<th>Index history</th>`) || !strings.Contains(selection, `name="window_`) {
+		t.Fatal("mailbox table is not a dense, aligned table with the history window")
+	}
+	// The Messages column shows the best-effort count and never a bare zero.
+	if !strings.Contains(selection, "<th>Messages</th>") {
+		t.Fatal("message-count column missing")
+	}
+	// The key-entry step no longer claims each inbox gets its own key copy.
+	if strings.Contains(entry.Body.String(), "encrypted copy of the key and connection") {
+		t.Fatal("key-entry step retains the removed encrypted-copy sentence")
+	}
 	selectionStart := strings.Index(selection, "<h2>Select mailboxes</h2>")
 	if selectionStart < 0 {
 		t.Fatal("selection heading missing")
