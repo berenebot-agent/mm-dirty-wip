@@ -2,13 +2,77 @@ package httpapp
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
+
+// messageNoun renders a count with its noun: "1 message", "3 messages".
+func messageNoun(count int) string {
+	if count == 1 {
+		return "1 message"
+	}
+	return fmt.Sprintf("%d messages", count)
+}
+
+// queuedNotice names the action a queued job will take, in the future tense, so
+// a flash never reads as a bare "action queued". It is shared by the
+// single-message, local bulk and remote bulk paths so their wording cannot
+// drift. action is one of read, unread, delete, restore, purge, move, spam,
+// unspam or labels; dest is the move destination's display name (or path) and
+// is only used for move.
+func queuedNotice(action string, count int, dest string) string {
+	switch action {
+	case "read":
+		return messageNoun(count) + " will be marked read"
+	case "unread":
+		return messageNoun(count) + " will be marked unread"
+	case "delete":
+		return messageNoun(count) + " will move to trash"
+	case "restore":
+		return messageNoun(count) + " will move back to Inbox"
+	case "purge":
+		return messageNoun(count) + " will be deleted permanently"
+	case "move":
+		if dest != "" {
+			return messageNoun(count) + " will move to " + dest
+		}
+		return messageNoun(count) + " will be moved"
+	case "spam":
+		return messageNoun(count) + " will move to spam"
+	case "unspam":
+		return messageNoun(count) + " will move out of spam"
+	case "labels":
+		return "Labels will be updated"
+	}
+	return messageNoun(count) + " queued"
+}
+
+// actionLabel recovers the user-facing action name from a normalised action
+// input: read/unread/spam/labels arrive as a "patch" with the specific field
+// set, so the display label is derived from the field rather than the kind.
+func actionLabel(in store.MessageActionInput) string {
+	if in.Kind == "patch" {
+		switch {
+		case in.Read != nil && *in.Read:
+			return "read"
+		case in.Read != nil && !*in.Read:
+			return "unread"
+		case in.Spam != nil && *in.Spam:
+			return "spam"
+		case in.Spam != nil && !*in.Spam:
+			return "unspam"
+		case in.Labels != nil:
+			return "labels"
+		}
+	}
+	return in.Kind
+}
 
 func (s *Server) enqueueBulkAction(r *http.Request, p model.Principal, box model.Inbox, id, kind, dest string) bool {
 	if kind == "move" && box.Kind != model.InboxKindStandalone {
@@ -45,7 +109,8 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	if ui {
-		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice=Action+queued", http.StatusSeeOther)
+		notice := queuedNotice(actionLabel(in), 1, "")
+		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {
@@ -276,7 +341,8 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 		jobs = append(jobs, a)
 	}
 	if ui {
-		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice=Trash+purge+queued", 303)
+		notice := queuedNotice("purge", len(jobs), "")
+		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape(notice), 303)
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {

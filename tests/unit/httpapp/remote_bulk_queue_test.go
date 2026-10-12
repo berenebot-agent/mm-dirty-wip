@@ -74,8 +74,16 @@ func TestRemoteBulkQueuesWithoutProvider(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if notice := loc.Query().Get("notice"); notice != "2 message actions queued; 1 could not be queued" {
-				t.Fatalf("notice = %q", notice)
+			wantNotice := map[string]string{
+				"delete":  "2 messages will move to trash",
+				"read":    "2 messages will be marked read",
+				"unread":  "2 messages will be marked unread",
+				"restore": "2 messages will move back to Inbox",
+				"move":    "2 messages will move to Trash",
+				"purge":   "2 messages will be deleted permanently",
+			}[action]
+			if notice := loc.Query().Get("notice"); notice != wantNotice+"; 1 could not be queued" {
+				t.Fatalf("notice = %q, want %q", notice, wantNotice+"; 1 could not be queued")
 			}
 			jobs, err := st.ListMessageActions(ctx, p)
 			if err != nil || len(jobs) != 2 {
@@ -86,9 +94,10 @@ func TestRemoteBulkQueuesWithoutProvider(t *testing.T) {
 					t.Fatalf("unexpected job: %#v", job)
 				}
 			}
-			// Submission must not claim settled provider success.
-			if strings.Contains(loc.Query().Get("notice"), "moved to trash") {
-				t.Fatal("queued action presented as completed")
+			// Submission must not claim settled provider success: the notice names
+			// the action but keeps it in the future tense.
+			if !strings.Contains(loc.Query().Get("notice"), "will ") {
+				t.Fatalf("queued notice not phrased as pending: %q", loc.Query().Get("notice"))
 			}
 		})
 	}
@@ -109,7 +118,7 @@ func TestRemoteBulkDeleteSettles(t *testing.T) {
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"_csrf": {csrf}, "folder": {"inbox"}, "scope": {"page"}, "action": {"delete"}, "ids": {rows[0].ID, rows[1].ID}}
 	rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/bulk", form.Encode())
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "2+message+actions+queued") {
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "2+messages+will+move+to+trash") {
 		t.Fatalf("submit = %d: %s", rr.Code, rr.Header().Get("Location"))
 	}
 	waitUIActions(t, svc, u.AccountID)

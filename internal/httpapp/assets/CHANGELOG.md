@@ -40,7 +40,18 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   monopolize the queue. Same-message ordering and retry safety are preserved;
   individual slow actions still delay other inboxes while they execute.
 
+- Queued message actions now say what they are doing instead of a bare
+  "action queued". A single-message, bulk or empty-trash submission reports, for
+  example, "2 messages will move to trash", "1 message will be marked read" or
+  "3 messages will move to Archive", naming the action (and move destination) in
+  the future tense so it never reads as a completed result.
+
 ### Added
+
+- The inbox settings **Identity** tab now shows your dashboard group for an inbox
+  and lets you set or clear it there. The group is a personal dashboard label, so
+  it is saved per user (with that inbox's other settings) and does not affect
+  access, routing or quota.
 
 - Direct MX outbound delivery can now sign messages with DKIM. Enable it in the
   domain's **Sending → Direct MX** tab: pick a selector (default `mailmoose`), and
