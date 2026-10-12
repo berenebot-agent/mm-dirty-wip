@@ -56,8 +56,10 @@ type mxdialStatusView struct {
 	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
 }
 
-// domainDNSView is one published-record check. State is "ok", "pending" or
-// "mismatch" and carries a short human reason. For an MX check, Matched lists
+// domainDNSView is one published-record check. State is "ok" (published and
+// matching), "pending" (definitively not published yet), "mismatch" (published
+// but wrong) or "unavailable" (the lookup could not be completed, so nothing is
+// known). It carries a short human reason. For an MX check, Matched lists
 // the expected receiver hostnames actually published (the per-connector lights
 // read it), Found is the published set shown to the operator, and Unexpected
 // lists published hostnames that are not one of our receivers (the aggregate

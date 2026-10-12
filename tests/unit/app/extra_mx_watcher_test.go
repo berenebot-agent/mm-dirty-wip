@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net"
 	"testing"
 
@@ -137,3 +138,58 @@ type fixedAntlerReceivers []mxdial.AntlerReceiver
 func (f fixedAntlerReceivers) Receivers(context.Context) ([]mxdial.AntlerReceiver, error) {
 	return f, nil
 }
+
+// errResolver fails every lookup with a non-notfound error, modelling a resolver
+// that cannot answer (timeout, SERVFAIL) rather than one that says "no records".
+type errResolver struct{ err error }
+
+func (e errResolver) LookupMX(context.Context, string) ([]*net.MX, error) { return nil, e.err }
+func (e errResolver) LookupTXT(context.Context, string) ([]string, error) { return nil, e.err }
+
+// TestExtraMXWatcherKeepsWarningWhenLookupFails proves a failed MX lookup does
+// not silently clear a known amber warning: the unexpected hosts a previous pass
+// observed are carried forward, so the light cannot turn green because the
+// resolver stopped answering.
+func TestExtraMXWatcherKeepsWarningWhenLookupFails(t *testing.T) {
+	core, _ := dialMXDomain(t, "example.test", "hermes")
+	ctx := context.Background()
+	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
+	if _, _, err := core.svc.SaveDomainReceivingConfig(ctx, core.user.AccountID, core.domain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save: %v", err)
+	}
+	cred, err := core.svc.Store.GetDialMXCredential(ctx, core.user.AccountID, core.domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+
+	res := &switchDNSResolver{}
+	res.setMX("antler1.example.test.", "old.example.test.")
+	res.setTXT(mxwire.DomainTXT(cred.KeyID, pub))
+	w := app.NewExtraMXWatcher(core.svc, res)
+	core.svc.ExtraMX = w
+	w.CheckOnce(ctx)
+
+	// A completed pass sees the rogue host.
+	if hosts, ok := core.svc.ExtraMXState(core.domain.ID); !ok || len(hosts) != 1 || hosts[0] != "old.example.test" {
+		t.Fatalf("extra-MX = %v, want [old.example.test]", hosts)
+	}
+
+	// The resolver now fails. The verdict must keep the known warning rather than
+	// reporting a clean domain it cannot vouch for.
+	w.SetDNSResolver(errResolver{err: errTestDNSFailure})
+	w.CheckOnce(ctx)
+	hosts, ok := core.svc.ExtraMXState(core.domain.ID)
+	if !ok || len(hosts) != 1 || hosts[0] != "old.example.test" {
+		t.Fatalf("extra-MX after a failed lookup = %v (ok=%v), want the carried [old.example.test]", hosts, ok)
+	}
+	v, _ := core.svc.DNSState(core.domain.ID)
+	if v.MX == nil || v.MX.State != app.StateUnavailable {
+		t.Fatalf("MX check after a failed lookup = %+v, want unavailable", v.MX)
+	}
+}
+
+// errTestDNSFailure stands in for a resolver that cannot complete a lookup.
+var errTestDNSFailure = errors.New("resolver unavailable")

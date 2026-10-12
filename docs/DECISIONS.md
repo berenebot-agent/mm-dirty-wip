@@ -3882,6 +3882,48 @@ unchanged.
 computation in `internal/httpapp/microsoft_push.go`; no migration, dependency,
 service, or schema change. See `docs/MICROSOFT.md`.
 
+## D111 — Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Two failure modes in the Dial MX published-record checks made
+the status surfaces say things that were not true. (1) Both `CheckMX` and
+`CheckTXT` collapsed every resolver error into `pending` ("not published yet"), so
+a timeout, SERVFAIL or refused lookup told the operator to publish a record they
+may already have published correctly — and, for MX, discarded the extra-MX hosts a
+previous pass had observed, letting a known amber warning turn green during a
+resolver outage. (2) `CheckTXT` carried its own hand-written MM1 parser that was
+not equivalent to the receiver's `mxwire.ParseDomainTXT`: it accepted a record
+with an extra field, and skipped a malformed MM1 record beside a valid one, where
+the receiver fails both closed. The status view could therefore show a green
+"matching" TXT record next to a receiver refusing the same record with "key
+unavailable", leaving the operator no fix to make.
+
+**Decision:** (1) Add an `unavailable` check state beside `ok`/`pending`/`mismatch`.
+A definitive NODATA/NXDOMAIN answer (`net.DNSError.IsNotFound`, the same test the
+receiver's `mxNotFound` applies) remains `pending`; any other error is
+`unavailable`, which claims no `found`/`matched` and renders in the wizard as
+**Unverified** with a retry notice instead of a publish prompt. On an
+`unavailable` MX check the watcher carries forward the previous `unexpected` hosts,
+so only a completed check may clear a known extra-MX warning; and
+`verdictClean` treats `unavailable` as nothing to announce, so a first-ever failed
+check does not publish an event. (2) Delete the local parser: `CheckTXT` parses
+with `mxwire.ParseDomainTXT` and compares the returned key, so the local check and
+the receiver cannot disagree about whether a published record is valid.
+
+**Reason:** "Definitely absent" and "could not be determined" call for opposite
+operator actions — publish a record versus wait and retry — so collapsing them
+costs an operator a wrong action during any resolver blip. And a second
+implementation of a security-critical validation rule is free to drift from the
+one that actually gates mail; sharing the receiver's parser removes the drift by
+construction rather than by keeping two edits in step.
+
+**Complexity:** One new state value threaded through the check views, the wizard's
+per-check rendering and the API docs; a `carriedUnexpected` read of the watcher's
+existing last-verdict map; and a net deletion of `txtMatches`/`parseMM1`. One
+imported helper (`mxwire.ParseDomainTXT`) already used by the receiver. No new
+dependency, service, table or migration. See `docs/DIALMX.md`, `docs/API.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

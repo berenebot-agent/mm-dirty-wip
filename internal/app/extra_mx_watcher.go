@@ -180,12 +180,33 @@ func (w *ExtraMXWatcher) verdictForDomain(ctx context.Context, accountID, domain
 	}
 	if len(expected) > 0 {
 		mx := CheckMX(ctx, resolver, domainName, expected)
+		// A lookup that could not be completed says nothing about the record set,
+		// so it must not silently drop an already-known amber warning: the
+		// unexpected hosts a previous pass observed are carried forward and the
+		// light keeps its meaning until a real answer arrives. Only a completed
+		// check may clear them.
+		if mx.State == StateUnavailable {
+			mx.Unexpected = w.carriedUnexpected(domainID)
+		}
 		verdict.MX = &mx
 	}
 	if verdict.TXT == nil && verdict.MX == nil {
 		return DNSVerdict{}, false
 	}
 	return verdict, true
+}
+
+// carriedUnexpected returns the unexpected-MX host list from the domain's last
+// published verdict, so an MX check that could not be completed keeps the warning
+// a previous completed check established instead of clearing it.
+func (w *ExtraMXWatcher) carriedUnexpected(domainID string) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	prev := w.last[domainID]
+	if prev.MX == nil {
+		return nil
+	}
+	return append([]string(nil), prev.MX.Unexpected...)
 }
 
 // setVerdict stores a domain's verdict and, when it changed, publishes the
@@ -218,11 +239,13 @@ func (w *ExtraMXWatcher) setVerdict(domainID, accountID string, verdict DNSVerdi
 	})
 }
 
-// verdictClean reports whether a verdict flags no problem (both checks ok or
-// absent), i.e. nothing the operator needs to be told about.
+// verdictClean reports whether a verdict flags no problem the operator must act
+// on: both checks ok or absent. A check that could not be completed
+// ("unavailable") is also treated as nothing to announce — there is no record to
+// publish and no answer to act on, only a retry the watcher already owns.
 func verdictClean(v DNSVerdict) bool {
 	for _, r := range []*DNSRecordView{v.TXT, v.MX} {
-		if r != nil && r.State != "ok" {
+		if r != nil && r.State != StateOK && r.State != StateUnavailable {
 			return false
 		}
 	}
