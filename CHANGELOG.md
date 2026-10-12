@@ -8,6 +8,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Standalone mailbox metadata syncs now share a global concurrency limit,
+  configurable with `REMOTE_SYNC_CONCURRENCY` (default `2`, range 1–32). This
+  staggers startup indexing and also bounds simultaneous scheduled, push-triggered
+  and manual syncs.
+
 - Cloudflare receiving setup is a **full-page one-time wizard** again, instead of
   a two-step modal. After saving a Cloudflare receive path it opens a dedicated
   page (`/ui/domains/{id}/receiving/worker`) with the complete Worker code, a
