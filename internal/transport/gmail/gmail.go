@@ -15,10 +15,11 @@ import (
 
 // Production endpoints. BaseURL is the Gmail REST host; the per-user API prefix
 // is appended by Client.endpoint. TokenURL is Google's OAuth 2.0 token
-// endpoint.
+// endpoint. UserInfoURL is Google's basic identity endpoint.
 const (
-	DefaultBaseURL  = "https://gmail.googleapis.com"
-	DefaultTokenURL = "https://oauth2.googleapis.com/token"
+	DefaultBaseURL     = "https://gmail.googleapis.com"
+	DefaultTokenURL    = "https://oauth2.googleapis.com/token"
+	DefaultUserInfoURL = "https://openidconnect.googleapis.com/v1/userinfo"
 
 	// usersPrefix is the Gmail REST prefix for the authenticated user.
 	usersPrefix = "/gmail/v1/users/me"
@@ -32,14 +33,15 @@ const (
 	maxMessageBytes = 64 << 20
 )
 
-// Client is a Gmail API and OAuth client. HTTP, BaseURL and TokenURL are public
+// Client is a Gmail API and OAuth client. HTTP, BaseURL, TokenURL and UserInfoURL are public
 // so a caller (or a test) can inject a custom *http.Client and deterministic
 // endpoint URLs. The production defaults are the fixed Google endpoints.
 type Client struct {
-	HTTP     *http.Client
-	BaseURL  string
-	TokenURL string
-	Executor RequestExecutor
+	HTTP        *http.Client
+	BaseURL     string
+	TokenURL    string
+	UserInfoURL string
+	Executor    RequestExecutor
 }
 
 // RequestExecutor replaces only mailbox HTTP execution, never OAuth exchange or
