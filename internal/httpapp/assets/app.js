@@ -2668,14 +2668,66 @@ function clearUrlParams(names) {
     }
     var googleLink = dlg.querySelector('[data-google-reconnect]');
     if (!googleLink) {
+      // The reconnect control lives under an "Advanced" disclosure so it does not
+      // read as a routine action, with a red prompt above it when the provider
+      // reports the account disconnected. One reconnects in place (an API-key
+      // dialog); Google and Microsoft follow their OAuth wizard flow.
+      var prompt = document.createElement('div');
+      prompt.className = 'banner danger';
+      prompt.setAttribute('data-reconnect-prompt', '');
+      prompt.setAttribute('role', 'alert');
+      prompt.hidden = true;
       googleLink = document.createElement('a');
       googleLink.setAttribute('data-google-reconnect', '');
       googleLink.className = 'btn secondary';
-      dlg.querySelector('[data-inbox-panel=basic]').appendChild(googleLink);
+      var advanced = document.createElement('details');
+      advanced.className = 'remote-fields';
+      advanced.setAttribute('data-advanced-reconnect', '');
+      var summary = document.createElement('summary');
+      summary.textContent = 'Advanced';
+      var body = document.createElement('div');
+      body.className = 'remote-fields-body';
+      body.appendChild(googleLink);
+      advanced.append(summary, body);
+      var panel = dlg.querySelector('[data-inbox-panel=basic]');
+      panel.append(prompt, advanced);
     }
-    googleLink.hidden = !google;
-    googleLink.textContent = one ? 'Gmail via One — connection settings' : (microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account');
+    var prompt = dlg.querySelector('[data-reconnect-prompt]');
+    var advanced = dlg.querySelector('[data-advanced-reconnect]');
+    advanced.hidden = !google;    googleLink.hidden = !google;
+    googleLink.textContent = one ? 'Gmail via One — reconnect account' : (microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account');
     googleLink.href = one ? '/ui/connections/one?inbox=' + encodeURIComponent(inboxID) : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
+    // The One reconnect opens the in-place API-key dialog rather than leaving
+    // for the full import wizard. The OAuth providers still follow their wizard.
+    if (one) {
+      googleLink.setAttribute('data-one-reconnect', '');
+      googleLink.setAttribute('data-inbox', inboxID);
+      googleLink.setAttribute('href', '#');
+    } else {
+      googleLink.removeAttribute('data-one-reconnect');
+      googleLink.removeAttribute('data-inbox');
+    }
+    if (prompt) {
+      var conn = (cfg && cfg.connection) || null;
+      var bad = !!(conn && conn.state === 'disconnected');
+      prompt.hidden = !(google && bad);
+      if (!prompt.hidden) {
+        prompt.textContent = (conn && conn.detail) ? conn.detail : 'This account is disconnected. Reconnect to resume syncing.';
+        var cta = document.createElement('button');
+        cta.type = 'button';
+        cta.className = 'btn-sm danger';
+        cta.textContent = 'Reconnect';
+        if (one) {
+          cta.setAttribute('data-one-reconnect', '');
+          cta.setAttribute('data-inbox', inboxID);
+        } else {
+          cta.addEventListener('click', function () { window.location.href = googleLink.href; });
+        }
+        prompt.appendChild(document.createTextNode(' '));
+        prompt.appendChild(cta);
+      }
+      if (bad && advanced) { advanced.open = true; }
+    }
     var port = document.getElementById('inbox-remote-port');
     var username = document.getElementById('inbox-remote-username');
     var security = document.getElementById('inbox-remote-security');
@@ -6309,3 +6361,116 @@ function hideInboxSubview(dlg) {
     });
   });
 }());
+
+// One reconnect dialog. The inbox Identity tab's reconnect control for a
+// One-backed inbox opens this in place — an API key field with "Save and check" —
+// rather than sending the operator through the full import wizard. The key is
+// validated and stored by the reconnect endpoint; the dialog stays open on a
+// failure and reports the provider's message, and closes on success after
+// re-checking the connection state.
+(function () {
+  'use strict';
+  var dlg = document.getElementById('one-reconnect-dialog');
+  if (!dlg) { return; }
+  var form = dlg.querySelector('#one-reconnect-form');
+  var inboxField = dlg.querySelector('#one-reconnect-inbox');
+  var keyField = dlg.querySelector('#one-reconnect-key');
+  var status = dlg.querySelector('#one-reconnect-status');
+  var submit = dlg.querySelector('#one-reconnect-submit');
+  var busy = false;
+
+  function setStatus(text, isError) {
+    if (!status) { return; }
+    status.textContent = text || '';
+    status.className = isError ? 'error small' : 'muted small';
+  }
+
+  function open(inboxID) {
+    if (!inboxID || typeof dlg.showModal !== 'function') { return; }
+    inboxField.value = inboxID;
+    keyField.value = '';
+    keyField.disabled = false;
+    submit.disabled = false;
+    busy = false;
+    setStatus('', false);
+    dlg.showModal();
+    keyField.focus();
+  }
+
+  // Any reconnect affordance for a One inbox (the Identity tab link/button, the
+  // dashboard prompt) carries data-one-reconnect with the inbox id in the
+  // closest row/button. Delegated so the dynamically built controls are covered.
+  document.addEventListener('click', function (event) {
+    var trigger = event.target.closest('[data-one-reconnect]');
+    if (!trigger) { return; }
+    event.preventDefault();
+    var inboxID = trigger.getAttribute('data-inbox') || '';
+    if (!inboxID) {
+      var row = trigger.closest('[data-inbox-id]');
+      if (row) { inboxID = row.getAttribute('data-inbox-id'); }
+    }
+    if (!inboxID) {
+      var editDlg = document.getElementById('inbox-edit-dialog');
+      if (editDlg && editDlg.open) {
+        var addr = document.getElementById('inbox-edit-address');
+        var btn = document.querySelector('.edit-inbox[data-address="' + (addr ? addr.value.replace(/"/g, '&quot;') : '') + '"]');
+        if (btn) { inboxID = btn.getAttribute('data-id') || ''; }
+      }
+    }
+    if (!inboxID) { return; }
+    open(inboxID);
+  });
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (busy) { return; }
+    var key = keyField.value.trim();
+    if (!key) { setStatus('Enter a One API key.', true); return; }
+    busy = true;
+    submit.disabled = true;
+    keyField.disabled = true;
+    setStatus('Checking the key against this inbox…', false);
+    var csrfField = form.querySelector('[name=_csrf]');
+    fetch('/ui/connections/one/reconnect', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-CSRF-Token': csrfField ? csrfField.value : ''
+      },
+      body: JSON.stringify({ inbox_id: inboxField.value, api_key: key })
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    }).then(function (result) {
+      busy = false;
+      submit.disabled = false;
+      keyField.disabled = false;
+      if (result.ok && result.data && result.data.status === 'connected') {
+        setStatus('Connection restored.', false);
+        // Reflect the healthy state in place: drop the reconnect prompt and
+        // refresh so the dashboard flag and Identity tab clear without a manual
+        // reload.
+        var prompt = document.querySelector('[data-reconnect-prompt]');
+        if (prompt) { prompt.hidden = true; }
+        window.setTimeout(function () { dlg.close(); window.location.reload(); }, 600);
+        return;
+      }
+      var message = (result.data && result.data.error) || 'The key was rejected. Check it and try again.';
+      setStatus(message, true);
+      keyField.focus();
+      keyField.select();
+    }).catch(function () {
+      busy = false;
+      submit.disabled = false;
+      keyField.disabled = false;
+      setStatus('Reconnect failed. Please try again.', true);
+    });
+  });
+
+  dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
+    b.addEventListener('click', function () { dlg.close(); });
+  });
+})();

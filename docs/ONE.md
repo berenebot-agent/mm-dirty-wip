@@ -198,7 +198,12 @@ minutes and is configurable from two to thirty minutes. One has no push setup.
 Each inbox's connection settings expose **Save**, sync status, polling and
 **Delete connection**. Saving replaces or reconnects only that inbox, with
 automatic validation of its original connection UUID, Gmail identity and action
-map. Deletion clears only that inbox's credentials, never its siblings' keys.
+map. When the connection is reported disconnected, the inbox's **Identity** tab
+shows a red reconnect prompt and, under **Advanced**, a **Gmail via One —
+reconnect account** control that opens the same in-place API-key **Save and
+check** dialog without leaving for the full import wizard; the dashboard flags
+the inbox with a red connection marker linked to that tab. Deletion clears only
+that inbox's credentials, never its siblings' keys.
 New imports resolve the configured Gmail sender display name through the optional
 native `GET /gmail/v1/users/{{userId}}/settings/sendAs` action, matching the
 verified profile address rather than another alias. If One lacks the action or
