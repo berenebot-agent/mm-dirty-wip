@@ -663,7 +663,7 @@ func (s *Server) uiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.logEvent(*ev)
 		s.Service.Hub.Publish(*ev)
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/outbox?notice=Message+removed", 303)
@@ -1023,7 +1023,7 @@ func (s *Server) bulkMessageAction(r *http.Request, p model.Principal, inboxID, 
 	case "delete":
 		if _, ev, err := s.Service.Store.TrashMessage(r.Context(), p, m.ID); err == nil {
 			if ev != nil {
-				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+				s.logEvent(*ev)
 				s.Service.Hub.Publish(*ev)
 			}
 			return true
@@ -1031,7 +1031,7 @@ func (s *Server) bulkMessageAction(r *http.Request, p model.Principal, inboxID, 
 	case "restore":
 		if _, ev, err := s.Service.Store.RestoreMessage(r.Context(), p, m.ID); err == nil {
 			if ev != nil {
-				s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+				s.logEvent(*ev)
 				s.Service.Hub.Publish(*ev)
 			}
 			return true
@@ -1044,7 +1044,7 @@ func (s *Server) bulkMessageAction(r *http.Request, p model.Principal, inboxID, 
 		if path != "" {
 			s.removeDataFile(path)
 		}
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.logEvent(ev)
 		s.Service.Hub.Publish(ev)
 		return true
 	case "move":
