@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -1713,7 +1714,7 @@ func (s *Server) apiOutboxDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ev != nil {
-		s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+		s.logEvent(*ev)
 		s.Service.Hub.Publish(*ev)
 	}
 	w.WriteHeader(204)
@@ -1894,13 +1895,56 @@ func (s *Server) apiEventsWait(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, v)
 }
 
+// eventMessage maps a durable event type to the human-readable phrase used in
+// logs, so an operator reading the stream sees what happened rather than a
+// namespaced wire type. The type string itself is never changed: it is a public
+// contract that SSE clients filter on.
+func eventMessage(ev model.Event) string {
+	switch ev.Type {
+	case model.EventMessageStateChanged:
+		if read, ok := ev.Payload["read"].(bool); ok {
+			if read {
+				return "message marked read"
+			}
+			return "message marked unread"
+		}
+		return "message state changed"
+	case model.EventMessageTrashed:
+		return "message moved to trash"
+	case model.EventMessageRestored:
+		return "message restored"
+	case model.EventMessagePurged:
+		return "message purged"
+	case model.EventMessageFolderChanged:
+		return "message moved"
+	case model.EventMessageLabelsChanged:
+		return "message labels changed"
+	case model.EventMessageSpamChanged:
+		return "message spam state changed"
+	}
+	return "event published"
+}
+
+// logEvent records a durable event. message.state_changed is written at debug
+// level: marking mail read is the highest-volume, lowest-information event in
+// the system (every message opened emits one), so it is kept out of the default
+// stream while remaining available for cursor correlation when debugging.
+func (s *Server) logEvent(ev model.Event) {
+	msg := eventMessage(ev)
+	level := slog.LevelInfo
+	if ev.Type == model.EventMessageStateChanged {
+		level = slog.LevelDebug
+	}
+	s.Log.Log(context.Background(), level, msg, "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+}
+
 // publishStateEvent logs and fans out a durable event to live subscribers. A nil
 // event (a no-op transition) is ignored.
 func (s *Server) publishStateEvent(ev *model.Event) {
 	if ev == nil {
 		return
 	}
-	s.Log.Info("event published", "type", ev.Type, "cursor", ev.Cursor, "entity_id", ev.EntityID, "inbox_id", ev.InboxID)
+	s.logEvent(*ev)
 	s.Service.Hub.Publish(*ev)
 }
 
