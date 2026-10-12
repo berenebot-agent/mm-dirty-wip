@@ -109,6 +109,45 @@ func TestMetadataSyncIMAPCountTotalResumeAndCompletion(t *testing.T) {
 	}
 }
 
+// TestMetadataSyncRefreshKeepsKnownTotal proves a refresh pass of an
+// already-complete inbox still reports the provider's total, so the UI renders
+// "N / Total (P%)" rather than flattening to a bare "N indexed" count. A refresh
+// re-reads and re-saves a valid total, so withholding it discards real progress
+// information; only an internally inconsistent total (fewer reported messages
+// than cached rows) is withheld.
+func TestMetadataSyncRefreshKeepsKnownTotal(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	for i := 0; i < 5; i++ {
+		fake.addMessage("INBOX", "body", fmt.Sprintf("<refresh-total-%d@test>", i), "subject")
+	}
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	// First pass indexes the whole folder and records the provider total.
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Force a refresh phase with a partial index status so the status is reported.
+	if err := svc.Store.SaveMetadataSyncState(ctx, u.AccountID, box.ID, "waiting", "refresh", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetRemoteIndexStatus(ctx, u.AccountID, box.ID, store.RemoteIndexPartial, ""); err != nil {
+		t.Fatal(err)
+	}
+	items, err := rm.MetadataSyncStatuses(ctx, p)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("refresh status: %+v %v", items, err)
+	}
+	if items[0].Phase != "refresh" {
+		t.Fatalf("phase = %q, want refresh", items[0].Phase)
+	}
+	if items[0].Total != 5 || items[0].Indexed != 5 {
+		t.Fatalf("refresh discarded the known total: %+v", items[0])
+	}
+}
+
 func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
 	svc, u, _, rm := remoteTestEnv(t)
 	f := onefixture.New(t)
@@ -182,6 +221,62 @@ func TestMetadataSyncMicrosoftTotalAndCompletion(t *testing.T) {
 	if err != nil || len(items) != 1 || items[0].Provider != "Outlook" {
 		t.Fatalf("Microsoft status: %+v %v", items, err)
 	}
+}
+
+// TestMetadataSyncExcludesDetectionPass proves a cheap arrival-detection pass is
+// never reported as a metadata sync. Detection bumps the same in-memory counter
+// the index build uses, so before this the "Refreshing mailbox metadata" banner
+// and the header metadata spinner lit up on every folder open even though no
+// metadata was being indexed. A detection pass must not surface as running, and
+// the status must stay settled once the inbox's index is complete.
+func TestMetadataSyncExcludesDetectionPass(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<detect@test>", "Detected")
+	ctx := context.Background()
+	// Complete the index for the inbox so the only work left is arrival detection.
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := svc.Store.GetInboxInternal(ctx, u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold the detection pass open so MetadataSyncStatuses is read while it is
+	// in flight: a running detection pass must not claim the index is syncing.
+	started, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDial := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseDial()
+	rm.SetRemoteDialer(func(ctx context.Context, _ imap.Config) (app.RemoteSession, error) {
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return fake, nil
+	})
+	w := app.NewRemoteWorker(svc, rm, nil)
+	w.SetDemandInterval(-1) // every demand pass runs; no coalescing
+	w.SetPollInterval(time.Second)
+	// The worker is never Start()ed, so Stop() would wait on a done channel that
+	// nothing closes. Cancel the pass context and release the dial instead.
+	passCtx, cancelPass := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); w.DetectInbox(passCtx, inbox) }()
+	<-started
+	items, err := rm.MetadataSyncStatuses(ctx, model.Principal{AccountID: u.AccountID, Admin: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("detection pass surfaced as a metadata sync: %+v", items)
+	}
+	cancelPass()
+	releaseDial()
+	<-done
 }
 
 func TestMetadataSyncQueuedAndCoalesced(t *testing.T) {
