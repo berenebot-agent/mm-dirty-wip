@@ -169,6 +169,11 @@ func (w *RemoteWorker) WatchInboxForTest(ctx context.Context, inbox model.Inbox)
 	w.watchInbox(ctx, inbox)
 }
 
+// DemandIntervalForTest exposes the demand-coalescing cadence for tests.
+func (w *RemoteWorker) DemandIntervalForTest(inbox model.Inbox) time.Duration {
+	return w.demandIntervalFor(inbox)
+}
+
 // Start launches the worker. It returns immediately.
 func (w *RemoteWorker) Start() { go w.run() }
 
@@ -409,9 +414,9 @@ func watcherPoll(sess RemoteSession) watchSessionPoll {
 
 // runIdleWatch runs the realtime IDLE watch, running detection on each signal and
 // reconnecting (returning) on a watch error. Each server-pushed update is logged
-// at Info, matching the Microsoft push notification log: it records that the
-// mailbox signalled a change, not that a message was found (detection decides
-// that and logs "remote received" itself).
+// at Debug only: the operator-facing line is the single "remote received" emitted
+// by the detection pass, whose source reports "imap push" when the pass was
+// driven by an IDLE update rather than the periodic poll.
 func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, folder string, watcher watchSession) error {
 	notify, stop, errCh, err := watcher.Watch(ctx, folder, 16)
 	if err != nil {
@@ -441,7 +446,7 @@ func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, fold
 			if event == "" {
 				event = "idle"
 			}
-			w.log.Info("imap push received",
+			w.log.Debug("imap push received",
 				"provider", "imap",
 				"inbox", inbox.Address,
 				"event", event,
@@ -449,7 +454,9 @@ func (w *RemoteWorker) runIdleWatch(ctx context.Context, inbox model.Inbox, fold
 			)
 			debounce.Reset(250 * time.Millisecond)
 		case <-debounce.C:
-			w.detectInbox(ctx, inbox)
+			// Mark the pass as IDLE-driven so any arrival it records reports the
+			// push source, then clear the mark so a later poll pass does not.
+			w.detectInbox(WithIMAPPushSync(ctx), inbox)
 		}
 	}
 }
@@ -638,12 +645,29 @@ func inboxFolder(inbox model.Inbox) string {
 	return f
 }
 
+// quickPollDisabledFor reports whether an inbox has opted out of the new-mail
+// quick poll (an explicit stored 0). One inboxes cannot disable it: their poll is
+// the only delivery path, so the flag is ignored for them.
+func (w *RemoteWorker) quickPollDisabledFor(inbox model.Inbox) bool {
+	if inbox.RemotePollSeconds == nil {
+		return false
+	}
+	if w.svc.Store.IsOne(context.Background(), inbox.AccountID, inbox.ID) {
+		return false
+	}
+	return *inbox.RemotePollSeconds == model.RemotePollSecondsDisabled
+}
+
 // pollIntervalFor resolves the quick (new-mail) poll cadence for one inbox: its
 // per-inbox override when positive, else the worker's configured default. The
 // override is clamped to the model minimum so a bad value cannot hammer the
-// remote server. This is the quick cadence the demand side (client presence,
-// long-polls, list reads) also coalesces onto.
+// remote server. A disabled quick poll resolves to the full-sync cadence, which
+// is the slowest safety-net pass the inbox still runs. This is the quick cadence
+// the demand side (client presence, long-polls, list reads) also coalesces onto.
 func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
+	if w.quickPollDisabledFor(inbox) {
+		return w.fullSyncIntervalFor(inbox)
+	}
 	if w.svc.Store.IsOne(context.Background(), inbox.AccountID, inbox.ID) {
 		seconds := 300
 		if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
@@ -651,7 +675,7 @@ func (w *RemoteWorker) pollIntervalFor(inbox model.Inbox) time.Duration {
 		}
 		return time.Duration(max(120, min(seconds, 1800))) * time.Second
 	}
-	if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
+	if inbox.RemotePollSeconds != nil {
 		return time.Duration(model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds)) * time.Second
 	}
 	return w.pollInterval
@@ -673,6 +697,8 @@ func (w *RemoteWorker) fullSyncIntervalFor(inbox model.Inbox) time.Duration {
 //     on the inbox's full-sync cadence (so a missed or expired notification is
 //     still caught). Re-evaluated every loop, so a subscription that expires or
 //     activates takes effect on the next pass.
+//   - An inbox whose owner disabled the quick poll (a stored 0) skips the quick
+//     poll the same way, relying on push and the full sync.
 //   - Otherwise the quick poll cadence applies.
 func (w *RemoteWorker) watchIntervalFor(inbox model.Inbox) time.Duration {
 	if w.svc.Store.MicrosoftPushActive(context.Background(), inbox.AccountID, inbox.ID) {
@@ -685,7 +711,9 @@ func (w *RemoteWorker) watchIntervalFor(inbox model.Inbox) time.Duration {
 // one inbox. It is the quick cadence so client presence cannot outpace the
 // worker's own poll. Gmail and IMAP share the same guard; Microsoft is exempt
 // only in that a push wake still forces an immediate pass on the watcher path
-// (this gate governs HTTP-demand callers, which push does not drive).
+// (this gate governs HTTP-demand callers, which push does not drive). An inbox
+// with the quick poll disabled coalesces onto the full-sync cadence instead, so
+// presence cannot reintroduce a near-minute poll the owner switched off.
 func (w *RemoteWorker) demandIntervalFor(inbox model.Inbox) time.Duration {
 	if w.demandInterval != 0 {
 		return w.demandInterval
@@ -864,7 +892,7 @@ func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (
 		}
 		arrival, inserted, aerr := w.svc.Store.RecordRemoteArrival(ctx, inbox.AccountID, inbox.ID, store.RemoteArrivalInput{
 			FolderPath:   folder,
-			Source:       "imap",
+			Source:       imapArrivalSource(ctx),
 			UIDValidity:  validity,
 			UID:          uid,
 			RFCMessageID: h.MessageID,
@@ -953,9 +981,26 @@ func (w *RemoteWorker) onNewArrival(ctx context.Context, inbox model.Inbox, arri
 	}
 	// Queue a preview only after control/workflow classification. The periodic
 	// worker fetches the bounded prefix later; a client read never fetches previews.
-	if arrival.Source == "imap" {
-		if rec, err := w.svc.Store.GetRemoteMessageByUID(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID); err == nil {
-			_ = w.svc.Store.QueueRemotePreview(ctx, inbox.AccountID, inbox.ID, rec.ID)
+	// Match the connector family, not one exact label: an IMAP arrival records
+	// "imap" when the quick poll found it and "imap push" when an IDLE update drove
+	// the pass, and a recovery/re-baseline pass may introduce another label again.
+	// Gating on the exact string "imap" silently skipped every push-discovered
+	// arrival, so no IMAP message ever got a preview while poll-discovered ones did.
+	if strings.HasPrefix(arrival.Source, "imap") {
+		rec, err := w.svc.Store.GetRemoteMessageByUID(ctx, inbox.AccountID, inbox.ID, arrival.FolderPath, arrival.UIDValidity, arrival.UID)
+		if err != nil {
+			// A miss here means the arrival and the read index disagree on
+			// (folder, uid_validity, uid); without this line the lookup failed
+			// invisibly and no preview was ever queued for any IMAP message.
+			w.log.Warn("remote preview lookup miss",
+				"inbox_id", inbox.ID, "arrival", arrival.ID,
+				"folder", arrival.FolderPath, "uid", arrival.UID, "error", err)
+		} else if n, qerr := w.svc.Store.QueueRemotePreviewRows(ctx, inbox.AccountID, inbox.ID, rec.ID); qerr != nil {
+			w.log.Warn("remote preview queue", "inbox_id", inbox.ID, "arrival", arrival.ID, "error", qerr)
+		} else if n == 0 {
+			// Declined: the row already carries a snippet, or has no remote UID.
+			w.log.Debug("remote preview queue declined",
+				"inbox_id", inbox.ID, "arrival", arrival.ID, "message", rec.ID)
 		}
 	}
 	// The proactive allowlist gates the notification, not live reads: a message

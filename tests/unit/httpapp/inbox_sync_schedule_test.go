@@ -164,9 +164,9 @@ func TestInboxSettingsSaveCadenceKeepsProviderGrant(t *testing.T) {
 // TestInboxSettingsPollMinutesConvertedAndBounded proves the Identity tab's
 // new-mail poll is entered in whole minutes and converted to the column's
 // seconds, that a blank field keeps inheriting the process default (no override
-// row), and that the one-minute floor rejects a zero instead of storing a poll
-// of nothing. The connector fields are submitted as the dialog sends them, so
-// the save is a real Identity-tab save rather than a partial form.
+// row), and that an explicit zero turns the poll off (stored as 0). The connector
+// fields are submitted as the dialog sends them, so the save is a real
+// Identity-tab save rather than a partial form.
 func TestInboxSettingsPollMinutesConvertedAndBounded(t *testing.T) {
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	ctx := context.Background()
@@ -191,9 +191,22 @@ func TestInboxSettingsPollMinutesConvertedAndBounded(t *testing.T) {
 		t.Fatalf("poll seconds = %v, want 300", box.RemotePollSeconds)
 	}
 
-	// The floor is one minute, so a zero is refused rather than stored.
-	if rr := post("0"); rr.Code != http.StatusBadRequest {
-		t.Fatalf("zero minutes = %d, want 400", rr.Code)
+	// Zero is accepted as "no quick poll" and stored as an explicit 0, distinct
+	// from a blank field inheriting the default.
+	if rr := post("0"); rr.Code != http.StatusSeeOther {
+		t.Fatalf("zero minutes = %d body=%s", rr.Code, rr.Body.String())
+	}
+	box, err = svc.Store.GetInboxInternal(ctx, u.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.RemotePollSeconds == nil || *box.RemotePollSeconds != 0 {
+		t.Fatalf("disabled poll = %v, want an explicit 0", box.RemotePollSeconds)
+	}
+
+	// A negative value is still refused.
+	if rr := post("-1"); rr.Code != http.StatusBadRequest {
+		t.Fatalf("negative minutes = %d, want 400", rr.Code)
 	}
 
 	// A blank field inherits the default again, clearing the override.

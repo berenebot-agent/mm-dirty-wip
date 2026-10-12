@@ -3476,9 +3476,17 @@ function clearUrlParams(names) {
     var scheduleNote = document.getElementById('inbox-schedule-note');
     if (scheduleNote) {
       if (cfg.capabilities && cfg.capabilities.realtime) {
-        scheduleNote.textContent = 'Instant push is active for this mailbox, so new mail arrives on its own; the poll below is only a safety net.';
+        if (microsoft) {
+          scheduleNote.textContent = 'Microsoft supports instant push and it is active for this mailbox, so new mail arrives automatically; the poll below is only a safety net.';
+        } else {
+          scheduleNote.textContent = 'Instant push is active for this mailbox, so new mail arrives on its own; the poll below is only a safety net.';
+        }
+      } else if (one) {
+        scheduleNote.textContent = 'One does not support instant push, so new mail arrives on the poll schedule below.';
+      } else if (microsoft) {
+        scheduleNote.textContent = 'This Microsoft mailbox has no instant push active, so new mail arrives on the poll schedule below.';
       } else if (google) {
-        scheduleNote.textContent = 'This mailbox has no instant push, so new mail arrives on this poll.';
+        scheduleNote.textContent = 'Gmail does not support instant push, so new mail arrives on the poll schedule below.';
       } else {
         scheduleNote.textContent = 'New mail is pushed instantly when the server supports IDLE; these intervals govern the fallback poll and the periodic full sync.';
       }
@@ -3591,8 +3599,14 @@ function clearUrlParams(names) {
     var pollMinutes = document.getElementById('inbox-remote-poll-minutes');
     var fullSync = document.getElementById('inbox-remote-full-sync-minutes');
     // The form states the poll in whole minutes; the API reports it in seconds.
+    // A stored 0 means "no quick poll" and must render as 0, not blank (blank
+    // would silently revert to the inherited default on the next save).
     if (pollMinutes) {
-      pollMinutes.value = cfg.poll_seconds ? Math.round(cfg.poll_seconds / 60) : '';
+      if (typeof cfg.poll_seconds === 'number' && cfg.poll_seconds === 0) {
+        pollMinutes.value = '0';
+      } else {
+        pollMinutes.value = cfg.poll_seconds ? Math.round(cfg.poll_seconds / 60) : '';
+      }
       pollMinutes.placeholder = '1';
     }
     if (fullSync) {

@@ -283,11 +283,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   not only a hand-configured IMAP one — a Microsoft delegated shared mailbox is
   poll-only, since Graph has no change subscriptions for it. It renders inline
   directly below the email address, with the two intervals side by side, rather
-  than as a separate collapsible section.
+  than as a separate collapsible section. Entering 0 for the new-mail poll turns
+  the quick poll off (the inbox relies on push and the full sync); blank inherits
+  the one-minute default.
 
-- The remote watcher logs each IMAP IDLE mailbox update (`imap push received`,
-  provider `imap`) at Info, mirroring the Microsoft Graph push log, so a
-  server-pushed change is visible without waiting for the arrival log.
+- A remote arrival's `source` now reports "imap push" when an IMAP IDLE mailbox
+  update drove the detection pass that found it, matching the Microsoft Graph
+  "microsoft push" source. The bare IDLE signal itself is logged at Debug now, so
+  an operator sees a single "remote received" line per arrival.
 
 - **Standalone mailboxes.** An inbox now has a `kind` (`domain` or
   `standalone`). A standalone mailbox owns an address independent of any managed

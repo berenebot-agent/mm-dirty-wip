@@ -24,6 +24,7 @@ import (
 // context) is always reported as automatic.
 type remoteSyncTriggerKey struct{}
 type pushRemoteSyncKey struct{}
+type imapPushSyncKey struct{}
 
 // WithManualRemoteSync marks ctx as an explicit, user-initiated sync (the UI
 // reload button or the blocking refresh API). The marker does not survive a
@@ -37,6 +38,29 @@ func WithManualRemoteSync(ctx context.Context) context.Context {
 // WithPushRemoteSync marks a sync pass driven by durable Microsoft webhook work.
 func WithPushRemoteSync(ctx context.Context) context.Context {
 	return context.WithValue(ctx, pushRemoteSyncKey{}, true)
+}
+
+// WithIMAPPushSync marks a detection pass driven by an IMAP IDLE mailbox update,
+// so an arrival found by that pass records source "imap push" and the single
+// "remote received" line reports it arrived by push. It deliberately does not set
+// the generic push trigger: that one is reserved for the Microsoft webhook work.
+func WithIMAPPushSync(ctx context.Context) context.Context {
+	return context.WithValue(ctx, imapPushSyncKey{}, true)
+}
+
+func imapPushSync(ctx context.Context) bool {
+	v, _ := ctx.Value(imapPushSyncKey{}).(bool)
+	return v
+}
+
+// imapArrivalSource names how an IMAP arrival was discovered: "imap push" when
+// the pass was driven by a server IDLE update, otherwise the plain connector
+// family label. It mirrors remoteArrivalSource's Microsoft "microsoft push" case.
+func imapArrivalSource(ctx context.Context) string {
+	if imapPushSync(ctx) {
+		return "imap push"
+	}
+	return "imap"
 }
 
 func remotePushSync(ctx context.Context) bool {
