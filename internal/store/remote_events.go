@@ -622,8 +622,6 @@ func (s *Store) RecordRemoteArrivalEvent(ctx context.Context, accountID, inboxID
 		"provider":       provider,
 		"source":         source,
 		"remote":         true,
-		"remote_uid":     a.UID,
-		"uid_validity":   a.UIDValidity,
 		"folder_path":    a.FolderPath,
 		"rfc_message_id": a.RFCMessageID,
 		"from_address":   a.FromAddress,

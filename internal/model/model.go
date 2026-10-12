@@ -356,6 +356,7 @@ type Message struct {
 	// ReadMetadata carries optional cached mailbox metadata through read surfaces.
 	// It is not persisted in messages and is serialized only by the API projection.
 	ReadMetadata      *MessageReadMetadata `json:"-"`
+	Snippet           string               `json:"-"`
 	ID                string               `json:"id"`
 	AccountID         string               `json:"-"`
 	InboxID           string               `json:"inbox_id"`
@@ -463,8 +464,6 @@ type Message struct {
 // MessageReadMetadata preserves metadata available from a mailbox read without
 // treating indexing time as creation time or an unknown spam verdict as false.
 type MessageReadMetadata struct {
-	UID          *uint32
-	UIDValidity  *uint32
 	Snippet      string
 	Flagged      *bool
 	Answered     *bool

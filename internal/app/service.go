@@ -1651,10 +1651,9 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 			refs[i] = ensureMessageID(refs[i])
 		}
 		if len(to) == 0 {
-			if target.Direction == "inbound" {
-				to = []string{target.From.Address}
-			} else {
-				to = append([]string{}, target.To...)
+			to = model.DefaultReplyRecipients(target)
+			if len(to) == 0 {
+				return SendResult{}, fmt.Errorf("reply recipients are required when message direction is unknown")
 			}
 		}
 		if subject == "" {

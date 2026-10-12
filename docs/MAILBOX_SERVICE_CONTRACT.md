@@ -419,12 +419,20 @@ transient scope/`LIST` shortfall or a generation flip.
   remote messages, across inbox-scoped/account-wide lists, search, thread
   messages, detail reads, and message results from sends/mutations. OpenAPI's
   `Message` schema defines a stable required core with availability-based optional
-  fields; `inbox_kind` and `inbox_provider` identify the backend without changing
+  fields; `inbox_kind` and `provider` identify the backend without changing
   the item schema. The internal read model carries optional mailbox metadata
   through `model.Message.ReadMetadata` instead of dropping it in UI projections.
   Lists/search/thread messages omit bodies for all inbox kinds; details carry
   plain text and sanitized HTML. Known false flags remain present; unknown
-  direction/status/spam/creation time stay absent. `created_at` is never replaced
+  status/spam/creation time stay absent. Direction is consistently
+  `inbound`/`outbound`/`unknown` under the shared recorded/role-evidence policy
+  (D110), and unknown-direction replies require explicit recipients.
+  `message_transport` names local delivery transport or equals `provider` for a
+  connected inbox. Public IMAP UIDs are removed, including event/webhook/relay
+  metadata. `snippet` is always a bounded string, with `"-"` for unavailable
+  previews. Migration 072 caches new local previews and queues new ordinary
+  IMAP arrivals for bounded background prefix reads in the existing worker;
+  existing mail is not back-generated. `created_at` is never replaced
   by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
 - **Account-wide listings merge into one globally ordered stream.**
   `internal/httpapp/mailbox_merge.go` merges the local store with every

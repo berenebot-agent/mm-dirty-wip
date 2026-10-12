@@ -527,6 +527,15 @@ func (a *Adapter) FetchRawMIME(ctx context.Context, loc Locator, w io.Writer) er
 	return a.streamSection(ctx, loc, imap.FetchItemBodySection{Peek: true}, w)
 }
 
+// FetchPreview fetches only a bounded MIME prefix with BODY.PEEK[]<0.n>. It
+// validates UIDVALIDITY and never marks the message seen or fetches a full body.
+func (a *Adapter) FetchPreview(ctx context.Context, loc Locator, limit int64, w io.Writer) error {
+	if limit <= 0 || limit > 64<<10 {
+		limit = 64 << 10
+	}
+	return a.streamSection(ctx, loc, imap.FetchItemBodySection{Peek: true, Partial: &imap.SectionPartial{Size: limit}}, w)
+}
+
 // FetchBodyPart streams a specific MIME part (a text body or an attachment)
 // using BODY.PEEK[part] so \Seen is not set. An empty part selects the whole
 // message. Attachment parts are streamed with bounded memory.

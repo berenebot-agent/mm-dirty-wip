@@ -500,7 +500,7 @@ func remoteMessageEvent(a store.RemoteArrival) map[string]any {
 	return map[string]any{
 		"text": display, "message_type": "text", "user_id": a.FromAddress, "user_name": name, "message_id": a.ID,
 		"source":                map[string]any{"platform": "email", "chat_id": a.RFCMessageID, "chat_type": "thread", "chat_name": a.Subject, "user_id": a.FromAddress, "user_name": name, "thread_id": a.RFCMessageID, "chat_topic": nil, "message_id": a.ID},
-		"metadata":              map[string]any{"email_message_id": a.ID, "inbox_id": a.InboxID, "thread_id": a.RFCMessageID, "from": a.FromAddress, "subject": a.Subject, "remote": true, "remote_uid": a.UID, "uid_validity": a.UIDValidity, "folder_path": a.FolderPath, "rfc_message_id": a.RFCMessageID, "is_spam": false},
+		"metadata":              map[string]any{"email_message_id": a.ID, "inbox_id": a.InboxID, "thread_id": a.RFCMessageID, "from": a.FromAddress, "subject": a.Subject, "remote": true, "folder_path": a.FolderPath, "rfc_message_id": a.RFCMessageID, "is_spam": false},
 		"provenance":            map[string]any{"source": "email", "trust": "external_untrusted", "authenticated_sender": false},
 		"allow_gateway_control": false,
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
+	"github.com/dellarb/mailmoose/internal/messagepreview"
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
@@ -15,9 +16,8 @@ type messageResponse struct {
 	ID                  string                  `json:"id"`
 	InboxID             string                  `json:"inbox_id"`
 	InboxKind           string                  `json:"inbox_kind,omitempty"`
-	InboxProvider       string                  `json:"inbox_provider,omitempty"`
 	ThreadID            string                  `json:"thread_id,omitempty"`
-	Direction           string                  `json:"direction,omitempty"`
+	Direction           string                  `json:"direction"`
 	From                model.Address           `json:"from"`
 	To                  []string                `json:"to"`
 	CC                  []string                `json:"cc"`
@@ -28,7 +28,8 @@ type messageResponse struct {
 	MessageID           string                  `json:"message_id,omitempty"`
 	InReplyTo           string                  `json:"in_reply_to,omitempty"`
 	References          []string                `json:"references,omitempty"`
-	Provider            string                  `json:"provider,omitempty"`
+	Provider            string                  `json:"provider"`
+	MessageTransport    string                  `json:"message_transport"`
 	ProviderMessageID   string                  `json:"provider_message_id,omitempty"`
 	EnvelopeTo          []string                `json:"envelope_to,omitempty"`
 	EnvelopeFrom        string                  `json:"envelope_from,omitempty"`
@@ -54,9 +55,7 @@ type messageResponse struct {
 	LastError           string                  `json:"last_error,omitempty"`
 	NextRetry           string                  `json:"next_retry,omitempty"`
 	Sending             bool                    `json:"sending,omitempty"`
-	UID                 *uint32                 `json:"uid,omitempty"`
-	UIDValidity         *uint32                 `json:"uid_validity,omitempty"`
-	Snippet             string                  `json:"snippet,omitempty"`
+	Snippet             string                  `json:"snippet"`
 	Flagged             *bool                   `json:"flagged,omitempty"`
 	Answered            *bool                   `json:"answered,omitempty"`
 	Draft               *bool                   `json:"draft,omitempty"`
@@ -67,10 +66,10 @@ type messageResponse struct {
 
 func messageResponseOf(m model.Message, body bool) messageResponse {
 	out := messageResponse{
-		ID: m.ID, InboxID: m.InboxID, ThreadID: m.ThreadID, Direction: m.Direction,
+		ID: m.ID, InboxID: m.InboxID, ThreadID: m.ThreadID, Direction: model.MessageDirection(m.Direction, false, false, false),
 		From: m.From, To: m.To, CC: m.CC, BCC: m.BCC, Subject: m.Subject,
 		MessageID: m.RFCMessageID, InReplyTo: m.InReplyTo, References: m.References,
-		Provider: m.Provider, ProviderMessageID: m.ProviderMessageID,
+		MessageTransport: m.Provider, ProviderMessageID: m.ProviderMessageID, Snippet: m.Snippet,
 		EnvelopeTo: m.EnvelopeTo, EnvelopeFrom: m.EnvelopeFrom, EnvelopeRecipient: m.EnvelopeRecipient,
 		Source: m.Source, Spam: &m.Spam, SpamReason: m.SpamReason, AuthResults: m.AuthResults,
 		ReceivedAt: m.ReceivedAt, SentAt: m.SentAt, Read: m.Read, DeletedAt: m.DeletedAt,
@@ -93,10 +92,16 @@ func messageResponseOf(m model.Message, body bool) messageResponse {
 		out.HTML = htmlsanitize.Sanitize(m.HTML)
 	}
 	if meta := m.ReadMetadata; meta != nil {
-		out.UID, out.UIDValidity = meta.UID, meta.UIDValidity
 		out.Snippet, out.Flagged, out.Answered, out.Draft = meta.Snippet, meta.Flagged, meta.Answered, meta.Draft
 		out.Flags, out.InternalDate, out.IndexedAt = meta.Flags, meta.InternalDate, meta.IndexedAt
 		out.CreatedAt, out.Spam = meta.CreatedAt, meta.Spam
+	}
+	out.Snippet = messagepreview.Text(out.Snippet)
+	if out.Snippet == "" {
+		out.Snippet = "-"
+	}
+	if out.MessageTransport == "" {
+		out.MessageTransport = "unknown"
 	}
 	return out
 }
@@ -111,9 +116,12 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 	for _, m := range ms {
 		id, ok := identities[m.InboxID]
 		if !ok {
+			id.provider = "unknown"
 			if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, m.InboxID); err == nil {
 				id.kind = box.Kind
+				id.provider = "mailmoose"
 				if box.Kind == model.InboxKindStandalone {
+					id.provider = "imap"
 					switch {
 					case s.Service.Store.IsOne(r.Context(), p.AccountID, box.ID):
 						id.provider = "one"
@@ -129,7 +137,10 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 			identities[m.InboxID] = id
 		}
 		v := messageResponseOf(m, body)
-		v.InboxKind, v.InboxProvider = id.kind, id.provider
+		v.InboxKind, v.Provider = id.kind, id.provider
+		if id.kind == model.InboxKindStandalone {
+			v.MessageTransport = id.provider
+		}
 		out = append(out, v)
 	}
 	return out

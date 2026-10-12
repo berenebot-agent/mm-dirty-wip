@@ -1285,13 +1285,14 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	m, err := s.Service.Store.GetMessage(r.Context(), p, r.PathValue("id"))
+	m, _, _, err := s.resolveMessageAny(r.Context(), p, r.PathValue("id"))
 	if err != nil {
-		mapStoreError(w, err)
+		mapMailboxError(w, err)
 		return
 	}
 	var in struct {
 		Sender      string               `json:"sender"`
+		To          stringList           `json:"to,omitempty"`
 		Text        string               `json:"text"`
 		HTML        string               `json:"html,omitempty"`
 		Attachments []app.SendAttachment `json:"attachments,omitempty"`
@@ -1299,7 +1300,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONLimit(w, r, &in, s.Service.Config.MaxMessageBytes*2) {
 		return
 	}
-	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
+	res, err := s.Service.Send(r.Context(), p, app.SendInput{InboxID: m.InboxID, FromAddress: in.Sender, To: []string(in.To), ReplyToMessageID: m.ID, Text: in.Text, HTML: in.HTML, Attachments: in.Attachments}, idemKey(r))
 	if err != nil {
 		mapStoreError(w, err)
 		return

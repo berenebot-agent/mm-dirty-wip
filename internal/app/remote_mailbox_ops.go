@@ -23,10 +23,11 @@ import (
 type RemoteMessageView struct {
 	ProviderCursor string        `json:"-"`
 	ID             string        `json:"id"`
+	Direction      string        `json:"direction"`
 	InboxID        string        `json:"inbox_id"`
 	FolderPath     string        `json:"folder_path"`
-	UIDValidity    uint32        `json:"uid_validity"`
-	UID            uint32        `json:"uid"`
+	UIDValidity    uint32        `json:"-"`
+	UID            uint32        `json:"-"`
 	RFCMessageID   string        `json:"message_id,omitempty"`
 	InReplyTo      string        `json:"in_reply_to,omitempty"`
 	References     []string      `json:"references,omitempty"`
@@ -650,7 +651,7 @@ type RemoteListResult struct {
 	Items        []RemoteMessageView    `json:"items"`
 	NextCursor   string                 `json:"next_cursor,omitempty"`
 	Completeness model.ListCompleteness `json:"completeness"`
-	UIDValidity  uint32                 `json:"uid_validity"`
+	UIDValidity  uint32                 `json:"-"`
 	Reconciled   bool                   `json:"reconciled"`
 }
 
@@ -742,7 +743,7 @@ func (m *RemoteMailboxService) listRemoteMessages(ctx context.Context, p model.P
 		}
 	}
 	for _, msg := range msgs {
-		view := remoteView(msg)
+		view := m.remoteView(ctx, msg)
 		labels, lerr := m.Service.Store.RemoteMessageLabels(ctx, p.AccountID, inboxID, msg.ID)
 		if lerr == nil {
 			view.Labels = labels
@@ -776,7 +777,7 @@ func (m *RemoteMailboxService) GetRemoteMessage(ctx context.Context, p model.Pri
 	if !m.folderInScope(inbox, rec.FolderPath) {
 		return RemoteMessageView{}, model.NewMailboxError(model.ErrKindNotFound, "message is not in this mailbox's scope", false, nil)
 	}
-	view := remoteView(rec)
+	view := m.remoteView(ctx, rec)
 	if m.IsMicrosoft(context.Background(), rec.AccountID, rec.InboxID) {
 		view.FolderPath, _ = m.Service.Store.MicrosoftMessageFolder(context.Background(), rec.AccountID, rec.InboxID, rec.ID)
 	}
@@ -806,7 +807,7 @@ func (m *RemoteMailboxService) refreshRemoteHeader(ctx context.Context, accountI
 			// no Message-ID cannot be re-resolved and is left as cached.
 			if newLoc, ferr := sess.FindByMessageID(ctx, view.FolderPath, view.RFCMessageID); ferr == nil {
 				if updated, uerr := m.Service.Store.MoveRemoteMessageMetadata(ctx, accountID, inboxID, view.ID, newLoc.FolderPath, newLoc.UIDValidity, newLoc.UID); uerr == nil {
-					*view = remoteView(updated)
+					*view = m.remoteView(ctx, updated)
 				}
 			}
 		}
@@ -815,7 +816,7 @@ func (m *RemoteMailboxService) refreshRemoteHeader(ctx context.Context, accountI
 	if h.UID != 0 {
 		if updated, uerr := m.Service.Store.UpsertRemoteMessage(ctx, accountID, inboxID, remoteMessageInputFromHeader(h)); uerr == nil {
 			labels := view.Labels
-			*view = remoteView(updated)
+			*view = m.remoteView(ctx, updated)
 			view.Labels = labels
 		}
 	}
@@ -980,7 +981,7 @@ func (m *RemoteMailboxService) ViewOf(rec store.RemoteMessage) RemoteMessageView
 	if m.IsGoogle(context.Background(), rec.AccountID, rec.InboxID) {
 		return m.googleView(context.Background(), rec)
 	}
-	view := remoteView(rec)
+	view := m.remoteView(context.Background(), rec)
 	labels, err := m.Service.Store.RemoteMessageLabels(context.WithoutCancel(context.Background()), rec.AccountID, rec.InboxID, rec.ID)
 	if err == nil {
 		view.Labels = labels
@@ -1219,7 +1220,9 @@ func (m *RemoteMailboxService) ResolveRemoteReply(ctx context.Context, accountID
 	if !ok {
 		return model.Message{}, false, nil
 	}
-	return remoteMessageToModelMessage(rec), true, nil
+	msg := remoteMessageToModelMessage(rec)
+	msg.Direction = m.remoteView(ctx, rec).Direction
+	return msg, true, nil
 }
 
 // resolveRemoteRecord resolves a remote message id (a metadata id, or an arrival
@@ -1311,7 +1314,7 @@ func remoteMessageToModelMessage(rec store.RemoteMessage) model.Message {
 		Read:           rec.Read,
 		Labels:         rec.Labels,
 		FolderPath:     rec.FolderPath,
-		Direction:      "inbound",
+		Direction:      model.DirectionUnknown,
 	}
 	// ThreadID is deliberately left empty. A remote thread key is not a local
 	// threads.id, so carrying it into an outbound message would violate the
@@ -1510,7 +1513,7 @@ func (m *RemoteMailboxService) MoveRemoteMessage(ctx context.Context, p model.Pr
 		// MOVE was confirmed by the server. Failure to resolve its destination
 		// locator is a cache limitation, not an uncertain remote write: do not
 		// fail the action or encourage another move. Reconcile fills the cache.
-		view := remoteView(rec)
+		view := m.remoteView(ctx, rec)
 		view.FolderPath = destPath
 		return view, nil
 	}

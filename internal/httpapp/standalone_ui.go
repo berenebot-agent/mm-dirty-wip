@@ -448,6 +448,7 @@ func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.M
 		ID:             v.ID,
 		InboxID:        v.InboxID,
 		ThreadID:       v.ThreadKey,
+		Direction:      v.Direction,
 		From:           v.From,
 		To:             v.To,
 		CC:             v.CC,
@@ -466,12 +467,6 @@ func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.M
 			Snippet: v.Snippet, Flagged: &v.Flagged, Answered: &v.Answered, Draft: &v.Draft,
 			Flags: v.Flags, InternalDate: remoteTimestamp(v.InternalDate),
 		},
-	}
-	if v.UID != 0 {
-		m.ReadMetadata.UID = &v.UID
-	}
-	if v.UIDValidity != 0 {
-		m.ReadMetadata.UIDValidity = &v.UIDValidity
 	}
 	if !v.IndexedAt.IsZero() {
 		m.ReadMetadata.IndexedAt = &v.IndexedAt
@@ -549,7 +544,6 @@ func (s *Server) remoteMessagePage(w http.ResponseWriter, r *http.Request, p mod
 // never blocks on the IMAP server.
 func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, view app.RemoteMessageView) {
 	m := remoteMessageToModel(view, &model.Folder{ID: "", Path: view.FolderPath})
-	m.Direction = "inbound"
 	// A remote message's Trash/Spam state is its remote role folder, not a local
 	// flag. Set DeletedAt so the reader offers Restore/Delete-forever instead of
 	// Reply/Trash, matching the local reader.
@@ -1066,22 +1060,23 @@ func (s *Server) composeRemoteMessage(w http.ResponseWriter, r *http.Request, p 
 			continue
 		}
 		m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
-		m.Direction = "inbound"
 		acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 		data := pageData{Principal: p, CSRF: csrf(r), Account: acc, ComposeCancel: "/ui/messages/" + m.ID}
 		data.ComposeFromOptions, data.ComposeFrom = composeFromOptions(box, "")
+		if m.Direction == model.DirectionUnknown && (kind == "reply" || kind == "reply-all") {
+			data.ComposeNote = "Message direction is unknown. Choose the reply recipients explicitly."
+		}
 		switch kind {
 		case "reply":
 			data.Title = "Reply"
 			data.ComposeTitle = "Reply"
-			data.ComposeTo = m.From.Address
+			data.ComposeTo = strings.Join(model.DefaultReplyRecipients(m), ", ")
 			data.ComposeSubject = app.ReplySubject(m.Subject)
 			data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply", csrf(r))
 		case "reply-all":
 			data.Title = "Reply all"
 			data.ComposeTitle = "Reply all"
-			data.ComposeTo = m.From.Address
-			data.ComposeCC = strings.Join(m.CC, ", ")
+			data.ComposeTo, data.ComposeCC = replyAllRecipients(m, box)
 			data.ComposeSubject = app.ReplySubject(m.Subject)
 			data.ComposeAction = actionWithCSRF("/ui/messages/"+m.ID+"/reply-all", csrf(r))
 		case "forward":

@@ -136,14 +136,14 @@ func TestMessageContractAcrossInboxKinds(t *testing.T) {
 				t.Fatal("list unexpectedly contains HTML")
 			}
 			if kind == "domain" {
-				if item["inbox_kind"] != "domain" || item["direction"] != "inbound" || item["is_spam"] != false {
+				if item["inbox_kind"] != "domain" || item["provider"] != "mailmoose" || item["message_transport"] != "mailgun" || item["direction"] != "inbound" || item["is_spam"] != false || item["snippet"] != "contract body" {
 					t.Fatalf("lost local metadata: %+v", item)
 				}
 			} else {
-				if item["inbox_kind"] != "standalone" || item["inbox_provider"] != kind {
+				if item["inbox_kind"] != "standalone" || item["provider"] != kind || item["message_transport"] != kind || item["direction"] != "inbound" {
 					t.Fatalf("wrong identity metadata: %+v", item)
 				}
-				for _, unknown := range []string{"direction", "status", "created_at", "is_spam"} {
+				for _, unknown := range []string{"status", "created_at", "is_spam"} {
 					if _, ok := item[unknown]; ok {
 						t.Errorf("fabricated %s: %+v", unknown, item)
 					}
@@ -153,14 +153,19 @@ func TestMessageContractAcrossInboxKinds(t *testing.T) {
 						t.Errorf("lost %s: %+v", known, item)
 					}
 				}
-				if kind == "imap" && (item["in_reply_to"] != "<parent@example.test>" || item["uid"] == nil || item["uid_validity"] == nil) {
+				if kind == "imap" && (item["in_reply_to"] != "<parent@example.test>" || item["snippet"] != "-") {
 					t.Fatalf("lost IMAP/thread metadata: %+v", item)
 				}
 				if kind == "imap" && item["sent_at"] != "2026-10-10T09:59:00Z" {
 					t.Fatalf("lost known sent timestamp: %+v", item)
 				}
-				if kind != "imap" && (item["uid"] != nil || item["uid_validity"] != nil) {
-					t.Fatalf("fabricated UID: %+v", item)
+			}
+			for _, removed := range []string{"uid", "uid_validity", "inbox_provider"} {
+				if _, ok := item[removed]; ok {
+					t.Errorf("removed field remains: %s", removed)
+				}
+				if _, ok := apispec.Schemas()["Message"].(map[string]any)["properties"].(map[string]any)[removed]; ok {
+					t.Errorf("removed field remains in OpenAPI: %s", removed)
 				}
 			}
 			for _, path := range []string{
@@ -282,8 +287,12 @@ func assertMessageSchema(t *testing.T, m map[string]any) {
 	}
 }
 
-func contractConnectorFixture(t *testing.T, kind string) *httptest.Server {
+func contractConnectorFixture(t *testing.T, kind string, nativeLabels ...string) *httptest.Server {
 	t.Helper()
+	labels := []string{"INBOX", "STARRED"}
+	if len(nativeLabels) > 0 {
+		labels = nativeLabels
+	}
 	var fixture *httptest.Server
 	fixture = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -292,13 +301,13 @@ func contractConnectorFixture(t *testing.T, kind string) *httptest.Server {
 			case strings.HasSuffix(r.URL.Path, "/profile"):
 				json.NewEncoder(w).Encode(map[string]string{"emailAddress": "google@example.test", "historyId": "10"})
 			case strings.HasSuffix(r.URL.Path, "/labels"):
-				w.Write([]byte(`{"labels":[{"id":"INBOX","name":"INBOX","type":"system"}]}`))
+				w.Write([]byte(`{"labels":[{"id":"INBOX","name":"INBOX","type":"system"},{"id":"SENT","name":"SENT","type":"system"},{"id":"DRAFT","name":"DRAFT","type":"system"}]}`))
 			case strings.HasSuffix(r.URL.Path, "/history"):
 				w.Write([]byte(`{"historyId":"10"}`))
 			case strings.HasSuffix(r.URL.Path, "/messages"):
 				w.Write([]byte(`{"messages":[{"id":"a","threadId":"th"}]}`))
 			case strings.HasSuffix(r.URL.Path, "/messages/a"):
-				json.NewEncoder(w).Encode(map[string]any{"id": "a", "threadId": "th", "labelIds": []string{"INBOX", "STARRED"}, "internalDate": "1700000000000", "snippet": "contract preview", "raw": base64.RawURLEncoding.EncodeToString([]byte(contractMIME)), "payload": map[string]any{"headers": []map[string]string{{"name": "Subject", "value": "Contract"}, {"name": "From", "value": "sender@example.test"}, {"name": "Message-ID", "value": "<contract@example.test>"}, {"name": "In-Reply-To", "value": "<parent@example.test>"}, {"name": "References", "value": "<parent@example.test>"}}}})
+				json.NewEncoder(w).Encode(map[string]any{"id": "a", "threadId": "th", "labelIds": labels, "internalDate": "1700000000000", "snippet": "contract preview", "raw": base64.RawURLEncoding.EncodeToString([]byte(contractMIME)), "payload": map[string]any{"headers": []map[string]string{{"name": "Subject", "value": "Contract"}, {"name": "From", "value": "sender@example.test"}, {"name": "Message-ID", "value": "<contract@example.test>"}, {"name": "In-Reply-To", "value": "<parent@example.test>"}, {"name": "References", "value": "<parent@example.test>"}}}})
 			default:
 				t.Errorf("unexpected Google request: %s", r.URL)
 				w.WriteHeader(404)

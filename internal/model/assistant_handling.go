@@ -153,7 +153,7 @@ type AssistantHandlingRequest struct {
 	Publication string `json:"publication"`
 	// RemoteUID is the appended message's UID when the server reported one, else
 	// zero.
-	RemoteUID uint32 `json:"remote_uid,omitempty"`
+	RemoteUID uint32 `json:"-"`
 	// NotificationStatus reports whether the handoff notification was queued,
 	// handed to the outbound path, or failed. It advances independently of
 	// publication: a handoff whose notification is unavailable is still

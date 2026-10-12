@@ -76,6 +76,11 @@ func scanEvent(row interface{ Scan(...any) error }) (model.Event, error) {
 	}
 	e.Cursor = EventCursor(e.ID)
 	e.Payload = decodeMap(payload)
+	// Old event rows may still contain transport locators. They remain internal
+	// storage details, never part of the replayed public contract.
+	delete(e.Payload, "uid")
+	delete(e.Payload, "remote_uid")
+	delete(e.Payload, "uid_validity")
 	e.CreatedAt = parseTime(created)
 	return e, nil
 }

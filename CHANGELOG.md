@@ -8,6 +8,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Message metadata now has required `provider` (mailbox implementation) and
+  `message_transport` fields; connected inboxes return the same connector name
+  in both. Public IMAP UID/UIDVALIDITY fields are removed, including handoff,
+  event-replay, webhook, and relay metadata. `direction` consistently reports
+  inbound, outbound, or unknown using recorded direction and native label/mapped
+  role evidence; unknown-direction replies require explicit recipients. New
+  local and IMAP arrivals cache bounded previews, with `snippet: "-"` when no
+  preview is available. IMAP preview fetching is background-only and historical
+  mail is not back-generated. Migration 072 adds the preview cache/pending bit.
+
 - Native message APIs now share one schema across domain, IMAP, Google,
   Microsoft, and Gmail-via-One inboxes and across inbox/account/thread/search
   routes. Optional remote metadata is preserved instead of being lost in the

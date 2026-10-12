@@ -341,7 +341,7 @@ func remoteAwareJSON(d store.PendingWebhookDelivery, arrival *store.RemoteArriva
 	}
 	return map[string]any{
 		"event": d.Type, "cursor": d.Cursor, "inbox_id": d.Client.InboxID, "message_id": arrival.ID,
-		"remote": true, "remote_uid": arrival.UID, "uid_validity": arrival.UIDValidity,
+		"remote":      true,
 		"folder_path": arrival.FolderPath, "rfc_message_id": arrival.RFCMessageID,
 		"from": arrival.FromAddress, "subject": arrival.Subject, "size_bytes": arrival.SizeBytes,
 	}
