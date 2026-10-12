@@ -5349,14 +5349,24 @@ function hideInboxSubview(dlg) {
   if (openCardEl && openCardEl.getAttribute('data-open-inbox')) {
     inboxReopening = true;
   }
-  document.querySelectorAll('.domain-dialog[data-open="1"]').forEach(function (dlg) {
+  var pendingDialogs = document.querySelectorAll('.domain-dialog[data-open="1"]');
+  var keyDialog = document.getElementById('dkim-key-dialog');
+  pendingDialogs.forEach(function (dlg) {
     if (inboxReopening) {
+      return;
+    }
+    // The one-time DKIM key pop-up is opened last (below) so it sits above the
+    // sending dialog it was launched from instead of behind it.
+    if (dlg === keyDialog) {
       return;
     }
     if (!dlg.open) {
       dlg.showModal();
     }
   });
+  if (!inboxReopening && keyDialog && keyDialog.getAttribute('data-open') === '1' && !keyDialog.open) {
+    keyDialog.showModal();
+  }
   document.querySelectorAll('.domain-dialog [data-close-dialog]').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var dlg = btn.closest('dialog');
@@ -5419,9 +5429,9 @@ function hideInboxSubview(dlg) {
       });
     });
   }
-  // syncSaveLabel picks the submit label. The Direct MX editor normally offers
-  // "Next" because saving reveals the DNS record; with signing off there is no
-  // record, so it reads "Save".
+  // syncSaveLabel picks the submit label. A provider whose editor has a
+  // server-generated secret offers "Next", because saving first reveals the
+  // generated value the operator must copy. Every other provider reads "Save".
   function syncSaveLabel(dlg) {
     var sel = dlg.querySelector('.provider-select');
     var save = dlg.querySelector('[data-save-provider]');
@@ -5430,12 +5440,6 @@ function hideInboxSubview(dlg) {
     }
     var opt = sel.options[sel.selectedIndex];
     var next = !!(opt && opt.getAttribute('data-next'));
-    if (next && dlg.querySelector('[data-dkim-panel]')) {
-      var toggle = dlg.querySelector('[name="cfg_mx_dkim_enabled"]');
-      if (toggle) {
-        next = (toggle.value || '').toLowerCase() === 'on';
-      }
-    }
     save.textContent = next ? 'Next' : 'Save';
   }
   function sync(dlg) {

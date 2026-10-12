@@ -658,6 +658,10 @@ func inboundConfigFields(provider string) ([]transport.ConfigField, error) {
 // against concurrent rotation: on conflict store.ErrConflict is returned and
 // the caller must reload rather than overwrite.
 func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domainID, provider string, cfg map[string]any) (store.DomainSendingConfig, error) {
+	return s.saveDomainSendingConfig(ctx, accountID, domainID, provider, cfg)
+}
+
+func (s *Service) saveDomainSendingConfig(ctx context.Context, accountID, domainID, provider string, cfg map[string]any) (store.DomainSendingConfig, error) {
 	// Resolve the domain and any current config before touching the provider
 	// schema: a missing or foreign domain must be ErrNotFound even when the
 	// requested provider is unknown.
@@ -685,11 +689,10 @@ func (s *Service) SaveDomainSendingConfig(ctx context.Context, accountID, domain
 		return store.DomainSendingConfig{}, err
 	}
 	// Direct MX signs with a key MailMoose generates. This runs here rather than
-	// in validateConfig because it is provider-specific key material, not
-	// generic field coercion. The previously stored key is the only trusted
-	// source, so a freshly posted value is not used.
-	storedKey := asString(old[mx.FieldDKIMPrivateKey])
-	if err := s.applyDKIMSendingKey(ctx, accountID, domainID, provider, storedKey, merged); err != nil {
+	// in validateConfig because it is provider-specific key material. The key
+	// lives on the domain row; this copies it into the config so the delivery
+	// path signs from the values the operator was shown.
+	if err := s.applyDKIMSendingKey(ctx, accountID, domainID, provider, merged); err != nil {
 		return store.DomainSendingConfig{}, err
 	}
 	if err := s.validateProviderBase(merged); err != nil {
