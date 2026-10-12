@@ -90,8 +90,10 @@ type RemoteWorker struct {
 	pollInterval time.Duration
 	// watchBackoff bounds reconnect attempts after a watch/connection failure.
 	watchBackoff time.Duration
-	detectionMu  sync.Mutex
-	detecting    map[string]bool
+	// detectionMu and detecting serialize provider detection across startup,
+	// watcher, demand, and approval-triggered paths for each inbox.
+	detectionMu sync.Mutex
+	detecting   map[string]bool
 	// demandMu guards lastDemand, the per-inbox timestamp of the last
 	// demand-driven detection pass. It coalesces the many clients that can ask
 	// for freshness (SSE streams, long-polls, list/thread reads, the reload
@@ -670,15 +672,29 @@ func (w *RemoteWorker) demandIntervalFor(inbox model.Inbox) time.Duration {
 	return w.pollIntervalFor(inbox)
 }
 
-// detectInbox runs one durable detection pass for one inbox and emits the
-// operator-facing completion line for the IMAP connector. Microsoft and Google
-// have dedicated passes (reconcileMicrosoft, detectGoogle) that log their own
-// completion, so this wrapper delegates to them without a second line. A
-// connection failure returns without touching the cursor.
+// detectInbox runs at most one durable detection pass for an inbox at a time,
+// regardless of whether startup, its watcher, or a demand path initiated it. It
+// emits the operator-facing completion line for IMAP; Microsoft and Google have
+// dedicated passes that log their own completion. A connection failure returns
+// without touching the cursor.
 func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	if w.stopping() {
 		return
 	}
+	key := inbox.AccountID + ":" + inbox.ID
+	w.detectionMu.Lock()
+	if w.detecting[key] {
+		w.detectionMu.Unlock()
+		return
+	}
+	w.detecting[key] = true
+	w.detectionMu.Unlock()
+	defer func() {
+		w.detectionMu.Lock()
+		delete(w.detecting, key)
+		w.detectionMu.Unlock()
+	}()
+
 	start := time.Now()
 	if w.remote.IsMicrosoft(ctx, inbox.AccountID, inbox.ID) {
 		w.detectMicrosoft(ctx, inbox)
@@ -723,19 +739,6 @@ func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (
 	if w.stopping() {
 		return 0, "partial", nil
 	}
-	key := inbox.AccountID + ":" + inbox.ID
-	w.detectionMu.Lock()
-	if w.detecting[key] {
-		w.detectionMu.Unlock()
-		return 0, "partial", nil
-	}
-	w.detecting[key] = true
-	w.detectionMu.Unlock()
-	defer func() {
-		w.detectionMu.Lock()
-		delete(w.detecting, key)
-		w.detectionMu.Unlock()
-	}()
 	folder := w.inboxFolder(inbox)
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {
