@@ -463,7 +463,7 @@ func (f *microsoftLogFixture) handle(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{"value": value, "@odata.deltaLink": f.url + r.URL.Path + "?cursor=1"})
 	case strings.HasSuffix(r.URL.Path, "/mailFolders"):
 		f.folderEnumerations++
-		json.NewEncoder(w).Encode(map[string]any{"value": []any{map[string]any{"id": "inbox-id", "displayName": "Inbox"}}})
+		json.NewEncoder(w).Encode(map[string]any{"value": []any{map[string]any{"id": "inbox-id", "displayName": "Inbox", "totalItemCount": len(f.messages)}}})
 	case strings.HasSuffix(r.URL.Path, "/mailFolders/inbox"):
 		json.NewEncoder(w).Encode(map[string]any{"id": "inbox-id", "displayName": "Inbox"})
 	default:

@@ -130,7 +130,9 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	call := &remoteReconcileCall{done: make(chan struct{})}
 	m.reconciling[key] = call
 	m.refreshMu.Unlock()
+	phase := m.beginMetadataSync(context.WithoutCancel(ctx), accountID, inboxID)
 	defer func() {
+		m.finishMetadataSync(context.WithoutCancel(ctx), accountID, inboxID, phase, result, resultErr)
 		m.refreshMu.Lock()
 		delete(m.reconciling, key)
 		call.status, call.err = result, resultErr
@@ -139,6 +141,7 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
+	ctx = m.withMetadataWait(ctx, accountID, inboxID)
 	// Each provider pass logs its own "remote sync" completion line, so a pass
 	// is reported exactly once regardless of which provider it ran.
 	if m.IsMicrosoft(ctx, accountID, inboxID) {
@@ -222,13 +225,33 @@ func (m *RemoteMailboxService) reconcileIMAPPass(ctx context.Context, accountID,
 	// Index the header metadata of each selectable folder progressively. A folder
 	// index failure is reported partial rather than aborting the whole reconcile.
 	complete := validityResolved
+	if !validityResolved {
+		m.metadataFolderError(ctx, accountID, inboxID)
+	}
+	key := accountID + ":" + inboxID
+	m.refreshMu.Lock()
+	if m.metadataTotals == nil {
+		m.metadataTotals = make(map[string]map[string]int64)
+	}
+	m.metadataTotals[key] = make(map[string]int64)
+	m.refreshMu.Unlock()
+	defer func() { m.refreshMu.Lock(); delete(m.metadataTotals, key); m.refreshMu.Unlock() }()
+	selectable := 0
 	for _, f := range folderSync {
+		if f.Selectable {
+			selectable++
+		}
 		if !f.Selectable || f.UIDValidity == 0 {
 			continue
 		}
 		folderComplete, err := m.indexRemoteFolder(ctx, sess, accountID, inboxID, f.Path, f.UIDValidity)
 		if err != nil {
 			m.Service.Log.Debug("remote folder index", "inbox_id", inboxID, "folder", f.Path, "error", err)
+			if errors.Is(err, store.ErrRemoteMetadataQuota) {
+				m.pauseMetadataSync(ctx, accountID, inboxID)
+			} else {
+				m.metadataFolderError(ctx, accountID, inboxID)
+			}
 			complete = false
 			continue
 		}
@@ -236,6 +259,18 @@ func (m *RemoteMailboxService) reconcileIMAPPass(ctx context.Context, accountID,
 			complete = false
 		}
 	}
+	m.refreshMu.Lock()
+	totals := m.metadataTotals[key]
+	var total int64
+	known := len(totals) == selectable
+	for _, n := range totals {
+		total += n
+	}
+	m.refreshMu.Unlock()
+	if !known {
+		total = 0
+	}
+	_ = m.Service.Store.SaveMetadataSyncTotal(ctx, accountID, inboxID, total)
 	status := store.RemoteIndexComplete
 	if !complete {
 		status = store.RemoteIndexPartial
@@ -272,6 +307,9 @@ func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess Remot
 	if isComplete {
 		unchanged, ferr := m.folderQuiescent(ctx, sess, accountID, inboxID, folderPath, validity)
 		if ferr == nil && unchanged {
+			if summary, err := m.Service.Store.GetRemoteFolderIndexSummary(ctx, accountID, inboxID, folderPath, validity); err == nil {
+				m.recordMetadataFolderTotal(accountID, inboxID, folderPath, int64(summary.Count))
+			}
 			return m.refreshQuiescent(ctx, sess, accountID, inboxID, folderPath, validity)
 		}
 	}
@@ -286,6 +324,9 @@ func (m *RemoteMailboxService) indexRemoteFolder(ctx context.Context, sess Remot
 	allUIDs := fullSearch.UIDs // ascending
 	tooLarge := len(allUIDs) > remoteUIDSetCap
 	fullKnown := fullSearch.Completeness == imap.CompletenessComplete && !tooLarge
+	if fullKnown {
+		m.recordMetadataFolderTotal(accountID, inboxID, folderPath, int64(len(allUIDs)))
+	}
 	// Diagnostic: a UIDVALIDITY change (bf.Generation != validity) or a non-empty
 	// cache that this pass does not fully cover is what used to transiently empty
 	// a folder. Log the folder's cached index vs the live snapshot so a

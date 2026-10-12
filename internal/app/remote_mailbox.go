@@ -102,14 +102,17 @@ type RemoteMailboxService struct {
 	oneLimiters     map[string]*one.Limiter
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
-	dial           RemoteDialer
-	refreshMu      sync.Mutex
-	refreshing     map[string]bool
-	refreshContext context.Context
-	refreshCancel  context.CancelFunc
-	refreshWG      sync.WaitGroup
-	refreshSlots   chan struct{}
-	reconciling    map[string]*remoteReconcileCall
+	dial             RemoteDialer
+	refreshMu        sync.Mutex
+	refreshing       map[string]bool
+	refreshContext   context.Context
+	refreshCancel    context.CancelFunc
+	refreshWG        sync.WaitGroup
+	refreshSlots     chan struct{}
+	reconciling      map[string]*remoteReconcileCall
+	metadataTotals   map[string]map[string]int64
+	metadataChecking map[string]int
+	metadataWaiting  map[string]int
 }
 
 type remoteReconcileCall struct {

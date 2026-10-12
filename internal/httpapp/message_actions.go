@@ -183,7 +183,13 @@ func (s *Server) uiActionQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"items": actions, "csrf": csrf(r)})
+	// The same response carries the live metadata-sync status so a single poll
+	// drives both the action-queue popup and the standalone mailbox banner.
+	writeJSON(w, 200, map[string]any{
+		"items": actions,
+		"syncs": s.metadataSyncStatuses(r.Context(), principal(r)),
+		"csrf":  csrf(r),
+	})
 }
 
 func (s *Server) apiAction(w http.ResponseWriter, r *http.Request) {

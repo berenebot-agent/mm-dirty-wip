@@ -17,8 +17,8 @@
   }
   var label = node.querySelector('.conn-label');
   var BUSY_DELAY_MS = 250;
-  var BUSY_ORDER = ['nav', 'sync', 'body', 'list'];
-  var BUSY_LABELS = { nav: 'Loading…', sync: 'Syncing messages…', body: 'Loading message body…', list: 'Updating messages…' };
+  var BUSY_ORDER = ['nav', 'sync', 'body', 'list', 'metadata'];
+  var BUSY_LABELS = { nav: 'Loading…', sync: 'Syncing messages…', body: 'Loading message body…', list: 'Updating messages…', metadata: 'Syncing mailbox metadata…' };
   var conn = 'connecting';
   var syncError = '';
   var busy = {};
@@ -154,14 +154,39 @@
     '.aq-empty,.aq-more,.aq-notice{margin:9px 0 2px;color:#5f6368;font-size:12px;text-align:center}',
     '.aq-notice[data-error]{color:#b3261e}',
     '.aq-notice[hidden]{display:none}',
-    '.aq-btn:focus-visible,.aq-close:focus-visible{outline:2px solid #1557b0;outline-offset:1px}'
+    '.aq-btn:focus-visible,.aq-close:focus-visible{outline:2px solid #1557b0;outline-offset:1px}',
+    '.aq-row[data-state=queued] .aq-dot{background:#b88700}',
+    '.aq-row[data-state=waiting] .aq-dot{background:#9aa0a6}',
+    '.aq-row[data-state=paused] .aq-dot{background:#b88700}',
+    '.aq-row[data-state=paused] .aq-state{color:#8a6d00}',
+    '.aq-row[data-state=error] .aq-dot{background:#b3261e}',
+    '.aq-row[data-state=error] .aq-state{color:#b3261e}',
+    '.sync-banner{display:block;background:#e8f0fe;border-color:#c6dafc;color:#174ea6}',
+    '.sync-banner[hidden]{display:none}',
+    '.sync-banner[data-state=waiting]{background:#f1f3f4;border-color:#dadce0;color:#3c4043}',
+    '.sync-banner[data-state=queued]{background:#fef7e0;border-color:#f2d489;color:#8a6d00}',
+    '.sync-banner[data-state=paused]{background:#fef7e0;border-color:#f2d489;color:#8a6d00}',
+    '.sync-banner[data-state=error]{background:#fce8e6;border-color:#f0b4ae;color:#b3261e}',
+    '.aq-sync[data-state=running] .aq-dot,.sync-banner[data-state=running]::before{border:2px solid #c6dafc;border-top-color:#1a73e8;border-radius:50%;background:transparent;animation:metadata-sync-spin .8s linear infinite}',
+    '.aq-sync[data-state=running] .aq-dot{width:9px;height:9px;box-sizing:border-box}',
+    '.sync-banner[data-state=running]::before{content:"";display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-2px}',
+    '@keyframes metadata-sync-spin{to{transform:rotate(360deg)}}',
+    '@media(prefers-reduced-motion:reduce){.aq-sync[data-state=running] .aq-dot,.sync-banner[data-state=running]::before{animation:none}}'
   ].join('');
   document.head.appendChild(style);
 
   var MAX_ROWS = 6;
   var RANK = { ambiguous: 0, failed: 1, running: 2, pending: 3 };
   var STATE_TEXT = { pending: 'Queued', running: 'Working…', failed: 'Failed', ambiguous: 'Check provider' };
-  var csrf = '', items = [], active = false;
+  // Live metadata-sync rows share the popup with message actions but carry their
+  // own state vocabulary (queued/running/waiting/error, plus "paused" when a
+  // provider stops for storage capacity) and never render a retry control: a
+  // sync is driven by the worker, not by the user. "waiting" is the idle/
+   // retry-pending state, so it sorts last and is counted without a spinner;
+  // "error" and "paused" need attention.
+  var SYNC_RANK = { error: 0, paused: 0, running: 1, queued: 2, waiting: 3 };
+  var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Indexing…', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
+  var csrf = '', items = [], syncs = [], active = false;
   var bubble = document.createElement('dialog');
   bubble.id = 'action-queue';
   bubble.tabIndex = -1;
@@ -210,12 +235,17 @@
   }
 
   function counts() {
-    var queued = 0, attention = 0;
+    var queued = 0, attention = 0, syncing = 0, waiting = 0;
     items.forEach(function (a) {
       if (a.state === 'pending' || a.state === 'running') { queued++; }
       if (a.state === 'failed' || a.state === 'ambiguous') { attention++; }
     });
-    return { queued: queued, attention: attention };
+    syncs.forEach(function (s) {
+      if (s.state === 'running' || s.state === 'queued') { syncing++; }
+      if (s.state === 'waiting') { waiting++; }
+      if (s.state === 'error' || s.state === 'paused') { attention++; }
+    });
+    return { queued: queued, attention: attention, syncing: syncing, waiting: waiting };
   }
 
   function control(a, label, action, showError) {
@@ -268,20 +298,131 @@
     return row;
   }
 
+  // fmtCount renders an integer with locale thousands separators, matching the
+  // rest of the UI's counts.
+  function fmtCount(n) {
+    return Number(n || 0).toLocaleString();
+  }
+
+  // syncProgress renders the progress fragment: "N / Total (P%)" when the
+  // provider reports a total, or "N indexed" when it can only report a count
+  // (Gmail and One have no trustworthy denominator). An unknown denominator is never
+  // presented as 0%.
+  function syncProgress(s) {
+    var indexed = s.indexed || 0;
+    if (s.total && s.total > 0 && indexed <= s.total) {
+      var pct = Math.round(indexed / s.total * 100);
+      if (pct < 0) { pct = 0; }
+      if (pct > 100) { pct = 100; }
+      return fmtCount(indexed) + ' / ' + fmtCount(s.total) + ' (' + pct + '%)';
+    }
+    return fmtCount(indexed) + ' indexed';
+  }
+
+  function syncLabel(s) {
+    return s.name || s.address || shortID(s.inbox_id) || 'Mailbox';
+  }
+
+  function syncMeta(s) {
+    var parts = [];
+    if (s.provider) { parts.push(s.provider); }
+    parts.push(s.phase === 'initial' ? 'Initial metadata sync' : 'Metadata refresh');
+    var progress = syncProgress(s);
+    if (progress) { parts.push(progress); }
+    if (s.error) { parts.push(s.error); }
+    return parts.join(' · ');
+  }
+
+  // syncRow renders one inbox's live metadata sync. It deliberately has no
+  // action controls: a sync cannot be retried or dismissed from here.
+  function syncRow(s) {
+    var row = document.createElement('div');
+    row.className = 'aq-row aq-sync';
+    row.setAttribute('data-state', s.state || 'waiting');
+    row.setAttribute('data-sync-inbox', s.inbox_id || '');
+    if (s.updated_at) { row.title = 'Status updated: ' + new Date(s.updated_at).toLocaleString(); }
+    if (s.state === 'error') { row.setAttribute('data-error', '1'); }
+    var dot = document.createElement('span');
+    dot.className = 'aq-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    var main = document.createElement('div');
+    main.className = 'aq-main';
+    var kind = document.createElement('span');
+    kind.className = 'aq-kind';
+    kind.textContent = syncLabel(s);
+    var meta = document.createElement('span');
+    meta.className = 'aq-meta';
+    meta.textContent = syncMeta(s);
+    if (!meta.textContent) { meta.hidden = true; }
+    main.append(kind, meta);
+    var state = document.createElement('span');
+    state.className = 'aq-state';
+    state.textContent = SYNC_STATE_TEXT[s.state] || s.state || 'Syncing';
+    row.append(dot, main, state);
+    return row;
+  }
+
+  // syncBannerText is the one-line banner summary for the inbox on screen.
+  function syncBannerText(s) {
+    var head = {
+      running: s.phase === 'initial' ? 'Initial metadata sync…' : 'Refreshing mailbox metadata…',
+      queued: 'Mailbox sync queued',
+      waiting: 'Mailbox sync waiting',
+      paused: 'Mailbox sync paused',
+      error: 'Mailbox sync problem'
+    }[s.state] || ('Mailbox sync ' + (SYNC_STATE_TEXT[s.state] || s.state || 'pending'));
+    var bits = [head, 'Inbox-wide'];
+    var progress = syncProgress(s);
+    if (progress) { bits.push(progress); }
+    if (s.error) { bits.push(s.error); }
+    return bits.join(' · ');
+  }
+
+  // updateBanner mirrors the current inbox's live sync into the top-of-view
+  // banner the standalone mailbox and folder pages render. It rides the shared
+  // queue poll so it tracks the same refresh as the popup. The service only
+  // reports inboxes whose metadata is not settled (queued, running, waiting to
+  // retry, paused or errored), so any matching row is worth showing.
+  function updateBanner() {
+    var banner = document.querySelector('[data-sync-banner]');
+    if (!banner) { return; }
+    var inbox = document.body.getAttribute('data-inbox') || '';
+    var match = null;
+    for (var i = 0; i < syncs.length; i++) {
+      if (syncs[i].inbox_id === inbox) { match = syncs[i]; break; }
+    }
+    if (!match) {
+      banner.hidden = true;
+      banner.textContent = '';
+      banner.removeAttribute('data-state');
+      return;
+    }
+    banner.hidden = false;
+    banner.setAttribute('data-state', match.state || '');
+    if (match.updated_at) { banner.title = 'Status updated: ' + new Date(match.updated_at).toLocaleString(); } else { banner.removeAttribute('title'); }
+    banner.textContent = syncBannerText(match);
+  }
+
   function render() {
     list.replaceChildren();
-    var ordered = items.slice().sort(function (a, b) {
+    var syncOrder = syncs.slice().sort(function (a, b) {
+      return (SYNC_RANK[a.state] === undefined ? 4 : SYNC_RANK[a.state]) - (SYNC_RANK[b.state] === undefined ? 4 : SYNC_RANK[b.state]);
+    });
+    var actionOrder = items.slice().sort(function (a, b) {
       return (RANK[a.state] === undefined ? 3 : RANK[a.state]) - (RANK[b.state] === undefined ? 3 : RANK[b.state]);
     });
-    if (!ordered.length) {
+    var shownSync = syncOrder;
+    var shownActions = actionOrder.slice(0, MAX_ROWS);
+    if (!shownSync.length && !shownActions.length) {
       var empty = document.createElement('p');
       empty.className = 'aq-empty';
       empty.textContent = 'No actions waiting.';
       list.appendChild(empty);
       return;
     }
-    ordered.slice(0, MAX_ROWS).forEach(function (a) { list.appendChild(actionRow(a)); });
-    var rest = ordered.length - MAX_ROWS;
+    shownSync.forEach(function (s) { list.appendChild(syncRow(s)); });
+    shownActions.forEach(function (a) { list.appendChild(actionRow(a)); });
+    var rest = (syncOrder.length - shownSync.length) + (actionOrder.length - shownActions.length);
     if (rest > 0) {
       var more = document.createElement('p');
       more.className = 'aq-more';
@@ -295,18 +436,25 @@
     // Successful actions stay in durable history briefly, but leave the status
     // popup as soon as the worker confirms completion.
     items = (data.items || []).filter(function (a) { return a.state !== 'done'; });
+    syncs = data.syncs || [];
+    if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
     var n = counts();
-    badge.textContent = n.attention ? ' !' : n.queued ? ' (' + n.queued + ')' : '';
+    var activity = n.queued + n.syncing + n.waiting;
+    badge.textContent = n.attention ? ' !' : activity ? ' (' + activity + ')' : '';
     badge.style.color = n.attention ? '#b3261e' : '';
     badge.style.fontWeight = 'bold';
-    var label = n.attention ? (n.attention === 1 ? '1 action needs attention' : n.attention + ' actions need attention') : n.queued ? n.queued + ' queued actions' : 'No queued actions';
+    var label = n.attention ? (n.attention === 1 ? '1 item needs attention' : n.attention + ' items need attention') : activity ? activity + ' queued, syncing or waiting' : 'No queued actions or syncs';
     badge.setAttribute('aria-label', label);
     var summaryParts = [];
     if (n.queued) { summaryParts.push(n.queued + ' queued'); }
+    if (n.syncing) { summaryParts.push(n.syncing + ' syncing'); }
+    if (n.waiting) { summaryParts.push(n.waiting + ' waiting'); }
     if (n.attention) { summaryParts.push(n.attention + ' need attention'); }
     summary.textContent = summaryParts.join(' · ') || 'All clear';
     notice.hidden = true;
     notice.removeAttribute('data-error');
+    // The banner tracks the poll even while the popup is closed.
+    updateBanner();
     if (bubble.open) { render(); }
   }
 
@@ -315,6 +463,7 @@
     active = true;
     fetch('/ui/actions', {credentials:'same-origin'}).then(function (r) { if (!r.ok) { throw new Error('Queue unavailable'); } return r.json(); })
       .then(update).catch(function () {
+        if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', false); }
         notice.hidden = false;
         notice.setAttribute('data-error', '1');
         notice.textContent = 'Queue unavailable. Try again.';

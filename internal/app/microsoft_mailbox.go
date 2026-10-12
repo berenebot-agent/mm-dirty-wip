@@ -144,6 +144,7 @@ func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, in
 		roles[f.ID] = role
 	}
 	var out []store.RemoteFolderSync
+	var total int64
 	queue := []string{""}
 	seen := map[string]bool{}
 	for len(queue) > 0 {
@@ -158,6 +159,7 @@ func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, in
 				continue
 			}
 			seen[f.ID] = true
+			total += f.TotalItemCount
 			if len(seen) > 10000 {
 				return nil, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft folder enumeration exceeds limit", false, nil)
 			}
@@ -171,7 +173,11 @@ func (m *RemoteMailboxService) microsoftFolders(ctx context.Context, account, in
 			}
 		}
 	}
-	return m.Service.Store.ReconcileRemoteFolders(ctx, account, inbox, out)
+	folders, err := m.Service.Store.ReconcileRemoteFolders(ctx, account, inbox, out)
+	if err == nil {
+		_ = m.Service.Store.SaveMetadataSyncTotal(ctx, account, inbox, total)
+	}
+	return folders, err
 }
 
 // reconcileMicrosoft runs one Microsoft delta pass and emits the operator-facing
@@ -259,6 +265,7 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 			return store.RemoteIndexStatus{}, arrived, e
 		}
 		if qh {
+			m.pauseMetadataSync(ctx, account, inbox)
 			// Do not advance the delta cursor or prune: the page was not fully
 			// indexed, so the next pass must replay it to stay consistent.
 			quotaHit = true
