@@ -149,7 +149,9 @@ func TestInboxSyncBannerRenderedForStandaloneViews(t *testing.T) {
 
 // TestActionQueueScriptWiresSyncStatus pins the client wiring: app.js must find
 // the banner, render sync rows that carry no action controls, and gate the
-// count/percentage on a known total.
+// count/percentage on a known total. Routine refreshes stay background-only:
+// the banner, rows and counts read the initial-sync filter while the header
+// spinner still reads every reported status.
 func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 	_, h, _, _, _ := httpFixture(t)
 	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
@@ -172,6 +174,12 @@ func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
 		"Downloading metadata",
 		"estimated_total",
 		"syncDenominator",
+		// Initial-sync-only banner/queue wiring: visible rows and counts use
+		// the filtered list while the spinner reads every status.
+		"shouldDisplaySync",
+		"displaySyncs",
+		"displaySyncs.forEach",
+		"displaySyncs.slice",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing sync wiring %q", want)

@@ -186,7 +186,7 @@
   // "error" and "paused" need attention.
   var SYNC_RANK = { error: 0, paused: 0, running: 1, queued: 2, waiting: 3 };
   var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Downloading', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
-  var csrf = '', items = [], syncs = [], active = false;
+  var csrf = '', items = [], syncs = [], displaySyncs = [], active = false;
   var bubble = document.createElement('dialog');
   bubble.id = 'action-queue';
   bubble.tabIndex = -1;
@@ -234,13 +234,24 @@
     return id.length > 12 ? id.slice(0, 12) + '…' : id;
   }
 
+  // shouldDisplaySync decides whether a metadata sync is shown in the inbox
+  // banner, the queue rows and the visible activity counts. Initial indexing
+  // is user-visible progress; routine refreshes of an already-complete index
+  // are background-only and surface only through the header spinner. Failures
+  // and pauses stay visible so they never disappear silently.
+  function shouldDisplaySync(s) {
+    if (!s) { return false; }
+    if (s.phase !== 'refresh') { return true; }
+    return s.state === 'error' || s.state === 'paused';
+  }
+
   function counts() {
     var queued = 0, attention = 0, syncing = 0, waiting = 0;
     items.forEach(function (a) {
       if (a.state === 'pending' || a.state === 'running') { queued++; }
       if (a.state === 'failed' || a.state === 'ambiguous') { attention++; }
     });
-    syncs.forEach(function (s) {
+    displaySyncs.forEach(function (s) {
       if (s.state === 'running' || s.state === 'queued') { syncing++; }
       if (s.state === 'waiting') { waiting++; }
       if (s.state === 'error' || s.state === 'paused') { attention++; }
@@ -393,18 +404,18 @@
     return bits.join(' · ');
   }
 
-  // updateBanner mirrors the current inbox's live sync into the top-of-view
+  // updateBanner mirrors the current inbox's initial sync into the top-of-view
   // banner the standalone mailbox and folder pages render. It rides the shared
-  // queue poll so it tracks the same refresh as the popup. The service only
-  // reports inboxes whose metadata is not settled (queued, running, waiting to
-  // retry, paused or errored), so any matching row is worth showing.
+  // queue poll so it tracks the same refresh as the popup. Routine refreshes of
+  // an already-complete index stay background-only (header spinner); only
+  // initial indexing and attention states are shown here.
   function updateBanner() {
     var banner = document.querySelector('[data-sync-banner]');
     if (!banner) { return; }
     var inbox = document.body.getAttribute('data-inbox') || '';
     var match = null;
-    for (var i = 0; i < syncs.length; i++) {
-      if (syncs[i].inbox_id === inbox) { match = syncs[i]; break; }
+    for (var i = 0; i < displaySyncs.length; i++) {
+      if (displaySyncs[i].inbox_id === inbox) { match = displaySyncs[i]; break; }
     }
     if (!match) {
       banner.hidden = true;
@@ -420,7 +431,7 @@
 
   function render() {
     list.replaceChildren();
-    var syncOrder = syncs.slice().sort(function (a, b) {
+    var syncOrder = displaySyncs.slice().sort(function (a, b) {
       return (SYNC_RANK[a.state] === undefined ? 4 : SYNC_RANK[a.state]) - (SYNC_RANK[b.state] === undefined ? 4 : SYNC_RANK[b.state]);
     });
     var actionOrder = items.slice().sort(function (a, b) {
@@ -452,6 +463,9 @@
     // popup as soon as the worker confirms completion.
     items = (data.items || []).filter(function (a) { return a.state !== 'done'; });
     syncs = data.syncs || [];
+    displaySyncs = syncs.filter(shouldDisplaySync);
+    // The header spinner reads every status, so routine refreshes still show
+    // there while staying out of the banner, rows and counts.
     if (window.mailmooseStatus) { window.mailmooseStatus.busy('metadata', syncs.some(function (s) { return s.state === 'running'; })); }
     var n = counts();
     var activity = n.queued + n.syncing + n.waiting;
