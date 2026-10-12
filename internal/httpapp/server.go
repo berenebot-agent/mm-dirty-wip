@@ -192,6 +192,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /account", s.withSession(s.settingsGet))
 	m.HandleFunc("POST /ui/account/settings", s.withSession(s.withCSRF(s.uiSettingsAccountBatch)))
 	m.HandleFunc("POST /ui/account/settings/me", s.withSession(s.withCSRF(s.uiSettingsPersonalBatch)))
+	m.HandleFunc("GET /ui/dashboard/preferences", s.withSession(s.uiDashboardPreferences))
+	m.HandleFunc("POST /ui/dashboard/preferences", s.withSession(s.withCSRF(s.uiDashboardPreferences)))
 	m.HandleFunc("POST /ui/account/account", s.withSession(s.withCSRF(s.uiSettingsAccount)))
 	m.HandleFunc("POST /ui/account/email", s.withSession(s.withCSRF(s.uiSettingsEmail)))
 	m.HandleFunc("POST /ui/account/password", s.withSession(s.withCSRF(s.uiSettingsPassword)))
