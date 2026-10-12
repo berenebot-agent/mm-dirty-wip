@@ -26,10 +26,16 @@ func TestUIDashboardDialogURLState(t *testing.T) {
 		t.Fatalf("missing data-open-inbox-tab=connectors")
 	}
 
-	// An unknown tab is coerced to the default aliases tab.
+	// The inbox settings button omits inbox_tab and should open Identity.
+	rr = domainGet(t, h, cookie, "/?inbox="+box.ID)
+	if body = rr.Body.String(); !strings.Contains(body, `data-open-inbox-tab="basic"`) {
+		t.Fatalf("missing default data-open-inbox-tab=basic")
+	}
+
+	// An unknown tab is coerced to the default Identity tab.
 	rr = domainGet(t, h, cookie, "/?inbox="+box.ID+"&inbox_tab=bogus")
-	if body = rr.Body.String(); !strings.Contains(body, `data-open-inbox-tab="aliases"`) {
-		t.Fatalf("unknown inbox_tab not coerced to aliases")
+	if body = rr.Body.String(); !strings.Contains(body, `data-open-inbox-tab="basic"`) {
+		t.Fatalf("unknown inbox_tab not coerced to basic")
 	}
 
 	// A stale or foreign inbox id is dropped so nothing re-opens.
