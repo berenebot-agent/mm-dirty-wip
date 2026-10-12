@@ -130,6 +130,20 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 	call := &remoteReconcileCall{done: make(chan struct{})}
 	m.reconciling[key] = call
 	m.refreshMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	select {
+	case m.syncSlots <- struct{}{}:
+		defer func() { <-m.syncSlots }()
+	case <-ctx.Done():
+		resultErr = ctx.Err()
+		m.refreshMu.Lock()
+		delete(m.reconciling, key)
+		call.status, call.err = result, resultErr
+		close(call.done)
+		m.refreshMu.Unlock()
+		return result, resultErr
+	}
 	phase := m.beginMetadataSync(context.WithoutCancel(ctx), accountID, inboxID)
 	defer func() {
 		m.finishMetadataSync(context.WithoutCancel(ctx), accountID, inboxID, phase, result, resultErr)
@@ -139,8 +153,6 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 		close(call.done)
 		m.refreshMu.Unlock()
 	}()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
 	ctx = m.withMetadataWait(ctx, accountID, inboxID)
 	// Each provider pass logs its own "remote sync" completion line, so a pass
 	// is reported exactly once regardless of which provider it ran.

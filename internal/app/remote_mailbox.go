@@ -109,6 +109,7 @@ type RemoteMailboxService struct {
 	refreshCancel    context.CancelFunc
 	refreshWG        sync.WaitGroup
 	refreshSlots     chan struct{}
+	syncSlots        chan struct{}
 	reconciling      map[string]*remoteReconcileCall
 	metadataTotals   map[string]map[string]int64
 	metadataChecking map[string]int
@@ -124,7 +125,11 @@ type remoteReconcileCall struct {
 // NewRemoteMailboxService builds the remote surface over the app service.
 func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, 2)}
+	concurrency := s.Config.RemoteSyncConcurrency
+	if concurrency < 1 {
+		concurrency = 2
+	}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs

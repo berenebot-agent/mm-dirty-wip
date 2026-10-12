@@ -109,6 +109,32 @@ func TestAllowPrivateOutboundByDefault(t *testing.T) {
 	}
 }
 
+func TestRemoteSyncConcurrencyConfiguration(t *testing.T) {
+	t.Setenv("APP_ENCRYPTION_KEY", testKey)
+	t.Setenv("REMOTE_SYNC_CONCURRENCY", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RemoteSyncConcurrency != 2 {
+		t.Fatalf("default remote sync concurrency = %d, want 2", cfg.RemoteSyncConcurrency)
+	}
+
+	t.Setenv("REMOTE_SYNC_CONCURRENCY", "4")
+	cfg, err = config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RemoteSyncConcurrency != 4 {
+		t.Fatalf("configured remote sync concurrency = %d, want 4", cfg.RemoteSyncConcurrency)
+	}
+
+	t.Setenv("REMOTE_SYNC_CONCURRENCY", "0")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("expected zero concurrency to be rejected")
+	}
+}
+
 func TestHostedModeIsRejected(t *testing.T) {
 	t.Setenv("APP_ENCRYPTION_KEY", testKey)
 	t.Setenv("MODE", "hosted")

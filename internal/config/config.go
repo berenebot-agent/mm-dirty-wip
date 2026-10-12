@@ -215,7 +215,8 @@ type Config struct {
 	// OutboundConcurrency is the number of outbox deliveries sent at once. Each
 	// in-flight send holds its attachments in memory, so this bounds peak memory
 	// as well as parallelism. Values below 1 behave as 1.
-	OutboundConcurrency int
+	OutboundConcurrency   int
+	RemoteSyncConcurrency int
 	// ApprovalExpiryHours bounds how long an external email approval request
 	// stays valid. Zero disables expiry (the token lives until decided or
 	// cancelled).
@@ -330,6 +331,7 @@ func Load() (Config, error) {
 		BodyReadTimeout:         time.Duration(envInt("BODY_READ_TIMEOUT_SECONDS", 30)) * time.Second,
 		OutboundHTTPTimeout:     time.Duration(envInt("OUTBOUND_HTTP_TIMEOUT_SECONDS", 300)) * time.Second,
 		OutboundConcurrency:     envInt("OUTBOUND_CONCURRENCY", 5),
+		RemoteSyncConcurrency:   envInt("REMOTE_SYNC_CONCURRENCY", 2),
 		ApprovalExpiryHours:     envInt("APPROVAL_EXPIRY_HOURS", 48),
 		WebhookRetryWindow:      time.Duration(envInt("WEBHOOK_RETRY_WINDOW_DAYS", 7)) * 24 * time.Hour,
 		MXMode:                  mxMode,
@@ -371,6 +373,9 @@ func Load() (Config, error) {
 	}
 	if cfg.OutboundConcurrency < 1 || cfg.OutboundConcurrency > 32 {
 		return Config{}, fmt.Errorf("OUTBOUND_CONCURRENCY must be between 1 and 32")
+	}
+	if cfg.RemoteSyncConcurrency < 1 || cfg.RemoteSyncConcurrency > 32 {
+		return Config{}, fmt.Errorf("REMOTE_SYNC_CONCURRENCY must be between 1 and 32")
 	}
 	if cfg.ApprovalExpiryHours < 0 {
 		return Config{}, fmt.Errorf("APPROVAL_EXPIRY_HOURS must be zero or greater")

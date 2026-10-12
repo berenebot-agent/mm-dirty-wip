@@ -122,6 +122,72 @@ func TestCachedPartialFirstPageDoesNotDialAndCountsIndexedRows(t *testing.T) {
 	}
 }
 
+func TestReconcileRemoteUsesConfiguredGlobalConcurrency(t *testing.T) {
+	svc, u, first, _ := remoteTestEnv(t)
+	svc.Config.RemoteSyncConcurrency = 1
+	rm := app.NewRemoteMailboxService(svc)
+	t.Cleanup(rm.Stop)
+	second, err := svc.Store.CreateStandaloneInbox(context.Background(), u.AccountID, store.StandaloneCreate{
+		DisplayName: "Second remote",
+		Address:     "second@remote.example",
+		Remote:      &model.RemoteConnection{Host: "imap.remote.example", Username: "second@remote.example", Security: model.RemoteSecurityPlain, Port: 143},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configureSecrets(t, rm, u, first, "pw", "")
+	configureSecrets(t, rm, u, second, "pw", "")
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{}, 2)
+	fake := newFakeRemoteServer()
+	rm.SetRemoteDialer(func(ctx context.Context, _ imap.Config) (app.RemoteSession, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return fake, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	done := make(chan error, 2)
+	go func() {
+		_, err := rm.ReconcileRemote(context.Background(), u.AccountID, first.ID)
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first sync did not start")
+	}
+	go func() {
+		_, err := rm.ReconcileRemote(context.Background(), u.AccountID, second.ID)
+		done <- err
+	}()
+	select {
+	case <-started:
+		t.Fatal("second sync exceeded configured concurrency")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release <- struct{}{}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("queued sync did not start after capacity became available")
+	}
+	release <- struct{}{}
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("reconcile failed: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("sync did not finish")
+		}
+	}
+}
+
 // configureSecrets stores an IMAP and optional SMTP password for a standalone
 // inbox through the real configure path.
 func configureSecrets(t *testing.T, rm *app.RemoteMailboxService, u model.User, box model.Inbox, imapPw, smtpPw string) {
