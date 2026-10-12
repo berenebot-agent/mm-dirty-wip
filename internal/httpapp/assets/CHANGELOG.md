@@ -8,6 +8,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Provider connection health is now surfaced per inbox. A revoked or expired
+  One/Gmail/Microsoft authorization renders a red flag in the dashboard's flags
+  column, linked straight to the inbox's Identity tab, and a red prompt at the
+  top of that tab offering **Reconnect**. The reconnect control sits under an
+  **Advanced** disclosure so it does not read as a routine action. A **Gmail via
+  One** inbox reconnects in place with a small **Save and check** API-key dialog
+  (the key is verified against the inbox's original Gmail identity before it is
+  stored); Google and Microsoft keep their OAuth wizard flows. Only a confirmed
+  disconnect is flagged — a transient retryable error is not.
+
 - Live inbox-wide metadata-sync progress for Gmail, One, Outlook and IMAP in the
   header Queue and at the top of every relevant folder view. Running work has a
   spinner; queued, waiting, paused and failed work stays visible with safe status.

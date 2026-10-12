@@ -767,6 +767,10 @@ type remoteConfigResponse struct {
 	FullSyncMinutes int                `json:"full_sync_minutes"`
 	Capabilities    model.Capabilities `json:"capabilities"`
 	MissingRoles    []string           `json:"missing_roles,omitempty"`
+	// Connection is the inbox's provider connection health, so the Identity tab
+	// can render the reconnect prompt and the Advanced reconnect action without a
+	// second request. It is absent for an IMAP-only inbox.
+	Connection *inboxConnectionState `json:"connection,omitempty"`
 }
 
 // remoteConfigView builds the secret-free remote view of a standalone inbox from
@@ -779,6 +783,12 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 	}
 	if inbox.Kind != model.InboxKindStandalone {
 		return remoteConfigResponse{}, model.NewMailboxError(model.ErrKindUnsupported, "not a standalone inbox", false, nil)
+	}
+	// Resolve the provider connection health once; every provider branch below
+	// returns it so the Identity tab can show the reconnect prompt/action.
+	var conn *inboxConnectionState
+	if state, ok := s.inboxConnectionState(ctx, p.AccountID, inbox); ok {
+		conn = &state
 	}
 	creds, cerr := s.Service.Store.GetRemoteCredentials(ctx, p.AccountID, inboxID)
 	if cerr != nil && !errors.Is(cerr, store.ErrNotFound) {
@@ -796,6 +806,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 			PollSeconds:     model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds),
 			FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes),
 			Capabilities:    caps,
+			Connection:      conn,
 		}, nil
 	}
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, inboxID) {
@@ -808,7 +819,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 			if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
 				poll = max(120, min(*inbox.RemotePollSeconds, 1800))
 			}
-			return remoteConfigResponse{Provider: "one", Configured: inbox.RemoteConfigured, Host: "Gmail via One", PollSeconds: poll, FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes), Capabilities: caps}, nil
+			return remoteConfigResponse{Provider: "one", Configured: inbox.RemoteConfigured, Host: "Gmail via One", PollSeconds: poll, FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes), Capabilities: caps, Connection: conn}, nil
 		}
 		return remoteConfigResponse{
 			Provider:        "google",
@@ -817,6 +828,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 			PollSeconds:     model.NormalizeRemotePollSeconds(inbox.RemotePollSeconds),
 			FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes),
 			Capabilities:    caps,
+			Connection:      conn,
 		}, nil
 	}
 	out := remoteConfigResponse{
