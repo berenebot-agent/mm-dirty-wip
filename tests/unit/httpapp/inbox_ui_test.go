@@ -786,10 +786,17 @@ func TestUISyncScheduleInlineUnderAddress(t *testing.T) {
 	body := rr.Body.String()
 
 	// The schedule block is inline (a div, not a collapsible details/summary) and
-	// sits immediately after the email-address input, before the IMAP connector.
-	inline := `<input id="inbox-edit-address" value="" disabled><div class="inbox-schedule" id="inbox-sync-schedule" data-remote-schedule hidden>`
-	if !strings.Contains(body, inline) {
-		t.Fatal("sync schedule is not inline directly below the email address")
+	// sits below the email address, before the IMAP connector. Other Identity
+	// fields (such as the dashboard group) may sit between the address and the
+	// schedule, so assert the order rather than a literal adjacency.
+	addr := strings.Index(body, `id="inbox-edit-address"`)
+	schedule := strings.Index(body, `<div class="inbox-schedule" id="inbox-sync-schedule" data-remote-schedule hidden>`)
+	imap := strings.Index(body, `id="inbox-remote-imap"`)
+	if addr < 0 || schedule < 0 || imap < 0 {
+		t.Fatal("inbox Identity panel is missing the address input, the sync schedule or the IMAP connector")
+	}
+	if !(addr < schedule && schedule < imap) {
+		t.Fatal("sync schedule is not inline between the email address and the IMAP connector")
 	}
 	if strings.Contains(body, `id="inbox-sync-schedule" data-remote-schedule`) && strings.Contains(body, `<summary>Sync schedule</summary>`) {
 		t.Fatal("sync schedule still renders as a collapsible disclosure")
