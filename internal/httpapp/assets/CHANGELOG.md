@@ -137,6 +137,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The mailbox toolbar's square buttons (settings, sync, mark read/unread,
+  trash) are the same 36×36 in every view. A later `.bulkbar .icon-btn` rule
+  carried the same CSS specificity as the sizing rule and won on source order,
+  so the buttons were pinned to 30px with nothing stopping the flex row from
+  shrinking them — which squashed them to slivers in the custom-folder view,
+  whose toolbar also carries the Move select and button.
+
 - An active Gmail or One metadata sync no longer reports **Waiting for provider
   request slot**. That label appeared for the whole sync because One paces
   requests at 15/minute, so it read as a fault when it was normal pacing. The row
