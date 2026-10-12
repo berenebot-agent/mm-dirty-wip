@@ -68,7 +68,7 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 				mapStoreError(w, e)
 				return
 			}
-			writeJSON(w, 200, sanitizedMessage(updated))
+			writeJSON(w, 200, s.messageResponse(r, updated))
 			return
 		}
 	}

@@ -8,6 +8,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Native message APIs now share one schema across domain, IMAP, Google,
+  Microsoft, and Gmail-via-One inboxes and across inbox/account/thread/search
+  routes. Optional remote metadata is preserved instead of being lost in the
+  account-wide projection. Unknown direction, spam verdict, and creation time
+  are omitted rather than invented. Lists and thread-message responses are
+  metadata-only for every inbox; fetch a detail to read its body. Details retain
+  sanitized HTML and live remote-body failure behavior. OpenAPI documents the
+  stable required core, optional fields, and inbox/provider identity metadata.
+
 - Durable inbox actions now use a single-worker round-robin scheduler, processing
   one eligible action per inbox per turn so a busy inbox's backlog cannot
   monopolize the queue. Same-message ordering and retry safety are preserved;

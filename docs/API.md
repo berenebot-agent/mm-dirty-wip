@@ -279,6 +279,48 @@ only acts on a message already in the Trash-role folder.
 
 ## 4. Messages
 
+### One message schema for every inbox
+
+All native message responses use the OpenAPI `Message` schema, regardless of
+whether the inbox is domain-backed, IMAP, Google, Microsoft, or Gmail via One.
+Inbox-scoped and account-wide routes use the same projection, including messages
+inside thread responses and search results. Clients must not select a message
+type based on the route, inbox kind, or provider. See decision **D109**.
+
+The required core is `id`, `inbox_id`, `from`, `to`, `cc`, `subject`, `read`,
+`has_attachments`, and `size_bytes`. `to` and `cc` are always arrays (`[]` when
+empty), never `null`. All other fields are optional; unavailable values are
+omitted, not replaced by invented values. A known boolean `false` is distinct
+from an absent/unknown boolean. Empty optional strings and arrays are omitted.
+
+`inbox_kind` identifies the owning inbox (`domain` or `standalone`);
+`inbox_provider` identifies a known mailbox connector (`imap`, `google`,
+`microsoft`, or `one`). These are informational metadata, not schema switches.
+The existing `provider` field identifies the message's delivery transport and
+is not overwritten with the mailbox connector.
+
+The shared schema preserves optional mailbox metadata: `uid`, `uid_validity`,
+`snippet`, `flagged`, `answered`, `draft`, `flags`, `internal_date`, and
+`indexed_at`. A non-IMAP message is not assigned a fake zero UID. RFC message
+identity, reply references, and known received/sent timestamps survive every
+projection. Unknown `direction`, delivery `status`, `is_spam`, or `created_at`
+remain absent. `created_at` is not synthesized from receipt or indexing time;
+`indexed_at` can advance when a remote header read refreshes the cache.
+
+Message lists, search results, outbox lists, and messages inside thread responses
+are metadata-only: they omit `text` and `html` for every inbox kind. Single-message
+detail reads include `text` (possibly empty) and non-empty sanitized `html`.
+Remote detail bodies are fetched live, never archived, and a fetch/parse failure
+returns `503` rather than a successful metadata-only response. Lists do not fetch
+remote MIME to manufacture body parity. Send/reply results retain their returned
+body; mutation responses use the same message schema without fetching a remote
+body just to acknowledge an action.
+
+**Compatibility:** Clients that used list or thread responses to read local
+message bodies must now fetch a message detail. Clients that relied on empty
+remote `direction` or synthesized `created_at` must handle their absence. The
+explicit openagent.email compatibility projections remain separate and unchanged.
+
 ```http
 GET /v1/messages
 GET /v1/messages/{id}

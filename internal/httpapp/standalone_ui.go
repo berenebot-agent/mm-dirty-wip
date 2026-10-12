@@ -458,6 +458,23 @@ func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.M
 		MailboxID:      folder.ID,
 		FolderPath:     folder.Path,
 		HasAttachments: v.HasAttach,
+		RFCMessageID:   v.RFCMessageID,
+		InReplyTo:      v.InReplyTo,
+		References:     v.References,
+		SentAt:         remoteTimestamp(v.SentAt),
+		ReadMetadata: &model.MessageReadMetadata{
+			Snippet: v.Snippet, Flagged: &v.Flagged, Answered: &v.Answered, Draft: &v.Draft,
+			Flags: v.Flags, InternalDate: remoteTimestamp(v.InternalDate),
+		},
+	}
+	if v.UID != 0 {
+		m.ReadMetadata.UID = &v.UID
+	}
+	if v.UIDValidity != 0 {
+		m.ReadMetadata.UIDValidity = &v.UIDValidity
+	}
+	if !v.IndexedAt.IsZero() {
+		m.ReadMetadata.IndexedAt = &v.IndexedAt
 	}
 	// A remote message's body lives only on the server; the list shows the cached
 	// snippet, so Text stays empty and the UI renders the snippet.
@@ -471,6 +488,17 @@ func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.M
 		m.CreatedAt = v.IndexedAt
 	}
 	return m
+}
+
+func remoteTimestamp(value *string) *time.Time {
+	if value == nil {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, *value)
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // folderBody is the common custom-folder mailbox page. It reuses the shared

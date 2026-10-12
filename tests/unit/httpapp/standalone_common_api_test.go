@@ -231,6 +231,9 @@ func fakeMessageHeader(m *fakeIMAPMsg) imap.MessageHeader {
 		h.References = parsed.References
 		h.To = parsed.To
 		h.CC = parsed.CC
+		if strings.HasPrefix(m.raw, "Date:") || strings.Contains(m.raw, "\nDate:") {
+			h.Date = parsed.Date
+		}
 	}
 	return h
 }
