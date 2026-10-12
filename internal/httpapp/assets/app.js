@@ -5362,6 +5362,13 @@ function hideInboxSubview(dlg) {
     try { connectors = JSON.parse(form.dataset.antlerConnectors || '[]') || []; } catch (err) { connectors = []; }
     var initialStatuses = [];
     try { initialStatuses = JSON.parse(form.dataset.antlerStatus || '[]') || []; } catch (err) { initialStatuses = []; }
+    // The copy-ready DNS records and the shared extra-MX verdict are seeded too,
+    // so the status view's fix prompts and "additional MX servers" warning paint
+    // on open rather than waiting for the first fetch to land.
+    var initialInstructions = null;
+    try { initialInstructions = JSON.parse(form.dataset.antlerInstructions || 'null'); } catch (err) { initialInstructions = null; }
+    var initialUnexpected = [];
+    try { initialUnexpected = JSON.parse(form.dataset.antlerUnexpected || '[]') || []; } catch (err) { initialUnexpected = []; }
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
@@ -5656,10 +5663,22 @@ function hideInboxSubview(dlg) {
       table.appendChild(tbody);
       return table;
     }
-    function renderSkeleton(connectors) {
+    // renderStatusRecords paints the saved status view's record area from the
+    // status set, the copy-ready instructions and the extra-MX verdict. Both the
+    // on-open seed (renderSkeleton, from the embedded attributes) and the live
+    // render (from a fetch or an SSE push) go through it, so the dialog opens
+    // complete — rows, fix prompts and the extra-MX warning — and then reconciles
+    // on the same code path rather than flashing rows without their remediation.
+    function renderStatusRecords(statuses, instructions, unexpected, domainName, mxName) {
       var records = wizard.querySelector('.antler-records');
       records.replaceChildren();
-      records.appendChild(statusTable(connectors, initialStatuses));
+      records.appendChild(statusTable(connectors, statuses));
+      records.appendChild(unexpectedMXBlock({ unexpected_mx: unexpected || [] }, domainName));
+      records.appendChild(remediationBlock({ status: statuses || [] }, instructions || {}, mxName));
+    }
+    function renderSkeleton(connectors) {
+      var instructions = initialInstructions || {};
+      renderStatusRecords(initialStatuses, instructions, initialUnexpected, form.dataset.antlerDomainName || '', form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@');
     }
     // renderReceivers fills the wizard's own receivers step (used while setting
     // up, not the saved status view) from the live status set.
@@ -5696,9 +5715,10 @@ function hideInboxSubview(dlg) {
       // complete and matches the dashboard light, then reconciles on each poll.
       // A connector the poll did not report keeps its "Pending" row.
       if (statusMode) {
-        records.appendChild(statusTable(connectors, data.status));
-        records.appendChild(unexpectedMXBlock({ unexpected_mx: extraMXFor(data) }, domainName));
-        records.appendChild(remediationBlock(data, instructions, mxName));
+        // The status view shares one paint path with the on-open seed, so rows,
+        // fix prompts and the extra-MX warning are always consistent. The extra-MX
+        // verdict prefers the freshest pushed value over the fetch's copy.
+        renderStatusRecords(data.status, instructions, extraMXFor(data), domainName, mxName);
         renderReceivers(data.status);
         update();
         return;
@@ -5942,21 +5962,21 @@ function hideInboxSubview(dlg) {
       if (shared && shared.length) { return shared; }
       return (data && data.unexpected_mx) || [];
     }
-    // refreshExtraMX applies a pushed verdict to the open dialog at once.
+    // refreshExtraMX applies a pushed verdict to the open dialog at once, through
+    // the same paint path as the seed and the fetch, so the record area never
+    // drifts.
     function refreshExtraMX(domainID, extra) {
       if (!active() || !dlg.open || !statusMode) { return; }
       if (domainID && form.dataset.antlerDomain && domainID !== form.dataset.antlerDomain) { return; }
       if (!state) { return; }
       state.unexpected_mx = extra || [];
-      var records = wizard.querySelector('.antler-records');
-      var existing = records.querySelector('.antler-extra-mx');
-      if (existing) { existing.remove(); }
-      var block = unexpectedMXBlock(state, form.dataset.antlerDomainName || '');
-      if (block.childNodes.length) {
-        var table = records.querySelector('.antler-status-table');
-        if (table && table.nextSibling) { records.insertBefore(block, table.nextSibling); }
-        else { records.insertBefore(block, records.firstChild); }
-      }
+      renderStatusRecords(
+        state.status,
+        state.instructions || {},
+        extra || [],
+        form.dataset.antlerDomainName || '',
+        form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@'
+      );
     }
     window.mailmooseRefreshExtraMX = refreshExtraMX;
     // Reuse the dashboard's single SSE connection (window.mailmooseEventsSource)
