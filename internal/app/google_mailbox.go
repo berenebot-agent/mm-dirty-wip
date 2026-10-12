@@ -440,7 +440,17 @@ func (m *RemoteMailboxService) listGoogle(ctx context.Context, p model.Principal
 		folder = "INBOX"
 	}
 	if cached {
-		m.ScheduleRefresh(p.AccountID, inbox)
+		// UI navigation serves the cache. Advance an initial or partial index
+		// in the background, but do not start a deep reconcile on every folder
+		// open once indexing is complete; freshness then belongs to the worker's
+		// periodic cadence, matching Microsoft and IMAP.
+		status, e := m.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, inbox)
+		if e != nil {
+			return RemoteListResult{}, mapStoreError(e)
+		}
+		if status.Status != store.RemoteIndexComplete {
+			m.ScheduleRefresh(p.AccountID, inbox)
+		}
 	} else {
 		if _, e := m.ReconcileRemote(ctx, p.AccountID, inbox); e != nil {
 			return RemoteListResult{}, e
