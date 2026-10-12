@@ -1,8 +1,10 @@
 package httpapp_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -171,6 +173,8 @@ func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
 
 func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 	svc, _, u, _, _, _ := standaloneFixture(t)
+	var logs bytes.Buffer
+	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
 	rm := app.NewRemoteMailboxService(svc)
 	defer rm.Stop()
 	f := onefixture.New(t)
@@ -259,6 +263,15 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 	imported := request("POST", "/ui/connections/one/import", url.Values{"_csrf": {csrf}, "setup_id": {setupURL.Query().Get("setup")}, "connection_id": {onefixture.ConnectionID}})
 	if imported.Code != 303 {
 		t.Fatalf("import: %d %s", imported.Code, imported.Body.String())
+	}
+	records := lifecycleRecords(t, &logs)
+	if len(records) != 1 || records[0]["msg"] != "inbox.created" || records[0]["operation"] != "one_import" || records[0]["source"] != "ui" || records[0]["user_id"] != u.ID {
+		t.Fatalf("One lifecycle attribution: %s", logs.String())
+	}
+	for _, private := range []string{onefixture.Key, onefixture.Selector, token, csrf} {
+		if strings.Contains(logs.String(), private) {
+			t.Fatalf("One credential leaked: %q", private)
+		}
 	}
 	complete := request("GET", imported.Header().Get("Location"), nil)
 	if !strings.Contains(entry.Body.String(), `name="api_key" type="text"`) {

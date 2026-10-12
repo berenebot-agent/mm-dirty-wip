@@ -391,6 +391,10 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 	if exists == 0 {
 		return nil, ErrNotFound
 	}
+	deleted, err := inboxDeletionLabels(ctx, tx, accountID, "domain_id", domainID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT m.raw_path,m.size_bytes FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE i.account_id=? AND i.domain_id=?`, accountID, domainID)
 	if err != nil {
 		return nil, err
@@ -516,6 +520,9 @@ func (s *Store) PurgeDomain(ctx context.Context, accountID, domainID string) ([]
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
+	for _, box := range deleted {
+		s.logInbox(ctx, "inbox.deleted", box, "domain_delete", "domain_delete")
+	}
 	return paths, nil
 }
 
@@ -547,7 +554,9 @@ func (s *Store) CreateInbox(ctx context.Context, accountID, domainID, localPart,
 	if err != nil {
 		return model.Inbox{}, err
 	}
-	return model.Inbox{ID: id, AccountID: accountID, Kind: model.InboxKindDomain, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, DeliveryTrigger: DeliveryTriggerDefault, CreatedAt: parseTime(now)}, nil
+	box := model.Inbox{ID: id, AccountID: accountID, Kind: model.InboxKindDomain, DomainID: domainID, LocalPart: localPart, Address: addr, DisplayName: display, Enabled: true, DeliveryTrigger: DeliveryTriggerDefault, CreatedAt: parseTime(now)}
+	s.logInbox(ctx, "inbox.created", box, "inbox_create", "")
+	return box, nil
 }
 
 // fullInboxSelectCols is the projection every full-inbox read shares. It uses
@@ -1210,6 +1219,10 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 	if exists == 0 {
 		return nil, ErrNotFound
 	}
+	deleted, err := inboxDeletionLabels(ctx, tx, accountID, "id", id)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT raw_path,size_bytes FROM messages WHERE account_id=? AND inbox_id=?`, accountID, id)
 	if err != nil {
 		return nil, err
@@ -1337,6 +1350,9 @@ func (s *Store) PurgeInbox(ctx context.Context, accountID, id string) ([]string,
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
+	}
+	for _, box := range deleted {
+		s.logInbox(ctx, "inbox.deleted", box, "inbox_delete", "direct_delete")
 	}
 	return paths, nil
 }

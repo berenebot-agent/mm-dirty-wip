@@ -100,6 +100,7 @@ func main() {
 		os.Exit(1)
 	}
 	svc.Log = log
+	st.SetInboxLogger(log)
 	dialTLS, err := mxdial.ReceiverTLS(cfg.DialMXCAFile)
 	if err != nil {
 		log.Error("invalid Dial MX TLS configuration", "error", err)

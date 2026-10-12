@@ -1,8 +1,10 @@
 package httpapp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,6 +32,7 @@ func TestGoogleOAuthIdentityNaming(t *testing.T) {
 		{"reconnect fallback", `{"name":"Google Person"}`, "", "oauth@example.net", "Google Person", 200},
 		{"reconnect custom", `{"name":"Google Person"}`, "", "Custom label", "Custom label", 200},
 		{"reconnect unavailable", `{}`, "", "oauth@example.net", "oauth@example.net", 503},
+		{"setup rollback", `{}`, "", "", "oauth@example.net", 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, u, _, _, _ := standaloneFixture(t)
@@ -39,9 +42,17 @@ func TestGoogleOAuthIdentityNaming(t *testing.T) {
 				switch {
 				case r.URL.Path == "/token":
 					// Only Gmail is required, even if identity permission was declined.
+					if tc.name == "setup rollback" {
+						w.Write([]byte(`{"access_token":"private-access-token","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.modify","token_type":"Bearer"}`))
+						return
+					}
 					w.Write([]byte(`{"access_token":"access","refresh_token":"refresh","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.modify","token_type":"Bearer"}`))
 				case r.URL.Path == "/userinfo":
-					if r.Header.Get("Authorization") != "Bearer access" {
+					bearer := "Bearer access"
+					if tc.name == "setup rollback" {
+						bearer = "Bearer private-access-token"
+					}
+					if r.Header.Get("Authorization") != bearer {
 						t.Error("missing identity bearer")
 					}
 					w.WriteHeader(tc.status)
@@ -75,6 +86,8 @@ func TestGoogleOAuthIdentityNaming(t *testing.T) {
 				}
 			}
 			srv := httpapp.New(svc, nil)
+			var logs bytes.Buffer
+			svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
 			srv.SetRemoteMailbox(rm)
 			token, csrf, err := svc.Store.CreateSession(context.Background(), u.ID, time.Hour)
 			if err != nil {
@@ -107,6 +120,31 @@ func TestGoogleOAuthIdentityNaming(t *testing.T) {
 			}
 			callback := q.Get("redirect_uri") + "?" + url.Values{"state": {q.Get("state")}, "code": {"once"}}.Encode()
 			finish := post("/ui/oauth/google/finish", url.Values{"callback_url": {callback}})
+			records := lifecycleRecords(t, &logs)
+			if tc.name == "setup rollback" {
+				if finish.Code != 400 || len(records) != 2 || records[0]["msg"] != "inbox.created" || records[1]["msg"] != "inbox.deleted" || records[1]["reason"] != "setup_rollback" {
+					t.Fatalf("rollback %d logs=%s", finish.Code, logs.String())
+				}
+			} else if tc.existing == "" {
+				if len(records) != 1 || records[0]["msg"] != "inbox.created" {
+					t.Fatalf("creation logs: %s", logs.String())
+				}
+			} else if len(records) != 0 {
+				t.Fatalf("reconnect logged creation: %s", logs.String())
+			}
+			for _, record := range records {
+				if record["source"] != "ui" || record["operation"] != "google_connect" || record["user_id"] != u.ID {
+					t.Fatalf("Google attribution: %v", record)
+				}
+			}
+			for _, private := range []string{"private-access-token", "refresh", "secret", token, csrf, q.Get("state")} {
+				if strings.Contains(logs.String(), private) {
+					t.Fatalf("OAuth credential leaked: %q", private)
+				}
+			}
+			if tc.name == "setup rollback" {
+				return
+			}
 			if finish.Code != 200 {
 				t.Fatalf("finish %d %s", finish.Code, finish.Body.String())
 			}

@@ -60,6 +60,36 @@ The system administrator's login is owned by `ADMIN_EMAIL` / `ADMIN_PASSWORD`,
 so `reset-password` refuses it and tells you to update the deployment secret
 and restart instead.
 
+## Inbox lifecycle logs
+
+The application emits `INFO inbox.created` and `INFO inbox.deleted` records to
+its existing `[Core]` terminal/container log stream. Watch them with:
+
+```bash
+docker compose logs -f mailmoose | grep -E 'inbox\.(created|deleted)'
+```
+
+Each record includes the account ID, inbox ID, address, inbox kind, source
+(`ui`, `api`, or `internal`), operation, and actor type. User/API-key IDs and
+domain IDs are included when applicable. Provider connections identify the
+operation as `google_connect`, `microsoft_connect`, or `one_import`.
+
+Deletion includes a reason: `direct_delete`, `domain_delete`, or
+`setup_rollback`. Deleting a domain produces one record per deleted inbox.
+If connector setup creates an inbox and then removes it, both changes are
+logged. Reconnection and idempotent imports do not log a new creation.
+
+Records describe persisted database changes, not completion of filesystem
+cleanup. Transactional changes are logged only after commit. The standalone
+inbox insert is independently committed before its subsequent connector setup,
+so its creation is logged even if that later setup fails. Logs are operational
+output, not a durable audit trail: a crash between commit and emission can lose
+a record, and retention follows the container/operator log policy.
+
+Lifecycle records do not include credentials, tokens, request bodies, client
+IPs, user-agents, or remote connection settings. They do include inbox addresses
+and stable identity IDs; restrict access to logs accordingly.
+
 ## Reverse proxy and TLS
 
 Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-*` headers

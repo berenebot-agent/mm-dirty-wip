@@ -1,8 +1,10 @@
 package httpapp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -175,6 +177,8 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 
 func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 	svc, _, u, _, _, _ := standaloneFixture(t)
+	var logs bytes.Buffer
+	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
 	svc.Config.MicrosoftClientID = "client"
 	svc.Config.MicrosoftTenantID = "common"
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -255,6 +259,15 @@ func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 	if boxes[1].DisplayName != "Personal Owner" || boxes[1].Address != "personal@example.net" {
 		t.Fatalf("personal label not defaulted from the identity: %#v", boxes[1])
 	}
+	records := lifecycleRecords(t, &logs)
+	if len(records) != 1 || records[0]["msg"] != "inbox.created" || records[0]["operation"] != "microsoft_connect" || records[0]["source"] != "ui" || records[0]["user_id"] != u.ID {
+		t.Fatalf("Microsoft lifecycle attribution: %s", logs.String())
+	}
+	for _, private := range []string{"refresh", "secret", session, csrf, state} {
+		if strings.Contains(logs.String(), private) {
+			t.Fatalf("Microsoft credential leaked: %q", private)
+		}
+	}
 }
 
 // TestMicrosoftSharedMailboxSelection covers the two-phase shared flow: the
@@ -262,6 +275,8 @@ func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 // discovered from the directory, and the chosen address completes the inbox.
 func TestMicrosoftSharedMailboxSelection(t *testing.T) {
 	svc, _, u, _, _, _ := standaloneFixture(t)
+	var logs bytes.Buffer
+	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
 	svc.Config.MicrosoftClientID = "client"
 	svc.Config.MicrosoftTenantID = "common"
 	var probeMu sync.Mutex
@@ -355,6 +370,10 @@ func TestMicrosoftSharedMailboxSelection(t *testing.T) {
 	json.Unmarshal(done.Body.Bytes(), &finished)
 	if finished["inbox_id"] == "" {
 		t.Fatal("no inbox returned")
+	}
+	records := lifecycleRecords(t, &logs)
+	if len(records) != 1 || records[0]["operation"] != "microsoft_connect" || records[0]["source"] != "ui" || records[0]["user_id"] != u.ID || records[0]["inbox_id"] != finished["inbox_id"] {
+		t.Fatalf("shared Microsoft attribution: %s", logs.String())
 	}
 	if rr := post("/ui/oauth/microsoft/finish", url.Values{"state": {choice.State}, "mailbox": {"shared@example.net"}}); rr.Code != 400 {
 		t.Fatal("selection replay accepted")

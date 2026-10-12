@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +18,10 @@ import (
 )
 
 type Store struct {
-	write *sql.DB
-	read  *sql.DB
-	path  string
+	inboxLogger *slog.Logger
+	write       *sql.DB
+	read        *sql.DB
+	path        string
 	// standaloneSender resolves a standalone inbox's own sending configuration
 	// (its remote SMTP binding). It is set once at startup; when nil, a standalone
 	// send resolves to ErrNoProvider and is queued and held.

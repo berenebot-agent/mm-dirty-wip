@@ -201,7 +201,7 @@ func (s *Server) uiGoogleFinish(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		box, e := s.Service.Store.CreateStandaloneInbox(r.Context(), p.AccountID, store.StandaloneCreate{Address: profile.EmailAddress, DisplayName: displayOr(a.DisplayName, identity.Name, profile.EmailAddress)})
+		box, e := s.Service.Store.CreateStandaloneInbox(store.WithInboxLogOperation(r.Context(), "google_connect"), p.AccountID, store.StandaloneCreate{Address: profile.EmailAddress, DisplayName: displayOr(a.DisplayName, identity.Name, profile.EmailAddress)})
 		if e != nil {
 			http.Error(w, "Could not create Google inbox; the address may already be connected", 400)
 			return
@@ -210,7 +210,8 @@ func (s *Server) uiGoogleFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	if e = rm.SaveGoogleGrant(r.Context(), p.AccountID, inbox, a.ClientID, pending["secret"], token); e != nil {
 		if a.InboxID == "" {
-			_, _ = s.Service.Store.PurgeInbox(r.Context(), p.AccountID, inbox)
+			ctx := store.WithInboxLogOperation(r.Context(), "google_connect")
+			_, _ = s.Service.Store.PurgeInbox(store.WithInboxLogReason(ctx, "setup_rollback"), p.AccountID, inbox)
 		}
 		http.Error(w, "Google offline mailbox access was not granted; connect again and approve mailbox access", 400)
 		return

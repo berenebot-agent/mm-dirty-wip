@@ -194,6 +194,9 @@ func (s *Store) CreateStandaloneInbox(ctx context.Context, accountID string, in 
 		id, accountID, model.InboxKindStandalone, nil, "", address, strings.TrimSpace(in.DisplayName), namespace, rhost, rport, ruser, rsec, shost, sport, suser, ssec, DeliveryTriggerDefault, 0, now); err != nil {
 		return model.Inbox{}, err
 	}
+	// The inbox insert is autocommitted independently of connector setup. Record
+	// the real creation even if a later setup step fails or purges it again.
+	s.logInbox(ctx, "inbox.created", model.Inbox{ID: id, AccountID: accountID, Kind: model.InboxKindStandalone, Address: address}, "standalone_create", "")
 	if _, err = s.write.ExecContext(ctx, `INSERT INTO inbox_remote_credentials(inbox_id,account_id,revision,created_at,updated_at) VALUES(?,?,0,?,?)`, id, accountID, now, now); err != nil {
 		return model.Inbox{}, err
 	}

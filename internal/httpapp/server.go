@@ -715,7 +715,9 @@ func (s *Server) withBearer(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, 401, "invalid API key")
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
+		ctx := context.WithValue(r.Context(), principalKey, p)
+		ctx = store.WithInboxLogActor(ctx, "api", p)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -734,6 +736,11 @@ func (s *Server) withSession(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), principalKey, p)
 		ctx = context.WithValue(ctx, csrfKey, cval)
 		ctx = withTimezone(ctx, p)
+		source := "ui"
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
+			source = "api"
+		}
+		ctx = store.WithInboxLogActor(ctx, source, p)
 		next(w, r.WithContext(ctx))
 	}
 }
