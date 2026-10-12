@@ -3969,6 +3969,47 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  function bindFrame(frame) {
+    if (frame.dataset.messageAutoHeight) { return; }
+    frame.dataset.messageAutoHeight = '1';
+
+    function fit() {
+      try {
+        var doc = frame.contentDocument;
+        if (!doc || !doc.documentElement) { return; }
+        var body = doc.body;
+        var height = Math.max(
+          360,
+          doc.documentElement.scrollHeight,
+          body ? body.scrollHeight : 0
+        );
+        frame.style.height = (height + 2) + 'px';
+      } catch (e) {
+        // Keep the fallback height if the frame document is unavailable.
+      }
+    }
+
+    frame.addEventListener('load', fit);
+    window.addEventListener('resize', fit);
+    if (frame.contentDocument && frame.contentDocument.readyState === 'complete') {
+      fit();
+    }
+  }
+
+  document.querySelectorAll('[data-mailframe]').forEach(bindFrame);
+  var addedFrames = new MutationObserver(function (records) {
+    records.forEach(function (record) {
+      record.addedNodes.forEach(function (node) {
+        if (node.nodeType !== 1) { return; }
+        if (node.matches('[data-mailframe]')) { bindFrame(node); }
+        node.querySelectorAll('[data-mailframe]').forEach(bindFrame);
+      });
+    });
+  });
+  addedFrames.observe(document.body, { childList: true, subtree: true });
+})();
+
+(function () {
   var host = document.querySelector('[data-remote-body]');
   if (!host) { return; }
   var active = false;
