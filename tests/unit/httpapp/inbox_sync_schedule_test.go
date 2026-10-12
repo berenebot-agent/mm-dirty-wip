@@ -286,11 +286,8 @@ func TestRealtimeCapabilityReflectsPush(t *testing.T) {
 		t.Fatal("gmail-via-one inbox claimed instant push")
 	}
 
-	// The account-wide listing (GET /v1/inboxes) attaches capabilities for the
-	// provider-connected inboxes; it must report the same poll-only reality, so an
-	// API client reading inbox capabilities is not told a poll-only mailbox
-	// pushes. (The store attaches no capability block to a plain IMAP standalone
-	// inbox, so only the provider inboxes are checked here.)
+	// The account-wide listing must include capabilities for IMAP as well as
+	// provider inboxes, without claiming push for a poll-only provider.
 	rr := apiGet(t, h, "/v1/inboxes", key)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list inboxes = %d body=%s", rr.Code, rr.Body.String())
@@ -320,6 +317,62 @@ func TestRealtimeCapabilityReflectsPush(t *testing.T) {
 			t.Fatalf("list reported instant push for %s", id)
 		}
 	}
+	if !present[standalone.ID] || !realtime[standalone.ID] {
+		t.Fatal("list omitted the declared imap realtime capability")
+	}
+}
+
+// TestInboxListingOutboundCapabilities checks the IMAP connector and One's
+// configured marker in the public listing, including the retained One tombstone.
+func TestInboxListingOutboundCapabilities(t *testing.T) {
+	svc, h, u, _, imap, _ := standaloneFixture(t)
+	ctx := context.Background()
+	key := adminKey(t, svc, u)
+	smtp, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
+		Address: "smtp@remote.test",
+		Remote: &model.RemoteConnection{Host: "imap.remote.test", Username: "smtp@remote.test",
+			SMTP: &model.RemoteSMTP{Host: "smtp.remote.test", Username: "smtp@remote.test"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := store.OneBinding{InboxID: "in_one_outbound", AccountID: u.AccountID,
+		ConnectionID: "outbound-connection", GmailEmail: "one-outbound@remote.test",
+		EncryptedKey: "key", EncryptedConnectionKey: "connection-key", KeyAAD: "aad",
+		Fingerprint: "fingerprint", RateGroup: "group"}
+	if _, err = svc.Store.ImportOneInbox(ctx, binding, "10"); err != nil {
+		t.Fatal(err)
+	}
+	check := func(oneOutbound bool) {
+		t.Helper()
+		rr := apiGet(t, h, "/v1/inboxes", key)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("list = %d: %s", rr.Code, rr.Body.String())
+		}
+		var boxes []model.Inbox
+		if err := json.Unmarshal(rr.Body.Bytes(), &boxes); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]bool{imap.ID: false, smtp.ID: true, binding.InboxID: oneOutbound}
+		for _, box := range boxes {
+			outbound, ok := want[box.ID]
+			if !ok {
+				continue
+			}
+			if box.Capabilities == nil || box.Capabilities.Outbound != outbound {
+				t.Fatalf("%s capabilities = %+v, want outbound=%v", box.ID, box.Capabilities, outbound)
+			}
+			delete(want, box.ID)
+		}
+		if len(want) != 0 {
+			t.Fatalf("missing inboxes: %v", want)
+		}
+	}
+	check(true)
+	if err = svc.Store.DeleteOneConnection(ctx, u.AccountID, binding.InboxID); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
 }
 
 // intPtr returns a pointer to v, for the optional per-inbox cadence overrides.

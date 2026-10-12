@@ -690,19 +690,8 @@ func (s *Store) ListInboxes(ctx context.Context, p model.Principal) ([]model.Inb
 		}
 	}
 	for n := range out {
-		if out[n].Kind == model.InboxKindStandalone && s.IsGoogle(ctx, p.AccountID, out[n].ID) {
-			caps := model.StandaloneCapabilities()
-			caps.HierarchicalFolders = false
-			caps.Outbound = true
-			// Gmail (native or via One) has no push subscription: the worker
-			// polls, so the mailbox never reports instant push.
-			caps.Realtime = false
-			out[n].Capabilities = &caps
-		}
-		if out[n].Kind == model.InboxKindStandalone && s.IsMicrosoft(ctx, p.AccountID, out[n].ID) {
-			caps := model.StandaloneCapabilities()
-			caps.Outbound = true
-			caps.Realtime = s.MicrosoftPushActive(ctx, p.AccountID, out[n].ID)
+		if out[n].Kind == model.InboxKindStandalone {
+			caps := s.MailboxCapabilities(ctx, out[n])
 			out[n].Capabilities = &caps
 		}
 	}
