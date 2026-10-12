@@ -8,6 +8,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- A terminal outbound send failure (permanent provider rejection, ambiguous
+  outcome, or exhausted retries) now lands in the inbox as a locally generated
+  delivery-failure notice from `MAILER-DAEMON@<domain>` (`Undeliverable: …`) and
+  is cleared from the outbox, instead of only appearing as a failed outbox row.
+  Retryable failures are unchanged. See `D101`.
+
 - Message metadata now has required `provider` (mailbox implementation) and
   `message_transport` fields; connected inboxes return the same connector name
   in both. Public IMAP UID/UIDVALIDITY fields are removed, including handoff,

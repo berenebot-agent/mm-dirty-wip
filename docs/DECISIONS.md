@@ -4187,6 +4187,65 @@ decision.
 `Principal` and its two call sites, comment/doc/Compose edits. No new
 dependency, table or migration.
 
+## D101 — Terminal outbound failures are surfaced as a local delivery-failure notice
+
+**Requirement:** A direct-MX send that fails terminally (for example a Microsoft
+`550 5.7.1 ... blocked using Spamhaus`) was recorded only as a failed row in the
+outbox queue, an `outbound_delivery_log` entry, and (draft sends only) a
+`draft.send_failed` event. Nothing landed in the mailbox and no event was emitted
+for a plain send, so the failure was invisible unless someone opened the outbox
+and read a log. In email tradition a delivery failure comes back to the sender's
+mailbox as a bounce, which is visible without a dashboard.
+
+**Decision (2026-10-13, human approved):**
+
+- **Terminal failures only.** On a terminal outbound failure — a permanent
+  provider error, an ambiguous send, or an exhausted retry budget
+  (`MarkFailed`/`MarkWorkflowFailed` with `maxAttempts` reached) — MailMoose
+  writes a delivery-failure notice. A retryable failure that is rescheduled is
+  untouched: no notice, no event, message stays queued.
+- **The notice is a real inbound message, generated locally.** It is written
+  straight into the store as `direction='inbound'`, from
+  `MAILER-DAEMON@<sending domain>` (non-routable `mailer-daemon.invalid` when the
+  message has no managed domain), to the failed message's sender, subject
+  `Undeliverable: <original subject>`. The body is a human summary plus a
+  diagnostic block (recipient, provider path, error, original message id,
+  attempts). It appears in the inbox, in search and in retention like any other
+  mail, so a human and an agent reading the mailbox both see it. It is **never**
+  enqueued for delivery and never sent over any transport, so no daemon-to-daemon
+  loop is possible.
+- **The failed original leaves the outbox.** It is trashed in the same
+  transaction, so it no longer sits in the outbox queue (which lists only
+  pending/failed rows). It stays recoverable in Trash, and `RequeueFailed`
+  restores it (`deleted_at=NULL`) as well as resetting it to pending, so a manual
+  retry still works.
+- **Exactly one notice per failure episode.** `writeDeliveryFailureTx` is a no-op
+  when the original is already trashed, so a re-marked terminal failure cannot
+  spam the mailbox. The notice arrival emits `message.received` and the clearing
+  emits `message.trashed`, both durable and both visible to SSE, webhooks, Relay
+  and the event history.
+- **Scope is user sends, not internal notification mail.** The workflow path
+  carries only approval-request and handoff-notification mail, which already has
+  its own surfacing (`notification_status='failed'`, `draft.notification_failed`)
+  and no originating user message; it is deliberately unchanged. The notice path
+  is `internal/store/outbound.go` `MarkFailed`.
+
+**Reason:** The outbox is a work queue, not a notification surface; a terminal
+failure parked there is easy to miss and produces no agent-visible signal. A
+locally generated MAILER-DAEMON message is the email-native way to make a
+delivery failure obvious, and keeps provenance honest (the notice is from the
+mailer daemon, the failed original remains a separate outbound message).
+
+**Known limitation (unchanged):** terminal classification is unchanged. An
+IP-blocklist `550` (e.g. Spamhaus) is treated as permanent and now produces a
+notice even though the block may later clear; changing that classification is a
+separate decision.
+
+**Complexity/resource budget:** One new file (`internal/store/delivery_failure.go`)
+with a shared notice writer and body renderer; two call sites in `MarkFailed`
+and a `deleted_at=NULL` addition to `RequeueFailed`. No new dependency, table or
+migration.
+
 ## Future extension register
 
 - additional inbound transport adapters
