@@ -201,3 +201,64 @@ func TestMessageActionsRecheckSelectionAndRequeue(t *testing.T) {
 		t.Fatalf("dismissed row resurrected: %+v %v", dism, err)
 	}
 }
+
+// TestRecheckDueDateIsTheNextCheckTime pins the single-interval contract: the
+// rechecker decides eligibility by comparing a failed row's next_attempt_at
+// against the current time, so a deferral of one interval makes the row due one
+// interval later, not two. The bug this guards against applied the interval once
+// when writing the timestamp and again in the selection query.
+func TestRecheckDueDateIsTheNextCheckTime(t *testing.T) {
+	s, u, _, boxes := testStore(t)
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	box := boxes[0]
+	a, err := s.EnqueueMessageAction(ctx, p, box.ID, "m", store.MessageActionInput{Kind: "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	const interval = 10 * time.Minute
+	if err := s.SettleMessageAction(ctx, a.ID, "failed", "boom", time.Now().Add(interval)); err != nil {
+		t.Fatal(err)
+	}
+	// Due now: not yet, because it was scheduled one interval ahead.
+	got, err := s.ListFailedActionsForRecheck(ctx, time.Now(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r.ID == a.ID {
+			t.Fatal("failed action selected before its recheck time")
+		}
+	}
+	// Once the interval has passed it is due.
+	got, err = s.ListFailedActionsForRecheck(ctx, time.Now().Add(interval+time.Second), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range got {
+		if r.ID == a.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("failed action not due after one interval")
+	}
+	// Deferring by one interval moves the next check to exactly that time, so the
+	// row is not due now but is due after the interval.
+	if err := s.DeferMessageActionRecheck(ctx, a.ID, time.Now().Add(interval)); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.ListFailedActionsForRecheck(ctx, time.Now(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range got {
+		if r.ID == a.ID {
+			t.Fatal("deferred action selected before its next check")
+		}
+	}
+}

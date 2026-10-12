@@ -353,3 +353,180 @@ func TestRecheckFailedSettlesAppliedPurgeAndRetriesPendingPurge(t *testing.T) {
 		t.Fatalf("pending purge not retried: %+v %v", retried, err)
 	}
 }
+
+// TestRecheckFailedDoesNotOverrideCompletedNewerAction covers the case the old
+// supersede check missed: a newer action that has already completed must stop a
+// stale failure from being replayed, or the replay would silently undo the
+// user's later instruction.
+func TestRecheckFailedDoesNotOverrideCompletedNewerAction(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<completed@test>", "Completed")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+
+	// 1. An agent marks the message read, but the action fails.
+	read := true
+	stale, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim stale: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, stale.ID, "failed", "provider blip", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, stale.ID)
+
+	// 2. The user marks it unread, and that action completes.
+	unread := false
+	newer, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &unread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := svc.Store.ClaimMessageAction(ctx, "test")
+	if err != nil || !ok || claimed.ID != newer.ID {
+		t.Fatalf("claim newer: %+v %v %v", claimed, ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, newer.ID, "done", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. The stale failure must not be replayed over the completed newer action.
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	kept, err := svc.Store.GetMessageAction(ctx, p, stale.ID)
+	if err != nil || kept.State != "failed" {
+		t.Fatalf("stale action replayed past a completed newer action: %+v %v", kept, err)
+	}
+}
+
+// TestRecheckFailedOlderActionDoesNotSupersede proves ordering is directional: a
+// failed action is not blocked by an action enqueued before it.
+func TestRecheckFailedOlderActionDoesNotSupersede(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<ordering@test>", "Ordering")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+	read := true
+
+	// An older, already-completed action.
+	older, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim older: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, older.ID, "done", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A later action fails, with nothing newer after it.
+	unread := false
+	failed, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &unread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim failed: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, failed.ID, "failed", "provider blip", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, failed.ID)
+
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	got, err := svc.Store.GetMessageAction(ctx, p, failed.ID)
+	if err != nil || got.State != "pending" {
+		t.Fatalf("failed action blocked by an older action: %+v %v", got, err)
+	}
+}
+
+// TestRecheckSpamPatchIsDecidedByProviderState covers a spam patch against a
+// standalone mailbox: it is a physical folder move at the provider, so it must be
+// resolved from the provider's current state, never replayed blindly. A spam
+// patch whose effect is already visible settles as done instead of moving again.
+func TestRecheckSpamPatchIsDecidedByProviderState(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addFolder("Spam", 100)
+	fake.addMessage("INBOX", "body", "<spam@test>", "Spam")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Map the Spam role to the indexed Spam folder so destinationRole resolves.
+	folders, err := svc.Store.ListFolders(ctx, u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spamFolderID := ""
+	for _, f := range folders {
+		if f.Path == "Spam" {
+			spamFolderID = f.ID
+		}
+	}
+	if spamFolderID == "" {
+		t.Fatal("Spam folder not indexed")
+	}
+	if _, err := rm.SetRemoteFolderRole(ctx, p, box.ID, spamFolderID, model.FolderRoleSpam); err != nil {
+		t.Fatalf("map spam role: %v", err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+
+	// A failed spam patch. Before the recheck, the move has already taken effect
+	// at the provider: the message now sits in Spam.
+	spam := true
+	failed, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Spam: &spam})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim spam patch: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, failed.ID, "failed", "timed out", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, failed.ID)
+	if _, err := rm.MoveRemoteMessage(ctx, p, box.ID, messageID, "Spam"); err != nil {
+		t.Fatalf("pre-apply spam move: %v", err)
+	}
+
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	settled, err := svc.Store.GetMessageAction(ctx, p, failed.ID)
+	if err != nil || settled.State != "done" {
+		t.Fatalf("applied spam patch not settled by provider state: %+v %v", settled, err)
+	}
+}

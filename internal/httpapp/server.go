@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -924,6 +925,30 @@ func decodeJSONLimit(w http.ResponseWriter, r *http.Request, v any, limit int64)
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		writeError(w, 400, "invalid JSON: "+err.Error())
+		return false
+	}
+	return true
+}
+
+// decodeJSONOptionalLimit decodes an optional JSON body. An absent or empty body
+// is accepted and leaves v untouched, because these endpoints keep a meaningful
+// all-defaults behaviour when no body is sent (POST /v1/messages/{id}/seen marks
+// the message read). A body that is present but malformed is still rejected with
+// 400, so a typo cannot silently fall back to those defaults.
+//
+// Unknown fields are tolerated here, unlike decodeJSONLimit: these handlers take
+// loose client input from several integrations and must not start rejecting
+// previously accepted requests.
+func decodeJSONOptionalLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	if r.Body == nil {
+		return true
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	if err := dec.Decode(v); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return false
 	}

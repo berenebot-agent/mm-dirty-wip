@@ -180,9 +180,12 @@ func (s *Store) ListMessageActionsForMessage(ctx context.Context, accountID, inb
 }
 
 // ListFailedActionsForRecheck returns failed, non-dismissed actions whose
-// recheck is due. Ordering is oldest first so the rechecker works through a
-// backlog steadily. It deliberately excludes 'ambiguous' rows: those require
-// human verification before they may run again.
+// recheck is due. Because next_attempt_at on a failed row is the next recheck
+// time, the caller passes the current time: an action is due when its recheck
+// time has arrived. The interval is applied once, when next_attempt_at is
+// written, never again here. Ordering is oldest first so the rechecker works
+// through a backlog steadily. It deliberately excludes 'ambiguous' rows: those
+// require human verification before they may run again.
 func (s *Store) ListFailedActionsForRecheck(ctx context.Context, due time.Time, limit int) ([]MessageAction, error) {
 	rows, err := s.read.QueryContext(ctx, actionSelect+` WHERE dismissed=0 AND state='failed' AND next_attempt_at<=? ORDER BY next_attempt_at,rowid LIMIT ?`, timeText(due), limit)
 	if err != nil {

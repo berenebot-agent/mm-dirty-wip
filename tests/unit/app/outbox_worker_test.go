@@ -54,6 +54,100 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 	t.Fatalf("worker did not deliver; calls=%d", calls.Load())
 }
 
+// TestOutboxWorkerSweepsOrphanedRawMIME covers the safety net for a raw MIME
+// file left behind when a purge's unlink failed: the row is gone, so nothing else
+// would ever reclaim the file. The sweep must remove it while keeping a file a
+// message still references, and must never touch the staging directory or a file
+// young enough to belong to a message whose row is not committed yet.
+func TestOutboxWorkerSweepsOrphanedRawMIME(t *testing.T) {
+	svc, u, dom, box := testService(t)
+	ctx := context.Background()
+	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
+
+	// A real message whose raw file the sweep must keep.
+	raw := "From: sender@example.net\r\nTo: hermes@example.com\r\nSubject: Keep\r\nMessage-ID: <keep@test>\r\n\r\nbody"
+	if _, _, err := svc.IngestInbound(ctx, "mailgun", mgRequest(t, testMailgunKey, "orphan-keep", "hermes@example.com", raw)); err != nil {
+		t.Fatal(err)
+	}
+	dir := svc.Config.DataDir
+
+	// An orphan: a file in the messages tree with no referencing row, older than
+	// the grace period.
+	orphan := filepath.Join(dir, "messages", "aa", "bb", "raw_orphan.eml")
+	if err := os.MkdirAll(filepath.Dir(orphan), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(orphan, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// A young file in the messages tree: it could belong to a message whose row is
+	// not committed yet, so the grace period must spare it.
+	young := filepath.Join(dir, "messages", "cc", "dd", "raw_young.eml")
+	if err := os.MkdirAll(filepath.Dir(young), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(young, []byte("young"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A staged file in the .tmp area must never be considered.
+	staged := filepath.Join(dir, "messages", ".tmp", "in_staged.eml")
+	if err := os.MkdirAll(filepath.Dir(staged), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged, []byte("staged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(staged, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	w := app.NewOutboxWorker(svc, nil)
+	w.SetPeriod(10 * time.Millisecond)
+	w.Start()
+	defer w.Stop()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(orphan); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("orphaned raw MIME was not swept")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The referenced file must still be present.
+	if _, err := os.Stat(filepath.Join(dir, "messages")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staged); err != nil {
+		t.Fatalf("staged file was swept: %v", err)
+	}
+	if _, err := os.Stat(young); err != nil {
+		t.Fatalf("young file was swept: %v", err)
+	}
+	// The kept message's own file is still referenced by its row.
+	paths, err := svc.Store.MessageRawPaths(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("referenced raw paths missing")
+	}
+	for p := range paths {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(p))); err != nil {
+			t.Fatalf("referenced raw file missing: %s %v", p, err)
+		}
+	}
+	_ = box
+}
+
 // TestSaveSendingConfigRequeuesPending verifies that saving a domain's sending
 // configuration resets pending messages (held for lack of a provider, or in
 // retry backoff) so the worker delivers them immediately instead of waiting out

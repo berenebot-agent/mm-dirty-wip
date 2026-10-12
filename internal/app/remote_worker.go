@@ -353,7 +353,7 @@ func (w *RemoteWorker) watchInbox(ctx context.Context, inbox model.Inbox) {
 			}
 		}
 	}
-	folder := w.inboxFolder(inbox)
+	folder := inboxFolder(inbox)
 	// Run one detection pass up front so a fresh watcher reports mail that
 	// arrived while the process was down.
 	w.detectInbox(ctx, inbox)
@@ -628,15 +628,9 @@ func (w *RemoteWorker) detectAll() {
 // namespace when set, else the default INBOX. A standalone inbox's scope is itself
 // the INBOX-and-children root; the watcher only ever detects new arrivals in the
 // selected root folder, never its children.
-func (w *RemoteWorker) inboxFolder(inbox model.Inbox) string {
-	f := strings.TrimSpace(inbox.Namespace)
-	if f == "" {
-		f = model.NamespaceINBOX
-	}
-	return f
-}
-
-// inboxFolder is a package helper so both the worker and its watch sessions agree.
+//
+// It is a package function, not a method, so the worker and its watch sessions
+// share one definition and cannot drift apart.
 func inboxFolder(inbox model.Inbox) string {
 	f := strings.TrimSpace(inbox.Namespace)
 	if f == "" {
@@ -790,7 +784,7 @@ func (w *RemoteWorker) detectInboxIMAP(ctx context.Context, inbox model.Inbox) (
 	if w.stopping() {
 		return 0, "partial", nil
 	}
-	folder := w.inboxFolder(inbox)
+	folder := inboxFolder(inbox)
 	sess, err := w.remote.openRemoteSession(ctx, inbox)
 	if err != nil {
 		w.log.Debug("remote detection open", "inbox_id", inbox.ID, "error", err)

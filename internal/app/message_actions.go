@@ -28,6 +28,9 @@ type ActionWorker struct {
 // recheckInterval is how often failed actions are reconsidered. It is long
 // enough to absorb a provider outage without hammering it, and short enough that
 // a transient failure retries within minutes rather than waiting for a human.
+// It is the single delay in the recheck cycle: a failed action's next_attempt_at
+// is set to now+recheckInterval, and the rechecker selects rows that are due,
+// so the wait between rechecks is exactly one interval.
 const recheckInterval = 10 * time.Minute
 
 // recheckBatch bounds how many failed actions one recheck pass examines, so a
@@ -35,7 +38,9 @@ const recheckInterval = 10 * time.Minute
 const recheckBatch = 200
 
 // recheckDeferral pushes an unresolvable failed action's next recheck out by one
-// interval, so the pass does not retry it again immediately.
+// interval, so the pass does not retry it again immediately. It matches
+// recheckInterval: a deferred action waits the same single interval as a freshly
+// failed one.
 const recheckDeferral = recheckInterval
 
 func NewActionWorker(svc *Service, remote *RemoteMailboxService) *ActionWorker {
@@ -101,7 +106,14 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		if recover() != nil {
 			state, reason = "ambiguous", "Action interrupted; verify the message before retrying"
 		}
+		// For a failed action, next_attempt_at is the next recheck time: the
+		// rechecker reconsiders it one interval from now. A retryable patch that
+		// stays pending keeps the short per-attempt backoff instead, which the
+		// claim query honours directly.
 		next := time.Now().Add(time.Duration(a.Attempts) * time.Second)
+		if state == "failed" {
+			next = time.Now().Add(recheckInterval)
+		}
 		outcome, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := w.svc.Store.SettleMessageAction(outcome, a.ID, state, reason, next); err != nil {
@@ -340,8 +352,9 @@ func (s *Service) WaitForInboxAction(ctx context.Context, p model.Principal, id 
 // Safety is decided before requeueing, because "the last try failed" is not the
 // same as "the operation still needs doing":
 //
-//   - A newer unsettled action for the same message supersedes the failure; the
-//     old attempt is stale, and replaying it could undo the newer instruction.
+//   - A newer action for the same message supersedes the failure — whether it is
+//     still unsettled or has already completed — because the old attempt is
+//     stale and replaying it could undo the newer instruction.
 //   - The provider's current state is checked where the action targets a remote
 //     message, so an operation that already took effect is not repeated.
 func (w *ActionWorker) RecheckFailed() {
@@ -349,7 +362,10 @@ func (w *ActionWorker) RecheckFailed() {
 }
 
 func (w *ActionWorker) recheckFailed(ctx context.Context) {
-	due := time.Now().Add(-recheckInterval)
+	// next_attempt_at on a failed row is the next recheck time, so eligibility is
+	// a plain "is it due now" comparison. The interval is applied once, where the
+	// timestamp is written, never again in the query.
+	due := time.Now()
 	actions, err := w.svc.Store.ListFailedActionsForRecheck(ctx, due, recheckBatch)
 	if err != nil {
 		w.svc.Log.Error("action recheck list", "error", err)
@@ -379,9 +395,12 @@ func (w *ActionWorker) recheckFailed(ctx context.Context) {
 // action should be requeued. An error means the state could not be determined and
 // the action's next recheck should be deferred.
 func (w *ActionWorker) recheckOne(ctx context.Context, a store.MessageAction) (bool, error) {
-	// A patch sets absolute state, so repeating it cannot duplicate an effect and
-	// is always safe to retry once no newer action supersedes it.
-	if a.Input.Kind == "patch" {
+	// A patch that only sets a flag is absolute state: repeating it cannot
+	// duplicate an effect and is safe to retry once no newer action supersedes
+	// it. A spam patch is the exception — against a standalone mailbox it is a
+	// physical folder move at the provider, so it is decided from the provider's
+	// current state like any other location change.
+	if a.Input.Kind == "patch" && a.Input.Spam == nil {
 		superseded, err := w.supersededByNewerAction(ctx, a)
 		if err != nil {
 			return false, err
@@ -479,18 +498,36 @@ func (w *ActionWorker) resolveRemoteLocationAction(ctx context.Context, a store.
 	return true, nil
 }
 
-// supersededByNewerAction reports whether the message already has a newer
-// unsettled action queued or running, which the failed attempt must not jump.
+// supersededByNewerAction reports whether a newer instruction for the same
+// message governs, so the failed attempt must not be replayed.
+//
+// Ordering is durable: ListMessageActionsForMessage returns the message's
+// actions oldest first by rowid, so position in that slice is the enqueue order.
+// Only actions created *after* the failed one count; an older action can never
+// supersede it.
+//
+// A newer action supersedes the failure when it is unsettled (pending, running
+// or ambiguous) — replaying the old attempt would jump the queue — or when it
+// has already completed. A completed newer action is the case the old check
+// missed: replaying the stale failure would silently undo a change the user
+// made after the failure, so the failure stays put for a human.
 func (w *ActionWorker) supersededByNewerAction(ctx context.Context, a store.MessageAction) (bool, error) {
 	actions, err := w.svc.Store.ListMessageActionsForMessage(ctx, a.AccountID, a.InboxID, a.MessageID)
 	if err != nil {
 		return false, err
 	}
+	seen := false
 	for _, other := range actions {
 		if other.ID == a.ID {
+			seen = true
 			continue
 		}
-		if other.State == "pending" || other.State == "running" || other.State == "ambiguous" {
+		if !seen {
+			// Enqueued before the failed action: it cannot supersede it.
+			continue
+		}
+		switch other.State {
+		case "pending", "running", "ambiguous", "done":
 			return true, nil
 		}
 	}
