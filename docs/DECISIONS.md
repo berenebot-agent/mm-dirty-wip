@@ -3731,6 +3731,49 @@ normalises and stops emitting the waiting state; `app.js` gains a
 `Downloading metadata` line and an estimate marker and loses one dead code path.
 See `docs/METADATA_SYNC.md`.
 
+## D109 — One native API message schema across inbox kinds and routes
+
+**Date:** 2026-10-12. **Approved by:** Ben.
+
+**Requirement:** Domain messages were marshaled directly from `model.Message`,
+while inbox-scoped standalone routes returned `remoteMessageResponse` and
+account-wide routes used a lossy UI-model projection. The same remote message
+therefore had different fields depending on the route, and OpenAPI described
+only one of the shapes. Clients need one contract for domain mailboxes and all
+four standalone modes (IMAP, Google, Microsoft, and Gmail via One).
+
+**Decision:** All native API message responses use one explicit HTTP-layer
+projection and one OpenAPI `Message` schema. Storage/UI models remain internal.
+Inbox kind and connector provider are informational `inbox_kind` and
+`inbox_provider` metadata only; they do not select a schema or omission policy.
+Keep existing public fields, including optional UID/index/snippet/flag metadata,
+and preserve RFC identity, threading headers, and received/sent timestamps.
+
+Use a stable required core and common availability-based optionality, not an
+identical key count for every message. `to` and `cc` are arrays even when empty.
+Known false booleans remain present; unknown values remain absent. Never invent
+direction, delivery status, a spam verdict, a UID, or creation time. Indexing
+time is separate from creation time and may change during a live header refresh.
+
+Equivalent list routes produce the same metadata for the same snapshot.
+Lists/search/thread-message reads omit bodies for every inbox kind. Details
+carry plain text and sanitized HTML; remote MIME is fetched transiently and
+fetch/parse failures retain the existing unavailable (`503`) behavior. Do not
+add remote MIME fetches to list reads. Send and mutation message results also
+use the same schema. The explicit openagent.email compatibility adapters are
+unchanged.
+
+**Compatibility:** Local list/thread bodies are now detail-only. Empty unknown
+remote direction/spam fields and synthesized creation timestamps disappear.
+Existing remote metadata remains available through account-wide routes instead
+of being dropped. This is a deliberate correction to the native V1 contract.
+
+**Complexity/resource budget:** One explicit response DTO, optional read-only
+metadata carried through the existing internal read model, common response
+helpers, and deterministic HTTP/OpenAPI contract tests for all five inbox modes.
+Inbox identity lookups are bounded to once per inbox per response. No migration,
+dependency, service, or additional MIME storage/fetching on list reads.
+
 ## Future extension register
 
 - additional inbound transport adapters

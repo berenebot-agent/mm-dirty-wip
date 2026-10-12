@@ -73,39 +73,6 @@ func folderResponse(f model.Folder) folderListResponse {
 	}
 }
 
-// remoteMessageResponse is the read projection of a cached remote message,
-// mirroring the app RemoteMessageView but with the HTML body sanitized and never
-// the raw bytes.
-type remoteMessageResponse struct {
-	ID           string        `json:"id"`
-	InboxID      string        `json:"inbox_id"`
-	FolderPath   string        `json:"folder_path"`
-	UIDValidity  uint32        `json:"uid_validity"`
-	UID          uint32        `json:"uid"`
-	MessageID    string        `json:"message_id,omitempty"`
-	InReplyTo    string        `json:"in_reply_to,omitempty"`
-	References   []string      `json:"references,omitempty"`
-	ThreadID     string        `json:"thread_id,omitempty"`
-	From         model.Address `json:"from"`
-	To           []string      `json:"to,omitempty"`
-	CC           []string      `json:"cc,omitempty"`
-	Subject      string        `json:"subject"`
-	Snippet      string        `json:"snippet,omitempty"`
-	Text         string        `json:"text,omitempty"`
-	HTML         string        `json:"html,omitempty"`
-	SizeBytes    int64         `json:"size_bytes"`
-	HasAttach    bool          `json:"has_attachments"`
-	Read         bool          `json:"read"`
-	Flagged      bool          `json:"flagged"`
-	Answered     bool          `json:"answered"`
-	Draft        bool          `json:"draft"`
-	Labels       []string      `json:"labels,omitempty"`
-	ReceivedAt   *string       `json:"received_at,omitempty"`
-	SentAt       *string       `json:"sent_at,omitempty"`
-	InternalDate *string       `json:"internal_date,omitempty"`
-	IndexedAt    time.Time     `json:"indexed_at,omitempty"`
-}
-
 // hydrateRemoteBody fetches a remote message's raw MIME transiently, parses it,
 // and returns its plain text and sanitized HTML. The body is never archived: it
 // is fetched live per read, matching the local single-message read. There is no
@@ -125,25 +92,13 @@ func (s *Server) hydrateRemoteBody(ctx context.Context, p model.Principal, mb ma
 	return parsed.Text, htmlsanitize.Sanitize(parsed.HTML), nil
 }
 
-func remoteMessageResponseOf(v app.RemoteMessageView) remoteMessageResponse {
-	return remoteMessageResponse{
-		ID: v.ID, InboxID: v.InboxID, FolderPath: v.FolderPath, UIDValidity: v.UIDValidity, UID: v.UID,
-		MessageID: v.RFCMessageID, InReplyTo: v.InReplyTo, References: v.References, ThreadID: v.ThreadKey,
-		From: v.From, To: v.To, CC: v.CC, Subject: v.Subject, Snippet: v.Snippet, SizeBytes: v.SizeBytes,
-		HasAttach: v.HasAttach, Read: v.Read, Flagged: v.Flagged, Answered: v.Answered, Draft: v.Draft,
-		Labels: v.Labels, ReceivedAt: v.ReceivedAt, SentAt: v.SentAt, InternalDate: v.InternalDate, IndexedAt: v.IndexedAt,
-	}
-}
-
-// remoteMessageResponseWithBody is remoteMessageResponseOf plus the live body:
-// the single-message read fetches and parses the MIME (never archived) so the
-// common GET returns the same text/html a local message read does. List reads
-// stay metadata-only.
-func (s *Server) remoteMessageResponseWithBody(ctx context.Context, p model.Principal, mb mailboxBackend, v app.RemoteMessageView) (remoteMessageResponse, error) {
-	out := remoteMessageResponseOf(v)
+// remoteMessageWithBody hydrates the common read model transiently. List reads
+// stay metadata-only; both detail routes use the same final API projection.
+func (s *Server) remoteMessageWithBody(ctx context.Context, p model.Principal, mb mailboxBackend, v app.RemoteMessageView) (model.Message, error) {
+	out := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
 	text, html, err := s.hydrateRemoteBody(ctx, p, mb, v.ID)
 	if err != nil {
-		return remoteMessageResponse{}, err
+		return model.Message{}, err
 	}
 	out.Text, out.HTML = text, html
 	return out, nil
@@ -348,7 +303,7 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 				cursor = msgs[len(msgs)-1].ID
 			}
 		}
-		writeJSON(w, 200, newEnvelope(sanitizedMessages(msgs), cursor, model.CompletenessComplete, nil))
+		writeJSON(w, 200, newEnvelope(s.messageResponses(r, msgs, false), cursor, model.CompletenessComplete, nil))
 		return
 	}
 	res, rerr := mb.remote.ListRemoteMessages(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, before)
@@ -356,16 +311,15 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, rerr)
 		return
 	}
-	items := make([]remoteMessageResponse, 0, len(res.Items))
+	items := make([]model.Message, 0, len(res.Items))
 	for _, v := range res.Items {
-		items = append(items, remoteMessageResponseOf(v))
+		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 	}
-	writeJSON(w, 200, newEnvelope(items, res.NextCursor, res.Completeness, nil))
+	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), res.NextCursor, res.Completeness, nil))
 }
 
-// apiInboxMessage returns one message. For a standalone inbox it is the cached
-// remote projection with a best-effort live header refresh; the body is fetched
-// separately by the content route.
+// apiInboxMessage returns the common message detail, including the body. Remote
+// MIME is fetched transiently; failures are never disguised as metadata-only reads.
 func (s *Server) apiInboxMessage(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
@@ -382,7 +336,7 @@ func (s *Server) apiInboxMessage(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "not found")
 			return
 		}
-		writeJSON(w, 200, sanitizedMessage(m))
+		writeJSON(w, 200, s.messageResponse(r, m))
 		return
 	}
 	v, rerr := mb.remote.GetRemoteMessage(r.Context(), p, mb.inbox.ID, messageID)
@@ -390,12 +344,12 @@ func (s *Server) apiInboxMessage(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, rerr)
 		return
 	}
-	resp, herr := s.remoteMessageResponseWithBody(r.Context(), p, mb, v)
+	resp, herr := s.remoteMessageWithBody(r.Context(), p, mb, v)
 	if herr != nil {
 		mapMailboxError(w, herr)
 		return
 	}
-	writeJSON(w, 200, resp)
+	writeJSON(w, 200, s.messageResponse(r, resp))
 }
 
 // apiInboxMessageContent streams the raw RFC5322 MIME of a message. A local
@@ -576,7 +530,7 @@ func (s *Server) apiInboxThread(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 404, "thread not found")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"id": threadKey, "inbox_id": mb.inbox.ID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": sanitizedMessages(msgs)})
+		writeJSON(w, 200, map[string]any{"id": threadKey, "inbox_id": mb.inbox.ID, "subject": msgs[len(msgs)-1].Subject, "message_count": len(msgs), "messages": s.messageResponses(r, msgs, false)})
 		return
 	}
 	view, msgs, rerr := mb.remote.GetRemoteThread(r.Context(), p, mb.inbox.ID, threadKey)
@@ -584,11 +538,11 @@ func (s *Server) apiInboxThread(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, rerr)
 		return
 	}
-	items := make([]remoteMessageResponse, 0, len(msgs))
+	items := make([]model.Message, 0, len(msgs))
 	for _, v := range msgs {
-		items = append(items, remoteMessageResponseOf(v))
+		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 	}
-	writeJSON(w, 200, map[string]any{"id": view.Key, "inbox_id": mb.inbox.ID, "subject": view.Subject, "message_count": view.MessageCount, "unread_count": view.UnreadCount, "messages": items})
+	writeJSON(w, 200, map[string]any{"id": view.Key, "inbox_id": mb.inbox.ID, "subject": view.Subject, "message_count": view.MessageCount, "unread_count": view.UnreadCount, "messages": s.messageResponses(r, items, false)})
 }
 
 // ---- Search ----
@@ -623,7 +577,7 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 			mapStoreError(w, lerr)
 			return
 		}
-		writeJSON(w, 200, newEnvelope(sanitizedMessages(items), "", model.CompletenessComplete, nil))
+		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", model.CompletenessComplete, nil))
 		return
 	}
 	cursorUID := uint32(0)
@@ -648,9 +602,9 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, rerr)
 		return
 	}
-	items := make([]remoteMessageResponse, 0, len(res.Items))
+	items := make([]model.Message, 0, len(res.Items))
 	for _, v := range res.Items {
-		items = append(items, remoteMessageResponseOf(v))
+		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 	}
 	cursor := ""
 	if res.NextCursor != 0 {
@@ -659,7 +613,7 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 	if res.ProviderCursor != "" {
 		cursor = res.ProviderCursor
 	}
-	writeJSON(w, 200, newEnvelope(items, cursor, res.Completeness, nil))
+	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, res.Completeness, nil))
 }
 
 // ---- Labels ----
@@ -1181,7 +1135,7 @@ func (s *Server) patchRemoteMessage(w http.ResponseWriter, r *http.Request, p mo
 		mapMailboxError(w, err)
 		return
 	}
-	writeJSON(w, 200, sanitizedMessage(updated))
+	writeJSON(w, 200, s.messageResponse(r, updated))
 }
 
 // resolveRemoteMessage re-reads a remote message projection as a common message.
