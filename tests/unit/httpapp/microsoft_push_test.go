@@ -213,16 +213,6 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 	mu.Unlock()
 	notify("subscription", state, "")
 	notify("subscription", state, "")
-	createdLogs := logSink.records("microsoft push received")
-	createdCount := 0
-	for _, entry := range createdLogs {
-		if entry.attrs["event"] == "created" && entry.attrs["provider"] == "microsoft" && entry.attrs["inbox"] == box.Address && entry.attrs["subscription_id"] == sub.ID {
-			createdCount++
-		}
-	}
-	if createdCount != 2 {
-		t.Fatalf("accepted created callback logs = %d, want 2: %#v", createdCount, createdLogs)
-	}
 	p, _ = svc.Store.MicrosoftPush(ctx, user.AccountID, box.ID)
 	if p.RequestedSource != "microsoft push" {
 		t.Fatalf("queued source = %q, want microsoft push", p.RequestedSource)

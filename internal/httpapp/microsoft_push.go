@@ -47,7 +47,13 @@ func (s *Server) microsoftPush(w http.ResponseWriter, r *http.Request) {
 		default:
 			continue
 		}
-		inbox, accepted, err := s.remoteMailbox().AcceptMicrosoftPush(r.Context(), n.SubscriptionID, n.ClientState, n.Lifecycle)
+		// An accepted notification is a fetch hint, not an arrival: it only
+		// persists durable work and wakes the push worker. It is therefore not
+		// logged at INFO. A push-triggered delivery is reported by the worker's
+		// "remote sync" line (trigger=push) and the arrival's "remote received"
+		// line (source="microsoft push"), so per-callback logging would be
+		// redundant. The matched inbox address is discarded for the same reason.
+		_, accepted, err := s.remoteMailbox().AcceptMicrosoftPush(r.Context(), n.SubscriptionID, n.ClientState, n.Lifecycle)
 		if err != nil {
 			http.Error(w, "notification persistence unavailable", http.StatusServiceUnavailable)
 			return
@@ -56,11 +62,6 @@ func (s *Server) microsoftPush(w http.ResponseWriter, r *http.Request) {
 			logger.DebugContext(r.Context(), "microsoft push ignored")
 			continue
 		}
-		event := n.Lifecycle
-		if event == "" {
-			event = n.ChangeType
-		}
-		logger.InfoContext(r.Context(), "microsoft push received", "provider", "microsoft", "inbox", inbox, "event", event, "subscription_id", n.SubscriptionID)
 	}
 	w.WriteHeader(http.StatusAccepted)
 }
