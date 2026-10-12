@@ -23,11 +23,19 @@ type dialMXLiveView struct {
 	MX           []dialMXMXInstruction
 	Statuses     []mxdialStatusView
 	DNS          []domainDNSView
+	// UnexpectedMX lists published MX hostnames that are not one of the
+	// configured Antler receivers. It is populated only when DNS is checked.
+	UnexpectedMX []string
 }
 
 // dialMXLiveView builds the view for a domain whose effective receiving
 // provider is Dial MX. It never returns an error: a missing credential or
 // config yields a partial view so the setup dialog still renders.
+//
+// The published-record checks (DNS) are deliberately not run here: the saved
+// status page renders the receivers' self-reported state only, and running a
+// resolver lookup on every status poll is wasted work. Callers that need the
+// checks call dialMXDNS afterwards (the setup wizard, and the dashboard light).
 func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg store.DomainReceivingConfig) dialMXLiveView {
 	view := dialMXLiveView{TXTName: "_mailmoose-mx." + domainName}
 	values := map[string]any{}
@@ -116,29 +124,46 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 			}
 		}
 	}
-	if view.TXTValue != "" {
-		view.DNS = append(view.DNS, s.dns.checkTXT(domainName, keyID, publicKey, view.TXTValue))
-	}
-	if len(view.MX) > 0 {
-		view.DNS = append(view.DNS, s.dns.checkMX(domainName, view.MX))
-	}
 	return view
 }
 
+// dialMXDNS runs the domain's published-record checks and returns them, plus the
+// unexpected MX hostnames, resolved fresh on every call. It is the expensive
+// half of the setup picture and is invoked only where the checks are actually
+// rendered: the setup wizard (with ?dns=1) and the dashboard light. The status
+// page never calls it.
+func (s *Server) dialMXDNS(domainName, keyID string, publicKey []byte, view dialMXLiveView) ([]domainDNSView, []string) {
+	var dns []domainDNSView
+	if view.TXTValue != "" {
+		dns = append(dns, s.dns.checkTXT(domainName, keyID, publicKey, view.TXTValue))
+	}
+	var unexpected []string
+	if len(view.MX) > 0 {
+		mxView := s.dns.checkMX(domainName, view.MX)
+		dns = append(dns, mxView)
+		unexpected = mxView.Unexpected
+	}
+	return dns, unexpected
+}
+
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic
-// light shown on the dashboard. It is binary: green when at least one connector
-// row is fully green, red otherwise. A receiver reports "ready" only after it has
+// light shown on the dashboard. It is: green when at least one connector row is
+// fully green and no unexpected MX records are published; amber when at least
+// one connector is green but the domain's MX records also name servers that are
+// not Antler receivers (mail is delivered, but routing is ambiguous and may not
+// go via Antler); red otherwise. A receiver reports "ready" only after it has
 // proved BOTH domain authority (its _mailmoose-mx TXT key) and routing (its own
 // SMTP hostname is published in the domain's MX records), so a ready row already
-// means mail will be delivered and the aggregate needs no separate MX check. A
-// receiver that is not routed reports rejected/not_mx and is not green.
+// means mail will be delivered and the aggregate needs no separate MX check
+// beyond the extra-record warning. A receiver that is not routed reports
+// rejected/not_mx and is not green.
 //
 // A receiver that has disconnected, been rejected, or become unreachable is not
 // green: green means mail will arrive now, and a reconnecting receiver is not
 // yet delivering. The receiving dialog carries the per-connector detail. light
-// is a "dns-light" token ("ok" or "danger") and title is the human explanation
-// for its tooltip.
-func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title string) {
+// is a "dns-light" token ("ok", "amber" or "danger") and title is the human
+// explanation for its tooltip.
+func dialMXHealth(statuses []mxdialStatusView, unexpectedMX []string, now time.Time) (light, title string) {
 	ready := 0
 	for _, st := range statuses {
 		if st.State != mxdial.StatusActive || (st.ExpiresAt != nil && !st.ExpiresAt.After(now)) {
@@ -146,10 +171,13 @@ func dialMXHealth(statuses []mxdialStatusView, now time.Time) (light, title stri
 		}
 		ready++
 	}
-	if ready > 0 {
-		return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
+	if ready == 0 {
+		return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver authorizes and your MX points at it"
 	}
-	return "danger", "No inbound connector is ready — mail delivery is blocked until a receiver authorizes and your MX points at it"
+	if len(unexpectedMX) > 0 {
+		return "amber", fmt.Sprintf("%d of %d inbound connectors ready, but extra MX records exist (%s) — mail may not be delivered via Antler", ready, len(statuses), strings.Join(unexpectedMX, ", "))
+	}
+	return "ok", fmt.Sprintf("%d of %d inbound connectors ready — mail will be delivered", ready, len(statuses))
 }
 
 // boundStatusReason truncates a receiver-supplied reason so an unexpectedly
@@ -167,12 +195,13 @@ func (v dialMXLiveView) instructionView() *dialMXDNSInstructions {
 		return nil
 	}
 	out := &dialMXDNSInstructions{
-		Service:  v.Service,
-		Contact:  v.ContactEmail,
-		TXTName:  v.TXTName,
-		TXTValue: v.TXTValue,
-		MX:       v.MX,
-		Receiver: v.Statuses,
+		Service:      v.Service,
+		Contact:      v.ContactEmail,
+		TXTName:      v.TXTName,
+		TXTValue:     v.TXTValue,
+		MX:           v.MX,
+		Receiver:     v.Statuses,
+		UnexpectedMX: v.UnexpectedMX,
 	}
 	return out
 }

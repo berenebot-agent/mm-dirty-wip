@@ -2,10 +2,12 @@ package httpapp
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
 // uiState is the lightweight, role-scoped snapshot the browser reconciles
@@ -158,12 +160,16 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 }
 
 // domainInboundLight computes a domain's aggregate inbound traffic light. It
-// reads the in-memory receiver statuses only: a receiver reports ready only
-// after proving both domain authority and MX routing, so no published-MX lookup
-// is needed and the read is cheap enough to compute on every snapshot. It
-// returns an empty light for a domain that does not receive by Dial MX (those
-// have no dashboard light) or when no manager is wired. A rotated-away key's
-// authorization is excluded so a stale row cannot present as current readiness.
+// reads the in-memory receiver statuses (each receiver reports ready only after
+// proving both domain authority and MX routing), and — because a rogue MX record
+// changes with no receiver event, so SSE alone cannot surface it — also runs the
+// bounded published-MX check to detect extra MX records that are not Antler
+// receivers. That check is resolver-bound and only runs when the caller asked for
+// lights (load, reconnect, a receiver-health notification, or the slow
+// tab-open refresh); it is never on a mail-event path. It returns an empty light
+// for a domain that does not receive by Dial MX (those have no dashboard light)
+// or when no manager is wired. A rotated-away key's authorization is excluded so
+// a stale row cannot present as current readiness.
 func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, domainName, receivingProvider string) (string, string) {
 	if normalizeDomainProvider(receivingProvider) != "dialmx" || s.Service.DialMX == nil {
 		return "", ""
@@ -185,5 +191,44 @@ func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, do
 		}
 		views = append(views, v)
 	}
-	return dialMXHealth(views, time.Now())
+	// Only a domain with an active receiver can be amber-on-extra-MX; a red
+	// domain stays red, so skip the lookup then.
+	var unexpected []string
+	if anyReady(views) {
+		unexpected = s.unexpectedMXForDomain(ctx, accountID, domainID, domainName, keyID)
+	}
+	return dialMXHealth(views, unexpected, time.Now())
+}
+
+// anyReady reports whether at least one receiver row is a live, unexpired ready
+// state, matching dialMXHealth's own readiness test.
+func anyReady(statuses []mxdialStatusView) bool {
+	now := time.Now()
+	for _, st := range statuses {
+		if st.State == mxdial.StatusActive && (st.ExpiresAt == nil || st.ExpiresAt.After(now)) {
+			return true
+		}
+	}
+	return false
+}
+
+// unexpectedMXForDomain runs the bounded published-MX check for a domain and
+// returns the published hostnames that are not one of its configured Antler
+// receivers. It is best-effort: a missing config, credential or resolver failure
+// yields no warning rather than an error, so the light is never failed by DNS.
+func (s *Server) unexpectedMXForDomain(ctx context.Context, accountID, domainID, domainName, keyID string) []string {
+	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
+	if err != nil {
+		return nil
+	}
+	cred, err := s.Service.Store.GetDialMXCredential(ctx, accountID, domainID)
+	if err != nil {
+		return nil
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+	view := s.dialMXLiveView(domainName, keyID, pub, cfg)
+	if len(view.MX) == 0 {
+		return nil
+	}
+	return s.dns.checkMX(domainName, view.MX).Unexpected
 }

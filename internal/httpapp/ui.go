@@ -1898,8 +1898,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			TXT:          mxwire.DomainTXT(credential.KeyID, decodePublicKey(credential.PublicKey)),
 			ReceiverURLs: urls,
 		}
+		var view dialMXLiveView
 		if haveCfg {
-			view := s.dialMXLiveView(d.Name, credential.KeyID, decodePublicKey(credential.PublicKey), cfg)
+			view = s.dialMXLiveView(d.Name, credential.KeyID, decodePublicKey(credential.PublicKey), cfg)
 			setup.Service, setup.ContactEmail, setup.MX = view.Service, view.ContactEmail, view.MX
 			setup.Statuses, setup.DNS = view.Statuses, view.DNS
 		} else {
@@ -1907,7 +1908,14 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
 		setup.StatusesJSON = dialMXStatusesJSON(setup.Statuses)
-		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, time.Now())
+		// The aggregate light runs the bounded published-MX check so a rogue MX
+		// record turns it amber on the initial paint; the live refresh then keeps
+		// it current. It is skipped for a domain with no active receiver (red).
+		var unexpected []string
+		if haveCfg && anyReady(setup.Statuses) {
+			unexpected = s.unexpectedMXForDomain(ctx, p.AccountID, d.ID, d.Name, credential.KeyID)
+		}
+		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, unexpected, time.Now())
 		dialMXSetup[d.ID] = setup
 	}
 	// A root domain may have had an ancestor added after it, so offer "Inherited
