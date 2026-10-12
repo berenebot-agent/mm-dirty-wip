@@ -137,6 +137,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The message reader's action buttons (Reply, Reply all, Forward, mark unread,
+  trash) are square and 36×36 like the mailbox toolbar. They had no width rule
+  of their own, so the flex row squeezed the five of them into a cramped,
+  uneven cluster.
+
 - The mailbox toolbar's square buttons (settings, sync, mark read/unread,
   trash) are the same 36×36 in every view. A later `.bulkbar .icon-btn` rule
   carried the same CSS specificity as the sizing rule and won on source order,
