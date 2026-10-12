@@ -853,7 +853,7 @@ func (s *Server) uiBulk(w http.ResponseWriter, r *http.Request) {
 // uiBulkRemote applies a bulk action to a standalone inbox's remote messages.
 // The explicit-id list is verified to belong to this inbox's remote index; the
 // "all N" set is re-derived from the folder's cached remote index. A per-message
-// failure is counted out rather than aborting the batch.
+// submission failure is reported separately rather than aborting the batch.
 func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox, action string) {
 	// Every bulk action here (including purge) requires Assistant; only sending
 	// needs Owner, and none of these actions sends.
@@ -876,7 +876,7 @@ func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Pr
 	}
 	var ids []string
 	if r.Form.Get("scope") == "all" {
-		res, err := s.remoteMailbox().ListRemoteMessages(r.Context(), p, box.ID, rolePath, remoteBulkMax, "")
+		res, err := s.remoteMailbox().ListRemoteMessagesCached(r.Context(), p, box.ID, rolePath, remoteBulkMax, "")
 		if err != nil {
 			s.uiError(w, err, 400)
 			return
@@ -885,21 +885,35 @@ func (s *Server) uiBulkRemote(w http.ResponseWriter, r *http.Request, p model.Pr
 			ids = append(ids, v.ID)
 		}
 	} else {
-		for _, id := range r.Form["ids"] {
-			// Verify the id is in this inbox's remote index before acting, so a
-			// crafted id from another inbox is never touched.
-			if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id); gerr == nil {
-				ids = append(ids, id)
-			}
-		}
+		ids = r.Form["ids"]
 	}
 	count := 0
+	failed := 0
+	seen := make(map[string]bool)
 	for _, id := range ids {
-		if s.bulkRemoteMessageAction(r, p, box, id, action, r.Form.Get("dest")) {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		// EnqueueInboxAction validates cached identity and inbox ownership without
+		// contacting the provider. Provider work must never hold this POST open.
+		if s.enqueueBulkAction(r, p, box, id, action, r.Form.Get("dest")) {
 			count++
+		} else {
+			failed++
 		}
 	}
-	s.redirectBulkResult(w, r, box, action, count)
+	notice := fmt.Sprintf("%d message actions queued", count)
+	if count == 1 {
+		notice = "1 message action queued"
+	}
+	if failed > 0 {
+		notice += fmt.Sprintf("; %d could not be queued", failed)
+	}
+	if len(ids) == 0 {
+		notice = "No messages selected"
+	}
+	s.redirectBulkNotice(w, r, box, notice)
 }
 
 // remoteBulkMax bounds an "all N" remote bulk enumeration.
@@ -932,40 +946,6 @@ func (s *Server) remoteFolderPathForView(r *http.Request, p model.Principal, box
 	return root
 }
 
-// bulkRemoteMessageAction applies one bulk action to one remote message.
-func (s *Server) bulkRemoteMessageAction(r *http.Request, p model.Principal, box model.Inbox, id, action, dest string) bool {
-	ctx := r.Context()
-	switch action {
-	case "read", "unread":
-		read := action == "read"
-		if _, err := s.remoteMailbox().SetRemoteRead(ctx, p, box.ID, id, read); err == nil {
-			return true
-		}
-	case "delete":
-		if err := s.trashRemoteMessage(ctx, p, mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}, id); err == nil {
-			return true
-		}
-	case "restore":
-		if err := s.moveRemoteToRole(ctx, p, mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}, id, model.FolderRoleInbox); err == nil {
-			return true
-		}
-	case "move":
-		if strings.TrimSpace(dest) == "" {
-			return false
-		}
-		if _, err := s.remoteMailbox().MoveRemoteMessage(ctx, p, box.ID, id, dest); err == nil {
-			return true
-		}
-	case "purge":
-		// Permanent erasure is a remote expunge; Assistant or Owner may do it
-		// (the only role difference is sending), enforced by the app service.
-		if err := s.remoteMailbox().PurgeRemoteMessage(ctx, p, box.ID, id); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
 // redirectBulkResult redirects to the mailbox folder after a bulk action.
 func (s *Server) redirectBulkResult(w http.ResponseWriter, r *http.Request, box model.Inbox, action string, count int) {
 	notice := fmt.Sprintf("%d message", count)
@@ -986,6 +966,10 @@ func (s *Server) redirectBulkResult(w http.ResponseWriter, r *http.Request, box 
 	case "move":
 		notice += " moved"
 	}
+	s.redirectBulkNotice(w, r, box, notice)
+}
+
+func (s *Server) redirectBulkNotice(w http.ResponseWriter, r *http.Request, box model.Inbox, notice string) {
 	base := "/ui/inboxes/" + box.ID
 	switch r.Form.Get("folder") {
 	case "sent":
