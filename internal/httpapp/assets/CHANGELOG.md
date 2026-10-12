@@ -8,6 +8,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- Live inbox-wide metadata-sync progress for Gmail, One, Outlook and IMAP in the
+  header Queue and at the top of every relevant folder view. Running work has a
+  spinner; queued, waiting, paused and failed work stays visible with safe status.
+  Counts update automatically, with indexed/total and percentages when a reliable
+  provider total is known. Completed syncs disappear without a page reload.
+
 - Standalone remote-mail arrivals now log a concise `remote received` line and
   include `provider` and `source` in their durable event payload. Source is
   persisted through asynchronous delivery: Microsoft delta polling reports

@@ -72,6 +72,15 @@ const syncButton = `{{if .StandaloneMode}}<button type="submit" formaction="/ui/
 // custom-folder id already travel in the bulk form's own hidden fields.
 const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before" value="{{.CurrentPageBefore}}">{{end}}`
 
+// syncBanner is the top-of-view live metadata-sync strip on a standalone
+// (remote) inbox's mailbox and folder pages. It is server-rendered hidden and
+// filled/toggled in place by app.js from the shared action-queue poll, so it
+// tracks the same refresh as the queue popup and never blocks the first paint.
+// Only a standalone inbox has remote metadata to sync, so it renders only in
+// StandaloneMode; app.js shows it for any status the service reports (queued,
+// running, waiting, paused or error) and hides it when there is none.
+const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-sync-banner hidden role="status" aria-live="polite"></div>{{end}}`
+
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
 // Labels section listing the inbox's labels one level in. It relies on
@@ -93,7 +102,7 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if .StandaloneMode}}{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
-{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}
+{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}` + syncBanner + `
 {{template "live-requests-card" .}}
 {{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`

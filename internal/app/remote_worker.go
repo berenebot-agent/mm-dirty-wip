@@ -689,6 +689,9 @@ func (w *RemoteWorker) detectInbox(ctx context.Context, inbox model.Inbox) {
 	}
 	w.detecting[key] = true
 	w.detectionMu.Unlock()
+	finishMetadataCheck := w.remote.metadataCheck(inbox.AccountID, inbox.ID)
+	defer finishMetadataCheck()
+	ctx = w.remote.withMetadataWait(ctx, inbox.AccountID, inbox.ID)
 	defer func() {
 		w.detectionMu.Lock()
 		delete(w.detecting, key)
