@@ -19,7 +19,6 @@ type oneCachedClient struct {
 	revision int64
 	client   *one.Client
 }
-
 type OneMailboxChoice struct {
 	ID          string `json:"id"`
 	Email       string `json:"email,omitempty"`
@@ -30,11 +29,20 @@ type OneMailboxChoice struct {
 	Status      string `json:"status"`
 	Available   bool   `json:"available"`
 }
+type OneImportResult struct {
+	ConnectionID string `json:"connection_id"`
+	InboxID      string `json:"inbox_id,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
 
-func oneAccountAAD(account, id string) string    { return "one_account:" + account + ":" + id }
 func oneBindingAAD(account, inbox string) string { return "one_binding:" + account + ":" + inbox }
+func oneKeyAAD(account, inbox string) string     { return "one_key:" + account + ":" + inbox }
+func oneSetupAAD(account, id string) string      { return "one_import:" + account + ":" + id }
 func oneError(kind, message string) error        { return model.NewMailboxError(kind, message, false, nil) }
-
+func oneFingerprint(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
 func onePermission(p model.Principal) error {
 	if !p.Admin || p.UserID == "" {
 		return oneError(model.ErrKindForbidden, "A signed-in account administrator must manage One credentials")
@@ -55,37 +63,55 @@ func (m *RemoteMailboxService) oneLimiter(id string) *one.Limiter {
 	return m.oneLimiters[id]
 }
 
-func (m *RemoteMailboxService) oneClient(ctx context.Context, a store.OneAccount) (*one.Client, error) {
-	limiter := m.oneLimiter(a.ID)
-	if a.Status != "active" || a.EncryptedKey == "" {
-		return nil, oneError(model.ErrKindAuth, "One credentials removed; configure One again")
-	}
+// Bind equal keys to the same limiter; retain a mailbox's quota group during
+// rotation so changing its key cannot bypass a cooldown shared with siblings.
+func (m *RemoteMailboxService) oneKeyLimiter(ctx context.Context, account, fingerprint, group string) (*one.Limiter, error) {
+	alias := "key:" + account + ":" + fingerprint
 	m.oneMu.Lock()
-	cached := m.oneClients[a.ID]
-	m.oneMu.Unlock()
-	if cached.revision == a.Revision && cached.client != nil {
-		return cached.client, nil
+	if existing := m.oneLimiters[alias]; existing != nil {
+		if group != "" {
+			m.oneLimiters[group] = existing
+		}
+		m.oneMu.Unlock()
+		return existing, nil
 	}
-	b, err := m.Service.DecryptSecretAAD(oneAccountAAD(a.AccountID, a.ID), a.EncryptedKey)
+	m.oneMu.Unlock()
+	bindings, err := m.Service.Store.ListOneBindings(ctx, account)
 	if err != nil {
-		return nil, oneError(model.ErrKindAuth, "One credentials unavailable")
+		return nil, err
 	}
-	c := one.NewClient(string(b), m.OneHTTP, limiter)
-	clear(b)
+	for _, b := range bindings {
+		if group == "" && b.Fingerprint == fingerprint {
+			group = b.RateGroup
+			break
+		}
+	}
+	if group == "" {
+		group = alias
+	}
+	l := m.oneLimiter(group)
 	m.oneMu.Lock()
-	m.oneClients[a.ID] = oneCachedClient{revision: a.Revision, client: c}
+	if existing := m.oneLimiters[alias]; existing != nil {
+		l = existing
+	}
+	m.oneLimiters[alias] = l
+	m.oneLimiters[group] = l
 	m.oneMu.Unlock()
-	return c, nil
+	return l, nil
 }
 
-func (m *RemoteMailboxService) testOne(ctx context.Context, p model.Principal, key, id string) (*one.Client, []one.Connection, error) {
+func (m *RemoteMailboxService) validatedOne(ctx context.Context, p model.Principal, key, group string) (*one.Client, []one.Connection, error) {
 	if err := onePermission(p); err != nil {
 		return nil, nil, err
 	}
 	if len(key) < 16 || len(key) > 4096 || strings.ContainsAny(key, " \t\r\n") {
 		return nil, nil, oneError(model.ErrKindInvalid, "Enter a standard One REST API key")
 	}
-	c := one.NewClient(key, m.OneHTTP, m.oneLimiter(id))
+	l, err := m.oneKeyLimiter(ctx, p.AccountID, oneFingerprint(key), group)
+	if err != nil {
+		return nil, nil, err
+	}
+	c := one.NewClient(key, m.OneHTTP, l)
 	rows, err := c.Connections(ctx)
 	if err == nil {
 		err = c.ValidateActions(ctx)
@@ -93,92 +119,40 @@ func (m *RemoteMailboxService) testOne(ctx context.Context, p model.Principal, k
 	return c, rows, err
 }
 
-func (m *RemoteMailboxService) TestOneKey(ctx context.Context, p model.Principal, key string) error {
-	id := "setup:" + p.AccountID + ":" + p.UserID
-	if a, err := m.Service.Store.OneAccount(ctx, p.AccountID, p.UserID); err == nil {
-		id = a.ID
+// Save stages an encrypted, user-scoped key for 30 minutes, not a global
+// configuration. Import fans it out into independently encrypted inbox rows.
+func (m *RemoteMailboxService) PrepareOneImport(ctx context.Context, p model.Principal, key string) (string, error) {
+	if _, _, err := m.validatedOne(ctx, p, key, ""); err != nil {
+		return "", err
 	}
-	_, _, err := m.testOne(ctx, p, key, id)
-	return err
-}
-
-func (m *RemoteMailboxService) TestStoredOne(ctx context.Context, p model.Principal) error {
-	_, c, err := m.ownedOne(ctx, p)
+	id := idgen.New("oneimport")
+	enc, err := m.Service.EncryptSecretAAD(oneSetupAAD(p.AccountID, id), []byte(key))
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err = c.Connections(ctx); err != nil {
-		return err
-	}
-	return c.ValidateActions(ctx)
+	err = m.Service.Store.SaveOneImportSetup(ctx, store.OneImportSetup{ID: id, AccountID: p.AccountID, UserID: p.UserID, EncryptedKey: enc, Fingerprint: oneFingerprint(key)})
+	return id, err
 }
 
-func (m *RemoteMailboxService) RemoveOneAccount(ctx context.Context, p model.Principal, confirmed bool) error {
+func (m *RemoteMailboxService) oneSetup(ctx context.Context, p model.Principal, id string) (store.OneImportSetup, *one.Client, string, error) {
 	if err := onePermission(p); err != nil {
-		return err
+		return store.OneImportSetup{}, nil, "", err
 	}
-	a, err := m.Service.Store.OneAccount(ctx, p.AccountID, p.UserID)
+	s, err := m.Service.Store.OneImportSetup(ctx, p.AccountID, p.UserID, id)
 	if err != nil {
-		return err
+		return s, nil, "", err
 	}
-	if err = m.Service.Store.RemoveOneAccount(ctx, p.AccountID, p.UserID, confirmed); err != nil {
-		return err
-	}
-	m.oneMu.Lock()
-	delete(m.oneClients, a.ID)
-	m.oneMu.Unlock()
-	// Retain the account limiter across removal/reconfiguration: creating
-	// another key must not bypass the upstream account's existing cooldown.
-	return nil
-}
-
-func (m *RemoteMailboxService) SaveOneKey(ctx context.Context, p model.Principal, key string) error {
-	if err := onePermission(p); err != nil {
-		return err
-	}
-	a, err := m.Service.Store.OneAccount(ctx, p.AccountID, p.UserID)
-	expected := a.Revision
-	if errors.Is(err, store.ErrNotFound) {
-		a = store.OneAccount{ID: store.NewOneID(), AccountID: p.AccountID, OwnerUserID: p.UserID}
-	} else if err != nil {
-		return err
-	}
-	c, rows, err := m.testOne(ctx, p, key, a.ID)
+	b, err := m.Service.DecryptSecretAAD(oneSetupAAD(p.AccountID, id), s.EncryptedKey)
 	if err != nil {
-		return err
+		return s, nil, "", oneError(model.ErrKindAuth, "One setup credentials unavailable; enter the key again")
 	}
-	bindings, err := m.Service.Store.OneBindings(ctx, p.AccountID, a.ID)
+	key := string(b)
+	clear(b)
+	l, err := m.oneKeyLimiter(ctx, p.AccountID, s.Fingerprint, "")
 	if err != nil {
-		return err
+		return s, nil, "", err
 	}
-	for i := range bindings {
-		b := &bindings[i]
-		selected := findOne(rows, b.ConnectionID)
-		if selected == nil {
-			return oneError(model.ErrKindConflict, "Replacement key lacks an imported Gmail connection; existing credentials retained")
-		}
-		profile, err := c.Gmail(selected.Key, nil, nil).Profile(ctx, "")
-		if err != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-			return oneError(model.ErrKindConflict, "Replacement key changes mailbox identity or permissions; explicit migration required")
-		}
-		b.EncryptedConnectionKey, err = m.Service.EncryptSecretAAD(oneBindingAAD(p.AccountID, b.InboxID), []byte(selected.Key))
-		if err != nil {
-			return err
-		}
-	}
-	a.EncryptedKey, err = m.Service.EncryptSecretAAD(oneAccountAAD(p.AccountID, a.ID), []byte(key))
-	if err != nil {
-		return err
-	}
-	hash := sha256.Sum256([]byte(key))
-	a.Fingerprint = hex.EncodeToString(hash[:])
-	if err = m.Service.Store.SaveOneAccount(ctx, a, expected, bindings); err != nil {
-		return err
-	}
-	m.oneMu.Lock()
-	m.oneClients[a.ID] = oneCachedClient{revision: expected + 1, client: c}
-	m.oneMu.Unlock()
-	return nil
+	return s, one.NewClient(key, m.OneHTTP, l), key, nil
 }
 
 func findOne(rows []one.Connection, id string) *one.Connection {
@@ -190,20 +164,8 @@ func findOne(rows []one.Connection, id string) *one.Connection {
 	return nil
 }
 
-func (m *RemoteMailboxService) ownedOne(ctx context.Context, p model.Principal) (store.OneAccount, *one.Client, error) {
-	if err := onePermission(p); err != nil {
-		return store.OneAccount{}, nil, err
-	}
-	a, err := m.Service.Store.OneAccount(ctx, p.AccountID, p.UserID)
-	if err != nil {
-		return a, nil, err
-	}
-	c, err := m.oneClient(ctx, a)
-	return a, c, err
-}
-
-func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principal) ([]OneMailboxChoice, error) {
-	a, c, err := m.ownedOne(ctx, p)
+func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principal, setupID string) ([]OneMailboxChoice, error) {
+	_, c, _, err := m.oneSetup(ctx, p, setupID)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +176,7 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 	if err = c.ValidateActions(ctx); err != nil {
 		return nil, err
 	}
-	bindings, err := m.Service.Store.OneBindings(ctx, p.AccountID, a.ID)
+	bindings, err := m.Service.Store.ListOneBindings(ctx, p.AccountID)
 	if err != nil {
 		return nil, err
 	}
@@ -264,14 +226,8 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 	return out, nil
 }
 
-type OneImportResult struct {
-	ConnectionID string `json:"connection_id"`
-	InboxID      string `json:"inbox_id,omitempty"`
-	Error        string `json:"error,omitempty"`
-}
-
-func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal, ids []string) ([]OneImportResult, error) {
-	a, c, err := m.ownedOne(ctx, p)
+func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal, setupID string, ids []string) ([]OneImportResult, error) {
+	s, c, key, err := m.oneSetup(ctx, p, setupID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,6 +241,17 @@ func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal,
 	if err = c.ValidateActions(ctx); err != nil {
 		return nil, err
 	}
+	group := "key:" + p.AccountID + ":" + s.Fingerprint
+	bindings, err := m.Service.Store.ListOneBindings(ctx, p.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range bindings {
+		if b.Fingerprint == s.Fingerprint {
+			group = b.RateGroup
+			break
+		}
+	}
 	out := []OneImportResult{}
 	seen := make(map[string]bool)
 	for _, id := range ids {
@@ -295,16 +262,21 @@ func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal,
 		result := OneImportResult{ConnectionID: id}
 		remote := findOne(rows, id)
 		if remote == nil {
-			result.Error = "Connection not present, active Gmail, or usable in your One account"
+			result.Error = "Connection not present, active Gmail, or usable with this key"
 		} else {
 			profile, e := c.Gmail(remote.Key, nil, nil).Profile(ctx, "")
 			if e != nil || profile.HistoryID == "" {
 				result.Error = "Gmail profile/history inaccessible; reconnect in One"
 			} else {
 				inbox := idgen.New("in")
-				enc, e := m.Service.EncryptSecretAAD(oneBindingAAD(p.AccountID, inbox), []byte(remote.Key))
+				b := store.OneBinding{InboxID: inbox, AccountID: p.AccountID, ConnectionID: remote.ID, GmailEmail: profile.EmailAddress, KeyAAD: oneKeyAAD(p.AccountID, inbox), Fingerprint: s.Fingerprint, RateGroup: group}
+				b.DisplayName, _ = c.SenderName(ctx, remote.Key, profile.EmailAddress)
+				b.EncryptedKey, e = m.Service.EncryptSecretAAD(b.KeyAAD, []byte(key))
 				if e == nil {
-					result.InboxID, e = m.Service.Store.ImportOne(ctx, a, store.OneBinding{InboxID: inbox, ConnectionID: remote.ID, EncryptedConnectionKey: enc, GmailEmail: profile.EmailAddress}, profile.HistoryID)
+					b.EncryptedConnectionKey, e = m.Service.EncryptSecretAAD(oneBindingAAD(p.AccountID, inbox), []byte(remote.Key))
+				}
+				if e == nil {
+					result.InboxID, e = m.Service.Store.ImportOneInbox(ctx, b, profile.HistoryID)
 				}
 				if e != nil {
 					result.Error = "Import failed; address already exists or configuration changed"
@@ -315,11 +287,49 @@ func (m *RemoteMailboxService) ImportOne(ctx context.Context, p model.Principal,
 		}
 		out = append(out, result)
 	}
+	complete := true
+	for _, result := range out {
+		if result.Error != "" {
+			complete = false
+		}
+	}
+	if complete {
+		if err := m.Service.Store.DeleteOneImportSetup(ctx, p.AccountID, p.UserID, setupID); err != nil {
+			return out, err
+		}
+	}
 	return out, nil
 }
 
-// GoogleMailboxClient separates authentication from the existing Gmail logic.
-// A One API key never becomes a fake Google token or a queued sending secret.
+func (m *RemoteMailboxService) oneClient(ctx context.Context, b store.OneBinding) (*one.Client, error) {
+	if b.Status == "disconnected" || b.EncryptedKey == "" {
+		return nil, oneError(model.ErrKindAuth, "One credentials removed; save a key for this inbox")
+	}
+	l, err := m.oneKeyLimiter(ctx, b.AccountID, b.Fingerprint, b.RateGroup)
+	if err != nil {
+		return nil, err
+	}
+	cacheID := b.AccountID + ":" + b.InboxID
+	m.oneMu.Lock()
+	cached := m.oneClients[cacheID]
+	m.oneMu.Unlock()
+	if cached.revision == b.Revision && cached.client != nil {
+		return cached.client, nil
+	}
+	key, err := m.Service.DecryptSecretAAD(b.KeyAAD, b.EncryptedKey)
+	if err != nil {
+		return nil, oneError(model.ErrKindAuth, "One credentials unavailable")
+	}
+	c := one.NewClient(string(key), m.OneHTTP, l)
+	clear(key)
+	m.oneMu.Lock()
+	m.oneClients[cacheID] = oneCachedClient{revision: b.Revision, client: c}
+	m.oneMu.Unlock()
+	return c, nil
+}
+
+// Resolve only this inbox's credentials; queued requests verify its revision
+// again after pacing. Another inbox's replacement/deletion cannot invalidate it.
 func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account, inbox string) (*gmail.Client, string, error) {
 	b, err := m.Service.Store.OneBinding(ctx, account, inbox)
 	if errors.Is(err, store.ErrNotFound) {
@@ -329,14 +339,10 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 	if err != nil {
 		return nil, "", err
 	}
-	if b.Status == "disconnected" || b.Status == "attention" {
-		return nil, "", oneError(model.ErrKindAuth, "One connection requires attention; reconnect in One settings")
+	if b.Status == "attention" {
+		return nil, "", oneError(model.ErrKindAuth, "One connection requires attention; save the key again for this inbox")
 	}
-	a, err := m.Service.Store.OneAccountByID(ctx, account, b.OneAccountID)
-	if err != nil {
-		return nil, "", err
-	}
-	c, err := m.oneClient(ctx, a)
+	c, err := m.oneClient(ctx, b)
 	if err != nil {
 		return nil, "", err
 	}
@@ -353,24 +359,21 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 		}
 		selected := findOne(rows, b.ConnectionID)
 		if selected == nil || selected.Key != selector {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Reconnect the original Gmail connection in One, then reconnect in MailMoose")
-			return nil, "", oneError(model.ErrKindAuth, "One connection requires attention; reconnect the original Gmail connection")
+			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Reconnect the original Gmail connection in One, then save this inbox's key", b.Revision)
+			return nil, "", oneError(model.ErrKindAuth, "One connection requires attention")
 		}
 		profile, e := c.Gmail(selector, nil, nil).Profile(ctx, "")
 		if e != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Gmail identity or permission changed; explicit reconnect required")
-			return nil, "", oneError(model.ErrKindAuth, "Gmail identity or permission changed; explicit reconnect required")
+			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Gmail identity or permission changed; explicit reconnect required", b.Revision)
+			return nil, "", oneError(model.ErrKindAuth, "Gmail identity or permission changed")
 		}
-		_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "active", "")
+		_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "active", "", b.Revision)
+		m.refreshOneDisplayName(ctx, c, selector, account, inbox, b.GmailEmail)
 	}
 	check := func(ctx context.Context) error {
-		current, err := m.Service.Store.OneBinding(ctx, account, inbox)
-		if err != nil || current.Status == "disconnected" || current.Status == "attention" || current.ConnectionID != b.ConnectionID || current.EncryptedConnectionKey != b.EncryptedConnectionKey {
-			return oneError(model.ErrKindAuth, "One binding changed or disconnected; refresh settings")
-		}
-		active, err := m.Service.Store.OneAccountByID(ctx, account, a.ID)
-		if err != nil || active.Status != "active" || active.Revision != a.Revision {
-			return oneError(model.ErrKindAuth, "One credentials changed or removed; refresh settings")
+		current, e := m.Service.Store.OneBinding(ctx, account, inbox)
+		if e != nil || current.Status == "disconnected" || current.Status == "attention" || current.Revision != b.Revision {
+			return oneError(model.ErrKindAuth, "One connection changed or deleted; refresh settings")
 		}
 		return nil
 	}
@@ -381,48 +384,74 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 			if mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden || mb.Kind == model.ErrKindUnsupported {
 				state = "attention"
 			}
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, state, mb.Message)
+			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, state, mb.Message, b.Revision)
 		}
 	}
 	return c.Gmail(selector, check, status), "", nil
 }
 
-func (m *RemoteMailboxService) ReconnectOne(ctx context.Context, p model.Principal, inbox string) error {
-	a, c, err := m.ownedOne(ctx, p)
-	if err != nil {
+func (m *RemoteMailboxService) SaveOneInboxKey(ctx context.Context, p model.Principal, inbox, key string) error {
+	if err := onePermission(p); err != nil {
 		return err
 	}
 	b, err := m.Service.Store.OneBinding(ctx, p.AccountID, inbox)
-	if err != nil || a.ID != b.OneAccountID {
-		return store.ErrForbidden
+	if err != nil {
+		return err
 	}
-	rows, err := c.Connections(ctx)
+	c, rows, err := m.validatedOne(ctx, p, key, b.RateGroup)
 	if err != nil {
 		return err
 	}
 	row := findOne(rows, b.ConnectionID)
 	if row == nil {
-		return oneError(model.ErrKindAuth, "Reconnect the original Gmail account in One, then refresh")
+		return oneError(model.ErrKindAuth, "Key must expose this inbox's original Gmail connection")
 	}
 	profile, err := c.Gmail(row.Key, nil, nil).Profile(ctx, "")
 	if err != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-		return oneError(model.ErrKindConflict, "Reconnect would change mailbox identity")
+		return oneError(model.ErrKindConflict, "Key would change this inbox's Gmail identity or permissions")
+	}
+	b.KeyAAD, b.Fingerprint = oneKeyAAD(p.AccountID, inbox), oneFingerprint(key)
+	b.EncryptedKey, err = m.Service.EncryptSecretAAD(b.KeyAAD, []byte(key))
+	if err != nil {
+		return err
 	}
 	b.EncryptedConnectionKey, err = m.Service.EncryptSecretAAD(oneBindingAAD(p.AccountID, inbox), []byte(row.Key))
 	if err != nil {
 		return err
 	}
-	if err = c.ValidateActions(ctx); err != nil {
+	if err = m.Service.Store.SaveOneBinding(ctx, b, b.Revision); err != nil {
 		return err
 	}
-	if err = m.Service.Store.SaveOneAccount(ctx, a, a.Revision, []store.OneBinding{b}); err != nil {
-		return err
-	}
-	if err = m.Service.Store.SetOneConnected(ctx, p.AccountID, p.UserID, inbox, true); err != nil {
-		return err
-	}
+	m.refreshOneDisplayName(ctx, c, row.Key, p.AccountID, inbox, b.GmailEmail)
+	m.oneMu.Lock()
+	delete(m.oneClients, p.AccountID+":"+inbox)
+	m.oneMu.Unlock()
 	m.ScheduleRefresh(p.AccountID, inbox)
 	return nil
+}
+
+func (m *RemoteMailboxService) DeleteOneConnection(ctx context.Context, p model.Principal, inbox string) error {
+	if err := onePermission(p); err != nil {
+		return err
+	}
+	if err := m.Service.Store.DeleteOneConnection(ctx, p.AccountID, inbox); err != nil {
+		return err
+	}
+	m.oneMu.Lock()
+	delete(m.oneClients, p.AccountID+":"+inbox)
+	m.oneMu.Unlock()
+	return nil
+}
+
+func (m *RemoteMailboxService) refreshOneDisplayName(ctx context.Context, c *one.Client, selector, account, inbox, email string) {
+	box, err := m.Service.Store.GetInboxInternal(ctx, account, inbox)
+	if err != nil || (box.DisplayName != box.Address && box.DisplayName != box.Address+" · Gmail via One") {
+		return
+	}
+	name, err := c.SenderName(ctx, selector, email)
+	if err == nil && name != "" {
+		_ = m.Service.Store.UpdateOneDisplayName(ctx, account, inbox, name)
+	}
 }
 
 func (s *Service) bindGmailSend(ctx context.Context, account, inbox string, cfg map[string]any) error {

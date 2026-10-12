@@ -1086,7 +1086,7 @@ func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
 	if s.Service.Store.IsOne(r.Context(), p.AccountID, id) {
-		http.Redirect(w, r, "/ui/connections/one", http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/connections/one?inbox="+url.QueryEscape(id), http.StatusSeeOther)
 		return
 	}
 	if s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, id) {
