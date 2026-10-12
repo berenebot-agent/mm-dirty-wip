@@ -414,6 +414,18 @@ transient scope/`LIST` shortfall or a generation flip.
 - Common routes (`internal/httpapp/standalone_api.go`) return the shared envelope
   `{items, next_cursor, completeness, errors}` for folders, messages, threads,
   search and labels, on both inbox kinds.
+- **One native message item schema (D109).**
+  `internal/httpapp/message_response.go` owns the API projection for local and
+  remote messages, across inbox-scoped/account-wide lists, search, thread
+  messages, detail reads, and message results from sends/mutations. OpenAPI's
+  `Message` schema defines a stable required core with availability-based optional
+  fields; `inbox_kind` and `inbox_provider` identify the backend without changing
+  the item schema. The internal read model carries optional mailbox metadata
+  through `model.Message.ReadMetadata` instead of dropping it in UI projections.
+  Lists/search/thread messages omit bodies for all inbox kinds; details carry
+  plain text and sanitized HTML. Known false flags remain present; unknown
+  direction/status/spam/creation time stay absent. `created_at` is never replaced
+  by `indexed_at`, which may advance on header refresh. See `docs/API.md` §4.
 - **Account-wide listings merge into one globally ordered stream.**
   `internal/httpapp/mailbox_merge.go` merges the local store with every
   authorized remote inbox into a single date-sorted page (not per-inbox

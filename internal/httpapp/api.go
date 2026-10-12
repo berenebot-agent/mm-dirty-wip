@@ -641,7 +641,7 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	writeJSON(w, 200, newEnvelope(items, cursor, model.CompletenessComplete, failures))
+	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessComplete, failures))
 }
 
 // listMessagesUnified returns the account-wide common message listing: local
@@ -852,10 +852,10 @@ func (s *Server) apiMessage(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			m.Text, m.HTML = text, html
-			writeJSON(w, 200, sanitizedMessage(m))
+			writeJSON(w, 200, s.messageResponse(r, m))
 			return
 		}
-		writeJSON(w, 200, sanitizedMessage(m))
+		writeJSON(w, 200, s.messageResponse(r, m))
 	case http.MethodPatch:
 		var in struct {
 			Read   *bool     `json:"read"`
@@ -1089,7 +1089,7 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 	}
 	subject := msgs[len(msgs)-1].Subject
 	_ = remote
-	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "messages": msgs})
+	writeJSON(w, 200, map[string]any{"id": key, "inbox_id": inboxID, "subject": subject, "message_count": len(msgs), "messages": s.messageResponses(r, msgs, false)})
 }
 func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -1102,7 +1102,7 @@ func (s *Server) apiThreadMessages(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, err)
 		return
 	}
-	writeJSON(w, 200, msgs)
+	writeJSON(w, 200, s.messageResponses(r, msgs, false))
 }
 func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	hasAttachment, ok := boolQuery(w, r, "has_attachment")
@@ -1159,7 +1159,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 					cursor = items[len(items)-1].ID
 				}
 			}
-			writeJSON(w, 200, newEnvelope(sanitizedMessages(items), cursor, model.CompletenessComplete, nil))
+			writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessComplete, nil))
 			return
 		}
 		s.demandDetection(r.Context(), []mailboxBackend{mb})
@@ -1177,7 +1177,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 			}
 			items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 		}
-		writeJSON(w, 200, newEnvelope(items, "", res.Completeness, nil))
+		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", res.Completeness, nil))
 		return
 	}
 	// Account-wide merged search.
@@ -1186,7 +1186,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 		mapMailboxError(w, err)
 		return
 	}
-	writeJSON(w, 200, newEnvelope(items, cursor, completeness, failures))
+	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, completeness, failures))
 }
 
 // labelList returns a single-element label slice or nil.
@@ -1281,7 +1281,7 @@ func (s *Server) apiSend(w http.ResponseWriter, r *http.Request) {
 		res.Message = m
 		res.ProviderMessageID = m.ProviderMessageID
 	}
-	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": sanitizedMessage(res.Message)})
+	writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
 }
 func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
@@ -1315,8 +1315,7 @@ func (s *Server) apiReply(w http.ResponseWriter, r *http.Request) {
 		res.Message = dm
 		res.ProviderMessageID = dm.ProviderMessageID
 	}
-	res.Message = sanitizedMessage(res.Message)
-	writeJSON(w, 201, res)
+	writeJSON(w, 201, map[string]any{"message": s.messageResponse(r, res.Message), "provider_message_id": res.ProviderMessageID})
 }
 
 func (s *Server) apiDrafts(w http.ResponseWriter, r *http.Request) {
@@ -1426,7 +1425,7 @@ func (s *Server) writeDraftResult(w http.ResponseWriter, r *http.Request, p mode
 			mapStoreError(w, err)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": sanitizedMessage(res.Message)})
+		writeJSON(w, 200, map[string]any{"queued": res.Message.Status == "pending", "messageId": res.Message.RFCMessageID, "provider_message_id": res.ProviderMessageID, "message": s.messageResponse(r, res.Message)})
 	case "request-send":
 		d, err := s.Service.RequestSend(r.Context(), p, draftID, external)
 		if err != nil {
@@ -1550,7 +1549,7 @@ func (s *Server) apiDraftApprove(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": sanitizedMessage(res.Message)})
+	writeJSON(w, 200, map[string]any{"queued": true, "messageId": res.Message.RFCMessageID, "message": s.messageResponse(r, res.Message)})
 }
 
 // apiDraftReject rejects a pending request with optional feedback. Requires
@@ -1694,7 +1693,7 @@ func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, sanitizedMessages(v))
+	writeJSON(w, 200, s.messageResponses(r, v, false))
 }
 
 func (s *Server) apiOutboxRetry(w http.ResponseWriter, r *http.Request) {
@@ -2216,7 +2215,7 @@ func (s *Server) apiMessagesWait(w http.ResponseWriter, r *http.Request) {
 			if compat {
 				writeJSON(w, 200, openAgentMessage(m))
 			} else {
-				writeJSON(w, 200, sanitizedMessage(m))
+				writeJSON(w, 200, s.messageResponse(r, m))
 			}
 			return
 		}

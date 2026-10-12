@@ -353,24 +353,27 @@ func NormalizeLabel(raw string) (string, bool) {
 }
 
 type Message struct {
-	ID                string   `json:"id"`
-	AccountID         string   `json:"-"`
-	InboxID           string   `json:"inbox_id"`
-	ThreadID          string   `json:"thread_id"`
-	Direction         string   `json:"direction"`
-	From              Address  `json:"from"`
-	To                []string `json:"to"`
-	CC                []string `json:"cc"`
-	BCC               []string `json:"bcc,omitempty"`
-	Subject           string   `json:"subject"`
-	Text              string   `json:"text"`
-	HTML              string   `json:"html,omitempty"`
-	RFCMessageID      string   `json:"message_id,omitempty"`
-	InReplyTo         string   `json:"in_reply_to,omitempty"`
-	References        []string `json:"references,omitempty"`
-	Provider          string   `json:"provider,omitempty"`
-	ProviderMessageID string   `json:"provider_message_id,omitempty"`
-	EnvelopeTo        []string `json:"envelope_to,omitempty"`
+	// ReadMetadata carries optional cached mailbox metadata through read surfaces.
+	// It is not persisted in messages and is serialized only by the API projection.
+	ReadMetadata      *MessageReadMetadata `json:"-"`
+	ID                string               `json:"id"`
+	AccountID         string               `json:"-"`
+	InboxID           string               `json:"inbox_id"`
+	ThreadID          string               `json:"thread_id"`
+	Direction         string               `json:"direction"`
+	From              Address              `json:"from"`
+	To                []string             `json:"to"`
+	CC                []string             `json:"cc"`
+	BCC               []string             `json:"bcc,omitempty"`
+	Subject           string               `json:"subject"`
+	Text              string               `json:"text"`
+	HTML              string               `json:"html,omitempty"`
+	RFCMessageID      string               `json:"message_id,omitempty"`
+	InReplyTo         string               `json:"in_reply_to,omitempty"`
+	References        []string             `json:"references,omitempty"`
+	Provider          string               `json:"provider,omitempty"`
+	ProviderMessageID string               `json:"provider_message_id,omitempty"`
+	EnvelopeTo        []string             `json:"envelope_to,omitempty"`
 	// EnvelopeFrom is the transport-supplied SMTP envelope sender (MAIL FROM)
 	// exactly as the receiving adapter observed it, or empty when the transport
 	// supplied none. It is never derived from the MIME From header.
@@ -455,6 +458,22 @@ type Message struct {
 	// from a consumed approval control message. Control mail is never stored in
 	// the messages table; see ControlMessage.
 	Approval bool `json:"approval,omitempty"`
+}
+
+// MessageReadMetadata preserves metadata available from a mailbox read without
+// treating indexing time as creation time or an unknown spam verdict as false.
+type MessageReadMetadata struct {
+	UID          *uint32
+	UIDValidity  *uint32
+	Snippet      string
+	Flagged      *bool
+	Answered     *bool
+	Draft        *bool
+	Flags        []string
+	InternalDate *time.Time
+	IndexedAt    *time.Time
+	CreatedAt    *time.Time
+	Spam         *bool
 }
 
 // MessageDelivery records that one connector (client) has successfully
