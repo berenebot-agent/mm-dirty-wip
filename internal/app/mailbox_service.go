@@ -60,7 +60,7 @@ func (r *MailboxRouter) Route(ctx context.Context, p model.Principal, inboxID st
 	if err != nil {
 		return MailboxRoute{}, mapStoreError(err)
 	}
-	return r.routeInbox(inbox), nil
+	return r.routeInbox(ctx, inbox), nil
 }
 
 // RouteInternal resolves an inbox without a principal check, for workflow code
@@ -70,13 +70,12 @@ func (r *MailboxRouter) RouteInternal(ctx context.Context, accountID, inboxID st
 	if err != nil {
 		return MailboxRoute{}, mapStoreError(err)
 	}
-	return r.routeInbox(inbox), nil
+	return r.routeInbox(ctx, inbox), nil
 }
 
-func (r *MailboxRouter) routeInbox(inbox model.Inbox) MailboxRoute {
+func (r *MailboxRouter) routeInbox(ctx context.Context, inbox model.Inbox) MailboxRoute {
 	if inbox.Kind == model.InboxKindStandalone {
-		caps := model.StandaloneCapabilities()
-		caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
+		caps := r.store.MailboxCapabilities(ctx, inbox)
 		return MailboxRoute{Inbox: inbox, Backend: BackendRemote, Capabilities: caps, Remote: inbox.Remote}
 	}
 	return MailboxRoute{Inbox: inbox, Backend: BackendLocal, Capabilities: model.DomainCapabilities()}
@@ -97,7 +96,7 @@ func (r *MailboxRouter) RemoteLocatorFor(ctx context.Context, accountID, inboxID
 
 // CapabilitiesOf reports an inbox's declared capability surface.
 func (r *MailboxRouter) CapabilitiesOf(inbox model.Inbox) model.Capabilities {
-	return r.routeInbox(inbox).Capabilities
+	return r.routeInbox(context.Background(), inbox).Capabilities
 }
 
 // mapStoreError converts a store error to a normalized *model.MailboxError.
@@ -284,17 +283,13 @@ type RemoteBackend struct {
 
 // NewRemoteBackend builds a remote backend for a resolved standalone inbox.
 func NewRemoteBackend(st *store.Store, inbox model.Inbox) *RemoteBackend {
-	caps := model.StandaloneCapabilities()
-	caps.Outbound = inbox.Remote != nil && inbox.Remote.SMTP != nil
 	return &RemoteBackend{store: st, inbox: inbox, remote: inbox.Remote}
 }
 
 func (b *RemoteBackend) Kind() MailboxBackendKind { return BackendRemote }
 
 func (b *RemoteBackend) Capabilities() model.Capabilities {
-	caps := model.StandaloneCapabilities()
-	caps.Outbound = b.remote != nil && b.remote.SMTP != nil
-	return caps
+	return b.store.MailboxCapabilities(context.Background(), b.inbox)
 }
 
 // ListFolders returns the cached folder set of the standalone inbox. It reports
