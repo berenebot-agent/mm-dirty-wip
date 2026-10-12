@@ -130,6 +130,10 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 			w.Write([]byte(`{"emailAddress":"oauth@example.net","historyId":"10"}`))
 			return
 		}
+		if r.URL.Path == "/userinfo" {
+			w.Write([]byte(`{}`))
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/labels") {
 			w.Write([]byte(`{"labels":[]}`))
 			return
@@ -146,6 +150,7 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 	rm.Google = gmail.NewClient(fixture.Client())
 	rm.Google.BaseURL = fixture.URL
 	rm.Google.TokenURL = fixture.URL + "/token"
+	rm.Google.UserInfoURL = fixture.URL + "/userinfo"
 	srv := httpapp.New(svc, nil)
 	srv.SetRemoteMailbox(rm)
 	h := srv.Handler()
@@ -173,6 +178,9 @@ func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := auth.Query()
+	if q.Get("scope") != gmail.AuthorizationScopes {
+		t.Fatalf("unexpected scopes: %s", q.Get("scope"))
+	}
 	if q.Get("code_challenge_method") != "S256" || q.Get("access_type") != "offline" {
 		t.Fatal("missing security/offline parameters")
 	}

@@ -24,11 +24,14 @@ default full-message archive. Bodies and attachments are fetched when opened.
    an unverified External app in production is hard-blocked (see
    [Long-lived access](#long-lived-access-and-troubleshooting)).
 5. Open [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or
-   remove scopes** and add `https://www.googleapis.com/auth/gmail.modify` (use
-   manual scope entry if it is not listed), then save. This single scope permits
+   remove scopes** and add `https://www.googleapis.com/auth/gmail.modify`,
+   `openid`, and `https://www.googleapis.com/auth/userinfo.profile` (use manual
+   scope entry if a scope is not listed), then save. The Gmail scope permits
    reading, labels, read/unread, drafts and sending, including moving mail to
    Trash. No separate `gmail.send` scope is needed, and MailMoose does not
    request the broader permanent-delete scope.
+   The basic-profile scope lets MailMoose retrieve your Google account name for
+   the inbox label. The OAuth request uses `openid profile` for this access.
 6. Open [Clients](https://console.cloud.google.com/auth/clients) → **Create
    client**, choosing **Web application**. Leave **Authorised JavaScript
    origins** empty.
@@ -53,6 +56,20 @@ the URL meets Google's redirect registration rules. A normal HTTPS hostname is
 required except for localhost/loopback HTTP when the browser and MailMoose share
 the computer. A raw LAN IP, `.local` hostname or arbitrary HTTP origin is not a
 registerable production callback. Set `BASE_URL` appropriately before setup.
+
+## Inbox display name
+
+For a new inbox, an optional display name entered in the wizard takes precedence
+over your Google account name. If Google does not supply a name, profile access
+is declined, or the profile lookup fails, the mailbox still connects and the
+email address is used as the fallback. This is the Google account profile name,
+not a Gmail “Send mail as” name.
+
+Existing connections need to reconnect to grant the added basic-profile access;
+refreshing a token cannot add permission. On reconnect, a Google name replaces
+only a label that still equals the inbox email address. Custom names are preserved,
+and names are not continuously synchronized. This applies to direct Google OAuth,
+not Gmail via One.
 
 ## If the callback page fails
 
