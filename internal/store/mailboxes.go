@@ -794,6 +794,13 @@ func (s *Store) UpdateInbox(ctx context.Context, p model.Principal, id, display 
 }
 
 // SetInboxDisplayName sets an inbox's display name, including clearing it.
+// UpgradeInboxDisplayName replaces only an address fallback, atomically preserving
+// custom names (including edits made while OAuth was in progress).
+func (s *Store) UpgradeInboxDisplayName(ctx context.Context, accountID, id, display string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE account_id=? AND id=? AND display_name=address`, strings.TrimSpace(display), accountID, id)
+	return err
+}
+
 func (s *Store) SetInboxDisplayName(ctx context.Context, accountID, id, display string) error {
 	res, err := s.write.ExecContext(ctx, `UPDATE inboxes SET display_name=? WHERE id=? AND account_id=?`, strings.TrimSpace(display), id, accountID)
 	if err != nil {
