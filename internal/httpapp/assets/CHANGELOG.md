@@ -42,6 +42,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Added
 
+- A Direct MX domain that signs outbound mail now shows a **published-DKIM-record
+  indicator**: a traffic light in the dashboard Domains table's **Sending**
+  column and the same dot next to the record in the sending dialog's "Publish
+  this DNS record" panel. Green means the record is published and matches the
+  signing key, red means a different key is published (a stale record from a
+  rotation, or someone else's record on the name), and grey means not yet
+  published or not confirmed. With signing off there is no light, no check and no
+  lookup. The check is owned by the same shared DNS watcher as the receiving
+  lights, so an open dialog polls it without ever blocking on a resolver. See
+  `D113`.
+
 - Direct MX outbound delivery can now sign messages with DKIM. Turn it on in the
   domain's **Sending → Direct MX** tab and MailMoose generates an RSA-2048 signing
   key and shows the exact TXT record to publish (`mailmoose._domainkey.<domain>`),

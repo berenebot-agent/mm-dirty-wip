@@ -207,6 +207,29 @@ func TXTRecordStrings(value string) []string {
 	return out
 }
 
+// ParseTXTRecordValue extracts the p= public key from published DKIM TXT record
+// strings, so a local published-record check compares against the same value a
+// verifier derives. It accepts the `v=DKIM1; k=rsa; p=<base64>` form
+// TXTRecordValue emits, tolerates tag reordering and the whitespace a DNS
+// provider may insert inside a long base64 value, and returns ok=false when no
+// record carries a non-empty p= value (an absent or malformed record, which the
+// check reports as not-yet-published rather than a mismatch).
+func ParseTXTRecordValue(records []string) (value string, ok bool) {
+	for _, rec := range records {
+		for _, tag := range strings.Split(rec, ";") {
+			name, val, found := strings.Cut(tag, "=")
+			if !found || !strings.EqualFold(strings.TrimSpace(name), "p") {
+				continue
+			}
+			val = strings.Join(strings.Fields(val), "")
+			if val != "" {
+				return val, true
+			}
+		}
+	}
+	return "", false
+}
+
 // TXTRecordQuoted renders a record value in the multi-string form a DNS provider
 // expects when the value is too long for one character-string, each part quoted.
 func TXTRecordQuoted(value string) string {

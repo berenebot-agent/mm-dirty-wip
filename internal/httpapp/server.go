@@ -231,6 +231,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/domains/{id}/sending/clear", s.withSession(s.withCSRF(s.uiDomainSendingClear)))
 	m.HandleFunc("POST /ui/domains/{id}/sending/dkim/reveal", s.withSession(s.withCSRF(s.uiDomainSendingDKIMReveal)))
 	m.HandleFunc("POST /ui/domains/{id}/sending/dkim/rotate", s.withSession(s.withCSRF(s.uiDomainSendingRotateDKIM)))
+	m.HandleFunc("GET /ui/domains/{id}/sending/dkim/status", s.withSession(s.uiDomainSendingDKIMStatus))
 	m.HandleFunc("POST /ui/domains/{id}/receiving", s.withSession(s.withCSRF(s.uiDomainReceiving)))
 	m.HandleFunc("GET /ui/domains/{id}/receiving/worker", s.withSession(s.uiDomainReceivingWorker))
 	m.HandleFunc("GET /ui/domains/{id}/receiving/setup", s.withSession(s.apiDomainReceiving))
