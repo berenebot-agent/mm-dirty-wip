@@ -357,11 +357,14 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 			view := s.dialMXLiveView(domain.Name, credential.KeyID, pub, cfg)
 			if includeDNS {
 				view.DNS = s.dialMXDNS(domain.Name, credential.KeyID, pub, view)
-				resp.UnexpectedMX = s.dialMXExtraMX(ctx, cfg.AccountID, domainID, domain.Name, credential.KeyID)
 			}
 			resp.Status = view.Statuses
 			resp.DNS = view.DNS
 			resp.Instructions = view.instructionView()
+			// The extra-MX verdict is always the watcher's shared value, so the
+			// status dialog's warning agrees with the dashboard light whether or
+			// not this request asked for the DNS table.
+			resp.UnexpectedMX = s.dialMXExtraMX(domainID)
 		}
 	}
 	return resp, nil

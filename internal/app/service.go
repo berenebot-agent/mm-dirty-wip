@@ -76,6 +76,10 @@ type Service struct {
 	Store  *store.Store
 	Hub    *events.Hub
 	DialMX *mxdial.Manager
+	// ExtraMX is the single owner of every Dial MX domain's "extra MX" verdict.
+	// cmd/server sets it and runs it; when nil (tests, or before startup) the
+	// HTTP layer reads an empty verdict. See ExtraMXState.
+	ExtraMX *ExtraMXWatcher
 	// AntlerEndpoints resolves the Antler MX receiver manifest at setup-save
 	// time. cmd/server installs the live GitHub resolver; when nil (tests) the
 	// embedded manifest is used.

@@ -3642,20 +3642,24 @@ Antler.
 
 **Decision:** (1) The status dialog is driven by the existing transient
 `mx.health_changed` SSE event and reconciles the instant a receiver's readiness
-changes; the **Check now** button and countdown are removed, replaced by a slow
-60-second fallback refresh while the dialog is open (the fallback also catches a
-published-record change, which emits no receiver event). (2) The published-record
-checks are a **setup-wizard-only** concern: `dialMXLiveView` no longer runs them;
-a new `dialMXDNS` runs on the setup GET only when the caller passes `?dns=1`
-(the wizard, and the dialog's own fetch). A plain status read returns no `dns[]`
-and runs zero resolver lookups. (3) The aggregate dashboard light gains a third
-**amber** state: green when at least one receiver is ready and no unexpected MX
-records are published; amber when at least one receiver is ready but the domain
-publishes MX hostnames that are not Antler receivers (listed in the new
-`unexpected_mx`/`unexpected` field); red otherwise. Individual receivers stay
-green when ready. The dashboard runs the MX check on load, reconnect, a
-receiver-health change, and a 15-minute background tick while a tab is open, so a
-rogue record is surfaced without a receiver event.
+changes; the **Check now** button and countdown are removed. (2) The
+published-record checks are a **setup-wizard-only** concern: `dialMXLiveView` no
+longer runs them; a new `dialMXDNS` runs on the setup GET only when the caller
+passes `?dns=1` (the wizard). A plain status read returns no `dns[]` and runs zero
+resolver lookups. (3) The aggregate dashboard light gains a third **amber** state:
+green when at least one receiver is ready and no unexpected MX records are
+published; amber when at least one receiver is ready but the domain publishes MX
+hostnames that are not Antler receivers; red otherwise. Individual receivers stay
+green when ready. (4) The extra-MX verdict is **one shared value owned by a
+background watcher**, not a per-render lookup: `app.ExtraMXWatcher` re-checks every
+Dial MX domain with a ready receiver on a fixed 60-second interval, diffs the
+result against the last one published, and — only on change — pushes a transient
+`mx.extra_mx_changed` event carrying the new host list to the owning account. The
+dashboard light and an open status dialog both read that single verdict (`GET
+.../receiving` returns it as the top-level `unexpected_mx`; the HTTP read is an
+in-memory lookup), so they can never disagree and neither runs DNS on a render. A
+dialog opened from an amber dashboard row shows the warning immediately, matching
+the light, and updates live when the watcher republishes.
 
 **Reason:** The receiver is the single authority on routing (D095); the status
 page should read its self-report, not re-derive DNS. Moving the checks off the
@@ -3663,17 +3667,20 @@ status path removes a resolver lookup from a hot poll and lets SSE carry the liv
 signal. The extra-MX warning is deliberately amber, not red: a ready receiver
 still accepts mail, but a foreign MX record means routing is ambiguous, which is
 the one routing question the receiver's own verdict cannot answer (it only knows
-its *own* hostname is present, not that others are absent).
+its *own* hostname is present, not that others are absent). A rogue record emits no
+receiver event, so it is the one signal SSE cannot synthesise from receiver
+status; a single background watcher that owns the verdict and pushes changes is
+what keeps the two surfaces in sync without either computing it.
 
-**Complexity:** No new dependency, service, table or migration. `checkMX` gains
-an `Unexpected` list; `dialMXHealth` takes it; a single `dialMXExtraMX` helper is
-the one computation of the extra-MX verdict, exposed as a **top-level**
-`unexpected_mx` field on the receiving response (independent of `instructions`)
-and read by both the dashboard light and the status dialog, so the two surfaces
-cannot disagree; `domainInboundLight` and the dashboard render run it on the
-existing lights cadence; the setup GET gates DNS behind `?dns=1`; the dialog's JS
-drops its timer/button for an SSE listener + 60s fallback and adds one warning
-block. See `docs/DIALMX.md`.
+**Complexity:** No new dependency, service, table or migration. `checkMX` gains an
+`Unexpected` list used by the wizard; a new `internal/app` watcher
+(`ExtraMXWatcher`, reusing the store, the Dial MX manager status and the Antler
+receiver snapshot) owns the verdict and publishes `mx.extra_mx_changed`;
+`dialMXHealth` takes the verdict; `domainInboundLight` and the dashboard render
+read it via `Service.ExtraMXState` (no DNS); the receiving response exposes it as
+a top-level `unexpected_mx` (independent of `instructions` and of `?dns=1`); the
+dialog's JS reads the shared value and updates live on the event. See
+`docs/DIALMX.md`.
 
 ## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
 

@@ -1,8 +1,6 @@
 package httpapp
 
 import (
-	"context"
-	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -141,30 +139,15 @@ func (s *Server) dialMXDNS(domainName, keyID string, publicKey []byte, view dial
 	return dns
 }
 
-// dialMXExtraMX is the single computation of a domain's "extra MX" verdict: the
-// published MX hostnames that are not one of the domain's configured Antler
-// receivers. The dashboard light and the status dialog both read it, so they
-// cannot disagree about whether a rogue record exists — it is one fact, computed
-// once per read. It is best-effort and never fails a caller: a missing config or
-// credential, or a resolver failure, yields no warning. It is not gated on
-// receiver readiness, because the fact is independent of the light's colour; the
-// caller decides whether the verdict matters (the aggregate light applies it only
-// when a receiver is ready).
-func (s *Server) dialMXExtraMX(ctx context.Context, accountID, domainID, domainName, keyID string) []string {
-	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
-	if err != nil {
-		return nil
-	}
-	cred, err := s.Service.Store.GetDialMXCredential(ctx, accountID, domainID)
-	if err != nil {
-		return nil
-	}
-	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
-	view := s.dialMXLiveView(domainName, keyID, pub, cfg)
-	if len(view.MX) == 0 {
-		return nil
-	}
-	return s.dns.checkMX(domainName, view.MX).Unexpected
+// dialMXExtraMX returns a domain's "extra MX" verdict: the published MX
+// hostnames that are not one of its configured Antler receivers. It reads the
+// single shared verdict owned by the ExtraMXWatcher (which re-checks on a fixed
+// interval and pushes changes over SSE), so the dashboard light and the status
+// dialog always agree and neither runs its own DNS lookup on a render. A domain
+// the watcher has not resolved yet reads as an empty verdict.
+func (s *Server) dialMXExtraMX(domainID string) []string {
+	hosts, _ := s.Service.ExtraMXState(domainID)
+	return hosts
 }
 
 // dialMXHealth aggregates a domain's receiver statuses into the single traffic

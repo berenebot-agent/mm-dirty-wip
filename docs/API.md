@@ -994,10 +994,13 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   custom service, the TXT record only. It is omitted entirely for a domain with
   no copy-ready records.
 - `unexpected_mx[]` — published MX hostnames that are not one of the domain's
-  configured Antler receivers, returned only with `?dns=1`. It is a **top-level**
-  field, independent of `instructions`, and is the single verdict behind both the
+  configured Antler receivers. It is a **top-level** field, independent of
+  `instructions` and of `?dns=1`, and is the shared verdict behind both the
   dashboard's amber light and the status dialog's "additional MX servers" warning,
-  so the two surfaces cannot disagree. Empty when no rogue records exist.
+  so the two surfaces cannot disagree. It is owned by a background watcher that
+  re-checks on a fixed interval and pushes changes as the transient
+  `mx.extra_mx_changed` event, so the HTTP read is an in-memory lookup and runs no
+  DNS. Empty when no rogue records exist.
 
 Generated secrets (`cloudflare.webhook_secret`) are created only when missing,
 preserved by a normal same-provider save, and replaced only by an explicit

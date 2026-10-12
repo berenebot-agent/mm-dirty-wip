@@ -4701,11 +4701,12 @@ function hideInboxSubview(dlg) {
     function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
     function api(method, config, regenerate) {
-      // The published-record checks (the wizard's DNS table and the status
-      // page's extra-MX warning) both need the server's ?dns=1 flag. A GET from
-      // this dialog always asks for them; the dialog only polls while it is
-      // open, so the resolver work is bounded by the open dialog.
-      var url = endpoint + (method === 'GET' ? '?dns=1' : '');
+      // Only the setup wizard needs the published-record DNS table, so only it
+      // asks for ?dns=1. The saved status view reads the shared extra-MX verdict
+      // (pushed over SSE) and the receivers' self-reported status, so it runs no
+      // resolver lookup of its own.
+      var wantDNS = method === 'GET' && !statusMode;
+      var url = endpoint + (wantDNS ? '?dns=1' : '');
       var options = { method: method, cache: 'no-store', headers: { 'Accept': 'application/json' } };
       if (config || regenerate) {
         options.headers['Content-Type'] = 'application/json';
@@ -4973,7 +4974,7 @@ function hideInboxSubview(dlg) {
       // A connector the poll did not report keeps its "Pending" row.
       if (statusMode) {
         records.appendChild(statusTable(connectors, data.status));
-        records.appendChild(unexpectedMXBlock(data, domainName));
+        records.appendChild(unexpectedMXBlock({ unexpected_mx: extraMXFor(data) }, domainName));
         records.appendChild(remediationBlock(data, instructions, mxName));
         renderReceivers(data.status);
         update();
@@ -5208,6 +5209,33 @@ function hideInboxSubview(dlg) {
       if (changed && form.dataset.antlerDomain && changed !== form.dataset.antlerDomain) { return; }
       refresh();
     }
+    // The extra-MX verdict is shared state owned by the server watcher and pushed
+    // over SSE. extraMXFor returns it for this dialog's domain, preferring the
+    // freshest pushed value, so the warning shows the moment the dialog opens
+    // (matching the dashboard light) instead of waiting for a dialog-local check.
+    function extraMXFor(data) {
+      var id = form.dataset.antlerDomain || '';
+      var shared = (window.mailmooseExtraMX || {})[id];
+      if (shared && shared.length) { return shared; }
+      return (data && data.unexpected_mx) || [];
+    }
+    // refreshExtraMX applies a pushed verdict to the open dialog at once.
+    function refreshExtraMX(domainID, extra) {
+      if (!active() || !dlg.open || !statusMode) { return; }
+      if (domainID && form.dataset.antlerDomain && domainID !== form.dataset.antlerDomain) { return; }
+      if (!state) { return; }
+      state.unexpected_mx = extra || [];
+      var records = wizard.querySelector('.antler-records');
+      var existing = records.querySelector('.antler-extra-mx');
+      if (existing) { existing.remove(); }
+      var block = unexpectedMXBlock(state, form.dataset.antlerDomainName || '');
+      if (block.childNodes.length) {
+        var table = records.querySelector('.antler-status-table');
+        if (table && table.nextSibling) { records.insertBefore(block, table.nextSibling); }
+        else { records.insertBefore(block, records.firstChild); }
+      }
+    }
+    window.mailmooseRefreshExtraMX = refreshExtraMX;
     // Reuse the dashboard's single SSE connection (window.mailmooseEventsSource)
     // so the status dialog adds a listener rather than a second stream. The
     // live-update loop that owns that connection runs after this closure, so the
@@ -5977,6 +6005,29 @@ function hideInboxSubview(dlg) {
     dot.setAttribute('aria-label', title || '');
   }
 
+  // applyExtraMX folds a pushed extra-MX verdict into a dashboard row without a
+  // re-fetch. A row that is green (a ready receiver) turns amber when rogue MX
+  // records exist, titled with the offending hosts. When the extras clear, the
+  // row's true colour depends on whether a receiver is still ready, which the row
+  // alone cannot tell — so it is left for the next lights snapshot (a cheap,
+  // now DNS-free read) rather than guessed.
+  function applyExtraMX(row, extra) {
+    if (!row || !extra || !extra.length) {
+      return;
+    }
+    var dot = row.querySelector('[data-receiving-light]');
+    if (!dot) {
+      return;
+    }
+    if (dot.className.indexOf('dns-light ok') === -1) {
+      return;
+    }
+    var title = 'Extra MX records exist (' + extra.join(', ') + ') — mail may not be delivered via Antler';
+    dot.className = 'dns-light amber';
+    dot.setAttribute('title', title);
+    dot.setAttribute('aria-label', title);
+  }
+
   // labelMatch tolerates the case-insensitive label keys the store returns.
   function labelMatch(labels, name) {
     var lower = name.toLowerCase();
@@ -6323,6 +6374,21 @@ function hideInboxSubview(dlg) {
     source.addEventListener('mx.health_changed', function () {
       wantLights = true;
       schedule();
+    });
+    // The extra-MX watcher is the single owner of the "extra MX" verdict. Its
+    // event carries the new host list; apply it to the dashboard row and hand it
+    // to an open status dialog, so both agree without a re-fetch.
+    source.addEventListener('mx.extra_mx_changed', function (event) {
+      var payload = {};
+      try { payload = JSON.parse(event.data || '{}') || {}; } catch (err) { payload = {}; }
+      var domainID = payload.domain_id || '';
+      if (!domainID) { return; }
+      var extra = payload.unexpected_mx || [];
+      window.mailmooseExtraMX = window.mailmooseExtraMX || {};
+      window.mailmooseExtraMX[domainID] = extra;
+      var row = document.querySelector('tbody[data-domain-rows] tr[data-domain-id="' + domainID + '"]');
+      if (row) { applyExtraMX(row, extra); }
+      if (window.mailmooseRefreshExtraMX) { window.mailmooseRefreshExtraMX(domainID, extra); }
     });
     source.onerror = function () {
       if (source) {

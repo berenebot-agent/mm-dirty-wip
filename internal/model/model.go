@@ -597,6 +597,14 @@ const EventMessageStateChanged = "message.state_changed"
 // cursor and is not part of the account's event history.
 const EventMXHealthChanged = "mx.health_changed"
 
+// EventMXExtraMXChanged is a transient, non-persisted notification that a
+// domain's "extra MX" verdict changed: the set of published MX hostnames that
+// are not one of its configured Antler receivers. It carries the new host list
+// in its payload. Like EventMXHealthChanged it is published only to the
+// in-process hub, so the dashboard light and an open status dialog stay in
+// sync without either running its own DNS lookup.
+const EventMXExtraMXChanged = "mx.extra_mx_changed"
+
 // Trash lifecycle event types. A trashed message is hidden but retained;
 // restored returns it to the mailbox; purged erases it permanently (removing
 // its row, raw MIME, attachments and storage accounting).
