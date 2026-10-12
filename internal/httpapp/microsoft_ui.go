@@ -159,7 +159,7 @@ func (s *Server) uiMicrosoftFinish(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		box, e := s.Service.Store.CreateStandaloneInbox(r.Context(), p.AccountID, store.StandaloneCreate{Address: address, DisplayName: displayOr(a.DisplayName, identity.DisplayName, address)})
+		box, e := s.Service.Store.CreateStandaloneInbox(store.WithInboxLogOperation(r.Context(), "microsoft_connect"), p.AccountID, store.StandaloneCreate{Address: address, DisplayName: displayOr(a.DisplayName, identity.DisplayName, address)})
 		if e != nil {
 			http.Error(w, "Could not create Microsoft inbox; the address may already be connected", 400)
 			return
@@ -169,7 +169,8 @@ func (s *Server) uiMicrosoftFinish(w http.ResponseWriter, r *http.Request) {
 	c := store.MicrosoftConnection{AccountID: p.AccountID, InboxID: inbox, ClientID: a.ClientID, Tenant: a.Tenant, IdentityID: identity.ID, Mailbox: mailbox, Shared: a.Shared}
 	if e = rm.SaveMicrosoftGrant(r.Context(), c, t); e != nil {
 		if a.InboxID == "" {
-			_, _ = s.Service.Store.PurgeInbox(r.Context(), p.AccountID, inbox)
+			ctx := store.WithInboxLogOperation(r.Context(), "microsoft_connect")
+			_, _ = s.Service.Store.PurgeInbox(store.WithInboxLogReason(ctx, "setup_rollback"), p.AccountID, inbox)
 		}
 		http.Error(w, "Microsoft offline mailbox access was not granted; approve mailbox permissions and reconnect", 400)
 		return
@@ -259,7 +260,7 @@ func (s *Server) uiMicrosoftSelect(w http.ResponseWriter, r *http.Request, p mod
 			return
 		}
 	} else {
-		box, e := s.Service.Store.CreateStandaloneInbox(r.Context(), p.AccountID, store.StandaloneCreate{Address: mailbox, DisplayName: displayOr(a.DisplayName, mailbox)})
+		box, e := s.Service.Store.CreateStandaloneInbox(store.WithInboxLogOperation(r.Context(), "microsoft_connect"), p.AccountID, store.StandaloneCreate{Address: mailbox, DisplayName: displayOr(a.DisplayName, mailbox)})
 		if e != nil {
 			http.Error(w, "Could not create Microsoft inbox; the address may already be connected", 400)
 			return
@@ -269,7 +270,8 @@ func (s *Server) uiMicrosoftSelect(w http.ResponseWriter, r *http.Request, p mod
 	c := store.MicrosoftConnection{AccountID: p.AccountID, InboxID: inbox, ClientID: a.ClientID, Tenant: a.Tenant, IdentityID: identity.ID, Mailbox: mailbox, Shared: true}
 	if e = rm.SaveMicrosoftGrant(r.Context(), c, t); e != nil {
 		if a.InboxID == "" {
-			_, _ = s.Service.Store.PurgeInbox(r.Context(), p.AccountID, inbox)
+			ctx := store.WithInboxLogOperation(r.Context(), "microsoft_connect")
+			_, _ = s.Service.Store.PurgeInbox(store.WithInboxLogReason(ctx, "setup_rollback"), p.AccountID, inbox)
 		}
 		http.Error(w, "Microsoft offline mailbox access was not granted; approve mailbox permissions and reconnect", 400)
 		return

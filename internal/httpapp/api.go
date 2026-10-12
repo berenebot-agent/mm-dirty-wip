@@ -487,7 +487,7 @@ func (s *Server) apiIdentities(w http.ResponseWriter, r *http.Request) {
 		if local == "" {
 			local = "agent-" + strings.ToLower(strings.TrimPrefix(idgen.New("id"), "id_"))[:8]
 		}
-		box, err := s.Service.Store.CreateInbox(r.Context(), p.AccountID, domainID, local, in.Name)
+		box, err := s.Service.Store.CreateInbox(store.WithInboxLogOperation(r.Context(), "identity_create"), p.AccountID, domainID, local, in.Name)
 		if err != nil {
 			mapStoreError(w, err)
 			return
@@ -517,7 +517,7 @@ func (s *Server) apiIdentityDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, b := range boxes {
 		if strings.EqualFold(b.Address, addr) {
-			paths, err := s.Service.Store.PurgeInbox(r.Context(), p.AccountID, b.ID)
+			paths, err := s.Service.Store.PurgeInbox(store.WithInboxLogOperation(r.Context(), "identity_delete"), p.AccountID, b.ID)
 			if err != nil {
 				mapStoreError(w, err)
 				return

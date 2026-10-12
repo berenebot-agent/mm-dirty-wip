@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+
+	"github.com/dellarb/mailmoose/internal/model"
 )
 
 // Legacy ciphertext keeps its original AAD during the SQL-only upgrade. Each
@@ -198,7 +200,11 @@ func (s *Store) ImportOneInbox(ctx context.Context, b OneBinding, history string
 	if _, err = tx.ExecContext(ctx, `INSERT INTO google_detection(inbox_id,history_id) VALUES(?,?)`, b.InboxID, history); err != nil {
 		return "", err
 	}
-	return b.InboxID, tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return b.InboxID, err
+	}
+	s.logInbox(ctx, "inbox.created", model.Inbox{ID: b.InboxID, AccountID: b.AccountID, Kind: model.InboxKindStandalone, Address: address}, "one_import", "")
+	return b.InboxID, nil
 }
 
 func (s *Store) UpdateOneDisplayName(ctx context.Context, account, inbox, name string) error {
