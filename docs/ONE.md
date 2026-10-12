@@ -157,9 +157,11 @@ outbox resolves a live bound client immediately before submission. Queued
 sending configuration contains only a One-binding marker, never the API key.
 
 Migration 066 copies existing Gmail sync cursors into `inbox_gmail_sync`, leaving
-native OAuth grants intact. One account keys and opaque connection selectors
-are stored separately, encrypted with account/binding-specific AAD. No fake
-Google credentials are created.
+native OAuth grants intact. Migration 067 moves One keys into each inbox's
+connection row and removes the shared credential table. Existing ciphertext is
+copied with its original AAD so the SQL upgrade does not need the root encryption
+key; replacement keys use inbox-specific AAD. Connection selectors remain
+inbox-encrypted. No fake Google credentials are created.
 
 One history processing uses bounded batches and persisted metadata-only page
 snapshots/offsets. Backfill uses ten-message pages with persisted snapshots and
@@ -170,25 +172,46 @@ quota on the first messages. Native Google retains its existing batch sizes.
 
 Choose **Add inbox → Standalone inbox → One (Easy Gmail Setup)**, or open
 `/ui/connections/one` as a signed-in account administrator. Save your personal
-One REST key, refresh connections, then check only the Gmail mailboxes to
-import. Discovery verifies actual Gmail profile identities rather than trusting
+One REST key, then check only the Gmail mailboxes to import. **Next** automatically
+validates the key and starts an encrypted, user-scoped setup lasting 30 minutes.
+The next wizard page shows mailbox selection only, with **Cancel** and
+**Refresh** on the left and **Import selected** on the right. Key entry is
+hidden and empty imported-mailbox sections are not displayed. Successful import
+shows a completion panel with the imported inbox names, addresses and **Open
+inbox** links, plus a right-aligned **Close** button back to the dashboard.
+API keys are visible during entry only; saved credentials are never redisplayed.
+Successful multi-import creates an independently encrypted key and connection
+for every selected inbox, then removes the temporary setup. Partial failures
+retain the setup for retry until expiry. There is no global One configuration.
+Discovery verifies actual Gmail profile identities rather than trusting
 opaque vault identities. Inactive connections and unsupported platforms are
 visible but cannot be imported. Duplicate addresses require explicit migration;
 they never replace an existing native connector.
 
 Every imported mailbox uses the normal mailbox UI, canonical APIs, roles,
 metadata cache, live MIME/attachments, RemoteDraft handoff and sending gates.
-All operations for one saved One account share conservative 15/minute pacing,
+Inboxes imported with the same key share conservative 15/minute pacing,
 with user operations ahead of background work. 429 imposes an account cooldown;
 unknown send outcomes are never automatically retried. Polling defaults to five
 minutes and is configurable from two to thirty minutes. One has no push setup.
 
-The settings page exposes test/replace/remove-key operations and per-mailbox
-sync status, polling, reconnect and local-only disconnect. Key replacement must
-still expose the original imported connection UUIDs and Gmail profile addresses.
-Disconnect/removal keeps local metadata and drafts and does not revoke or delete
-upstream connections. Live bodies/attachments require an active connection.
-Reconnect explicitly revalidates the original mailbox identity and action map.
+Each inbox's connection settings expose **Save**, sync status, polling and
+**Delete connection**. Saving replaces or reconnects only that inbox, with
+automatic validation of its original connection UUID, Gmail identity and action
+map. Deletion clears only that inbox's credentials, never its siblings' keys.
+New imports resolve the configured Gmail sender display name through the optional
+native `GET /gmail/v1/users/{{userId}}/settings/sendAs` action, matching the
+verified profile address rather than another alias. If One lacks the action or
+Gmail settings permission, or Gmail returns an empty inherited name, up to three
+recent Sent-message metadata headers are checked for a named From address matching
+the verified mailbox. No bodies are downloaded. With no matching name, the address
+is the fallback, never a provider-suffixed name. Existing automatic names are refreshed during reconnect or the next
+connection revalidation; custom inbox names are preserved.
+A non-secret disconnected marker prevents fallback to IMAP; local metadata and
+drafts remain. Nothing is revoked or deleted upstream. Live bodies/attachments
+require an active connection. There are no separate test buttons or account-wide
+removal controls. Key rotation retains the imported quota group; One's actual
+quota is account-wide even when different keys are used.
 Protect and back up `APP_ENCRYPTION_KEY` separately from `/data`.
 
 ## Deterministic tests
@@ -209,7 +232,8 @@ and cancellation. Connector fixtures additionally cover native streamed sends
 and drafts, fixed-host/allowlist enforcement, action ambiguity, gateway versus
 Gmail errors, account cooldown/cancellation/priority, selective idempotent import,
 encrypted storage, scoped mailbox operations, ordinary outbox delivery, durable
-history resume, local-only disconnect/removal, fourth-provider UI and CSRF.
+history resume, per-inbox replacement/deletion isolation, multi-import credential
+fan-out, upgrade preservation, fourth-provider UI and CSRF.
 
 References: [Vault](https://www.withone.ai/docs/api-reference/vault/list_vault_connections),
 [Actions](https://www.withone.ai/docs/api-reference/actions/list_actions),

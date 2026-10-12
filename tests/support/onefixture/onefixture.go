@@ -20,6 +20,7 @@ const Key = "fixture-one-key-never-live"
 const Selector = "fixture-one-selector"
 const ConnectionID = "fixture-one-uuid"
 const Email = "gmail-one@example.test"
+const Name = "Fixture Gmail Owner"
 
 type Fixture struct {
 	mu           sync.Mutex
@@ -34,6 +35,9 @@ type Fixture struct {
 	History      map[string]any
 	DraftRaw     string
 	SendCalls    int
+	Keys         []string
+	SenderNames  map[string]string
+	SentFrom     string
 }
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -43,12 +47,14 @@ func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f
 func New(t *testing.T) *Fixture {
 	t.Helper()
 	f := &Fixture{Status: make(map[string]int), LabelIDs: []string{"INBOX", "UNREAD"}, History: map[string]any{"historyId": "20"}}
+	f.SenderNames = map[string]string{Email: Name}
 	f.Connections = []map[string]any{
 		{"id": ConnectionID, "key": Selector, "platform": "gmail", "active": true, "state": "operational", "environment": "live", "identity": "opaque-not-an-email"},
 		{"id": "fixture-outlook", "key": "fixture-outlook-selector", "platform": "outlook", "active": true, "state": "operational", "environment": "live"},
 		{"id": "fixture-inactive", "key": "fixture-inactive-selector", "platform": "gmail", "active": false, "state": "revoked", "environment": "live"},
 	}
 	f.Actions = one.Operations()
+	f.Actions = append(f.Actions, one.Action{Method: "GET", Path: "/gmail/v1/users/{{userId}}/settings/sendAs"})
 	for i := range f.Actions {
 		f.Actions[i].ID = f.Actions[i].Method + "-" + f.Actions[i].Path
 	}
@@ -59,8 +65,11 @@ func New(t *testing.T) *Fixture {
 		call := r.Method + " " + r.URL.Path
 		f.Calls = append(f.Calls, call)
 		w.Header().Set("Content-Type", "application/json")
-		if r.Header.Get("X-One-Secret") != Key || r.Header.Get("Authorization") != "" {
-			t.Errorf("fixture credentials rejected for %s: key matches=%v bearer present=%v", call, r.Header.Get("X-One-Secret") == Key, r.Header.Get("Authorization") != "")
+		accepted := r.Header.Get("X-One-Secret") == Key
+		for _, key := range f.Keys {
+			accepted = accepted || r.Header.Get("X-One-Secret") == key
+		}
+		if !accepted || r.Header.Get("Authorization") != "" {
 			w.WriteHeader(401)
 			_ = json.NewEncoder(w).Encode(map[string]any{"key": "error", "message": "rejected " + r.Header.Get("X-One-Secret")})
 			return
@@ -83,19 +92,40 @@ func New(t *testing.T) *Fixture {
 			_ = json.NewEncoder(w).Encode(map[string]any{"page": 1, "pages": 1, "rows": f.Actions})
 			return
 		}
-		if r.Header.Get("X-One-Connection-Key") != Selector || r.Header.Get("X-One-Action-Id") == "" {
+		selectorOK := false
+		profileEmail := Email
+		for _, connection := range f.Connections {
+			if connection["key"] == r.Header.Get("X-One-Connection-Key") {
+				selectorOK = true
+				if email, ok := connection["email"].(string); ok {
+					profileEmail = email
+				}
+			}
+		}
+		if !selectorOK || r.Header.Get("X-One-Action-Id") == "" {
 			t.Error("missing server-resolved selector/action")
 			w.WriteHeader(403)
 			return
 		}
 		path := strings.TrimPrefix(r.URL.Path, "/v1/passthrough/gmail/v1/users/me")
 		switch path {
+		case "/settings/sendAs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"sendAs": []any{map[string]string{"sendAsEmail": "other-alias@example.test", "displayName": "Wrong alias name"}, map[string]string{"sendAsEmail": profileEmail, "displayName": f.SenderNames[profileEmail]}}})
 		case "/profile":
-			_ = json.NewEncoder(w).Encode(map[string]string{"emailAddress": Email, "historyId": "10"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"emailAddress": profileEmail, "historyId": "10"})
 		case "/labels":
 			_ = json.NewEncoder(w).Encode(map[string]any{"labels": []any{map[string]string{"id": "INBOX", "name": "INBOX", "type": "system"}, map[string]string{"id": "DRAFT", "name": "DRAFT", "type": "system"}, map[string]string{"id": "SENT", "name": "SENT", "type": "system"}}})
 		case "/messages":
+			if r.URL.Query().Get("labelIds") == "SENT" && f.SentFrom != "" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"messages": []map[string]string{{"id": "sent-name"}}})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"messages": f.Messages})
+		case "/messages/sent-name":
+			if r.URL.Query().Get("format") != "metadata" && (r.URL.Query().Get("fields") == "" || strings.Contains(r.URL.Query().Get("fields"), "data")) {
+				t.Error("naming fetched more than metadata")
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sent-name", "payload": map[string]any{"headers": []map[string]string{{"name": "From", "value": f.SentFrom}}}})
 		case "/history":
 			_ = json.NewEncoder(w).Encode(f.History)
 		case "/messages/message-one/modify":

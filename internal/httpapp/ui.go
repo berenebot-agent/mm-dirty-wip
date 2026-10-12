@@ -567,8 +567,8 @@ type pageData struct {
 	StandaloneConfigured bool
 	StandalonePlain      bool
 	RemoteConnectorURL   string
-	OneConfigured        bool
-	OneConfigStatus      string
+	OneSetupID           string
+	OneInboxID           string
 	OneChoices           []app.OneMailboxChoice
 	OneMailboxes         []oneMailboxStatus
 	OneImportResults     []app.OneImportResult

@@ -39,8 +39,10 @@ func TestMigration066PreservesNativeGoogleGrantAndSync(t *testing.T) {
 	db := rawDB(t, path)
 	for _, statement := range []string{
 		`UPDATE inbox_google_connections SET history_id='123',backfill_page='opaque-page',backfill_done=0,sync_generation='fixture-generation'`,
-		`DROP TABLE gmail_history_pages`, `DROP TABLE inbox_one_bindings`, `DROP TABLE one_accounts`, `DROP TABLE inbox_gmail_sync`,
+		`DROP TABLE gmail_history_pages`, `DROP TABLE inbox_one_bindings`, `DROP TABLE inbox_gmail_sync`,
 		`DELETE FROM schema_migrations WHERE version='066'`,
+		`DROP TABLE one_import_setups`,
+		`DELETE FROM schema_migrations WHERE version='067'`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			db.Close()
