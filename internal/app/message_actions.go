@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
@@ -24,6 +25,19 @@ type ActionWorker struct {
 	lastInbox string
 }
 
+// recheckInterval is how often failed actions are reconsidered. It is long
+// enough to absorb a provider outage without hammering it, and short enough that
+// a transient failure retries within minutes rather than waiting for a human.
+const recheckInterval = 10 * time.Minute
+
+// recheckBatch bounds how many failed actions one recheck pass examines, so a
+// large error backlog is worked through steadily instead of in one burst.
+const recheckBatch = 200
+
+// recheckDeferral pushes an unresolvable failed action's next recheck out by one
+// interval, so the pass does not retry it again immediately.
+const recheckDeferral = recheckInterval
+
 func NewActionWorker(svc *Service, remote *RemoteMailboxService) *ActionWorker {
 	return &ActionWorker{svc: svc, remote: remote, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 }
@@ -42,6 +56,8 @@ func (w *ActionWorker) run() {
 	_ = w.svc.Store.RecoverMessageActions(context.Background())
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
+	recheck := time.NewTicker(recheckInterval)
+	defer recheck.Stop()
 	lastSweep := time.Time{}
 	for {
 		w.drain()
@@ -54,6 +70,8 @@ func (w *ActionWorker) run() {
 			return
 		case <-w.wake:
 		case <-tick.C:
+		case <-recheck.C:
+			w.RecheckFailed()
 		}
 	}
 }
@@ -313,4 +331,186 @@ func (s *Service) WaitForInboxAction(ctx context.Context, p model.Principal, id 
 		case <-tick.C:
 		}
 	}
+}
+
+// RecheckFailed reconsiders failed actions and, when it is safe, returns them to
+// the pending queue so the main worker retries them. It never executes an action
+// itself and never touches 'ambiguous' rows.
+//
+// Safety is decided before requeueing, because "the last try failed" is not the
+// same as "the operation still needs doing":
+//
+//   - A newer unsettled action for the same message supersedes the failure; the
+//     old attempt is stale, and replaying it could undo the newer instruction.
+//   - The provider's current state is checked where the action targets a remote
+//     message, so an operation that already took effect is not repeated.
+func (w *ActionWorker) RecheckFailed() {
+	w.recheckFailed(context.Background())
+}
+
+func (w *ActionWorker) recheckFailed(ctx context.Context) {
+	due := time.Now().Add(-recheckInterval)
+	actions, err := w.svc.Store.ListFailedActionsForRecheck(ctx, due, recheckBatch)
+	if err != nil {
+		w.svc.Log.Error("action recheck list", "error", err)
+		return
+	}
+	for _, a := range actions {
+		requeue, err := w.recheckOne(ctx, a)
+		if err != nil {
+			w.svc.Log.Warn("action recheck deferred", "action_id", a.ID, "error", err)
+			if derr := w.svc.Store.DeferMessageActionRecheck(ctx, a.ID, time.Now().Add(recheckDeferral)); derr != nil {
+				w.svc.Log.Error("action recheck defer", "action_id", a.ID, "error", derr)
+			}
+			continue
+		}
+		if requeue {
+			if err := w.svc.Store.RequeueMessageAction(ctx, a.ID); err != nil {
+				w.svc.Log.Error("action requeue", "action_id", a.ID, "error", err)
+				continue
+			}
+			w.svc.Hub.Publish(model.Event{AccountID: a.AccountID, InboxID: a.InboxID, Type: "actions.changed", Transient: true})
+			w.Wake()
+		}
+	}
+}
+
+// recheckOne decides a single failed action's fate. It reports whether the
+// action should be requeued. An error means the state could not be determined and
+// the action's next recheck should be deferred.
+func (w *ActionWorker) recheckOne(ctx context.Context, a store.MessageAction) (bool, error) {
+	// A patch sets absolute state, so repeating it cannot duplicate an effect and
+	// is always safe to retry once no newer action supersedes it.
+	if a.Input.Kind == "patch" {
+		superseded, err := w.supersededByNewerAction(ctx, a)
+		if err != nil {
+			return false, err
+		}
+		return !superseded, nil
+	}
+	// Every other kind is a location change at the provider. Decide from the
+	// provider's current state, never by blind replay.
+	return w.resolveRemoteLocationAction(ctx, a)
+}
+
+// resolveRemoteLocationAction checks a failed move/delete/restore/purge against
+// the provider's current location. It reports whether the action should be
+// requeued. A location change counts as already applied only when the message is
+// positively observed in the intended destination (or, for a purge, absent
+// entirely). A move/delete whose target can no longer be located is left for a
+// human rather than retried or silently completed, because its outcome is
+// genuinely unknown.
+func (w *ActionWorker) resolveRemoteLocationAction(ctx context.Context, a store.MessageAction) (bool, error) {
+	superseded, err := w.supersededByNewerAction(ctx, a)
+	if err != nil {
+		return false, err
+	}
+	if superseded {
+		// A newer instruction for the same message governs. Leave the stale
+		// failure as-is so it is not replayed out of order.
+		return false, nil
+	}
+	p := model.Principal{AccountID: a.AccountID, Admin: true}
+	box, err := w.svc.Store.GetInbox(ctx, p, a.InboxID)
+	if err != nil {
+		return false, err
+	}
+	if _, err := w.svc.Store.GetMessage(ctx, p, a.MessageID); err == nil {
+		// A locally stored message: the local store is authoritative and the
+		// location action is safe to retry.
+		return true, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	if box.Kind != model.InboxKindStandalone {
+		return false, nil
+	}
+	rec, err := w.svc.Store.GetRemoteMessage(ctx, p.AccountID, a.InboxID, a.MessageID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// A purge is satisfied by the message's absence: settle it as done. A
+			// move/delete that lost its locator has an unknown outcome; leave it
+			// failed rather than guess.
+			if a.Input.Kind == "purge" {
+				if serr := w.svc.Store.SettleMessageAction(ctx, a.ID, "done", "", time.Now()); serr != nil {
+					return false, serr
+				}
+				w.svc.Hub.Publish(model.Event{AccountID: a.AccountID, InboxID: a.InboxID, Type: "actions.changed", Transient: true})
+			}
+			return false, nil
+		}
+		return false, err
+	}
+	// A purge has no destination folder: its intended effect is the message's
+	// absence, so a message that still exists has not been purged and is safe to
+	// retry.
+	if a.Input.Kind == "purge" {
+		return true, nil
+	}
+	target := ""
+	if a.Input.Kind == "move" {
+		target = a.Input.Destination
+	}
+	if role := destinationRole(a); role != "" {
+		folders, err := w.svc.Store.ListFolders(ctx, p.AccountID, a.InboxID)
+		if err != nil {
+			return false, err
+		}
+		for _, f := range folders {
+			if f.Role == role && (f.Origin == "remote" || f.RoleLocked) {
+				target = f.Path
+				break
+			}
+		}
+	}
+	if target == "" {
+		return false, nil
+	}
+	if strings.EqualFold(target, rec.FolderPath) {
+		// The message already sits where the action wanted it: it is settled.
+		if err := w.svc.Store.SettleMessageAction(ctx, a.ID, "done", "", time.Now()); err != nil {
+			return false, err
+		}
+		w.svc.Hub.Publish(model.Event{AccountID: a.AccountID, InboxID: a.InboxID, Type: "actions.changed", Transient: true})
+		return false, nil
+	}
+	// Still in the source folder: the earlier attempt did not take effect, so the
+	// move/purge is safe to retry.
+	return true, nil
+}
+
+// supersededByNewerAction reports whether the message already has a newer
+// unsettled action queued or running, which the failed attempt must not jump.
+func (w *ActionWorker) supersededByNewerAction(ctx context.Context, a store.MessageAction) (bool, error) {
+	actions, err := w.svc.Store.ListMessageActionsForMessage(ctx, a.AccountID, a.InboxID, a.MessageID)
+	if err != nil {
+		return false, err
+	}
+	for _, other := range actions {
+		if other.ID == a.ID {
+			continue
+		}
+		if other.State == "pending" || other.State == "running" || other.State == "ambiguous" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// destinationRole maps a location action onto the folder role it moves toward,
+// or "" when the action's destination is an explicit path rather than a role.
+func destinationRole(a store.MessageAction) string {
+	if a.Input.Spam != nil {
+		if *a.Input.Spam {
+			return model.FolderRoleSpam
+		}
+		return model.FolderRoleInbox
+	}
+	switch a.Input.Kind {
+	case "delete":
+		return model.FolderRoleTrash
+	case "restore":
+		return model.FolderRoleInbox
+	}
+	return ""
 }

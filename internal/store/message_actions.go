@@ -159,6 +159,65 @@ func (s *Store) SettleMessageAction(ctx context.Context, id, state, reason strin
 	return err
 }
 
+// ListMessageActionsForMessage returns every action recorded for one message,
+// oldest first. The rechecker uses it to detect whether a newer unsettled action
+// already supersedes a stale failure.
+func (s *Store) ListMessageActionsForMessage(ctx context.Context, accountID, inboxID, messageID string) ([]MessageAction, error) {
+	rows, err := s.read.QueryContext(ctx, actionSelect+` WHERE account_id=? AND inbox_id=? AND message_id=? ORDER BY rowid`, accountID, inboxID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MessageAction{}
+	for rows.Next() {
+		a, err := scanAction(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ListFailedActionsForRecheck returns failed, non-dismissed actions whose
+// recheck is due. Ordering is oldest first so the rechecker works through a
+// backlog steadily. It deliberately excludes 'ambiguous' rows: those require
+// human verification before they may run again.
+func (s *Store) ListFailedActionsForRecheck(ctx context.Context, due time.Time, limit int) ([]MessageAction, error) {
+	rows, err := s.read.QueryContext(ctx, actionSelect+` WHERE dismissed=0 AND state='failed' AND next_attempt_at<=? ORDER BY next_attempt_at,rowid LIMIT ?`, timeText(due), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MessageAction{}
+	for rows.Next() {
+		a, err := scanAction(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// RequeueMessageAction returns a failed action to the pending queue. It is
+// conditional on the row still being failed and undismissed, so a human retry or
+// dismissal that landed first is never clobbered. Attempts are left intact: the
+// rechecker's job is to try again after an interval, not to reset the record of
+// how often the action has already run.
+func (s *Store) RequeueMessageAction(ctx context.Context, id string) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_message_actions SET state='pending',next_attempt_at=?,claim_owner='' WHERE id=? AND state='failed' AND dismissed=0`, nowText(), id)
+	return err
+}
+
+// DeferMessageActionRecheck pushes a failed action's next recheck back without
+// changing its state, used when the rechecker cannot yet determine the provider
+// outcome and must try again later.
+func (s *Store) DeferMessageActionRecheck(ctx context.Context, id string, next time.Time) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_message_actions SET next_attempt_at=? WHERE id=? AND state='failed' AND dismissed=0`, timeText(next), id)
+	return err
+}
+
 func (s *Store) RecoverMessageActions(ctx context.Context) error {
 	// A crash after a remote move/purge may have committed externally. Never
 	// replay those blindly; safe absolute state patches can be retried.

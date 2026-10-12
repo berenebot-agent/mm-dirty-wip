@@ -3537,6 +3537,22 @@ monopolizing execution. It does not isolate other inboxes from the duration of a
 single slow action: execution remains globally serial. No schema migration,
 dependency, additional service or worker-concurrency configuration is introduced.
 
+**Failed-action recheck amendment (2026-10-12, approved by Ben):** A transient
+provider failure must not require a human to clear it. A ten-minute ticker inside
+the action worker reconsiders `failed`, non-dismissed actions and, when it is safe,
+returns them to `pending` so the same single worker retries them. The rechecker
+only schedules; it never executes an action itself, so per-inbox and per-message
+ordering are unchanged and no second executor exists. Safety is decided before
+requeueing: an absolute-state patch (read/unread, labels) is always safe to retry
+once no newer unsettled action for the same message supersedes it; any other kind
+is a provider location change and is decided from the observed location — already
+in the intended destination settles as `done`, still in the source is retried, and
+an unknown location is deferred rather than guessed. `ambiguous` rows are never
+reconsidered; they keep requiring human verification. Rechecks are unbounded (a
+retryable patch keeps being reconsidered) and per-attempt execution stays bounded
+by the existing 30-second context. No schema migration, dependency or additional
+service; two store methods and worker logic only. See `docs/API.md`.
+
 ## D104 — Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling
 
 **Date:** 2026-10-11. **Approved by:** Ben.
