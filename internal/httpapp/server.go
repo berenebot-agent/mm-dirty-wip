@@ -244,6 +244,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /ui/inboxes/standalone/new", s.withSession(s.uiStandaloneWizard))
 	m.HandleFunc("GET /ui/connections/one", s.withSession(s.uiOne))
 	m.HandleFunc("POST /ui/connections/one/config", s.withSession(s.withCSRF(s.uiOneSave)))
+	m.HandleFunc("POST /ui/connections/one/reconnect", s.withSession(s.withCSRF(s.uiOneReconnect)))
 	m.HandleFunc("POST /ui/connections/one/import", s.withSession(s.withCSRF(s.uiOneImport)))
 	m.HandleFunc("POST /ui/connections/one/mailbox", s.withSession(s.withCSRF(s.uiOneMailbox)))
 	m.HandleFunc("POST /ui/oauth/microsoft/begin", s.withSession(s.withCSRF(s.uiMicrosoftBegin)))

@@ -1,7 +1,9 @@
 package httpapp
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -141,6 +143,50 @@ func (s *Server) uiOneSave(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/ui/connections/one?setup="+url.QueryEscape(id), 303)
 }
+
+// uiOneReconnect is the in-place reconnect endpoint behind the Identity tab's
+// One reconnect dialog. It takes the inbox id and a replacement One API key as
+// JSON, verifies the key against the inbox's original Gmail connection, stores
+// it only on success, and returns a small JSON verdict so the dialog can report
+// a failure without leaving the page or opening the full import wizard.
+func (s *Server) uiOneReconnect(w http.ResponseWriter, r *http.Request) {
+	if !s.oneAdmin(w, r) {
+		return
+	}
+	var body struct {
+		InboxID string `json:"inbox_id"`
+		APIKey  string `json:"api_key"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&body); err != nil {
+		writeError(w, 400, "invalid request")
+		return
+	}
+	inbox := strings.TrimSpace(body.InboxID)
+	key := strings.TrimSpace(body.APIKey)
+	if inbox == "" || key == "" {
+		writeError(w, 400, "inbox_id and api_key are required")
+		return
+	}
+	// Only a One-bound inbox has an in-place reconnect; refuse anything else so
+	// the endpoint can never be used to attach a key to an unrelated inbox.
+	if !s.Service.Store.IsOne(r.Context(), principal(r).AccountID, inbox) {
+		writeError(w, 404, "not a One-connected inbox")
+		return
+	}
+	if err := s.remoteMailbox().SaveOneInboxKey(r.Context(), principal(r), inbox, key); err != nil {
+		message := "The key was rejected. Check it and try again."
+		var mb *model.MailboxError
+		if errors.As(err, &mb) && strings.TrimSpace(mb.Message) != "" {
+			message = mb.Message
+		} else if errors.Is(err, store.ErrNotFound) {
+			message = "One connection not found; refresh settings and try again"
+		}
+		writeJSON(w, 400, map[string]any{"status": "error", "error": message})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"status": "connected"})
+}
+
 func (s *Server) uiOneImport(w http.ResponseWriter, r *http.Request) {
 	if !s.oneAdmin(w, r) {
 		return
