@@ -99,3 +99,257 @@ func TestActionWorkerRemoteReadThenUnread(t *testing.T) {
 		t.Fatalf("out of order read state: %+v %v", m, err)
 	}
 }
+
+// TestRecheckFailedRetriesPatchAndSupersedesStaleAction covers the two rules that
+// make an unbounded recheck safe for absolute-state patches: a failed patch is
+// retried, but not when a newer unsettled action for the same message exists.
+func TestRecheckFailedRetriesPatchAndSupersedesStaleAction(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<recheck@test>", "Recheck")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+	read := true
+	failed, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim failed patch: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, failed.ID, "failed", "provider blip", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, failed.ID)
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	got, err := svc.Store.GetMessageAction(ctx, p, failed.ID)
+	if err != nil || got.State != "pending" {
+		t.Fatalf("failed patch not requeued: %+v %v", got, err)
+	}
+
+	// With a newer unsettled action the stale failure must stay put so it cannot
+	// be replayed out of order.
+	svc2, u2, box2, rm2 := remoteTestEnv(t)
+	configureSecrets(t, rm2, u2, box2, "pw", "")
+	fake2 := newFakeRemoteServer()
+	fake2.addMessage("INBOX", "body", "<stale@test>", "Stale")
+	rm2.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake2, nil })
+	p2 := model.Principal{AccountID: u2.AccountID, Admin: true}
+	if _, err := rm2.ReconcileRemote(ctx, u2.AccountID, box2.ID); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := rm2.ListRemoteMessagesCached(ctx, p2, box2.ID, "INBOX", 10, "")
+	if err != nil || len(res2.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res2, err)
+	}
+	mid2 := res2.Items[0].ID
+	stale, err := svc2.Store.EnqueueMessageAction(ctx, p2, box2.ID, mid2, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc2.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim stale: %v %v", ok, err)
+	}
+	if err := svc2.Store.SettleMessageAction(ctx, stale.ID, "failed", "provider blip", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc2, stale.ID)
+	unread := false
+	if _, err := svc2.Store.EnqueueMessageAction(ctx, p2, box2.ID, mid2, store.MessageActionInput{Kind: "patch", Read: &unread}); err != nil {
+		t.Fatal(err)
+	}
+	w2 := app.NewActionWorker(svc2, rm2)
+	w2.RecheckFailed()
+	kept, err := svc2.Store.GetMessageAction(ctx, p2, stale.ID)
+	if err != nil || kept.State != "failed" {
+		t.Fatalf("stale action requeued past newer action: %+v %v", kept, err)
+	}
+}
+
+// TestRecheckFailedRespectsRemoteLocation covers a location-changing action: an
+// effect already visible at the provider settles as done, while one still in the
+// source folder is safe to retry. An ambiguous row is never reconsidered.
+func TestRecheckFailedRespectsRemoteLocation(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<move@test>", "Move")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+
+	// Already applied: the cached location is the destination folder.
+	applied, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "move", Destination: "Drafts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim applied: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, applied.ID, "failed", "timed out", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, applied.ID)
+	if _, err := rm.MoveRemoteMessage(ctx, p, box.ID, messageID, "Drafts"); err != nil {
+		t.Fatalf("pre-apply move: %v", err)
+	}
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	settled, err := svc.Store.GetMessageAction(ctx, p, applied.ID)
+	if err != nil || settled.State != "done" {
+		t.Fatalf("already-applied move not settled: %+v %v", settled, err)
+	}
+}
+
+// makeRecheckDue ages a failed action so the next recheck pass treats it as due
+// without the test waiting out a real ten-minute interval.
+func makeRecheckDue(t *testing.T, svc *app.Service, id string) {
+	t.Helper()
+	if err := svc.Store.DeferMessageActionRecheck(context.Background(), id, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRecheckEndToEndRetriesFailedPatchThroughWorker proves the rechecker only
+// requeues, and the main worker still performs the mutation, so a transient
+// failure eventually takes effect without a human. It also proves an ambiguous
+// row is left alone.
+func TestRecheckEndToEndRetriesFailedPatchThroughWorker(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<e2e@test>", "E2E")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	messageID := res.Items[0].ID
+	read := true
+	failed, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, messageID, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, failed.ID, "failed", "transient", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// An ambiguous action on another message must never be reconsidered.
+	fake.addMessage("INBOX", "second", "<e2e2@test>", "E2E2")
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res2, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res2.Items) != 2 {
+		t.Fatalf("messages: %+v %v", res2, err)
+	}
+	amb, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, res2.Items[0].ID, store.MessageActionInput{Kind: "patch", Read: &read})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, amb.ID, "ambiguous", "uncertain", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, failed.ID)
+	w := app.NewActionWorker(svc, rm)
+	svc.ActionWaker = w
+	w.Start()
+	defer w.Stop()
+	w.RecheckFailed()
+	settled, err := svc.WaitForInboxAction(ctx, p, failed.ID, 3*time.Second)
+	if err != nil || settled.State != "done" {
+		t.Fatalf("requeued patch not executed: %+v %v", settled, err)
+	}
+	m, err := svc.Store.GetRemoteMessage(ctx, u.AccountID, box.ID, messageID)
+	if err != nil || !m.Read {
+		t.Fatalf("patch not applied remotely: %+v %v", m, err)
+	}
+	still, err := svc.Store.GetMessageAction(ctx, p, amb.ID)
+	if err != nil || still.State != "ambiguous" {
+		t.Fatalf("ambiguous row reconsidered: %+v %v", still, err)
+	}
+}
+
+// TestRecheckFailedSettlesAppliedPurgeAndRetriesPendingPurge covers a purge's
+// absence-based outcome: a purge whose message is already gone settles as done,
+// while one whose message still exists is retried.
+func TestRecheckFailedSettlesAppliedPurgeAndRetriesPendingPurge(t *testing.T) {
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+
+	// Already-applied purge: the remote row is gone.
+	gone, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, "rm_missing_purge", store.MessageActionInput{Kind: "purge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim gone: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, gone.ID, "failed", "transient", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, gone.ID)
+	w := app.NewActionWorker(svc, rm)
+	w.RecheckFailed()
+	settled, err := svc.Store.GetMessageAction(ctx, p, gone.ID)
+	if err != nil || settled.State != "done" {
+		t.Fatalf("applied purge not settled: %+v %v", settled, err)
+	}
+
+	// Pending purge: the remote row still exists in Trash, so it is retried.
+	fake := newFakeRemoteServer()
+	fake.addFolder("Trash", 100)
+	fake.addMessage("Trash", "body", "<purge@test>", "Purge")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "Trash", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("trash messages: %+v %v", res, err)
+	}
+	pending, err := svc.Store.EnqueueMessageAction(ctx, p, box.ID, res.Items[0].ID, store.MessageActionInput{Kind: "purge"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := svc.Store.ClaimMessageAction(ctx, "test"); err != nil || !ok {
+		t.Fatalf("claim pending: %v %v", ok, err)
+	}
+	if err := svc.Store.SettleMessageAction(ctx, pending.ID, "failed", "transient", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	makeRecheckDue(t, svc, pending.ID)
+	w.RecheckFailed()
+	retried, err := svc.Store.GetMessageAction(ctx, p, pending.ID)
+	if err != nil || retried.State != "pending" {
+		t.Fatalf("pending purge not retried: %+v %v", retried, err)
+	}
+}
