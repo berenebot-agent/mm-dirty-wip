@@ -3471,7 +3471,7 @@ func openClawConfigBlock(baseURL, gatewayID, secret string) string {
 }`, baseURL, gatewayID, secret)
 }
 
-const messageBody = `<style>body:has(.mail-layout){height:100dvh;min-height:0}</style><div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
+const messageBody = `<style>.mailframe{flex:0 0 auto;height:360px}</style><div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if .StandaloneMode}}{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}
