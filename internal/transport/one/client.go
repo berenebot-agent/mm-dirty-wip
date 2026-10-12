@@ -97,14 +97,6 @@ type Limiter struct {
 
 type waiter struct{ background bool }
 
-type waitStatusKey struct{}
-
-// WithWaitStatus reports time spent waiting for a shared provider request slot.
-// The callback is request-scoped and receives no key or provider payload.
-func WithWaitStatus(ctx context.Context, status func(bool)) context.Context {
-	return context.WithValue(ctx, waitStatusKey{}, status)
-}
-
 func (l *Limiter) notify() {
 	if l.changed != nil {
 		close(l.changed)
@@ -113,10 +105,6 @@ func (l *Limiter) notify() {
 }
 
 func (l *Limiter) Wait(ctx context.Context) error {
-	if status, ok := ctx.Value(waitStatusKey{}).(func(bool)); ok && status != nil {
-		status(true)
-		defer status(false)
-	}
 	w := &waiter{background: ctx.Value(backgroundKey{}) == true}
 	l.mu.Lock()
 	l.waiters = append(l.waiters, w)

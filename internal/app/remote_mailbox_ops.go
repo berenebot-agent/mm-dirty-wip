@@ -153,7 +153,6 @@ func (m *RemoteMailboxService) ReconcileRemote(ctx context.Context, accountID, i
 		close(call.done)
 		m.refreshMu.Unlock()
 	}()
-	ctx = m.withMetadataWait(ctx, accountID, inboxID)
 	// Each provider pass logs its own "remote sync" completion line, so a pass
 	// is reported exactly once regardless of which provider it ran.
 	if m.IsMicrosoft(ctx, accountID, inboxID) {

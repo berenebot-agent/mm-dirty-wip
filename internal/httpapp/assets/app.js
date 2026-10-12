@@ -132,18 +132,18 @@
     '.aq-close{width:26px;height:26px;padding:0;flex:0 0 auto;border:0;border-radius:50%;background:transparent;color:#5f6368;font-size:18px;line-height:1}',
     '.aq-close:hover{background:#f1f3f4;color:#202124}',
     '.aq-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}',
-    '.aq-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:2px 8px;align-items:center;padding:8px 0;border-bottom:1px solid #f1f3f4}',
+    '.aq-row{display:grid;grid-template-columns:7px minmax(0,1fr) auto;gap:2px 8px;align-items:start;padding:8px 0;border-bottom:1px solid #f1f3f4}',
     '.aq-row:last-child{border-bottom:0}',
-    '.aq-dot{grid-column:1;grid-row:1;width:7px;height:7px;border-radius:50%;background:#9aa0a6}',
+    '.aq-dot{grid-column:1;grid-row:1;width:7px;height:7px;margin-top:5px;border-radius:50%;background:#9aa0a6}',
     '.aq-row[data-state=running] .aq-dot{background:#1a73e8}',
     '.aq-row[data-state=failed] .aq-dot{background:#b3261e}',
     '.aq-row[data-state=ambiguous] .aq-dot{background:#b88700}',
     '.aq-main{grid-column:2;grid-row:1;min-width:0}',
-    '.aq-kind{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}',
-    '.aq-meta{display:block;overflow-wrap:anywhere;color:#6b6f73;font-size:12px}',
+    '.aq-kind{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;line-height:1.4}',
+    '.aq-meta{display:block;overflow-wrap:anywhere;color:#6b6f73;font-size:12px;line-height:1.4}',
     '.aq-meta[hidden]{display:none}',
     '.aq-row[data-error] .aq-meta{color:#b3261e}',
-    '.aq-state{grid-column:3;grid-row:1;color:#6b6f73;font-size:12px;white-space:nowrap}',
+    '.aq-state{grid-column:3;grid-row:1;margin-top:1px;color:#6b6f73;font-size:12px;line-height:1.4;white-space:nowrap}',
     '.aq-row[data-state=running] .aq-state{color:#174ea6}',
     '.aq-row[data-state=failed] .aq-state,.aq-row[data-state=ambiguous] .aq-state{color:#b3261e}',
     '.aq-acts{grid-column:2 / 4;grid-row:2;display:flex;gap:6px;padding-top:4px}',
@@ -185,7 +185,7 @@
    // retry-pending state, so it sorts last and is counted without a spinner;
   // "error" and "paused" need attention.
   var SYNC_RANK = { error: 0, paused: 0, running: 1, queued: 2, waiting: 3 };
-  var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Indexing…', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
+  var SYNC_STATE_TEXT = { queued: 'Queued', running: 'Downloading', waiting: 'Waiting', paused: 'Paused', error: 'Sync error' };
   var csrf = '', items = [], syncs = [], active = false;
   var bubble = document.createElement('dialog');
   bubble.id = 'action-queue';
@@ -304,17 +304,25 @@
     return Number(n || 0).toLocaleString();
   }
 
+  // syncDenominator renders the total with an estimate marker when the provider
+  // count is approximate (Gmail/One count every label; we index a folder
+  // subset). "~240" reads as an estimate; a plain "240" is authoritative.
+  function syncDenominator(s) {
+    return (s.estimated_total ? '~' : '') + fmtCount(s.total);
+  }
+
   // syncProgress renders the progress fragment: "N / Total (P%)" when the
-  // provider reports a total, or "N indexed" when it can only report a count
-  // (Gmail and One have no trustworthy denominator). An unknown denominator is never
-  // presented as 0%.
+  // provider reports a total, else "N indexed" (Gmail, One and IMAP have no
+  // trustworthy denominator). A percentage is always clamped to 0-100 and the
+  // server never sends a total below the indexed count, so it cannot render a
+  // nonsense fraction like 110/100.
   function syncProgress(s) {
     var indexed = s.indexed || 0;
     if (s.total && s.total > 0 && indexed <= s.total) {
       var pct = Math.round(indexed / s.total * 100);
       if (pct < 0) { pct = 0; }
       if (pct > 100) { pct = 100; }
-      return fmtCount(indexed) + ' / ' + fmtCount(s.total) + ' (' + pct + '%)';
+      return fmtCount(indexed) + ' / ' + syncDenominator(s) + ' (' + pct + '%)';
     }
     return fmtCount(indexed) + ' indexed';
   }
@@ -326,9 +334,16 @@
   function syncMeta(s) {
     var parts = [];
     if (s.provider) { parts.push(s.provider); }
-    parts.push(s.phase === 'initial' ? 'Initial metadata sync' : 'Metadata refresh');
     var progress = syncProgress(s);
-    if (progress) { parts.push(progress); }
+    if (s.state === 'running') {
+      // Provider pacing is shown as live progress, never as a separate
+      // "waiting" state. When only a count is known, drop the " indexed" suffix
+      // so it reads "Downloading metadata 18" rather than "... 18 indexed".
+      parts.push('Downloading metadata ' + progress.replace(/ indexed$/, ''));
+    } else {
+      parts.push(s.phase === 'initial' ? 'Initial metadata sync' : 'Metadata refresh');
+      parts.push(progress);
+    }
     if (s.error) { parts.push(s.error); }
     return parts.join(' · ');
   }
@@ -365,7 +380,7 @@
   // syncBannerText is the one-line banner summary for the inbox on screen.
   function syncBannerText(s) {
     var head = {
-      running: s.phase === 'initial' ? 'Initial metadata sync…' : 'Refreshing mailbox metadata…',
+      running: 'Downloading metadata…',
       queued: 'Mailbox sync queued',
       waiting: 'Mailbox sync waiting',
       paused: 'Mailbox sync paused',
