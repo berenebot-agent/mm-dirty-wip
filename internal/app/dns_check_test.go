@@ -1,10 +1,9 @@
-package httpapp
+package app
 
-// This suite lives in package httpapp rather than under tests/unit because
-// checkMX is an unexported helper whose "unexpected host" rule (a published MX
+// This suite lives in package app rather than under tests/unit because CheckMX
+// is the published-record check whose "unexpected host" rule (a published MX
 // hostname that is not one of our receivers) is exactly the extra-MX signal the
-// dashboard light turns amber on. The black-box convention cannot reach it. It
-// uses no database or server.
+// dashboard light turns amber on. It uses no database or server.
 
 import (
 	"context"
@@ -20,13 +19,12 @@ type staticResolver struct {
 }
 
 func (s staticResolver) LookupMX(context.Context, string) ([]*net.MX, error) { return s.mx, s.err }
-func (s staticResolver) LookupTXT(context.Context, string) ([]string, error) { return nil, nil }
+func (s staticResolver) LookupTXT(context.Context, string) ([]string, error) {
+	return nil, nil
+}
 
 func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
-	expected := []dialMXMXInstruction{
-		{Hostname: "antler1.example.test", Priority: 10},
-		{Hostname: "antler2.example.test", Priority: 20},
-	}
+	expected := []string{"antler1.example.test", "antler2.example.test"}
 	for _, tc := range []struct {
 		name      string
 		published []*net.MX
@@ -60,10 +58,14 @@ func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 			wantMatch: []string{"antler1.example.test"},
 			wantExtra: []string{"old.example.test"},
 		},
+		{
+			name:      "nothing published is pending",
+			published: nil,
+			wantState: "pending",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := &dnsChecker{resolver: staticResolver{mx: tc.published}}
-			view := c.checkMX("example.test", expected)
+			view := CheckMX(context.Background(), staticResolver{mx: tc.published}, "example.test", expected)
 			if view.State != tc.wantState {
 				t.Fatalf("state = %q, want %q", view.State, tc.wantState)
 			}

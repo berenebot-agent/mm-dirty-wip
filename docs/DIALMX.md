@@ -318,44 +318,50 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
   (ready, rejected, connecting, …) with a bounded reason and expiry. A receiver
   is `ready` only once it has passed both gates, so a ready row already means
   mail will be delivered and no separate core MX check is needed.
-- `dns[]` — best-effort published-record checks: the domain's MX hostnames
-  against the expected receivers, and the `_mailmoose-mx` TXT record against the
-  domain's exact key. `state` is `ok`, `pending` (not published yet) or
-  `mismatch`. The MX check is `ok` as soon as any one expected receiver hostname
-  is published and lists those in `matched`; an operator who points MX at a
-  single receiver is not failed by the others in the advertised set. It is
-  `mismatch` only when MX records exist but none belongs to a receiver, and it
-  lists in `unexpected` any published hostname that is not one of our receivers.
-  The TXT check stays exact. These checks are the *local verification feed* for
-  the setup wizard's record table — they answer "has the record propagated yet?"
-  so the operator can watch a fix land — not an independent routing verdict,
-  which is the receiver's. The checks are returned only when the caller asks for
-  them with `?dns=1`, so the status page's self-reported read never runs a
-  resolver lookup.
+- `dns[]` — the watcher's shared published-record checks: the domain's MX
+  hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
+  against the domain's exact key. `state` is `ok`, `pending` (not published yet) or
+  `mismatch`. The MX check is `ok` as soon as any one expected receiver hostname is
+  published and lists those in `matched`; an operator who points MX at a single
+  receiver is not failed by the others in the advertised set. It is `mismatch` only
+  when MX records exist but none belongs to a receiver, and it lists in `unexpected`
+  any published hostname that is not one of our receivers. The TXT check stays
+  exact. These checks are the local verification feed for the setup wizard's record
+  table and the status view's fix prompts — they answer "has the record propagated
+  yet?" so the operator can watch a fix land — not an independent routing verdict,
+  which is the receiver's. They are read from the watcher's cache, not resolved on a
+  render.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup. It is
   omitted for a domain with no copy-ready records.
-- `unexpected_mx[]` — a top-level field (independent of `instructions` and of
-  `?dns=1`) listing published MX hostnames that are not Antler receivers. It is
-  the watcher's shared verdict, read by both the dashboard's amber light and the
-  status dialog's "additional MX servers" warning, so the two can never disagree.
+- `unexpected_mx[]` — a top-level field (independent of `instructions`) listing
+  published MX hostnames that are not Antler receivers. It is the watcher's shared
+  verdict (the MX check's `unexpected`), read by both the dashboard's amber light
+  and the status dialog's "additional MX servers" warning, so the two can never
+  disagree.
 
-The `dns[]` checks resolve DNS live on every `?dns=1` request, bounded by a
-four-second timeout, and never block a save for longer than that. A green light
-means the record matches; a green receiver light means it holds an active binding
-that passed both gates. The `unexpected_mx[]` verdict is not computed on a render
-at all — the watcher owns it (see below).
+The `dns[]` verdict is **one shared value owned by the watcher** (see below), read
+in memory by every render — the wizard, the status view and the dashboard light all
+show the same picture. A green light means the record matches; a green receiver
+light means it holds an active binding that passed both gates.
 
 The receiving dialog drives its receiver status from the shared SSE stream: it
 reconciles the instant a receiver's readiness changes (the transient
 `mx.health_changed` event). There is no **Check now** button and no counter — the
-receiver is the authority and reports itself; the published-record DNS table
-belongs to the setup wizard, which fetches it once on open and after a key
-rotation. The saved status view opens **complete**: the receiving form embeds the
-copy-ready DNS records and the shared extra-MX verdict alongside the connector and
-status sets, so its rejection fix prompts (publish this TXT record / this MX
-record) and its "additional MX servers" warning paint on open — the same picture
-the dashboard light was drawn from — rather than appearing only after the first
-refresh lands.
+receiver is the authority on its own readiness. The published-record verdict is the
+watcher's, pushed as `mx.dns_changed`. The saved status view opens **complete**: the
+receiving form embeds the copy-ready DNS records, the DNS checks and the extra-MX
+verdict alongside the connector and status sets, so its fix prompts (publish this
+TXT record / these MX records) and its "additional MX servers" warning paint on
+open — the same picture the dashboard light was drawn from — rather than appearing
+only after the first refresh lands.
+
+The fix prompts are driven by the **per-check DNS verdict**, not by the receiver's
+single reason. The receiver proves authority (gate 1) before routing (gate 2) and
+stops at the first failure, so a domain whose TXT *and* MX are both wrong reports
+only the TXT reason — yet the status view still shows **both** fixes, because the
+watcher checks both. Each receiver row shows its specific Antler reason (`not in
+MX`, `key unavailable`, `authentication failed`, `receiver unreachable`, …) inline
+next to its traffic light.
 
 The dashboard's Domains table shows one aggregate connector light per Dial MX
 domain: **green** when at least one receiver is `ready` and no rogue MX records
@@ -367,29 +373,30 @@ check; a receiver that is connected but not routed by MX reports `rejected`
 (`not_mx`) and is not green. The amber case exists because a rogue MX record
 changes with no receiver event.
 
-The "extra MX" verdict (the amber host list) is **one shared value owned by a
-background watcher**, not a per-render lookup. The watcher re-checks every Dial MX
-domain that has a ready receiver on a fixed 60-second interval, diffs the result
-against the last one it published, and — only when it changes — pushes a transient
-`mx.extra_mx_changed` event carrying the new host list to the domain's owning
-account. The dashboard light and an open status dialog both read that single
-verdict (the HTTP read is an in-memory lookup), so they can never disagree and
-neither runs DNS on a render. A dialog opened from an amber dashboard row shows
-the warning immediately, matching the light, and updates live when the watcher
-republishes.
+The published-record verdict — the `_mailmoose-mx` TXT check, the MX routing check
+and the extra-MX host list — is **one shared value owned by a background watcher**,
+not a per-render lookup. Every 60 seconds the watcher checks every Dial MX domain
+that has a receiver configured (ready or not), diffs the verdict against the last
+one it published, and — only when it changes — pushes a transient `mx.dns_changed`
+event carrying it to the domain's owning account. The dashboard light and an open
+status dialog both read that single verdict (the HTTP read is an in-memory lookup),
+so they can never disagree and neither runs DNS on a render. A dialog opened from a
+red or amber dashboard row shows the relevant fix prompt or warning immediately,
+matching the light, and updates live when the watcher republishes.
 
-The receiving dialog renders one light per receiver (Connector | Status) and,
-when something is unhealthy, an inline remediation block: the failing record to
-publish with a copy button, on the same screen, with the live check flipping it
-green once DNS propagates — no jump to a separate repair step. When the domain
-also publishes MX hostnames that are not Antler receivers, the dialog adds a
-separate warning listing those servers and suggesting their removal. Each
-receiver that is not routed shows red `not in MX`; in a redundant Antler set
-where MX names only some receivers, the unnamed ones show red while the aggregate
-stays green, because a ready sibling will accept mail. A receiver the core cannot
-reach reports no advertised hostname, so the status view keeps the configured
-`smtp_hostname` for it — the row names the receiver and shows the real failure
-instead of an indeterminate wait.
+The receiving dialog renders one light per receiver (Connector | Status), each
+labelled with its specific Antler reason, and — driven by the per-check DNS
+verdict — an inline remediation block for whichever checks are failing: the TXT
+record and/or the MX records to publish, each with a copy button, on the same
+screen, flipping green once the watcher sees the records land — no jump to a
+separate repair step. When the domain also publishes MX hostnames that are not
+Antler receivers, the dialog adds a separate warning listing those servers and
+suggesting their removal. In a redundant Antler set where MX names only some
+receivers, the unnamed ones show red while the aggregate stays green, because a
+ready sibling will accept mail. A receiver the core cannot reach reports no
+advertised hostname, so the status view keeps the configured `smtp_hostname` for it
+— the row names the receiver and shows the real failure instead of an indeterminate
+wait.
 
 ## 4. DNS authorisation flow
 

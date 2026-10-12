@@ -102,6 +102,11 @@ type dialMXSetupView struct {
 	// so the status view opens already showing its "additional MX servers" warning
 	// in step with the dashboard's amber light. It carries no secret.
 	UnexpectedJSON string
+	// DNSJSON is the watcher's shared published-record verdict (TXT + MX checks)
+	// embedded on the form, so the status view can show a domain's DNS problems
+	// per check on open — even when the receiver stopped at its first failing gate
+	// and reports only one reason.
+	DNSJSON string
 	// Light is the aggregate traffic light for the domain's receiving setup
 	// ("ok", "amber" or "danger"), and LightTitle its tooltip. It is green only
 	// when at least one receiver is both authorized and published in the domain's
@@ -242,6 +247,21 @@ func dialMXUnexpectedJSON(hosts []string) string {
 		return "[]"
 	}
 	b, err := json.Marshal(hosts)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// dialMXDNSJSON marshals the watcher's shared published-record checks to the
+// secret-free JSON embedded on the receiving form, so the status view opens
+// already showing a domain's DNS problems per check. The records are public
+// (they are what the operator publishes), so nothing secret is included.
+func dialMXDNSJSON(views []domainDNSView) string {
+	if len(views) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(views)
 	if err != nil {
 		return "[]"
 	}
@@ -1789,7 +1809,7 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
 .antler-record-table th:nth-child(6){width:14%!important}
 .antler-record-table button{padding:4px 8px;font-size:12px;white-space:normal}
 </style>
-<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}" data-antler-status="{{.StatusesJSON}}" data-antler-instructions="{{.InstructionsJSON}}" data-antler-unexpected="{{.UnexpectedJSON}}"{{end}}>
+<form id="domain-receiving-form-{{$d.ID}}" method="post" action="/ui/domains/{{$d.ID}}/receiving" class="cfg-form" autocomplete="off" data-antler-domain="{{$d.ID}}" data-antler-domain-name="{{$d.Name}}" data-antler-parent="{{$d.ParentDomain}}"{{with index $.DialMXSetup $d.ID}} data-antler-connectors="{{.ConnectorsJSON}}" data-antler-status="{{.StatusesJSON}}" data-antler-instructions="{{.InstructionsJSON}}" data-antler-unexpected="{{.UnexpectedJSON}}" data-antler-dns="{{.DNSJSON}}"{{end}}>
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <label>Provider</label>
 <select name="provider" class="provider-select"><option value="">Select a provider…</option>{{if $d.ParentDomainID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{$d.ParentDomain}})</option>{{else if index $.DomainParentCandidate $d.ID}}<option value="inherited"{{if eq $sel "inherited"}} selected{{end}}>Inherited (from {{index $.DomainParentCandidate $d.ID}})</option>{{end}}{{range index $.DomainReceivingEditors $d.ID}}<option value="{{.Provider}}"{{if eq .Provider $sel}} selected{{end}} data-next="{{if .Generated}}1{{end}}">{{if .SelectLabel}}{{.SelectLabel}}{{else}}{{.ProviderLabel}}{{end}}</option>{{end}}</select>
@@ -1945,16 +1965,18 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		if haveCfg {
 			view = s.dialMXLiveView(d.Name, credential.KeyID, decodePublicKey(credential.PublicKey), cfg)
 			setup.Service, setup.ContactEmail, setup.MX = view.Service, view.ContactEmail, view.MX
-			setup.Statuses, setup.DNS = view.Statuses, view.DNS
+			setup.Statuses = view.Statuses
 		} else {
 			setup.Statuses = s.dialMXStatuses(d.Name)
 		}
+		// The published-record checks and the extra-MX verdict are the watcher's
+		// shared values, so the dashboard light, the setup wizard and the status
+		// dialog all read one picture without a render-time lookup.
+		setup.DNS = s.dialMXDNS(d.ID)
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
 		setup.StatusesJSON = dialMXStatusesJSON(setup.Statuses)
-		// The aggregate light folds in the watcher's shared "extra MX" verdict so
-		// an amber light and the status dialog's warning always agree without a
-		// render-time lookup. It is only relevant for a domain with an active
-		// receiver (a red domain stays red).
+		// The aggregate light folds in the shared "extra MX" verdict. It is only
+		// relevant for a domain with an active receiver (a red domain stays red).
 		var unexpected []string
 		if haveCfg && anyReady(setup.Statuses) {
 			unexpected = s.dialMXExtraMX(d.ID)
@@ -1965,6 +1987,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		// waiting for the first fetch. The instructions carry only public records.
 		setup.InstructionsJSON = dialMXInstructionsJSON(view.instructionView())
 		setup.UnexpectedJSON = dialMXUnexpectedJSON(unexpected)
+		setup.DNSJSON = dialMXDNSJSON(setup.DNS)
 		dialMXSetup[d.ID] = setup
 	}
 	// A root domain may have had an ancestor added after it, so offer "Inherited

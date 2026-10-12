@@ -5369,6 +5369,8 @@ function hideInboxSubview(dlg) {
     try { initialInstructions = JSON.parse(form.dataset.antlerInstructions || 'null'); } catch (err) { initialInstructions = null; }
     var initialUnexpected = [];
     try { initialUnexpected = JSON.parse(form.dataset.antlerUnexpected || '[]') || []; } catch (err) { initialUnexpected = []; }
+    var initialDNS = [];
+    try { initialDNS = JSON.parse(form.dataset.antlerDns || '[]') || []; } catch (err) { initialDNS = []; }
     var providerLabel = provider.previousElementSibling;
     var serviceLabel = service.previousElementSibling;
     var danger = dlg.querySelector('.dialog-danger');
@@ -5464,9 +5466,20 @@ function hideInboxSubview(dlg) {
       if (isReady(status)) { return 'green'; }
       return ['connecting', 'deferred'].indexOf(status.state) !== -1 ? 'amber' : 'red';
     }
+    // receiverLabel renders the specific Antler reason next to the traffic light,
+    // not a generic word: the receiver's own verdict ("not in MX", "key
+    // unavailable", "authentication failed") is the most precise thing we know
+    // about that connector. The raw reason stays in the row's tooltip.
     function receiverLabel(status) {
       if (isReady(status)) { return 'Ready to receive'; }
-      if (status.reason === 'not_mx') { return 'Not in MX'; }
+      switch (status.reason) {
+        case 'not_mx': return 'Not in MX';
+        case 'key_unavailable': return 'Key unavailable';
+        case 'authentication_failed': return 'Authentication failed';
+        case 'dns_unavailable': return 'DNS unavailable';
+        case 'domain_limit': return 'Domain limit';
+        case 'domain_cooldown': return 'Waiting to retry';
+      }
       return {
         connecting: 'Authorizing',
         disconnected: 'Reconnecting',
@@ -5512,44 +5525,44 @@ function hideInboxSubview(dlg) {
       });
       return box;
     }
-    // remediationBlock builds the inline fix list for the failing receivers, or an
-    // empty node when nothing needs publishing. not_mx is a missing MX record;
-    // key_unavailable / authentication_failed are a missing or wrong TXT record.
-    function remediationBlock(data, instructions, mxName) {
-      var statuses = data.status || [];
-      var needTXT = statuses.some(function (s) { return s.reason === 'key_unavailable' || s.reason === 'authentication_failed'; });
-      // Only the receiver(s) that actually failed MX routing get a fix prompt:
-      // when one receiver is not_mx and another is fine, prompting to republish
-      // every MX record would be misleading. The failing receiver names its own
-      // hostname; its priority comes from the configured record when known.
-      var failedMX = [];
-      statuses.forEach(function (s) {
-        if (s.reason !== 'not_mx' || !s.smtp_hostname) { return; }
-        if (failedMX.some(function (e) { return e.hostname === s.smtp_hostname; })) { return; }
-        var priority = '';
-        (instructions.mx || []).forEach(function (mx) { if (mx.hostname === s.smtp_hostname) { priority = String(mx.priority); } });
-        failedMX.push({ hostname: s.smtp_hostname, priority: priority });
-      });
-      // If a not_mx receiver reported no hostname, fall back to the configured MX
-      // set rather than leaving the operator with no guidance.
-      if (!failedMX.length && statuses.some(function (s) { return s.reason === 'not_mx'; })) {
-        failedMX = (instructions.mx || []).map(function (mx) { return { hostname: mx.hostname, priority: String(mx.priority) }; });
-      }
+    // remediationBlock builds the inline fix list from the watcher's DNS verdict,
+    // or an empty node when both checks are ok. It is DNS-driven rather than keyed
+    // off the receiver's single reason: the receiver stops at its first failing
+    // gate, so a domain with a broken TXT and a broken MX would otherwise show only
+    // the TXT fix. Here each failing check gets its own prompt, so the operator
+    // sees every record to publish at once. The records themselves come from the
+    // copy-ready instructions.
+    function remediationBlock(dns, instructions, mxName) {
+      var byKind = {};
+      (dns || []).forEach(function (entry) { if (entry && entry.kind) { byKind[entry.kind] = entry; } });
+      var txt = byKind.txt, mx = byKind.mx;
       var block = document.createElement('div');
-      if (!needTXT && !failedMX.length) { return block; }
+      var needTXT = txt && txt.state !== 'ok';
+      var needMX = mx && mx.state !== 'ok';
+      if (!needTXT && !needMX) { return block; }
       block.className = 'antler-dns-remediation';
       if (needTXT && instructions.txt_value) {
-        block.appendChild(remediationLine('Domain not authorized — publish this TXT record:', [
+        var txtPrompt = txt.state === 'pending'
+          ? 'Domain not authorized — no TXT record is published yet. Publish this TXT record:'
+          : 'Domain not authorized — the published TXT record does not match this domain\x27s key. Publish this TXT record:';
+        block.appendChild(remediationLine(txtPrompt, [
           ['Record name', instructions.txt_name, true],
           ['Record value', instructions.txt_value, true]
         ]));
       }
-      failedMX.forEach(function (mx) {
-        var fields = [['Record name', mxName, true], ['Record type', 'MX', false]];
-        if (mx.priority) { fields.push(['Priority', mx.priority, true]); }
-        fields.push(['Record value', mx.hostname, true]);
-        block.appendChild(remediationLine(mx.hostname + ' is not listed as an MX receiver for this domain — publish this MX record:', fields));
-      });
+      if (needMX && (instructions.mx || []).length) {
+        var mxPrompt = mx.state === 'pending'
+          ? 'No MX records are published for this domain yet. Publish these MX records:'
+          : 'This domain\x27s MX records do not name an Antler receiver. Publish these MX records:';
+        var first = true;
+        (instructions.mx || []).forEach(function (record) {
+          var fields = [['Record name', mxName, true], ['Record type', 'MX', false]];
+          if (record.priority) { fields.push(['Priority', String(record.priority), true]); }
+          fields.push(['Record value', record.hostname, true]);
+          block.appendChild(remediationLine(first ? mxPrompt : record.hostname + ':', fields));
+          first = false;
+        });
+      }
       return block;
     }
     // unexpectedMXBlock warns that the domain's MX records name servers which are
@@ -5664,21 +5677,23 @@ function hideInboxSubview(dlg) {
       return table;
     }
     // renderStatusRecords paints the saved status view's record area from the
-    // status set, the copy-ready instructions and the extra-MX verdict. Both the
-    // on-open seed (renderSkeleton, from the embedded attributes) and the live
-    // render (from a fetch or an SSE push) go through it, so the dialog opens
-    // complete — rows, fix prompts and the extra-MX warning — and then reconciles
-    // on the same code path rather than flashing rows without their remediation.
-    function renderStatusRecords(statuses, instructions, unexpected, domainName, mxName) {
+    // status set, the copy-ready instructions, the DNS verdict and the extra-MX
+    // verdict. Both the on-open seed (renderSkeleton, from the embedded attributes)
+    // and the live render (from a fetch or an SSE push) go through it, so the
+    // dialog opens complete — rows, fix prompts and the extra-MX warning — and then
+    // reconciles on the same code path rather than flashing rows without their
+    // remediation.
+    function renderStatusRecords(statuses, instructions, dns, unexpected, domainName, mxName) {
       var records = wizard.querySelector('.antler-records');
       records.replaceChildren();
       records.appendChild(statusTable(connectors, statuses));
       records.appendChild(unexpectedMXBlock({ unexpected_mx: unexpected || [] }, domainName));
-      records.appendChild(remediationBlock({ status: statuses || [] }, instructions || {}, mxName));
+      records.appendChild(remediationBlock(dns || [], instructions || {}, mxName));
     }
     function renderSkeleton(connectors) {
       var instructions = initialInstructions || {};
-      renderStatusRecords(initialStatuses, instructions, initialUnexpected, form.dataset.antlerDomainName || '', form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@');
+      var mxName = form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@';
+      renderStatusRecords(initialStatuses, instructions, initialDNS, initialUnexpected, form.dataset.antlerDomainName || '', mxName);
     }
     // renderReceivers fills the wizard's own receivers step (used while setting
     // up, not the saved status view) from the live status set.
@@ -5716,9 +5731,10 @@ function hideInboxSubview(dlg) {
       // A connector the poll did not report keeps its "Pending" row.
       if (statusMode) {
         // The status view shares one paint path with the on-open seed, so rows,
-        // fix prompts and the extra-MX warning are always consistent. The extra-MX
-        // verdict prefers the freshest pushed value over the fetch's copy.
-        renderStatusRecords(data.status, instructions, extraMXFor(data), domainName, mxName);
+        // fix prompts and the extra-MX warning are always consistent. Both the DNS
+        // verdict and the extra-MX verdict prefer the freshest pushed value over
+        // the fetch's copy.
+        renderStatusRecords(data.status, instructions, dnsFor(data), extraMXFor(data), domainName, mxName);
         renderReceivers(data.status);
         update();
         return;
@@ -5776,7 +5792,7 @@ function hideInboxSubview(dlg) {
       // The receivers step of the new-setup wizard carries the same inline
       // remediation, so an operator completing setup can publish the MX record
       // they need without leaving the step.
-      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data, instructions, mxName));
+      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data.dns || [], instructions, mxName));
       update();
     }
     function update() {
@@ -5948,37 +5964,47 @@ function hideInboxSubview(dlg) {
     function onHealthChanged(event) {
       if (!active() || !dlg.open) { return; }
       var changed = '';
-      try { changed = (JSON.parse(event.data || '{}') || {}).domain_id || ''; } catch (err) { changed = ''; }
+      try { changed = ((JSON.parse(event.data || '{}') || {}).payload || {}).domain_id || ''; } catch (err) { changed = ''; }
       if (changed && form.dataset.antlerDomain && changed !== form.dataset.antlerDomain) { return; }
       refresh();
     }
-    // The extra-MX verdict is shared state owned by the server watcher and pushed
-    // over SSE. extraMXFor returns it for this dialog's domain, preferring the
-    // freshest pushed value, so the warning shows the moment the dialog opens
-    // (matching the dashboard light) instead of waiting for a dialog-local check.
+    // The DNS verdict is shared state owned by the server watcher and pushed over
+    // SSE. dnsFor returns it for this dialog's domain as an array of check views,
+    // preferring the freshest pushed value over the fetch's copy, so the fix
+    // prompts paint the moment the dialog opens.
+    function dnsFor(data) {
+      var id = form.dataset.antlerDomain || '';
+      var pushed = (window.mailmooseDNS || {})[id];
+      if (pushed && pushed.length) { return pushed; }
+      return (data && data.dns) || [];
+    }
+    // The extra-MX verdict is the MX check's unexpected hosts, also shared.
     function extraMXFor(data) {
       var id = form.dataset.antlerDomain || '';
       var shared = (window.mailmooseExtraMX || {})[id];
       if (shared && shared.length) { return shared; }
       return (data && data.unexpected_mx) || [];
     }
-    // refreshExtraMX applies a pushed verdict to the open dialog at once, through
-    // the same paint path as the seed and the fetch, so the record area never
-    // drifts.
-    function refreshExtraMX(domainID, extra) {
+    // refreshDNS applies a pushed verdict to the open dialog at once, through the
+    // same paint path as the seed and the fetch, so the record area never drifts.
+    function refreshDNS(domainID, dns) {
       if (!active() || !dlg.open || !statusMode) { return; }
       if (domainID && form.dataset.antlerDomain && domainID !== form.dataset.antlerDomain) { return; }
       if (!state) { return; }
-      state.unexpected_mx = extra || [];
+      var views = dns || [];
+      state.dns = views;
+      var mxCheck = views.filter(function (v) { return v && v.kind === 'mx'; })[0];
+      state.unexpected_mx = (mxCheck && mxCheck.unexpected) || [];
       renderStatusRecords(
         state.status,
         state.instructions || {},
-        extra || [],
+        views,
+        state.unexpected_mx,
         form.dataset.antlerDomainName || '',
         form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@'
       );
     }
-    window.mailmooseRefreshExtraMX = refreshExtraMX;
+    window.mailmooseRefreshDNS = refreshDNS;
     // Reuse the dashboard's single SSE connection (window.mailmooseEventsSource)
     // so the status dialog adds a listener rather than a second stream. The
     // live-update loop that owns that connection runs after this closure, so the
@@ -6748,6 +6774,19 @@ function hideInboxSubview(dlg) {
     dot.setAttribute('aria-label', title || '');
   }
 
+  // dnsViewsFromVerdict flattens the watcher's DNS verdict ({txt, mx}) into the
+  // array shape the status view renders, so a pushed event and a fetched response
+  // feed the same code.
+  function dnsViewsFromVerdict(v) {
+    if (!v) {
+      return [];
+    }
+    var out = [];
+    if (v.txt) { out.push(v.txt); }
+    if (v.mx) { out.push(v.mx); }
+    return out;
+  }
+
   // applyExtraMX folds a pushed extra-MX verdict into a dashboard row without a
   // re-fetch. A row that is green (a ready receiver) turns amber when rogue MX
   // records exist, titled with the offending hosts. When the extras clear, the
@@ -7121,20 +7160,25 @@ function hideInboxSubview(dlg) {
       wantLights = true;
       schedule();
     });
-    // The extra-MX watcher is the single owner of the "extra MX" verdict. Its
-    // event carries the new host list; apply it to the dashboard row and hand it
-    // to an open status dialog, so both agree without a re-fetch.
-    source.addEventListener('mx.extra_mx_changed', function (event) {
-      var payload = {};
-      try { payload = JSON.parse(event.data || '{}') || {}; } catch (err) { payload = {}; }
+    // The DNS watcher is the single owner of a domain's published-record verdict.
+    // Its event carries the new TXT/MX checks; apply them to the dashboard row and
+    // hand them to an open status dialog, so both agree without a re-fetch.
+    source.addEventListener('mx.dns_changed', function (event) {
+      var ev = {};
+      try { ev = JSON.parse(event.data || '{}') || {}; } catch (err) { ev = {}; }
+      var payload = ev.payload || {};
       var domainID = payload.domain_id || '';
       if (!domainID) { return; }
-      var extra = payload.unexpected_mx || [];
+      var views = dnsViewsFromVerdict(payload.dns);
+      window.mailmooseDNS = window.mailmooseDNS || {};
+      window.mailmooseDNS[domainID] = views;
+      var mxCheck = views.filter(function (v) { return v && v.kind === 'mx'; })[0];
+      var extra = (mxCheck && mxCheck.unexpected) || [];
       window.mailmooseExtraMX = window.mailmooseExtraMX || {};
       window.mailmooseExtraMX[domainID] = extra;
       var row = document.querySelector('tbody[data-domain-rows] tr[data-domain-id="' + domainID + '"]');
       if (row) { applyExtraMX(row, extra); }
-      if (window.mailmooseRefreshExtraMX) { window.mailmooseRefreshExtraMX(domainID, extra); }
+      if (window.mailmooseRefreshDNS) { window.mailmooseRefreshDNS(domainID, views); }
     });
     source.onerror = function () {
       if (source) {

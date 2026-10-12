@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
@@ -193,12 +192,11 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
 	}})
 	svc.DialMX = m
-	// The shared resolver the watcher checks with, and the HTTP resolver, are
-	// separate: the HTTP snapshot must never consult one.
-	httpRes := &switchableResolver{}
-	httpRes.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	// A counting resolver so the test can prove the HTTP snapshot never consults it.
+	res := &switchableResolver{}
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	watchDNS(svc, res)
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(httpRes)
 	h := srv.Handler()
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -223,19 +221,18 @@ func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
 	}
 
 	// Only the Antler receiver is published: green.
-	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test."}})
-	svc.ExtraMX.CheckOnce(ctx)
 	if got := light(); got != "ok" {
 		t.Fatalf("light with only the Antler receiver = %q, want ok", got)
 	}
 	// An extra MX record appears and the watcher republishes: amber.
-	svc.ExtraMX.SetExtraMXResolver(fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}}, nil)
 	svc.ExtraMX.CheckOnce(ctx)
 	if got := light(); got != "amber" {
 		t.Fatalf("light with an extra MX record = %q, want amber", got)
 	}
-	// The HTTP snapshot never ran a resolver lookup: the verdict is the watcher's.
-	if mxHits, txHits := httpRes.counts(); mxHits != 0 || txHits != 0 {
-		t.Fatalf("lights snapshot ran resolver lookups: mx=%d txt=%d", mxHits, txHits)
+	// The HTTP snapshot never ran a resolver lookup: the verdict is the watcher's,
+	// and the counters only moved on the two explicit watcher passes.
+	if mxHits, _ := res.counts(); mxHits != 2 {
+		t.Fatalf("lights snapshot ran resolver lookups: mx=%d, want 2 (watcher only)", mxHits)
 	}
 }

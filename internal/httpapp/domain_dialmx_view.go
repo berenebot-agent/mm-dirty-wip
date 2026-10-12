@@ -124,19 +124,13 @@ func (s *Server) dialMXLiveView(domainName, keyID string, publicKey []byte, cfg 
 	return view
 }
 
-// dialMXDNS runs the domain's published-record checks and returns them, resolved
-// fresh on every call. It is the expensive half of the setup picture and is
-// invoked only where the checks are actually rendered: the setup wizard (with
-// ?dns=1) and the dashboard light. The status page never calls it.
-func (s *Server) dialMXDNS(domainName, keyID string, publicKey []byte, view dialMXLiveView) []domainDNSView {
-	var dns []domainDNSView
-	if view.TXTValue != "" {
-		dns = append(dns, s.dns.checkTXT(domainName, keyID, publicKey, view.TXTValue))
-	}
-	if len(view.MX) > 0 {
-		dns = append(dns, s.dns.checkMX(domainName, view.MX))
-	}
-	return dns
+// dialMXDNS returns the domain's published-record checks from the watcher's
+// single shared verdict. It runs no resolver lookup of its own: the watcher
+// re-checks on a fixed interval and pushes changes over SSE, so the wizard, the
+// status view and the dashboard light all read the same in-memory value.
+func (s *Server) dialMXDNS(domainID string) []domainDNSView {
+	verdict, _ := s.Service.DNSState(domainID)
+	return dnsViewsFromVerdict(verdict)
 }
 
 // dialMXExtraMX returns a domain's "extra MX" verdict: the published MX

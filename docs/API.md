@@ -973,34 +973,33 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   advertised hostname, so the configured `smtp_hostname` (from the saved
   receiver snapshot) is returned instead; the status rows always name their
   connector.
-- `dns[]` — published-record checks, returned only when the request asks for them
-  with `?dns=1`: `kind` (`mx`/`txt`), `name`, `expected`, bounded `found`, bounded
-  `matched`, bounded `unexpected` (published MX hostnames that are not Antler
-  receivers), `state` (`ok`, `pending`, `mismatch`) and a short `reason`. Checks
-  resolve DNS live on each `?dns=1` request (bounded by a four-second timeout);
-  nothing is cached in the core, so a record change is reflected on the next read.
-  A resolver failure is reported as a check state, never an API error. A plain
-  read (no `?dns=1`) omits `dns[]` and runs no resolver lookup, so the status
-  page's self-reported `status[]` read stays cheap. For an MX check `matched`
-  lists the expected receiver hostnames actually published; the check is `ok` once
-  at least one expected hostname is published (the receiver set is redundancy),
-  and `mismatch` only when MX records exist but none belongs to a receiver. The
-  TXT check remains exact. These checks are the local "has the record propagated
-  yet?" feed behind the setup wizard's record table; the extra-MX verdict itself
-  is surfaced separately as the top-level `unexpected_mx[]` (see below), and
-  routing is the receiver's `status[]` verdict, not a second core-side decision.
+- `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
+  `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
+  (published MX hostnames that are not Antler receivers), `state` (`ok`, `pending`,
+  `mismatch`) and a short `reason`. The checks are computed by a background watcher
+  (bounded by a four-second timeout per lookup), so every read is an in-memory
+  lookup and runs no DNS; a verdict change is pushed as the transient
+  `mx.dns_changed` event. A resolver failure is reported as a check state, never an
+  API error. For an MX check `matched` lists the expected receiver hostnames
+  actually published; the check is `ok` once at least one expected hostname is
+  published (the receiver set is redundancy), and `mismatch` only when MX records
+  exist but none belongs to a receiver. The TXT check remains exact. These checks
+  are the local "has the record propagated yet?" feed behind the setup wizard's
+  record table and the status view's fix prompts; the extra-MX verdict itself is
+  surfaced separately as the top-level `unexpected_mx[]` (see below), and routing is
+  the receiver's `status[]` verdict, not a second core-side decision.
 - `instructions` — for Antler MX, the copy-ready `txt_name`/`txt_value` and the
   `mx[]` list (`hostname`, `priority`) to publish, plus the contact email; for a
   custom service, the TXT record only. It is omitted entirely for a domain with
   no copy-ready records.
 - `unexpected_mx[]` — published MX hostnames that are not one of the domain's
   configured Antler receivers. It is a **top-level** field, independent of
-  `instructions` and of `?dns=1`, and is the shared verdict behind both the
-  dashboard's amber light and the status dialog's "additional MX servers" warning,
-  so the two surfaces cannot disagree. It is owned by a background watcher that
-  re-checks on a fixed interval and pushes changes as the transient
-  `mx.extra_mx_changed` event, so the HTTP read is an in-memory lookup and runs no
-  DNS. Empty when no rogue records exist.
+  `instructions`, and is the shared verdict behind both the dashboard's amber light
+  and the status dialog's "additional MX servers" warning, so the two surfaces
+  cannot disagree. It is the `unexpected` list of the `mx` check in `dns[]`, owned
+  by the same background watcher (which pushes changes as the transient
+  `mx.dns_changed` event), so the HTTP read is an in-memory lookup and runs no DNS.
+  Empty when no rogue records exist.
 
 Generated secrets (`cloudflare.webhook_secret`) are created only when missing,
 preserved by a normal same-provider save, and replaced only by an explicit

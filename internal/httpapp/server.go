@@ -94,9 +94,6 @@ type Server struct {
 	// webauthnLoginLimiter bounds passkey login attempts per source address,
 	// separate from the password limiter so one cannot exhaust the other.
 	webauthnLoginLimiter *limiter
-	// dns performs the live published-record checks behind the Dial MX setup
-	// traffic lights. It is never on a save path and never fails a request.
-	dns *dnsChecker
 	// remoteMailboxSvc is the shared remote-mailbox surface the HTTP layer
 	// dispatches a standalone inbox's operations to. It is built lazily over
 	// the app Service on first use, or installed by cmd/server / a test.
@@ -135,8 +132,7 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		inboundSem:           make(chan struct{}, conc),
 		streamLimiter:        newConcurrentLimiter(maxConcurrentLongLived),
 		waitLimiter:          newConcurrentLimiter(maxConcurrentLongLived),
-		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		dns:                  newDNSChecker()}
+		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute)}
 	if rpID := svc.Config.WebAuthnRPID(); rpID != "" {
 		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
 			RPDisplayName: "MailMoose",

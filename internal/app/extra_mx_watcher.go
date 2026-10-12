@@ -2,79 +2,80 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"net"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// extraMXResolver is the small resolver surface the extra-MX check needs.
-// *net.Resolver satisfies it; tests substitute a deterministic implementation.
-type extraMXResolver interface {
-	LookupMX(ctx context.Context, name string) ([]*net.MX, error)
-}
-
-const (
-	// extraMXCheckTimeout bounds a single domain's MX lookup so a slow resolver
-	// cannot stall the watcher tick.
-	extraMXCheckTimeout = 4 * time.Second
-	// extraMXMaxHosts caps the published hostnames reported per domain.
-	extraMXMaxHosts = 4
-)
-
-// ExtraMXWatcher is the single owner of every Dial MX domain's "extra MX"
-// verdict: the published MX hostnames that are not one of the domain's
-// configured Antler receivers. It re-checks each domain with a ready receiver on
-// a fixed interval, diffs the result against the last one it published, and
-// publishes a transient mx.extra_mx_changed event only when the set changes. The
-// dashboard light and the status dialog both read the same verdict, so they can
-// never disagree, and neither runs its own DNS lookup on a render.
+// ExtraMXWatcher is the single owner of every Dial MX domain's published-record
+// verdict: the `_mailmoose-mx` TXT check and the MX routing check (including the
+// "extra MX" hosts that are not one of the domain's Antler receivers). It
+// re-checks each Dial MX domain on a fixed interval, diffs the result against the
+// last one it published, and publishes a transient mx.dns_changed event only when
+// it changes. The dashboard light and the status dialog both read the same
+// verdict, so they can never disagree, and neither runs a DNS lookup on a render.
+//
+// It checks a domain whenever it has at least one receiver configured (ready or
+// not): a ready receiver needs the extra-MX verdict for the amber warning, and a
+// non-ready receiver needs the TXT/MX checks to explain *why* it is red — the
+// receiver's own single reason cannot, because it stops at the first failing gate.
 type ExtraMXWatcher struct {
 	svc      *Service
-	resolver extraMXResolver
+	resolver DNSResolver
 
 	mu       sync.Mutex
-	last     map[string][]string // domainID -> last published verdict
-	resolved map[string]bool     // domainID -> whether last is populated
+	last     map[string]DNSVerdict // domainID -> last published verdict
+	resolved map[string]bool       // domainID -> whether last is populated
 }
 
-// ExtraMXState returns the last verdict the watcher published for a domain, and
-// whether the watcher has ever resolved one. A domain with no entry (never
-// checked, or not Dial MX) reads as an empty verdict. It is the read side the
-// HTTP layer uses so both the light and the dialog surface agree.
-func (s *Service) ExtraMXState(domainID string) ([]string, bool) {
+// DNSState returns the last verdict the watcher published for a domain, and
+// whether it has ever resolved one. It is the read side the HTTP layer uses so
+// both the light and the dialog surface agree.
+func (s *Service) DNSState(domainID string) (DNSVerdict, bool) {
 	if s.ExtraMX == nil {
-		return nil, false
+		return DNSVerdict{}, false
 	}
 	s.ExtraMX.mu.Lock()
 	defer s.ExtraMX.mu.Unlock()
 	if !s.ExtraMX.resolved[domainID] {
-		return nil, false
+		return DNSVerdict{}, false
 	}
-	return append([]string(nil), s.ExtraMX.last[domainID]...), true
+	return s.ExtraMX.last[domainID], true
+}
+
+// ExtraMXState returns just the unexpected-MX host list from the shared verdict:
+// published MX hostnames that are not one of the domain's Antler receivers. It is
+// the projection the dashboard light turns amber on.
+func (s *Service) ExtraMXState(domainID string) ([]string, bool) {
+	v, ok := s.DNSState(domainID)
+	if !ok || v.MX == nil {
+		return nil, ok
+	}
+	return append([]string(nil), v.MX.Unexpected...), true
 }
 
 // NewExtraMXWatcher builds the watcher. A nil resolver defaults to the system
-// resolver; tests inject a deterministic one via SetExtraMXResolver.
-func NewExtraMXWatcher(svc *Service, resolver extraMXResolver) *ExtraMXWatcher {
+// resolver; tests inject a deterministic one via SetDNSResolver.
+func NewExtraMXWatcher(svc *Service, resolver DNSResolver) *ExtraMXWatcher {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
 	return &ExtraMXWatcher{
 		svc:      svc,
 		resolver: resolver,
-		last:     map[string][]string{},
+		last:     map[string]DNSVerdict{},
 		resolved: map[string]bool{},
 	}
 }
 
-// SetExtraMXResolver replaces the resolver the check uses. It exists for tests;
+// SetDNSResolver replaces the resolver the checks use. It exists for tests;
 // production always uses the system resolver.
-func (w *ExtraMXWatcher) SetExtraMXResolver(r extraMXResolver) {
+func (w *ExtraMXWatcher) SetDNSResolver(r DNSResolver) {
 	if r == nil {
 		return
 	}
@@ -83,10 +84,14 @@ func (w *ExtraMXWatcher) SetExtraMXResolver(r extraMXResolver) {
 	w.mu.Unlock()
 }
 
-// Run re-checks every Dial MX domain's MX records on a fixed interval until ctx
-// is cancelled. It runs one pass immediately so a light is correct on startup.
-// The pass is bounded: each domain gets one resolver lookup with its own timeout,
-// and a domain with no ready receiver is skipped (a red domain cannot be amber).
+func (w *ExtraMXWatcher) currentResolver() DNSResolver {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.resolver
+}
+
+// Run re-checks every Dial MX domain on a fixed interval until ctx is cancelled.
+// It runs one pass immediately so a light is correct on startup.
 func (w *ExtraMXWatcher) Run(ctx context.Context, every time.Duration) {
 	if every <= 0 {
 		every = time.Minute
@@ -109,139 +114,115 @@ func (w *ExtraMXWatcher) CheckOnce(ctx context.Context) { w.checkAll(ctx) }
 
 // checkAll evaluates every Dial MX domain and publishes changes.
 func (w *ExtraMXWatcher) checkAll(ctx context.Context) {
-	if w.svc.DialMX == nil {
-		return
-	}
 	domains, err := w.svc.Store.ListDialMXDomains(ctx)
 	if err != nil {
 		return
 	}
-	// Only domains with a live, unexpired ready receiver are candidates: a
-	// receiver reports ready only after proving both authority and routing, so a
-	// red domain cannot be amber-on-extra-MX and needs no lookup.
-	ready := map[string]bool{}
+	seen := map[string]bool{}
 	for _, d := range domains {
-		if !anyReadyStatus(w.svc.DialMX.Status(d.Name), time.Now()) {
+		seen[d.ID] = true
+		verdict, ok := w.verdictForDomain(ctx, d.AccountID, d.ID, d.Name)
+		if !ok {
 			continue
 		}
-		ready[d.ID] = true
+		w.setVerdict(d.ID, d.AccountID, verdict)
 	}
-	for _, d := range domains {
-		if !ready[d.ID] {
-			// A domain that is no longer eligible drops any stale verdict so the
-			// light cannot stay amber from an old record set.
-			w.setVerdict(d.ID, "", nil)
-			continue
+	// A domain that is no longer Dial MX drops its stale verdict so the light
+	// cannot stay amber or red from an old record set.
+	w.mu.Lock()
+	var stale []string
+	for id := range w.resolved {
+		if !seen[id] {
+			stale = append(stale, id)
 		}
-		hosts := w.extraMXForDomain(ctx, d.AccountID, d.ID, d.Name)
-		w.setVerdict(d.ID, d.AccountID, hosts)
+	}
+	w.mu.Unlock()
+	for _, id := range stale {
+		w.setVerdict(id, "", DNSVerdict{})
 	}
 }
 
-// extraMXForDomain resolves a domain's configured Antler receivers and returns
-// the published MX hostnames that are not among them. A missing config or
-// credential, or a resolver failure, yields no verdict (not an error).
-func (w *ExtraMXWatcher) extraMXForDomain(ctx context.Context, accountID, domainID, domainName string) []string {
-	cfg, err := w.svc.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
+// verdictForDomain resolves a domain's config and credential and computes the TXT
+// and MX checks. ok is false when the domain has no resolvable config or
+// credential (nothing to check).
+func (w *ExtraMXWatcher) verdictForDomain(ctx context.Context, accountID, domainID, domainName string) (DNSVerdict, bool) {
+	cfg, err := w.svc.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, mxdial.Provider)
 	if err != nil {
-		return nil
+		return DNSVerdict{}, false
 	}
 	values, err := w.svc.DecryptDomainReceivingConfig(cfg)
 	if err != nil {
-		return nil
+		return DNSVerdict{}, false
 	}
+	resolver := w.currentResolver()
+	var verdict DNSVerdict
+
+	// The TXT check needs the domain's exact key. A missing credential means the
+	// domain has never minted one; skip rather than report a spurious mismatch.
+	cred, err := w.svc.Store.GetDialMXCredential(ctx, accountID, domainID)
+	if err == nil {
+		pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+		if len(pub) > 0 {
+			expectedValue := mxwire.DomainTXT(cred.KeyID, pub)
+			txt := CheckTXT(ctx, resolver, domainName, cred.KeyID, pub, expectedValue)
+			verdict.TXT = &txt
+		}
+	}
+
+	// The MX check applies only to an Antler setup with configured receivers; a
+	// custom-service domain leaves the MX hostnames to its own operator.
 	receivers := AntlerReceiversFromConfig(values)
 	expected := make([]string, 0, len(receivers))
 	for _, r := range receivers {
-		expected = append(expected, r.SMTPHostname)
-	}
-	if len(expected) == 0 {
-		return nil
-	}
-	return w.unexpectedMXLoop(ctx, domainName, expected)
-}
-
-// unexpectedMXLoop performs the bounded MX lookup and returns the published
-// hostnames not in expected (lower-cased, trailing dot trimmed). A resolver
-// error yields no verdict.
-func (w *ExtraMXWatcher) unexpectedMXLoop(ctx context.Context, domain string, expected []string) []string {
-	w.mu.Lock()
-	resolver := w.resolver
-	w.mu.Unlock()
-	lctx, cancel := context.WithTimeout(ctx, extraMXCheckTimeout)
-	defer cancel()
-	records, err := resolver.LookupMX(lctx, domain)
-	if err != nil || len(records) == 0 {
-		return nil
-	}
-	known := map[string]bool{}
-	for _, want := range expected {
-		known[strings.ToLower(strings.TrimSuffix(want, "."))] = true
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, mx := range records {
-		host := strings.TrimSuffix(strings.ToLower(mx.Host), ".")
-		if known[host] || seen[host] {
-			continue
+		if r.SMTPHostname != "" {
+			expected = append(expected, r.SMTPHostname)
 		}
-		seen[host] = true
-		out = append(out, host)
 	}
-	sort.Strings(out)
-	if len(out) > extraMXMaxHosts {
-		out = out[:extraMXMaxHosts]
+	if len(expected) > 0 {
+		mx := CheckMX(ctx, resolver, domainName, expected)
+		verdict.MX = &mx
 	}
-	return out
+	if verdict.TXT == nil && verdict.MX == nil {
+		return DNSVerdict{}, false
+	}
+	return verdict, true
 }
 
 // setVerdict stores a domain's verdict and, when it changed, publishes the
 // transient event to the owning account. An empty accountID clears the record
 // without publishing (the domain left the Dial MX set).
-func (w *ExtraMXWatcher) setVerdict(domainID, accountID string, hosts []string) {
+func (w *ExtraMXWatcher) setVerdict(domainID, accountID string, verdict DNSVerdict) {
 	w.mu.Lock()
 	prev, had := w.last[domainID]
-	changed := !had || !equalStrings(prev, hosts)
-	w.last[domainID] = append([]string(nil), hosts...)
+	changed := !had || !prev.Equal(verdict)
+	w.last[domainID] = verdict
 	w.resolved[domainID] = true
 	w.mu.Unlock()
-	// Publish only on a real change. The first time a domain is seen with an
-	// empty verdict there is nothing to announce; only a non-empty first verdict
-	// (a domain that was already amber) warrants an event.
+	// Publish only on a real change. The first verdict for a domain that is clean
+	// (nothing published to fix) has nothing to announce; only a first verdict
+	// that already flags a problem warrants an event.
 	if !changed || accountID == "" {
 		return
 	}
-	if !had && len(hosts) == 0 {
+	if !had && verdictClean(verdict) {
 		return
 	}
 	w.svc.Hub.Publish(model.Event{
-		Type:      model.EventMXExtraMXChanged,
+		Type:      model.EventMXDNSChanged,
 		AccountID: accountID,
 		Transient: true,
 		Payload: map[string]any{
-			"domain_id":     domainID,
-			"unexpected_mx": hosts,
+			"domain_id": domainID,
+			"dns":       verdict,
 		},
 	})
 }
 
-// anyReadyStatus mirrors the aggregate light's readiness test: at least one
-// unexpired ready receiver row.
-func anyReadyStatus(statuses []mxdial.Status, now time.Time) bool {
-	for _, st := range statuses {
-		if st.State == mxdial.StatusActive && (st.ExpiresAt.IsZero() || st.ExpiresAt.After(now)) {
-			return true
-		}
-	}
-	return false
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
+// verdictClean reports whether a verdict flags no problem (both checks ok or
+// absent), i.e. nothing the operator needs to be told about.
+func verdictClean(v DNSVerdict) bool {
+	for _, r := range []*DNSRecordView{v.TXT, v.MX} {
+		if r != nil && r.State != "ok" {
 			return false
 		}
 	}

@@ -3625,62 +3625,63 @@ Incremental history catch-up and new-mail detection are unaffected.
 getter/setter. `List` already accepts a Gmail query string, so no transport
 change is needed. No new dependency or service. See `docs/ONE.md`.
 
-## D107 — Dial MX status is SSE-driven and DNS-free; DNS checks move to the setup wizard; the aggregate light warns on extra MX records
+## D107 — Dial MX published-record checks are one watcher-owned verdict, pushed over SSE
 
 **Date:** 2026-10-12. **Approved by:** Ben.
 
 **Requirement:** The saved Antler MX status dialog polled its setup GET every
 10 seconds with a **Check now** button and a countdown, and every poll ran the
 bounded published-record (`checkMX`/`checkTXT`) resolver lookups — even though
-the status page renders only the receivers' self-reported `status[]` and never
-reads `dns[]`. The DNS work was wasted on the status path, and the counter/button
-duplicated a live signal the receivers already push. Separately, a domain with a
-ready Antler receiver could still publish MX records pointing elsewhere (a
-leftover Google Workspace record, an auto-added backup MX, a `*` wildcard
-inherited by a subdomain) with nothing surfacing that mail might not route via
-Antler.
+the status page rendered only the receivers' self-reported `status[]`. Separately,
+a domain with a ready Antler receiver could still publish MX records pointing
+elsewhere (a leftover Google Workspace record, an auto-added backup MX, a `*`
+wildcard inherited by a subdomain) with nothing surfacing that mail might not route
+via Antler; and a domain whose TXT *and* MX were both wrong showed only the TXT
+prompt, because the receiver stops at its first failing gate and reports a single
+reason.
 
 **Decision:** (1) The status dialog is driven by the existing transient
 `mx.health_changed` SSE event and reconciles the instant a receiver's readiness
 changes; the **Check now** button and countdown are removed. (2) The
-published-record checks are a **setup-wizard-only** concern: `dialMXLiveView` no
-longer runs them; a new `dialMXDNS` runs on the setup GET only when the caller
-passes `?dns=1` (the wizard). A plain status read returns no `dns[]` and runs zero
-resolver lookups. (3) The aggregate dashboard light gains a third **amber** state:
-green when at least one receiver is ready and no unexpected MX records are
-published; amber when at least one receiver is ready but the domain publishes MX
-hostnames that are not Antler receivers; red otherwise. Individual receivers stay
-green when ready. (4) The extra-MX verdict is **one shared value owned by a
-background watcher**, not a per-render lookup: `app.ExtraMXWatcher` re-checks every
-Dial MX domain with a ready receiver on a fixed 60-second interval, diffs the
-result against the last one published, and — only on change — pushes a transient
-`mx.extra_mx_changed` event carrying the new host list to the owning account. The
-dashboard light and an open status dialog both read that single verdict (`GET
-.../receiving` returns it as the top-level `unexpected_mx`; the HTTP read is an
-in-memory lookup), so they can never disagree and neither runs DNS on a render. A
-dialog opened from an amber dashboard row shows the warning immediately, matching
-the light, and updates live when the watcher republishes.
+published-record checks (the `_mailmoose-mx` TXT check and the MX routing check) are
+**one shared value owned by a background watcher**, not a per-render lookup:
+`app.ExtraMXWatcher` checks every Dial MX domain that has a receiver configured
+(ready or not) on a fixed 60-second interval, diffs the verdict against the last one
+published, and — only on change — pushes a transient `mx.dns_changed` event
+carrying the full verdict to the owning account. The checks themselves live in
+`internal/app` (moved from `httpapp`) so one implementation serves the watcher and
+the wizard. (3) The receiving response returns `dns[]` (the TXT/MX checks) and the
+top-level `unexpected_mx[]` from the watcher's cache for every read; nothing
+resolves DNS on a render. (4) The aggregate dashboard light keeps green/amber/red:
+green when at least one receiver is ready and no rogue MX records are published;
+amber when at least one receiver is ready but the domain publishes MX hostnames that
+are not Antler receivers; red otherwise. (5) The status view's fix prompts are
+driven by the **per-check DNS verdict**, not the receiver's single reason, so a
+domain with both TXT and MX wrong shows **both** prompts; each receiver row shows
+its specific Antler reason (`not in MX`, `key unavailable`, `authentication
+failed`, `receiver unreachable`, …) inline next to its light. The form embeds the
+DNS verdict, the copy-ready records and the extra-MX list so the dialog opens
+complete and updates live.
 
-**Reason:** The receiver is the single authority on routing (D095); the status
-page should read its self-report, not re-derive DNS. Moving the checks off the
-status path removes a resolver lookup from a hot poll and lets SSE carry the live
-signal. The extra-MX warning is deliberately amber, not red: a ready receiver
-still accepts mail, but a foreign MX record means routing is ambiguous, which is
-the one routing question the receiver's own verdict cannot answer (it only knows
-its *own* hostname is present, not that others are absent). A rogue record emits no
-receiver event, so it is the one signal SSE cannot synthesise from receiver
-status; a single background watcher that owns the verdict and pushes changes is
-what keeps the two surfaces in sync without either computing it.
+**Reason:** The receiver is the single authority on its own readiness (D095); the
+core should not re-derive routing per render. Moving the checks to one background
+watcher removes resolver work from every render, lets SSE carry the live signal, and
+gives a single source of truth the dashboard light and the status dialog share. The
+extra-MX warning is deliberately amber, not red: a ready receiver still accepts
+mail, but a foreign MX record means routing is ambiguous, which the receiver's own
+verdict cannot answer (it only knows its *own* hostname is present, not that others
+are absent). Driving the fix prompts from the per-check DNS verdict is what surfaces
+both a broken TXT and a broken MX at once, which the receiver's gate-ordered single
+reason cannot.
 
-**Complexity:** No new dependency, service, table or migration. `checkMX` gains an
-`Unexpected` list used by the wizard; a new `internal/app` watcher
-(`ExtraMXWatcher`, reusing the store, the Dial MX manager status and the Antler
-receiver snapshot) owns the verdict and publishes `mx.extra_mx_changed`;
-`dialMXHealth` takes the verdict; `domainInboundLight` and the dashboard render
-read it via `Service.ExtraMXState` (no DNS); the receiving response exposes it as
-a top-level `unexpected_mx` (independent of `instructions` and of `?dns=1`); the
-dialog's JS reads the shared value and updates live on the event. See
-`docs/DIALMX.md`.
+**Complexity:** No new dependency, service, table or migration. The check logic
+moves to `internal/app` (one resolver-bounded implementation); a new
+`internal/app` watcher (`ExtraMXWatcher`, reusing the store, the Dial MX manager
+status and the Antler receiver snapshot) owns the verdict and publishes
+`mx.dns_changed`; `dialMXHealth` takes the verdict; `domainInboundLight` and the
+dashboard render read it via `Service.DNSState`/`ExtraMXState` (no DNS); the
+receiving response exposes `dns[]` and `unexpected_mx`; the dialog's JS renders the
+per-check prompts and updates live on the event. See `docs/DIALMX.md`.
 
 ## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
 

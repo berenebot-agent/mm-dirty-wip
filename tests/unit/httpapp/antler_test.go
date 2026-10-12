@@ -17,17 +17,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
 
-// fixedMXResolver serves a deterministic MX set to the extra-MX watcher.
-type fixedMXResolver struct{ hosts []string }
-
-func (f fixedMXResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
-	out := make([]*net.MX, 0, len(f.hosts))
-	for _, h := range f.hosts {
-		out = append(out, &net.MX{Host: h, Pref: 10})
-	}
-	return out, nil
-}
-
 // fixedAntler is a deterministic Antler endpoint resolver for HTTP tests.
 type fixedAntler struct{ receivers []mxdial.AntlerReceiver }
 
@@ -35,7 +24,7 @@ func (f fixedAntler) Receivers(context.Context) ([]mxdial.AntlerReceiver, error)
 	return f.receivers, nil
 }
 
-// fakeResolver serves deterministic MX/TXT answers for the traffic-light tests.
+// fakeResolver serves deterministic MX/TXT answers to the watcher.
 type fakeResolver struct {
 	mx   []*net.MX
 	mxE  error
@@ -49,7 +38,7 @@ func (f fakeResolver) LookupTXT(context.Context, string) ([]string, error) {
 }
 
 // switchableResolver returns the current answers and counts lookups, so a test
-// can prove each request resolves DNS afresh with no core-side cache.
+// can prove the watcher re-resolves on each pass while the HTTP layer does not.
 type switchableResolver struct {
 	mu     sync.Mutex
 	mx     []*net.MX
@@ -84,21 +73,28 @@ func (s *switchableResolver) LookupTXT(context.Context, string) ([]string, error
 	return s.txt, nil
 }
 
-// waitForDNS returns the receiving-status body. The published-record checks now
-// resolve synchronously on every request, so one call has a settled result.
-func waitForDNS(t *testing.T, do func() *httptest.ResponseRecorder) map[string]any {
+// watchDNS installs the shared DNS watcher and runs one pass, so the receiving
+// API and dashboard render read a settled verdict.
+func watchDNS(svc *app.Service, res app.DNSResolver) {
+	svc.ExtraMX = app.NewExtraMXWatcher(svc, res)
+	svc.ExtraMX.CheckOnce(context.Background())
+}
+
+// dnsLights returns the kind→state map from a receiving response body.
+func dnsLights(t *testing.T, body map[string]any) map[string]string {
 	t.Helper()
-	rr := do()
-	var body map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
+	out := map[string]string{}
+	for _, raw := range body["dns"].([]any) {
+		v := raw.(map[string]any)
+		out[v["kind"].(string)] = v["state"].(string)
 	}
-	return body
+	return out
 }
 
 // TestDialMXAntlerReceivingAPITrafficLights proves the receiving API returns the
-// Antler instructions, live receiver status and published-record checks, with a
-// green light for matching MX and TXT records and a red one for a mismatch.
+// Antler instructions, live receiver status and the watcher's published-record
+// checks, with a green verdict for matching MX and TXT records and a red one for a
+// mismatch.
 func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -118,26 +114,30 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
 	txtValue := mxwire.DomainTXT(cred.KeyID, pub)
 
-	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(fakeResolver{
+	watchDNS(svc, fakeResolver{
 		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "antler2.example.test.", Pref: 20}},
 		txt: []string{txtValue},
 	})
+	srv := httpapp.New(svc, nil)
 	h := srv.Handler()
 
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
-	do := func() *httptest.ResponseRecorder {
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
+	do := func() map[string]any {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
-		return rr
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body
 	}
-	body := waitForDNS(t, do)
+	body := do()
 	statuses, _ := body["status"].([]any)
 	if len(statuses) != 2 {
 		t.Fatalf("must show both receivers before their first connection: %v", body["status"])
@@ -164,12 +164,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 		t.Fatalf("unexpected TXT name: %v", instr["txt_name"])
 	}
 
-	dns, _ := body["dns"].([]any)
-	lights := map[string]string{}
-	for _, raw := range dns {
-		v := raw.(map[string]any)
-		lights[v["kind"].(string)] = v["state"].(string)
-	}
+	lights := dnsLights(t, body)
 	if lights["mx"] != "ok" || lights["txt"] != "ok" {
 		t.Fatalf("expected green MX and TXT lights, got %v", lights)
 	}
@@ -178,15 +173,13 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	if _, err := svc.RotateDialMXCredential(ctx, u.AccountID, domain.ID); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	srv.SetDNSResolver(fakeResolver{
+	watchDNS(svc, fakeResolver{
 		mx:  []*net.MX{{Host: "elsewhere.example.test.", Pref: 10}},
 		txt: []string{"v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub)},
 	})
-	body = waitForDNS(t, do)
-	for _, raw := range body["dns"].([]any) {
-		v := raw.(map[string]any)
-		if v["state"] != "mismatch" {
-			t.Fatalf("%s light = %v, want mismatch", v["kind"], v["state"])
+	for kind, state := range dnsLights(t, do()) {
+		if state != "mismatch" {
+			t.Fatalf("%s light = %v, want mismatch", kind, state)
 		}
 	}
 
@@ -200,9 +193,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 	// The status view draws its connector table from the set embedded on the
 	// form, so the rendered attributes must exist and name a connector hostname
-	// (html/template escapes them for attribute context). The live per-receiver
-	// statuses are embedded too, so the dialog opens already matching the
-	// dashboard light rather than flashing "Pending".
+	// (html/template escapes them for attribute context).
 	for _, attr := range []string{`data-antler-connectors=`, `data-antler-status=`} {
 		i := strings.Index(page.Body.String(), attr)
 		if i < 0 {
@@ -218,10 +209,10 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 	}
 }
 
-// TestDialMXAntlerDNSChecksAreNotCached proves the published-record checks are
-// live: each request re-resolves DNS, so a TXT record changed between two reads
-// is reflected immediately rather than served from a TTL cache.
-func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
+// TestDialMXWatcherRefreshesVerdict proves the shared verdict is the watcher's:
+// each pass re-resolves DNS, so a record changed between two passes is reflected
+// in the receiving API rather than served from a stale cache.
+func TestDialMXWatcherRefreshesVerdict(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -241,14 +232,15 @@ func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
 
 	res := &switchableResolver{}
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{txtValue})
+	watchDNS(svc, res)
+
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(res)
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
+	path := "/v1/admin/domains/" + domain.ID + "/receiving"
 	do := func() map[string]any {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -260,37 +252,25 @@ func TestDialMXAntlerDNSChecksAreNotCached(t *testing.T) {
 		}
 		return body
 	}
-	txtState := func(body map[string]any) string {
-		for _, raw := range body["dns"].([]any) {
-			v := raw.(map[string]any)
-			if v["kind"] == "txt" {
-				return v["state"].(string)
-			}
-		}
-		return ""
-	}
 
-	if got := txtState(do()); got != "ok" {
+	if got := dnsLights(t, do())["txt"]; got != "ok" {
 		t.Fatalf("first TXT light = %q, want ok", got)
 	}
-	// The record changes to a key that no longer matches the domain's exact key.
+	// The record changes to a key that no longer matches the domain's exact key;
+	// the next watcher pass republishes the verdict.
 	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{
 		"v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub),
 	})
-	if got := txtState(do()); got != "mismatch" {
-		t.Fatalf("second TXT light = %q, want mismatch (a cached result would stay ok)", got)
-	}
-	mxHits, txHits := res.counts()
-	if mxHits < 2 || txHits < 2 {
-		t.Fatalf("resolver hits mx=%d txt=%d, want >=2 each (checks must not be cached)", mxHits, txHits)
+	svc.ExtraMX.CheckOnce(ctx)
+	if got := dnsLights(t, do())["txt"]; got != "mismatch" {
+		t.Fatalf("second TXT light = %q, want mismatch (a stale verdict would stay ok)", got)
 	}
 }
 
-// TestDialMXReceivingStatusStaysDNSFree proves the status page's receiver read
-// does not run the published-record checks: a plain status GET (no ?dns=1) must
-// perform zero resolver lookups, so the self-reported status path is cheap and
-// the DNS checks belong to the setup wizard and the dashboard light only.
-func TestDialMXReceivingStatusStaysDNSFree(t *testing.T) {
+// TestDialMXReceivingStatusRunsNoLookup proves the HTTP layer reads the watcher's
+// cached verdict and runs no resolver lookup of its own: repeated status reads do
+// not move the resolver counters.
+func TestDialMXReceivingStatusRunsNoLookup(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -301,34 +281,40 @@ func TestDialMXReceivingStatusStaysDNSFree(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
+	cred, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
 	res := &switchableResolver{}
-	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, nil)
+	res.set([]*net.MX{{Host: "antler1.example.test.", Pref: 10}}, []string{mxwire.DomainTXT(cred.KeyID, pub)})
+	watchDNS(svc, res)
+	baseMX, baseTX := res.counts()
+
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(res)
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
-	req.Header.Set("Authorization", "Bearer "+key)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, ok := body["dns"]; !ok {
+			t.Fatalf("status read must carry the watcher's cached verdict, got %v", body["dns"])
+		}
 	}
-	var body map[string]any
-	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if _, ok := body["dns"]; ok {
-		t.Fatalf("plain status GET must not run DNS checks, got %v", body["dns"])
-	}
-	if _, ok := body["unexpected_mx"]; ok {
-		t.Fatalf("plain status GET must not return the extra-MX verdict, got %v", body["unexpected_mx"])
-	}
-	if mxHits, txHits := res.counts(); mxHits != 0 || txHits != 0 {
-		t.Fatalf("plain status GET ran resolver lookups: mx=%d txt=%d", mxHits, txHits)
+	if mxHits, txHits := res.counts(); mxHits != baseMX || txHits != baseTX {
+		t.Fatalf("status reads ran resolver lookups: mx %d->%d txt %d->%d", baseMX, mxHits, baseTX, txHits)
 	}
 }
 
@@ -354,9 +340,10 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
 	}})
 	svc.DialMX = m
-	// The watcher owns the verdict; one pass publishes it.
-	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
-	svc.ExtraMX.CheckOnce(ctx)
+	watchDNS(svc, fakeResolver{mx: []*net.MX{
+		{Host: "antler1.example.test.", Pref: 10},
+		{Host: "old.example.test.", Pref: 20},
+	}})
 
 	srv := httpapp.New(svc, nil)
 	h := srv.Handler()
@@ -365,7 +352,7 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The status dialog's read carries the shared verdict at the top level.
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving?dns=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -398,10 +385,10 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 }
 
 // TestDialMXStatusViewSeedsFixPrompts proves the receiving form embeds the
-// copy-ready instructions and the extra-MX verdict so the saved status view can
-// paint its fix prompts and warning on open — rather than showing rows without
-// their remediation until the first fetch lands. It is what makes a rejected
-// receiver's full fix prompt appear immediately, matching the dashboard light.
+// copy-ready instructions, the extra-MX verdict and the DNS checks so the saved
+// status view can paint its fix prompts and warning on open — rather than showing
+// rows without their remediation until the first fetch lands. It is what makes a
+// red receiver's DNS problem appear immediately, matching the dashboard light.
 func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -413,16 +400,22 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	}, false); err != nil {
 		t.Fatalf("antler save: %v", err)
 	}
-	// A ready receiver and a resolved extra-MX verdict: the form must seed both
-	// the copy-ready instructions and the rogue-host warning so the dialog opens
-	// complete.
+	cred, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
+	// A ready receiver, a rogue MX record and a broken TXT: the form must seed the
+	// instructions, the rogue-host warning and both DNS checks.
 	m := mxdial.New(svc.DialMXBackend(), mxdial.Config{DataDir: svc.Config.DataDir, AllowPrivateDestinations: true})
 	m.SetStatusForTest(domain.Name, []mxdial.Status{{
 		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
 	}})
 	svc.DialMX = m
-	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
-	svc.ExtraMX.CheckOnce(ctx)
+	watchDNS(svc, fakeResolver{
+		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}, {Host: "old.example.test.", Pref: 20}},
+		txt: []string{"v=MM1; k=ed25519; id=other; p=" + base64.StdEncoding.EncodeToString(pub)},
+	})
 
 	srv := httpapp.New(svc, nil)
 	h := srv.Handler()
@@ -449,6 +442,10 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 	if got := attrValue(`data-antler-unexpected=`); !strings.Contains(got, "old.example.test") {
 		t.Fatalf("seeded extra-MX verdict missing the rogue host: %q", got)
 	}
+	// The DNS checks flag both the TXT mismatch and the rogue MX.
+	if got := attrValue(`data-antler-dns=`); !strings.Contains(got, "mismatch") || !strings.Contains(got, "old.example.test") {
+		t.Fatalf("seeded DNS checks missing the TXT mismatch or rogue host: %q", got)
+	}
 }
 
 // TestDialMXAntlerPartialMXSetIsHealthy proves the MX check treats the receiver
@@ -472,28 +469,25 @@ func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub, _ := base64.RawURLEncoding.DecodeString(cred.PublicKey)
-	txtValue := mxwire.DomainTXT(cred.KeyID, pub)
-
-	srv := httpapp.New(svc, nil)
 	// Only the priority-10 receiver is published.
-	srv.SetDNSResolver(fakeResolver{
+	watchDNS(svc, fakeResolver{
 		mx:  []*net.MX{{Host: "antler1.example.test.", Pref: 10}},
-		txt: []string{txtValue},
+		txt: []string{mxwire.DomainTXT(cred.KeyID, pub)},
 	})
+	srv := httpapp.New(svc, nil)
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
-	do := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+key)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	body := waitForDNS(t, do)
 	var mx *map[string]any
 	for _, raw := range body["dns"].([]any) {
 		v := raw.(map[string]any)
@@ -676,29 +670,30 @@ func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 }
 
 // TestDialMXCustomReceivingAPIHasNoAntlerInstructions pins that a custom setup
-// keeps its manual receiver URLs and does not advertise Antler MX records.
+// keeps its manual receiver URLs and does not advertise Antler MX records, and
+// that the watcher computes no MX check for it (the MX hostname is the operator's
+// own), only the TXT check.
 func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example"}, false); err != nil {
 		t.Fatal(err)
 	}
+	watchDNS(svc, fakeResolver{mx: []*net.MX{{Host: "receiver.example.", Pref: 10}}})
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(fakeResolver{mx: []*net.MX{{Host: "receiver.example.", Pref: 10}}})
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := "/v1/admin/domains/" + domain.ID + "/receiving?dns=1"
-	do := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+key)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		return rr
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	body := waitForDNS(t, do)
 	instr, _ := body["instructions"].(map[string]any)
 	if instr == nil || instr["service"] != "custom" {
 		t.Fatalf("instructions = %v, want custom", body["instructions"])

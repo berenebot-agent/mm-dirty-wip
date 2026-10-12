@@ -169,7 +169,7 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if errors.Is(err, store.ErrNoProvider) {
 				if effective, resolveErr := s.Service.Store.ResolveDomainReceivingConfig(r.Context(), p.AccountID, id, "dialmx"); resolveErr == nil {
-					resp, responseErr := s.domainReceivingResponse(r.Context(), id, effective, includeDNSRequested(r))
+					resp, responseErr := s.domainReceivingResponse(r.Context(), id, effective)
 					if responseErr != nil {
 						mapDomainConfigError(w, responseErr)
 						return
@@ -187,7 +187,7 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainReceivingResponse(r.Context(), id, cfg, includeDNSRequested(r))
+		resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -216,7 +216,7 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 				mapDomainConfigError(w, err)
 				return
 			}
-			resp, err := s.domainReceivingResponse(r.Context(), id, cfg, true)
+			resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
 			if err != nil {
 				mapDomainConfigError(w, err)
 				return
@@ -229,7 +229,7 @@ func (s *Server) apiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			mapDomainConfigError(w, err)
 			return
 		}
-		resp, err := s.domainReceivingResponse(r.Context(), id, cfg, true)
+		resp, err := s.domainReceivingResponse(r.Context(), id, cfg)
 		if err != nil {
 			mapDomainConfigError(w, err)
 			return
@@ -323,14 +323,7 @@ func (s *Server) domainSendingResponse(domainID string, cfg store.DomainSendingC
 	}, nil
 }
 
-// includeDNSRequested reports whether the caller asked for the published-record
-// checks (the ?dns=1 query flag). The status page runs them on its own slow
-// cadence; a plain API GET omits them so a scripted read stays resolver-free.
-func includeDNSRequested(r *http.Request) bool {
-	return r.URL.Query().Get("dns") == "1"
-}
-
-func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, cfg store.DomainReceivingConfig, includeDNS bool) (domainConfigResponse, error) {
+func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, cfg store.DomainReceivingConfig) (domainConfigResponse, error) {
 	dec, err := s.Service.DecryptDomainReceivingConfig(cfg)
 	if err != nil {
 		return domainConfigResponse{}, err
@@ -355,15 +348,9 @@ func (s *Server) domainReceivingResponse(ctx context.Context, domainID string, c
 		domain, derr := s.Service.Store.GetDomain(ctx, cfg.AccountID, domainID)
 		if derr == nil {
 			view := s.dialMXLiveView(domain.Name, credential.KeyID, pub, cfg)
-			if includeDNS {
-				view.DNS = s.dialMXDNS(domain.Name, credential.KeyID, pub, view)
-			}
 			resp.Status = view.Statuses
-			resp.DNS = view.DNS
+			resp.DNS = s.dialMXDNS(domainID)
 			resp.Instructions = view.instructionView()
-			// The extra-MX verdict is always the watcher's shared value, so the
-			// status dialog's warning agrees with the dashboard light whether or
-			// not this request asked for the DNS table.
 			resp.UnexpectedMX = s.dialMXExtraMX(domainID)
 		}
 	}
