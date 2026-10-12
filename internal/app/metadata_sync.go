@@ -46,7 +46,14 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		}
 		key := p.AccountID + ":" + box.ID
 		m.refreshMu.Lock()
-		running, queued := m.reconciling[key] != nil || m.metadataChecking[key] > 0, m.refreshing[key]
+		// Running is the deep index build only: a reconcile in flight, or a
+		// background refresh queued to run it. A detection pass is deliberately
+		// excluded even though it bumps metadataChecking: a cheap arrival check
+		// is not a metadata sync, and reporting it as one flashed the "Refreshing
+		// mailbox metadata" banner and the header metadata spinner on every
+		// folder open. metadataChecking still marks the action queue's activity;
+		// it just no longer claims the index is being rebuilt.
+		running, queued := m.reconciling[key] != nil, m.refreshing[key]
 		waiting := m.metadataWaiting[key] > 0
 		m.refreshMu.Unlock()
 		if !running && !queued && index.Status == store.RemoteIndexComplete && (snapshot.State == "" || snapshot.State == "done") {
@@ -84,7 +91,13 @@ func (m *RemoteMailboxService) MetadataSyncStatuses(ctx context.Context, p model
 		} else if m.IsMicrosoft(ctx, p.AccountID, box.ID) {
 			provider = "Outlook"
 		}
-		if snapshot.Total < snapshot.Indexed || phase == "refresh" {
+		// Total is the provider's own count for the inbox. It is only withheld
+		// when it is internally inconsistent (a pass indexed more rows than the
+		// provider reports), because a smaller numerator than denominator would
+		// render a nonsense percentage. A refresh pass of an already-complete
+		// inbox still re-reads and re-saves a valid total, so it must keep its
+		// percentage rather than being flattened to a bare "N indexed" count.
+		if snapshot.Total < snapshot.Indexed {
 			snapshot.Total = 0
 		}
 		if snapshot.UpdatedAt.IsZero() {
