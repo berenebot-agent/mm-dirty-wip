@@ -148,6 +148,107 @@ func TestMetadataSyncRefreshKeepsKnownTotal(t *testing.T) {
 	}
 }
 
+// TestCachedNavigationDoesNotRefreshCompleteStandaloneIndexes proves cached UI
+// navigation does not queue a deep metadata reconcile for any standalone
+// provider once its index is complete. Gmail and One share the Google-backed
+// path; Microsoft already has the same complete-index guard, and IMAP only
+// schedules on an unindexed folder or while paging incomplete backfill.
+func TestCachedNavigationDoesNotRefreshCompleteStandaloneIndexes(t *testing.T) {
+	ctx := context.Background()
+	markComplete := func(t *testing.T, svc *app.Service, account, inbox string) {
+		t.Helper()
+		if err := svc.Store.SetRemoteIndexStatus(ctx, account, inbox, store.RemoteIndexComplete, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertCachedReadDoesNotSchedule := func(t *testing.T, rm *app.RemoteMailboxService, principal model.Principal, inbox string) {
+		t.Helper()
+		if _, err := rm.ListRemoteMessagesCached(ctx, principal, inbox, "INBOX", 10, ""); err != nil {
+			t.Fatal(err)
+		}
+		if rm.Refreshing(principal.AccountID, inbox) {
+			t.Fatal("cached navigation scheduled a metadata refresh for a complete index")
+		}
+	}
+
+	t.Run("Gmail", func(t *testing.T) {
+		svc, box, rm, fixture := googleLogEnv(t)
+		markComplete(t, svc, box.AccountID, box.ID)
+		principal := model.Principal{AccountID: box.AccountID, Admin: true}
+		assertCachedReadDoesNotSchedule(t, rm, principal, box.ID)
+
+		// An incomplete index must still make progress in the background. Hold
+		// the first Profile request so the test can deterministically observe
+		// that cached navigation queued the reconcile.
+		fixture.profileStarted = make(chan struct{}, 1)
+		fixture.releaseProfile = make(chan struct{})
+		var releaseOnce sync.Once
+		releaseProfile := func() { releaseOnce.Do(func() { close(fixture.releaseProfile) }) }
+		defer releaseProfile()
+		if err := svc.Store.SetRemoteIndexStatus(ctx, box.AccountID, box.ID, store.RemoteIndexPartial, ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rm.ListRemoteMessagesCached(ctx, principal, box.ID, "INBOX", 10, ""); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-fixture.profileStarted:
+		case <-time.After(5 * time.Second):
+			t.Fatal("cached navigation did not schedule an incomplete Gmail index")
+		}
+		if !rm.Refreshing(box.AccountID, box.ID) {
+			t.Fatal("incomplete Gmail index was not marked refreshing")
+		}
+		releaseProfile()
+	})
+
+	t.Run("One", func(t *testing.T) {
+		svc, u, _, rm := remoteTestEnv(t)
+		f := onefixture.New(t)
+		rm.OneHTTP, rm.OneInterval = f.Client(t), time.Nanosecond
+		principal := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+		setup, err := rm.PrepareOneImport(ctx, principal, onefixture.Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		results, err := rm.ImportOne(ctx, principal, setup, []string{onefixture.ConnectionID}, nil)
+		if err != nil || len(results) != 1 || results[0].Error != "" {
+			t.Fatalf("import: %+v %v", results, err)
+		}
+		box := results[0].InboxID
+		// ImportOne queues its own initial reconcile. Let that separate setup
+		// work finish before testing what cached navigation adds.
+		deadline := time.After(5 * time.Second)
+		for rm.Refreshing(u.AccountID, box) {
+			select {
+			case <-deadline:
+				t.Fatal("One import's initial reconcile did not finish")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		markComplete(t, svc, u.AccountID, box)
+		assertCachedReadDoesNotSchedule(t, rm, principal, box)
+	})
+
+	t.Run("Microsoft", func(t *testing.T) {
+		svc, box, rm, _ := microsoftLogEnv(t)
+		markComplete(t, svc, box.AccountID, box.ID)
+		assertCachedReadDoesNotSchedule(t, rm, model.Principal{AccountID: box.AccountID, Admin: true}, box.ID)
+	})
+
+	t.Run("IMAP", func(t *testing.T) {
+		svc, u, box, rm := remoteTestEnv(t)
+		configureSecrets(t, rm, u, box, "pw", "")
+		fake := newFakeRemoteServer()
+		rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+		if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+			t.Fatal(err)
+		}
+		markComplete(t, svc, box.AccountID, box.ID)
+		assertCachedReadDoesNotSchedule(t, rm, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID)
+	})
+}
+
 func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
 	svc, u, _, rm := remoteTestEnv(t)
 	f := onefixture.New(t)
