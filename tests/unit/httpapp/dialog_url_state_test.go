@@ -50,12 +50,21 @@ func TestUIDashboardDialogURLState(t *testing.T) {
 		t.Fatalf("data-open-connector should no longer be rendered")
 	}
 
-	// A domain dialog opens only for a matching domain id and kind.
+	// A domain dialog opens only for a matching domain id and kind. The Direct MX
+	// sending dialog also carries the wider layout class, so match the class set
+	// rather than one exact string.
 	rr = domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=sending")
-	if body = rr.Body.String(); !strings.Contains(body, `id="domain-sending-dialog-`+d.ID+`" class="domain-dialog" data-open="1"`) {
+	body = rr.Body.String()
+	sendingTag := `id="domain-sending-dialog-` + d.ID + `" class="domain-dialog`
+	if !strings.Contains(body, sendingTag) {
+		t.Fatalf("sending dialog missing for %s", d.ID)
+	}
+	if !strings.Contains(body, sendingTag+`" data-open="1"`) &&
+		!strings.Contains(body, sendingTag+` domain-dialog--wide" data-open="1"`) {
 		t.Fatalf("sending dialog not marked data-open for %s", d.ID)
 	}
-	if strings.Contains(body, `id="domain-receiving-dialog-`+d.ID+`" class="domain-dialog" data-open="1"`) {
+	recvOpen := `id="domain-receiving-dialog-` + d.ID + `" class="domain-dialog" data-open="1"`
+	if strings.Contains(body, recvOpen) {
 		t.Fatalf("receiving dialog wrongly marked data-open")
 	}
 

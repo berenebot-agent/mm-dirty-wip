@@ -125,7 +125,7 @@ func TestFolderBulkSelectAllRemote(t *testing.T) {
 		t.Fatalf("remote folder scope=all redirected to %q", loc)
 	}
 	// Exactly the two Archive messages were acted on; the Inbox message was not.
-	if !strings.Contains(loc, "2+message+actions+queued") {
+	if !strings.Contains(loc, "2+messages+will+be+marked+read") {
 		t.Fatalf("remote folder scope=all notice = %q; want 2 messages (the folder's), not the Inbox's", loc)
 	}
 }
