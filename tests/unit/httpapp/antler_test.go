@@ -11,10 +11,22 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
 )
+
+// fixedMXResolver serves a deterministic MX set to the extra-MX watcher.
+type fixedMXResolver struct{ hosts []string }
+
+func (f fixedMXResolver) LookupMX(context.Context, string) ([]*net.MX, error) {
+	out := make([]*net.MX, 0, len(f.hosts))
+	for _, h := range f.hosts {
+		out = append(out, &net.MX{Host: h, Pref: 10})
+	}
+	return out, nil
+}
 
 // fixedAntler is a deterministic Antler endpoint resolver for HTTP tests.
 type fixedAntler struct{ receivers []mxdial.AntlerReceiver }
@@ -321,10 +333,9 @@ func TestDialMXReceivingStatusStaysDNSFree(t *testing.T) {
 }
 
 // TestDialMXExtraMXVerdictIsSharedAcrossSurfaces proves the status dialog's
-// warning field and the dashboard light's verdict come from the same
-// computation, so the two surfaces cannot disagree about whether a rogue MX
-// record exists. It also pins that the top-level unexpected_mx is returned even
-// when the copy-ready instructions object is omitted.
+// warning field and the dashboard light's verdict come from the one shared
+// watcher-owned value, so the two surfaces cannot disagree about whether a rogue
+// MX record exists.
 func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
@@ -343,19 +354,17 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 		ReceiverURL: "https://antler1.example.test", State: mxdial.StatusActive, SMTPHostname: "antler1.example.test",
 	}})
 	svc.DialMX = m
-	res := &switchableResolver{}
-	res.set([]*net.MX{
-		{Host: "antler1.example.test.", Pref: 10},
-		{Host: "old.example.test.", Pref: 20},
-	}, nil)
+	// The watcher owns the verdict; one pass publishes it.
+	svc.ExtraMX = app.NewExtraMXWatcher(svc, fixedMXResolver{hosts: []string{"antler1.example.test.", "old.example.test."}})
+	svc.ExtraMX.CheckOnce(ctx)
+
 	srv := httpapp.New(svc, nil)
-	srv.SetDNSResolver(res)
 	h := srv.Handler()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The status dialog's read (which carries the copy-ready instructions).
+	// The status dialog's read carries the shared verdict at the top level.
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/domains/"+domain.ID+"/receiving?dns=1", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
 	rr := httptest.NewRecorder()
@@ -369,7 +378,7 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 		t.Fatalf("top-level unexpected_mx = %v, want [old.example.test]", body["unexpected_mx"])
 	}
 
-	// The dashboard light's read, from the same DNS state, must agree.
+	// The dashboard light's read must agree with the same shared verdict.
 	cookie, _ := uiSession(t, svc, u.ID)
 	req = httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
 	req.AddCookie(cookie)

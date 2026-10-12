@@ -1908,14 +1908,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		setup.ConnectorsJSON = dialMXConnectorsJSON(setup.MX)
 		setup.StatusesJSON = dialMXStatusesJSON(setup.Statuses)
-		// The aggregate light runs the bounded published-MX check so a rogue MX
-		// record turns it amber on the initial paint; the live refresh then keeps
-		// it current. It is skipped for a domain with no active receiver (red).
-		// The verdict comes from the one shared helper so the light and the
-		// status dialog cannot disagree.
+		// The aggregate light folds in the watcher's shared "extra MX" verdict so
+		// an amber light and the status dialog's warning always agree without a
+		// render-time lookup. It is only relevant for a domain with an active
+		// receiver (a red domain stays red).
 		var unexpected []string
 		if haveCfg && anyReady(setup.Statuses) {
-			unexpected = s.dialMXExtraMX(ctx, p.AccountID, d.ID, d.Name, credential.KeyID)
+			unexpected = s.dialMXExtraMX(d.ID)
 		}
 		setup.Light, setup.LightTitle = dialMXHealth(setup.Statuses, unexpected, time.Now())
 		dialMXSetup[d.ID] = setup

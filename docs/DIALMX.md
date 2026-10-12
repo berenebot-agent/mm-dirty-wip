@@ -334,27 +334,23 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
   resolver lookup.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup. It is
   omitted for a domain with no copy-ready records.
-- `unexpected_mx[]` — a top-level field (independent of `instructions`) listing
-  published MX hostnames that are not Antler receivers, returned with `?dns=1`.
-  It is the single verdict behind both the dashboard's amber light and the status
-  dialog's "additional MX servers" warning.
+- `unexpected_mx[]` — a top-level field (independent of `instructions` and of
+  `?dns=1`) listing published MX hostnames that are not Antler receivers. It is
+  the watcher's shared verdict, read by both the dashboard's amber light and the
+  status dialog's "additional MX servers" warning, so the two can never disagree.
 
-The extra-MX verdict is computed once per read by one helper and read by both
-surfaces, so the dashboard light and the status dialog cannot disagree about
-whether a rogue record exists.
-
-The checks resolve DNS live on every request, bounded by a four-second timeout,
-and never block a save for longer than that. Nothing is cached in the core, so a
-record change is reflected on the next check. A green light means the record
-matches; a green receiver light means it holds an active binding that passed both
-gates.
+The `dns[]` checks resolve DNS live on every `?dns=1` request, bounded by a
+four-second timeout, and never block a save for longer than that. A green light
+means the record matches; a green receiver light means it holds an active binding
+that passed both gates. The `unexpected_mx[]` verdict is not computed on a render
+at all — the watcher owns it (see below).
 
 The receiving dialog drives its receiver status from the shared SSE stream: it
 reconciles the instant a receiver's readiness changes (the transient
-`mx.health_changed` event) and re-runs the published-record checks on a slow
-60-second fallback while it is open. There is no **Check now** button and no
-counter — the receiver is the authority and reports itself; the DNS checks belong
-to the setup wizard, which fetches them once on open and after a key rotation.
+`mx.health_changed` event). There is no **Check now** button and no counter — the
+receiver is the authority and reports itself; the published-record DNS table
+belongs to the setup wizard, which fetches it once on open and after a key
+rotation.
 
 The dashboard's Domains table shows one aggregate connector light per Dial MX
 domain: **green** when at least one receiver is `ready` and no rogue MX records
@@ -364,10 +360,18 @@ routing is ambiguous and may not go via Antler), and **red** otherwise. Because
 ready implies both authority and routing, a green light needs no separate MX
 check; a receiver that is connected but not routed by MX reports `rejected`
 (`not_mx`) and is not green. The amber case exists because a rogue MX record
-changes with no receiver event, so SSE alone cannot surface it: the dashboard
-re-checks on load, reconnect, a receiver-health change, and a 15-minute
-background tick while a tab is open. It answers "will mail arrive via Antler?" at
-a glance; the receiving dialog carries the per-receiver detail.
+changes with no receiver event.
+
+The "extra MX" verdict (the amber host list) is **one shared value owned by a
+background watcher**, not a per-render lookup. The watcher re-checks every Dial MX
+domain that has a ready receiver on a fixed 60-second interval, diffs the result
+against the last one it published, and — only when it changes — pushes a transient
+`mx.extra_mx_changed` event carrying the new host list to the domain's owning
+account. The dashboard light and an open status dialog both read that single
+verdict (the HTTP read is an in-memory lookup), so they can never disagree and
+neither runs DNS on a render. A dialog opened from an amber dashboard row shows
+the warning immediately, matching the light, and updates live when the watcher
+republishes.
 
 The receiving dialog renders one light per receiver (Connector | Status) and,
 when something is unhealthy, an inline remediation block: the failing record to

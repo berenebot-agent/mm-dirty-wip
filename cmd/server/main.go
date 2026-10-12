@@ -125,6 +125,18 @@ func main() {
 	}()
 	defer dialCancel()
 
+	// The extra-MX watcher is the single owner of every Dial MX domain's "extra
+	// MX" verdict. It re-checks on a fixed interval and pushes changes over SSE,
+	// so the dashboard light and an open status dialog stay in sync without
+	// either running a lookup on a render. It shares the dial context, so it
+	// stops with the dial manager.
+	svc.ExtraMX = app.NewExtraMXWatcher(svc, nil)
+	extraMXDone := make(chan struct{})
+	go func() {
+		defer close(extraMXDone)
+		svc.ExtraMX.Run(dialCtx, time.Minute)
+	}()
+
 	// Transition the legacy environment MX configuration into the store once,
 	// then start the process-owned receiver controller. The controller reads the
 	// persisted settings and reconciles the included child or the private dialer
@@ -247,6 +259,11 @@ func main() {
 	case <-dialDone:
 	case <-ctx.Done():
 		log.Warn("Dial MX shutdown timed out")
+	}
+	select {
+	case <-extraMXDone:
+	case <-ctx.Done():
+		log.Warn("extra-MX watcher shutdown timed out")
 	}
 	// Stop the MX receiver and wait (bounded) for the included child to drain
 	// and the private dialer to stop, before the deferred store close runs. The
