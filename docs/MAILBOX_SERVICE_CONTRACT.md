@@ -170,10 +170,14 @@ External aliases are removed, so sending has one target shape per kind:
   (`SetStandaloneSenderResolver`). When no resolver is installed the
   configuration is `ErrNoProvider`, so a standalone message is **queued and
   held** rather than attributed to a domain that does not exist.
-- `resolveSendingTargetQuery` resolves a requested sender to the inbox primary
-  or a managed `inbox_aliases` entry only (a standalone inbox sends as its own
-  connected address only). A standalone request for any other sender is
-  `ErrSenderNotAllowed`.
+- `resolveSendingTargetQuery` resolves a requested sender to the inbox primary,
+  a managed `inbox_aliases` entry, or — when the sending key holds a **live
+  domain-wide sending grant** on this inbox — any local part on the inbox's
+  domain (a standalone inbox sends as its own connected address only). The grant
+  is live only while the inbox is its domain's enabled catch-all; a standalone
+  request, or one that matches none of the above, is `ErrSenderNotAllowed`.
+  The grant is key-scoped: the resolution takes the sending key's id, so a
+  session or the principal-free approval path never widens the address space.
 
 ## 3. Application boundary (`internal/app`)
 

@@ -4287,10 +4287,11 @@ hand-made alias first.
   moved or disabled catch-all makes the flag dormant without deleting it, and
   pointing the catch-all back restores it. The condition is evaluated at send
   time, never stored.
-- **Domain-wide sending implies owner.** Ticking the grant forces the binding's
-  role to `owner`. Clearing it leaves the role alone: the system may raise a role
-  to owner as a side effect of the grant, and never lowers a role on its own.
-  Only an operator demotes a key, by hand.
+- **Domain-wide sending and owner are one state.** Setting the grant forces the
+  binding's role to owner, and lowering the role below owner drops the grant —
+  so removing Owner removes Domain send. Clearing the grant on its own leaves the
+  role at owner, because the system never lowers a role on its own; only an
+  operator demotes a key, by hand.
 - **Account Admin keys get the capability for free** (implicit Owner everywhere);
   the flag is meaningful only for non-admin keys. A session, system mail and the
   principal-free approval path hold no key, so they keep the exact primary/alias
@@ -4313,10 +4314,23 @@ hand-made alias first.
   accepted rather than gated per provider. The residual risk is reputation, not
   authentication, and the reply path is guaranteed by the catch-all condition.
 - **UI.** The Clients & Access panel of a domain's catch-all inbox gains a
-  "Domain-wide sending" control, shown only there and only while the inbox is an
-  enabled catch-all. It is staged and committed by the same footer Save as the
-  role ladder, which it drives to Owner when ticked. `create-key` gains an
-  optional `domain_send` list for API parity.
+  **Domain send** control, rendered as a segmented button matching the role
+  ladder beside it, placed at the **left of the row** (with an equal-width spacer
+  on rows that lack it, so names and ladders stay aligned). It is shown only on
+  an enabled catch-all. Turning it on pins the ladder to Owner and disables the
+  lower rungs, since the grant and owner are one state; turning it off frees the
+  ladder at owner. It stages and commits with the same footer Save as the role
+  ladder. The Clients tab's key dialog carries the same control in its Inbox ×
+  Role matrix, on the **domain's catch-all inbox row** — not on the domain header
+  row, whose "Set all" segment already means "apply to every inbox below" — with
+  the same pinning behaviour and the same single save. A catch-all inbox carries
+  a small catch-all marker (tooltip "Catch-all inbox") to the **right of its
+  address** wherever inboxes are listed, so the extra control's presence on that
+  one row is legible. `create-key` gains an optional `domain_send` list for API
+  parity, and the capability is discoverable by an agent: `GET /v1/bootstrap`
+  reports `send_any_in_domain` (with `send_any_domain` naming the domain) per
+  inbox, live grants only, the `/v1` capabilities list gains `send-any-in-domain`,
+  and the `/agent` guide documents the widened `sender` rule.
 
 **Reason:** The motivating case is an agent that must correspond as a role
 address without an operator pre-creating each one. Anchoring on the catch-all —

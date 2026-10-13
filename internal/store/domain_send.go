@@ -99,8 +99,9 @@ func (s *Store) ListDomainSendGrants(ctx context.Context, clientID string) ([]Do
 
 // SetBindingDomainSend sets or clears the domain-wide sending grant on a key's
 // binding for one inbox. Setting the grant forces the binding's role to owner
-// ("domain-wide sending implies owner"); clearing it leaves the role untouched,
-// because the system never lowers a role on its own.
+// (domain-wide sending and owner are one state); clearing it leaves the role as
+// owner, because the system never lowers a role on its own. Dropping the role
+// below owner through UpdateAPIKey drops the grant with it.
 //
 // The inbox must be the domain's catch-all: the grant is only meaningful
 // anchored there, and hiding the control everywhere else in the UI is mirrored

@@ -62,6 +62,7 @@ func distinctGroups(routes []Route) []string {
 
 const agentGuideQuickstart = "## Quick start\n" +
 	"1. Call `GET /v1/bootstrap` and choose an inbox whose `permissions[inbox_id].can_send` is `true`. The matching `inboxes` entry includes the primary address, managed aliases and `default_sender`.\n" +
+	"  If that inbox's `permissions` also has `send_any_in_domain: true`, you may set `sender` to **any** address on the domain named by `send_any_domain` (for example `billing@example.com`), not only the primary or an alias. Without it, `sender` must be the primary or one of `aliases`, or the send fails with `sender_not_allowed`.\n" +
 	"2. Send with `POST /v1/send?wait=true`:\n\n" +
 	"```http\nPOST /v1/send?wait=true\nAuthorization: Bearer <key>\nContent-Type: application/json\n\n{\"inbox_id\":\"inb_...\",\"to\":[\"recipient@example.com\"],\"subject\":\"Test message\",\"text\":\"Hello from MailMoose\"}\n```\n\n" +
 	"3. With `wait=true`, a successful response waits for the provider attempt and includes the message status. Without it, the message is returned as soon as it is queued.\n" +
