@@ -255,6 +255,10 @@ func migrations(dataDir string) []migration {
 		{version: "073", sql: migration073, detect: stateOf(columnAdded("domains", "dkim_private_key"))},
 		{version: "074", sql: migration074, detect: stateOf(columnAdded("client_inbox_bindings", "send_any_in_domain"))},
 		{version: "075", sql: migration075, detect: stateOf(tableExists("inbox_defined_labels"))},
+		// 076 is a data-only migration (it retires already-queued handoff
+		// notification jobs), so it has no schema state to detect: an
+		// interrupted run is simply repeated, and the UPDATE is idempotent.
+		{version: "076", sql: migration076},
 	}
 }
 

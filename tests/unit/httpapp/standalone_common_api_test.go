@@ -1629,13 +1629,18 @@ func TestRemoteMessageUIDeleteRestorePurgeSpam(t *testing.T) {
 }
 
 // TestAuthoringUISavePersists proves the Approvals tab selector actually saves the
-// authoring mode and notify override through the inbox edit form.
+// authoring mode through the inbox edit form, and that moving a standalone inbox
+// into the remote-draft mode clears any approver (a remote-draft request just
+// places the draft in the connected Drafts folder and never emails an approver).
 func TestAuthoringUISavePersists(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
+	if err := svc.Store.SetInboxApprover(context.Background(), u.AccountID, standalone.ID, "ops@remote.test"); err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, u.ID)
-	// Save the mode + notify via the edit form.
-	form := "display=Agent&authoring_mode=mailmoose_approval&authoring_notify=ops@remote.test&_csrf=" + csrf
+	// Save the mode via the edit form.
+	form := "display=Agent&authoring_mode=mailmoose_approval&_csrf=" + csrf
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+standalone.ID+"/edit", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -1648,8 +1653,25 @@ func TestAuthoringUISavePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Mode != model.AuthoringMailMooseApproval || settings.NotifyAddress != "ops@remote.test" || !settings.NotifyOverridden {
+	if settings.Mode != model.AuthoringMailMooseApproval {
 		t.Fatalf("authoring not persisted: %+v", settings)
+	}
+	// Save again in remote-draft mode: the approver is cleared.
+	form = "display=Agent&authoring_mode=remote_draft&_csrf=" + csrf
+	req = httptest.NewRequest("POST", "/ui/inboxes/"+standalone.ID+"/edit", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 303 {
+		t.Fatalf("authoring save (draft) %d: %s", rr.Code, rr.Body.String())
+	}
+	box, err := svc.Store.GetInboxInternal(context.Background(), u.AccountID, standalone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box.ApproverEmail != "" {
+		t.Fatalf("remote-draft inbox still has approver %q", box.ApproverEmail)
 	}
 }
 
@@ -2413,10 +2435,10 @@ func TestAccountWideMergeFilterStarveNoGap(t *testing.T) {
 }
 
 // TestRequestSendRemoteDraftReturnsHandoff proves a remote-draft request-send
-// response surfaces the actionable handoff record: its immutable handoff id and
-// the independent publication and notification states. Without this a client
-// could not tell that a handoff was created, nor act on a later
-// published/ambiguous/failed outcome.
+// response surfaces the handoff record's immutable handoff id and its
+// publication state, so a client can tell that a handoff was created and observe
+// a later published/ambiguous/failed outcome. A handoff never reports a
+// notification state: it never sends a notification email.
 func TestRequestSendRemoteDraftReturnsHandoff(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
@@ -2456,6 +2478,9 @@ func TestRequestSendRemoteDraftReturnsHandoff(t *testing.T) {
 	}
 	if out.Handoff.Publication != model.HandoffPending {
 		t.Fatalf("handoff publication = %q want pending", out.Handoff.Publication)
+	}
+	if out.Handoff.NotificationStatus != "" {
+		t.Fatalf("handoff reported a notification state %q; a handoff never notifies", out.Handoff.NotificationStatus)
 	}
 }
 
@@ -2674,8 +2699,8 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 		"approverInput.disabled = !approval",
 		"data.standalone ? 'Approvals' : 'Approver'",
 		"effective === 'mailmoose_approval'",
-		// A domain inbox is preset to MailMoose approval: the handoff controls
-		// are hidden, never offered.
+		// A domain inbox is preset to MailMoose approval: the mode selector is
+		// hidden, never offered.
 		"authStandalone = !!data.standalone",
 		"controls.hidden = !authStandalone",
 	} {
@@ -2685,10 +2710,11 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 	}
 }
 
-// TestHandoffHistoryRetainedAndPanel proves the drafts page renders the handoff
-// history panel and badge, and that a published handoff's terminal record survives
-// after the local draft is cleaned up.
-func TestHandoffHistoryRetainedAndPanel(t *testing.T) {
+// TestHandoffRetainedButNotExposedInUI proves a handoff's durable record is kept
+// and listed by the API, but the drafts page exposes no handoff UI: the draft is
+// just placed, with no handoff pane, badge, notification column or cancel/retry
+// controls.
+func TestHandoffRetainedButNotExposedInUI(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	// Create a draft and hand it off (remote_draft is the standalone default).
@@ -2704,11 +2730,11 @@ func TestHandoffHistoryRetainedAndPanel(t *testing.T) {
 	if err != nil || len(handoffs) != 1 {
 		t.Fatalf("handoffs %v %#v", err, handoffs)
 	}
-	if handoffs[0].Publication != model.HandoffPending || handoffs[0].NotificationStatus == "" {
+	if handoffs[0].Publication != model.HandoffPending {
 		t.Fatalf("handoff state %+v", handoffs[0])
 	}
-	// The drafts page shows the handoff badge and the history panel.
-	cookie, csrf := uiSession(t, svc, u.ID)
+	// The drafts page carries no handoff UI at all.
+	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/ui/inboxes/"+standalone.ID+"/drafts", nil)
 	req.AddCookie(cookie)
 	rr := httptest.NewRecorder()
@@ -2717,32 +2743,20 @@ func TestHandoffHistoryRetainedAndPanel(t *testing.T) {
 		t.Fatalf("drafts %d: %s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"Draft handoffs", "Handoff pending", "cancel-handoff"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("drafts page missing %q", want)
+	for _, unwanted := range []string{"Draft handoffs", "Handoff pending", "cancel-handoff", "retry-handoff", "Handoff state"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("drafts page still shows handoff UI %q", unwanted)
 		}
 	}
-	// The handoff list API returns the record in the envelope.
+	// The handoff list API still returns the record in the envelope, without a
+	// notification state (a handoff never notifies).
 	key := adminKey(t, svc, u)
 	rr = apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/handoffs", key)
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"publication":"pending"`) {
 		t.Fatalf("handoffs api %d: %s", rr.Code, rr.Body.String())
 	}
-	// Cancelling returns the draft to editable and keeps the terminal record.
-	req = httptest.NewRequest("POST", "/ui/inboxes/"+standalone.ID+"/drafts/"+d.ID+"/cancel-handoff", strings.NewReader("_csrf="+csrf))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 303 {
-		t.Fatalf("cancel handoff %d: %s", rr.Code, rr.Body.String())
-	}
-	after, err := svc.Store.ListAssistantHandlingForInbox(context.Background(), p, standalone.ID, 50)
-	if err != nil || len(after) != 1 {
-		t.Fatalf("retained handoffs %v %#v", err, after)
-	}
-	if after[0].Publication != model.HandoffFailed {
-		t.Fatalf("cancelled handoff state %+v", after[0])
+	if strings.Contains(rr.Body.String(), "notification_status") {
+		t.Fatalf("handoff api exposes notification state: %s", rr.Body.String())
 	}
 }
 
@@ -2902,7 +2916,7 @@ func TestStandaloneEditDialogRemoteFields(t *testing.T) {
 
 // TestStandaloneEditRemoteSave proves the Identity tab's single Save updates the
 // connector (blank password keeps the stored secret) through the inbox edit
-// endpoint and reopens on Identity.
+// endpoint and closes the settings dialog.
 func TestStandaloneEditRemoteSave(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
@@ -2923,7 +2937,7 @@ func TestStandaloneEditRemoteSave(t *testing.T) {
 		t.Fatalf("remote save %d: %s", rr.Code, rr.Body.String())
 	}
 	loc := rr.Header().Get("Location")
-	if !strings.Contains(loc, "inbox="+standalone.ID) || !strings.Contains(loc, "inbox_tab=basic") || !strings.Contains(loc, "notice=Inbox+updated") {
+	if !strings.Contains(loc, "notice=Inbox+updated") {
 		t.Fatalf("redirect %q", loc)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true}

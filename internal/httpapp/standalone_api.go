@@ -747,14 +747,6 @@ func (s *Server) apiInboxLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, newEnvelope(labels, "", model.CompletenessComplete, nil))
 }
 
-// firstQuery returns the first value of a repeatable query parameter.
-func firstQuery(r *http.Request, name string) string {
-	if v := r.URL.Query()[name]; len(v) > 0 {
-		return v[0]
-	}
-	return ""
-}
-
 // parsePartPath parses an IMAP MIME part path ("1.2.3", or a bare "1") into a
 // slice of part numbers.
 func parsePartPath(raw string) []int {
@@ -1193,6 +1185,16 @@ func (s *Server) apiInboxAuthoringSet(w http.ResponseWriter, r *http.Request) {
 		if err := s.Service.Store.SetInboxAuthoringMode(r.Context(), p, id, *in.Mode); err != nil {
 			mapStoreError(w, err)
 			return
+		}
+		// Moving to remote_draft clears any approver: a remote-draft request just
+		// places the draft in the connected Drafts folder and never sends an
+		// approval email.
+		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id); err == nil &&
+			model.NormalizeAuthoringMode(box.Kind, *in.Mode) == model.AuthoringRemoteDraft {
+			if err := s.Service.Store.SetInboxApprover(r.Context(), p.AccountID, id, ""); err != nil {
+				mapStoreError(w, err)
+				return
+			}
 		}
 	}
 	if in.NotifyAddress != nil {

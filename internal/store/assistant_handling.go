@@ -316,9 +316,6 @@ func handoffPayload(r model.AssistantHandlingRequest) map[string]any {
 	if r.MessageID != "" {
 		p["message_id"] = r.MessageID
 	}
-	if r.NotificationStatus != "" && r.NotificationStatus != model.NotificationNone {
-		p["notification_status"] = r.NotificationStatus
-	}
 	if r.LastError != "" {
 		p["error"] = r.LastError
 	}
@@ -425,12 +422,14 @@ func (s *Store) MarkHandoffPublished(ctx context.Context, accountID, id string, 
 
 // MarkHandoffAmbiguous records that the append outcome could not be verified. It
 // is an explicit terminal-for-retry state: the draft may or may not exist
-// remotely, so no automatic re-append follows.
+// remotely, so no automatic re-append follows. The local draft is unfrozen so it
+// is not trapped: a handoff UI no longer exists to resolve it by hand, and the
+// human can act on the draft directly (including deleting it).
 func (s *Store) MarkHandoffAmbiguous(ctx context.Context, accountID, id, reason string) (*model.Event, error) {
-	return s.settleHandoff(ctx, accountID, id, model.HandoffAmbiguous, reason, model.EventDraftHandoffAmbiguous, false)
+	return s.settleHandoff(ctx, accountID, id, model.HandoffAmbiguous, reason, model.EventDraftHandoffAmbiguous, true)
 }
 
-// MarkHandoffFailed records a terminal handoff failure.
+// MarkHandoffFailed records a terminal handoff failure and unfreezes its draft.
 func (s *Store) MarkHandoffFailed(ctx context.Context, accountID, id, reason string) (*model.Event, error) {
 	return s.settleHandoff(ctx, accountID, id, model.HandoffFailed, reason, model.EventDraftHandoffFailed, true)
 }
@@ -472,153 +471,6 @@ func (s *Store) settleHandoff(ctx context.Context, accountID, id, state, reason,
 	return &ev, nil
 }
 
-// CancelHandoff withdraws an outstanding handoff that has not been published and
-// unfreezes its draft. It accepts both a Pending handoff (before publication) and
-// an Ambiguous one (the append outcome could not be verified): resolving an
-// ambiguous handoff gives the operator an exit so its frozen draft is not trapped.
-// A published handoff cannot be cancelled.
-func (s *Store) CancelHandoff(ctx context.Context, p model.Principal, draftID string) (model.AssistantHandlingRequest, model.Event, error) {
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	defer tx.Rollback()
-	d, err := getDraftTx(ctx, tx, p.AccountID, draftID)
-	if err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	if !p.CanAssist(d.InboxID) {
-		return model.AssistantHandlingRequest{}, model.Event{}, ErrForbidden
-	}
-	r, err := scanAssistantHandling(tx.QueryRowContext(ctx, `SELECT `+handlingColumns+` FROM assistant_handling_requests WHERE account_id=? AND draft_id=? ORDER BY requested_at DESC LIMIT 1`, p.AccountID, draftID))
-	if err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	if r.Publication != model.HandoffPending && r.Publication != model.HandoffAmbiguous {
-		return model.AssistantHandlingRequest{}, model.Event{}, ErrConflict
-	}
-	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE assistant_handling_requests SET publication=?,last_error='cancelled',updated_at=? WHERE id=? AND account_id=?`, model.HandoffFailed, now, r.ID, p.AccountID); err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE drafts SET status=?,updated_at=? WHERE id=? AND account_id=?`, model.DraftStatusDraft, now, draftID, p.AccountID); err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	r.Publication = model.HandoffFailed
-	r.LastError = "cancelled"
-	r.UpdatedAt = parseTime(now)
-	ev, err := insertEventTx(ctx, tx, p.AccountID, r.InboxID, model.EventDraftHandoffCancelled, r.ID, handoffPayload(r))
-	if err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return model.AssistantHandlingRequest{}, model.Event{}, err
-	}
-	return r, ev, nil
-}
-
-// MarkHandoffNotificationSent records that the handoff notification was handed to
-// the outbound path. It advances independently of publication and never touches
-// the remote append.
-func (s *Store) MarkHandoffNotificationSent(ctx context.Context, accountID, id string) (*model.Event, error) {
-	return s.settleHandoffNotification(ctx, accountID, id, model.NotificationSent, "", model.EventDraftHandoffNotificationSent)
-}
-
-// MarkHandoffNotificationFailed records a terminal notification failure.
-// Publication is unaffected by this state.
-func (s *Store) MarkHandoffNotificationFailed(ctx context.Context, accountID, id, reason string) (*model.Event, error) {
-	return s.settleHandoffNotification(ctx, accountID, id, model.NotificationFailed, reason, model.EventDraftHandoffNotificationFailed)
-}
-
-func (s *Store) settleHandoffNotification(ctx context.Context, accountID, id, state, reason, eventType string) (*model.Event, error) {
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	r, err := getAssistantHandlingTx(ctx, tx, accountID, id)
-	if err != nil {
-		return nil, err
-	}
-	// Notification is at-most-once from the local outbox: never emit a second
-	// event for a state it is already in, and never regress a delivered
-	// notification back to failed when a duplicate worker pass re-settles it.
-	if r.NotificationStatus == state {
-		return nil, nil
-	}
-	if r.NotificationStatus == model.NotificationSent && state == model.NotificationFailed {
-		return nil, nil
-	}
-	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE assistant_handling_requests SET notification_status=?,updated_at=? WHERE id=? AND account_id=?`, state, now, id, accountID); err != nil {
-		return nil, err
-	}
-	r.NotificationStatus = state
-	r.UpdatedAt = parseTime(now)
-	payload := handoffPayload(r)
-	if reason != "" {
-		payload["error"] = reason
-	}
-	ev, err := insertEventTx(ctx, tx, accountID, r.InboxID, eventType, r.ID, payload)
-	if err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &ev, nil
-}
-
-// SetHandoffNotificationWorkflow links a handoff record to its queued
-// notification workflow job and marks the notification queued. The workflow job
-// carries only the notification kind, never a token.
-func (s *Store) SetHandoffNotificationWorkflow(ctx context.Context, accountID, id, workflowID string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE assistant_handling_requests SET notification_status=?,updated_at=? WHERE id=? AND account_id=?`, model.NotificationQueued, nowText(), id, accountID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
-	}
-	_ = workflowID
-	return nil
-}
-
-// CommitHandoffNotification enqueues the handoff notification workflow job and
-// links the handoff record to it in one transaction. The job kind is
-// model.WorkflowKindHandoff and it carries no token; RawPath/SizeBytes describe
-// the generated notification MIME.
-func (s *Store) CommitHandoffNotification(ctx context.Context, accountID string, r model.AssistantHandlingRequest, wf WorkflowRecord, provider, lastError, notificationMessageID string) (string, error) {
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	id := idgen.New("wfl")
-	if _, err = tx.ExecContext(ctx, `INSERT INTO outbound_workflow(id,account_id,inbox_id,request_id,kind,provider,from_name,from_address,to_json,cc_json,bcc_json,subject,text_body,html_body,raw_path,size_bytes,status,attempts,last_error,next_attempt_at,claim_owner,claim_expires_at,provider_message_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',0,?,'','','','',?)`,
-		id, accountID, wf.Inbox.ID, r.ID, model.WorkflowKindHandoff, provider, wf.From.Name, wf.From.Address, jsonString(wf.To), jsonString(wf.CC), jsonString(wf.BCC), wf.Subject, wf.Text, wf.HTML, wf.RawPath, wf.SizeBytes, lastError, nowText()); err != nil {
-		return "", err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE assistant_handling_requests SET notification_status=?,notification_message_id=?,updated_at=? WHERE id=? AND account_id=?`, model.NotificationQueued, strings.TrimSpace(notificationMessageID), nowText(), r.ID, accountID); err != nil {
-		return "", err
-	}
-	if err = tx.Commit(); err != nil {
-		return "", err
-	}
-	return id, nil
-}
-
-// HandoffNotificationWorkflowID resolves the queued notification workflow job id
-// for a handoff record, or "" when none is linked.
-func (s *Store) HandoffNotificationWorkflowID(ctx context.Context, accountID, requestID string) (string, error) {
-	var id string
-	err := s.read.QueryRowContext(ctx, `SELECT id FROM outbound_workflow WHERE account_id=? AND request_id=? AND kind=? ORDER BY created_at DESC LIMIT 1`, accountID, requestID, model.WorkflowKindHandoff).Scan(&id)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	return id, err
-}
-
 // HandoffByMessageID resolves a handoff record from the RFC5322 Message-ID of the
 // frozen draft. It is the inbound-side correlation used to keep a handoff's own
 // notification mail out of future remote detection.
@@ -628,18 +480,6 @@ func (s *Store) HandoffByMessageID(ctx context.Context, accountID, messageID str
 		return model.AssistantHandlingRequest{}, ErrNotFound
 	}
 	return scanAssistantHandling(s.read.QueryRowContext(ctx, `SELECT `+handlingColumns+` FROM assistant_handling_requests WHERE account_id=? AND message_id=? AND message_id<>'' ORDER BY requested_at DESC LIMIT 1`, accountID, messageID))
-}
-
-// HandoffByNotificationMessageID resolves a handoff record from the RFC5322
-// Message-ID of its generated notification email. A notification delivered back
-// into the connected inbox is excluded from remote detection by this durable
-// lookup, so the exclusion does not depend on a live body fetch.
-func (s *Store) HandoffByNotificationMessageID(ctx context.Context, accountID, messageID string) (model.AssistantHandlingRequest, error) {
-	messageID = strings.TrimSpace(messageID)
-	if messageID == "" {
-		return model.AssistantHandlingRequest{}, ErrNotFound
-	}
-	return scanAssistantHandling(s.read.QueryRowContext(ctx, `SELECT `+handlingColumns+` FROM assistant_handling_requests WHERE account_id=? AND notification_message_id=? AND notification_message_id<>'' ORDER BY requested_at DESC LIMIT 1`, accountID, messageID))
 }
 
 // HandoffByHandoffID resolves a handoff record from its stable handoff id.

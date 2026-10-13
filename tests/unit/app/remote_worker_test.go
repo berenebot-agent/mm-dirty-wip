@@ -585,42 +585,35 @@ func TestRemoteWorkerAllowlistSkipsProactive(t *testing.T) {
 	}
 }
 
-// TestRemoteWorkerHandoffNotificationExcluded proves a handoff's own notification
-// email (identified by its durably-recorded notification Message-ID) is excluded
-// from proactive delivery without a live body fetch, so a handoff never echoes
-// back as a fresh arrival.
-func TestRemoteWorkerHandoffNotificationExcluded(t *testing.T) {
+// TestRemoteWorkerHandoffEchoExcluded proves a handoff's own frozen draft
+// (identified by its durably-recorded Message-ID) echoed back into the connected
+// inbox is excluded from proactive delivery without a live body fetch, so a
+// handoff never echoes back as a fresh arrival.
+func TestRemoteWorkerHandoffEchoExcluded(t *testing.T) {
 	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
-	// Record a handoff with a notification Message-ID.
+	// Record a handoff whose frozen draft has a Message-ID.
 	asst := model.Principal{AccountID: box.AccountID, MailboxRoles: map[string]string{box.ID: "assistant"}, Admin: true}
 	d, err := svc.Store.CreateDraft(ctx, asst, model.Draft{InboxID: box.ID, To: []string{"x@y.test"}, Subject: "s", Text: "b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, _, err := svc.Store.CreateAssistantHandling(ctx, asst, store.AssistantHandlingInsert{
+	if _, _, err := svc.Store.CreateAssistantHandling(ctx, asst, store.AssistantHandlingInsert{
 		DraftID: d.ID, InboxID: box.ID, Mode: model.AuthoringRemoteDraft,
 		ContentHash: "h", HandoffID: "hnd_x", MessageID: "<frozen@remote.example>", RemoteFolder: "Drafts",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Store.CommitHandoffNotification(ctx, box.AccountID, created, store.WorkflowRecord{
-		Inbox: box, From: model.Address{Address: box.Address}, To: []string{box.Address},
-		Subject: "Draft placed", Text: "x", RawPath: "handoff/x.eml", SizeBytes: 1,
-	}, "", "", "<notify@remote.example>"); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
 	w.DetectInbox(ctx, inbox) // baseline
-	// The notification email arrives back in the INBOX.
-	fake.addMessage("INBOX", "From: "+box.Address+"\r\nSubject: Draft placed\r\nMessage-ID: <notify@remote.example>\r\n\r\nnotify", "<notify@remote.example>", "Draft placed")
+	// The frozen draft is found again in the INBOX (e.g. re-synced).
+	fake.addMessage("INBOX", "From: "+box.Address+"\r\nSubject: s\r\nMessage-ID: <frozen@remote.example>\r\n\r\nb", "<frozen@remote.example>", "s")
 	ch, cancel := collectEvents(svc)
 	defer cancel()
 	w.DetectInbox(ctx, inbox)
 	if evs := drainEvents(ch); len(evs) != 0 {
-		t.Fatalf("handoff notification raised a proactive event: %d", len(evs))
+		t.Fatalf("handoff echo raised a proactive event: %d", len(evs))
 	}
 	arrivals, err := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
 	if err != nil {

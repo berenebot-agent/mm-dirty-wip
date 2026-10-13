@@ -50,11 +50,12 @@ An `assistant` send (a request to send a draft) is resolved per the inbox's
   nominated approver. An approved request then sends through the domain's
   outbound configuration. A domain inbox cannot be switched to remote draft;
   the mode selector is not offered for one.
-- **Remote draft handoff** (the default for a standalone inbox) — the frozen
-  draft is placed one-way into the connected mailbox's remote **Drafts** folder
-  for a human to review and send from their own client. MailMoose never sends
-  it and sends no notification email. Publication is tracked separately from
-  the remote Sent-copy.
+- **Remote draft** (the default for a standalone inbox) — the frozen draft is
+  placed one-way into the connected mailbox's remote **Drafts** folder for a
+  human to review and send from their own client. MailMoose never sends it,
+  sends no notification email, and involves no approver (switching to this mode
+  clears any approver). The web UI shows no handoff surface: the request just
+  places the draft.
 
 Both modes are set per inbox (**Approvals** settings) for a standalone inbox and
 can be changed; the

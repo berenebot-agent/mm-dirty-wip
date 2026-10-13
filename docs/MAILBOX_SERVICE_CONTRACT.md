@@ -360,36 +360,32 @@ transient scope/`LIST` shortfall or a generation flip.
   immutable handoff id plus the publication state, populated on
   draft retrieval (`internal/store/drafts.go`), and `GET
   /v1/inboxes/{id}/handoffs` lists the inbox's handoffs newest first, **retaining
-  terminal records** (`published`, `ambiguous`, `failed`/`cancelled`) even after
-  the local draft has been cleaned up. The handoff events
-  (`draft.handoff_requested`/`_published`/`_ambiguous`/`_failed`/`_cancelled`)
-  carry the same non-secret fields. Legacy notification-state fields and event
-  names are retained for compatibility but no new handoff notification is queued.
-- **Cancel and retry are explicit, bounded, and never automatic.** A **pending**
-  or **ambiguous** handoff can be **resolved** (`Store.CancelHandoff` / the UI
-  action): it becomes `failed` with `last_error="cancelled"`, the draft returns
-  to editable, and a `draft.handoff_cancelled` event is emitted. Allowing an
-  ambiguous handoff to be resolved gives the operator an exit so its frozen draft
-  is not trapped. An already-`published` handoff cannot be cancelled (`409`). A
-  **retry** (UI `retry-handoff`) is a deliberate **re-request** that routes
-  through the inbox's effective authoring mode (`RequestSend`), so it only
-  produces a new handoff while the inbox is in `remote_draft` mode; it never
-  re-appends blindly. In particular, an `ambiguous` append — one whose outcome
-  could not be verified — is **never automatically retried**; the human resolves
-  or re-requests it. A **transient verification failure** (a lookup error after
-  an unconfirmed append) is *not* terminal: the handoff stays pending and the next
-  pass re-verifies by lookup (never a blind re-append), bounded by
-  `maxHandoffAppendAttempts`. A definitive not-found with no other copy is
-  ambiguous; more than one remote match is ambiguous. A retry of a missing frozen
+  terminal records** (`published`, `ambiguous`, `failed`) even after the local
+  draft has been cleaned up. The handoff events
+  (`draft.handoff_requested`/`_published`/`_ambiguous`/`_failed`) carry the same
+  non-secret fields. A handoff never queues a notification job and never sends a
+  notification email; the web UI exposes no handoff surface at all.
+- **Settlement is automatic, bounded and never a blind retry.** A handoff that
+  publishes is cleaned up. A terminal outcome (a permanent append failure, an
+  unverifiable append after the bounded attempt budget, or more than one remote
+  match) **unfreezes its local draft** so it is never trapped now that no resolve
+  or retry UI remains: the human acts on the draft directly. An append is
+  **never automatically retried** once terminal — an `ambiguous` outcome is not
+  re-appended (a second copy could be created). A **transient verification
+  failure** (a lookup error after an unconfirmed append) is *not* terminal: the
+  handoff stays pending and the next pass re-verifies by lookup (never a blind
+  re-append), bounded by `maxHandoffAppendAttempts`. A retry of a missing frozen
   file verifies by lookup instead of re-appending different bytes.
 - **Effective-mode controls.** `GET /v1/inboxes/{id}/authoring` reports the
-  effective `mode`, the kind `default_mode`, the notify override, whether the
-  inbox `standalone`, and `approver_enabled` — which is true exactly when the
-  effective mode is `mailmoose_approval` (a `remote_draft` inbox has no in-app
-  approver, regardless of kind). A domain inbox is preset to `mailmoose_approval`:
-  `PUT /authoring` rejects `remote_draft` for a domain inbox with `400`, and the
-  UI hides the mode selector and notify override for a domain inbox rather than
-  offering them.
+  effective `mode`, the kind `default_mode`, whether the inbox `standalone`, and
+  `approver_enabled` — which is true exactly when the effective mode is
+  `mailmoose_approval` (a `remote_draft` inbox has no approver, regardless of
+  kind). Setting a standalone inbox to `remote_draft` (via `PUT /authoring`, the
+  inbox edit form, or `PATCH /v1/inboxes/{id}`) clears any stored approver. A
+  domain inbox is preset to `mailmoose_approval`: `PUT /authoring` rejects
+  `remote_draft` for a domain inbox with `400`, and the UI hides the mode
+  selector for a domain inbox rather than offering it. The legacy notify fields
+  are retained but have no effect.
 
 ### Remote detection and approval (`internal/app/remote_worker.go`, `control.go`)
 - `RemoteWorker` watches each remote-configured standalone inbox (IDLE with a

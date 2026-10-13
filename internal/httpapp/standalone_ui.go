@@ -826,11 +826,11 @@ func (s *Server) authoringSettingsByInbox(ctx context.Context, boxes []model.Inb
 			continue
 		}
 		payload := map[string]any{
-			"mode":              settings.Mode,
-			"default_mode":      model.DefaultAuthoringMode(box.Kind),
-			"notify_address":    settings.NotifyAddress,
-			"notify_overridden": settings.NotifyOverridden,
-			// Approver is enabled by the EFFECTIVE mode, not the kind.
+			"mode":         settings.Mode,
+			"default_mode": model.DefaultAuthoringMode(box.Kind),
+			// Approver is enabled by the EFFECTIVE mode, not the kind. A
+			// remote-draft inbox has no approver: its request to send just places
+			// the draft in the connected Drafts folder.
 			"approver_enabled": settings.Mode == model.AuthoringMailMooseApproval,
 			"standalone":       box.Kind == model.InboxKindStandalone,
 		}
