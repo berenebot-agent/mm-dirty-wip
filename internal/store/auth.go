@@ -267,10 +267,9 @@ func (s *Store) authenticateUser(ctx context.Context, email, password string, ar
 	if !ok {
 		return model.User{}, ErrNotFound
 	}
-	// Lazy migration: a successful verify of a legacy pbkdf2-sha256 hash (or an
-	// Argon2id hash below the current cost) upgrades the stored hash to the
-	// current algorithm. Best-effort; a failure only means the row is upgraded
-	// on a later login.
+	// Lazy migration: a successful verify of an Argon2id hash below the current
+	// cost upgrades the stored hash. Best-effort; a failure only means the row
+	// is upgraded on a later login.
 	if auth.NeedsRehash(ph) {
 		if upgraded, herr := auth.HashPassword(password); herr == nil {
 			_, _ = s.write.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=? AND password_hash=?`, upgraded, u.ID, ph)

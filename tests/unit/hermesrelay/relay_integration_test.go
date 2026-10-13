@@ -135,8 +135,8 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
 	delivery := "delivery-secret"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(delivery))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-test")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(delivery), []byte(app.RelaySecretAAD("gateway-test")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-test", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -213,8 +213,8 @@ func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-future-ack")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-future-ack")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-future-ack", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -288,8 +288,8 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-replay")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-replay")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-replay", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -375,8 +375,8 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-sender")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-sender")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-sender", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -447,8 +447,8 @@ func TestRelayOutboundBurstIsBounded(t *testing.T) {
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-burst")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-burst")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-burst", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -523,8 +523,8 @@ func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-test")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-test")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-test", se, de)
 	if err != nil {
 		t.Fatal(err)
@@ -596,8 +596,8 @@ func TestRelayDeliversRemoteArrival(t *testing.T) {
 	}
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: inbox.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-remote")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-remote")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-remote", se, de)
 	if err != nil {
 		t.Fatal(err)

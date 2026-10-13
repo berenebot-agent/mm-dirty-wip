@@ -128,12 +128,9 @@ type Service struct {
 	// resolvable and the send is refused as not found. It is never a global.
 	RemoteMessages     RemoteMessageResolver
 	GmailMailboxClient func(context.Context, string, string) (*gmail.Client, string, error)
-	// encryptionKeys holds the primary key first and any legacy derivation
-	// after it, so decrypting pre-upgrade ciphertext still works.
-	encryptionKeys  [][]byte
-	unroutedLim     *rateLimiter
-	sendLim         *rateLimiter
-	dialMXIngestSem chan struct{}
+	unroutedLim        *rateLimiter
+	sendLim            *rateLimiter
+	dialMXIngestSem    chan struct{}
 }
 
 // AntlerEndpointResolver resolves the current Antler MX receiver set. It is
@@ -158,7 +155,7 @@ func (s *Service) wakeOutbox() {
 }
 
 func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) {
-	key, keys, err := cryptox.DeriveKeys(cfg.AppEncryptionKey)
+	key, err := cryptox.DeriveKey(cfg.AppEncryptionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +168,7 @@ func New(cfg config.Config, st *store.Store, hub *events.Hub) (*Service, error) 
 	if concurrency < 1 {
 		concurrency = 32
 	}
-	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, encryptionKeys: keys, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
+	return &Service{Config: cfg, Store: st, Hub: hub, Log: slog.Default(), EncryptionKey: key, unroutedLim: newRateLimiter(1, time.Minute), sendLim: newRateLimiter(cfg.SendLimitPerMinute, time.Minute), dialMXIngestSem: make(chan struct{}, concurrency)}, nil
 }
 
 // providerSourceLabel returns the human source label for a webhook provider
@@ -1365,17 +1362,11 @@ func wholeFloat(v float64) (int, error) {
 	return int(v), nil
 }
 
-// DecryptSecret decrypts a stored secret with any key that can still read it,
-// so data written before a key-derivation upgrade remains readable.
-func (s *Service) DecryptSecret(encrypted string) ([]byte, error) {
-	return cryptox.DecryptFirst(s.encryptionKeys, encrypted)
-}
-
-// DecryptSecretAAD decrypts a secret bound to a row identity. A legacy
-// (unbound) blob is still read, so migrating a call site does not strand
-// existing data.
+// DecryptSecretAAD decrypts a secret bound to its row identity. A blob whose
+// binding does not match is refused; pre-AAD ciphertext is rewritten at startup
+// by ReencryptLegacySecrets, so a reader never sees an unbound value.
 func (s *Service) DecryptSecretAAD(aad string, encrypted string) ([]byte, error) {
-	return cryptox.DecryptFirstAAD(s.encryptionKeys, encrypted, []byte(aad))
+	return cryptox.DecryptWithAAD(s.EncryptionKey, encrypted, []byte(aad))
 }
 
 // EnsureDialMXCredential creates an exact-domain key without copying inherited
@@ -1439,13 +1430,8 @@ func (s *Service) newDialMXCredential(accountID, domainID string) (store.DialMXC
 	return store.DialMXCredential{KeyID: keyID, EncryptedPrivateSeed: encrypted, PublicKey: base64.RawURLEncoding.EncodeToString(public)}, nil
 }
 
-// EncryptSecret encrypts a secret with the current primary key.
-func (s *Service) EncryptSecret(plaintext []byte) (string, error) {
-	return cryptox.Encrypt(s.EncryptionKey, plaintext)
-}
-
-// EncryptSecretAAD encrypts a secret bound to a row identity, so a blob copied
-// to another row fails to decrypt under its new owner.
+// EncryptSecretAAD encrypts a secret bound to its row identity, so a blob
+// copied to another row fails to decrypt under its new owner.
 func (s *Service) EncryptSecretAAD(aad string, plaintext []byte) (string, error) {
 	return cryptox.EncryptWithAAD(s.EncryptionKey, plaintext, []byte(aad))
 }
@@ -1520,7 +1506,7 @@ func (s *Service) CreateRelay(ctx context.Context, p model.Principal, inboxID, n
 	if err != nil {
 		return "", "", "", err
 	}
-	secEnc, err := cryptox.Encrypt(s.EncryptionKey, []byte(secret))
+	secEnc, err := s.EncryptSecretAAD(RelaySecretAAD(gatewayID), []byte(secret))
 	if err != nil {
 		return "", "", "", err
 	}

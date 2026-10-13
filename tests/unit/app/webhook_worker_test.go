@@ -59,7 +59,7 @@ func TestWebhookWorkerNotifySignsAndAcks(t *testing.T) {
 	messageID := seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
 
 	const secret = "webhook-signing-secret"
-	enc, err := svc.EncryptSecret([]byte(secret))
+	enc, err := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte(secret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestWebhookWorkerForwardStreamsRawMIME(t *testing.T) {
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
 
 	const secret = "forward-token"
-	enc, _ := svc.EncryptSecret([]byte(secret))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte(secret))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestWebhookWorkerRetriesOnServerError(t *testing.T) {
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
 
-	enc, _ := svc.EncryptSecret([]byte("s"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("s"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "notify", "signature", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestWebhookBackedOffClientDoesNotBlockOthers(t *testing.T) {
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
 
-	enc, _ := svc.EncryptSecret([]byte("s"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("s"))
 	failing, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "failing", "https://hooks.example.test/x", "notify", "signature", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func TestWebhookWorkerDeliveryLogRecordsSuccess(t *testing.T) {
 	ctx := context.Background()
 	messageID := seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
 
-	enc, _ := svc.EncryptSecret([]byte("s"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("s"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "notify", "signature", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +312,7 @@ func TestCancelledWebhookAttemptPersistsBackoff(t *testing.T) {
 	svc.Config.WebhookRetryWindow = time.Hour
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
-	enc, _ := svc.EncryptSecret([]byte("s"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("s"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "slow", "https://hooks.example.test/x", "notify", "signature", enc)
 	if err != nil {
 		t.Fatal(err)

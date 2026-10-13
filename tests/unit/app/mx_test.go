@@ -58,11 +58,11 @@ func mxService(t *testing.T) (*app.Service, model.User, model.Domain, model.Inbo
 // the UI without depending on the generated credential.
 func enableMXReceiver(t *testing.T, svc *app.Service) {
 	t.Helper()
-	encSecret, err := svc.EncryptSecret([]byte("test-receiver-key"))
+	encSecret, err := svc.EncryptSecretAAD(app.MXSettingsAAD, []byte("test-receiver-key"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	encConfig, err := svc.EncryptSecret([]byte("{}"))
+	encConfig, err := svc.EncryptSecretAAD(app.MXSettingsAAD, []byte("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
