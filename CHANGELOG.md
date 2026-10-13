@@ -108,6 +108,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   No behaviour changes; the live paths are unchanged. See `D097`'s status update.
 - `docs/IMPLEMENTATION_PLAN.md`, an unreferenced V1 phase plan.
 
+### Changed
+
+- Stored secrets are now always bound to the row that owns them (an AAD
+  binding), so a value written in the older unbound format is refused on read.
+  Upgrading an instance created before this release needs a one-shot migration:
+  a `migrate-secrets` command is built into the image and rewrites the affected
+  values in place; see the upgrade section in `docs/SELFHOSTING.md`. The command
+  verifies every secret through the application's own decrypt path and is
+  idempotent.
+
 ### Added
 
 - A Direct MX domain that signs outbound mail now shows a **published-DKIM-record
