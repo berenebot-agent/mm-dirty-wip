@@ -27,6 +27,20 @@ const (
 	argonKeyBytes    = 32
 )
 
+// Bounds on the parameters a stored Argon2id hash may request. The values come
+// from the stored row, which a database-write attacker controls, so an
+// unbounded request could force a huge allocation or workload through the
+// four-slot admission gate. The caps are generous enough never to reject a hash
+// this code emits or a near-future cost increase, and are the Argon2id
+// counterpart of the legacy PBKDF2 iteration bound (legacyMinIterations and
+// legacyMaxIterations). argonMaxMemoryKiB keeps the gate's peak at 1 GiB
+// (4 x 256 MiB).
+const (
+	argonMaxMemoryKiB   = 4 * argonMemory
+	argonMaxIterations  = 32
+	argonMaxParallelism = 64
+)
+
 // Legacy PBKDF2 parameters, retained only so existing stored hashes keep
 // verifying. New hashes are always Argon2id.
 const (
@@ -206,7 +220,7 @@ func NeedsRehash(encoded string) bool {
 	if e1 != nil || e2 != nil || e3 != nil {
 		return true
 	}
-	return uint32(m) < argonMemory || uint32(t) < argonIterations || uint8(p) < argonParallelism
+	return uint32(m) < argonMemory || uint32(t) < argonIterations || uint32(p) < argonParallelism || uint32(p) > argonMaxParallelism
 }
 
 func checkArgon2id(encoded, password string) bool {
@@ -231,6 +245,12 @@ func verifyArgon2id(encoded, password string) bool {
 	iterations, e2 := strconv.ParseUint(strings.TrimPrefix(values[1], "t="), 10, 32)
 	parallelism, e3 := strconv.ParseUint(strings.TrimPrefix(values[2], "p="), 10, 32)
 	if e1 != nil || e2 != nil || e3 != nil || parallelism == 0 {
+		return false
+	}
+	// Reject a stored row that asks for an out-of-range workload before any KDF
+	// work happens, so a database-write attacker cannot make one verification
+	// allocate or compute an unbounded amount.
+	if memory > argonMaxMemoryKiB || iterations > argonMaxIterations || parallelism > argonMaxParallelism {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])

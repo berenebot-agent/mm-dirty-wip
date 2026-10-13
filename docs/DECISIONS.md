@@ -4416,6 +4416,83 @@ session-bound; the legacy PBKDF2 path is not moved behind the Argon2 timeout (it
 is not gated by the Argon2 slots); and the Mailgun/Cloudflare unattested envelope
 sender accepted risk (`D058`) is untouched.
 
+## D117 — Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF
+
+**Context:** A follow-up external review surfaced low-severity and edge-case
+findings. None are exploitable without database-write access, control of a
+sibling subdomain, or a captured provider signature, and several were already
+covered by `D058`/`D059`/`D116`. This entry records the fixes applied and the
+items deliberately retained.
+
+**Decision:**
+
+- **Argon2id parameter bounds (password hashes).** `verifyArgon2id` trusted the
+  memory, time and parallelism encoded in the stored hash, so a database-write
+  attacker could make one verification request an unbounded allocation or
+  workload through the four-slot admission gate. The stored parameters are now
+  bounded (`argonMaxMemoryKiB` 256 MiB, `argonMaxIterations` 32,
+  `argonMaxParallelism` 64) and rejected before any KDF work, mirroring the
+  existing legacy PBKDF2 iteration bound. `NeedsRehash` no longer truncates `p`
+  with `uint8`; it compares the full width and flags an out-of-range `p`.
+- **`safepath` comment corrected.** `Join` is a lexical containment guard; the
+  post-join re-check does not resolve symlinks. The code is unchanged and
+  correct for its threat (server-generated stored paths); the comment that
+  implied a symlinked-root defence now states what the guard actually does.
+- **App CSP gains `base-uri`, `form-action` and `object-src`.** The
+  application-shell CSP (`securityHeaders`) now sets
+  `base-uri 'none'; form-action 'self'; object-src 'none'`, matching the
+  per-message CSPs that already set the first two. `form-action` is `'self'`
+  because the shell posts to itself.
+- **Remote images: protocol-relative `src` stripped.** `StripRemoteImages`
+  matched only `http(s)://`, so a protocol-relative `//host/...` `<img src>`
+  survived the default pass. The regex now also matches protocol-relative URLs
+  (and `HasRemoteImages` reports them). The CSP blocked them either way; this
+  keeps the "no remote images" render honest.
+- **Message HTML and attachments are `no-store`.** Decrypted message HTML, the
+  standalone remote message HTML and streamed attachments were
+  `private, max-age=300`, so a copy could outlive sign-out in the browser cache.
+  They now send `Cache-Control: no-store`, matching every other authenticated
+  page in the app. The cost is a re-fetch on Back/Forward.
+- **Pre-auth CSRF token is signed.** `mmm_csrf` is the only double-submit CSRF
+  token in the app (session CSRF is server-side). It was unsigned, so an
+  attacker controlling a sibling subdomain could plant a same-site cookie and
+  pair it with a forged form field; `SameSite=Lax` does not block a same-site
+  request. The token is now `raw.hmac` signed with a process-local key, and the
+  value must both equal the form field and carry a valid signature. Scope is
+  `/login`, `/register`, `/setup` and `/invite/{token}`.
+
+**Accepted / retained:**
+
+- **Mailgun replay window kept at ±24h.** The signature covers only
+  `timestamp+token`, so a captured triple is usable with a forged body until its
+  token is recorded by the durable delivery dedupe. The window is retained
+  because Mailgun can delay a webhook well beyond 15 minutes and it is not
+  established whether a retry is re-signed with a fresh timestamp; shrinking it
+  could drop legitimate mail. Resend's Svix window (5 minutes) and SendGrid's
+  dedupe are unchanged and already tighter. The rationale sits next to each
+  constant.
+- **Legacy AAD-less ciphertext and the fixed PBKDF2 salt are retained**
+  (`internal/cryptox`). A `v2.`-prefixed blob is AAD-bound; a legacy blob is
+  decrypted with a nil AAD so pre-migration rows keep working, and the
+  passphrase fallback uses a fixed application salt. A database-write attacker
+  can therefore swap legacy blobs between unmigrated rows or re-derive a
+  passphrase key, which is the same access the encryption is meant to survive;
+  all new writes use the AAD-bound format. Recorded in `SECURITY.md`.
+- **Relay WebSocket keeps `CheckOrigin: true`.** Relay auth is a bearer secret
+  (plus an optional caller bearer), never a cookie, so a cross-origin socket
+  cannot ride an ambient session; the upgrader's same-origin default would
+  reject legitimate cross-origin gateways. Rationale recorded at the call site.
+
+**Reason:** Each fix removes a small, cheap-to-close gap without changing the
+product's behaviour. The retained items are deliberate trade-offs already
+documented or newly recorded here, and shrinking the Mailgun window needs a
+provider-behaviour fact that is not yet established.
+
+**Complexity:** Local changes only — `internal/auth` (parameter bounds),
+`internal/httpapp` (CSP, signed pre-auth CSRF, `no-store`), `internal/htmlsanitize`
+(regex), `internal/transport/{mailgun,resend}` (comment) and `internal/hermesrelay`
+(comment). No new dependency, schema, transport or runtime service.
+
 ## Future extension register
 
 - additional inbound transport adapters

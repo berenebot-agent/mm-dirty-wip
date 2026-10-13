@@ -55,7 +55,12 @@ func New(svc *app.Service) *Server {
 		Hub:                 svc.Hub,
 		Log:                 svc.Log,
 		RequireCallerBearer: svc.Config.RelayRequireBearer,
-		upgrader:            ws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
+		// Origin is deliberately not checked. Relay auth is the connection's
+		// bearer secret plus an optional caller bearer, never an ambient
+		// cookie, so a cross-origin WebSocket cannot ride a logged-in session.
+		// The upgrader's same-origin default would instead reject legitimate
+		// cross-origin gateways, which have no browser origin to present.
+		upgrader: ws.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }},
 	}
 }
 

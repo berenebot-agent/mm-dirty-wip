@@ -463,7 +463,7 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "html-1", RFCMessageID: "<html@test>",
 		From: model.Address{Address: "sender@outside.test"}, To: []string{box.Address},
 		EnvelopeTo: []string{box.Address}, Subject: "HTML", Text: "plain",
-		HTML:    `<p>Hello <img src="cid:logo@test"><img src="https://tracker.example/pixel.png"></p>`,
+		HTML:    `<p>Hello <img src="cid:logo@test"><img src="https://tracker.example/pixel.png"><img src="//tracker2.example/px.png"></p>`,
 		RawPath: "messages/test.eml", SizeBytes: 10, ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -504,6 +504,12 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 	if strings.Contains(rr.Body.String(), "tracker.example") {
 		t.Fatal("remote image should be stripped by default")
 	}
+	if strings.Contains(rr.Body.String(), "tracker2.example") {
+		t.Fatal("protocol-relative remote image should be stripped by default")
+	}
+	if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("message html Cache-Control = %q, want no-store", cc)
+	}
 	if !strings.Contains(body, "data-remote-img-show") {
 		t.Fatal("message view should offer a show-images control when remote images exist")
 	}
@@ -518,6 +524,9 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "tracker.example") {
 		t.Fatal("remote image should load after opt-in")
+	}
+	if !strings.Contains(rr.Body.String(), "tracker2.example") {
+		t.Fatal("protocol-relative image should load after opt-in")
 	}
 }
 

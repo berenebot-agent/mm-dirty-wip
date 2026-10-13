@@ -2,10 +2,13 @@ package httpapp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,9 +89,15 @@ type Server struct {
 	registerLimiter     *limiter
 	// setupLimiter bounds first-run setup claim attempts per source address,
 	// separate from the registration limiter so neither can exhaust the other.
-	setupLimiter  *limiter
-	flashes       *flashStore
-	assetVersion  string
+	setupLimiter *limiter
+	flashes      *flashStore
+	assetVersion string
+	// csrfSignKey signs the pre-auth double-submit CSRF token so a sibling
+	// subdomain (same-site, so SameSite=Lax does not help) cannot plant a
+	// known cookie value and pair it with a forged form field. The key is
+	// process-local: a restart invalidates outstanding pre-auth cookies and the
+	// next page load issues a fresh one.
+	csrfSignKey   []byte
 	inboundSem    chan struct{}
 	inboundPerIP  *concurrentLimiter
 	streamLimiter *concurrentLimiter
@@ -122,11 +131,18 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		_, _ = h.Write(b)
 	}
 	sum := h.Sum(nil)
+	// A process-local signing key for the pre-auth CSRF token. crypto/rand
+	// failing is unrecoverable, so fail loudly rather than issue forgeable
+	// tokens.
+	csrfKey := make([]byte, 32)
+	if _, err := rand.Read(csrfKey); err != nil {
+		panic("httpapp: cannot read random bytes for the CSRF signing key: " + err.Error())
+	}
 	conc := svc.Config.InboundConcurrency
 	if conc < 1 {
 		conc = 32
 	}
-	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
+	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log, csrfSignKey: csrfKey,
 		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		keyLoginLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		accountLoginLimiter:  newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
@@ -592,7 +608,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 		w.Header().Set("Link", `</.well-known/mailmoose>; rel="help"; title="Agents: GET /.well-known/mailmoose for API reference"`)
 		// HSTS is only meaningful on a deployment that requires HTTPS; the
 		// redirect middleware runs over plaintext, so this is reached only on
@@ -685,19 +701,52 @@ func withTimezone(ctx context.Context, p model.Principal) context.Context {
 	return context.WithValue(ctx, tzKey, timezone.Resolve(p.Timezone, ""))
 }
 
+// preAuthCSRFCookie carries the pre-auth double-submit CSRF token.
+const preAuthCSRFCookie = "mmm_csrf"
+
+// signPreAuthCSRF returns raw with an HMAC signature appended. The pre-auth
+// flow is a double-submit check, so the cookie value is echoed in the form.
+// Signing it stops an attacker who controls a sibling subdomain from planting a
+// known cookie value (same-site, so SameSite=Lax does not block it) and pairing
+// it with a forged form field: without the signing key the attacker cannot
+// produce a valid signature.
+func (s *Server) signPreAuthCSRF(raw string) string {
+	mac := hmac.New(sha256.New, s.csrfSignKey)
+	_, _ = mac.Write([]byte(raw))
+	return raw + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// validPreAuthCSRF reports whether v is a signed pre-auth token this server
+// issued. raw contains only base64url characters (no "."), so splitting on the
+// last "." is unambiguous.
+func (s *Server) validPreAuthCSRF(v string) bool {
+	i := strings.LastIndexByte(v, '.')
+	if i <= 0 || i == len(v)-1 {
+		return false
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(v[i+1:])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, s.csrfSignKey)
+	_, _ = mac.Write([]byte(v[:i]))
+	return hmac.Equal(sig, mac.Sum(nil))
+}
+
 func (s *Server) setPreAuthCSRF(w http.ResponseWriter, r *http.Request) string {
-	if c, err := r.Cookie("mmm_csrf"); err == nil && len(c.Value) >= 20 {
+	if c, err := r.Cookie(preAuthCSRFCookie); err == nil && s.validPreAuthCSRF(c.Value) {
 		return c.Value
 	}
-	tok, err := auth.RandomToken(24)
+	raw, err := auth.RandomToken(24)
 	if err != nil {
 		return ""
 	}
-	http.SetCookie(w, &http.Cookie{Name: "mmm_csrf", Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
+	tok := s.signPreAuthCSRF(raw)
+	http.SetCookie(w, &http.Cookie{Name: preAuthCSRFCookie, Value: tok, Path: "/", HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode, MaxAge: 3600})
 	return tok
 }
 func preAuthCSRF(r *http.Request) string {
-	c, err := r.Cookie("mmm_csrf")
+	c, err := r.Cookie(preAuthCSRFCookie)
 	if err != nil {
 		return ""
 	}
@@ -708,7 +757,7 @@ func (s *Server) withPreAuthCSRF(next http.HandlerFunc) http.HandlerFunc {
 		_ = r.ParseForm()
 		got := r.Form.Get("_csrf")
 		want := preAuthCSRF(r)
-		if got == "" || want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		if got == "" || want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 || !s.validPreAuthCSRF(want) {
 			http.Error(w, "invalid CSRF token", http.StatusForbidden)
 			return
 		}

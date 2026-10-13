@@ -398,3 +398,41 @@ func TestPasskeysRequireSecureContext(t *testing.T) {
 		}
 	})
 }
+
+// TestPreAuthCSRFRejectsUnsignedAndTamperedCookie covers the pre-auth CSRF
+// hardening: the double-submit cookie is same-site, so SameSite=Lax does not
+// stop a sibling subdomain from planting it. The token is now signed, so a
+// planted or altered value must be refused even when the cookie and the form
+// field match. t.Parallel(): the fixture owns its server and signing key.
+func TestPreAuthCSRFRejectsUnsignedAndTamperedCookie(t *testing.T) {
+	t.Parallel()
+	_, h, u, _, _ := httpFixture(t)
+
+	post := func(cookie *http.Cookie) *httptest.ResponseRecorder {
+		t.Helper()
+		form := url.Values{"email": {u.Email}, "password": {"wrong-password"}, "_csrf": {cookie.Value}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+
+	// A value with no server signature (the sibling-subdomain plant).
+	if rr := post(&http.Cookie{Name: "mmm_csrf", Value: "planted-token-with-no-signature"}); rr.Code != http.StatusForbidden {
+		t.Fatalf("unsigned pre-auth CSRF accepted: %d", rr.Code)
+	}
+
+	// A genuine token whose signature was altered must also be refused.
+	good := csrfFromLogin(t, h)
+	if rr := post(&http.Cookie{Name: "mmm_csrf", Value: good.Value + "x"}); rr.Code != http.StatusForbidden {
+		t.Fatalf("tampered pre-auth CSRF accepted: %d", rr.Code)
+	}
+
+	// The genuine signed token still passes the CSRF gate (the login itself may
+	// fail on the password, but not with a CSRF rejection).
+	if rr := post(good); rr.Code == http.StatusForbidden {
+		t.Fatalf("valid signed pre-auth CSRF rejected: %d", rr.Code)
+	}
+}
