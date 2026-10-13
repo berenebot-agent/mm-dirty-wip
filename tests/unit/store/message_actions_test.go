@@ -11,6 +11,7 @@ import (
 )
 
 func TestMessageActionsRoundRobin(t *testing.T) {
+	t.Parallel()
 	s, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -63,6 +64,7 @@ func TestMessageActionsRoundRobin(t *testing.T) {
 }
 
 func TestMessageActionsRoundRobinSkipsBlockedMessages(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"pending", "ambiguous"} {
 		t.Run(state, func(t *testing.T) {
 			s, u, _, boxes := testStore(t)
@@ -110,6 +112,7 @@ func TestMessageActionsRoundRobinSkipsBlockedMessages(t *testing.T) {
 }
 
 func TestMessageActionsRecheckSelectionAndRequeue(t *testing.T) {
+	t.Parallel()
 	s, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -208,6 +211,7 @@ func TestMessageActionsRecheckSelectionAndRequeue(t *testing.T) {
 // interval later, not two. The bug this guards against applied the interval once
 // when writing the timestamp and again in the selection query.
 func TestRecheckDueDateIsTheNextCheckTime(t *testing.T) {
+	t.Parallel()
 	s, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}

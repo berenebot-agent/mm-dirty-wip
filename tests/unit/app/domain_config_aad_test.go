@@ -9,6 +9,7 @@ import (
 // bound to its owning domain: relabelling the ciphertext to another domain (a
 // cross-row copy) fails to decrypt.
 func TestDomainConfigAADBindsToDomain(t *testing.T) {
+	t.Parallel()
 	svc, u, domA, _ := testService(t)
 	ctx := context.Background()
 	domB, err := svc.Store.CreateDomain(ctx, u.AccountID, "second.example.com")

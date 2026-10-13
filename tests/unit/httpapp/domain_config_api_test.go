@@ -16,6 +16,7 @@ import (
 // API: unconfigured GET, redacted PUT/GET, validation, provider switching,
 // non-admin rejection, idempotent delete, and no-store responses.
 func TestDomainSendingConfigREST(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -124,6 +125,7 @@ func adminDo(h http.Handler, method, path, body, key string) *httptest.ResponseR
 // TestDomainConfigCrossAccountIsolation proves another account can neither read
 // nor mutate a domain's sending, receiving or delivery config.
 func TestDomainConfigCrossAccountIsolation(t *testing.T) {
+	t.Parallel()
 	svc, h, _, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	b, err := svc.Store.CreateAccountAndAdmin(ctx, "B", "b@example.com", "correct horse battery staple", 50<<20)
@@ -155,6 +157,7 @@ func TestDomainConfigCrossAccountIsolation(t *testing.T) {
 // TestDomainDeliveryHistoryIndependentOfConfig proves past attempts remain
 // visible after the sending config is deleted or the provider is switched.
 func TestDomainDeliveryHistoryIndependentOfConfig(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -195,6 +198,7 @@ func TestDomainDeliveryHistoryIndependentOfConfig(t *testing.T) {
 // TestDomainConfigRepeatedGETNeverLeaksOrRotatesSecret proves repeated redacted
 // GETs never expose a stored secret and never mint a new generated secret.
 func TestDomainConfigRepeatedGETNeverLeaksOrRotatesSecret(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -241,6 +245,7 @@ func TestDomainConfigRepeatedGETNeverLeaksOrRotatesSecret(t *testing.T) {
 // TestRemovedConfigRoutesAreGone proves the retired connector routes and domain
 // assignment selector no longer exist.
 func TestRemovedConfigRoutesAreGone(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -281,6 +286,7 @@ func TestRemovedConfigRoutesAreGone(t *testing.T) {
 // TestAPIDomainPatchRejectsRetiredFields proves the domain PATCH DTO no longer
 // accepts credential-assignment fields.
 func TestAPIDomainPatchRejectsRetiredFields(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -297,6 +303,7 @@ func TestAPIDomainPatchRejectsRetiredFields(t *testing.T) {
 // TestDomainSendingDeliveriesEmptyArray proves an empty history is serialised as
 // [] rather than null.
 func TestDomainSendingDeliveriesEmptyArray(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

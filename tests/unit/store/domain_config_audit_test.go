@@ -13,6 +13,7 @@ import (
 // caller holds a version for a config that is then deleted. The stale save must
 // conflict rather than silently resurrecting the removed config.
 func TestDomainConfigSaveAfterRemovalConflicts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
@@ -35,6 +36,7 @@ func TestDomainConfigSaveAfterRemovalConflicts(t *testing.T) {
 // TestDomainConfigSendingReceivingIsolation verifies the two per-domain config
 // slots are independent: deleting or rotating one never touches the other.
 func TestDomainConfigSendingReceivingIsolation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
@@ -66,6 +68,7 @@ func TestDomainConfigSendingReceivingIsolation(t *testing.T) {
 // copies made by migration 013 are genuinely independent rows: rotating one
 // domain's config leaves the sibling's encrypted bytes untouched.
 func TestMigrationConfigCopiesRotateIndependently(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 	st, err := store.Open(dir)
@@ -99,6 +102,7 @@ func TestMigrationConfigCopiesRotateIndependently(t *testing.T) {
 // at the storage boundary: a config row cannot name a domain owned by a
 // different account.
 func TestDomainConfigFKRejectsMismatchedAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, d, _ := testStore(t)
 	other, err := s.CreateAccountAndAdmin(ctx, "B", "admin@b.test", "correct horse battery staple", 100<<20)
@@ -116,6 +120,7 @@ func TestDomainConfigFKRejectsMismatchedAccount(t *testing.T) {
 // TestMigration013MarkerRecovery verifies a lost 013 marker is re-recorded from
 // the already-applied schema without resurrecting the retired tables.
 func TestMigration013MarkerRecovery(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -147,6 +152,7 @@ func TestMigration013MarkerRecovery(t *testing.T) {
 // concurrency: two writers that read the same revision cannot both commit; one
 // wins and the other gets ErrConflict without corrupting the stored config.
 func TestDomainConfigConcurrentSaveOneWins(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "brevo", "seed", store.ConfigVersion{}); err != nil {
@@ -192,6 +198,7 @@ func TestDomainConfigConcurrentSaveOneWins(t *testing.T) {
 // key violations after upgrade and that enforcement is active on a fresh
 // connection, i.e. the composite config FK and the log's domain FK are valid.
 func TestMigration013FinalForeignKeysClean(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 	st, err := store.Open(dir)

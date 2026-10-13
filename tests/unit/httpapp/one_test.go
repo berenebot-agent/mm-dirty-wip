@@ -20,6 +20,7 @@ import (
 )
 
 func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	f := onefixture.New(t)
@@ -172,6 +173,7 @@ func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
 }
 
 func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	var logs bytes.Buffer
 	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -312,6 +314,7 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 // progressive backfill as a Gmail "after:" boundary, while the default indexes
 // everything.
 func TestOneImportHistoryWindowBoundsBackfill(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	f := onefixture.New(t)

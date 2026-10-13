@@ -27,6 +27,7 @@ func configureMXReceiver(t *testing.T, svc *app.Service, mode string) {
 // MX UX: an account admin sees the Direct MX option and, once the installation
 // receiver is configured, a status panel naming the mode, state and MX target.
 func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	configureMXReceiver(t, svc, app.MXModeIncluded)
 
@@ -59,6 +60,7 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 }
 
 func TestDirectMXEditorPermissionsAndDomainReturn(t *testing.T) {
+	t.Parallel()
 	svc, h, u, box := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	path := "/ui/domains/" + box.DomainID + "/mx"
@@ -133,6 +135,7 @@ func TestDirectMXEditorPermissionsAndDomainReturn(t *testing.T) {
 }
 
 func TestDirectMXIncludedDefaultsAndEditableGreeting(t *testing.T) {
+	t.Parallel()
 	svc, h, u, box := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
@@ -176,6 +179,7 @@ func TestDirectMXIncludedDefaultsAndEditableGreeting(t *testing.T) {
 // Direct MX before the receiver exists is told, in the dialog, that a system
 // administrator must enable it, rather than silently accepting mail nowhere.
 func TestDirectMXUIUnconfiguredReceiverShowsGuidance(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -193,6 +197,7 @@ func TestDirectMXUIUnconfiguredReceiverShowsGuidance(t *testing.T) {
 // TestDirectMXLabel proves the transport advertises the human label used by the
 // provider dropdown rather than the internal transport string.
 func TestDirectMXLabel(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)

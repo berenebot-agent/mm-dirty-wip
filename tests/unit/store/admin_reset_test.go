@@ -10,6 +10,7 @@ import (
 )
 
 func TestGetUserByEmail(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	got, err := s.GetUserByEmail(ctx, "admin@example.com")
@@ -25,6 +26,7 @@ func TestGetUserByEmail(t *testing.T) {
 }
 
 func TestAdminResetPasswordRevokesSessionsAndKeepsAPIKeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	_, plain, err := s.CreateAPIKey(ctx, u.AccountID, "machine", true, nil)
@@ -72,6 +74,7 @@ func TestAdminResetPasswordRevokesSessionsAndKeepsAPIKeys(t *testing.T) {
 }
 
 func TestCreateInitialAdminIsOneShot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -87,6 +90,7 @@ func TestCreateInitialAdminIsOneShot(t *testing.T) {
 }
 
 func TestAdminResetPasswordUnknownUser(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, _ := testStore(t)
 	if err := s.AdminResetPassword(ctx, "usr_missing", "new-correct-horse-staple"); !errors.Is(err, store.ErrNotFound) {

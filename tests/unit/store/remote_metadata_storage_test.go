@@ -39,6 +39,7 @@ func accountUsed(t *testing.T, s *store.Store, accountID string) int64 {
 // charged to both the account and the inbox storage counters, and that the
 // remote-reported size_bytes is NOT what is charged.
 func TestRemoteMetadataCountsTowardQuota(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 
@@ -77,6 +78,7 @@ func TestRemoteMetadataCountsTowardQuota(t *testing.T) {
 // TestRemoteMetadataDoesNotChargeSizeBytes proves the reported remote body size
 // is ignored: two messages differing only in size_bytes cost the same.
 func TestRemoteMetadataDoesNotChargeSizeBytes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{
@@ -107,6 +109,7 @@ func TestRemoteMetadataDoesNotChargeSizeBytes(t *testing.T) {
 // TestRemoteMetadataRefundedOnDelete proves removing remote metadata returns its
 // bytes to the counters.
 func TestRemoteMetadataRefundedOnDelete(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{
@@ -142,6 +145,7 @@ func TestRemoteMetadataRefundedOnDelete(t *testing.T) {
 // TestRemoteMetadataRefundedOnReset proves ResetRemoteInboxState refunds every
 // cached remote byte.
 func TestRemoteMetadataRefundedOnReset(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{
@@ -176,6 +180,7 @@ func TestRemoteMetadataRefundedOnReset(t *testing.T) {
 // TestRemoteMetadataLabelsAndFoldersCount proves label and folder metadata are
 // charged, and refunded when cleared.
 func TestRemoteMetadataLabelsAndFoldersCount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	base := accountUsed(t, s, acct)
@@ -218,6 +223,7 @@ func TestRemoteMetadataLabelsAndFoldersCount(t *testing.T) {
 // the reconcile stops adding new rows (leaving the folder partial) rather than
 // failing with ErrQuota, and that existing rows remain.
 func TestRemoteMetadataCapStopsIndexing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{
@@ -263,6 +269,7 @@ func TestRemoteMetadataCapStopsIndexing(t *testing.T) {
 // TestRemoteMetadataUpsertCapSentinel proves the single-message upsert path
 // returns ErrRemoteMetadataQuota when its new row would exceed the cap.
 func TestRemoteMetadataUpsertCapSentinel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if err := s.SetAccountStorageQuota(ctx, acct, 50); err != nil {
@@ -281,6 +288,7 @@ func TestRemoteMetadataUpsertCapSentinel(t *testing.T) {
 // equals the maintained counter after remote writes, exercising the SQL byte
 // definition end to end.
 func TestInboxStorageUsedMatchesMaintainedCounter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, acct, inboxID := remoteMetaSetup(t)
 	if _, err := s.ReconcileRemoteFolders(ctx, acct, inboxID, []store.RemoteFolderSync{

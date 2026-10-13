@@ -14,6 +14,7 @@ import (
 // TestAPIAccountSettingsTimezone covers the timezone field on the account
 // settings route: default empty, set, invalid rejected, cleared.
 func TestAPIAccountSettingsTimezone(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -67,6 +68,7 @@ func TestAPIAccountSettingsTimezone(t *testing.T) {
 // TestUISettingsTimezone covers the account-page form flow: setting the account
 // default and the per-user override, and that both render their values back.
 func TestUISettingsTimezone(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -108,6 +110,7 @@ func TestUISettingsTimezone(t *testing.T) {
 // TestUIRendersTimestampsInAccountZone proves the display conversion: a message
 // timestamp is rendered in the configured zone, not UTC.
 func TestUIRendersTimestampsInAccountZone(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	m := seedInbound(t, svc, box, "tz-render-1", "<tz-render-1@test>", "Zone me", "body")

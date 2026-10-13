@@ -14,6 +14,7 @@ import (
 )
 
 func TestMessageActionsAsyncDefaultAndPolling(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box := httpFixture(t)
 	h := httpapp.New(svc, nil).Handler()
 	m := seedInbound(t, svc, box, "action-api", "<action-api@test>", "Action", "body")

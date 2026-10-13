@@ -10,6 +10,7 @@ import (
 )
 
 func TestResolveInboundBindingAndIsolation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
@@ -70,6 +71,7 @@ func TestResolveInboundBindingAndIsolation(t *testing.T) {
 }
 
 func TestInboundPersistsTransportEnvelopeMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 	box := b[0]
@@ -108,6 +110,7 @@ func TestInboundPersistsTransportEnvelopeMetadata(t *testing.T) {
 }
 
 func TestWebhookSkippedDeliveryAdvancesCursor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	c, err := s.CreateWebhookClient(ctx, u.AccountID, b[0].ID, "ep", "https://hooks.example.test/x", "notify", "signature", "enc")
@@ -145,6 +148,7 @@ func TestWebhookSkippedDeliveryAdvancesCursor(t *testing.T) {
 }
 
 func TestInboundDedupScopedByRecipient(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 	r1 := inbound(b[0], "same-delivery", "<one@test>", "", nil, "s", "body")

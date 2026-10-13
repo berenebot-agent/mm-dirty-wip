@@ -11,6 +11,7 @@ import (
 )
 
 func TestHermesEnvBlock(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
 	if err != nil {
@@ -43,6 +44,7 @@ func TestHermesEnvBlock(t *testing.T) {
 }
 
 func TestDashboardRendersKeyDialog(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/", nil)
@@ -87,6 +89,7 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 // delete through the confirmation dialog (which names the client and type)
 // rather than a data-confirm attribute, and that the delete route still works.
 func TestDashboardRendersClientDeleteDialog(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, nil)
 	if err != nil {
@@ -131,6 +134,7 @@ func TestDashboardRendersClientDeleteDialog(t *testing.T) {
 }
 
 func TestCreateKeyReturnsJSONSecret(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"type": {"api"}, "name": {"Agent"}, "_csrf": {csrf}, "role_" + box.ID: {"read"}}
@@ -156,6 +160,7 @@ func TestCreateKeyReturnsJSONSecret(t *testing.T) {
 }
 
 func TestCreateKeyRedirectsWithoutJSONAccept(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"type": {"api"}, "name": {"Agent"}, "_csrf": {csrf}, "role_" + box.ID: {"read"}}

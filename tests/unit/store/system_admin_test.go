@@ -18,6 +18,7 @@ func openStore(t *testing.T) *store.Store {
 }
 
 func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	const first = "correct horse battery staple"
@@ -69,6 +70,7 @@ func TestSyncSystemAdminCreatesThenRotates(t *testing.T) {
 }
 
 func TestSyncSystemAdminAdoptsExistingUser(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	// An ordinary account Admin already exists (for example from a prior
@@ -98,6 +100,7 @@ func TestSyncSystemAdminAdoptsExistingUser(t *testing.T) {
 }
 
 func TestSyncSystemAdminPromotesAnOperatorAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, accountOwner, _, boxes := testStore(t)
 	// An operator (non-admin) whose email is then chosen as ADMIN_EMAIL must be
@@ -123,6 +126,7 @@ func TestSyncSystemAdminPromotesAnOperatorAccount(t *testing.T) {
 }
 
 func TestSyncSystemAdminMovesRoleOnEmailChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	first, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
@@ -151,6 +155,7 @@ func TestSyncSystemAdminMovesRoleOnEmailChange(t *testing.T) {
 }
 
 func TestAdminResetRefusesSystemAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -163,6 +168,7 @@ func TestAdminResetRefusesSystemAdmin(t *testing.T) {
 }
 
 func TestAccountMailerOwnership(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	if err := s.SetAccountMailerInbox(ctx, u.AccountID, boxes[0].ID); err != nil {
@@ -187,6 +193,7 @@ func TestAccountMailerOwnership(t *testing.T) {
 }
 
 func TestSetAccountStorageQuota(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	if err := s.SetAccountStorageQuota(ctx, u.AccountID, 123<<20); err != nil {
@@ -232,6 +239,7 @@ func TestSetAccountStorageQuota(t *testing.T) {
 }
 
 func TestAccountAdminInviteRedeemsSeparateAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	inv, token, err := s.CreateInvite(ctx, store.InviteInput{
@@ -262,6 +270,7 @@ func TestAccountAdminInviteRedeemsSeparateAccount(t *testing.T) {
 }
 
 func TestCreateInviteRejectsEmailConflictsWithoutSideEffects(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	other, _, err := s.CreateInvite(ctx, store.InviteInput{Email: "other@example.com", Kind: model.InviteKindAccountAdmin})
@@ -300,6 +309,7 @@ func TestCreateInviteRejectsEmailConflictsWithoutSideEffects(t *testing.T) {
 }
 
 func TestCreateInviteAllowsExpiredOrRevokedEmail(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"expired", "revoked"} {
 		t.Run(state, func(t *testing.T) {
 			ctx := context.Background()
@@ -325,6 +335,7 @@ func TestCreateInviteAllowsExpiredOrRevokedEmail(t *testing.T) {
 }
 
 func TestCreateInviteConcurrentEmailConflict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	start := make(chan struct{})
@@ -355,6 +366,7 @@ func TestCreateInviteConcurrentEmailConflict(t *testing.T) {
 }
 
 func TestOperatorInviteGrantsOwnerOnSelectedInboxes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	inv, token, err := s.CreateInvite(ctx, store.InviteInput{
@@ -395,6 +407,7 @@ func TestOperatorInviteGrantsOwnerOnSelectedInboxes(t *testing.T) {
 }
 
 func TestRevokeInviteInvalidatesToken(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	inv, token, err := s.CreateInvite(ctx, store.InviteInput{AccountID: u.AccountID, Email: "op@example.com", Kind: model.InviteKindOperator, TTL: time.Hour})
@@ -413,6 +426,7 @@ func TestRevokeInviteInvalidatesToken(t *testing.T) {
 }
 
 func TestSetUserRolesReplacesOperatorGrants(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	_, token, err := s.CreateInvite(ctx, store.InviteInput{AccountID: u.AccountID, Email: "op@example.com", Kind: model.InviteKindOperator, InboxIDs: []string{boxes[0].ID}, TTL: time.Hour})

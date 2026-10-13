@@ -11,6 +11,7 @@ import (
 // fix: a read-only principal must not receive the assistant-scoped approval
 // fields on the events feed, while an assistant/owner still does.
 func TestListEventsRedactsAssistantFieldsForReadPrincipal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 

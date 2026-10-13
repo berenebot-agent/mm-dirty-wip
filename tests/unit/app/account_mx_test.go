@@ -20,6 +20,7 @@ func adminP(u model.User) model.Principal {
 // resave that retains it, CAS conflict handling, the global one-account-per-
 // receiver rule, and the fail-closed clear while a domain still routes to it.
 func TestAccountMXReceiverLifecycle(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 
@@ -77,6 +78,7 @@ func TestAccountMXReceiverLifecycle(t *testing.T) {
 // TestAccountMXReceiverGlobalUniqueness proves one physical single-mode receiver
 // may be registered by exactly one account.
 func TestAccountMXReceiverGlobalUniqueness(t *testing.T) {
+	t.Parallel()
 	svc, u, _ := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 
@@ -96,6 +98,7 @@ func TestAccountMXReceiverGlobalUniqueness(t *testing.T) {
 // public-routable, while a private opt-in permits an http/LAN receiver only when
 // the operator allows private outbound.
 func TestAccountMXReceiverURLPolicy(t *testing.T) {
+	t.Parallel()
 	// Operator allows private outbound: the public policy still rejects private
 	// hosts unless the account explicitly opts in.
 	svc, u, _ := newMXServiceWithOutboundPolicy(t, true)
@@ -116,6 +119,9 @@ func TestAccountMXReceiverURLPolicy(t *testing.T) {
 // internet: the per-account allow_private opt-in is ignored and the save is held
 // to the public-only policy.
 func TestAccountMXReceiverOperatorPolicyWins(t *testing.T) {
+	// Serial: newMXServiceWithOutboundPolicy(false) installs a strict process-wide
+	// netutil policy that send-time provider validation reads, so it must not
+	// overlap another test's service.
 	svc, u, _ := newMXServiceWithOutboundPolicy(t, false)
 	ctx := context.Background()
 
@@ -132,6 +138,7 @@ func TestAccountMXReceiverOperatorPolicyWins(t *testing.T) {
 
 // TestAccountMXReceiverAdminOnly proves a non-admin principal cannot save.
 func TestAccountMXReceiverAdminOnly(t *testing.T) {
+	t.Parallel()
 	svc, u, _ := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 	nonAdmin := model.Principal{UserID: u.ID, AccountID: u.AccountID}
@@ -143,6 +150,7 @@ func TestAccountMXReceiverAdminOnly(t *testing.T) {
 // TestRemoteMXDomainSelectRequiresReceiver proves selecting Remote MX for a
 // domain fails closed when the account has no receiver configured.
 func TestRemoteMXDomainSelectRequiresReceiver(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, app.RemoteMXProvider, map[string]any{}, false); !errors.Is(err, app.ErrInvalidConfig) {

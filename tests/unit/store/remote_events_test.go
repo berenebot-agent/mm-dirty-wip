@@ -12,6 +12,7 @@ import (
 // TestMigration057RemoteEvents proves migration 057 adds the durable remote
 // event/detection surface on a genuinely fresh database.
 func TestMigration057RemoteEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -42,6 +43,7 @@ func TestMigration057RemoteEvents(t *testing.T) {
 }
 
 func TestMigration065RemoteArrivalSources(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -92,6 +94,7 @@ func remoteEventEnv(t *testing.T) (*store.Store, string, model.Inbox) {
 // without emitting arrivals, then only strictly-new UIDs are recorded, and a
 // repeated detection is idempotent.
 func TestRemoteDetectionBaselineAndArrivals(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 
@@ -150,6 +153,7 @@ func TestRemoteDetectionBaselineAndArrivals(t *testing.T) {
 // TestRemoteArrivalEventAndNotifyBaseline proves the arrival event is persisted
 // remote-aware and the notification baseline is independent.
 func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 	if err := st.EstablishRemoteBaseline(ctx, acct, in.ID, "INBOX", 5, 0); err != nil {
@@ -197,6 +201,7 @@ func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
 // TestRemoteArrivalClaimAndSettle proves the proactive fan-out claim/retry/settle
 // state machine.
 func TestRemoteArrivalClaimAndSettle(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 	if err := st.EstablishRemoteBaseline(ctx, acct, in.ID, "INBOX", 5, 0); err != nil {
@@ -227,6 +232,7 @@ func TestRemoteArrivalClaimAndSettle(t *testing.T) {
 
 // TestRemoteNotifyBaselineFlag proves the baseline flag toggles once.
 func TestRemoteNotifyBaselineFlag(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 	if set, err := st.RemoteNotifyBaselineSet(ctx, acct, in.ID); err != nil || set {
@@ -243,6 +249,7 @@ func TestRemoteNotifyBaselineFlag(t *testing.T) {
 // TestRemoteActionsDelayedTrash proves the durable auto-action stamps a trash due
 // instant and is applied once.
 func TestRemoteActionsDelayedTrash(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 	if err := st.EstablishRemoteBaseline(ctx, acct, in.ID, "INBOX", 5, 0); err != nil {
@@ -287,6 +294,7 @@ func TestRemoteActionsDelayedTrash(t *testing.T) {
 // TestListDetectableRemoteInboxes proves only configured standalone inboxes are
 // returned.
 func TestListDetectableRemoteInboxes(t *testing.T) {
+	t.Parallel()
 	st, acct, in := remoteEventEnv(t)
 	ctx := context.Background()
 	// An unconfigured standalone inbox is not detectable.

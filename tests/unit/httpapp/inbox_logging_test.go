@@ -35,6 +35,7 @@ func lifecycleRecords(t *testing.T, logs *bytes.Buffer) []map[string]any {
 }
 
 func TestInboxTerminalLogsAPIAttribution(t *testing.T) {
+	t.Parallel()
 	svc, _, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	client, token, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "private-key-label", true, nil)
@@ -86,6 +87,7 @@ func TestInboxTerminalLogsAPIAttribution(t *testing.T) {
 }
 
 func TestInboxTerminalLogsUISessionAttribution(t *testing.T) {
+	t.Parallel()
 	for _, keySession := range []bool{false, true} {
 		name := "user"
 		if keySession {

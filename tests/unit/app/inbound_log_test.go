@@ -14,6 +14,7 @@ import (
 // blocked" INFO line on the container stream, and that a retry is logged too
 // (the sender retrying must not look silent).
 func TestBlockedInboundIsLogged(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := mxService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxAllowedSenders(ctx, u.AccountID, box.ID, []string{"friend@outside.test"}); err != nil {
@@ -63,6 +64,7 @@ func TestBlockedInboundIsLogged(t *testing.T) {
 // invisible in the inbox — emits a terminal "inbound control mail" INFO line
 // whose outcome is the recorded control outcome.
 func TestControlMailIsLogged(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	sink := newLogSink()
 	svc.Log = slog.New(sink)

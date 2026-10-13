@@ -11,6 +11,7 @@ import (
 // self-discovery: the documentation table in internal/apispec and the live
 // registrations in internal/httpapp must describe exactly the same /v1 surface.
 func TestAPISpecCoversEveryRegisteredRoute(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _, _ := httpFixture(t)
 	srv := httpapp.New(svc, nil)
 	undocumented, phantom := apispec.Missing(srv.RegisteredAPIRoutes())
@@ -26,6 +27,7 @@ func TestAPISpecCoversEveryRegisteredRoute(t *testing.T) {
 // session-authenticated installation surface: the spec's Auth "session" entries
 // and the live session registrations must describe exactly the same routes.
 func TestAPISpecCoversEverySessionRoute(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _, _ := httpFixture(t)
 	srv := httpapp.New(svc, nil)
 	undocumented, phantom := apispec.SessionMissing(srv.RegisteredSessionRoutes())

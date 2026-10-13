@@ -40,6 +40,7 @@ func remoteCadenceView(t *testing.T, h http.Handler, inboxID, key string) (strin
 // leaves the Identity tab with nothing to show for it. An unset override resolves
 // to the model defaults, so the form always has an effective value to display.
 func TestRemoteConfigReportsCadenceForEveryStandaloneProvider(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	ctx := context.Background()
 	key := adminKey(t, svc, u)
@@ -99,6 +100,7 @@ func TestRemoteConfigReportsCadenceForEveryStandaloneProvider(t *testing.T) {
 // the save answered 400 from ConfigureStandaloneRemote, which refuses a provider
 // inbox outright, so no Identity-tab setting could be saved at all.
 func TestInboxSettingsSaveCadenceKeepsProviderGrant(t *testing.T) {
+	t.Parallel()
 	for _, provider := range []string{"microsoft", "google"} {
 		t.Run(provider, func(t *testing.T) {
 			svc, h, u, _, _, _ := standaloneFixture(t)
@@ -168,6 +170,7 @@ func TestInboxSettingsSaveCadenceKeepsProviderGrant(t *testing.T) {
 // fields are submitted as the dialog sends them, so the save is a real
 // Identity-tab save rather than a partial form.
 func TestInboxSettingsPollMinutesConvertedAndBounded(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -248,6 +251,7 @@ func remoteRealtime(t *testing.T, h http.Handler, inboxID, key string) bool {
 // a plain IMAP inbox are included for contrast: IMAP keeps the flag because IDLE
 // can deliver immediately, the others do not.
 func TestRealtimeCapabilityReflectsPush(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	ctx := context.Background()
 	key := adminKey(t, svc, u)
@@ -338,6 +342,7 @@ func TestRealtimeCapabilityReflectsPush(t *testing.T) {
 // TestInboxListingOutboundCapabilities checks the IMAP connector and One's
 // configured marker in the public listing, including the retained One tombstone.
 func TestInboxListingOutboundCapabilities(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, imap, _ := standaloneFixture(t)
 	ctx := context.Background()
 	key := adminKey(t, svc, u)

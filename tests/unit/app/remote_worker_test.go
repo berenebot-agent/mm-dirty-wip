@@ -62,6 +62,7 @@ func drainEvents(ch <-chan model.Event) []model.Event {
 // arrival's header into the read index (inbox_remote_messages) so the message is
 // visible in the inbox list immediately, without waiting for a full reconcile.
 func TestRemoteWorkerQuickIndexesNewMail(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: old\r\nMessage-ID: <old@remote>\r\n\r\nbody", "<old@remote>", "old")
@@ -95,6 +96,7 @@ func TestRemoteWorkerQuickIndexesNewMail(t *testing.T) {
 // TestRemoteWorkerBaselineNoFlood proves the first detection pass establishes the
 // baseline without emitting any arrival event for pre-existing mail.
 func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
@@ -133,6 +135,7 @@ func TestRemoteWorkerBaselineNoFlood(t *testing.T) {
 // ask, and that a manual sync always runs. It counts passes through the dialer,
 // which the detection path invokes exactly once per pass.
 func TestDetectInboxDemandCoalesced(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	// Re-enable the real time-based gate (workerEnv disables it for determinism)
@@ -175,6 +178,7 @@ func TestDetectInboxDemandCoalesced(t *testing.T) {
 // the full-sync safety-net cadence instead of the quick poll, and an inbox
 // without push uses the quick cadence (honoring its per-inbox override).
 func TestWatchIntervalPushAware(t *testing.T) {
+	t.Parallel()
 	svc, _, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	w := app.NewRemoteWorker(svc, rm, nil)
@@ -216,6 +220,7 @@ func TestWatchIntervalPushAware(t *testing.T) {
 // the watcher and the demand coalescing both fall back to the full-sync cadence,
 // while a nil override still inherits the one-minute quick poll.
 func TestQuickPollDisabled(t *testing.T) {
+	t.Parallel()
 	svc, _, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	w := app.NewRemoteWorker(svc, rm, nil)
@@ -253,6 +258,7 @@ func TestQuickPollDisabled(t *testing.T) {
 // Debug only, so there is a single operator-facing "remote received" line whose
 // source reports the push.
 func TestIdleWatchPushMarksArrivalSource(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, _ := workerEnv(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -289,7 +295,12 @@ func TestIdleWatchPushMarksArrivalSource(t *testing.T) {
 	// Push one server-side mailbox update and wait for the arrival to be recorded.
 	sess.notes <- imap.Notification{Folder: "INBOX", Kind: "idle", NumMessages: 1, HasNumMessages: true}
 	deadline := time.Now().Add(5 * time.Second)
-	for {
+	// The arrival row is inserted before its preview is queued, and both happen on
+	// the worker's goroutine, so poll until the arrival AND its queued preview are
+	// both visible rather than sampling once. A poll that lands between the two
+	// writes must retry, not fail.
+	pushed := false
+	for !pushed {
 		arrivals, aerr := svc.Store.ListRemoteArrivalsForInbox(ctx, box.AccountID, box.ID, 10)
 		if aerr != nil {
 			t.Fatal(aerr)
@@ -311,26 +322,37 @@ func TestIdleWatchPushMarksArrivalSource(t *testing.T) {
 			if perr != nil {
 				t.Fatalf("list pending previews: %v", perr)
 			}
-			queued := false
 			for _, p := range pending {
 				if p.ID == rec.ID {
-					queued = true
+					pushed = true
 					break
 				}
 			}
-			if !queued {
-				t.Fatalf("push arrival %s queued no preview; pending=%d, logs %q", rec.ID, len(pending), sink.text())
+		}
+		if pushed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no pushed arrival with a queued preview recorded; logs %q", sink.text())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The operator-facing arrival line carries the push source. It is logged after
+	// the durable event is persisted, still on the worker's goroutine, so it trails
+	// the row by a scheduling gap under load: poll the sink instead of sampling it
+	// once, or the read races the log write and sees no entry.
+	for {
+		entry, ok := sink.entry("remote received")
+		if ok {
+			if entry["source"] != "imap push" {
+				t.Fatalf("remote received source = %#v", entry)
 			}
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no pushed arrival recorded; logs %q", sink.text())
+			t.Fatalf("no remote received line recorded; logs %q", sink.text())
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-	// The operator-facing arrival line carries the push source.
-	if entry, ok := sink.entry("remote received"); !ok || entry["source"] != "imap push" {
-		t.Fatalf("remote received source = %#v", entry)
 	}
 	cancel()
 	<-done
@@ -422,6 +444,7 @@ func (s *idleFakeSession) Watch(ctx context.Context, folder string, _ int) (<-ch
 }
 
 func TestRemoteDetectionSurvivesPollingRequestCancellation(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	inbox, err := svc.Store.GetInboxInternal(context.Background(), box.AccountID, box.ID)
 	if err != nil {
@@ -454,6 +477,7 @@ func TestRemoteDetectionSurvivesPollingRequestCancellation(t *testing.T) {
 // order the truncation would return the OLDEST page, so the baseline would sit far
 // below the true maximum and detection would be permanently suppressed.
 func TestRemoteWorkerLargeFolderBaselineAndDetect(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	// More than one search page (MaxSearchResults = 500) of pre-existing mail.
@@ -481,6 +505,7 @@ func TestRemoteWorkerLargeFolderBaselineAndDetect(t *testing.T) {
 // TestRemoteWorkerNoReadSideEffect proves a detection pass never marks a message
 // seen on the live server.
 func TestRemoteWorkerNoReadSideEffect(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	fake.addMessage("INBOX", "From: a@b.test\r\nSubject: s\r\nMessage-ID: <s@remote>\r\n\r\nbody", "<s@remote>", "s")
@@ -496,6 +521,7 @@ func TestRemoteWorkerNoReadSideEffect(t *testing.T) {
 // TestRemoteWorkerOutsideScopeNotDetected proves a message outside the inbox's
 // explicit root scope is never detected.
 func TestRemoteWorkerOutsideScopeNotDetected(t *testing.T) {
+	t.Parallel()
 	st, u, _, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	box, err := st.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
@@ -528,6 +554,7 @@ func TestRemoteWorkerOutsideScopeNotDetected(t *testing.T) {
 // TestRemoteWorkerAllowlistSkipsProactive proves a message from a disallowed sender
 // is still recorded (live-readable) but raises no proactive notification.
 func TestRemoteWorkerAllowlistSkipsProactive(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxAllowedSenders(ctx, box.AccountID, box.ID, []string{"allowed@example.test"}); err != nil {
@@ -563,6 +590,7 @@ func TestRemoteWorkerAllowlistSkipsProactive(t *testing.T) {
 // from proactive delivery without a live body fetch, so a handoff never echoes
 // back as a fresh arrival.
 func TestRemoteWorkerHandoffNotificationExcluded(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	// Record a handoff with a notification Message-ID.
@@ -606,6 +634,7 @@ func TestRemoteWorkerHandoffNotificationExcluded(t *testing.T) {
 // TestRemoteWorkerControlForcesApproval seeds a pending approval and a control
 // reply from the nominated approver; detection consumes it and never forwards it.
 func TestRemoteWorkerControlForcesApproval(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	req := seedPendingApproval(t, svc, box)
@@ -635,6 +664,7 @@ func TestRemoteWorkerControlForcesApproval(t *testing.T) {
 // whose body cannot be fetched is never published as an ordinary remote event and
 // remains pending for a retry.
 func TestRemoteWorkerControlFetchFailureFailsClosed(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	req := seedPendingApproval(t, svc, box)
@@ -672,6 +702,7 @@ func TestRemoteWorkerControlFetchFailureFailsClosed(t *testing.T) {
 // TestRemoteWorkerACKMarkReadAndAutoTrash proves the ACK mark-read sets \Seen and
 // the delayed auto-trash moves the message, with retry on failure.
 func TestRemoteWorkerACKMarkReadAndAutoTrash(t *testing.T) {
+	t.Parallel()
 	svc, box, _, fake, w := workerEnv(t)
 	ctx := context.Background()
 	fake.addFolder("Trash", 100)
@@ -731,6 +762,7 @@ func TestRemoteWorkerACKMarkReadAndAutoTrash(t *testing.T) {
 // TestRemoteWorkerReconnectNotSkip proves a connection failure during detection
 // does not advance the cursor, so the message is detected on the next pass.
 func TestRemoteWorkerReconnectNotSkip(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	inbox, _ := svc.Store.GetInboxInternal(ctx, box.AccountID, box.ID)
@@ -774,6 +806,7 @@ func TestRemoteWorkerReconnectNotSkip(t *testing.T) {
 // TestRemoteWorkerStopNoLeak proves Start/Stop terminates promptly with no
 // leaked goroutine (a second Stop would deadlock if one leaked the done channel).
 func TestRemoteWorkerStopNoLeak(t *testing.T) {
+	t.Parallel()
 	_, _, _, _, w := workerEnv(t)
 	w.SetPeriod(10 * time.Millisecond)
 	w.Start()
@@ -830,6 +863,7 @@ func seedPendingApproval(t *testing.T, svc *app.Service, box model.Inbox) pendin
 // to a configured forward-mode webhook client with the raw MIME fetched live from
 // the server, and that a metadata-only read never fetches the body.
 func TestRemoteWorkerWebhookForwardRaw(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	rm.InstallRemoteBridges()
@@ -879,6 +913,7 @@ func TestRemoteWorkerWebhookForwardRaw(t *testing.T) {
 // TestRemoteWorkerWebhookNotifyJSON proves a notify-mode webhook client receives a
 // remote-aware JSON body (no local message id) without fetching a body.
 func TestRemoteWorkerWebhookNotifyJSON(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	rm.InstallRemoteBridges()

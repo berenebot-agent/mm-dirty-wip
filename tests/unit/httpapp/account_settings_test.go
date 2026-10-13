@@ -16,6 +16,7 @@ import (
 // zone are editable only by an account Admin. A non-admin operator's POSTs must
 // not change the stored values, and must not render the admin-only controls.
 func TestAccountSettingsRequireAdmin(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 
@@ -81,6 +82,7 @@ func TestAccountSettingsRequireAdmin(t *testing.T) {
 // value back into the settings button data attribute, renders the dialog
 // control, and clears when the override checkbox is absent.
 func TestInboxTrashRetentionUISetsOverride(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, root.ID)
@@ -147,6 +149,7 @@ func TestInboxTrashRetentionUISetsOverride(t *testing.T) {
 // the inbox PATCH route: an integer sets the override, null clears it to
 // inherit, and an absent field leaves it unchanged.
 func TestAPIInboxTrashRetentionOverride(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -197,6 +200,7 @@ func TestAPIInboxTrashRetentionOverride(t *testing.T) {
 // name, default time zone and Trash retention in one POST, and that a non-admin
 // cannot use it.
 func TestAccountSettingsBatch(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, root.ID)
@@ -246,6 +250,7 @@ func TestAccountSettingsBatch(t *testing.T) {
 // regression guard for the authorization hole where OwnsAccount() treated a
 // single-inbox owner credential as an account owner.
 func TestAccountSettingsScopedOwnerForbidden(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 
@@ -314,6 +319,7 @@ func TestAccountSettingsScopedOwnerForbidden(t *testing.T) {
 
 // TestPersonalSettingsBatch verifies the Personal tab's single Save applies the
 func TestPersonalSettingsBatch(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)

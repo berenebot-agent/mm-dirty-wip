@@ -50,6 +50,7 @@ func sendOne(t *testing.T, svc *app.Service, accountID, inboxID string) model.Me
 // enabled Direct MX config produces a stored message carrying exactly one
 // signature that verifies against the public key MailMoose reports for DNS.
 func TestDirectMXSignsStoredMessage(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":         "mail.example.com",
@@ -110,6 +111,7 @@ func TestDirectMXSignsStoredMessage(t *testing.T) {
 // without filling anything in: the well-known selector, and a signing domain
 // that follows the address the mail is From.
 func TestDirectMXDefaultSelectorAndDomain(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":         "mail.example.com",
@@ -129,6 +131,7 @@ func TestDirectMXDefaultSelectorAndDomain(t *testing.T) {
 // TestDirectMXSigningOffLeavesMessageUnsigned proves signing is opt-in: the
 // default config, and a config that explicitly turns it off, must not sign.
 func TestDirectMXSigningOffLeavesMessageUnsigned(t *testing.T) {
+	t.Parallel()
 	for name, cfg := range map[string]map[string]any{
 		"default (unset)": {"helo": "mail.example.com"},
 		"explicitly off":  {"helo": "mail.example.com", "dkim_enabled": "off"},
@@ -149,6 +152,7 @@ func TestDirectMXSigningOffLeavesMessageUnsigned(t *testing.T) {
 // signed, because every other provider either signs with its own key or
 // submits through its own authenticated infrastructure.
 func TestNonMXProviderIsNotSigned(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	api := providerServer(t, "<brevo>", new(atomic.Int32))
 	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k", "api_base": api.URL})
@@ -165,6 +169,7 @@ func TestNonMXProviderIsNotSigned(t *testing.T) {
 // key keeps signing with the existing key, so an unrelated settings change does
 // not silently rotate the key out from under published DNS.
 func TestBlankPrivateKeyRetainsStoredKey(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
@@ -209,6 +214,7 @@ func TestBlankPrivateKeyRetainsStoredKey(t *testing.T) {
 // signing is switched back on without a save. Signing itself is governed by the
 // enabled flag, not by whether a key is stored.
 func TestDisablingDKIMKeepsStoredKey(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
@@ -241,6 +247,7 @@ func TestDisablingDKIMKeepsStoredKey(t *testing.T) {
 // and not operator-controlled: a submitted key is not used, so the key shown for
 // DNS is always the one that signs.
 func TestOperatorSuppliedKeyIsIgnored(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 	attackerPEM, _, err := dkimsign.GenerateRSA2048()
@@ -272,6 +279,7 @@ func TestOperatorSuppliedKeyIsIgnored(t *testing.T) {
 // TestGeneratedKeyNeverAppearsInReadConfig proves the private key is not exposed
 // on any config read: only the public half is.
 func TestGeneratedKeyNeverAppearsInReadConfig(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
@@ -309,6 +317,7 @@ func TestGeneratedKeyNeverAppearsInReadConfig(t *testing.T) {
 // TestSigningDomainIsTheSendingDomain proves signing uses the domain mail is
 // sent from, so an aligned signature needs no operator input.
 func TestSigningDomainIsTheSendingDomain(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
@@ -342,6 +351,7 @@ func TestSigningDomainIsTheSendingDomain(t *testing.T) {
 // keeps its unsigned bytes, because rewriting a stored message a worker may
 // already be delivering would break byte-identical retries.
 func TestQueuedBeforeEnableIsDeliveredUnsigned(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	// Queue one message with signing off.
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{"helo": "mail.example.com"})
@@ -367,6 +377,7 @@ func TestQueuedBeforeEnableIsDeliveredUnsigned(t *testing.T) {
 // TestDKIMSigningSurvivesSizeChecks proves the signature is added before the
 // message-size check, so the check accounts for the bytes actually stored.
 func TestDKIMSigningSurvivesSizeChecks(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	seedSending(t, svc, u.AccountID, d.ID, "mx", map[string]any{
 		"helo":         "mail.example.com",

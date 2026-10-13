@@ -17,6 +17,7 @@ import (
 // refused (the object survives and the dashboard returns an error notice), and
 // a matching confirm deletes.
 func TestUIDeleteRequiresServerTypedConfirmation(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -44,6 +45,7 @@ func TestUIDeleteRequiresServerTypedConfirmation(t *testing.T) {
 // TestUIDeleteInboxRequiresServerTypedConfirmation is the inbox counterpart: the
 // typed value is the inbox address.
 func TestUIDeleteInboxRequiresServerTypedConfirmation(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -68,6 +70,7 @@ func TestUIDeleteInboxRequiresServerTypedConfirmation(t *testing.T) {
 // TestUIDeleteClientRequiresServerTypedConfirmation proves the client delete
 // guard is enforced server-side: the typed value is the client's name.
 func TestUIDeleteClientRequiresServerTypedConfirmation(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -116,6 +119,7 @@ func TestUIDeleteClientRequiresServerTypedConfirmation(t *testing.T) {
 // redirects back to the dashboard with an error notice instead of a bare 400
 // page, so the user is not stranded.
 func TestUICreateDomainInvalidShowsError(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	rr := domainPost(t, h, cookie, "/ui/domains", url.Values{"_csrf": {csrf}, "name": {"not a valid domain"}})
@@ -135,6 +139,7 @@ func TestUICreateDomainInvalidShowsError(t *testing.T) {
 // queued mail exists, and that the pager cursor returns the older page without
 // the newest page's rows.
 func TestUIOutboxPager(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	cookie, _ := uiSession(t, svc, u.ID)

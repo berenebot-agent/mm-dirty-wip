@@ -877,7 +877,7 @@ func (s *Service) saveDialMXReceivingConfig(ctx context.Context, accountID, doma
 		}
 	} else {
 		urlsRaw, _ := merged["receiver_urls"].(string)
-		urls, err := validateDialMXReceiverURLs(urlsRaw)
+		urls, err := validateDialMXReceiverURLs(urlsRaw, s.Config.RequirePublicOutbound())
 		if err != nil {
 			return store.DomainReceivingConfig{}, nil, invalidConfig("%s", err.Error())
 		}
@@ -1102,7 +1102,7 @@ func AntlerReceiversFromConfig(values map[string]any) []mxdial.AntlerReceiver {
 	return receivers
 }
 
-func validateDialMXReceiverURLs(raw string) ([]string, error) {
+func validateDialMXReceiverURLs(raw string, requirePublic bool) ([]string, error) {
 	parts := strings.Split(raw, ",")
 	if len(parts) > 8 {
 		return nil, fmt.Errorf("at most eight receiver URLs are supported")
@@ -1114,7 +1114,7 @@ func validateDialMXReceiverURLs(raw string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("receiver URLs must be HTTPS base URLs without paths, userinfo, query or fragment")
 		}
-		if err := netutil.ValidateBaseURL(canonical); err != nil {
+		if err := netutil.ValidateBaseURLPolicy(canonical, requirePublic); err != nil {
 			return nil, err
 		}
 		if !seen[canonical] {
@@ -1214,7 +1214,7 @@ func (s *Service) validateProviderBase(values map[string]any) error {
 	if strings.TrimSpace(base) == "" {
 		return nil
 	}
-	if err := netutil.ValidateBaseURL(base); err != nil {
+	if err := netutil.ValidateBaseURLPolicy(base, s.Config.RequirePublicOutbound()); err != nil {
 		return invalidConfig("Base URL: %s", err.Error())
 	}
 	return nil

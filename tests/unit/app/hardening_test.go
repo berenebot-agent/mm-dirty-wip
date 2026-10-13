@@ -14,6 +14,7 @@ import (
 // TestFinalMIMESizeGuardRejectsExpansion proves the size limit is enforced on
 // the built message, not just the pre-encoded attachment payload.
 func TestFinalMIMESizeGuardRejectsExpansion(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	// A body just under the cap expands past it once MIME headers are added.
 	svc.Config.MaxMessageBytes = 256
@@ -31,6 +32,7 @@ func TestFinalMIMESizeGuardRejectsExpansion(t *testing.T) {
 // TestWorkflowMailDoesNotConsumeQuotaOrCreateThread proves approval mail is not
 // mailbox content: it creates no thread and never touches account storage.
 func TestWorkflowMailDoesNotConsumeQuotaOrCreateThread(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
@@ -68,6 +70,7 @@ func TestWorkflowMailDoesNotConsumeQuotaOrCreateThread(t *testing.T) {
 // TestUnroutedAuditCoalescesPerDomain proves random local parts on the same
 // receiving domain cannot each produce an audit row.
 func TestUnroutedAuditCoalescesPerDomain(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, _ := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	ctx := context.Background()

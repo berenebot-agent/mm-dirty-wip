@@ -22,6 +22,7 @@ func standaloneBox(t *testing.T, s *store.Store, accountID, address string) mode
 }
 
 func TestAuthoringModeDefaultsByKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	domain := b[0]
@@ -77,6 +78,7 @@ func TestAuthoringModeDefaultsByKind(t *testing.T) {
 // mode: a domain inbox rejects it on write, and a legacy domain row stored as
 // remote_draft normalizes back to the kind default on read.
 func TestAuthoringModeDomainPresetApproval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	domain := b[0]
@@ -112,6 +114,7 @@ func TestAuthoringModeDomainPresetApproval(t *testing.T) {
 }
 
 func TestCreateAssistantHandlingFreezesAndSettles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -187,6 +190,7 @@ func TestCreateAssistantHandlingFreezesAndSettles(t *testing.T) {
 }
 
 func TestHandoffAmbiguousIsExplicitAndNotRetried(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -223,6 +227,7 @@ func TestHandoffAmbiguousIsExplicitAndNotRetried(t *testing.T) {
 }
 
 func TestHandoffNotificationIndependentOfPublication(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -280,6 +285,7 @@ func TestHandoffNotificationIndependentOfPublication(t *testing.T) {
 }
 
 func TestHandoffNotificationStateMonotonic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -311,6 +317,7 @@ func TestHandoffNotificationStateMonotonic(t *testing.T) {
 }
 
 func TestHandoffCancelUnfreezes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -334,6 +341,7 @@ func TestHandoffCancelUnfreezes(t *testing.T) {
 }
 
 func TestCancelAmbiguousHandoffUnfreezes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -365,6 +373,7 @@ func TestCancelAmbiguousHandoffUnfreezes(t *testing.T) {
 }
 
 func TestStandaloneSendingTargetResolves(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	box := standaloneBox(t, s, u.AccountID, "send@remote.example")

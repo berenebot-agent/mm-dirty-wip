@@ -12,6 +12,7 @@ import (
 )
 
 func TestOneMultiImportIndependentKeysAndSingleDeletion(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	f := onefixture.New(t)

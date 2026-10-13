@@ -11,6 +11,7 @@ import (
 // Migration tests intentionally use a fresh store, not the migrated testdb
 // template. Reconstruct the immediate pre-066 schema in this disposable DB.
 func TestMigration066PreservesNativeGoogleGrantAndSync(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
@@ -77,6 +78,7 @@ func TestMigration066PreservesNativeGoogleGrantAndSync(t *testing.T) {
 // backfill horizon column on a genuinely fresh database and that the store
 // accessors round-trip it.
 func TestMigration070BackfillAfter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := store.Open(dir)

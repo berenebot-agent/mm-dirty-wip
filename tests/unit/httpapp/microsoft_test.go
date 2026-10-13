@@ -21,6 +21,7 @@ import (
 )
 
 func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	box, e := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "shared@example.net"})
@@ -176,6 +177,7 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 }
 
 func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	var logs bytes.Buffer
 	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -274,6 +276,7 @@ func TestMicrosoftOAuthPasteStateAndReplay(t *testing.T) {
 // sign-in returns before mailbox choice, accessible shared mailboxes are
 // discovered from the directory, and the chosen address completes the inbox.
 func TestMicrosoftSharedMailboxSelection(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	var logs bytes.Buffer
 	svc.Store.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))

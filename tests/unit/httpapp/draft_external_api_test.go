@@ -10,6 +10,7 @@ import (
 )
 
 func TestAPIInboxApproverAndExternalRequest(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()

@@ -184,6 +184,7 @@ func send(t *testing.T, addr string, recipients []string) {
 // TestTLSHTTP2SMTPDelivery is the end-to-end smoke test: one manager, one
 // domain, real SMTP edge, real HTTP/2 session, faked core persistence.
 func TestTLSHTTP2SMTPDelivery(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
@@ -206,6 +207,7 @@ func TestTLSHTTP2SMTPDelivery(t *testing.T) {
 // (two domain authorities) both authenticate on the same receiver object, and a
 // single SMTP transaction fans out across both physical connections.
 func TestTwoManagersOneReceiverFansOut(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	r, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
@@ -242,6 +244,7 @@ func TestTwoManagersOneReceiverFansOut(t *testing.T) {
 // authenticating two domains for the same receiver and delivering both in one
 // SMTP transaction -- on one physical HTTP/2 connection.
 func TestOneCoreTwoDomainsOnePhysicalConnection(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	r, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
@@ -273,6 +276,7 @@ func TestOneCoreTwoDomainsOnePhysicalConnection(t *testing.T) {
 // recipient. It drives the receiver with a fake in-process dialer over the real
 // wire protocol, so it does not depend on the mxdial runtime.
 func TestUnknownRecipientBackendReplyPreserved(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
@@ -303,6 +307,7 @@ func TestUnknownRecipientBackendReplyPreserved(t *testing.T) {
 // succeeds against the live key, then that removing the TXT record causes the
 // binding to be revoked promptly under a fast tick.
 func TestFreshReauthThenTXTRemovalRenewsAndRevokes(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	var mu sync.Mutex
 	records := []string{mxwire.DomainTXT("key1", pub)}
@@ -347,6 +352,7 @@ func TestFreshReauthThenTXTRemovalRenewsAndRevokes(t *testing.T) {
 // renewal rejects not_mx and the core settles on rejected/not_mx (not the
 // generic unavailable a revocation notice would produce).
 func TestRenewalRepointToNotMXRevokesAsRejected(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	var mu sync.Mutex
 	mxHost := "mx.test"
@@ -389,6 +395,7 @@ func TestRenewalRepointToNotMXRevokesAsRejected(t *testing.T) {
 // on its already-pinned (now replaced, unexpired) binding. Replacement must not
 // behave like revocation.
 func TestReplacementPinnedDataStillDelivers(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
@@ -458,6 +465,7 @@ func TestReplacementPinnedDataStillDelivers(t *testing.T) {
 // challenge, while the failed domain's own retry is refused with
 // domain_cooldown (not source_limit).
 func TestFailureCooldownIsPerDomain(t *testing.T) {
+	t.Parallel()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(_ context.Context, name string) ([]string, error) {
 		if strings.HasPrefix(name, "_mailmoose-mx.bad.test") {
@@ -505,6 +513,7 @@ func TestFailureCooldownIsPerDomain(t *testing.T) {
 // attempts for that domain from the same source do no additional DNS work until
 // the cooldown lapses.
 func TestDNSFailureCooldownBoundsAuthGrowth(t *testing.T) {
+	t.Parallel()
 	var mu sync.Mutex
 	lookups := 0
 	dns := func(context.Context, string) ([]string, error) {
@@ -513,7 +522,10 @@ func TestDNSFailureCooldownBoundsAuthGrowth(t *testing.T) {
 		mu.Unlock()
 		return nil, errors.New("dns unavailable")
 	}
-	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns})
+	// MaxConnsPerIP is lifted because two bursts of ten sessions can overlap while
+	// the first burst drains; the per-IP connection cap is not what this test
+	// covers, and hitting it rejects a session mid-handshake.
+	_, srv, client := newReceiverServer(t, receiver.Config{LookupTXT: dns, MaxConnsPerIP: 64})
 	httpClient := &http.Client{Transport: &http.Transport{TLSClientConfig: client, ForceAttemptHTTP2: true}}
 
 	burst := func(n int) []*rawSession {
@@ -725,6 +737,13 @@ func newRawSession(t *testing.T, client *http.Client, base string) *rawSession {
 	t.Helper()
 	pr, pw := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
+	// Tear the request down before the shared server closes: a failure inside
+	// this helper would otherwise leave the receiver handler blocked reading the
+	// request body, and httptest.Server.Close would wait for it forever, turning
+	// a transient protocol error into a 60s test-binary timeout. Cleanups run
+	// LIFO, so these (registered after newReceiverServer's srv.Close) run first.
+	t.Cleanup(cancel)
+	t.Cleanup(func() { _ = pw.CloseWithError(io.ErrClosedPipe) })
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, base+mxwire.SessionPath, pr)
 	if e != nil {
 		t.Fatal(e)
@@ -748,6 +767,7 @@ func newRawSession(t *testing.T, client *http.Client, base string) *rawSession {
 	if resp == nil || resp.ProtoMajor != 2 {
 		t.Fatalf("no HTTP/2 session: %#v", resp)
 	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	s := &rawSession{t: t, client: client, url: base, cancel: cancel, pr: pr, pw: pw, resp: resp}
 	s.expect(t, mxwire.FrameReady)
 	return s

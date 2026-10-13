@@ -30,6 +30,7 @@ func cfRequest(t *testing.T, secret, deliveryID, recipient, raw string) *http.Re
 }
 
 func TestCloudflareIngestAndDedup(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -48,6 +49,7 @@ func TestCloudflareIngestAndDedup(t *testing.T) {
 }
 
 func TestInboundPersistsTransportEnvelopeSender(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 
@@ -81,6 +83,7 @@ func TestInboundPersistsTransportEnvelopeSender(t *testing.T) {
 }
 
 func TestInboundMissingEnvelopeSenderStaysEmpty(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -97,6 +100,7 @@ func TestInboundMissingEnvelopeSenderStaysEmpty(t *testing.T) {
 }
 
 func TestInboundUnknownProviderAndUnauthorized(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -110,6 +114,7 @@ func TestInboundUnknownProviderAndUnauthorized(t *testing.T) {
 }
 
 func TestInboundAllowedSenderWildcard(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -142,6 +147,7 @@ func TestInboundAllowedSenderWildcard(t *testing.T) {
 }
 
 func TestMailgunCanonicalRouteIngests(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	ctx := context.Background()

@@ -39,6 +39,7 @@ func outboundForFailure(t *testing.T, s *store.Store, box model.Inbox) model.Mes
 // failure obvious to a human (and an agent reading the mailbox) instead of
 // leaving it silently parked in the outbox queue.
 func TestTerminalFailureWritesNoticeAndClearsOutbox(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -119,6 +120,7 @@ func TestTerminalFailureWritesNoticeAndClearsOutbox(t *testing.T) {
 // the message stays queued in the outbox, no notice is written, and no
 // delivery-failure event is emitted. Only a terminal failure is surfaced.
 func TestRetryableFailureWritesNoNotice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -157,6 +159,7 @@ func TestRetryableFailureWritesNoNotice(t *testing.T) {
 // same message does not write a second notice, so a re-marked failure cannot
 // spam the mailbox.
 func TestTerminalFailureNoticeIsNotDuplicated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -188,6 +191,7 @@ func TestTerminalFailureNoticeIsNotDuplicated(t *testing.T) {
 // standalone inbox (no managed domain) still produces a notice from the
 // non-routable fallback domain rather than emitting an empty sender.
 func TestTerminalFailureNoticeFallbackSenderDomain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	box, err := s.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{

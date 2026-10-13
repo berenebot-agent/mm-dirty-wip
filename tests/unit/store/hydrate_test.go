@@ -13,6 +13,7 @@ import (
 // returned by a write path is identical to a fresh read, so callers never need
 // a fallible read after commit.
 func TestCommitReturnsCommittedMessage(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 

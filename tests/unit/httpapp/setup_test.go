@@ -47,6 +47,7 @@ func preAuthCSRFCookie(t *testing.T, h http.Handler) *http.Cookie {
 }
 
 func TestSetupPageRendersForm(t *testing.T) {
+	t.Parallel()
 	_, h := unconfiguredHandler(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/setup", nil))
@@ -63,6 +64,7 @@ func TestSetupPageRendersForm(t *testing.T) {
 }
 
 func TestSetupCreatesAdminAndSignsIn(t *testing.T) {
+	t.Parallel()
 	st, h := unconfiguredHandler(t)
 	csrf := preAuthCSRFCookie(t, h)
 
@@ -102,6 +104,7 @@ func TestSetupCreatesAdminAndSignsIn(t *testing.T) {
 }
 
 func TestSetupSecondClaimRefused(t *testing.T) {
+	t.Parallel()
 	st, h := unconfiguredHandler(t)
 	csrf := preAuthCSRFCookie(t, h)
 
@@ -135,6 +138,7 @@ func TestSetupSecondClaimRefused(t *testing.T) {
 }
 
 func TestSetupGetRedirectsWhenConfigured(t *testing.T) {
+	t.Parallel()
 	st, h := unconfiguredHandler(t)
 	if _, err := st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20); err != nil {
 		t.Fatal(err)
@@ -147,6 +151,7 @@ func TestSetupGetRedirectsWhenConfigured(t *testing.T) {
 }
 
 func TestSetupPostRejectsCrossOrigin(t *testing.T) {
+	t.Parallel()
 	_, h := unconfiguredHandler(t)
 	csrf := preAuthCSRFCookie(t, h)
 
@@ -169,6 +174,7 @@ func TestSetupPostRejectsCrossOrigin(t *testing.T) {
 }
 
 func TestSetupPostRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	_, h := unconfiguredHandler(t)
 	csrf := preAuthCSRFCookie(t, h)
 

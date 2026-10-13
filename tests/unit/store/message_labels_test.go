@@ -11,6 +11,7 @@ import (
 )
 
 func TestReplaceMessageLabelsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -55,6 +56,7 @@ func TestReplaceMessageLabelsRoundTrip(t *testing.T) {
 }
 
 func TestMessageLabelFilterAnd(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -90,6 +92,7 @@ func TestMessageLabelFilterAnd(t *testing.T) {
 }
 
 func TestListLabelsScope(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -135,6 +138,7 @@ func TestListLabelsScope(t *testing.T) {
 }
 
 func TestMessageLabelsCascadeOnDelete(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -160,6 +164,7 @@ func TestMessageLabelsCascadeOnDelete(t *testing.T) {
 }
 
 func TestReplaceMessageLabelsForbidden(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -185,6 +190,7 @@ func TestReplaceMessageLabelsForbidden(t *testing.T) {
 }
 
 func TestReplaceMessageLabelsInvalid(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}

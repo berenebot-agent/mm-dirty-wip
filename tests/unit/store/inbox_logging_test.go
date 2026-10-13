@@ -33,6 +33,7 @@ func inboxLogRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 }
 
 func TestInboxLifecycleLogging(t *testing.T) {
+	t.Parallel()
 	s, u, d, _ := testStore(t)
 	var logs bytes.Buffer
 	s.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -76,6 +77,7 @@ func TestInboxLifecycleLogging(t *testing.T) {
 }
 
 func TestInboxCoreTerminalLogFormat(t *testing.T) {
+	t.Parallel()
 	s, u, d, _ := testStore(t)
 	var logs bytes.Buffer
 	s.SetInboxLogger(logging.New(&logs, slog.LevelInfo, logging.PrefixCore))
@@ -94,6 +96,7 @@ func TestInboxCoreTerminalLogFormat(t *testing.T) {
 }
 
 func TestStandaloneLifecycleLoggingAndSetupCleanup(t *testing.T) {
+	t.Parallel()
 	s, u, _, _ := testStore(t)
 	var logs bytes.Buffer
 	s.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -133,6 +136,7 @@ func TestStandaloneLifecycleLoggingAndSetupCleanup(t *testing.T) {
 }
 
 func TestDomainPurgeLogsEveryDeletedInbox(t *testing.T) {
+	t.Parallel()
 	s, u, d, boxes := testStore(t)
 	var logs bytes.Buffer
 	s.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -163,6 +167,7 @@ func TestDomainPurgeLogsEveryDeletedInbox(t *testing.T) {
 }
 
 func TestOneImportLogsOnlyCommittedNewInbox(t *testing.T) {
+	t.Parallel()
 	s, u, _, _ := testStore(t)
 	var logs bytes.Buffer
 	s.SetInboxLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -195,6 +200,7 @@ func TestOneImportLogsOnlyCommittedNewInbox(t *testing.T) {
 }
 
 func TestInboxLoggingOmitsRolledBackMutations(t *testing.T) {
+	t.Parallel()
 	s, dir := testdb.OpenDir(t)
 	ctx := context.Background()
 	u, err := s.CreateAccountAndAdmin(ctx, "Logging", "logging@example.com", "correct horse battery staple", 100<<20)

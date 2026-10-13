@@ -13,6 +13,7 @@ import (
 )
 
 func TestDashboardActivitySurvivesMessageDelete(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	msg, _, _, err := svc.Store.CommitInbound(ctx, store.InboundRecord{
@@ -49,6 +50,7 @@ func TestDashboardActivitySurvivesMessageDelete(t *testing.T) {
 // dashboard Recent messages and the domain log, distinguished from genuine
 // mail by the grey Control pill in the Client column, and never as Blocked.
 func TestApprovalControlShowsReceivedWithControlClient(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	if _, err := svc.Store.RecordControlMessage(ctx, store.ControlMessageRecord{
@@ -116,6 +118,7 @@ func TestApprovalControlShowsReceivedWithControlClient(t *testing.T) {
 // "Approval:" for an approval and "Rejected:" for a rejection, in both the
 // dashboard Recent messages and the domain log.
 func TestApprovalControlSubjectLabelReflectsOutcome(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	for _, rec := range []store.ControlMessageRecord{

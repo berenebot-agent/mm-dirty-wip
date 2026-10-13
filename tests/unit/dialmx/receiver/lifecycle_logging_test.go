@@ -16,6 +16,7 @@ import (
 // without DIALMX_LOG_LEVEL=debug. The DEBUG session/transport records remain,
 // but the lifecycle is what an operator monitors.
 func TestCoreLifecycleRecordsAreInfo(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	_, srv := newLoggedServer(t, sink, receiver.Config{})
 
@@ -76,6 +77,7 @@ func TestCoreLifecycleRecordsAreInfo(t *testing.T) {
 // trusted-proxy allowlist. A cleartext HTTP/1.1 request to the session path is
 // refused before any session exists.
 func TestSessionRejectionIsInfoWithPeer(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	r, _ := newLoggedServer(t, sink, receiver.Config{})
 
@@ -107,6 +109,7 @@ func TestSessionRejectionIsInfoWithPeer(t *testing.T) {
 // TestSummaryHeartbeat asserts the periodic INFO heartbeat reports totals, and
 // that the first tick omits the delta because there is no previous window.
 func TestSummaryHeartbeat(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	log := receiver.NewLogger(slog.LevelInfo, sink)
 	r := receiver.New(receiver.Config{
@@ -157,6 +160,7 @@ func TestSummaryHeartbeat(t *testing.T) {
 // TestSummaryDisabledWhenNegative asserts a negative interval suppresses the
 // heartbeat, so a test asserting an exact record set is not disturbed.
 func TestSummaryDisabledWhenNegative(t *testing.T) {
+	t.Parallel()
 	var buf strings.Builder
 	log := receiver.NewLogger(slog.LevelInfo, &buf)
 	r := receiver.New(receiver.Config{Mode: "single", CoreKey: "0123456789abcdef", SummaryInterval: -1}, log)

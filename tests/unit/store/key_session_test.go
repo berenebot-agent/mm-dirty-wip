@@ -13,6 +13,7 @@ import (
 // API key resolves to a principal with exactly the key's mailbox bindings and
 // never an admin/system-admin role.
 func TestKeySessionResolvesToKeyScope(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
@@ -66,6 +67,7 @@ func TestKeySessionResolvesToKeyScope(t *testing.T) {
 // TestKeySessionRefusedAfterRevoke verifies a live key session is refused once
 // the underlying key is revoked.
 func TestKeySessionRefusedAfterRevoke(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
@@ -90,6 +92,7 @@ func TestKeySessionRefusedAfterRevoke(t *testing.T) {
 // TestDeleteKeySessionsForClient verifies revoke/rotate teardown drops every
 // browser session minted from a key.
 func TestDeleteKeySessionsForClient(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, _ := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)
@@ -109,6 +112,7 @@ func TestDeleteKeySessionsForClient(t *testing.T) {
 // TestKeySessionRejectsAdminKey verifies an admin key (which carries no mailbox
 // bindings) cannot resolve to a browser session principal.
 func TestKeySessionRejectsAdminKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, _ := s.SyncSystemAdmin(ctx, "MailMoose", "root@example.com", "correct horse battery staple", 50<<20)

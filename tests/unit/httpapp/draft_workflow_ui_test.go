@@ -30,6 +30,7 @@ func uiGet(t *testing.T, h http.Handler, cookie *http.Cookie, path string) *http
 }
 
 func TestUIDraftApprovalFlow(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -102,6 +103,7 @@ func TestUIDraftApprovalFlow(t *testing.T) {
 }
 
 func TestUIDraftRejectAndCancel(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}

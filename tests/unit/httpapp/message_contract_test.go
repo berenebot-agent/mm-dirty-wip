@@ -28,6 +28,7 @@ const contractMIME = "Date: Sat, 10 Oct 2026 09:59:00 +0000\r\nFrom: sender@exam
 // Exercise actual HTTP routes and connector adapters, not private projection
 // functions. The same OpenAPI contract validates every backend's responses.
 func TestMessageContractAcrossInboxKinds(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"domain", "imap", "google", "microsoft", "one"} {
 		t.Run(kind, func(t *testing.T) {
 			svc, h, u, domainBox, box, fake := standaloneFixture(t)

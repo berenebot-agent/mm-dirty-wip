@@ -16,6 +16,7 @@ import (
 // HTML, not the raw email body, so an agent/LLM consumer cannot receive
 // script-bearing markup.
 func TestAPIMessageSanitizesHTML(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 

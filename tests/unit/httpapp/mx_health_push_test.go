@@ -15,6 +15,7 @@ import (
 // browser can refresh a traffic light the instant readiness changes (rather
 // than waiting for a poll). The notification carries no durable cursor.
 func TestDialMXStatusObserverPublishesHealthEvent(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{

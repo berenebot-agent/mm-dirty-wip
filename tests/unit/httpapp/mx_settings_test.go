@@ -73,6 +73,7 @@ func sessionReq(t *testing.T, method, path, csrf, body string, cookie *http.Cook
 // (generated credentials and advanced limits, no echo of the secret), a remote
 // save and blank-key retention, CAS conflicts, and clear.
 func TestMXSettingsAPIRoundTrip(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -173,6 +174,7 @@ func TestMXSettingsAPIRoundTrip(t *testing.T) {
 // TestMXSettingsAPICSRFDenied pins that a write without a CSRF token is refused
 // even with a valid system-administrator session, matching the UI write path.
 func TestMXSettingsAPICSRFDenied(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -206,6 +208,7 @@ func TestMXSettingsAPICSRFDenied(t *testing.T) {
 // TestMXSettingsAPIBearerKeyForbidden pins that an account bearer API key (the
 // /v1 default) cannot reach the installation MX settings, even an Admin key.
 func TestMXSettingsAPIBearerKeyForbidden(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -241,6 +244,7 @@ func TestMXSettingsAPIBearerKeyForbidden(t *testing.T) {
 // without the system-administrator role is refused, so an account Admin cannot
 // edit installation state.
 func TestMXSettingsAPINonSystemAdminSessionForbidden(t *testing.T) {
+	t.Parallel()
 	svc, h, _, _, _ := httpFixture(t)
 	// httpFixture's bootstrap user is an account Admin but not a system admin.
 	u, err := svc.Store.GetUserByEmail(context.Background(), "admin@example.com")
@@ -266,6 +270,7 @@ func TestMXSettingsAPINonSystemAdminSessionForbidden(t *testing.T) {
 // TestAdminMXUISaveAndClear exercises the Included domain MX form and clear,
 // both guarded by CSRF.
 func TestAdminMXUISaveAndClear(t *testing.T) {
+	t.Parallel()
 	svc, h, u, box := systemAdminFixture(t)
 	path := "/ui/domains/" + box.DomainID + "/mx"
 	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
@@ -317,6 +322,7 @@ func TestAdminMXUISaveAndClear(t *testing.T) {
 // service contract: the included advanced fields round-trip through the JSON
 // handler into the persisted runtime settings.
 func TestMXSettingsAPIMatchesAppStruct(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -343,6 +349,7 @@ func TestMXSettingsAPIMatchesAppStruct(t *testing.T) {
 // stored tri-state is returned verbatim so a GET reflects the operator's
 // choice.
 func TestMXSettingsAPIVerifyTogglesStrict(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -398,6 +405,7 @@ func TestMXSettingsAPIVerifyTogglesStrict(t *testing.T) {
 // verification boxes checked by default and saves an unchecked box as an
 // explicit off, and that Remote submissions are rejected by the Direct MX UI.
 func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
+	t.Parallel()
 	svc, h, u, box := systemAdminFixture(t)
 	path := "/ui/domains/" + box.DomainID + "/mx"
 	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"
@@ -460,6 +468,7 @@ func TestAdminMXUIVerifyCheckboxes(t *testing.T) {
 // (key_configured, smtp_tls_key_configured, status, updated_at) must not be
 // rejected as unknown, for both a remote and a full included configuration.
 func TestMXSettingsAPIRoundTripsGETBody(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	certPEM, keyPEM := testTLSPair(t)
@@ -503,6 +512,7 @@ func TestMXSettingsAPIRoundTripsGETBody(t *testing.T) {
 // private STARTTLS key is never returned (only smtp_tls_key_configured), and
 // that clearing the certificate clears the retained key.
 func TestMXSettingsAPIFullIncludedConfig(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -583,6 +593,7 @@ func TestMXSettingsAPIFullIncludedConfig(t *testing.T) {
 // a cert-without-key are rejected with a field-level 400, and that RequireTLS
 // without a certificate is refused.
 func TestMXSettingsAPIMalformedTLSRejected(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	certPEM, _ := testTLSPair(t)
@@ -612,6 +623,7 @@ func TestMXSettingsAPIMalformedTLSRejected(t *testing.T) {
 // echoed on the success page or on a validation-error re-render, and that the
 // form repopulates the submitted non-secret values after an error.
 func TestAdminMXUIFullFormAndTLSKeyNeverEchoed(t *testing.T) {
+	t.Parallel()
 	svc, h, u, box := systemAdminFixture(t)
 	path := "/ui/domains/" + box.DomainID + "/mx"
 	view := "/?domain=" + box.DomainID + "&kind=receiving&provider=mx"

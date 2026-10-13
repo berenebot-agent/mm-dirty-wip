@@ -14,6 +14,7 @@ import (
 // is only live while the inbox is the domain's enabled catch-all, and any other
 // key on the same inbox is unaffected.
 func TestDomainWideSendingGrant(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	catch := boxes[0]
@@ -87,6 +88,7 @@ func TestDomainWideSendingGrant(t *testing.T) {
 // binding's role to owner, that clearing it leaves the role alone, and that a
 // role-only save preserves an existing grant.
 func TestDomainWideSendingGrantForcesOwner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	catch := boxes[0]
@@ -164,6 +166,7 @@ func TestDomainWideSendingGrantForcesOwner(t *testing.T) {
 // TestSetBindingDomainSendRequiresCatchAll proves the grant can only be placed
 // on a domain's catch-all, mirroring the UI restriction at the store.
 func TestSetBindingDomainSendRequiresCatchAll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	notCatch := boxes[1]
@@ -184,6 +187,7 @@ func TestSetBindingDomainSendRequiresCatchAll(t *testing.T) {
 // TestMigration074AddsDomainSendColumn proves the domain-wide sending flag
 // column is present after migration, so the feature is wired to real schema.
 func TestMigration074AddsDomainSendColumn(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	if !columnPresent(t, s, "client_inbox_bindings", "send_any_in_domain") {
 		t.Fatal("client_inbox_bindings.send_any_in_domain missing")

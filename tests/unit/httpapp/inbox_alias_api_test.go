@@ -15,6 +15,7 @@ import (
 // with an explicit empty array, and rejecting shadowed mailboxes and unknown
 // domains.
 func TestInboxAliasREST(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -78,6 +79,7 @@ func TestInboxAliasREST(t *testing.T) {
 // TestInboxAliasNamesREST exercises alias sender display names: setting them
 // alongside an alias, reading them back, and clearing one with an empty string.
 func TestInboxAliasNamesREST(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

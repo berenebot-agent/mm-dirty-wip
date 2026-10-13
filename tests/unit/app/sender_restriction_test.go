@@ -12,6 +12,7 @@ import (
 // a restricted inbox blocks non-listed senders, and the configured approver is
 // always accepted.
 func TestSenderRestrictionAndApproverAlwaysAllowed(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	ctx := context.Background()

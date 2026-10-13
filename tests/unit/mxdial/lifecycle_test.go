@@ -21,6 +21,7 @@ import (
 )
 
 func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
+	t.Parallel()
 	_, keyA, _ := ed25519.GenerateKey(rand.Reader)
 	_, keyB, _ := ed25519.GenerateKey(rand.Reader)
 	dataDir := t.TempDir()

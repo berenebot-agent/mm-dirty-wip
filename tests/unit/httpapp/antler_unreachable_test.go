@@ -17,6 +17,7 @@ import (
 // status row by smtp_hostname, so an empty hostname would strand the row on an
 // amber "Waiting" instead of showing the real red failure.
 func TestDialMXAntlerUnreachableReceiverKeepsConnectorHostname(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{

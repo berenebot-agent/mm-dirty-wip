@@ -119,6 +119,7 @@ const goodRaw = "From: Sender <sender@outside.test>\r\nTo: hermes@example.com\r\
 // TestMXIngestStoresAndDeduplicates verifies the durable path and receipt-based
 // dedup across a repeat of the same fingerprint.
 func TestMXIngestStoresAndDeduplicates(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	ctx := context.Background()
 	in := mxInput(t, svc, box.Address, goodRaw, mxwire.AuthResults{})
@@ -145,6 +146,7 @@ func TestMXIngestStoresAndDeduplicates(t *testing.T) {
 // TestMXAuthFailureGoesToSpam verifies a definitive auth failure is a durable
 // Spam disposition, never a rejection, for both enforcement modes.
 func TestMXAuthFailureGoesToSpam(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		mode string
@@ -179,6 +181,7 @@ func TestMXAuthFailureGoesToSpam(t *testing.T) {
 // turned into a cryptographic failure, and neutral/softfail evidence alone is
 // not Spam.
 func TestMXModerateKeepsAlignedPass(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	auth := mxwire.AuthResults{
 		SPF:  &mxwire.SPFEvidence{Result: "softfail"},
@@ -196,6 +199,7 @@ func TestMXModerateKeepsAlignedPass(t *testing.T) {
 // TestMXUnknownRecipient verifies an unknown recipient is a permanent rejection
 // code and no message is stored.
 func TestMXUnknownRecipient(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := mxService(t)
 	res, err := svc.IngestMX(context.Background(), mxInput(t, svc, "nobody@example.com", goodRaw, mxwire.AuthResults{}))
 	if err != nil {
@@ -209,6 +213,7 @@ func TestMXUnknownRecipient(t *testing.T) {
 // TestMXFanOutToTwoRecipients verifies one ingest with two accepted recipients
 // stores one message per recipient and reports both.
 func TestMXFanOutToTwoRecipients(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := mxService(t)
 	ctx := context.Background()
 	second, err := svc.Store.CreateInbox(ctx, u.AccountID, dom.ID, "ops", "Ops")
@@ -253,6 +258,7 @@ func TestMXFanOutToTwoRecipients(t *testing.T) {
 // same inbox store one message, while still returning a result per envelope
 // recipient so the edge's transaction accounting is exact.
 func TestMXAliasFanOutDeduplicatesByInbox(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := mxService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: dom.ID, LocalPart: "sales"}}); err != nil {
@@ -282,6 +288,7 @@ func TestMXAliasFanOutDeduplicatesByInbox(t *testing.T) {
 // sender requirement: MX mail from an allow-listed but unauthenticated sender
 // is blocked, while an authenticated one is stored.
 func TestMXRequireAuthenticatedSender(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := mxService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxAllowedSenders(ctx, u.AccountID, box.ID, []string{"sender@outside.test"}); err != nil {
@@ -326,6 +333,7 @@ func TestMXRequireAuthenticatedSender(t *testing.T) {
 // TestMXDisabled verifies deployments with no configured receiver reject the
 // mx-routed ingest path.
 func TestMXDisabled(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	if err := svc.Store.ClearMXSettingsCAS(context.Background(), store.ConfigVersion{}); err != nil {
 		t.Fatal(err)
@@ -337,6 +345,7 @@ func TestMXDisabled(t *testing.T) {
 
 // TestMXSpamNotInNormalListAndRelease verifies Spam visibility and release.
 func TestMXSpamNotInNormalListAndRelease(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := mxService(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	ctx := context.Background()

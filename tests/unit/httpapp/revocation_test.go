@@ -9,6 +9,7 @@ import (
 )
 
 func TestEventsStreamCancelledOnKeyRevoke(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "stream", true, nil)

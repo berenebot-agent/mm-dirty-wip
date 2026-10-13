@@ -15,6 +15,7 @@ import (
 // connector is created through its own enroll route, listed with its kind,
 // role-updated, protected by Admin scope, and deleted; it never leaks secrets.
 func TestOpenClawConnectorAPI(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
 	if err != nil {
@@ -99,6 +100,7 @@ func TestOpenClawConnectorAPI(t *testing.T) {
 // exactly once, renders the claim URL with the code in the fragment, and
 // refuses cross-account inboxes.
 func TestOpenClawSetupCodeAPI(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
 	if err != nil {

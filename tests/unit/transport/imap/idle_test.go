@@ -41,21 +41,28 @@ func TestWatchEmitsOnNewMail(t *testing.T) {
 	defer stop()
 
 	// Append a message from a second connection so the watched session sees an
-	// EXISTS update.
+	// EXISTS update. A change made before the watch has actually entered IDLE is
+	// not delivered as a unilateral update, so retry the append until one arrives
+	// rather than racing IDLE establishment once.
 	seed := dialFake(t, fs, "user@example.com", "secret")
-	seedMessage(t, seed, "INBOX", sampleMessage, nil)
-
-	select {
-	case n := <-notes:
-		if n.Folder != "INBOX" {
-			t.Errorf("notification folder = %q", n.Folder)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		seedMessage(t, seed, "INBOX", sampleMessage, nil)
+		select {
+		case n := <-notes:
+			if n.Folder != "INBOX" {
+				t.Errorf("notification folder = %q", n.Folder)
+			}
+			stop()
+			return
+		case err := <-errCh:
+			t.Fatalf("watch ended early: %v", err)
+		case <-time.After(200 * time.Millisecond):
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for an IDLE notification")
+			}
 		}
-	case err := <-errCh:
-		t.Fatalf("watch ended early: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for an IDLE notification")
 	}
-	stop()
 }
 
 func TestWatchReportsUnsupportedWhenNoIdle(t *testing.T) {

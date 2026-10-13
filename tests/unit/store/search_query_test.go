@@ -16,6 +16,7 @@ import (
 // typed client-input error, and a control byte that is merely stripped must
 // still search the remaining terms.
 func TestSearchRejectsControlBytesInQuery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 
@@ -68,6 +69,7 @@ func TestSearchRejectsControlBytesInQuery(t *testing.T) {
 // FTS operators must stay inert: quoting each term is what prevents a query
 // from injecting syntax, and that behaviour must survive the control-byte fix.
 func TestSearchQuotesFTSOperators(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	if _, _, _, err := s.CommitInbound(ctx, inbound(b[0], "d1", "rfc1", "", nil, "hello", "hello world")); err != nil {

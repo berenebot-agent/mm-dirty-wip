@@ -62,6 +62,7 @@ func sgRequest(t *testing.T, priv *ecdsa.PrivateKey, recipient, raw string) *htt
 }
 
 func TestSendGridInboundEndToEnd(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	// SendGrid's adapter is complete and unit-tested, but it is deliberately
@@ -112,6 +113,7 @@ func postmarkRequest(t *testing.T, recipient, rawEmail, messageID string) *http.
 }
 
 func TestPostmarkInboundEndToEnd(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	saved, generated, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, dom.ID, "postmark", nil, false)
@@ -149,6 +151,7 @@ func TestPostmarkInboundEndToEnd(t *testing.T) {
 // TestPostmarkGeneratedCredentialFlash proves the generated Basic-auth URL is
 // shown exactly once on the domain page.
 func TestPostmarkGeneratedCredentialFlash(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/receiving", url.Values{"_csrf": {csrf}, "provider": {"postmark"}})

@@ -18,6 +18,7 @@ import (
 // live per-inbox counts for the signed-in account's inboxes only, refusing an
 // unauthenticated request and never leaking another account's inbox.
 func TestUIStateDashboardScopedToPrincipal(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	seedInbound(t, svc, box, "state-1", "<state-1@test>", "s1", "b1")
 
@@ -66,6 +67,7 @@ func TestUIStateDashboardScopedToPrincipal(t *testing.T) {
 // TestUIStateDashboardLightsOptIn proves the DNS-backed traffic light block is
 // returned only when the caller asks for it.
 func TestUIStateDashboardLightsOptIn(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
@@ -90,6 +92,7 @@ func TestUIStateDashboardLightsOptIn(t *testing.T) {
 // counts for a granted inbox and refuses an inbox the principal has no role on
 // (an unknown/ungranted id is reported as 404 rather than leaking counts).
 func TestUIStateInboxScopesToGrantedInbox(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -126,6 +129,7 @@ func TestUIStateInboxScopesToGrantedInbox(t *testing.T) {
 // a session (an unauthenticated request is a redirect/denial, not a stream) and
 // returns the SSE content type for an authenticated session.
 func TestUIEventsStreamRequiresSessionAndScopes(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	srv := httptest.NewServer(h)
 	defer srv.Close()
@@ -166,6 +170,7 @@ func TestUIEventsStreamRequiresSessionAndScopes(t *testing.T) {
 
 // TestModelEventMessageStateChangedValue pins the wire value the UI subscribes to.
 func TestModelEventMessageStateChangedValue(t *testing.T) {
+	t.Parallel()
 	if model.EventMessageStateChanged != "message.state_changed" {
 		t.Fatalf("EventMessageStateChanged = %q", model.EventMessageStateChanged)
 	}
@@ -176,6 +181,7 @@ func TestModelEventMessageStateChangedValue(t *testing.T) {
 // aggregate light amber — and performs no resolver lookup of its own (the
 // watcher owns every check).
 func TestUIStateDashboardLightReflectsExtraMX(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{

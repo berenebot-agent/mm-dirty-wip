@@ -50,6 +50,9 @@ func testCertPEM(t *testing.T) string {
 // allowed by default, and held to https+public-routable when the operator
 // confines outbound to the public internet.
 func TestMXReceiverSettingsInstallationURLPolicy(t *testing.T) {
+	// Serial: newMXServiceWithOutboundPolicy(false) installs a strict process-wide
+	// netutil policy that send-time provider validation reads, so it must not
+	// overlap another test's service.
 	ctx := context.Background()
 
 	// Default (private outbound allowed): a cleartext LAN URL is accepted.
@@ -75,6 +78,7 @@ func TestMXReceiverSettingsInstallationURLPolicy(t *testing.T) {
 // contract: permission, validation, CAS, key generation/retention and
 // redaction.
 func TestMXReceiverSettingsSaveAndRedact(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := testService(t)
 	ctx := context.Background()
 	caPEM := testCertPEM(t)
@@ -263,6 +267,7 @@ func tlsTestKeyPair(t *testing.T) (string, string) {
 // available to the runtime, a blank key retains the stored one, and malformed or
 // partial TLS pairs are rejected.
 func TestMXReceiverIncludedAdvancedSettings(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := testService(t)
 	ctx := context.Background()
 	certPEM, keyPEM := tlsTestKeyPair(t)
@@ -358,6 +363,7 @@ func TestMXReceiverIncludedAdvancedSettings(t *testing.T) {
 // TestMXReceiverIngestGate verifies the persisted configuration, not MX_ENABLE,
 // decides whether the mx-routed ingest path accepts work.
 func TestMXReceiverIngestGate(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	ctx := context.Background()
 	cleared, err := svc.GetMXReceiverSettings(ctx)
@@ -395,6 +401,7 @@ func (s stubRuntime) Status(context.Context) app.MXReceiverStatus { return s.sta
 // TestMXReceiverStatusQueriesRuntimeWithoutSettings verifies a fresh install
 // still reports the included shape as supported, so the UI does not hide it.
 func TestMXReceiverStatusQueriesRuntimeWithoutSettings(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _ := testService(t)
 	ctx := context.Background()
 	svc.MXRuntime = stubRuntime{status: app.MXReceiverStatus{State: "disabled", IncludedSupported: true}}

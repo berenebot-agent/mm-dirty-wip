@@ -77,6 +77,7 @@ func (h *syncLogSink) records(message string) []map[string]string {
 // newly-detected messages and the completion status. A subsequent pass that
 // finds nothing still logs (the heartbeat), with new=0.
 func TestIMAPSyncIsLogged(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()
@@ -145,6 +146,7 @@ func TestIMAPSyncIsLogged(t *testing.T) {
 // "remote sync" line with provider=microsoft and the newly-detected arrival
 // count, and that a repeat pass with no new mail logs new=0.
 func TestMicrosoftDeltaSyncIsLogged(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fixture := microsoftLogEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()
@@ -231,6 +233,7 @@ func TestMicrosoftDeltaSyncIsLogged(t *testing.T) {
 // line, detects a new Inbox arrival, and does NOT re-enumerate the folder tree
 // (the full reconcile owns that).
 func TestMicrosoftQuickDetectionLogsAndCheap(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fixture := microsoftLogEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()
@@ -274,6 +277,7 @@ func TestMicrosoftQuickDetectionLogsAndCheap(t *testing.T) {
 // TestGmailSyncIsLogged proves the Gmail history detection pass emits a "remote
 // sync" line with provider=gmail, and reports the added-message count.
 func TestGmailSyncIsLogged(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fixture := googleLogEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()
@@ -316,6 +320,7 @@ func TestGmailSyncIsLogged(t *testing.T) {
 }
 
 func TestConcurrentGmailDetectionRunsOnePass(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fixture := googleLogEnv(t)
 	w := app.NewRemoteWorker(svc, rm, nil)
 	w.SetDemandInterval(-1)
@@ -366,6 +371,7 @@ func TestConcurrentGmailDetectionRunsOnePass(t *testing.T) {
 // and the fetch) does not fail the detection pass: the pass completes, the stale
 // cached row is dropped, and the detection cursor still advances.
 func TestGmailDetectionToleratesVanishedMessage(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, fixture := googleLogEnv(t)
 	ctx := context.Background()
 	sink := newSyncLogSink()

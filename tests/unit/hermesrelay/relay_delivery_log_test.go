@@ -15,6 +15,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/hermesrelay"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // TestRelayDeliveryLogAcknowledged proves an acknowledged relay event records an
@@ -23,10 +24,7 @@ import (
 func TestRelayDeliveryLogAcknowledged(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()

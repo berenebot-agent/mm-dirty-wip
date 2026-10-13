@@ -11,6 +11,7 @@ import (
 // TestFeedbackButtonOnSignedInShell asserts the global header exposes the
 // feedback entry point and its mailto target once a user is signed in.
 func TestFeedbackButtonOnSignedInShell(t *testing.T) {
+	t.Parallel()
 	_, h, u, _, _ := httpFixture(t)
 
 	csrf := loginCSRFCookie(t, h)
@@ -52,6 +53,7 @@ func TestFeedbackButtonOnSignedInShell(t *testing.T) {
 // TestFeedbackAbsentWhenSignedOut asserts the feedback button is not shown on
 // the public login page, since the shell only renders it for a session.
 func TestFeedbackAbsentWhenSignedOut(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))

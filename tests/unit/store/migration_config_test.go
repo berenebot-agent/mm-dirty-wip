@@ -106,6 +106,7 @@ func queryInt(t *testing.T, st *store.Store, q string, args ...any) int {
 }
 
 func TestMigration013UpgradeSharedAndUnassignedConfigs(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 
@@ -219,6 +220,7 @@ func TestMigration013UpgradeSharedAndUnassignedConfigs(t *testing.T) {
 }
 
 func TestMigration013ReopenDoesNotResurrectRetiredTables(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 
@@ -252,6 +254,7 @@ func TestMigration013ReopenDoesNotResurrectRetiredTables(t *testing.T) {
 }
 
 func TestMigration013RollsBackOnFailure(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 	// Create an index name that migration 013 will try to create. The index is
@@ -290,6 +293,7 @@ func TestMigration013RollsBackOnFailure(t *testing.T) {
 }
 
 func TestMigration013PartialSchemaFailsFast(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 	// Simulate an interrupted 013: one new table exists without a marker.
@@ -312,6 +316,7 @@ func TestMigration013PartialSchemaFailsFast(t *testing.T) {
 // leaves upgraded accounts at 0 (no auto-purge), existing rows are carried over
 // live (deleted_at NULL), and the FTS index survives the rebuild.
 func TestMigration039DropsArchiveAddsTrash(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 

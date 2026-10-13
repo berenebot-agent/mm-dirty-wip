@@ -11,6 +11,7 @@ import (
 )
 
 func TestDomainSendingConfigAndHold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 
@@ -74,6 +75,7 @@ func TestDomainSendingConfigAndHold(t *testing.T) {
 // claim) so it retries immediately, while leaving other domains' mail and
 // already-failed messages untouched.
 func TestRequeuePendingForDomain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	box := boxes[0]
@@ -146,6 +148,7 @@ func TestRequeuePendingForDomain(t *testing.T) {
 }
 
 func TestMigrationReopenIsIdempotent(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	s, err := store.Open(dir)
 	if err != nil {

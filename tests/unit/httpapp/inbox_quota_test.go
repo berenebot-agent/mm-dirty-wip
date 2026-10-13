@@ -12,6 +12,7 @@ import (
 // clears it, a negative value is rejected, and the read model exposes both the
 // cap and the maintained usage.
 func TestAPIInboxStorageQuotaPatch(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, adminKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -74,6 +75,7 @@ func TestAPIInboxStorageQuotaPatch(t *testing.T) {
 // TestDashboardInboxSizeColourRendering proves the dashboard Size cell carries
 // the near/over class and a usage tooltip once an inbox cap is set.
 func TestDashboardInboxSizeColourRendering(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	// Store 4 MB and cap at 5 MB: 80% is below the 90% amber threshold, so the

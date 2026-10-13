@@ -28,6 +28,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/hermesrelay"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 type rawWS struct {
@@ -120,10 +121,7 @@ func makeUpgradeTokenTest(gateway, secret string) string {
 func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
@@ -202,10 +200,7 @@ func TestRelayHandshakeAndBufferedInbound(t *testing.T) {
 func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
@@ -280,10 +275,7 @@ func TestRelayFutureAckDoesNotSkipEvents(t *testing.T) {
 func TestRelayDisconnectReconnectReplay(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
@@ -360,10 +352,7 @@ func TestRelayDisconnectReconnectReplay(t *testing.T) {
 func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
@@ -445,10 +434,7 @@ func TestRelayOutboundUsesDefaultSender(t *testing.T) {
 func TestRelayOutboundBurstIsBounded(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SendLimitPerMinute: 1 << 30}
 	hub := events.NewHub()
@@ -524,10 +510,7 @@ func TestRelayOutboundBurstIsBounded(t *testing.T) {
 func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()
@@ -595,10 +578,7 @@ func TestRelaySkipsDeletedMessageEvent(t *testing.T) {
 func TestRelayDeliversRemoteArrival(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20}
 	hub := events.NewHub()

@@ -11,6 +11,7 @@ import (
 // TestMXSettingsLifecycle covers the singleton configuration's create, CAS
 // update, conflict, redaction-relevant storage and clear semantics.
 func TestMXSettingsLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 

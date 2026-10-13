@@ -10,6 +10,7 @@ import (
 )
 
 func TestListMessagesBeforeCursor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -54,6 +55,7 @@ func TestListMessagesBeforeCursor(t *testing.T) {
 }
 
 func TestUnreadCounts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}

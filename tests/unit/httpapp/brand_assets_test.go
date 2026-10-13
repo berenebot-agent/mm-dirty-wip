@@ -8,6 +8,7 @@ import (
 )
 
 func TestBrandAssetsServed(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	for _, tc := range []struct {
 		path string
@@ -31,6 +32,7 @@ func TestBrandAssetsServed(t *testing.T) {
 }
 
 func TestHeaderUsesLogoHomeLink(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))

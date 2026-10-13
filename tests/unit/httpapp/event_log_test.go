@@ -38,6 +38,7 @@ func eventLogRecords(t *testing.T, logs *bytes.Buffer) []map[string]any {
 // at debug level so message.state_changed records are visible, and the trash is
 // asserted at info so operational events stay in the default stream.
 func TestEventLogDescribesAction(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "evtlog-1", "<evtlog-1@test>", "Logged", "body")
 
@@ -84,6 +85,7 @@ func TestEventLogDescribesAction(t *testing.T) {
 // message.state_changed record, so routine read churn does not flood the log,
 // and that the old generic "event published" phrase is gone.
 func TestEventLogHidesStateChangeAtInfo(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "evtlog-2", "<evtlog-2@test>", "Quiet", "body")
 

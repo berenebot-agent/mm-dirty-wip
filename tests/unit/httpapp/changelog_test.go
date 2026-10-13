@@ -12,6 +12,7 @@ import (
 
 // TestChangelogServed asserts /changelog serves the project changelog.
 func TestChangelogServed(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/changelog", nil))
@@ -29,6 +30,7 @@ func TestChangelogServed(t *testing.T) {
 // TestChangelogAssetUpToDate guards the embedded copy against drifting from the
 // repository-root CHANGELOG.md. Run `make changelog` to sync.
 func TestChangelogAssetUpToDate(t *testing.T) {
+	t.Parallel()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller(0) failed")

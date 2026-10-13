@@ -15,6 +15,7 @@ import (
 // display preference, not inbox policy, so it rides the main save but writes to
 // the user's dashboard preferences.
 func TestInboxEditSavesDashboardGroup(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 

@@ -13,6 +13,7 @@ import (
 )
 
 func TestSendDraftConsumesAndAttaches(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}

@@ -11,6 +11,7 @@ import (
 // reader), so the client script can attach to it, and is absent from pages
 // without a stream.
 func TestConnStatusFlagRendering(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	m := seedInbound(t, svc, box, "conn-1", "<conn-1@test>", "Hello", "body")

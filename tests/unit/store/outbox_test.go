@@ -13,6 +13,7 @@ import (
 )
 
 func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -64,6 +65,7 @@ func TestOutboxEnqueueClaimMarkSent(t *testing.T) {
 // means the same thing whether the send succeeded or failed. Reply threading
 // still works because findThreadTx matches provider_message_id too.
 func TestMarkSentKeepsMintedMessageID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -87,6 +89,7 @@ func TestMarkSentKeepsMintedMessageID(t *testing.T) {
 // TestMarkSentLeavesNonMessageIDProviderID proves ids that are not RFC
 // Message-IDs (SMTP's sentinel, Resend's UUID) do not overwrite the local id.
 func TestMarkSentLeavesNonMessageIDProviderID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -105,6 +108,7 @@ func TestMarkSentLeavesNonMessageIDProviderID(t *testing.T) {
 }
 
 func TestOutboxMarkFailedAndRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -177,6 +181,7 @@ func TestOutboxMarkFailedAndRetry(t *testing.T) {
 }
 
 func TestDraftAttachmentsCRUD(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -206,6 +211,7 @@ func TestDraftAttachmentsCRUD(t *testing.T) {
 }
 
 func TestClaimRecoveredAfterRestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 	box := b[0]
@@ -232,6 +238,7 @@ func TestClaimRecoveredAfterRestart(t *testing.T) {
 }
 
 func TestConcurrentDeleteSubtractsOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -277,6 +284,7 @@ func TestConcurrentDeleteSubtractsOnce(t *testing.T) {
 // another worker can pick it up immediately, and that the guard prevents
 // clearing someone else's claim.
 func TestReleaseMessageClaim(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]

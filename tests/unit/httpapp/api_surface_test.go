@@ -15,6 +15,7 @@ import (
 // OpenAPI 3.0.3 (every Operation Object carries a non-empty responses map) and
 // covers every operation in the spec table.
 func TestOpenAPISurfaceIsValidAndComplete(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
@@ -98,6 +99,7 @@ func TestOpenAPISurfaceIsValidAndComplete(t *testing.T) {
 // TestDiscoverySurfacesServeRealContent asserts every advertised discovery
 // artifact exists and is non-trivial.
 func TestDiscoverySurfacesServeRealContent(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	get := func(path string) string {
 		t.Helper()
@@ -149,6 +151,7 @@ func TestDiscoverySurfacesServeRealContent(t *testing.T) {
 // no browser session: an API client (does not ask for HTML) gets the discovery
 // document, while a browser is sent through the login flow.
 func TestRootServesDiscoveryToAgents(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 
 	rr := httptest.NewRecorder()
@@ -187,6 +190,7 @@ func TestRootServesDiscoveryToAgents(t *testing.T) {
 // TestOpenAPIDiscoversRequestOrigin asserts the served document advertises the
 // host the caller actually reached instead of a configured BASE_URL.
 func TestOpenAPIDiscoversRequestOrigin(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
@@ -208,6 +212,7 @@ func TestOpenAPIDiscoversRequestOrigin(t *testing.T) {
 // TestDiscoveryAdvertisesLimits asserts the discovery surfaces publish the
 // pagination, size and rate bounds an agent needs to page safely.
 func TestDiscoveryAdvertisesLimits(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/.well-known/mailmoose", nil))
@@ -231,6 +236,7 @@ func TestDiscoveryAdvertisesLimits(t *testing.T) {
 // scheme, header and key prefix so an agent can authenticate from the
 // well-known document without reading the full /agent guide first.
 func TestDiscoveryAdvertisesAuth(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	for _, path := range []string{"/.well-known/mailmoose", "/"} {
 		rr := httptest.NewRecorder()
@@ -253,6 +259,7 @@ func TestDiscoveryAdvertisesAuth(t *testing.T) {
 }
 
 func TestBootstrapAdvertisesEffectivePermissions(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -302,6 +309,7 @@ func TestBootstrapAdvertisesEffectivePermissions(t *testing.T) {
 }
 
 func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	for _, tc := range []struct {
 		name string
@@ -337,6 +345,7 @@ func TestBearerAuthChallengeAndErrorCode(t *testing.T) {
 // TestInvalidLimitRejected asserts a non-integer limit is a 400 rather than a
 // silently ignored default.
 func TestInvalidLimitRejected(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	_, token, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "test", true, nil)
 	if err != nil {

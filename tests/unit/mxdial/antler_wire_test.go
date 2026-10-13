@@ -20,6 +20,7 @@ func wireDomain(rc *fakeReceiver, name, contact, setupID string) mxdial.Domain {
 // standard fake challenge exchange runs so the proof completes; a passive
 // onFrame hook observes the frame the dialer sent.
 func TestDomainAuthCarriesRegistrationMetadata(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	got := make(chan mxwire.DomainAuth, 2)
 	rc.onFrame = func(_ *fakeConn, f mxwire.Frame) bool {
@@ -59,6 +60,7 @@ func TestDomainAuthCarriesRegistrationMetadata(t *testing.T) {
 // DomainAuth with no registration metadata, so a legacy receiver sees the same
 // frame it always did.
 func TestCustomDomainAuthOmitsMetadata(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	got := make(chan mxwire.DomainAuth, 2)
 	rc.onFrame = func(_ *fakeConn, f mxwire.Frame) bool {

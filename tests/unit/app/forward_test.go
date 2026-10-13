@@ -16,6 +16,7 @@ import (
 )
 
 func TestForwardCarriesBodyAndAttachments(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

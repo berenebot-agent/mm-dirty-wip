@@ -13,6 +13,7 @@ import (
 // dashboard renders the name/address rows, and the shared alias dialog markup
 // is present.
 func TestInboxAliasUIRoundTrip(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 

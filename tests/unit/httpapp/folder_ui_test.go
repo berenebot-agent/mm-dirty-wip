@@ -14,6 +14,7 @@ import (
 // folder returns the user to that folder, not the Inbox, and still applies the
 // action to the selected message.
 func TestFolderBulkActionStaysInFolder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -46,6 +47,7 @@ func TestFolderBulkActionStaysInFolder(t *testing.T) {
 // inbox re-derives the set from the folder, not the whole inbox and not an
 // error. Before the fix mailboxFilter rejected the "folder" view with a 400.
 func TestFolderBulkSelectAllLocal(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -93,6 +95,7 @@ func TestFolderBulkSelectAllLocal(t *testing.T) {
 // messages, not the namespace root (the Inbox). The regression acted on the
 // Inbox's messages instead.
 func TestFolderBulkSelectAllRemote(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	ctx := context.Background()
 	fake.add("Archive", "From: a@b.test\r\nSubject: Archived 1\r\nMessage-ID: <arc1@remote>\r\n\r\nbody", "<arc1@remote>", "Archived 1")
@@ -133,6 +136,7 @@ func TestFolderBulkSelectAllRemote(t *testing.T) {
 // TestFolderRenameRedirectsToFolder proves renaming a folder returns the user to
 // the renamed folder rather than the Inbox.
 func TestFolderRenameRedirectsToFolder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -172,6 +176,7 @@ func TestFolderRenameRedirectsToFolder(t *testing.T) {
 // button). The rule is gone and the sizing rule now pins the width, a min-width
 // and a no-shrink flex basis so Inbox and folder views match.
 func TestToolbarIconButtonsAreUniformWidth(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	folder, err := svc.Store.CreateFolder(context.Background(), model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, store.FolderCreate{Path: "Projects"})
 	if err != nil {
@@ -195,6 +200,7 @@ func TestToolbarIconButtonsAreUniformWidth(t *testing.T) {
 // "Manage folders" disclosure with a New folder button and a per-folder manage
 // glyph whose dialog is present.
 func TestSidebarFolderManagementMarkup(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
 	folder, err := svc.Store.CreateFolder(context.Background(), admin, box.ID, store.FolderCreate{Path: "Projects"})

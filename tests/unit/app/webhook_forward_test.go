@@ -77,6 +77,7 @@ func seedForwardMessage(t *testing.T, svc *app.Service, accountID, domainID, box
 }
 
 func TestWebhookForwardEnvelopeHeadersAndExactMIME(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	// A sender exercising RFC 3986 escaping: space, plus, @, and a unicode rune.
@@ -135,6 +136,7 @@ func TestWebhookForwardEnvelopeHeadersAndExactMIME(t *testing.T) {
 }
 
 func TestWebhookForwardMissingSenderEmitsEmptyHeader(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: no sender\r\nMessage-ID: <fwd-nosender@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
@@ -165,6 +167,7 @@ func TestWebhookForwardMissingSenderEmitsEmptyHeader(t *testing.T) {
 }
 
 func TestWebhookRetryKeepsEnvelopeMetadata(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.WebhookRetryWindow = time.Hour
 	ctx := context.Background()
@@ -231,6 +234,7 @@ func receivedEventID(t *testing.T, svc *app.Service, accountID, inboxID string) 
 }
 
 func TestWebhookSpamSkipsWithoutNetworkAndReleaseDelivers(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: spam skip\r\nMessage-ID: <fwd-spam@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
@@ -303,6 +307,7 @@ func TestWebhookSpamSkipsWithoutNetworkAndReleaseDelivers(t *testing.T) {
 }
 
 func TestWebhookDeletedMessageDoesNotStall(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: deleted\r\nMessage-ID: <fwd-deleted@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
@@ -339,6 +344,7 @@ func TestWebhookDeletedMessageDoesNotStall(t *testing.T) {
 // an account or inbox boundary: each webhook client only receives events from
 // its own bound inbox, and a client in another account is untouched.
 func TestWebhookDeliveryIsScopedToOwnInbox(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	second, err := svc.Store.CreateInbox(ctx, u.AccountID, dom.ID, "sales", "Sales")
@@ -422,6 +428,7 @@ func TestWebhookDeliveryIsScopedToOwnInbox(t *testing.T) {
 // that failed and is awaiting a retry is terminally skipped (no network) once
 // its message moves to Spam, so the retry does not deliver quarantined mail.
 func TestWebhookRetrySkippedWhenMessageBecomesSpam(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.WebhookRetryWindow = time.Hour
 	ctx := context.Background()
@@ -495,6 +502,7 @@ func receivedEvents(t *testing.T, svc *app.Service, accountID, inboxID string) [
 // set to a file path whose parent directory exists. It is skipped otherwise, so
 // ordinary test runs never write files.
 func TestWebhookForwardContractFixture(t *testing.T) {
+	t.Parallel()
 	out := os.Getenv("BILLBOT_CONTRACT_FIXTURE")
 	if out == "" {
 		t.Skip("BILLBOT_CONTRACT_FIXTURE not set")

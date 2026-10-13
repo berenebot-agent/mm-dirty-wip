@@ -16,6 +16,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // passkeyFixture builds a self-contained handler so these tests do not depend on
@@ -23,10 +24,7 @@ import (
 func passkeyFixture(t *testing.T) (*app.Service, http.Handler) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
@@ -96,6 +94,7 @@ func loginSession(t *testing.T, h http.Handler) (*http.Cookie, *http.Cookie) {
 // registration endpoints are CSRF-protected and the account-page JS must send
 // the token (regression: it previously sent none and every add failed with 403).
 func TestPasskeyRegisterRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	svc, h := passkeyFixture(t)
 	if svc.Config.WebAuthnRPID() == "" {
 		t.Skip("webauthn not configured for fixture")
@@ -142,6 +141,7 @@ func TestPasskeyRegisterRequiresCSRF(t *testing.T) {
 // TestPasskeySysadminCannotDisablePassword guards the break-glass invariant at
 // the HTTP layer: the sysadmin's password must stay usable.
 func TestPasskeySysadminCannotDisablePassword(t *testing.T) {
+	t.Parallel()
 	svc, _ := passkeyFixture(t)
 	if svc.Config.WebAuthnRPID() == "" {
 		t.Skip("webauthn not configured for fixture")

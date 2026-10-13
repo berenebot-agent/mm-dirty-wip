@@ -17,6 +17,7 @@ import (
 // the human provider name (the transport's description) rather than the raw
 // registry id, mirroring the inbound "provider" attribute.
 func TestOutboundSentLogsProviderLabel(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -55,6 +56,7 @@ func providerServer(t *testing.T, id string, calls *atomic.Int32) *httptest.Serv
 // provider still accepts mail into the outbox, holds it without consuming a
 // retry, and delivers it once a provider is assigned.
 func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -95,6 +97,7 @@ func TestSendQueuesWithoutProviderThenDelivers(t *testing.T) {
 // TestSendUsesDomainCredential verifies that a domain sends through the
 // provider configured for it, not a provider configured on another domain.
 func TestSendUsesDomainCredential(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -129,6 +132,7 @@ func TestSendUsesDomainCredential(t *testing.T) {
 // TestSendDoesNotUseOtherDomainCredential verifies the core isolation rule: a
 // domain with no credential must never send through another domain's provider.
 func TestSendDoesNotUseOtherDomainCredential(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}

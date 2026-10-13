@@ -32,6 +32,7 @@ func (ambiguousTransport) Send(context.Context, map[string]any, transport.Outbou
 func init() { transport.RegisterOutbound(ambiguousTransport{}) }
 
 func TestDeliverAmbiguousErrorIsTerminal(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, dom.ID, "ambiguousprov", map[string]any{})
@@ -87,6 +88,7 @@ func testServiceConcurrency(t *testing.T, n int) (*app.Service, model.User, mode
 // one message at a time: with several senders and a provider that holds each
 // request open, more than one request must be in flight simultaneously.
 func TestOutboxWorkerDeliversConcurrently(t *testing.T) {
+	t.Parallel()
 	const concurrency = 5
 	const messages = 10
 	svc, u, dom, box := testServiceConcurrency(t, concurrency)

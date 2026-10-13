@@ -15,6 +15,7 @@ import (
 // local backend and a standalone inbox to the remote backend, with the declared
 // capability surface attached, without any remote I/O.
 func TestMailboxRouterRoutesByKind(t *testing.T) {
+	t.Parallel()
 	svc, u, _, domainInbox := testService(t)
 	ctx := context.Background()
 	router := app.NewMailboxRouter(svc.Store)
@@ -74,6 +75,7 @@ func TestMailboxRouterRoutesByKind(t *testing.T) {
 // interfaces, not just HTTP projections. Routing and backend discovery must
 // agree on provider push and outbound state without contacting any provider.
 func TestMailboxApplicationProviderCapabilities(t *testing.T) {
+	t.Parallel()
 	svc, u, _, domain := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -175,6 +177,7 @@ func TestMailboxApplicationProviderCapabilities(t *testing.T) {
 // an account-level action: an account Admin may create one, but a mailbox Owner
 // who is not an account Admin may not.
 func TestStandaloneCreateRequiresAccountAdmin(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	mailboxes := app.NewStandaloneMailboxService(svc)

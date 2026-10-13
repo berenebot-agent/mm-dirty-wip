@@ -22,6 +22,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 const resendFixtureKey = "resend-webhook-fixture-key"
@@ -32,10 +33,7 @@ func resendIngestFixture(t *testing.T) (*app.Service, *httpapp.Server, model.Pri
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{
 		DataDir: dir, Mode: "selfhosted", AllowPrivateOutbound: true, BaseURL: "http://example.test",
@@ -217,6 +215,7 @@ func TestResendIngestSurvivesWebhookCancellation(t *testing.T) {
 // authenticated before an event type is acknowledged, so an unauthenticated
 // caller cannot get a 200 for a non-mail event.
 func TestResendNonReceivedEventRequiresSignature(t *testing.T) {
+	t.Parallel()
 	_, server, _, _ := resendIngestFixture(t)
 	body := `{"type":"email.delivered","data":{"email_id":"x","to":["hermes@example.com"]}}`
 	r := httptest.NewRequest(http.MethodPost, "/internal/ingest/resend", strings.NewReader(body))

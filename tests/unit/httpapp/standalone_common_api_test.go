@@ -505,6 +505,7 @@ func refreshRemote(t *testing.T, h http.Handler, inboxID, key string) {
 // for a domain inbox and a standalone inbox, returns the shared envelope, and
 // that the standalone tree is reconciled from the live server.
 func TestCommonFoldersEnvelopeBothKinds(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	refreshRemote(t, h, standalone.ID, key)
@@ -536,6 +537,7 @@ func TestCommonFoldersEnvelopeBothKinds(t *testing.T) {
 }
 
 func TestCachedFoldersDoNotDialAndReturnIndexedCounts(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.add("INBOX", "body", "<counts@test>", "Cached")
@@ -576,6 +578,7 @@ func TestCachedFoldersDoNotDialAndReturnIndexedCounts(t *testing.T) {
 // returns the shared envelope and a message read resolves the cached remote
 // projection, and that the message body is fetched live by the content route.
 func TestCommonMessagesEnvelopeAndRemoteRead(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	raw := "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Live\r\nMessage-ID: <live@remote>\r\n\r\nbody here"
@@ -623,6 +626,7 @@ func TestCommonMessagesEnvelopeAndRemoteRead(t *testing.T) {
 // TestCommonRemotePartialFailure proves an uninitialized folder cache returns
 // immediately with partial completeness even when the background dial fails.
 func TestCommonRemotePartialFailure(t *testing.T) {
+	t.Parallel()
 	svc := newIsolatedService(t)
 	u := createAdmin(t, svc)
 	standalone := createStandalone(t, svc, u)
@@ -666,6 +670,7 @@ func TestCommonRemotePartialFailure(t *testing.T) {
 // TestCommonPermissionReadVsOwner proves the remote configuration write requires
 // Owner while a read-only credential can list folders and read messages.
 func TestCommonPermissionReadVsOwner(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	ctx := context.Background()
 	// A read-only key on the standalone inbox.
@@ -691,6 +696,7 @@ func TestCommonPermissionReadVsOwner(t *testing.T) {
 // TestCommonRemoteConfigMasksSecrets proves the remote configuration view never
 // returns a password but reports that one is stored, and lists unmapped roles.
 func TestCommonRemoteConfigMasksSecrets(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/remote", key)
@@ -722,6 +728,7 @@ func TestCommonRemoteConfigMasksSecrets(t *testing.T) {
 // session with a CSRF token and is refused without one, and that a created folder
 // is listed back.
 func TestCommonFolderCRUDSessionCSRF(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -757,6 +764,7 @@ func TestCommonFolderCRUDSessionCSRF(t *testing.T) {
 // TestRemoteTestEndpoint proves the remote test endpoint reports a resolved scope
 // using the stored secret.
 func TestRemoteTestEndpoint(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	req := httptest.NewRequest("POST", "/v1/inboxes/"+standalone.ID+"/remote/test", strings.NewReader(`{}`))
@@ -773,6 +781,7 @@ func TestRemoteTestEndpoint(t *testing.T) {
 // caller-supplied host using the inbox's stored credentials — is not reachable by
 // a merely read-scoped key.
 func TestRemoteTestRequiresOwner(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "reader", false, map[string]string{standalone.ID: "read"})
 	if err != nil {
@@ -843,6 +852,7 @@ func TestRemoteFilteredScanReachesDeepMatch(t *testing.T) {
 // chooser (with the standalone choice) and the standalone setup form, and that a
 // standalone mailbox page shows the setup banner and the folder management UI.
 func TestStandaloneUIAddAndBanner(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	// The dashboard needs an admin session.
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -893,6 +903,7 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 // disabled "coming next" button. The Add-inbox dialog deep-links each provider
 // with ?provider=, so every step must exist in the rendered page.
 func TestStandaloneWizardProviderSteps(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/ui/inboxes/standalone/new", nil)
@@ -947,6 +958,7 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 // folder's messages for a domain inbox and a remote folder's cached messages for
 // a standalone inbox.
 func TestFolderViewBothKinds(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, fake := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
@@ -1008,6 +1020,7 @@ func TestFolderViewBothKinds(t *testing.T) {
 // opens in the same reader and its HTML is passed through the same sanitizer:
 // script and event handlers are stripped, and the message body is fetched live.
 func TestRemoteMessageReadSameSanitizedBackend(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	raw := "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Scripted\r\nMessage-ID: <scripted@remote>\r\nMIME-Version: 1.0\r\nContent-Type: text/html\r\n\r\n<p>hi</p><script>alert(1)</script><img src=x onerror=alert(2)>"
@@ -1057,6 +1070,7 @@ func TestRemoteMessageReadSameSanitizedBackend(t *testing.T) {
 }
 
 func TestRemoteReaderShellUsesCacheAndBodyCanRetry(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
 	fake.add("INBOX", "From: remote@test\r\nSubject: Fast shell\r\nContent-Type: text/html\r\n\r\n<p>Live body</p><script>bad()</script><img src=\"https://tracker.test/pixel\">", "<shell@test>", "Fast shell")
 	key := adminKey(t, svc, u)
@@ -1128,6 +1142,7 @@ func TestRemoteReaderShellUsesCacheAndBodyCanRetry(t *testing.T) {
 // TestRemoteMessageAttachmentSecurity proves a remote attachment downloads with
 // Content-Disposition: attachment and nosniff.
 func TestRemoteMessageAttachmentSecurity(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	raw := "From: remote@elsewhere.test\r\nSubject: Files\r\nMessage-ID: <files@remote>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n--b\r\nContent-Type: text/html; name=evil.html\r\nContent-Disposition: attachment; filename=evil.html\r\n\r\n<script>alert(1)</script>\r\n--b--"
@@ -1160,6 +1175,7 @@ func TestRemoteMessageAttachmentSecurity(t *testing.T) {
 // conversation thread, and that the UI attachment route streams the part live
 // with a secure download disposition.
 func TestRemoteReaderAttachmentsAndThread(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	raw := "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Thread 2\r\nMessage-ID: <t2@remote>\r\nIn-Reply-To: <t1@remote>\r\nReferences: <t1@remote>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nsecond\r\n--b\r\nContent-Type: application/pdf; name=report.pdf\r\nContent-Disposition: attachment; filename=report.pdf\r\n\r\nPDFDATA\r\n--b--"
@@ -1233,6 +1249,7 @@ func TestRemoteReaderAttachmentsAndThread(t *testing.T) {
 // Trash-role folder renders the Restore/Delete-forever actions (its remote
 // folder is its trash state), not Reply/Trash.
 func TestRemoteReaderTrashState(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.folders["Trash"] = 100
@@ -1272,6 +1289,7 @@ func TestRemoteReaderTrashState(t *testing.T) {
 // spurious 404) and enqueue a local outbound message. With no remote SMTP bound
 // the send is queued and held, which is the correct no-provider outcome.
 func TestRemoteReplyForwardSubmit(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.add("INBOX", "From: sender@outside.test\r\nTo: agent@remote.test\r\nSubject: Original\r\nMessage-ID: <orig@remote>\r\n\r\noriginal body", "<orig@remote>", "Original")
@@ -1323,6 +1341,7 @@ func TestRemoteReplyForwardSubmit(t *testing.T) {
 // the approver only for a local inbox, defaults the notify address to the
 // connected address, and lets Owner switch the mode and override the notify.
 func TestAuthoringSelectorPerKind(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 
@@ -1371,6 +1390,7 @@ func TestAuthoringSelectorPerKind(t *testing.T) {
 // /v1/messages endpoint returns the shared envelope and, account-wide, includes
 // the authorized standalone inbox's remote messages alongside the local ones.
 func TestOriginalMessagesUnifiedEnvelopeAndRemoteFanout(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	seedInbound(t, svc, domainBox, "fan-local", "<fan-local@test>", "Local fan", "body")
@@ -1414,6 +1434,7 @@ func TestOriginalMessagesUnifiedEnvelopeAndRemoteFanout(t *testing.T) {
 // TestOriginalSearchThreadsEnvelope proves the original /v1/search and /v1/threads
 // endpoints return the shared envelope.
 func TestOriginalSearchThreadsEnvelope(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, _, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	seedInbound(t, svc, domainBox, "env-s", "<env-s@test>", "Envelope search", "findme body")
@@ -1432,6 +1453,7 @@ func TestOriginalSearchThreadsEnvelope(t *testing.T) {
 // resolve a standalone inbox's remote metadata id: GET returns the projection,
 // PATCH sets read/labels, and DELETE moves it to the remote Trash folder.
 func TestOriginalMessageRemoteFallback(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.folders["Trash"] = 100
@@ -1475,6 +1497,7 @@ func TestOriginalMessageRemoteFallback(t *testing.T) {
 // the live server through the mailbox bulk route, and that the "all N" scope is
 // derived from the folder index rather than a client id list.
 func TestRemoteBulkActions(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	fake.folders["Archive"] = 100
@@ -1506,6 +1529,7 @@ func TestRemoteBulkActions(t *testing.T) {
 // instead of answering a spurious "message not found" (the local-store miss a
 // remote id always produces).
 func TestRemoteMessageUIDeleteRestorePurgeSpam(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	fake.folders["Trash"] = 100
@@ -1608,6 +1632,7 @@ func TestRemoteMessageUIDeleteRestorePurgeSpam(t *testing.T) {
 // TestAuthoringUISavePersists proves the Approvals tab selector actually saves the
 // authoring mode and notify override through the inbox edit form.
 func TestAuthoringUISavePersists(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	// Save the mode + notify via the edit form.
@@ -1633,6 +1658,7 @@ func TestAuthoringUISavePersists(t *testing.T) {
 // reports a detected folder, refuses to invent a mapping, and only creates the
 // conventional folder on an explicit request.
 func TestRemoteRoleMappingDetectAndCreate(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	refreshRemote(t, h, standalone.ID, key)
@@ -1678,6 +1704,7 @@ func TestRemoteRoleMappingDetectAndCreate(t *testing.T) {
 // TestRemoteSettingsPageRenders proves the standalone connection-settings page
 // renders the secret-free bindings and the special-folder role prompt.
 func TestRemoteSettingsPageRenders(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/ui/inboxes/"+standalone.ID+"/remote", nil)
@@ -1724,6 +1751,7 @@ func (d *recordingDetection) count() int {
 // stream surfaces invoke svc.RemoteDetection for authorized standalone inboxes as
 // active demand, without mutating any read state.
 func TestEventSurfacesDriveRemoteDetection(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	det := &recordingDetection{}
 	svc.RemoteDetection = det
@@ -1814,6 +1842,7 @@ func mergeFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.I
 // streams one globally date-sorted page across the local store and two standalone
 // inboxes, with no duplicates or gaps across cursor pages.
 func TestAccountWideMergePaginationOrdering(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, _, _, fakeA, fakeB := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -1875,6 +1904,7 @@ func TestAccountWideMergePaginationOrdering(t *testing.T) {
 // reported in the envelope errors while the other sources are still merged and
 // correctly ordered.
 func TestAccountWideMergePartialFailure(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, saA, _, fakeA, _ := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	_ = saA
@@ -1921,6 +1951,7 @@ func TestAccountWideMergePartialFailure(t *testing.T) {
 // TestRemoteErrorIs503Not404 proves a state change on a remote message whose
 // connector is unavailable is a 503, not a misleading 404.
 func TestRemoteErrorIs503Not404(t *testing.T) {
+	t.Parallel()
 	svc := newIsolatedService(t)
 	u := createAdmin(t, svc)
 	box := createStandalone(t, svc, u)
@@ -1964,6 +1995,7 @@ func TestRemoteErrorIs503Not404(t *testing.T) {
 // settings and clearing the approver does not alter an existing send request's
 // snapshot.
 func TestAuthoringModeFlipPreservesSnapshot(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _, _, _ := mergeFixture(t)
 	// Use the domain inbox: mailmoose_approval with an approver.
 	ctx := context.Background()
@@ -2029,6 +2061,7 @@ func seedInboundAt(t *testing.T, svc *app.Service, box model.Inbox, delivery, rf
 // UID-targeted expunge that requires at least Assistant (Read is refused) and only
 // acts on a trashed message.
 func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
+	t.Parallel()
 	svc := newIsolatedService(t)
 	u := createAdmin(t, svc)
 	box := createStandalone(t, svc, u)
@@ -2103,6 +2136,7 @@ func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
 
 // TestStandaloneCreateOriginalAPI proves POST /v1/inboxes supports kind=standalone.
 func TestStandaloneCreateOriginalAPI(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, _, _, _ := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	body := `{"kind":"standalone","address":"new@remote.test","display_name":"New"}`
@@ -2127,6 +2161,7 @@ func TestStandaloneCreateOriginalAPI(t *testing.T) {
 // TestOriginalThreadRemoteFallback proves /v1/threads/{id} resolves a remote
 // thread key to its messages.
 func TestOriginalThreadRemoteFallback(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	_ = svc
@@ -2156,6 +2191,7 @@ func TestOriginalThreadRemoteFallback(t *testing.T) {
 // standalone inbox: a from filter is applied, and trashed=true maps to the
 // remote Trash folder rather than being ignored.
 func TestRemoteListFiltersAndRoleFolder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.folders["Trash"] = 100
@@ -2192,6 +2228,7 @@ func TestRemoteListFiltersAndRoleFolder(t *testing.T) {
 // pages through same-second remote mail without gaps: the cursor is a metadata
 // id, and resuming must not drop siblings that share the boundary second.
 func TestRemoteScopedListCursorNoSkip(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2245,6 +2282,7 @@ func TestRemoteScopedListCursorNoSkip(t *testing.T) {
 // indexed the message, the read must still return it, materializing the metadata
 // row from the arrival's durable header.
 func TestRemoteArrivalEventIDResolvesToCanonicalMessage(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.add("INBOX", "From: sender@elsewhere.test\r\nSubject: Arrival canonical\r\nMessage-ID: <arr@remote>\r\n\r\nbody", "<arr@remote>", "Arrival canonical")
@@ -2289,6 +2327,7 @@ func TestRemoteArrivalEventIDResolvesToCanonicalMessage(t *testing.T) {
 // remote source is resumed by its metadata id (a total order), so a same-second
 // tie at a page boundary can never strand the remaining siblings.
 func TestAccountWideMergeSameSecondNoGap(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, _, _, fakeA, _ := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2343,6 +2382,7 @@ func TestAccountWideMergeSameSecondNoGap(t *testing.T) {
 // sits behind newer non-matching rows. The merge must scan deeper within the
 // remote source rather than return the first (all non-matching) window.
 func TestAccountWideMergeFilterStarveNoGap(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, _, fakeA, _ := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2379,6 +2419,7 @@ func TestAccountWideMergeFilterStarveNoGap(t *testing.T) {
 // could not tell that a handoff was created, nor act on a later
 // published/ambiguous/failed outcome.
 func TestRequestSendRemoteDraftReturnsHandoff(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	ctx := context.Background()
@@ -2424,6 +2465,7 @@ func TestRequestSendRemoteDraftReturnsHandoff(t *testing.T) {
 // archived) rather than only metadata, matching the local read. The list stays
 // metadata-only.
 func TestRemoteMessageGETReturnsLiveBody(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	raw := "From: remote@elsewhere.test\r\nTo: agent@remote.test\r\nSubject: Live body\r\nMessage-ID: <livebody@remote>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nhello live body"
@@ -2461,6 +2503,7 @@ func TestRemoteMessageGETReturnsLiveBody(t *testing.T) {
 // the discovery excludes) is not addressable: the scoped listing answers 404
 // rather than silently returning an empty 200 for any path under the login.
 func TestRemoteScopeRejectsUnadmittedSharedFolder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	// Prime the scope-correct tree.
@@ -2479,6 +2522,7 @@ func TestRemoteScopeRejectsUnadmittedSharedFolder(t *testing.T) {
 // does not silently fall back to cached metadata when the live body fetch fails:
 // the connector being unreachable is a 503, not a metadata-only 200.
 func TestRemoteMessageGETBodyFetchFailureIs503(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	fake.add("INBOX", "From: a@b.test\r\nSubject: Body fail\r\nMessage-ID: <bf@remote>\r\n\r\nbody", "<bf@remote>", "Body fail")
@@ -2530,6 +2574,7 @@ func TestRemoteMessageGETBodyFetchFailureIs503(t *testing.T) {
 // and that a page with zero matches still exposes a resume cursor while more
 // pages remain.
 func TestRemoteSearchAttachmentFilteredPaginationNoGap(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, _, fakeA, _ := mergeFixture(t)
 	key := adminKey(t, svc, u)
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -2565,6 +2610,7 @@ func TestRemoteSearchAttachmentFilteredPaginationNoGap(t *testing.T) {
 // enabled (with standalone true), and a domain inbox cannot be set to
 // remote_draft at all (the mode is preset to mailmoose_approval).
 func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
@@ -2622,6 +2668,7 @@ func TestAuthoringApproverEnabledByEffectiveMode(t *testing.T) {
 // the effective mode is remote_draft and enables it for mailmoose_approval, and
 // labels the tab "Approvals" for a standalone inbox.
 func TestApproverToggleScriptPresent(t *testing.T) {
+	t.Parallel()
 	js := string(httpapp.AppJS())
 	for _, want := range []string{
 		"function syncAuthoringControls",
@@ -2643,6 +2690,7 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 // history panel and badge, and that a published handoff's terminal record survives
 // after the local draft is cleaned up.
 func TestHandoffHistoryRetainedAndPanel(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	// Create a draft and hand it off (remote_draft is the standalone default).
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
@@ -2702,6 +2750,7 @@ func TestHandoffHistoryRetainedAndPanel(t *testing.T) {
 // TestInboxReadinessStandaloneDistinct proves a standalone inbox's readiness is
 // its IMAP/SMTP connector, not an empty domain.
 func TestInboxReadinessStandaloneDistinct(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domainBox, standalone, _ := standaloneFixture(t)
 	// Re-read the standalone inbox so RemoteConfigured reflects the configured
 	// connector (the fixture configures it after creation).
@@ -2724,6 +2773,7 @@ func TestInboxReadinessStandaloneDistinct(t *testing.T) {
 // a domain inbox (approval mode, keeping the approver) does not disturb the
 // approval controls: the mode stays mailmoose_approval and the approver is kept.
 func TestDomainAuthoringSaveKeepsApprovalControls(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
@@ -2765,6 +2815,7 @@ func TestDomainAuthoringSaveKeepsApprovalControls(t *testing.T) {
 // remote index staleness for a standalone inbox, so a live unread count is never
 // presented as current when the remote index is incomplete.
 func TestStandaloneLiveStateStaleness(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest("GET", "/ui/state?page=inbox&inbox="+standalone.ID, nil)
@@ -2791,6 +2842,7 @@ func TestStandaloneLiveStateStaleness(t *testing.T) {
 // inside its Identity tab, and embeds the secret-free remote config on its row
 // so they populate, while a domain inbox embeds none.
 func TestStandaloneEditDialogRemoteFields(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	rr := uiGet(t, h, cookie, "/")
@@ -2853,6 +2905,7 @@ func TestStandaloneEditDialogRemoteFields(t *testing.T) {
 // connector (blank password keeps the stored secret) through the inbox edit
 // endpoint and reopens on Identity.
 func TestStandaloneEditRemoteSave(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{
@@ -2896,6 +2949,7 @@ func TestStandaloneEditRemoteSave(t *testing.T) {
 // sign in is never persisted: the save redirects with an error and the stored
 // binding is unchanged.
 func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
+	t.Parallel()
 	// Build the stack with a dialer that always fails, so the save's live
 	// sign-in test cannot pass.
 	svc := newIsolatedService(t)

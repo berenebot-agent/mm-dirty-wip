@@ -19,6 +19,7 @@ import (
 // proof and message handoff metadata, and that the proof itself still succeeds
 // from DNS authority alone (the metadata is never authority).
 func TestAntlerRegistrationMetadataLogged(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -64,6 +65,7 @@ func TestAntlerRegistrationMetadataLogged(t *testing.T) {
 // contact email or setup id never becomes authority: it is dropped and the
 // DNS-anchored proof still authenticates the domain.
 func TestAntlerMalformedMetadataDroppedWithoutRejectingProof(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -116,6 +118,7 @@ func TestAntlerMalformedMetadataDroppedWithoutRejectingProof(t *testing.T) {
 // configured landing page, while a non-HTML client gets a plain 404 and the
 // configured redirect never affects the session or health routes.
 func TestBrowserRootRedirect(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{BrowserRedirectURL: "https://github.com/dellarb/mailmoose"})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()
@@ -155,6 +158,7 @@ func TestBrowserRootRedirect(t *testing.T) {
 // TestBrowserRootWithoutConfigDoesNotRedirect pins the default: no redirect
 // configured means the root is an ordinary 404 for every client.
 func TestBrowserRootWithoutConfigDoesNotRedirect(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{})
 	srv := httptest.NewServer(r.Handler())
 	defer srv.Close()

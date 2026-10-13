@@ -39,6 +39,7 @@ func accessMember(t *testing.T, svc *app.Service, accountID, ownerID, email stri
 }
 
 func TestDashboardRendersClientsAccessTab(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "read"})
 	if err != nil {
@@ -95,6 +96,7 @@ func TestDashboardRendersClientsAccessTab(t *testing.T) {
 }
 
 func TestInboxAccessCreateKey(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"name": {"Scoped"}, "role": {"read"}, "_csrf": {csrf}}
@@ -133,6 +135,7 @@ func TestInboxAccessCreateKey(t *testing.T) {
 }
 
 func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
 	if err != nil {
@@ -204,6 +207,7 @@ func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
 // staged binding change: the inbox settings Save sets the grant (forcing owner)
 // and the panel only offers it on the domain's catch-all inbox.
 func TestInboxAccessDomainWideSending(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, box := httpFixture(t)
 	ctx := context.Background()
 	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
@@ -273,6 +277,7 @@ func TestInboxAccessDomainWideSending(t *testing.T) {
 }
 
 func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	adminKey, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Admin", true, nil)
 	if err != nil {
@@ -291,6 +296,7 @@ func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
 }
 
 func TestInboxAccessAddUserMerges(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
 	if err != nil {
@@ -319,6 +325,7 @@ func TestInboxAccessAddUserMerges(t *testing.T) {
 }
 
 func TestInboxAccessInviteForwardsToAccount(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"email": {"new@example.com"}, "_csrf": {csrf}}
@@ -358,6 +365,7 @@ func TestInboxAccessInviteForwardsToAccount(t *testing.T) {
 // email of an existing non-admin member who lacks access here grants access
 // directly instead of creating an invite (and never surfaces a raw conflict).
 func TestInboxAccessInviteAutoRoutesExistingMember(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	second, err := svc.Store.CreateInbox(context.Background(), u.AccountID, box.DomainID, "second", "Second")
 	if err != nil {
@@ -392,6 +400,7 @@ func TestInboxAccessInviteAutoRoutesExistingMember(t *testing.T) {
 // TestInboxAccessInviteClassifiesAdmin verifies the account administrator is
 // reported as such rather than surfacing a raw email-conflict message.
 func TestInboxAccessInviteClassifiesAdmin(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"email": {u.Email}, "_csrf": {csrf}}
@@ -411,6 +420,7 @@ func TestInboxAccessInviteClassifiesAdmin(t *testing.T) {
 // TestInboxAccessInviteClassifiesPending verifies a duplicate pending invite is
 // reported clearly.
 func TestInboxAccessInviteClassifiesPending(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	inv, _, err := svc.Store.CreateInvite(context.Background(), store.InviteInput{
 		AccountID: u.AccountID, Email: "pending@example.com", Kind: model.InviteKindOperator,
@@ -438,6 +448,7 @@ func TestInboxAccessInviteClassifiesPending(t *testing.T) {
 // TestInboxAccessInviteClassifiesExistingAccess verifies a member who already
 // has a role here is reported as already having access.
 func TestInboxAccessInviteClassifiesExistingAccess(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	member := accessMember(t, svc, u.AccountID, u.ID, "member@example.com", box.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -456,6 +467,7 @@ func TestInboxAccessInviteClassifiesExistingAccess(t *testing.T) {
 }
 
 func TestInboxAccessRejectsForeignInbox(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	key, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Agent", false, map[string]string{box.ID: "owner"})
 	if err != nil {

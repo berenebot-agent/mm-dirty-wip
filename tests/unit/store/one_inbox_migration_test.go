@@ -9,6 +9,7 @@ import (
 
 // Deliberately construct the pre-067 schema in a fresh disposable database.
 func TestOneMigration067FansOutExistingCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := store.Open(dir)

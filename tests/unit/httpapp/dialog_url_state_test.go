@@ -10,6 +10,7 @@ import (
 // not re-open a cancelled dialog; these assertions guard the rendering and
 // validation the client relies on.
 func TestUIDashboardDialogURLState(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 

@@ -81,6 +81,7 @@ func (c *countingResolver) LookupTXT(context.Context, string) ([]string, error) 
 // dashboard tick must not turn one domain into a resolver burst, while a read
 // past the floor does ask for a fresh check.
 func TestDNSWatcherDemandCoalesces(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
@@ -115,6 +116,7 @@ func TestDNSWatcherDemandCoalesces(t *testing.T) {
 // TestDNSWatcherRequestCheckForces proves a forced request re-checks a domain
 // even inside the floor, so a save or a key rotation is reflected at once.
 func TestDNSWatcherRequestCheckForces(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
@@ -142,6 +144,7 @@ func TestDNSWatcherRequestCheckForces(t *testing.T) {
 // a transient mx.dns_changed event only when the verdict changes, and shares it via
 // DNSState so the dashboard light and the status dialog read the same value.
 func TestDNSWatcherPublishesDNSChanges(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
@@ -254,6 +257,7 @@ func (e errResolver) LookupTXT(context.Context, string) ([]string, error) { retu
 // observed are carried forward, so the light cannot turn green because the
 // resolver stopped answering.
 func TestDNSWatcherKeepsWarningWhenLookupFails(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	core.svc.AntlerEndpoints = fixedAntlerReceivers{{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10}}
@@ -326,6 +330,7 @@ func dkimExpectedTXT(t *testing.T, svc *app.Service, accountID, domainID string)
 // gets a DKIM check (green when the published record matches, red when it does
 // not), while a domain with signing off gets no DKIM check and costs no lookup.
 func TestDNSWatcherChecksDKIMForSigningDomain(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	if _, err := core.svc.SaveDomainSendingConfig(ctx, core.user.AccountID, core.domain.ID, mx.Provider, map[string]any{
@@ -362,6 +367,7 @@ func TestDNSWatcherChecksDKIMForSigningDomain(t *testing.T) {
 // off is not checked for a DKIM record at all, so it renders no light and costs
 // no lookup.
 func TestDNSWatcherSkipsDKIMWhenSigningOff(t *testing.T) {
+	t.Parallel()
 	core, _ := dialMXDomain(t, "example.test", "hermes")
 	ctx := context.Background()
 	if _, err := core.svc.SaveDomainSendingConfig(ctx, core.user.AccountID, core.domain.ID, mx.Provider, map[string]any{

@@ -34,6 +34,7 @@ func seedRemoteMXReceiver(t *testing.T, svc *app.Service, u model.User) {
 // mailbox. Both directions are asserted so a future change cannot fix one
 // spelling and break the other.
 func TestResolveMXRecipientsAcceptsEitherSelfHostedProviderSpelling(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		configured string
@@ -79,6 +80,7 @@ func TestResolveMXRecipientsAcceptsEitherSelfHostedProviderSpelling(t *testing.T
 // a blanket accept. An address with no inbox, alias or catch-all on a configured
 // domain stays unknown, so provider tolerance does not leak mailbox existence.
 func TestResolveMXRecipientsStillRejectsUnknownRecipient(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := mxService(t)
 	seedRemoteMXReceiver(t, svc, u)
 	if _, _, err := svc.SaveDomainReceivingConfig(

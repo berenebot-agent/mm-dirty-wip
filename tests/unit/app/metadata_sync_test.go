@@ -16,6 +16,7 @@ import (
 )
 
 func TestMetadataSyncRunningAndRestartSafe(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	ctx := context.Background()
@@ -68,6 +69,7 @@ func TestMetadataSyncRunningAndRestartSafe(t *testing.T) {
 }
 
 func TestMetadataSyncIMAPCountTotalResumeAndCompletion(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -116,6 +118,7 @@ func TestMetadataSyncIMAPCountTotalResumeAndCompletion(t *testing.T) {
 // information; only an internally inconsistent total (fewer reported messages
 // than cached rows) is withheld.
 func TestMetadataSyncRefreshKeepsKnownTotal(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -154,6 +157,7 @@ func TestMetadataSyncRefreshKeepsKnownTotal(t *testing.T) {
 // path; Microsoft already has the same complete-index guard, and IMAP only
 // schedules on an unindexed folder or while paging incomplete backfill.
 func TestCachedNavigationDoesNotRefreshCompleteStandaloneIndexes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	markComplete := func(t *testing.T, svc *app.Service, account, inbox string) {
 		t.Helper()
@@ -250,6 +254,7 @@ func TestCachedNavigationDoesNotRefreshCompleteStandaloneIndexes(t *testing.T) {
 }
 
 func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
+	t.Parallel()
 	svc, u, _, rm := remoteTestEnv(t)
 	f := onefixture.New(t)
 	rm.OneHTTP, rm.OneInterval = f.Client(t), time.Nanosecond
@@ -287,6 +292,7 @@ func TestMetadataSyncOneCountsUniqueMessagesAndUnknownTotal(t *testing.T) {
 }
 
 func TestMetadataSyncNativeGoogleCountsAndCompletion(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, f := googleLogEnv(t)
 	ctx := context.Background()
 	if _, err := rm.ReconcileRemote(ctx, box.AccountID, box.ID); err != nil {
@@ -310,6 +316,7 @@ func TestMetadataSyncNativeGoogleCountsAndCompletion(t *testing.T) {
 }
 
 func TestMetadataSyncMicrosoftTotalAndCompletion(t *testing.T) {
+	t.Parallel()
 	svc, box, rm, f := microsoftLogEnv(t)
 	ctx := context.Background()
 	f.add("ms-metadata-one", "inbox-id", "one")
@@ -341,6 +348,7 @@ func TestMetadataSyncMicrosoftTotalAndCompletion(t *testing.T) {
 // metadata was being indexed. A detection pass must not surface as running, and
 // the status must stay settled once the inbox's index is complete.
 func TestMetadataSyncExcludesDetectionPass(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -391,6 +399,7 @@ func TestMetadataSyncExcludesDetectionPass(t *testing.T) {
 }
 
 func TestMetadataSyncQueuedAndCoalesced(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	ctx := context.Background()

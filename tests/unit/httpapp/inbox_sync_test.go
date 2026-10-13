@@ -18,6 +18,7 @@ import (
 // the same view preserving pagination. It is available to a non-admin user with
 // read access, and is a safe no-op redirect for a domain inbox.
 func TestInboxSyncRouteQuickRefresh(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	// Give the standalone inbox indexed mail so the view has a page to refresh.
 	fake.add("INBOX", "From: a@b.test\r\nSubject: Hello\r\nMessage-ID: <m1@remote>\r\n\r\nbody", "<m1@remote>", "Hello")
@@ -46,6 +47,7 @@ func TestInboxSyncRouteQuickRefresh(t *testing.T) {
 // TestInboxSyncRouteRequiresCSRF proves the sync endpoint is CSRF-protected like
 // every other session state change.
 func TestInboxSyncRouteRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	rr := uiPost(t, h, cookie, "/ui/inboxes/"+standalone.ID+"/sync", "folder=inbox")
@@ -58,6 +60,7 @@ func TestInboxSyncRouteRequiresCSRF(t *testing.T) {
 // present on a standalone inbox toolbar for any signed-in user, and absent on a
 // domain inbox.
 func TestInboxSyncButtonRenderedForStandaloneOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	rr := uiGet(t, h, cookie, "/ui/inboxes/"+standalone.ID)
@@ -125,6 +128,7 @@ func seedPaginatedRemote(t *testing.T, h http.Handler, svc *app.Service, u model
 // cursor, so it acted like "Load older" and hid the newest messages. The reload
 // form must submit the INCOMING cursor (empty on the newest page).
 func TestReloadNewestPageStaysNewest(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	// More than one page (inboxPageSize = 50) so a next-page cursor exists.
 	seedPaginatedRemote(t, h, svc, u, fake, standalone, "INBOX", 60)
@@ -166,6 +170,7 @@ func TestReloadNewestPageStaysNewest(t *testing.T) {
 // asserts each press stays on the newest page rather than advancing through
 // older pages.
 func TestReloadDoesNotWalkBackwards(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	seedPaginatedRemote(t, h, svc, u, fake, standalone, "INBOX", 120)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -193,6 +198,7 @@ func TestReloadDoesNotWalkBackwards(t *testing.T) {
 // TestReloadOlderPageStaysOnThatPage proves reload on an older page preserves
 // that page's INCOMING cursor rather than advancing to the following page.
 func TestReloadOlderPageStaysOnThatPage(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	seedPaginatedRemote(t, h, svc, u, fake, standalone, "INBOX", 120)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -249,6 +255,7 @@ func renderedCursor(t *testing.T, body string) string {
 // TestReloadCustomFolderPreservesView proves the custom-folder view behaves the
 // same: reload stays on the folder's newest page instead of advancing.
 func TestReloadCustomFolderPreservesView(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, fake := standaloneFixture(t)
 	// Archive is a custom (non-system) folder in the fixture.
 	seedPaginatedRemote(t, h, svc, u, fake, standalone, "Archive", 60)

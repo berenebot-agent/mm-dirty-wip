@@ -50,6 +50,7 @@ func keyLogin(t *testing.T, h http.Handler, key string) *http.Cookie {
 // and lands on the operator view, scoped to its mailboxes, with no admin
 // controls and no Admin plane.
 func TestKeyLoginShowsOperatorScope(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, box := httpFixture(t)
 	ctx := context.Background()
 	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "sales", "Sales")
@@ -102,6 +103,7 @@ func TestKeyLoginShowsOperatorScope(t *testing.T) {
 // TestKeyLoginRejectsAdminKey verifies an admin key cannot sign in to the HTML
 // UI: this path maps mailbox access, not admin mode.
 func TestKeyLoginRejectsAdminKey(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "full", true, nil)
 	if err != nil {
@@ -115,6 +117,7 @@ func TestKeyLoginRejectsAdminKey(t *testing.T) {
 // TestKeyLoginRejectsUnknownKey verifies an unknown key is refused with a
 // redirect back to the login form (no session).
 func TestKeyLoginRejectsUnknownKey(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	if session := keyLogin(t, h, "mmm_not-a-real-key"); session != nil {
 		t.Fatal("unknown key obtained a session cookie")
@@ -124,6 +127,7 @@ func TestKeyLoginRejectsUnknownKey(t *testing.T) {
 // TestKeySessionDiesOnRevoke verifies revoking a key invalidates a browser
 // session already minted from it.
 func TestKeySessionDiesOnRevoke(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	k, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "agent", false, map[string]string{box.ID: "owner"})
@@ -152,6 +156,7 @@ func TestKeySessionDiesOnRevoke(t *testing.T) {
 // TestKeySessionReadOnlyStaysReadOnly verifies a Read-scoped key session cannot
 // send from its own mailbox, even though it can open the mailbox.
 func TestKeySessionReadOnlyStaysReadOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "reader", false, map[string]string{box.ID: "read"})

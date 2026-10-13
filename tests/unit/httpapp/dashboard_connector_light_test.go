@@ -18,6 +18,7 @@ import (
 // routed. (The red/green MX-gating logic itself is pinned by
 // TestDialMXHealthAggregatesReceiverStatus.)
 func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, u, mailgunDomain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{

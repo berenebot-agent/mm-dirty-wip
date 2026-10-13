@@ -14,6 +14,7 @@ import (
 // Worker secret accepts mail addressed to an inbox on the subdomain, and the
 // message lands in that subdomain's inbox, scoped to the authenticated account.
 func TestCloudflareIngestSubdomainInheritsParentReceiver(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -70,6 +71,7 @@ func TestCloudflareIngestSubdomainInheritsParentReceiver(t *testing.T) {
 // own, so mail to it is rejected (404/unauthorized) rather than silently
 // inheriting.
 func TestCloudflareIngestSubdomainInheritanceOffRejects(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, _ := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()
@@ -90,6 +92,7 @@ func TestCloudflareIngestSubdomainInheritanceOffRejects(t *testing.T) {
 // credential must still be scoped to the subdomain (the binding's DomainID),
 // which the inheritance path preserves.
 func TestSubdomainBindingKeepsDomainScope(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, _ := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})
 	ctx := context.Background()

@@ -13,6 +13,7 @@ import (
 // selector and bulk bar as the other folders, and that bulk delete removes only
 // the selected drafts that belong to that inbox.
 func TestUIDraftsBulkDelete(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -59,6 +60,7 @@ func TestUIDraftsBulkDelete(t *testing.T) {
 // TestUIDraftsBulkDeleteScopeAll proves scope=all deletes every draft in the
 // inbox, not just a page.
 func TestUIDraftsBulkDeleteScopeAll(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -85,6 +87,7 @@ func TestUIDraftsBulkDeleteScopeAll(t *testing.T) {
 // TestUIBulkSelectAllBypassesPageCap seeds more messages than the list page cap
 // and proves scope=all acts on the true folder total, not just the first page.
 func TestUIBulkSelectAllBypassesPageCap(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	const n = 60 // > inboxPageSize (50)
@@ -119,6 +122,7 @@ const inboxPageSizeForTest = 50
 // TestUIDraftsPagination proves the drafts list pages with a keyset cursor and
 // that the "Load older" link renders for a folder larger than a page.
 func TestUIDraftsPagination(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}

@@ -24,6 +24,7 @@ func localFolderStore(t *testing.T) (*store.Store, model.Principal, model.Inbox)
 // system/origin/metadata columns and the folder indexes. It uses store.Open on a
 // real temp dir because it asserts migration behaviour.
 func TestMigration054FolderModel(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -66,6 +67,7 @@ func TestMigration054FolderModel(t *testing.T) {
 // roles cannot be renamed or deleted, and that a non-empty custom folder refuses
 // deletion.
 func TestLocalFolderCRUDAndProtectedRoles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, p, box := localFolderStore(t)
 
@@ -152,6 +154,7 @@ func TestLocalFolderCRUDAndProtectedRoles(t *testing.T) {
 // the Inbox view, that the change is reversible, and that labels are independent
 // of folders.
 func TestMoveToFolderSingleMembershipAndInboxExclusion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, p, box := localFolderStore(t)
 	archive, err := s.GetSystemFolder(ctx, p.AccountID, box.ID, model.FolderRoleArchive)
@@ -228,6 +231,7 @@ func TestMoveToFolderSingleMembershipAndInboxExclusion(t *testing.T) {
 // conflated with folder membership: an outbound message stays in Sent and does
 // not appear in the Inbox view, and does not require a folder row.
 func TestSentAndInboxNotConflated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, p, box := localFolderStore(t)
 	if _, _, err := s.CommitOutbound(ctx, store.OutboundRecord{
@@ -251,6 +255,7 @@ func TestSentAndInboxNotConflated(t *testing.T) {
 // require Assistant or Owner, and that a folder in another inbox cannot be a
 // move destination.
 func TestAssistantPermissionsAndCrossInboxIsolation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box, other := b[0], b[1]
@@ -293,6 +298,7 @@ func TestAssistantPermissionsAndCrossInboxIsolation(t *testing.T) {
 // membership and restoring returns it to that same folder, and that Assistant or
 // Owner can permanently purge (Read cannot).
 func TestTrashRestorePreservesFolder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -358,6 +364,7 @@ func TestTrashRestorePreservesFolder(t *testing.T) {
 // mail, and that custom folders work on a standalone inbox as well as a domain
 // inbox.
 func TestFolderStatsAndBothKinds(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -405,6 +412,7 @@ func TestFolderStatsAndBothKinds(t *testing.T) {
 // path/parent_path of every descendant, preserving stable ids, and refuses a
 // collision atomically.
 func TestRenameFolderMovesSubtree(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, p, box := localFolderStore(t)
 	parent, err := s.CreateFolder(ctx, p, box.ID, store.FolderCreate{Path: "Projects"})
@@ -457,6 +465,7 @@ func TestRenameFolderMovesSubtree(t *testing.T) {
 }
 
 func TestFolderRemoteMetadata(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, p, box := localFolderStore(t)
 	folder, err := s.CreateFolder(ctx, p, box.ID, store.FolderCreate{Path: "Remote"})

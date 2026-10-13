@@ -20,6 +20,7 @@ func ownerPrincipal(accountID, inboxID string) model.Principal {
 }
 
 func TestRequestSendValidationAndFreeze(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	asst := assistantPrincipal(u.AccountID, box.ID)
@@ -58,6 +59,7 @@ func TestRequestSendValidationAndFreeze(t *testing.T) {
 }
 
 func TestApproveDraftSendsStoredContent(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -110,6 +112,7 @@ func TestApproveDraftSendsStoredContent(t *testing.T) {
 }
 
 func TestApproveDraftRejectsTamperedFingerprint(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -129,6 +132,7 @@ func TestApproveDraftRejectsTamperedFingerprint(t *testing.T) {
 }
 
 func TestRejectDraftRevisionFlow(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}

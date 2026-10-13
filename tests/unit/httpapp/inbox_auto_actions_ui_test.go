@@ -12,6 +12,7 @@ import (
 // live in their own form on the Connectors tab, so they are absent from a save
 // posted from any other tab; absence must mean "leave it alone", not "off".
 func TestInboxEditSaveKeepsAutoActions(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 
@@ -58,6 +59,7 @@ func TestInboxEditSaveKeepsAutoActions(t *testing.T) {
 // auto-action controls ARE submitted, the form wins — an unchecked auto-trash
 // box clears the window rather than leaving a stale value.
 func TestInboxAutoActionsFormIsAuthoritative(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	markRead := true
@@ -97,6 +99,7 @@ func TestInboxAutoActionsFormIsAuthoritative(t *testing.T) {
 // other's fields. The settings footer's single Save targets that form when the
 // panel is active.
 func TestInboxConnectorsTabHasItsOwnForm(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := uiGet(t, h, cookie, "/?inbox="+box.ID+"&inbox_tab=connectors")
@@ -133,6 +136,7 @@ func TestInboxConnectorsTabHasItsOwnForm(t *testing.T) {
 // reaches the endpoint without the field would otherwise silently narrow the
 // policy to the first delivery.
 func TestInboxAutoActionsBlankTriggerDefaultsToAll(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -184,6 +188,7 @@ func assertDefaultDeliveryTrigger(t *testing.T, markup string) {
 // the trigger select must present "all" as the preselected option, so a user who
 // never touches it saves the default rather than the old "any".
 func TestDeliveryTriggerControlsDefaultToAll(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := uiGet(t, h, cookie, "/?inbox="+box.ID+"&inbox_tab=connectors")

@@ -19,6 +19,7 @@ import (
 // Remote MX, and "Antler: <host>" for an Antler Dial MX receiver (resolved from
 // the saved receiver snapshot, not hard-coded).
 func TestMXSourceLabelPerFamily(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("antler names the concrete receiver", func(t *testing.T) {
@@ -104,6 +105,7 @@ func (h *logSink) messages() []string {
 // receiving family) does not log provider=mx for Direct MX, Remote MX and Dial
 // MX alike.
 func TestMXIngestLogsReceivingSourceAsProvider(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	sink := newLogSink()
 	svc.Log = slog.New(sink)

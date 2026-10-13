@@ -14,6 +14,7 @@ import (
 )
 
 func TestPrivateMXSessionPersistsAndDeduplicates(t *testing.T) {
+	t.Parallel()
 	svc, _, _, box := mxService(t)
 	r := receiver.New(receiver.Config{Mode: "single", CoreKey: "private-key"}, nil)
 	srv := httptest.NewUnstartedServer(r.Handler())

@@ -37,6 +37,7 @@ func mxControlInput(t *testing.T, svc *app.Service, recipient, envelopeFrom, raw
 // also covers vuln-0001: a byte-identical replay is deduplicated by the
 // recorded control receipt.
 func TestMXControlApprovalRequiresAuthEvidence(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := mxService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()

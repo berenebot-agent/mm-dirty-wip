@@ -16,6 +16,7 @@ import (
 // was already pinned to the old binding may still deliver its DATA durably
 // until the old authorization expires.
 func TestReplacedPinnedTransactionStillIngests(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -68,6 +69,7 @@ func TestReplacedPinnedTransactionStillIngests(t *testing.T) {
 // recipient (accept=false) is returned as permanent and is never upgraded to a
 // temporary failure by normalization.
 func TestUnknownRecipientStaysPermanent(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -109,6 +111,7 @@ func TestUnknownRecipientStaysPermanent(t *testing.T) {
 // crash the core: the client receives a temporary failure and the manager keeps
 // running.
 func TestBackendPanicIsContained(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -144,6 +147,7 @@ func TestBackendPanicIsContained(t *testing.T) {
 // TestBackoffNotBypassedByReconcile verifies a stable configuration does not
 // wake the session every reconcile tick, so reconnect backoff is honoured.
 func TestBackoffNotBypassedByReconcile(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.mode("silent") // never answers, so the handshake eventually times out
 	b := &scriptedBackend{}
@@ -163,6 +167,7 @@ func TestBackoffNotBypassedByReconcile(t *testing.T) {
 // TestReplacedNoticeParksChannel verifies a "replaced" notice parks the local
 // pin (no re-auth takeover loop) for an unchanged configuration.
 func TestReplacedNoticeParksChannel(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	var revokeOnce atomic.Bool
 	rc.onAccepted = func(fc *fakeConn, domain string, ch uint64) {
@@ -190,6 +195,7 @@ func TestReplacedNoticeParksChannel(t *testing.T) {
 // TestMissingBackendResultGetsScopedTemporaryResult verifies the client
 // synthesizes an explicit temporary result when the backend omits one.
 func TestMissingBackendResultGetsScopedTemporaryResult(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -240,6 +246,7 @@ func TestMissingBackendResultGetsScopedTemporaryResult(t *testing.T) {
 // cooldown refusal is surfaced as the amber "deferred" state, never as a red
 // "rejected" verdict on the domain's authority.
 func TestDomainCooldownShowsDeferred(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.onAuth = func(fc *fakeConn, ch uint64, a mxwire.DomainAuth) {
 		fc.send(mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: a.Domain, KeyID: a.KeyID, Accepted: false, Reason: "domain_cooldown"})
@@ -258,6 +265,7 @@ func TestDomainCooldownShowsDeferred(t *testing.T) {
 // retried on the same connection after the bounded retry window, without
 // tearing the connection down.
 func TestAuthRejectRetriesSameConnection(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	var attempts atomic.Int64
 	rc.onAuth = func(fc *fakeConn, ch uint64, a mxwire.DomainAuth) {
@@ -291,6 +299,7 @@ func TestAuthRejectRetriesSameConnection(t *testing.T) {
 // TestConfigKeyChangeReauths verifies a changed domain key re-authenticates
 // and unregisters the replaced channel rather than reusing stale authority.
 func TestConfigKeyChangeReauths(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -347,6 +356,7 @@ func TestConfigKeyChangeReauths(t *testing.T) {
 // TestDistinctTransactionsRunInParallel verifies two different transaction ids
 // on the same connection can be in flight together.
 func TestDistinctTransactionsRunInParallel(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))

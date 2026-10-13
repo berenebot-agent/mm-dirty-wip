@@ -13,6 +13,7 @@ import (
 // TestInboxAliasCrossDomainIngest proves an alias on one domain delivers into
 // an inbox on another domain of the same account, and that retries dedup.
 func TestInboxAliasCrossDomainIngest(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 
@@ -49,6 +50,7 @@ func TestInboxAliasCrossDomainIngest(t *testing.T) {
 // TestInboxAliasDisabledTargetUnrouted proves a disabled target inbox is not a
 // delivery destination: the alias is treated as unrouted.
 func TestInboxAliasDisabledTargetUnrouted(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedInbound(t, svc, u.AccountID, dom.ID, "cloudflare", map[string]any{"webhook_secret": testCFSecret})

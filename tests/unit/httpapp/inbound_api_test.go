@@ -13,6 +13,7 @@ import (
 )
 
 func TestDomainReceivingConfigREST(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -116,6 +117,7 @@ func TestDomainReceivingConfigREST(t *testing.T) {
 }
 
 func TestDomainReceivingGeneratedSecretReturnedOnce(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -165,6 +167,7 @@ func TestDomainReceivingGeneratedSecretReturnedOnce(t *testing.T) {
 }
 
 func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	inbound := httpapp.New(svc, nil).InboundHandler()
@@ -206,6 +209,7 @@ func TestInboundCanonicalRoutesBothListeners(t *testing.T) {
 }
 
 func TestUIDomainReceivingConfigRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	post := func(csrfValue string) *httptest.ResponseRecorder {

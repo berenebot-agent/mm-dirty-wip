@@ -16,6 +16,7 @@ import (
 // provider is still a user validation error, and no rejected save mutates any
 // stored data.
 func TestConfigSaveResolvesDomainBeforeProvider(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 

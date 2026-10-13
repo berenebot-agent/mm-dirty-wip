@@ -34,6 +34,7 @@ func relayEventFor(t *testing.T, s *store.Store, box model.Inbox, u model.User, 
 // message read and records the per-connector delivery, with the default
 // trigger leaving actions off until the inbox opts in.
 func TestDeliveryAutoMarkReadOnAnyTrigger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 
@@ -74,6 +75,7 @@ func TestDeliveryAutoMarkReadOnAnyTrigger(t *testing.T) {
 // TestDeliveryRecordIsIdempotent proves a repeated ack for the same
 // (message, connector) pair inserts only one delivery row.
 func TestDeliveryRecordIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	conn, m, ev := relayEventFor(t, s, b[0], u, "gw-idem")
@@ -96,6 +98,7 @@ func TestDeliveryRecordIsIdempotent(t *testing.T) {
 // TestDeliveryTrashAfterHours proves the due instant is stamped on delivery and
 // the sweep trashes only once the window has passed.
 func TestDeliveryTrashAfterHours(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -143,6 +146,7 @@ func TestDeliveryTrashAfterHours(t *testing.T) {
 // waits for every connector present at receipt and is not blocked by a
 // connector added afterwards.
 func TestDeliveryAllTriggerWaitsForReceiptTimeConnectors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -183,6 +187,7 @@ func TestDeliveryAllTriggerWaitsForReceiptTimeConnectors(t *testing.T) {
 // TestDeliveryAllTriggerWaits proves the all trigger does not fire until every
 // receipt-time connector has delivered.
 func TestDeliveryAllTriggerWaits(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -223,6 +228,7 @@ func TestDeliveryAllTriggerWaits(t *testing.T) {
 
 // TestDeliveryActionsSkipSpamAndInternal proves Spam mail is never acted on.
 func TestDeliveryActionsSkipSpamAndInternal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -255,6 +261,7 @@ func TestDeliveryActionsSkipSpamAndInternal(t *testing.T) {
 func boolPtr(v bool) *bool { return &v }
 
 func TestDeliveryAllTriggerIgnoresSenderDate(t *testing.T) {
+	t.Parallel()
 	for _, offset := range []time.Duration{-365 * 24 * time.Hour, 365 * 24 * time.Hour} {
 		t.Run(offset.String(), func(t *testing.T) {
 			ctx := context.Background()
@@ -310,6 +317,7 @@ func TestDeliveryAllTriggerIgnoresSenderDate(t *testing.T) {
 // a per-connector delivery and fires the auto-actions, while a failed attempt
 // does not.
 func TestDeliveryWebhookSuccessRecords(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -354,6 +362,7 @@ func TestDeliveryWebhookSuccessRecords(t *testing.T) {
 // returns and the stored row are asserted, because CreateInbox builds its own
 // model.Inbox and previously reported no trigger at all.
 func TestNewInboxDefaultsToAllDeliveryTrigger(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 

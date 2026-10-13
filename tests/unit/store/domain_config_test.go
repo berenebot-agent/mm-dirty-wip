@@ -11,6 +11,7 @@ import (
 )
 
 func TestDomainConfigCAS(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 
@@ -62,6 +63,7 @@ func TestDomainConfigCAS(t *testing.T) {
 }
 
 func TestDomainConfigAccountIsolation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	ub, err := s.CreateAccountAndAdmin(ctx, "B", "admin@b.test", "correct horse battery staple", 100<<20)
@@ -125,6 +127,7 @@ func TestDomainConfigAccountIsolation(t *testing.T) {
 }
 
 func TestDeliveryHistorySurvivesConfigAndDomainDeletes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	box := boxes[0]

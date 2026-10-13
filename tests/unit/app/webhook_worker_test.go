@@ -53,6 +53,7 @@ func seedWebhookMessage(t *testing.T, svc *app.Service, accountID, domainID, box
 }
 
 func TestWebhookWorkerNotifySignsAndAcks(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	messageID := seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
@@ -114,6 +115,7 @@ func TestWebhookWorkerNotifySignsAndAcks(t *testing.T) {
 }
 
 func TestWebhookWorkerForwardStreamsRawMIME(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
@@ -155,6 +157,7 @@ func TestWebhookWorkerForwardStreamsRawMIME(t *testing.T) {
 }
 
 func TestWebhookWorkerRetriesOnServerError(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
@@ -199,6 +202,7 @@ func TestWebhookWorkerRetriesOnServerError(t *testing.T) {
 // delivery is backed off does not pin the queue head: another webhook on the
 // same inbox with a due event is still delivered.
 func TestWebhookBackedOffClientDoesNotBlockOthers(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
@@ -270,6 +274,7 @@ func (t *fixedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 // TestWebhookWorkerDeliveryLogRecordsSuccess proves a successful delivery is
 // recorded as "delivered" in the client delivery log.
 func TestWebhookWorkerDeliveryLogRecordsSuccess(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	messageID := seedWebhookMessage(t, svc, u.AccountID, dom.ID, box.Address)
@@ -302,6 +307,7 @@ func TestWebhookWorkerDeliveryLogRecordsSuccess(t *testing.T) {
 }
 
 func TestCancelledWebhookAttemptPersistsBackoff(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.WebhookRetryWindow = time.Hour
 	ctx := context.Background()
