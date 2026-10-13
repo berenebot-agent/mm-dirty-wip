@@ -1363,8 +1363,8 @@ func wholeFloat(v float64) (int, error) {
 }
 
 // DecryptSecretAAD decrypts a secret bound to its row identity. A blob whose
-// binding does not match is refused; pre-AAD ciphertext is refused too, so an
-// instance that still holds one must be migrated with cmd/migrate-secrets.
+// binding does not match is refused; unsupported pre-AAD ciphertext is refused
+// too. Only the current bound format is supported.
 func (s *Service) DecryptSecretAAD(aad string, encrypted string) ([]byte, error) {
 	return cryptox.DecryptWithAAD(s.EncryptionKey, encrypted, []byte(aad))
 }

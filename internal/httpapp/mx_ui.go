@@ -241,7 +241,7 @@ func (s *Server) mxAdminError(w http.ResponseWriter, r *http.Request, err error)
 	case errors.Is(err, app.ErrMXInvalidInput):
 		dest := mxDomainDestination(r) + "&"
 		f := mxFormFlash{UserID: p.UserID, DomainID: r.PathValue("id"), Error: mxUserMessage(err), Values: mxSubmittedValues(r), Checked: mxSubmittedChecks(r)}
-		if tok := s.flashes.put(f, mxFlashSize(f)); tok != "" {
+		if tok := s.putFlash(w, r, f, mxFlashSize(f)); tok != "" {
 			dest += url.Values{"_flash": {tok}}.Encode()
 		} else {
 			dest += url.Values{"error": {f.Error}}.Encode()
@@ -300,11 +300,11 @@ func mxFlashSize(f mxFormFlash) int {
 // takeMXFormFlash consumes a bound form flash for this user, if present. The
 // token is only consumed when it belongs to the caller, so a stale or foreign
 // flash is neither shown nor destroyed.
-func (s *Server) takeMXFormFlash(tok string, userID, domainID string) (mxFormFlash, bool) {
+func (s *Server) takeMXFormFlash(r *http.Request, tok string, userID, domainID string) (mxFormFlash, bool) {
 	if tok == "" {
 		return mxFormFlash{}, false
 	}
-	v, ok := s.flashes.peek(tok)
+	v, ok := s.peekFlash(r, tok)
 	if !ok {
 		return mxFormFlash{}, false
 	}
@@ -312,7 +312,7 @@ func (s *Server) takeMXFormFlash(tok string, userID, domainID string) (mxFormFla
 	if !ok || f.UserID != userID || f.DomainID != domainID {
 		return mxFormFlash{}, false
 	}
-	if taken, ok := s.flashes.take(tok); ok {
+	if taken, ok := s.takeFlash(r, tok); ok {
 		if tf, ok := taken.(mxFormFlash); ok && tf.UserID == userID && tf.DomainID == domainID {
 			return tf, true
 		}

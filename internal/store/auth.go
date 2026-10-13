@@ -543,18 +543,28 @@ func (s *Store) DeleteSession(ctx context.Context, token string) {
 	_, _ = s.write.ExecContext(ctx, `DELETE FROM key_sessions WHERE id_hash=?`, hash)
 }
 func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
+	return s.sessionPrincipal(ctx, token, false)
+}
+
+// ExpiredSessionDraftPrincipal verifies a recently expired, unrevoked session
+// solely for draft recovery. It MUST NOT be used to authorize application
+// actions. The ordinary resolver continues to reject expired sessions.
+func (s *Store) ExpiredSessionDraftPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
+	return s.sessionPrincipal(ctx, token, true)
+}
+
+func (s *Store) sessionPrincipal(ctx context.Context, token string, recovery bool) (model.Principal, string, error) {
 	var p model.Principal
 	var csrf, exp, userTZ, acctTZ string
 	var admin, sysadmin int
 	err := s.read.QueryRowContext(ctx, `SELECT u.account_id,u.id,u.is_admin,u.is_system_admin,s.csrf_token,s.expires_at,u.timezone,a.timezone FROM sessions s JOIN users u ON u.id=s.user_id JOIN accounts a ON a.id=u.account_id WHERE s.id_hash=?`, auth.HashToken(token)).Scan(&p.AccountID, &p.UserID, &admin, &sysadmin, &csrf, &exp, &userTZ, &acctTZ)
 	if err == sql.ErrNoRows {
-		return s.keySessionPrincipal(ctx, token)
+		return s.keySessionPrincipal(ctx, token, recovery)
 	}
 	if err != nil {
 		return p, "", err
 	}
-	if parseTime(exp).Before(time.Now().UTC()) {
-		s.DeleteSession(ctx, token)
+	if !s.sessionExpiryAllowed(ctx, token, exp, recovery) {
 		return p, "", ErrNotFound
 	}
 	p.Admin = admin != 0
@@ -579,7 +589,7 @@ func (s *Store) SessionPrincipal(ctx context.Context, token string) (model.Princ
 // the account Admin or system administrator role. The key's last_used_at is not
 // touched here — this runs on every request, and the bearer path already records
 // use; resolving a session is a read-only operation.
-func (s *Store) keySessionPrincipal(ctx context.Context, token string) (model.Principal, string, error) {
+func (s *Store) keySessionPrincipal(ctx context.Context, token string, recovery bool) (model.Principal, string, error) {
 	var p model.Principal
 	var csrf, exp string
 	var revoked sql.NullString
@@ -593,8 +603,7 @@ func (s *Store) keySessionPrincipal(ctx context.Context, token string) (model.Pr
 	if revoked.Valid {
 		return p, "", ErrNotFound
 	}
-	if parseTime(exp).Before(time.Now().UTC()) {
-		s.DeleteSession(ctx, token)
+	if !s.sessionExpiryAllowed(ctx, token, exp, recovery) {
 		return p, "", ErrNotFound
 	}
 	roles, err := s.clientMailboxRoles(ctx, p.APIKeyID)
@@ -611,6 +620,20 @@ func (s *Store) keySessionPrincipal(ctx context.Context, token string) (model.Pr
 	p.ViaSession = true
 	p.SessionHash = auth.HashToken(token)
 	return p, csrf, nil
+}
+
+func (s *Store) sessionExpiryAllowed(ctx context.Context, token, exp string, recovery bool) bool {
+	expires := parseTime(exp)
+	now := time.Now().UTC()
+	if !expires.Before(now) {
+		return !recovery
+	}
+	// Retain the record briefly for provenance, never for normal authorization.
+	if now.Sub(expires) > 15*time.Minute {
+		s.DeleteSession(ctx, token)
+		return false
+	}
+	return recovery
 }
 
 // clientMailboxRoles returns a key's per-inbox roles from the unified client

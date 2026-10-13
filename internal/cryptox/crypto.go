@@ -121,12 +121,11 @@ func EncryptWithAAD(key, plaintext, aad []byte) (string, error) {
 const envelopeAADPrefix = "v2."
 
 // DecryptWithAAD decrypts an AAD-bound ("v2.") ciphertext. A value without the
-// prefix is pre-AAD ciphertext and is refused rather than read unbound; an
-// instance that still holds one must be migrated with cmd/migrate-secrets
-// before this code reads it.
+// prefix is unsupported pre-AAD ciphertext and is refused rather than read
+// unbound. Legacy secret-format migration support has been retired.
 func DecryptWithAAD(key []byte, encoded string, aad []byte) ([]byte, error) {
 	if !strings.HasPrefix(encoded, envelopeAADPrefix) {
-		return nil, fmt.Errorf("cryptox: unsupported pre-AAD ciphertext (run cmd/migrate-secrets)")
+		return nil, fmt.Errorf("cryptox: unsupported pre-AAD ciphertext")
 	}
 	if len(aad) == 0 {
 		return nil, fmt.Errorf("cryptox: an aad binding is required")

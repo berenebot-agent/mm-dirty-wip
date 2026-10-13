@@ -8,19 +8,25 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
-// TestExpiredSessionComposePreserved proves a compose POST with no session is
+// TestExpiredSessionComposePreserved proves a compose POST with a real expired session is
 // redirected to login carrying both a post-login `next` back to the form and a
 // flash that preserves the typed message, and that the login page carries the
 // notice and the next path forward.
 func TestExpiredSessionComposePreserved(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
+	expired, csrf, err := svc.Store.CreateSession(t.Context(), u.ID, -time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	for k, v := range map[string]string{
+		"_csrf":   csrf,
 		"to":      "friend@example.net",
 		"subject": "hi",
 		"text":    "the body that must survive",
@@ -34,10 +40,8 @@ func TestExpiredSessionComposePreserved(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/send", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	// A stale session cookie: the session has expired, but the browser still
-	// sends the old cookie, which is what makes preservation safe (an
-	// anonymous caller with no cookie at all is not preserved).
-	req.AddCookie(&http.Cookie{Name: "mmm_session", Value: "expired-session-token"})
+	// A real, recently expired session record supplies provenance and CSRF.
+	req.AddCookie(&http.Cookie{Name: "mmm_session", Value: expired})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 

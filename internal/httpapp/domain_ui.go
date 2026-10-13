@@ -783,7 +783,7 @@ func (s *Server) domainEditorError(w http.ResponseWriter, r *http.Request, domai
 		size = len(msg) + 32
 	}
 	f := domainNoticeFlash{AccountID: p.AccountID, UserID: p.UserID, DomainID: domainID, Kind: kind, Provider: provider, Error: msg, Values: values}
-	if tok := s.flashes.put(f, size); tok != "" {
+	if tok := s.putFlash(w, r, f, size); tok != "" {
 		q.Set("_flash", tok)
 	}
 	http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
@@ -859,7 +859,7 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
 	dest := "/ui/domains/" + url.PathEscape(domainID) + "/receiving/worker"
-	if tok := s.flashes.put(f, len(code)+128); tok != "" {
+	if tok := s.putFlash(w, r, f, len(code)+128); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -904,7 +904,7 @@ func (s *Server) uiDomainReceivingWorker(w http.ResponseWriter, r *http.Request)
 		Warning:    cloudflareReachabilityWarning(base),
 	}
 	if tok := r.URL.Query().Get("_flash"); tok != "" {
-		if v, ok := s.flashes.peek(tok); ok {
+		if v, ok := s.peekFlash(r, tok); ok {
 			if f, ok := v.(domainWorkerFlash); ok && f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == d.ID {
 				var cfgID string
 				var rev int64
@@ -914,7 +914,7 @@ func (s *Server) uiDomainReceivingWorker(w http.ResponseWriter, r *http.Request)
 				if f.ConfigID == cfgID && f.Revision == rev {
 					// Consume only a matching flash, so a foreign or stale
 					// attempt leaves the owner's code intact.
-					if taken, ok := s.flashes.take(tok); ok {
+					if taken, ok := s.takeFlash(r, tok); ok {
 						if tf, ok := taken.(domainWorkerFlash); ok {
 							view.WorkerCode = tf.WorkerCode
 						}
@@ -978,7 +978,7 @@ func (s *Server) flashDomainCredential(w http.ResponseWriter, r *http.Request, p
 		Secret:       user + ":" + pass,
 	}
 	dest := "/?domain=" + url.PathEscape(domainID)
-	if tok := s.flashes.put(f, len(basicURL)+len(f.Secret)+256); tok != "" {
+	if tok := s.putFlash(w, r, f, len(basicURL)+len(f.Secret)+256); tok != "" {
 		dest += "&_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
