@@ -71,10 +71,18 @@ func (s *Server) mailboxLabels(ctx context.Context, p model.Principal, box model
 	if err != nil {
 		return nil, err
 	}
+	if box.Kind == model.InboxKindDomain {
+		defined, err := s.Service.Store.ListDefinedLabels(ctx, p.AccountID, box.ID)
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, defined...)
+	}
 	for _, name := range tags {
 		if seenTags[strings.ToLower(name)] {
 			continue
 		}
+		seenTags[strings.ToLower(name)] = true
 		source := "local"
 		if microsoft || google {
 			source = "provider"
@@ -266,4 +274,72 @@ func (s *Server) uiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.submitMessageAction(w, r, m.ID, action, true)
+}
+
+// apiMailboxLabelCreate creates a native additive label or delegates remote
+// folder creation to the existing provider-aware adapter. Unsupported
+// combinations return a clear 400 instead of silently changing semantics.
+func (s *Server) apiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if mb.inbox.Kind == model.InboxKindDomain {
+		created, err := s.Service.Store.CreateDefinedLabel(r.Context(), p, mb.inbox.ID, name)
+		if err != nil {
+			mapStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, mailLabel{ID: "tag:" + created, Name: created, Kind: "tag", Membership: "multiple", Source: "local", CanRemove: true})
+		return
+	}
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	folder, err := mb.remote.CreateRemoteFolder(r.Context(), p, mb.inbox.ID, name, name)
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	kind, membership := "folder", "exclusive"
+	if mb.remote.IsGoogle(r.Context(), p.AccountID, mb.inbox.ID) {
+		kind, membership = "tag", "multiple"
+	}
+	labelID := "folder:" + folder.ID
+	if kind == "tag" {
+		labelID = "tag:" + folder.Name
+	}
+	writeJSON(w, http.StatusCreated, mailLabel{ID: labelID, Name: folder.Name, Kind: kind, Membership: membership, Source: "provider", FolderID: folder.ID})
+}
+
+func (s *Server) uiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {
+	p := principal(r)
+	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.Service.Store.CreateDefinedLabel(r.Context(), p, mb.inbox.ID, r.Form.Get("name")); err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(mb.inbox.ID)+"?notice="+url.QueryEscape("Label created"), http.StatusSeeOther)
 }
