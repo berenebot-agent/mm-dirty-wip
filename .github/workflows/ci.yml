@@ -47,6 +47,10 @@ jobs:
       # The Antler dialog interaction checks drive the real app.js closure against
       # a DOM stand-in: timers, SSE listener attachment and footer payloads are
       # invisible to the Go suite. ubuntu-latest ships Node.
+      - name: generated API reference
+        run: |
+          go run ./cmd/docsgen > /tmp/mailmoose-API-REFERENCE.md
+          diff -u docs/API-REFERENCE.md /tmp/mailmoose-API-REFERENCE.md
       - name: js
         run: node tests/antler-wizard-check.cjs 2>&1 | tee ci-logs/js.log
       # The default run skips the slow gated tests (see tests/support/smoke);
