@@ -54,6 +54,21 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	if err != nil || len(after.Labels) != 0 { t.Fatalf("remove tag: %+v %v", after.Labels, err) }
 }
 
+func TestReaderLabelActionPreservesReader(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	m := seedInbound(t, svc, box, "reader-label", "<reader-label@test>", "Reader", "body")
+	cookie, csrf := uiSession(t, svc, u.ID)
+	response := uiPost(t, h, cookie, "/ui/messages/"+m.ID+"/labels",
+		"_csrf="+csrf+"&action=add&label=Projects")
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("label action returned %d: %s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Location"); !strings.HasPrefix(got, "/ui/messages/"+m.ID+"?notice=") {
+		t.Fatalf("label action navigated away from reader: %q", got)
+	}
+}
+
 func TestNativeNewLabelIsAdditive(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
@@ -98,7 +113,7 @@ func TestUnifiedLabelSidebarAndPicker(t *testing.T) {
 	m := seedInbound(t, svc, box, "unified-ui", "<unified-ui@test>", "Organise", "body")
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
-	if strings.Count(page, `class="navgroup">Labels`) != 1 || !strings.Contains(page, "Projects") {
+	if strings.Count(page, `class="navgroup labelgroup-head"`) != 1 || !strings.Contains(page, "Projects") {
 		t.Fatalf("expected single Labels navigation section")
 	}
 	msg := uiGet(t, h, cookie, "/ui/messages/"+m.ID).Body.String()
