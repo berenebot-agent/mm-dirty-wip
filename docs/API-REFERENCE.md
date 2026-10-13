@@ -37,7 +37,7 @@ Generated from `internal/apispec`; do not edit by hand.
 | GET | /v1/inboxes/{id}/threads | List an inbox's threads (common envelope) | read |
 | GET | /v1/inboxes/{id}/threads/{threadId} | Get a thread (common) | read |
 | GET | /v1/inboxes/{id}/search | Search an inbox (common envelope) | read |
-| GET | /v1/inboxes/{id}/labels | List an inbox's labels (common envelope) | read |
+| GET | /v1/inboxes/{id}/labels | List legacy flat labels | read |
 | GET | /v1/inboxes/{id}/remote | Get a standalone inbox's remote configuration | read |
 | PUT | /v1/inboxes/{id}/remote | Configure a standalone inbox's remote connector (Owner/Admin) | owner |
 | POST | /v1/inboxes/{id}/remote/test | Test a standalone inbox's remote connector | read |
