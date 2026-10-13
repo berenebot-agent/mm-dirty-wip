@@ -429,12 +429,11 @@ snapshotted onto each request at creation:
 - **Remote draft handoff** (a standalone inbox's default): a one-way handoff
   that places the frozen draft in the inbox's connected remote Drafts folder for
   the human to review and send from their own client. MailMoose never sends it.
-  A handoff notification (no token) tells the human the draft is waiting.
+  No notification email is sent for a handoff.
 
-Publication, notification and the Sent-copy are tracked as separate states, so a
-notification failure never blocks publication and a copy failure never re-sends.
-A remote append whose result cannot be verified is reported as ambiguous, never
-retried blindly.
+Publication and the Sent-copy are tracked separately, and a copy failure never
+re-sends. A remote append whose result cannot be verified is reported as
+ambiguous, never retried blindly.
 
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 

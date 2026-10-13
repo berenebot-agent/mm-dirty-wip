@@ -339,8 +339,8 @@ transient scope/`LIST` shortfall or a generation flip.
   `From`.
 - **`RemoteDraft`** (a standalone inbox's default): a one-way handoff that
   appends the frozen draft to the connected remote Drafts folder. MailMoose
-  never sends it. A handoff notification (carrying the correlation header, no
-  token) tells the human a draft is waiting.
+  never sends it and sends no notification email. The frozen draft carries the
+  correlation header used to verify publication.
 - The mode is snapshotted onto each request at creation, so an inbox setting
   change never affects an in-flight request. A standalone inbox can be switched
   to `MailMooseApproval` (its approver identity is matched against the message
@@ -349,23 +349,22 @@ transient scope/`LIST` shortfall or a generation flip.
   row stored as `remote_draft` normalizes back to the kind default on read), and
   `requestRemoteDraft` requires `kind=standalone` and a mapped remote Drafts
   folder.
-- **Notify**: defaults to the inbox's own connected address, with an optional
-  per-inbox override, snapshotted per submitted request.
-- **Publication, notification and Sent-copy are separate state machines.** A
+- **Publication and Sent-copy are separate state machines.** A
   handoff's publication state (`pending`/`published`/`ambiguous`/`failed`) is
-  independent of its notification state; the Sent-copy is a separate durable job
-  that never re-runs the SMTP send. Publication never claims guaranteed
+  independent of its Sent-copy, which is a separate durable job that never
+  re-runs the SMTP send. Publication never claims guaranteed
   exactly-once: an append whose result cannot be verified is `ambiguous`, not a
   blind retry.
 - **A handoff's outcome is exposed on the Draft response and in a history
   listing.** `model.Draft.Handoff` (`AssistantHandlingRequest`) carries the
-  immutable handoff id plus the publication and notification states, populated on
+  immutable handoff id plus the publication state, populated on
   draft retrieval (`internal/store/drafts.go`), and `GET
   /v1/inboxes/{id}/handoffs` lists the inbox's handoffs newest first, **retaining
   terminal records** (`published`, `ambiguous`, `failed`/`cancelled`) even after
   the local draft has been cleaned up. The handoff events
-  (`draft.handoff_requested`/`_published`/`_ambiguous`/`_failed`/`_cancelled`/
-  `_notification_sent`/`_notification_failed`) carry the same non-secret fields.
+  (`draft.handoff_requested`/`_published`/`_ambiguous`/`_failed`/`_cancelled`)
+  carry the same non-secret fields. Legacy notification-state fields and event
+  names are retained for compatibility but no new handoff notification is queued.
 - **Cancel and retry are explicit, bounded, and never automatic.** A **pending**
   or **ambiguous** handoff can be **resolved** (`Store.CancelHandoff` / the UI
   action): it becomes `failed` with `last_error="cancelled"`, the draft returns

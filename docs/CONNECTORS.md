@@ -53,9 +53,8 @@ An `assistant` send (a request to send a draft) is resolved per the inbox's
 - **Remote draft handoff** (the default for a standalone inbox) — the frozen
   draft is placed one-way into the connected mailbox's remote **Drafts** folder
   for a human to review and send from their own client. MailMoose never sends
-  it. A notification (which carries **no** approval token) tells the human a
-  draft is waiting, and publication, notification and the Sent-copy are tracked
-  as separate states.
+  it and sends no notification email. Publication is tracked separately from
+  the remote Sent-copy.
 
 Both modes are set per inbox (**Approvals** settings) for a standalone inbox and
 can be changed; the
