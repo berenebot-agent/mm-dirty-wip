@@ -125,13 +125,6 @@ func (s *Store) ListEvents(ctx context.Context, p model.Principal, after int64, 
 	}
 	return out, rows.Err()
 }
-func (s *Store) GetEvent(ctx context.Context, accountID string, id int64) (model.Event, error) {
-	e, err := scanEvent(s.read.QueryRowContext(ctx, `SELECT id,account_id,inbox_id,type,entity_id,payload_json,created_at FROM events WHERE account_id=? AND id=?`, accountID, id))
-	if err == sql.ErrNoRows {
-		return e, ErrNotFound
-	}
-	return e, err
-}
 func (s *Store) NextHermesEvent(ctx context.Context, connID string, after int64) (model.Event, error) {
 	e, err := scanEvent(s.read.QueryRowContext(ctx, `SELECT e.id,e.account_id,e.inbox_id,e.type,e.entity_id,e.payload_json,e.created_at FROM events e JOIN client_push p ON p.inbox_id=e.inbox_id JOIN clients c ON c.id=p.client_id WHERE c.id=? AND c.type IN ('hermes','openclaw') AND e.id>? AND e.type IN ('message.received','message.spam_state_changed') ORDER BY e.id ASC LIMIT 1`, connID, after))
 	if err == sql.ErrNoRows {

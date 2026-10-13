@@ -92,28 +92,6 @@ func (s *Server) SetRemoteMailbox(rm *app.RemoteMailboxService) {
 	}
 }
 
-// Kind reports the routing decision.
-func (m mailboxBackend) Kind() app.MailboxBackendKind {
-	if m.routed {
-		return app.BackendRemote
-	}
-	return app.BackendLocal
-}
-
-// Remote reports the non-secret remote description of a standalone inbox.
-func (m mailboxBackend) Remote() *model.RemoteConnection { return m.inbox.Remote }
-
-// Capabilities reports the declared capability surface.
-func (m mailboxBackend) Capabilities() model.Capabilities {
-	if m.inbox.Capabilities != nil {
-		return *m.inbox.Capabilities
-	}
-	if m.routed {
-		return model.StandaloneCapabilities()
-	}
-	return model.DomainCapabilities()
-}
-
 // normalizeMailboxStoreError wraps a raw store error in the common mailbox
 // classification so the HTTP layer answers with a stable status and a safe
 // message. It mirrors the app package's mapping for the errors the store emits

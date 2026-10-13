@@ -39,10 +39,6 @@ func validRelayKind(kind RelayKind) bool {
 	return kind == KindHermes || kind == KindOpenClaw
 }
 
-func (s *Store) CreateHermesEnrollToken(ctx context.Context, accountID, inboxID, name string, ttl time.Duration) (string, error) {
-	return s.CreateRelayEnrollToken(ctx, accountID, inboxID, name, KindHermes, ttl)
-}
-
 // CreateRelayEnrollToken mints a one-time setup code for a relay connector of
 // the given kind. The code is only an authority: the claimant supplies the
 // MailMoose URL, and the code remembers which connector it creates.

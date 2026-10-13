@@ -86,6 +86,18 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   monopolize the queue. Same-message ordering and retry safety are preserved;
   individual slow actions still delay other inboxes while they execute.
 
+### Removed
+
+- Unreachable code reported by `deadcode` and `staticcheck -checks U1000` is
+  gone. The `MailboxRouter`/`StandaloneMailboxService`/`MailboxBackend` seam in
+  `internal/app` (plus its unit test) was never constructed by any workflow, HTTP
+  or UI path; superseded remote-message handlers and form helpers in
+  `internal/httpapp`; and the unreferenced `ListBlockedMessages`,
+  `LatestMessageInThread`, `DeleteDraft`, `GetEvent`, `DeleteDomain`,
+  `CreateHermesEnrollToken`, `ResolveDialMXRecipients` and `CreateReply` methods.
+  No behaviour changes; the live paths are unchanged. See `D097`'s status update.
+- `docs/IMPLEMENTATION_PLAN.md`, an unreferenced V1 phase plan.
+
 ### Added
 
 - A Direct MX domain that signs outbound mail now shows a **published-DKIM-record

@@ -224,7 +224,6 @@ type fakeMsg struct {
 type fakeRemoteServer struct {
 	mu             sync.Mutex
 	folders        map[string]uint32 // path -> UIDVALIDITY
-	order          []string
 	messages       []*fakeMsg
 	nextUID        uint32
 	appendCount    int
@@ -1279,7 +1278,6 @@ func imapLiteral(raw string) goimap.LiteralReader {
 type stringLiteral struct {
 	data string
 	off  int
-	size int64
 }
 
 func (l *stringLiteral) Size() int64 { return int64(len(l.data)) }

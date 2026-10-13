@@ -43,10 +43,6 @@ func (s *Service) ResolveMXRecipients(ctx context.Context, recipients []string) 
 	return s.resolveMXRecipients(ctx, mxProvider, recipients)
 }
 
-func (s *Service) ResolveDialMXRecipients(ctx context.Context, recipients []string) []MXResolveResult {
-	return s.resolveMXRecipients(ctx, "dialmx", recipients)
-}
-
 // selfHostedReceivingProviders returns the provider spellings that name a
 // self-hosted receiver, most specific first.
 //

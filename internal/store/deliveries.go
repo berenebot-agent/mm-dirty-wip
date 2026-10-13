@@ -23,13 +23,6 @@ const (
 	DeliveryTriggerDefault = DeliveryTriggerAll
 )
 
-// inboxAutoActions is the delivery-driven policy an inbox carries.
-type inboxAutoActions struct {
-	MarkRead   bool
-	TrashHours *int
-	Trigger    string
-}
-
 func validDeliveryTrigger(t string) bool {
 	return t == DeliveryTriggerAny || t == DeliveryTriggerAll
 }

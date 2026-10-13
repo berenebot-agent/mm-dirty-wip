@@ -119,9 +119,6 @@ type RemoteLocator struct {
 	MessageID string `json:"message_id,omitempty"`
 }
 
-// Empty reports whether the locator names no remote position (a local record).
-func (l RemoteLocator) Empty() bool { return l.FolderPath == "" && l.UID == 0 && l.UIDValidity == 0 }
-
 // RemoteConnection carries the operator-supplied, non-secret description of a
 // remote mail server binding. Secrets are never held here; they live encrypted
 // in the store keyed by InboxID.
@@ -220,12 +217,6 @@ func NormalizeRemotePollSeconds(v *int) int {
 		return RemotePollSecondsMin
 	}
 	return *v
-}
-
-// RemotePollDisabled reports whether an effective quick-poll value (from
-// NormalizeRemotePollSeconds) means the new-mail poll is switched off.
-func RemotePollDisabled(effectiveSeconds int) bool {
-	return effectiveSeconds <= 0
 }
 
 // NormalizeRemoteFullSyncMinutes resolves a per-inbox full-sync override to an

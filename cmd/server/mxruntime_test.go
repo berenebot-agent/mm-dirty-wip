@@ -161,7 +161,7 @@ func TestMXRuntimeLastDomainStandbyAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.reconcile(ctx)
-	if err := svc.Store.DeleteDomain(ctx, other.AccountID, second.ID); err != nil {
+	if _, err := svc.Store.PurgeDomain(ctx, other.AccountID, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	rt.reconcile(ctx)

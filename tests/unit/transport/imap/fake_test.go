@@ -142,12 +142,6 @@ func (fs *fakeServer) setNamespace(prefix string, delim rune) {
 	fs.overrides.namespaceDelim = &delim
 }
 
-func (fs *fakeServer) setUIDValidity(v uint32) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-	fs.overrides.fixedUIDValidity = v
-}
-
 func (fs *fakeServer) setAppendNoUID(v bool) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()

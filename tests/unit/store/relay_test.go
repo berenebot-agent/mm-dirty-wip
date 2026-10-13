@@ -31,7 +31,7 @@ func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tok, err := s.CreateHermesEnrollToken(ctx, u.AccountID, b[0].ID, "attacker", time.Hour)
+	tok, err := s.CreateRelayEnrollToken(ctx, u.AccountID, b[0].ID, "attacker", store.KindHermes, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestHermesEnrollSameAccountRotates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
-	tok1, err := s.CreateHermesEnrollToken(ctx, u.AccountID, b[0].ID, "first", time.Hour)
+	tok1, err := s.CreateRelayEnrollToken(ctx, u.AccountID, b[0].ID, "first", store.KindHermes, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestHermesEnrollSameAccountRotates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok2, err := s.CreateHermesEnrollToken(ctx, u.AccountID, b[0].ID, "second", time.Hour)
+	tok2, err := s.CreateRelayEnrollToken(ctx, u.AccountID, b[0].ID, "second", store.KindHermes, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
