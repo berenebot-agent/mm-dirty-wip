@@ -2868,56 +2868,13 @@ function aliasNameByAddress(list) {
     return;
   }
   var form = dlg.querySelector('form');
-  var input = document.getElementById('add-domain-name');
-  var panel = document.getElementById('add-domain-inherit');
-  var parentEl = document.getElementById('add-domain-parent');
-  var controls = document.getElementById('add-domain-inherit-controls');
-  var names = (form.getAttribute('data-domain-names') || '')
-    .split(',')
-    .map(function (s) { return s.trim().toLowerCase(); })
-    .filter(Boolean);
-  // detect reveals the reuse-parent checkboxes when the typed name is a
-  // subdomain of an existing domain; server-side detection is authoritative, so
-  // with JS off the domain is still created as a subdomain with inheritance on.
-  function detect() {
-    if (!input || !panel) {
-      return;
-    }
-    var v = (input.value || '').trim().toLowerCase().replace(/\.$/, '');
-    var parent = '';
-    names.forEach(function (d) {
-      if (v.length > d.length + 1 && v.slice(-(d.length + 1)) === '.' + d) {
-        if (d.length > parent.length) {
-          parent = d;
-        }
-      }
-    });
-    if (parent) {
-      if (parentEl) {
-        parentEl.textContent = parent;
-      }
-      document.querySelectorAll('.add-domain-parent').forEach(function (el) {
-        el.textContent = parent;
-      });
-      panel.hidden = false;
-      if (controls) {
-        controls.value = '1';
-      }
-    } else {
-      panel.hidden = true;
-      if (controls) {
-        controls.value = '';
-      }
-    }
-  }
-  if (input) {
-    input.addEventListener('input', detect);
-  }
   var add = document.getElementById('add-domain');
   if (add) {
     add.addEventListener('click', function () {
       form.reset();
-      detect();
+      var error = form.querySelector('.error');
+      if (error) { error.remove(); }
+      document.getElementById('add-domain-name').value = '';
       dlg.showModal();
     });
   }
@@ -2927,6 +2884,13 @@ function aliasNameByAddress(list) {
       dlg.close();
     });
   }
+  var state = document.getElementById('domain-wizard-state');
+  if (state && state.dataset.step === 'domain' && !state.dataset.domain) {
+    dlg.showModal();
+  }
+  dlg.addEventListener('close', function () {
+    clearUrlParams(['domain_wizard', 'domain_name', 'error']);
+  });
 })();
 
 (function () {
@@ -5570,6 +5534,68 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  // Reuse the existing editors: only their navigation changes during addition.
+  // The server validates wizard IDs against the account's domain list.
+  var state = document.getElementById('domain-wizard-state');
+  if (!state || !state.dataset.domain || (state.dataset.step !== 'receiving' && state.dataset.step !== 'sending')) { return; }
+  var kind = state.dataset.step;
+  var dlg = document.getElementById('domain-' + kind + '-dialog-' + state.dataset.domain);
+  if (!dlg) { return; }
+  var form = dlg.querySelector('form.cfg-form');
+  var footer = dlg.querySelector(':scope > .dialog-actions');
+  var save = dlg.querySelector('[data-save-provider]');
+  var provider = form.querySelector('.provider-select');
+  var inheritance = provider.querySelector('option[value="inherited"]');
+  if (inheritance) {
+    if (state.dataset.inherit !== 'true') { inheritance.remove(); }
+    else { inheritance.textContent = inheritance.textContent.replace('Inherited (from ', 'Use ').replace(/\)$/, '’s configuration'); }
+  }
+  dlg.classList.add('domain-wizard');
+  dlg.dataset.domainWizard = kind;
+  dlg.dataset.wizardNext = state.dataset.next;
+  var marker = document.createElement('input');
+  marker.type = 'hidden'; marker.name = 'domain_wizard'; marker.value = '1'; form.appendChild(marker);
+  var progress = document.createElement('p');
+  progress.className = 'domain-wizard-progress';
+  progress.textContent = 'Step ' + (kind === 'receiving' ? '2' : '3') + ' of 4 · Domain → Receiving → Sending → Summary';
+  var heading = dlg.querySelector('h2');
+  heading.insertAdjacentElement('afterend', progress);
+  var note = document.createElement('p'); note.className = 'muted small';
+  note.textContent = 'The domain is saved. Close keeps saved progress; Skip ignores unsaved edits. You can finish setup from the Domains list later.';
+  progress.insertAdjacentElement('afterend', note);
+  Array.prototype.forEach.call(footer.children, function (child) { child.hidden = child !== save; });
+  // Antler's own setup buttons remain above the domain-level navigation.
+  function innerActions() { footer.hidden = kind !== 'receiving' || provider.value !== 'dialmx'; }
+  provider.addEventListener('change', innerActions); innerActions();
+  var actions = document.createElement('div'); actions.className = 'dialog-actions domain-wizard-actions';
+  actions.innerHTML = '<button type="button" class="secondary" data-close-dialog>Close</button>' +
+    '<a class="btn secondary" data-wizard-back>Back</a><span class="spacer"></span>' +
+    '<a class="btn secondary" data-wizard-skip>Skip</a><button type="submit" data-wizard-next>Next</button>';
+  actions.querySelector('[data-wizard-back]').href = state.dataset.back;
+  actions.querySelector('[data-wizard-skip]').href = state.dataset.next;
+  var next = actions.querySelector('[data-wizard-next]'); next.setAttribute('form', form.id);
+  function syncNext() { next.disabled = !provider.value; }
+  provider.addEventListener('change', syncNext); syncNext();
+  dlg.appendChild(actions);
+  // Account receiver settings are a secondary save, not an advancement.
+  dlg.querySelectorAll('form[action="/ui/account/mx"]').forEach(function (receiverForm) {
+    var returnID = document.createElement('input');
+    returnID.type = 'hidden'; returnID.name = 'domain_wizard_domain'; returnID.value = state.dataset.domain;
+    receiverForm.appendChild(returnID);
+  });
+  var credential = document.getElementById('domain-credential-dialog');
+  if (kind === 'receiving' && credential) {
+    var done = credential.querySelector('[data-close-dialog]');
+    done.removeAttribute('data-close-dialog'); done.textContent = 'Next';
+    done.addEventListener('click', function () { window.location.assign(state.dataset.next); });
+    var close = document.createElement('button'); close.type = 'button'; close.className = 'secondary';
+    close.textContent = 'Close';
+    close.addEventListener('click', function () { window.location.assign('/'); });
+    credential.querySelector('.dialog-actions').prepend(close);
+  }
+})();
+
+(function () {
   document.querySelectorAll('.open-domain-dialog').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var dlg = document.getElementById('domain-' + btn.getAttribute('data-kind') + '-dialog-' + btn.getAttribute('data-domain'));
@@ -5590,19 +5616,23 @@ function hideInboxSubview(dlg) {
   }
   var pendingDialogs = document.querySelectorAll('.domain-dialog[data-open="1"]');
   var keyDialog = document.getElementById('dkim-key-dialog');
+  var credentialDialog = document.getElementById('domain-credential-dialog');
   pendingDialogs.forEach(function (dlg) {
     if (inboxReopening) {
       return;
     }
     // The one-time DKIM key pop-up is opened last (below) so it sits above the
     // sending dialog it was launched from instead of behind it.
-    if (dlg === keyDialog) {
+    if (dlg === keyDialog || dlg === credentialDialog) {
       return;
     }
     if (!dlg.open) {
       dlg.showModal();
     }
   });
+  if (!inboxReopening && credentialDialog && !credentialDialog.open) {
+    credentialDialog.showModal();
+  }
   if (!inboxReopening && keyDialog && keyDialog.getAttribute('data-open') === '1' && !keyDialog.open) {
     keyDialog.showModal();
   }
@@ -5620,7 +5650,11 @@ function hideInboxSubview(dlg) {
   // in the inbox settings block, which also restores the suspended inbox.
   document.querySelectorAll('.domain-dialog[id^="domain-"]').forEach(function (dlg) {
     dlg.addEventListener('close', function () {
-      clearUrlParams(['domain', 'kind', 'provider']);
+      if (dlg.dataset.domainWizard || dlg.id === 'domain-wizard-dialog') {
+        window.location.assign('/');
+        return;
+      }
+      clearUrlParams(['domain', 'kind', 'provider', 'domain_wizard', 'domain_name']);
     });
   });
 })();
@@ -6286,6 +6320,8 @@ function hideInboxSubview(dlg) {
     }
     function update() {
       var enabled = active();
+      var domainNext = dlg.querySelector('[data-wizard-next]');
+      if (domainNext) { domainNext.disabled = busy || !provider.value; }
       dlg.classList.toggle('antler-dialog', enabled);
       if (rotate) { rotate.querySelector('button').disabled = busy || rotating; }
       provider.disabled = busy;
@@ -6447,6 +6483,19 @@ function hideInboxSubview(dlg) {
     form.addEventListener('submit', function (event) {
       if (!active()) { return; }
       event.preventDefault();
+      // Domain-level Next may leave saved receiving setup while DNS/receivers
+      // are pending. Antler's own buttons still walk through its full setup.
+      if (dlg.dataset.domainWizard && event.submitter && event.submitter.hasAttribute('data-wizard-next') && (state || statusMode)) {
+        if (busy) { return; }
+        if (!custom && !email.value.trim()) { fail('Enter a contact email.'); return; }
+        if (custom && !urls.value.trim()) { fail('Enter at least one receiver URL.'); return; }
+        var config = { service: custom ? 'custom' : 'antler', enforcement: enforcement.value };
+        if (custom) { config.receiver_urls = urls.value; } else { config.contact_email = email.value; }
+        busy = true; fail(''); update();
+        api('PUT', config).then(function () { window.location.assign(dlg.dataset.wizardNext); })
+          .catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
+        return;
+      }
       if (busy || (!statusMode && !rotating && step === 2 && !ready)) { return; }
       // Rotation finishes regardless of readiness; the receiver re-authorizes on
       // its own and the status view reports it as in progress.

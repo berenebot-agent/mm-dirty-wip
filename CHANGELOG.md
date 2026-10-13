@@ -15,6 +15,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- **Add Domain** now guides users through Domain → Receiving → Sending →
+  Summary, using the existing provider dropdowns and configuration forms.
+  The first Next saves the domain; each provider step saves independently.
+  Close keeps saved progress, and Skip ignores unsaved edits without removing
+  saved configuration. Subdomain inheritance is an explicit per-direction
+  choice. Provider setup instructions and one-time generated credentials remain
+  available, and DNS propagation does not block finishing setup. Existing-domain
+  sending and receiving editors retain their usual behaviour.
+
 - Messages now expose `label_ids`, the canonical unified label membership for the
   owning inbox: `tag:<Name>` for additive labels and `folder:<id>` for the single
   folder-backed label, always present and `[]` when empty. The older `labels`
