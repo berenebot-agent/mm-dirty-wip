@@ -219,14 +219,6 @@ func standaloneRemoteChanged(box model.Inbox, in store.StandaloneRemoteUpdate) b
 	return false
 }
 
-// hasFormRemoteNonSecret reports whether a submitted remote form carries any
-// non-secret field, so a secrets-only save does not require the host.
-func hasFormRemoteNonSecret(in store.StandaloneRemoteUpdate) bool {
-	return strings.TrimSpace(in.Host) != "" || in.Port != 0 || strings.TrimSpace(in.Username) != "" ||
-		strings.TrimSpace(in.Security) != "" || strings.TrimSpace(in.Namespace) != "" ||
-		strings.TrimSpace(in.SMTPHost) != "" || in.SMTPPort != 0 || strings.TrimSpace(in.SMTPUsername) != ""
-}
-
 // parseIntForm parses an optional integer form field, returning 0 when blank or
 // unparseable (a zero port means "use the conventional default").
 func parseIntForm(raw string) (int, bool) {
@@ -659,79 +651,6 @@ func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
 		"attachments":   atts,
 	})
 }
-
-// remoteMessageSetRead toggles the read flag of a standalone inbox's cached remote
-// message and mirrors it to the live server. It returns false when id is not a
-// cached remote message, so the caller can answer 404 for a genuine miss.
-func (s *Server) remoteMessageSetRead(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
-	read := r.Form.Get("read") == "1"
-	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
-	if err != nil {
-		return false
-	}
-	for _, box := range boxes {
-		if !p.CanRead(box.ID) && !p.Admin {
-			continue
-		}
-		if _, gerr := s.Service.Store.GetRemoteMessage(r.Context(), p.AccountID, box.ID, id); gerr != nil {
-			continue
-		}
-		if _, uerr := s.remoteMailbox().SetRemoteRead(r.Context(), p, box.ID, id, read); uerr != nil {
-			s.uiError(w, uerr, 400)
-			return true
-		}
-		http.Redirect(w, r, "/ui/messages/"+id, 303)
-		return true
-	}
-	return false
-}
-
-// remoteMessageSetLabels adds or removes one label on a standalone inbox's cached
-// remote message. Labels are local free-text metadata on both inbox kinds, so no
-// provider call is made. It returns false when id is not a cached remote message.
-func (s *Server) remoteMessageSetLabels(w http.ResponseWriter, r *http.Request, p model.Principal, id string) bool {
-	label := strings.TrimSpace(r.Form.Get("label"))
-	action := r.Form.Get("action")
-	if action != addLabelAction && action != removeLabelAction {
-		return false
-	}
-	boxes, err := s.Service.Store.ListStandaloneInboxes(r.Context(), p.AccountID)
-	if err != nil {
-		return false
-	}
-	for _, box := range boxes {
-		if !p.CanAssist(box.ID) && !p.Admin {
-			continue
-		}
-		current, lerr := s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, box.ID, id)
-		if lerr != nil {
-			continue
-		}
-		var next []string
-		switch action {
-		case addLabelAction:
-			next = append(append([]string{}, current...), label)
-		case removeLabelAction:
-			for _, l := range current {
-				if !strings.EqualFold(l, label) {
-					next = append(next, l)
-				}
-			}
-		}
-		if _, uerr := s.remoteMailbox().SetRemoteLabels(r.Context(), p, box.ID, id, next); uerr != nil {
-			http.Redirect(w, r, "/ui/messages/"+id+"?notice="+url.QueryEscape("Invalid label: "+uerr.Error()), 303)
-			return true
-		}
-		http.Redirect(w, r, "/ui/messages/"+id, 303)
-		return true
-	}
-	return false
-}
-
-const (
-	addLabelAction    = "add"
-	removeLabelAction = "remove"
-)
 
 // remoteMessageActionBox finds the standalone inbox that owns a cached remote
 // message id, so a session-UI state change (trash/restore/purge/spam) can route

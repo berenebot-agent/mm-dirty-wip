@@ -330,14 +330,6 @@ func resolverMultipartLimit(resolver transport.BindingResolver) int {
 	return 0
 }
 
-func isSingletonField(name string) bool {
-	switch name {
-	case "timestamp", "token", "signature", "sender", "recipient", "Message-Id", "message-id", "message_id":
-		return true
-	}
-	return false
-}
-
 // setField records a known Mailgun field, rejecting a repeated singleton so a
 // later value cannot change the recipient or auth material after verification.
 func setField(out *InboundForm, name, value string, seen map[string]bool) error {

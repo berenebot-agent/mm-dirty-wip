@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"strings"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
 	"github.com/dellarb/mailmoose/internal/limits"
@@ -338,9 +337,3 @@ func (s *Store) DeleteDraftCascade(ctx context.Context, p model.Principal, id st
 	}
 	return paths, nil
 }
-
-func (s *Store) DeleteDraft(ctx context.Context, p model.Principal, id string) error {
-	_, err := s.DeleteDraftCascade(ctx, p, id)
-	return err
-}
-func cleanSubject(v string) string { return strings.TrimSpace(v) }

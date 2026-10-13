@@ -69,7 +69,7 @@ domain and is reached through an optional per-inbox remote IMAP/SMTP connector
 threads, events and API keys; only their transport differs. A standalone inbox's
 message and thread **metadata** is cached locally while bodies and attachments
 stay live on the provider and are never archived. The common mailbox boundary is
-`internal/app`'s `MailboxRouter`/`RemoteMailboxService` plus
+`internal/app`'s `RemoteMailboxService` plus
 `internal/httpapp/mailbox_access.go`; see
 [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
 

@@ -211,18 +211,6 @@ type Adapter struct {
 	caps              Capabilities
 }
 
-// NewFromClient adopts an existing, authenticated IMAP client. It performs the
-// initial capability discovery but does not select a folder. The caller
-// transfers ownership of conn to the Adapter, which closes it with Close.
-//
-// It is primarily useful for tests that install a fake server; production code
-// should use Dial.
-func NewFromClient(cfg Config, conn *imapclient.Client) *Adapter {
-	a := &Adapter{cfg: cfg.Normalize(), conn: conn}
-	a.caps = a.readCapabilities()
-	return a
-}
-
 // Dial connects to the configured server and authenticates. The returned
 // Adapter owns the connection and must be closed with Close.
 func Dial(ctx context.Context, cfg Config) (*Adapter, error) {
@@ -313,11 +301,4 @@ func (a *Adapter) ModelCapabilities() model.Capabilities {
 	caps.Search = true
 	caps.HierarchicalFolders = true
 	return caps
-}
-
-// selectedFolder returns the currently selected folder, or "" when none.
-func (a *Adapter) selectedFolder() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.selected
 }
