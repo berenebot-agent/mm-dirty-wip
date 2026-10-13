@@ -372,6 +372,12 @@ func TestKeyDialogDomainWideSending(t *testing.T) {
 	if !strings.Contains(body, "domainsend_"+box.ID) {
 		t.Fatal("key matrix missing the domain-send control on the catch-all inbox")
 	}
+	// The control must submit an explicit value so unticking persists: an
+	// unchecked checkbox submits nothing, which is indistinguishable from
+	// "untouched" server-side.
+	if !strings.Contains(body, `type="hidden" name="domainsend_`+box.ID+`" value="0"`) {
+		t.Fatal("domain-send control must carry a hidden field that always submits a value")
+	}
 	if strings.Contains(body, "domainsend_"+other.ID) {
 		t.Fatal("key matrix offered the domain-send control on a non-catch-all inbox")
 	}
@@ -393,21 +399,48 @@ func TestKeyDialogDomainWideSending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found bool
+	var key model.APIKey
 	for _, k := range keys {
-		if k.Name != "Agent" {
-			continue
-		}
-		found = true
-		if !k.DomainSend[box.ID] {
-			t.Fatalf("grant not applied from key dialog: %#v", k.DomainSend)
-		}
-		if k.Roles[box.ID] != "owner" {
-			t.Fatalf("grant did not force owner: %#v", k.Roles)
+		if k.Name == "Agent" {
+			key = k
 		}
 	}
-	if !found {
+	if key.ID == "" {
 		t.Fatal("created key not found")
+	}
+	if !key.DomainSend[box.ID] {
+		t.Fatalf("grant not applied from key dialog: %#v", key.DomainSend)
+	}
+	if key.Roles[box.ID] != "owner" {
+		t.Fatalf("grant did not force owner: %#v", key.Roles)
+	}
+
+	// Clearing it from the same dialog must actually persist. The control submits
+	// an explicit 0 rather than relying on an unchecked checkbox (which submits
+	// nothing), so this is the regression guard for "untick does not save".
+	clear := url.Values{"_csrf": {csrf}, "name": {"Agent"}, "role_" + box.ID: {"owner"}, "domainsend_" + box.ID: {"0"}}
+	clearReq := httptest.NewRequest("POST", "/ui/keys/"+key.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusCreated && clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear domain-send = %d body=%s", clearRR.Code, clearRR.Body.String())
+	}
+	keys, err = svc.Store.ListAPIKeys(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if k.DomainSend[box.ID] {
+			t.Fatalf("grant not cleared from key dialog: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("clearing the grant demoted the role: %#v", k.Roles)
+		}
 	}
 }
 
