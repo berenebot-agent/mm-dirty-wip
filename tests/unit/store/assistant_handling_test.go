@@ -378,7 +378,7 @@ func TestStandaloneSendingTargetResolves(t *testing.T) {
 	if d.FromAddress != box.Address {
 		t.Fatalf("from=%q want %q", d.FromAddress, box.Address)
 	}
-	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "")
+	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "")
 	if err != nil || from.Address != box.Address {
 		t.Fatalf("resolve target from=%+v err=%v", from, err)
 	}
@@ -386,7 +386,7 @@ func TestStandaloneSendingTargetResolves(t *testing.T) {
 		t.Fatalf("standalone target=%+v want inbox-scoped, no domain", target)
 	}
 	// A different sender is not allowed on a standalone inbox.
-	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "other@remote.example"); !errors.Is(err, store.ErrForbidden) {
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "other@remote.example"); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("foreign sender err=%v want forbidden", err)
 	}
 	// With no standalone sender bridge, sending config for the standalone inbox is

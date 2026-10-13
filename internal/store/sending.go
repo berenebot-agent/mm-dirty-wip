@@ -53,9 +53,11 @@ func (s *Store) SendingConfigForTarget(ctx context.Context, accountID, inboxID s
 
 // ResolveSendingTarget maps a requested sender address to its From identity and
 // the managed domain whose connector sends it. It is the send path's entry
-// point.
-func (s *Store) ResolveSendingTarget(ctx context.Context, accountID, inboxID, requested string) (model.Address, SendingTarget, error) {
-	return resolveSendingTargetQuery(ctx, s.read, accountID, inboxID, requested)
+// point. keyID is the API key performing the send (empty for a web session,
+// system mail or the principal-free approval path); it carries the domain-wide
+// sending grant, if any.
+func (s *Store) ResolveSendingTarget(ctx context.Context, accountID, inboxID, keyID, requested string) (model.Address, SendingTarget, error) {
+	return resolveSendingTargetQuery(ctx, s.read, accountID, inboxID, keyID, requested)
 }
 
 // SendingConfigForMessage resolves the sending configuration for an already
@@ -96,7 +98,15 @@ func (s *Store) SendingConfigForMessage(ctx context.Context, accountID, messageI
 // primary, resolves to the primary on the inbox's own domain. Any other address
 // must match one of the inbox's managed aliases; a request that matches neither
 // is ErrForbidden.
-func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, SendingTarget, error) {
+//
+// keyID is the API key performing the send (empty for a web session, system
+// mail or the principal-free approval path). When the key holds the
+// domain-wide sending grant on the domain's enabled catch-all, any local part on
+// that domain is accepted — see domainSendGrantAt. The grant is evaluated at send
+// time against the sending principal's key, so revoking it stops a queued or
+// approved wildcard send; the resolved address is then frozen into the message
+// and the outbox retry reuses it without re-resolving.
+func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, inboxID, keyID, requested string) (model.Address, SendingTarget, error) {
 	// Domain inbox: the primary is local_part@domain; managed aliases may override.
 	// Standalone inbox: the primary is the inbox's own address and there are no
 	// managed aliases or domain, so the sender must be exactly that address.
@@ -121,11 +131,30 @@ func resolveSendingTargetQuery(ctx context.Context, q senderQueryer, accountID, 
 	}
 	var alias, aliasDomainID, aliasName string
 	err := q.QueryRowContext(ctx, `SELECT a.local_part||'@'||d.name,a.domain_id,COALESCE(NULLIF(a.display_name,''),i.display_name) FROM inbox_aliases a JOIN domains d ON d.id=a.domain_id JOIN inboxes i ON i.id=a.inbox_id WHERE a.account_id=? AND a.inbox_id=? AND (a.local_part||'@'||d.name)=?`, accountID, inboxID, requested).Scan(&alias, &aliasDomainID, &aliasName)
-	if err == sql.ErrNoRows {
-		return model.Address{}, SendingTarget{}, fmt.Errorf("%w: %w", ErrForbidden, ErrSenderNotAllowed)
+	if err == nil {
+		return model.Address{Name: aliasName, Address: alias}, SendingTarget{DomainID: aliasDomainID}, nil
 	}
-	if err != nil {
+	if err != sql.ErrNoRows {
 		return model.Address{}, SendingTarget{}, err
 	}
-	return model.Address{Name: aliasName, Address: alias}, SendingTarget{DomainID: aliasDomainID}, nil
+	// No primary or alias match. A key holding the domain-wide sending grant on
+	// this inbox may send as any local part on the grant's domain, while the
+	// inbox is still the domain's enabled catch-all.
+	granted, gerr := domainSendGrantAt(ctx, q, keyID, inboxID)
+	if gerr != nil {
+		return model.Address{}, SendingTarget{}, gerr
+	}
+	if granted {
+		var grantDomainID, grantDomainName string
+		if derr := q.QueryRowContext(ctx, `SELECT d.id,d.name FROM domains d WHERE d.id=? AND d.account_id=?`, domainID, accountID).Scan(&grantDomainID, &grantDomainName); derr != nil {
+			if derr == sql.ErrNoRows {
+				return model.Address{}, SendingTarget{}, fmt.Errorf("%w: %w", ErrForbidden, ErrSenderNotAllowed)
+			}
+			return model.Address{}, SendingTarget{}, derr
+		}
+		if strings.HasSuffix(requested, "@"+strings.ToLower(grantDomainName)) {
+			return model.Address{Name: primaryName, Address: requested}, SendingTarget{DomainID: grantDomainID}, nil
+		}
+	}
+	return model.Address{}, SendingTarget{}, fmt.Errorf("%w: %w", ErrForbidden, ErrSenderNotAllowed)
 }

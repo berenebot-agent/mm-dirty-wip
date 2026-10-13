@@ -47,7 +47,7 @@ func TestUpdateAPIKeyPerInboxRoleChange(t *testing.T) {
 	}
 
 	// Change b1 to assistant, keeping b2 at owner.
-	if err := s.UpdateAPIKey(ctx, u.AccountID, key.ID, key.Name, false, map[string]string{b1.ID: "assistant", b2.ID: "owner"}); err != nil {
+	if err := s.UpdateAPIKey(ctx, u.AccountID, key.ID, key.Name, false, map[string]string{b1.ID: "assistant", b2.ID: "owner"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := s.ListAPIKeys(ctx, u.AccountID)
@@ -65,7 +65,7 @@ func TestUpdateAPIKeyPerInboxRoleChange(t *testing.T) {
 	}
 
 	// Remove b1 only; the key keeps b2.
-	if err := s.UpdateAPIKey(ctx, u.AccountID, key.ID, key.Name, false, map[string]string{b2.ID: "owner"}); err != nil {
+	if err := s.UpdateAPIKey(ctx, u.AccountID, key.ID, key.Name, false, map[string]string{b2.ID: "owner"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	keys, _ = s.ListAPIKeys(ctx, u.AccountID)

@@ -22,7 +22,7 @@ func (s *Store) CreateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if err := adjustStorageTx(ctx, tx, p.AccountID, d.InboxID, draftBodyBytes(d)); err != nil {
 		return model.Draft{}, err
 	}
-	from, _, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
+	from, _, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, p.APIKeyID, d.FromAddress)
 	if err != nil {
 		return model.Draft{}, err
 	}
@@ -265,7 +265,7 @@ func (s *Store) UpdateDraft(ctx context.Context, p model.Principal, d model.Draf
 	if old.Status == model.DraftStatusPendingApproval {
 		return model.Draft{}, ErrConflict
 	}
-	from, _, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, d.FromAddress)
+	from, _, err := resolveSendingTargetQuery(ctx, tx, p.AccountID, d.InboxID, p.APIKeyID, d.FromAddress)
 	if err != nil {
 		return model.Draft{}, err
 	}

@@ -519,7 +519,7 @@ func (s *Server) uiInboxAccessRemoveKey(w http.ResponseWriter, r *http.Request) 
 			roles[id] = existing
 		}
 	}
-	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, keyID, target.Name, false, roles); err != nil {
+	if err := s.Service.Store.UpdateAPIKey(r.Context(), p.AccountID, keyID, target.Name, false, roles, nil); err != nil {
 		s.uiError(w, err, 400)
 		return
 	}

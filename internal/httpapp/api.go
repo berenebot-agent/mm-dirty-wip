@@ -2363,11 +2363,23 @@ func (s *Server) apiKeys(w http.ResponseWriter, r *http.Request) {
 			Name      string            `json:"name"`
 			Admin     bool              `json:"admin"`
 			Mailboxes map[string]string `json:"mailboxes"`
+			// DomainSend names inboxes (a domain's catch-all) that hold the
+			// domain-wide sending grant, so a key may send as any address on the
+			// domain. Setting the grant forces Owner on that binding.
+			DomainSend []string `json:"domain_send,omitempty"`
 		}
 		if !decodeJSON(w, r, &in) {
 			return
 		}
-		k, plain, err := s.Service.Store.CreateAPIKey(r.Context(), p.AccountID, in.Name, in.Admin, in.Mailboxes)
+		grant := map[string]bool{}
+		for _, inboxID := range in.DomainSend {
+			grant[inboxID] = true
+		}
+		var opt []map[string]bool
+		if len(grant) > 0 {
+			opt = []map[string]bool{grant}
+		}
+		k, plain, err := s.Service.Store.CreateAPIKey(r.Context(), p.AccountID, in.Name, in.Admin, in.Mailboxes, opt...)
 		if err != nil {
 			mapStoreError(w, err)
 			return

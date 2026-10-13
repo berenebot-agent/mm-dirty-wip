@@ -1151,7 +1151,10 @@ func (s *Store) SetInboxAliases(ctx context.Context, accountID, inboxID string, 
 		return err
 	}
 	if currentDefault != "" {
-		if _, _, rerr := resolveSenderQuery(ctx, tx, accountID, inboxID, currentDefault); rerr != nil {
+		// No key context here (alias management is a session/admin path), so a
+		// wildcard default sender cannot be validated and is cleared, which is
+		// the safe outcome.
+		if _, _, rerr := resolveSenderQuery(ctx, tx, accountID, inboxID, "", currentDefault); rerr != nil {
 			if !errors.Is(rerr, ErrForbidden) && !errors.Is(rerr, ErrNotFound) {
 				return rerr
 			}
@@ -1172,8 +1175,9 @@ type senderQueryer interface {
 
 // resolveSenderQuery maps a requested sender address to its canonical From
 // identity and the id of the domain whose sending configuration must be used.
-func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, requested string) (model.Address, string, error) {
-	from, target, err := resolveSendingTargetQuery(ctx, q, accountID, inboxID, requested)
+// keyID is the API key performing the send (empty for a session or system mail).
+func resolveSenderQuery(ctx context.Context, q senderQueryer, accountID, inboxID, keyID, requested string) (model.Address, string, error) {
+	from, target, err := resolveSendingTargetQuery(ctx, q, accountID, inboxID, keyID, requested)
 	return from, target.DomainID, err
 }
 
@@ -1186,7 +1190,7 @@ func (s *Store) SetInboxDefaultSender(ctx context.Context, accountID, inboxID, a
 		return err
 	}
 	defer tx.Rollback()
-	if _, _, err = resolveSenderQuery(ctx, tx, accountID, inboxID, address); err != nil {
+	if _, _, err = resolveSenderQuery(ctx, tx, accountID, inboxID, "", address); err != nil {
 		return err
 	}
 	value := ""
