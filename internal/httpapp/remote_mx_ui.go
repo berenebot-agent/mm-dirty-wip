@@ -35,7 +35,7 @@ func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
 		s.accountMXUIError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/?notice=Remote+MX+receiver+saved", http.StatusSeeOther)
+	http.Redirect(w, r, s.accountMXDestination(r, url.Values{"notice": {"Remote MX receiver saved"}}), http.StatusSeeOther)
 }
 
 // uiAccountMXClear removes the account's Remote MX receiver. It is refused while
@@ -62,16 +62,29 @@ func (s *Server) uiAccountMXClear(w http.ResponseWriter, r *http.Request) {
 func (s *Server) accountMXUIError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrAccountMXInvalidInput):
-		dest := "/?" + url.Values{"rx_error": {accountMXUserMessage(err)}, "rx_form": {"1"}}.Encode()
+		dest := s.accountMXDestination(r, url.Values{"rx_error": {accountMXUserMessage(err)}, "rx_form": {"1"}})
 		http.Redirect(w, r, dest, http.StatusSeeOther)
 	case errors.Is(err, store.ErrConflict):
-		http.Redirect(w, r, "/?"+url.Values{"rx_error": {"The Remote MX configuration changed in another session. Reload and try again."}, "rx_form": {"1"}}.Encode(), http.StatusSeeOther)
+		http.Redirect(w, r, s.accountMXDestination(r, url.Values{"rx_error": {"The Remote MX configuration changed in another session. Reload and try again."}, "rx_form": {"1"}}), http.StatusSeeOther)
 	case errors.Is(err, store.ErrForbidden):
 		http.Error(w, "admin required", 403)
 	default:
 		s.Log.Error("Remote MX receiver save failed", "error", err)
 		http.Error(w, "could not save Remote MX receiver", 500)
 	}
+}
+
+// A receiver-settings save keeps the adding-domain wizard on Receiving. The
+// return domain is account-scoped, and no submitted receiver secrets are copied.
+func (s *Server) accountMXDestination(r *http.Request, q url.Values) string {
+	if id := r.Form.Get("domain_wizard_domain"); id != "" {
+		if _, err := s.Service.Store.GetDomain(r.Context(), principal(r).AccountID, id); err == nil {
+			q.Set("domain", id)
+			q.Set("domain_wizard", "receiving")
+			q.Set("provider", "remotemx")
+		}
+	}
+	return "/?" + q.Encode()
 }
 
 // accountMXUserMessage strips the sentinel prefix from a validation error so the
