@@ -304,6 +304,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   bare **Action could not be completed**. A remote error normalised without a
   curated message (for example a refused folder move) previously had its cause
   discarded, so every failure looked identical in the action queue. See `D119`.
+- Applying a folder-backed label to a message in an Outlook (Microsoft) inbox
+  now moves it. The label API supplied the folder's local id as the destination,
+  but the Microsoft move path resolved destinations by path only, so the move
+  failed before reaching the provider with a generic error. A move destination
+  is now resolved as a folder id **or** a path. See `D120`.
 - The Antler MX status view and setup wizard no longer tell you to publish a
   record when the DNS lookup simply failed. A record that is definitely absent
   still shows its publish prompt, but a lookup that could not be completed reads

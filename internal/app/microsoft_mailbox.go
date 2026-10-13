@@ -441,7 +441,9 @@ func (m *RemoteMailboxService) moveMicrosoft(ctx context.Context, p model.Princi
 	if _, e := m.authorizeAssist(ctx, p, inbox); e != nil {
 		return RemoteMessageView{}, e
 	}
-	f, e := m.Service.Store.GetFolder(ctx, p.AccountID, inbox, dest)
+	// dest may be a folder id (the unified Labels API sends `folder:<id>`) or a
+	// path. Resolve either so a label-backed move reaches the provider.
+	f, e := m.Service.Store.GetFolderDestination(ctx, p.AccountID, inbox, dest)
 	if e != nil {
 		return RemoteMessageView{}, e
 	}

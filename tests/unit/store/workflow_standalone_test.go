@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -116,5 +117,41 @@ func TestDomainWorkflowDeliveryStartedStillAttributed(t *testing.T) {
 	}
 	if attempts[0].DomainID != d.ID {
 		t.Fatalf("attempt domain = %q, want %q", attempts[0].DomainID, d.ID)
+	}
+}
+
+// TestGetFolderDestinationResolvesIDOrPath proves a move destination is resolved
+// whether it is given as a folder id or as a folder path. The unified Labels API
+// sends a folder id (`folder:<id>`), while the bulk-move form and API clients
+// send a path; both must reach the same folder, because the move path previously
+// only matched on path and silently failed a label-driven move with a
+// not-found error.
+func TestGetFolderDestinationResolvesIDOrPath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+
+	folder, err := s.CreateFolder(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, box.ID, store.FolderCreate{Path: "Projects/2026"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID, err := s.GetFolderDestination(ctx, u.AccountID, box.ID, folder.ID)
+	if err != nil {
+		t.Fatalf("resolve by id: %v", err)
+	}
+	if byID.ID != folder.ID {
+		t.Fatalf("by id resolved %q, want %q", byID.ID, folder.ID)
+	}
+	byPath, err := s.GetFolderDestination(ctx, u.AccountID, box.ID, folder.Path)
+	if err != nil {
+		t.Fatalf("resolve by path: %v", err)
+	}
+	if byPath.ID != folder.ID {
+		t.Fatalf("by path resolved %q, want %q", byPath.ID, folder.ID)
+	}
+	// An unknown destination is still a not-found, never a silent success.
+	if _, err := s.GetFolderDestination(ctx, u.AccountID, box.ID, "does/not/exist"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unknown destination err = %v, want ErrNotFound", err)
 	}
 }

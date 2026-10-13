@@ -257,73 +257,53 @@ Open questions for Ben before implementation:
 
 ---
 
-## Finding 3 (new, 2026-10-13) — an applied folder label's *move* fails on every provider
+## Finding 3 (new, 2026-10-13) — an applied folder label's *move* fails on Outlook (resolved)
 
 Reported after a run of RemoteDraft handoffs on standalone inboxes: "update labels action cannot be
 completed on IMAP, Outlook, Gmail and Orwan", plus a stuck "publication queued" badge.
 
-Two **separate** defects produce that experience. The stuck "publication queued" is **not** this
-finding — it was a standalone-inbox `domain_id` NULL scan that failed every workflow notification;
-that is fixed and recorded as `D119`. This finding is the action failure itself and is **still
-open**.
+**The stuck "publication queued" is not this finding** — it was a standalone-inbox `domain_id` NULL
+scan that failed every workflow notification; that is fixed and recorded as `D119`.
 
-### What was measured (live, public host, 2026-10-13)
+**The move failure is now fixed and recorded as `D120`.** The root cause was confirmed live:
 
-Applying a folder-backed label queues a `move` action, which then fails on all four connector types:
+- `labelAction` (`internal/httpapp/unified_labels.go:192`) sends the folder **id** (`fld_...`) as the
+  move destination for a **Microsoft** standalone inbox.
+- `moveMicrosoft` (`internal/app/microsoft_mailbox.go:444`) resolved that destination with
+  `Store.GetFolder(ctx, accountID, inboxID, dest)`, which matches on **path**. A local folder id is
+  never a path, so the lookup returned `ErrNotFound` before any provider call.
+- The store error is not a `*model.MailboxError`, so `ActionWorker.execute` fell through to its
+  generic `"Action could not be completed"` — which is why every provider looked equally broken.
 
-| Inbox | Connector | Result of the queued `move` |
-|---|---|---|
-| berenebot@gmail.com | `imap` (imap.gmail.com) | `running` past the 30 s `?wait` window, then `failed` |
-| b.dellar@outlook.com | `microsoft` | `failed` |
-| donnasterling96@gmail.com | `one` (Gmail via One) | fails |
-| teamberene@gmail.com | `google` | fails |
+Decisive evidence: for a Microsoft inbox the folder row's **`path` column holds the Graph folder
+id** (`AQMkADAw...`), and `Microsoft.Move` needs that id. `Destination` therefore had two meanings
+(a local id from the Labels API, a path from the bulk-move form) with only one implemented.
 
-The IMAP inbox's label catalog exposed Gmail's `Important` and `Starred` as **custom** folder
-labels, and a folder-label `remove` on all of them returns the documented `409 ... move the
-message instead`. The queue rows for the failing Outlook inbox were a `move` to
-`fld_06gjpwmmgw15p0694d4jyzjnt8` and a `label add FolderX`.
+**Fix (shipped, `D120`):** `Store.GetFolderDestination` resolves a destination that may be either a
+folder id or a path; `moveMicrosoft` uses it. `execute` also gained actionable reasons for the common
+store errors (`ErrNotFound` → "the destination folder could not be found").
 
-### Candidate root causes (needs the raw provider error to decide)
+**Corrected scope — not "every provider":**
 
-The real provider error is swallowed by the `execute` fallback that Finding 3's sibling fix in
-`D119` just made visible — after `D119` a fresh attempt records the cause in the action's
-`error`, so reproduce once more and read `GET /v1/actions/{id}` to choose between:
-
-- **3a. Gmail/One destination mismatch.** `labelAction` (`internal/httpapp/unified_labels.go:188`)
-  sends `Destination = target.FolderPath` for a standalone non-Microsoft inbox, but the Google
-  branch of `mailboxLabels` (`unified_labels.go:54-63`) rewrites the entry to
-  `ID = "tag:" + folder.Name` and **never assigns `FolderPath`**. So `moveGoogle`
-  (`internal/app/google_mailbox.go:541`) receives an empty/`Name` destination and its
-  `GetFolder`/`modifyGoogle` step fails. `IsOne` inboxes take the same `moveGoogle` path.
-- **3b. IMAP destination scope/name.** `labelAction` sets `Destination = target.FolderPath`; for
-  the IMAP inbox the paths came from Gmail's IMAP namespace, which may be outside the `INBOX`
-  scope `folderInScope` admits (`internal/app/remote_mailbox_ops.go:919`), or the folder is a
-  Gmail system label the server refuses to move into.
-
-### Fix sketch (do not implement blind)
-
-1. Reproduce once per connector with `?wait=true`, read the now-visible `error` from
-   `GET /v1/actions/{id}`, and confirm 3a/3b against the real text.
-2. Make `labelAction` pass a value each provider's move path actually accepts: a `folder:` **ID**
-   for Google/One (mirroring the Microsoft branch, `unified_labels.go:193`), and a scoped,
-   verified **path** for raw IMAP. Never a `Name` with an unset `FolderPath`.
-3. Add a per-provider regression: apply a folder-backed label with `?wait=true` on each of
-   `imap`, `one`, `google` and `microsoft`, and assert the queued `move` settles `done` and the
-   message's folder actually changes.
+- **IMAP**: the destination was a valid path; the observed failure was a **timeout** (the Gmail IMAP
+  inbox syncs reached a 45 s ceiling and reported `context canceled`), classified `ambiguous`, not a
+  destination error. No code change was needed; it is a slow/flaky connector.
+- **Google / One**: `mailboxLabels` projects every Google folder as a `tag` (`unified_labels.go:54`),
+  so no `folder:`-kind label is ever offered and `labelAction` never produces a folder move for them.
+  `moveGoogle` is thus not reachable through the labels grammar.
 
 ### Tests
 
-- HTTP/app: `labelAction` returns a non-empty, provider-appropriate `Destination` for a
-  folder-backed label on each connector type (a unit guard that would have caught 3a).
-- Integration: the four-connector `?wait=true` round trip above.
+- `tests/unit/store/workflow_standalone_test.go` — `GetFolderDestination` resolves a folder id and a
+  folder path to the same row, and still returns `ErrNotFound` for an unknown destination.
+- `tests/unit/app/message_actions_test.go` — a failed move surfaces the provider cause, not the
+  generic string.
 
 ### Docs
 
-- Correct the "one location" note in the labels-system reference so applying a folder label is
-  described as a move that must resolve to a provider-valid destination, once the fix shape is
-  known.
-- Cross-reference from Finding 1: the move-*out* route (1c) and this move-*in* fix share the
-  `move` action's destination contract, so land them together.
+- `D120` records the id-or-path destination contract.
+- The labels-system reference's "one location" note should describe a folder label as a move whose
+  destination is a folder id, once the reference is next touched.
 
 ---
 

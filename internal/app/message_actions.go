@@ -147,6 +147,18 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		if mb.Retryable && (a.Input.Kind != "patch" || a.Input.Spam != nil) {
 			state, reason = "ambiguous", "Remote outcome uncertain; verify the message before dismissing or submitting another action"
 		}
+		return
+	}
+	// A non-MailboxError failure is a store or validation error with no provider
+	// detail. Give the common ones a reason an operator can act on rather than the
+	// generic string, which otherwise hides a missing destination folder.
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		reason = "the destination folder could not be found"
+	case errors.Is(err, store.ErrConflict):
+		reason = "the destination is not a valid move target"
+	case errors.Is(err, store.ErrForbidden):
+		reason = "not permitted"
 	}
 }
 
