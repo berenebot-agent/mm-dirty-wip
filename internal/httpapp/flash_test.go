@@ -4,8 +4,12 @@ package httpapp
 // and quota admission directly; public HTTP ownership tests live in tests/unit.
 import (
 	"fmt"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/dellarb/mailmoose/internal/app"
 )
 
 func TestFlashOwnershipAndConsumption(t *testing.T) {
@@ -83,5 +87,35 @@ func TestFlashExpiryReleasesQuota(t *testing.T) {
 	}
 	if f.put("alice", "replacement", 32) == "" {
 		t.Fatal("expiry did not release quota")
+	}
+}
+
+func TestAnonymousFlashPoolCannotConsumeAuthenticatedCapacity(t *testing.T) {
+	t.Parallel()
+	f := newFlashStore(1, 64)
+	for i := 0; i < flashAnonymousMaxEntries; i++ {
+		if f.put(fmt.Sprintf("browser:%d", i), "notice", 1) == "" {
+			t.Fatal("anonymous pool filled before its limit")
+		}
+	}
+	if f.put("browser:overflow", "notice", 1) != "" {
+		t.Fatal("anonymous pool exceeded its entry limit")
+	}
+	if f.put("authenticated", "secret", 1) == "" {
+		t.Fatal("anonymous flashes consumed authenticated capacity")
+	}
+}
+
+func TestFlashSecretFallsBackInlineWhenStoreRejectsIt(t *testing.T) {
+	t.Parallel()
+	s := &Server{Service: &app.Service{}, flashes: newFlashStore(1, 1)}
+	r := httptest.NewRequest("POST", "/ui/keys", nil)
+	w := httptest.NewRecorder()
+	s.flashSecret(w, r, "API key created", "Copy this now", "secret<&>")
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("fallback response = %d, Cache-Control=%q", w.Code, w.Header().Get("Cache-Control"))
+	}
+	if !strings.Contains(w.Body.String(), "secret&lt;&amp;&gt;") {
+		t.Fatalf("response did not safely display the secret: %s", w.Body.String())
 	}
 }
