@@ -107,6 +107,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   `CreateHermesEnrollToken`, `ResolveDialMXRecipients` and `CreateReply` methods.
   No behaviour changes; the live paths are unchanged. See `D097`'s status update.
 - `docs/IMPLEMENTATION_PLAN.md`, an unreferenced V1 phase plan.
+- `tests/security-live-check.sh`, a one-off manual probe script from a security
+  review round: it was not part of `tests/run.sh`, CI or any doc, and its checks
+  are covered by `tests/unit/httpapp/security_fixes_test.go`.
 
 ### Changed
 
