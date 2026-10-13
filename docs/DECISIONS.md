@@ -1218,6 +1218,11 @@ deferral. Every operation now references named `components.schemas`.
 
 ## D053 — Proxy-chain trust and canonical HTTPS redirect
 
+> **Amended by D116:** the `Secure`-cookie decision now follows `BASE_URL`
+> alone (`https://` ⇒ always `Secure`). The per-request `X-Forwarded-Proto`
+> gate described below no longer controls cookie security; the XFF/XFP parsing
+> rules for client identity and the `FORCE_HTTPS` redirect are unchanged.
+
 **Decision:** `X-Forwarded-For` is walked from the right (closest to us):
 trusted `TRUSTED_PROXIES` entries are stripped and the first untrusted address
 is the client identity used for rate limiting; a single trusted hop yields the
@@ -4320,6 +4325,88 @@ runtime service.
 design); Google/Microsoft unowned-address behaviour is not gated; and a wildcard
 address cannot be approved from the web UI or sent by system mail, because those
 paths hold no key.
+
+## D116 — Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness
+
+**Context:** A follow-up external review (findings 3–9; 1–2 handled elsewhere)
+confirmed two issues against a live instance and flagged five hardening items.
+The two live-confirmed issues were an open redirect through the post-login `next`
+path and an unauthenticated compose body being parsed and cached in the shared
+flash store. The hardening items were the `Secure` cookie gate behind a
+TLS-terminating proxy, the CSRF token travelling in form-action URLs, a
+per-IP-only login throttle, a blocking Argon2 admission gate, and the inbound
+semaphore being taken before the provider signature is verified.
+
+**Decision:**
+
+- **`safeNextPath` rejects control characters and non-path forms (finding 3).**
+  Browsers strip ASCII tab and newline from a URL, so `/<TAB>/evil.com` resolved
+  to the off-site `//evil.com` despite the existing `//` and backslash guards.
+  The helper now also fails closed on any rune `< 0x20` or `0x7f`, and parses the
+  value with `url.Parse` requiring an empty scheme, host and opaque part and a
+  root-relative, non-`//` path.
+- **`Secure` follows the canonical `BASE_URL` (finding 4).** `cookieSecure` now
+  returns true whenever `BaseURL` is `https://`, instead of also requiring a
+  direct TLS connection or a trusted proxy's `X-Forwarded-Proto`. The README
+  quickstart sets `BASE_URL=https://…` with no `TRUSTED_PROXIES`, so the common
+  TLS-terminating-proxy deployment previously received non-`Secure` session and
+  CSRF cookies. This amends the per-request gate described in `D053`; the proxy
+  trust rules for client identity and the `FORCE_HTTPS` redirect are unchanged.
+  The trade-off is that a `BASE_URL=https` instance browsed directly over plain
+  HTTP now gets `Secure` cookies the browser will not send back; such an instance
+  is already misconfigured and `FORCE_HTTPS` exists for it.
+- **CSRF reads the multipart field, not the URL (finding 5).** `withCSRF` now
+  falls back to a bounded `ParseMultipartForm(4<<20)` (with `RemoveAll`) so the
+  hidden `_csrf` field in a compose/reply/forward form is honoured; previously
+  only `ParseForm` ran, which does not read `multipart/form-data`, so the token
+  had to be appended to the action URL by `actionWithCSRF`. That put a live
+  per-session token into proxy and access logs. `actionWithCSRF` now returns the
+  bare path and the token travels in the hidden field or the `X-CSRF-Token`
+  header.
+- **The flash store is not writable anonymously (finding 6).** `preserveComposeOnExpiry`
+  now returns early when the request carried no `mmm_session` cookie at all, so
+  an unauthenticated POST cannot make the server parse its multipart body or pin
+  flash memory. The store's byte ceiling also drops from 64 MiB to 8 MiB
+  (`flashStoreMaxBytes`), limiting both how much one caller can pin and how much
+  a legitimate user's invite-link/API-secret flashes can be evicted. Compose
+  flashes remain `peek`-readable (not `take`) so the render and a resubmit both
+  work; that behaviour is unchanged.
+- **Login throttling is per-account as well as per-IP (finding 7).** A second
+  `limiter` keyed on the normalized account email bounds attempts at one account
+  regardless of source address, and is reset on a successful login. IP limiter
+  keys are normalized with `rateLimitKey`, which masks IPv6 to `/64` so a client
+  rotating within its prefix cannot burn distinct `limiter` entries and drive the
+  map to its fail-closed cap.
+- **Unauthenticated password login sheds load instead of blocking (finding 8).**
+  `auth.CheckPasswordContext` and `store.AuthenticateUserWithin` acquire the
+  Argon2 admission slot with a timeout (`argonAdmissionTimeout`, 5 s) and return
+  `auth.ErrArgonBusy` when the four slots stay saturated; `loginPost` maps it to
+  a retryable `503`. Registration, password-change and reset paths keep the
+  blocking acquire, preserving the process-wide memory bound described in `D014`.
+- **Inbound slots are capped per source (finding 9).** `ingestProvider` takes a
+  per-IP concurrent slot (`inboundPerIP`, a quarter of the inbound pool, at least
+  2) before the shared `inboundSem`, returning `429` when one address holds its
+  cap. The signature-before-body ordering is unchanged — Mailgun's signature is
+  in the form body, so the body must still be read before it can be verified —
+  but one source can no longer hold every slot and starve real deliveries.
+
+**Reason:** Each live-confirmed issue was directly exploitable (an off-site
+redirect after login; unauthenticated memory pinning and eviction of one-time
+secrets). The hardening items all concern an unauthenticated caller's ability to
+consume a shared, process-wide resource: cookie integrity, log-exposed secrets,
+the rate-limit map, the Argon2 slots and the inbound semaphore.
+
+**Complexity:** Local changes only — `internal/httpapp` (redirect, cookie,
+CSRF, flash, limiter, inbound) and `internal/auth` plus `internal/store` (the
+timeout-aware password check). One new constant pair (`flashStoreMaxBytes`,
+`argonAdmissionTimeout`), one helper (`rateLimitKey`), one `limiter.Reset`
+method, and one test file (`tests/unit/httpapp/security_fixes_test.go`). No new
+dependency, schema, transport or runtime service.
+
+**Deliberately not done:** compose flashes stay `peek`-readable rather than
+session-bound; the legacy PBKDF2 path is not moved behind the Argon2 timeout (it
+is not gated by the Argon2 slots); and the Mailgun/Cloudflare unattested envelope
+sender accepted risk (`D058`) is untouched.
 
 ## Future extension register
 

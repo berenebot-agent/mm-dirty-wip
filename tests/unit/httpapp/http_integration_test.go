@@ -128,7 +128,7 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 	}
 }
 
-func TestSecureCookieFollowsActualConnection(t *testing.T) {
+func TestSecureCookieLoginFlow(t *testing.T) {
 	t.Parallel()
 	newHandler := func(t *testing.T, baseURL string, trustProxy bool) http.Handler {
 		t.Helper()
@@ -167,38 +167,32 @@ func TestSecureCookieFollowsActualConnection(t *testing.T) {
 		req.AddCookie(cookie)
 		return req
 	}
-	// Direct plain HTTP with an https BaseURL: cookies must not be Secure,
-	// otherwise browsers drop them and login fails with "invalid CSRF token".
+	// An https BaseURL always marks cookies Secure, even for a request the app
+	// sees over plain HTTP (behind a TLS-terminating proxy with no trusted
+	// proxy). The browser stores and returns them over the https origin.
 	h := newHandler(t, "https://mail.example.test", false)
 	c := csrfCookie(t, h, httptest.NewRequest("GET", "/login", nil))
-	if c.Secure {
-		t.Fatal("csrf cookie must not be Secure over direct plain HTTP")
+	if !c.Secure {
+		t.Fatal("csrf cookie must be Secure when BaseURL is https")
 	}
+	// A Secure cookie is still set on the response; a real browser would return
+	// it over TLS. The login flow itself must succeed with the presented value.
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, newLogin(c.Value, c))
 	if rr.Code != 303 {
-		t.Fatalf("plain http login with csrf=%d body=%s", rr.Code, rr.Body.String())
+		t.Fatalf("login with csrf=%d body=%s", rr.Code, rr.Body.String())
 	}
 	for _, sc := range rr.Result().Cookies() {
-		if sc.Name == "mmm_session" && sc.Secure {
-			t.Fatal("session cookie must not be Secure over direct plain HTTP")
+		if sc.Name == "mmm_session" && !sc.Secure {
+			t.Fatal("session cookie must be Secure when BaseURL is https")
 		}
 	}
-	// Trusted proxy reporting https: cookies keep the Secure flag.
-	h = newHandler(t, "https://mail.example.test", true)
-	req := httptest.NewRequest("GET", "/login", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
-	c = csrfCookie(t, h, req)
-	if !c.Secure {
-		t.Fatal("csrf cookie must be Secure behind trusted https proxy")
-	}
-	// An untrusted X-Forwarded-Proto header must not enable Secure.
-	h = newHandler(t, "https://mail.example.test", false)
-	req = httptest.NewRequest("GET", "/login", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
-	c = csrfCookie(t, h, req)
+	// A plain-HTTP self-hosted deployment keeps non-Secure cookies so the
+	// browser does not drop them and break login with "invalid CSRF token".
+	h = newHandler(t, "http://example.test", false)
+	c = csrfCookie(t, h, httptest.NewRequest("GET", "/login", nil))
 	if c.Secure {
-		t.Fatal("untrusted proxy header must not set Secure cookies")
+		t.Fatal("csrf cookie must not be Secure when BaseURL is http")
 	}
 }
 

@@ -34,7 +34,10 @@ func TestExpiredSessionComposePreserved(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/send", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
-	// No session cookie: the session has expired.
+	// A stale session cookie: the session has expired, but the browser still
+	// sends the old cookie, which is what makes preservation safe (an
+	// anonymous caller with no cookie at all is not preserved).
+	req.AddCookie(&http.Cookie{Name: "mmm_session", Value: "expired-session-token"})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 

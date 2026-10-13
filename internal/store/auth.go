@@ -220,6 +220,22 @@ func ensureEmailUnused(ctx context.Context, tx *sql.Tx, email, excludeID string)
 }
 
 func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (model.User, error) {
+	return s.authenticateUser(ctx, email, password, 0)
+}
+
+// ErrAuthBusy reports that a password check could not run because the Argon2
+// admission slots stayed saturated. The HTTP layer maps it to a retryable 503
+// on the unauthenticated login route, so a login flood is shed instead of
+// parking goroutines behind the four slots.
+var ErrAuthBusy = auth.ErrArgonBusy
+
+// AuthenticateUserWithin is AuthenticateUser with a bounded wait for the Argon2
+// admission slot. A zero timeout keeps the blocking behaviour.
+func (s *Store) AuthenticateUserWithin(ctx context.Context, email, password string, timeout time.Duration) (model.User, error) {
+	return s.authenticateUser(ctx, email, password, timeout)
+}
+
+func (s *Store) authenticateUser(ctx context.Context, email, password string, argonTimeout time.Duration) (model.User, error) {
 	var u model.User
 	var ph, created string
 	var admin, sysadmin, pwEnabled int
@@ -227,7 +243,9 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	if err == sql.ErrNoRows {
 		// Equalize the work done for an unknown account so login timing cannot
 		// be used to enumerate accounts.
-		auth.DummyPasswordCheck(password)
+		if busy := s.dummyPasswordCheck(ctx, password, argonTimeout); busy != nil {
+			return model.User{}, busy
+		}
 		return model.User{}, ErrNotFound
 	}
 	if err != nil {
@@ -237,10 +255,16 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	if !u.PasswordEnabled {
 		// A passkey-only user has no password. Equalize timing and fail the
 		// password path; the passkey ceremony is their login method.
-		auth.DummyPasswordCheck(password)
+		if busy := s.dummyPasswordCheck(ctx, password, argonTimeout); busy != nil {
+			return model.User{}, busy
+		}
 		return model.User{}, ErrNotFound
 	}
-	if !auth.CheckPassword(ph, password) {
+	ok, busyErr := auth.CheckPasswordContext(ctx, ph, password, argonTimeout)
+	if busyErr != nil {
+		return model.User{}, ErrAuthBusy
+	}
+	if !ok {
 		return model.User{}, ErrNotFound
 	}
 	// Lazy migration: a successful verify of a legacy pbkdf2-sha256 hash (or an
@@ -256,6 +280,16 @@ func (s *Store) AuthenticateUser(ctx context.Context, email, password string) (m
 	u.SystemAdmin = sysadmin != 0
 	u.CreatedAt = parseTime(created)
 	return u, nil
+}
+
+// dummyPasswordCheck equalizes work for an unknown or password-less account,
+// honoring the Argon2 admission timeout. It returns ErrAuthBusy when the slots
+// stayed saturated.
+func (s *Store) dummyPasswordCheck(ctx context.Context, password string, argonTimeout time.Duration) error {
+	if _, err := auth.DummyPasswordCheckContext(ctx, password, argonTimeout); err != nil {
+		return ErrAuthBusy
+	}
+	return nil
 }
 
 func (s *Store) GetUser(ctx context.Context, userID string) (model.User, error) {

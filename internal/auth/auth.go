@@ -1,16 +1,19 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -42,6 +45,57 @@ var argonAdmission = make(chan struct{}, 4)
 func acquireArgonSlot() { argonAdmission <- struct{}{} }
 
 func releaseArgonSlot() { <-argonAdmission }
+
+// ErrArgonBusy reports that no Argon2 admission slot became free in time. It is
+// returned by the context-aware acquire so an unauthenticated caller cannot
+// queue an unbounded number of password checks: the four slots keep peak memory
+// bounded, and a caller that cannot get one quickly is shed with a retryable
+// error instead of blocking an interpreter goroutine indefinitely.
+var ErrArgonBusy = errors.New("argon2 admission unavailable")
+
+// acquireArgonSlotContext acquires an admission slot, waiting no longer than
+// timeout. Unlike the blocking acquireArgonSlot it is cancellable, so a login
+// flood cannot park unbounded goroutines behind the four slots.
+func acquireArgonSlotContext(ctx context.Context, timeout time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		// Fall back to the blocking path with cancellation only.
+		select {
+		case argonAdmission <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return ErrArgonBusy
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case argonAdmission <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ErrArgonBusy
+	case <-timer.C:
+		return ErrArgonBusy
+	}
+}
+
+// CheckPasswordContext verifies a password like CheckPassword but acquires the
+// Argon2 admission slot with a timeout, returning ErrArgonBusy when the slots
+// stay saturated. Callers on unauthenticated paths use it to shed load rather
+// than block; every other caller keeps using the blocking CheckPassword.
+func CheckPasswordContext(ctx context.Context, encoded, password string, timeout time.Duration) (bool, error) {
+	if !strings.HasPrefix(encoded, "$argon2id$") {
+		// Legacy PBKDF2 is not gated by the Argon2 slots; verify it directly.
+		return CheckPassword(encoded, password), nil
+	}
+	if err := acquireArgonSlotContext(ctx, timeout); err != nil {
+		return false, err
+	}
+	defer releaseArgonSlot()
+	return verifyArgon2id(encoded, password), nil
+}
 
 // testArgonMemory/testArgonIterations override the production parameters when a
 // test calls SetArgonParamsForTest. Zero means "use production values".
@@ -156,6 +210,15 @@ func NeedsRehash(encoded string) bool {
 }
 
 func checkArgon2id(encoded, password string) bool {
+	acquireArgonSlot()
+	defer releaseArgonSlot()
+	return verifyArgon2id(encoded, password)
+}
+
+// verifyArgon2id performs the Argon2id computation for a stored hash. The
+// caller owns the admission slot; this helper does no gating, so both the
+// blocking and the context-aware acquire paths can share it.
+func verifyArgon2id(encoded, password string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {
 		return false
@@ -178,8 +241,6 @@ func checkArgon2id(encoded, password string) bool {
 	if err != nil || len(want) < 16 {
 		return false
 	}
-	acquireArgonSlot()
-	defer releaseArgonSlot()
 	got := argon2.IDKey([]byte(password), salt, uint32(iterations), uint32(memory), uint8(parallelism), uint32(len(want)))
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
@@ -220,10 +281,17 @@ var (
 // is used on the unknown-account path so login timing cannot be used to confirm
 // whether an account exists.
 func DummyPasswordCheck(password string) {
+	_, _ = DummyPasswordCheckContext(context.Background(), password, 0)
+}
+
+// DummyPasswordCheckContext is DummyPasswordCheck with an Argon2 admission
+// timeout. It returns ErrArgonBusy when no slot became free in time, so an
+// unknown-account login is shed under flood instead of blocking.
+func DummyPasswordCheckContext(ctx context.Context, password string, timeout time.Duration) (bool, error) {
 	dummyHashOnce.Do(func() {
 		dummyHash, _ = HashPassword("mailmoose-dummy-password")
 	})
-	_ = CheckPassword(dummyHash, password)
+	return CheckPasswordContext(ctx, dummyHash, password, timeout)
 }
 
 // pbkdf2SHA256 implements PBKDF2-HMAC-SHA256 as specified by RFC 8018. It is

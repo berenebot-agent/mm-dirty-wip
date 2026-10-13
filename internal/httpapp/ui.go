@@ -1232,7 +1232,7 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r, s.Service.Config)
-	if s.setupLimiter != nil && !s.setupLimiter.Allow(ip) {
+	if s.setupLimiter != nil && !s.setupLimiter.Allow(rateLimitKey(ip)) {
 		http.Error(w, "too many setup attempts", 429)
 		return
 	}
@@ -1296,7 +1296,7 @@ func (s *Server) registerPost(w http.ResponseWriter, r *http.Request) {
 	// Bound signup abuse: a public deployment cannot let a single source
 	// create accounts without limit.
 	ip := clientIP(r, s.Service.Config)
-	if s.registerLimiter != nil && !s.registerLimiter.Allow(ip) {
+	if s.registerLimiter != nil && !s.registerLimiter.Allow(rateLimitKey(ip)) {
 		http.Error(w, "too many registration attempts", 429)
 		return
 	}
@@ -1331,15 +1331,31 @@ func (s *Server) keyLoginGet(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r, s.Service.Config)
-	if !s.loginLimiter.Allow(ip) {
+	if !s.loginLimiter.Allow(rateLimitKey(ip)) {
 		http.Error(w, "too many login attempts", 429)
 		return
 	}
 	_ = r.ParseForm()
-	u, err := s.Service.Store.AuthenticateUser(r.Context(), r.Form.Get("email"), r.Form.Get("password"))
-	if err != nil {
-		s.flashAuth(w, r, "/login", "Log In", "Invalid email or password", r.Form.Get("email"))
+	email := strings.TrimSpace(r.Form.Get("email"))
+	// Per-account throttle, independent of source address, so rotating IPs
+	// cannot spray one account behind the per-IP limiter.
+	accountKey := strings.ToLower(email)
+	if accountKey != "" && s.accountLoginLimiter != nil && !s.accountLoginLimiter.Allow(accountKey) {
+		http.Error(w, "too many login attempts", 429)
 		return
+	}
+	u, err := s.Service.Store.AuthenticateUserWithin(r.Context(), email, r.Form.Get("password"), argonAdmissionTimeout)
+	if err != nil {
+		if errors.Is(err, store.ErrAuthBusy) {
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "server busy, try again", http.StatusServiceUnavailable)
+			return
+		}
+		s.flashAuth(w, r, "/login", "Log In", "Invalid email or password", email)
+		return
+	}
+	if accountKey != "" && s.accountLoginLimiter != nil {
+		s.accountLoginLimiter.Reset(accountKey)
 	}
 	tok, _, err := s.Service.Store.CreateSession(r.Context(), u.ID, s.Service.Config.SessionTTL)
 	if err != nil {
@@ -1352,10 +1368,22 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 
 // safeNextPath returns a same-origin next path for a post-login redirect, or "/"
 // when none is valid. It rejects scheme-relative and backslash forms that
-// browsers may normalize to an off-site redirect.
+// browsers may normalize to an off-site redirect, and any control character:
+// browsers strip ASCII tab/newline from a URL, so "/\t/evil.com" would resolve
+// to "//evil.com" off-site. Failing closed on anything that does not parse as a
+// scheme-less, host-less, root-relative path covers both.
 func safeNextPath(next string) string {
 	next = strings.TrimSpace(next)
 	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") {
+		return "/"
+	}
+	for _, r := range next {
+		if r < 0x20 || r == 0x7f {
+			return "/"
+		}
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
 		return "/"
 	}
 	return next
@@ -1369,7 +1397,7 @@ func safeNextPath(next string) string {
 // refused by the principal lookup.
 func (s *Server) keyLoginPost(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r, s.Service.Config)
-	if s.keyLoginLimiter == nil || !s.keyLoginLimiter.Allow(ip) {
+	if s.keyLoginLimiter == nil || !s.keyLoginLimiter.Allow(rateLimitKey(ip)) {
 		http.Error(w, "too many login attempts", 429)
 		return
 	}
@@ -1675,7 +1703,7 @@ func (s *Server) uiSettingsEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r, s.Service.Config)
-	if !s.passwordLimiter.Allow(ip) {
+	if !s.passwordLimiter.Allow(rateLimitKey(ip)) {
 		s.settingsRedirect(w, r, "", "too many attempts, try again later")
 		return
 	}
@@ -1702,7 +1730,7 @@ func (s *Server) uiSettingsPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r, s.Service.Config)
-	if !s.passwordLimiter.Allow(ip) {
+	if !s.passwordLimiter.Allow(rateLimitKey(ip)) {
 		s.settingsRedirect(w, r, "", "too many attempts, try again later")
 		return
 	}
@@ -1793,7 +1821,7 @@ func (s *Server) uiSettingsPersonalBatch(w http.ResponseWriter, r *http.Request)
 	changingPassword := newPassword != "" || confirm != ""
 	if changingEmail || changingPassword {
 		ip := clientIP(r, s.Service.Config)
-		if !s.passwordLimiter.Allow(ip) {
+		if !s.passwordLimiter.Allow(rateLimitKey(ip)) {
 			s.settingsRedirect(w, r, "", "too many attempts, try again later")
 			return
 		}

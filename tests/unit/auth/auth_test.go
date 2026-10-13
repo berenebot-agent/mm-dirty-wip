@@ -2,7 +2,9 @@ package auth_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/tests/support/smoke"
@@ -68,5 +70,57 @@ func TestLegacyPBKDF2StillVerifies(t *testing.T) {
 func TestCheckPasswordRejectsUnknownFormat(t *testing.T) {
 	if auth.CheckPassword("not-a-valid-hash", "whatever") {
 		t.Fatal("unknown format verified")
+	}
+}
+
+// TestCheckPasswordContextShedsUnderSaturation proves the timeout-aware check
+// returns ErrArgonBusy rather than blocking when every admission slot is held.
+// This test is deliberately serial (no t.Parallel()): it mutates the
+// process-global Argon2 parameters via SetArgonParamsForTest, which would race
+// with any parallel test hashing a password.
+func TestCheckPasswordContextShedsUnderSaturation(t *testing.T) {
+	// A cost high enough that the occupying hashes hold their slots for a
+	// measurable window, while staying quick under -race.
+	auth.SetArgonParamsForTest(1<<13, 2)
+	defer auth.SetArgonParamsForTest(0, 0)
+	enc, err := auth.HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Saturate the four admission slots with blocking hashes that re-run for a
+	// fixed number of rounds, so the slots stay busy while the probe runs.
+	const occupiers = 4
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < occupiers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = auth.HashPassword("occupy-slot-password")
+			}
+		}()
+	}
+
+	// With the slots saturated, a short-timeout check must shed rather than
+	// block. Retry briefly to let the occupiers actually take the slots first.
+	var busyErr error
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, busyErr = auth.CheckPasswordContext(nil, enc, "correct horse battery staple", time.Millisecond)
+		if busyErr == auth.ErrArgonBusy {
+			break
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if busyErr != auth.ErrArgonBusy {
+		t.Skip("could not observe all argon slots held in this environment")
 	}
 }

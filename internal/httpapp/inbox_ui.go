@@ -1532,15 +1532,13 @@ func normalizeContentType(ct string) string {
 
 func isInlineImage(ct string) bool { return inlineImageTypes[ct] }
 
-func actionWithCSRF(path, token string) string {
-	if token == "" {
-		return path
-	}
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
-	}
-	return path + sep + "_csrf=" + token
+// actionWithCSRF returns the form action path unchanged. It is kept as a named
+// seam so call sites read clearly, but it must not carry the CSRF token in the
+// URL: the token is a per-session secret and a query string leaks it into proxy
+// and access logs. The token travels in the hidden _csrf field that withCSRF
+// reads from the (also multipart) form body, or in the X-CSRF-Token header.
+func actionWithCSRF(path, _ string) string {
+	return path
 }
 
 func formAddresses(r *http.Request, name string) []string {
