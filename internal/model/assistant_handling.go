@@ -80,21 +80,10 @@ const (
 	HandoffFailed = "failed"
 )
 
-// Notification job kinds for the outbound_workflow queue. A RemoteDraft handoff
-// enqueues a WorkflowKindHandoff job so the human can be told a draft was placed
-// in their remote Drafts; it carries no token and is not the approval email. A
-// MailMooseApproval request enqueues WorkflowKindApprovalRequest as before. The
-// persisted workflow row records only the job kind (plus its non-secret request
-// link); no token is ever stored on the handoff notification.
-const (
-	// WorkflowKindHandoff is the workflow job kind for a RemoteDraft handoff
-	// notification. It carries no approval token.
-	WorkflowKindHandoff = "draft_handoff"
-)
-
 // Durable RemoteDraft handoff event types. They mirror the draft workflow events
 // but are scoped to the handoff record: a handoff is a one-way publication, not
-// an approval, so its events never imply a send decision.
+// an approval, so its events never imply a send decision. A handoff never sends
+// a notification email, so there are deliberately no notification event types.
 const (
 	// EventDraftHandoffRequested: an assistant requested a RemoteDraft handoff.
 	EventDraftHandoffRequested = "draft.handoff_requested"
@@ -106,15 +95,6 @@ const (
 	EventDraftHandoffAmbiguous = "draft.handoff_ambiguous"
 	// EventDraftHandoffFailed: the handoff failed terminally.
 	EventDraftHandoffFailed = "draft.handoff_failed"
-	// EventDraftHandoffCancelled: an outstanding handoff was withdrawn before
-	// publication.
-	EventDraftHandoffCancelled = "draft.handoff_cancelled"
-	// EventDraftHandoffNotificationSent: the handoff notification was handed to
-	// the outbound path.
-	EventDraftHandoffNotificationSent = "draft.handoff_notification_sent"
-	// EventDraftHandoffNotificationFailed: the handoff notification failed
-	// terminally. Publication is unaffected.
-	EventDraftHandoffNotificationFailed = "draft.handoff_notification_failed"
 )
 
 // AssistantHandlingRequest is the durable record of a RemoteDraft handoff. It is
@@ -154,16 +134,10 @@ type AssistantHandlingRequest struct {
 	// RemoteUID is the appended message's UID when the server reported one, else
 	// zero.
 	RemoteUID uint32 `json:"-"`
-	// NotificationStatus reports whether the handoff notification was queued,
-	// handed to the outbound path, or failed. It advances independently of
-	// publication: a handoff whose notification is unavailable is still
-	// published.
-	NotificationStatus string `json:"notification_status,omitempty"`
-	// NotificationMessageID is the RFC5322 Message-ID of the generated handoff
-	// notification email (distinct from the frozen draft's MessageID). It is
-	// recorded so a notification that arrives back in the connected inbox is
-	// excluded from remote detection by a durable lookup rather than a live body
-	// fetch.
+	// NotificationStatus and NotificationMessageID are retained only so a
+	// pre-existing row still scans; a handoff no longer queues a notification
+	// email, so nothing writes them and they are never exposed.
+	NotificationStatus    string     `json:"-"`
 	NotificationMessageID string     `json:"-"`
 	Attempts              int        `json:"attempts,omitempty"`
 	LastError             string     `json:"last_error,omitempty"`

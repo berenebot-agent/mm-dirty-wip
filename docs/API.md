@@ -258,16 +258,18 @@ PUT /v1/inboxes/{id}/authoring
   never silently invented.
 - `GET /handoffs` lists the inbox's RemoteDraft handoffs newest first as the
   shared envelope, retaining terminal records (`published`, `ambiguous`,
-  `failed`/`cancelled`) even after the source draft is cleaned up. Each record
-  carries its `publication` state and never an approval token or frozen content
-  hash. Remote-draft handoffs do not send a notification email.
+  `failed`) even after the source draft is cleaned up. Each record carries its
+  `publication` state and never an approval token, notification state, or frozen
+  content hash. Remote-draft handoffs do not send a notification email.
 - `GET`/`PUT /authoring` read/write the assistant authoring mode
-  (`mailmoose_approval` or `remote_draft`) and the notify override. A standalone
-  inbox defaults to `remote_draft`; a domain inbox is **preset** to
-  `mailmoose_approval` — `remote_draft` is a standalone-only mode and is
-  rejected (`400`) for a domain inbox. The mode is snapshotted onto each request.
-  The read also reports `standalone` and `approver_enabled` (true exactly when the
-  effective mode is `mailmoose_approval`).
+  (`mailmoose_approval` or `remote_draft`). A standalone inbox defaults to
+  `remote_draft`; a domain inbox is **preset** to `mailmoose_approval` —
+  `remote_draft` is a standalone-only mode and is rejected (`400`) for a domain
+  inbox. The mode is snapshotted onto each request. Setting a standalone inbox to
+  `remote_draft` clears any approver. The read also reports `standalone` and
+  `approver_enabled` (true exactly when the effective mode is
+  `mailmoose_approval`). The legacy `notify_address`/`notify_overridden` fields
+  are still returned but have no effect.
 
 For a standalone inbox, a message's body and attachments are fetched **live**
 from the remote server on each request and are never archived; the attachment
@@ -685,30 +687,24 @@ GET  /v1/send-requests?inbox={id}&active=true
 
 The inbox's **authoring mode** decides how a request is handled (snapshotted at
 creation). **MailMoose approvals** (domain default) is the workflow above.
-**Remote draft handoff** (standalone default) is a one-way handoff to the
-connected mailbox's remote Drafts folder instead: MailMoose never sends it and
-does not send a notification email. The handoff events are
-`draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`,
-`draft.handoff_failed` and `draft.handoff_cancelled`. An unverifiable remote append is
-reported `ambiguous`, never retried blindly. A handoff on an inbox with no remote
-Drafts folder is refused.
+**Remote draft** (standalone default) just places the draft in the connected
+mailbox's remote Drafts folder: MailMoose never sends it, sends no notification
+email, and never involves an approver (switching a standalone inbox to
+`remote_draft` clears any approver). The handoff events are
+`draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`
+and `draft.handoff_failed`. An unverifiable remote append is reported
+`ambiguous`, never retried blindly, and its local draft is unfrozen so it is not
+trapped. A handoff on an inbox with no remote Drafts folder is refused.
 
 A draft response carries a **`handoff`** object when a RemoteDraft handoff is
 active or most recent, exposing the immutable `handoff_id` and
-`publication` (`pending`/`published`/`ambiguous`/`failed`), so a client that
-requested a handoff can act on its outcome rather than only seeing the frozen
-draft. The full history is at
+`publication` (`pending`/`published`/`ambiguous`/`failed`), so a client can
+observe the placement outcome rather than only seeing the frozen draft. There is
+no notification state: a handoff never notifies. The full history is at
 `GET /v1/inboxes/{id}/handoffs` (terminal records are retained after the local
-draft is cleaned up).
-
-Only a **pending** handoff can be cancelled (the UI `cancel-handoff` action;
-`Store.CancelHandoff`): it becomes `failed` with `last_error="cancelled"`, the
-draft returns to editable, and `draft.handoff_cancelled` is emitted; a
-`published` or `ambiguous` handoff cannot be cancelled. A **retry**
-(`retry-handoff`) is a deliberate re-request through the inbox's effective
-authoring mode, so it only produces a new handoff while the inbox is in
-`remote_draft` mode. An `ambiguous` append is **never** automatically retried —
-the record is terminal and re-requesting is a human choice.
+draft is cleaned up). The web UI exposes no handoff surface: a request to send in
+`remote_draft` mode simply places the draft, with no pane, badge or
+cancel/retry control.
 
 Mailbox roles apply to API keys and to human users alike. An account Admin is an Owner of every mailbox in the account; a non-admin mailbox operator holds Owner on only the inboxes assigned to them.
 Hermes Relay sends as an owner directly and does not use the draft workflow.

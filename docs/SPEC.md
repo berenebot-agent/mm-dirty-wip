@@ -426,14 +426,15 @@ snapshotted onto each request at creation:
   approval workflow — an Owner approves/rejects in the UI or via a tokenized
   approval email; an approved request is then sent through the domain's outbound
   configuration. A domain inbox cannot be switched to remote draft.
-- **Remote draft handoff** (a standalone inbox's default): a one-way handoff
-  that places the frozen draft in the inbox's connected remote Drafts folder for
-  the human to review and send from their own client. MailMoose never sends it.
-  No notification email is sent for a handoff.
+- **Remote draft** (a standalone inbox's default): the frozen draft is placed in
+  the inbox's connected remote Drafts folder for the human to review and send
+  from their own client. MailMoose never sends it, sends no notification email,
+  and uses no approver (switching to this mode clears any approver).
 
 Publication and the Sent-copy are tracked separately, and a copy failure never
 re-sends. A remote append whose result cannot be verified is reported as
-ambiguous, never retried blindly.
+ambiguous, never retried blindly, and its local draft is unfrozen so it is never
+trapped.
 
 Domain setup documentation covers the provider DNS records required for receiving and authenticated sending, including MX plus the applicable SPF/DKIM records.
 

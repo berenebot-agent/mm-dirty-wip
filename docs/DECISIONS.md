@@ -4794,3 +4794,61 @@ out of scope.
 - richer team/organisation administration
 
 Additions should preserve the canonical mailbox/event model.
+
+## D121 — Remote-draft mode just places the draft: no notification, no approver, no handoff UI
+
+**Date:** 2026-10-13. **Approved by:** Ben.
+
+**Context:** A standalone inbox in `remote_draft` mode is meant to do one thing: an
+assistant's request to send places the draft in the connected mailbox's Drafts
+folder. The implementation had grown a visible handoff lifecycle around it — a
+"Draft handoffs" pane with publication and notification columns, per-draft handoff
+badges, a "Handoff state" settings panel, cancel/retry controls, handoff
+notification emails, and an approver field — which read to the operator as "an
+assistant wanted a draft" rather than the draft itself. A `remote_draft` inbox
+never uses an approver, and the notification email was pure noise.
+
+**Decision:**
+
+- **No notification email, ever.** The handoff notification path is removed
+  (`WorkflowKindHandoff`, `CommitHandoffNotification`, the notification store
+  methods and events, `HandoffByNotificationMessageID`). A data-only migration
+  (`076`) settles any handoff notification job still queued from an older build
+  terminally, so the outbox worker can never deliver one. Publication and the
+  Sent-copy remain the only state machines.
+- **No handoff UI.** The pane, badges, "Handoff state" panel, cancel/retry routes
+  and handlers are deleted. The Drafts page shows drafts; the Approvals tab shows
+  the mode and its description. `GET /v1/inboxes/{id}/handoffs` and the draft
+  response's `handoff` object remain (publication only) so an agent can still
+  observe the placement outcome.
+- **No trapped draft.** A terminal outcome — a permanent append failure, an
+  unverifiable append after the bounded attempt budget, or more than one remote
+  match — now **unfreezes** the local draft (`MarkHandoffFailed` /
+  `MarkHandoffAmbiguous`, and the ambiguous user-resolve path is removed with the
+  UI). Previously only a permanent failure unfroze it, and an ambiguous handoff
+  relied on the now-deleted resolve control.
+- **No approver on a draft inbox.** Switching a standalone inbox to
+  `remote_draft` clears any stored approver (the inbox edit form, `PUT
+  /authoring`, and `PATCH /v1/inboxes/{id}`), and the settings UI no longer offers
+  the notification-address field. The legacy `notify_address` /
+  `notify_overridden` values remain in the API and store but have no effect.
+
+**Scope:** draft mode (`remote_draft`) only. The MailMoose approval flow
+(`mailmoose_approval`) — approver, approval emails, the "Draft send requests"
+card, `draft_send_requests`, and its notification state machine — is unchanged.
+
+**Consequences:** A `remote_draft` request to send places the draft and nothing
+else; the operator sees an ordinary draft that disappears from MailMoose once the
+append is confirmed and appears in their own client's Drafts folder. The
+`assistant_handling_requests` table keeps its `notification_status` /
+`notification_message_id` columns (unused, scanned for backward compatibility);
+no column is dropped.
+
+**Complexity:** `internal/model/assistant_handling.go` (event kinds and the
+notification fields), `internal/store/assistant_handling.go` (removed
+notification/cancel methods; ambiguity now unfreezes), `internal/app/
+draft_handoff.go` and `remote_worker.go` (the echo exclusion kept, the
+notification lookup removed), `internal/app/remote_worker.go`, the handoff
+removal in `internal/httpapp/{inbox_ui,ui,server,api,standalone_api,standalone_ui}.go`
+and `assets/app.js`, the CLI table columns, a migration (`076`), apispec and docs,
+and the affected tests. No new dependency.

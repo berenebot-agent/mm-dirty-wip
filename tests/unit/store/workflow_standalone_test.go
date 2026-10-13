@@ -41,19 +41,19 @@ func TestStandaloneWorkflowDeliveryStartedSucceeds(t *testing.T) {
 
 	wf, _, err := s.CommitWorkflow(ctx, store.WorkflowRecord{
 		Inbox:     inbox,
-		Kind:      model.WorkflowKindHandoff,
+		Kind:      model.WorkflowKindApprovalRequest,
 		From:      model.Address{Address: inbox.Address},
 		To:        []string{inbox.Address},
-		Subject:   "Draft placed",
+		Subject:   "Approval request",
 		Text:      "x",
-		RawPath:   "handoff/n.eml",
+		RawPath:   "workflow/n.eml",
 		SizeBytes: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if wf.ID != "" {
-		t.Fatalf("handoff workflow unexpectedly produced a send request %q", wf.ID)
+		t.Fatalf("workflow unexpectedly produced a send request %q", wf.ID)
 	}
 	// CommitWorkflow returns the send request, not the job id; claim the queued
 	// job the way the outbox worker does.

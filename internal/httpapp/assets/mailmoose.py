@@ -590,7 +590,6 @@ def handoff_columns():
         ("id", "id"),
         ("draft", "draft_id"),
         ("publication", "publication"),
-        ("notification", "notification_status"),
         ("remote_folder", "remote_folder"),
         ("error", "last_error"),
         ("requested", "requested_at"),

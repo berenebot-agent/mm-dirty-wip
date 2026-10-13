@@ -297,7 +297,7 @@ func (s *Service) deferHandoffRetry(ctx context.Context, accountID string, r mod
 
 // markHandoffAmbiguous records the explicit ambiguous publication state and
 // publishes its event. An ambiguous handoff is never automatically re-appended;
-// the operator can resolve it (see CancelHandoff).
+// the local draft is unfrozen so it is not trapped with no way to act on it.
 func (s *Service) markHandoffAmbiguous(ctx context.Context, accountID string, r model.AssistantHandlingRequest, reason string) {
 	ev, err := s.Store.MarkHandoffAmbiguous(ctx, accountID, r.ID, reason)
 	if err != nil {

@@ -246,8 +246,8 @@ TABLE_AUTHORING='if type!="object" then tostring else
 
 TABLE_HANDOFFS='def rows: if type=="array" then . elif ((.items? // null)|type)=="array" then .items else null end;
 if rows==null then (to_entries[] | "\(.key)\t\(.value|tostring)") else
-(["ID","DRAFT","PUBLICATION","NOTIFICATION","REMOTE_FOLDER","ERROR","REQUESTED"]|@tsv),
-(rows[] | [.id, (.draft_id//""), (.publication//""), (.notification_status//""), (.remote_folder//""), (.last_error//""), (.requested_at//"")] | map(tostring) | @tsv) end'
+(["ID","DRAFT","PUBLICATION","REMOTE_FOLDER","ERROR","REQUESTED"]|@tsv),
+(rows[] | [.id, (.draft_id//""), (.publication//""), (.remote_folder//""), (.last_error//""), (.requested_at//"")] | map(tostring) | @tsv) end'
 
 # ---------------------------------------------------------------------------
 # Usage

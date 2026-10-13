@@ -525,9 +525,9 @@ func TestHandleRemoteApprovalControlRejectsMismatchedFrom(t *testing.T) {
 	}
 }
 
-// TestHandleRemoteApprovalControlExcludesHandoffNotification proves a message
-// carrying the handoff correlation header is excluded from approval handling.
-func TestHandleRemoteApprovalControlExcludesHandoffNotification(t *testing.T) {
+// TestHandleRemoteApprovalControlExcludesHandoffHeader proves a message carrying
+// the handoff correlation header is excluded from approval handling.
+func TestHandleRemoteApprovalControlExcludesHandoffHeader(t *testing.T) {
 	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
@@ -556,7 +556,7 @@ func TestHandleRemoteApprovalControlExcludesHandoffNotification(t *testing.T) {
 	}
 	sr, err := svc.Store.GetSendRequestByDraft(ctx, asst, d.ID)
 	if err != nil || sr.Status != model.SendRequestPending {
-		t.Fatalf("handoff notification changed the request: %+v err=%v", sr, err)
+		t.Fatalf("handoff-header message changed the request: %+v err=%v", sr, err)
 	}
 }
 
