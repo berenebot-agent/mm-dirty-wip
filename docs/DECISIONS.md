@@ -3547,8 +3547,7 @@ durable job. Existing send/reply queues remain independent.
 
 **Complexity:** One table, store queue methods, app submission/waiter and worker,
 HTTP adapters, header queue view, and deterministic tests. No dependencies or
-additional runtime service. See `docs/API.md` and
-`docs/proposals/inbox-action-queue.md`.
+additional runtime service. See `docs/API.md`.
 
 **Scheduling amendment (2026-10-12, approved by Ben):** Keep one action worker,
 but select one eligible action per inbox per turn in round-robin inbox-ID order.
