@@ -622,8 +622,10 @@ func (c Config) IsTrustedProxy(remoteAddr string) bool {
 }
 
 // RequirePublicOutbound reports whether outbound transports must resolve only
-// public-routable destinations. It is enforced unless the operator explicitly
-// opts out.
+// public-routable destinations. The check is off by default: self-hosting is the
+// primary model, so private gateways, local relays and LAN receivers work
+// without configuration. An operator who must confine outbound traffic to the
+// public internet opts in by setting ALLOW_PRIVATE_OUTBOUND=false.
 func (c Config) RequirePublicOutbound() bool {
 	return !c.AllowPrivateOutbound
 }

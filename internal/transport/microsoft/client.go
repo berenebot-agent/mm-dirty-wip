@@ -19,6 +19,7 @@ import (
 
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/transport"
+	"github.com/dellarb/mailmoose/internal/transport/netutil"
 )
 
 const RedirectURI = "http://localhost"
@@ -63,10 +64,21 @@ type Client struct {
 }
 
 func NewClient(h *http.Client) *Client {
-	if h == nil {
-		h = &http.Client{Timeout: 45 * time.Second}
+	// A nil client is the production path: use the shared guarded outbound client
+	// so Microsoft Graph traffic is held to the same public-routable destination
+	// policy as every other provider (see netutil.HTTPClient). The endpoints are
+	// fixed public hosts, but routing through the guard keeps the invariant that
+	// no production outbound HTTP connection bypasses it.
+	shared := h == nil
+	if shared {
+		h = netutil.HTTPClient()
 	}
 	copy := *h
+	if shared {
+		// The shared client's default budget is short for a raw-MIME upload, so
+		// keep Microsoft's previous 45s timeout on this copy.
+		copy.Timeout = 45 * time.Second
+	}
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Client{HTTP: &copy, BaseURL: "https://graph.microsoft.com/v1.0", AuthBaseURL: "https://login.microsoftonline.com"}
 }
