@@ -100,6 +100,11 @@ Generated from `internal/apispec`; do not edit by hand.
 | Method | Path | Summary | Role |
 | --- | --- | --- | --- |
 | GET | /v1/labels | List distinct labels in use | read |
+| GET | /v1/inboxes/{id}/label-catalog | List provider-aware labels | read |
+| POST | /v1/inboxes/{id}/label-catalog | Create a label | assistant |
+| PATCH | /v1/inboxes/{id}/label-catalog/{labelId} | Rename a label if supported | assistant |
+| DELETE | /v1/inboxes/{id}/label-catalog/{labelId} | Delete a label if supported | assistant |
+| POST | /v1/inboxes/{id}/messages/{messageId}/labels | Apply or remove a message label | assistant |
 
 ## Events
 
