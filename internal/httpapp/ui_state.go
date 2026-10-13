@@ -159,6 +159,9 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 	// state and remote_indexed_at is when it was last built (zero if never).
 	box, gerr := s.Service.Store.GetInboxInternal(ctx, p.AccountID, id)
 	if gerr == nil && box.Kind == model.InboxKindStandalone {
+		if remoteLabels, e := s.Service.Store.RemoteInboxLabelUnreadCounts(ctx, p.AccountID, id); e == nil {
+			out["labels"] = remoteLabels
+		}
 		out["remote"] = true
 		out["remote_syncing"] = s.remoteMailbox().Refreshing(p.AccountID, id)
 		if status, serr := s.Service.Store.GetRemoteIndexStatus(ctx, p.AccountID, id); serr == nil {

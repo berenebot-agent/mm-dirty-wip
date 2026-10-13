@@ -193,31 +193,6 @@ func (s *Server) queuedUIAction(w http.ResponseWriter, r *http.Request, kind str
 		in.Kind = "patch"
 		in.Spam = &spam
 	}
-	if kind == "labels" {
-		m, _, err := s.resolveActionMessage(r, principal(r), r.PathValue("id"))
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
-		labels := append([]string{}, m.Labels...)
-		label := strings.TrimSpace(r.Form.Get("label"))
-		if r.Form.Get("action") == "add" {
-			labels = append(labels, label)
-		} else if r.Form.Get("action") == "remove" {
-			kept := []string{}
-			for _, l := range labels {
-				if !strings.EqualFold(l, label) {
-					kept = append(kept, l)
-				}
-			}
-			labels = kept
-		} else {
-			writeError(w, 400, "unknown action")
-			return
-		}
-		in.Kind = "patch"
-		in.Labels = &labels
-	}
 	s.submitMessageAction(w, r, r.PathValue("id"), in, true)
 }
 
