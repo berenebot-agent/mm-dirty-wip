@@ -28,6 +28,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   naming the domain), the `/v1` capabilities list gains `send-any-in-domain`, and
   the `/agent` guide explains the widened `sender` rule. See `D115`.
 
+### Removed
+
+- The `GET /changelog` route and the `changelog` field it added to
+  `/.well-known/mailmoose`. The changelog is a repository document; agents read
+  it from the source repository rather than from a running instance, so the
+  embedded copy under `internal/httpapp/assets/` and the `make changelog` sync
+  step are gone with it.
+
 ### Fixed
 
 - Clearing **Domain send** on the Clients tab's edit-client screen now persists.
