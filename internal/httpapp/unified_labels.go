@@ -222,8 +222,8 @@ func (s *Server) apiMailboxLabelCatalog(w http.ResponseWriter, r *http.Request) 
 // distinguish moves from classification, even with duplicate display names.
 func (s *Server) apiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		LabelID string `json:"label_id"`
-		Name string `json:"name"`
+		LabelID   string `json:"label_id"`
+		Name      string `json:"name"`
 		Operation string `json:"operation"`
 	}
 	if !decodeJSON(w, r, &in) {
@@ -247,9 +247,15 @@ func (s *Server) apiUnifiedMessageLabels(w http.ResponseWriter, r *http.Request)
 	}
 	if problem != "" {
 		code := http.StatusBadRequest
-		if problem == "forbidden" { code = http.StatusForbidden }
-		if problem == "label not found" { code = http.StatusNotFound }
-		if strings.Contains(problem, "cannot be removed") { code = http.StatusConflict }
+		if problem == "forbidden" {
+			code = http.StatusForbidden
+		}
+		if problem == "label not found" {
+			code = http.StatusNotFound
+		}
+		if strings.Contains(problem, "cannot be removed") {
+			code = http.StatusConflict
+		}
 		writeError(w, code, problem)
 		return
 	}
@@ -289,8 +295,10 @@ func (s *Server) createMailboxLabel(ctx context.Context, p model.Principal, box 
 	}
 	if box.Kind == model.InboxKindDomain || s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID) {
 		created, err := s.Service.Store.CreateDefinedLabel(ctx, p, box.ID, clean)
-		if err != nil { return mailLabel{}, err }
-		return mailLabel{ID:"tag:"+created, Name:created, Kind:"tag", Membership:"multiple", Source:"local", CanRemove:true, CanRename:box.Kind==model.InboxKindDomain, CanDelete:box.Kind==model.InboxKindDomain}, nil
+		if err != nil {
+			return mailLabel{}, err
+		}
+		return mailLabel{ID: "tag:" + created, Name: created, Kind: "tag", Membership: "multiple", Source: "local", CanRemove: true, CanRename: box.Kind == model.InboxKindDomain, CanDelete: box.Kind == model.InboxKindDomain}, nil
 	}
 	path := clean
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
@@ -306,32 +314,54 @@ func (s *Server) createMailboxLabel(ctx context.Context, p model.Principal, box 
 		}
 	}
 	folder, err := s.remoteMailbox().CreateRemoteFolder(ctx, p, box.ID, path, clean)
-	if err != nil { return mailLabel{}, err }
-	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
-		return mailLabel{ID:"tag:"+folder.Name, Name:folder.Name, Kind:"tag", Membership:"multiple", Source:"provider", CanRemove:true, CanRename:true, CanDelete:true, FolderID:folder.ID}, nil
+	if err != nil {
+		return mailLabel{}, err
 	}
-	return mailLabel{ID:"folder:"+folder.ID, Name:folder.Name, Kind:"folder", Membership:"exclusive", Source:"provider", FolderID:folder.ID, CanRename:true, CanDelete:true}, nil
+	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
+		return mailLabel{ID: "tag:" + folder.Name, Name: folder.Name, Kind: "tag", Membership: "multiple", Source: "provider", CanRemove: true, CanRename: true, CanDelete: true, FolderID: folder.ID}, nil
+	}
+	return mailLabel{ID: "folder:" + folder.ID, Name: folder.Name, Kind: "folder", Membership: "exclusive", Source: "provider", FolderID: folder.ID, CanRename: true, CanDelete: true}, nil
 }
 
 func (s *Server) apiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {
-	var in struct { Name string `json:"name"` }
-	if !decodeJSON(w, r, &in) { return }
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil { mapMailboxError(w, err); return }
-	if !p.CanAssist(mb.inbox.ID) && !p.Admin { writeError(w, 403, "forbidden"); return }
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
+		writeError(w, 403, "forbidden")
+		return
+	}
 	created, err := s.createMailboxLabel(r.Context(), p, mb.inbox, in.Name)
-	if err != nil { mapMailboxError(w, err); return }
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, created)
 }
 
 func (s *Server) uiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil { mapMailboxError(w, err); return }
-	if !p.CanAssist(mb.inbox.ID) && !p.Admin { http.Error(w,"forbidden",403); return }
+	if err != nil {
+		mapMailboxError(w, err)
+		return
+	}
+	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
+		http.Error(w, "forbidden", 403)
+		return
+	}
 	if _, err := s.createMailboxLabel(r.Context(), p, mb.inbox, r.Form.Get("name")); err != nil {
-		s.uiError(w, err, 400); return
+		s.uiError(w, err, 400)
+		return
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(mb.inbox.ID)+"?notice="+url.QueryEscape("Label created"), http.StatusSeeOther)
 }

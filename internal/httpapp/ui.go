@@ -695,12 +695,12 @@ type pageData struct {
 	// TotalCount is the exact number of items in the current folder/label, used
 	// by the "select all N" banner. It is independent of the page size, so a
 	// paginated folder can offer a bulk action over every matching item.
-	TotalCount  int
-	Labels      []string
+	TotalCount    int
+	Labels        []string
 	UnifiedLabels []mailLabel
 	MessageLabels []mailLabel
-	LabelUnread map[string]int
-	ActiveLabel string
+	LabelUnread   map[string]int
+	ActiveLabel   string
 	// Folders is the inbox's folder tree (both inbox kinds), for the common
 	// folder sidebar. ActiveFolderID marks the currently-open custom folder.
 	Folders        []folderSidebarItem

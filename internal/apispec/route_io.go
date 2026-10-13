@@ -71,7 +71,7 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/inboxes/{id}/label-catalog":                          {Request: "MailboxLabelCreate", Response: "MailboxLabel"},
 	"PATCH /v1/inboxes/{id}/label-catalog/{labelId}":               {Request: "MailboxLabelRename"},
 	"DELETE /v1/inboxes/{id}/label-catalog/{labelId}":              {},
-	"POST /v1/inboxes/{id}/messages/{messageId}/labels":           {Request: "MailboxLabelAction", Response: "MessageActionResult", Query: []Param{qWait}},
+	"POST /v1/inboxes/{id}/messages/{messageId}/labels":            {Request: "MailboxLabelAction", Response: "MessageActionResult", Query: []Param{qWait}},
 	"GET /v1/inboxes/{id}/remote":                                  {Response: "RemoteConfig"},
 	"PUT /v1/inboxes/{id}/remote":                                  {Request: "RemoteConfigPut", Response: "Inbox"},
 	"POST /v1/inboxes/{id}/remote/test":                            {Request: "RemoteConfigTest", Response: "RemoteTestResult"},
