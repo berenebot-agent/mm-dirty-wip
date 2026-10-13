@@ -72,7 +72,9 @@ func (c *Client) httpClient() *http.Client {
 	if c != nil && c.HTTP != nil {
 		h = c.HTTP
 	} else {
-		h = http.DefaultClient
+		// Never fall back to an unguarded client: the production path always
+		// routes through the shared guarded outbound client (see netutil).
+		h = netutil.HTTPClient()
 	}
 	copy := *h
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
