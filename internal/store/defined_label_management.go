@@ -66,6 +66,14 @@ func (s *Store) ManageDefinedLabel(ctx context.Context, p model.Principal, inbox
 	if defined == 0 && len(messages) == 0 {
 		return nil, ErrNotFound
 	}
+	// A no-op rename must never delete the catalogue row, including a
+	// case-insensitive spelling match on the SQLite NOCASE primary key.
+	if operation == "rename" && strings.EqualFold(oldName, newName) {
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
 	if operation == "rename" {
 		if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_defined_labels(account_id,inbox_id,name) VALUES(?,?,?)`,
 			p.AccountID, inboxID, newName); err != nil {

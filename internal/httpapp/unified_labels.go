@@ -293,21 +293,17 @@ func (s *Server) createMailboxLabel(ctx context.Context, p model.Principal, box 
 		return mailLabel{ID:"tag:"+created, Name:created, Kind:"tag", Membership:"multiple", Source:"local", CanRemove:true, CanRename:box.Kind==model.InboxKindDomain, CanDelete:box.Kind==model.InboxKindDomain}, nil
 	}
 	path := clean
-	if !s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
-		root := strings.TrimSpace(box.Namespace)
-		if root != "" && !strings.EqualFold(root, clean) && !strings.HasPrefix(clean, root+"/") {
-			delimiter := "/"
-			folders, _ := s.Service.Store.ListFolders(ctx, p.AccountID, box.ID)
-			for _, folder := range folders {
-				if strings.HasPrefix(folder.Path, root+".") {
-					delimiter = "."
-					break
-				}
-			}
-			path = root + delimiter + clean
-		}
-	} else {
+	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
 		path = ""
+	} else {
+		// The default INBOX scope also permits sibling personal folders.
+		// Do not accidentally create every new label inside INBOX. A custom
+		// scope, however, must place new folders under its configured root.
+		root := strings.TrimSpace(box.Namespace)
+		if root != "" && !strings.EqualFold(root, model.NamespaceINBOX) &&
+			!strings.EqualFold(root, clean) && !strings.HasPrefix(clean, root+"/") {
+			path = root + "/" + clean
+		}
 	}
 	folder, err := s.remoteMailbox().CreateRemoteFolder(ctx, p, box.ID, path, clean)
 	if err != nil { return mailLabel{}, err }
