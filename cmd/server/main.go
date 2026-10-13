@@ -101,13 +101,6 @@ func main() {
 	}
 	svc.Log = log
 	st.SetInboxLogger(log)
-	// Webhook signing secrets and relay connection secrets are AAD-bound now,
-	// so no read path opens a pre-AAD value. Rewrite any that predates the
-	// binding before a worker or request can read one. The walk is idempotent:
-	// it is a no-op on a fresh instance and on a second start.
-	if migrated, failed := svc.ReencryptLegacySecrets(context.Background()); migrated > 0 || failed > 0 {
-		log.Info("re-encrypted pre-AAD secrets", "migrated", migrated, "failed", failed)
-	}
 	dialTLS, err := mxdial.ReceiverTLS(cfg.DialMXCAFile)
 	if err != nil {
 		log.Error("invalid Dial MX TLS configuration", "error", err)

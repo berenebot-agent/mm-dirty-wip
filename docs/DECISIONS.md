@@ -4516,14 +4516,15 @@ connections were the rows still being written unbound; they now bind to their
 row identity — `WebhookSecretAAD(accountID, inboxID)` (the client row id does not
 exist when the handler seals the secret, and a webhook client never moves inbox)
 and `RelaySecretAAD(gatewayID)` (unique and immutable for the connection's life).
-A one-time, idempotent walk (`Service.ReencryptLegacySecrets`, called from
-`cmd/server` before any worker starts) rewrites pre-AAD values in place using
-`cryptox.DeprecatedOpenLegacy` and, where a passphrase key predates the PBKDF2
-change, `cryptox.DeprecatedLegacyKey`. The PBKDF2 *password* path is gone too:
+A one-time, idempotent migrator (`cmd/migrate-secrets`, run by the operator with
+the application stopped; see the upgrade section in `docs/SELFHOSTING.md`)
+rewrites pre-AAD values in place, opening each with the current key and, where a
+passphrase key predates the PBKDF2 change, the pre-PBKDF2 derivation. The PBKDF2
+*password* path is gone too:
 only an Argon2id hash verifies, so an account that has not logged in since the
 Argon2id switch needs a password reset (accepted by the operator). The fixed KDF
-salt is unchanged, and the walk plus those two deprecated primitives are
-temporary — delete them once every deployment has started once on this version.
+salt is unchanged, and the migrator is temporary — delete it once every instance
+has been migrated.
 `SECURITY.md` records the same. See `D118`.
 
 ## D118 — Stored secrets always carry an AAD binding; the PBKDF2 password path is removed
@@ -4551,27 +4552,31 @@ an account that has not logged in since the Argon2id switch).
   relay secret and delivery key bind to `RelaySecretAAD(gatewayID)`, which is
   unique and immutable for the connection's life and, unlike the row id, exists
   at seal time. `EncryptSecret`/`DecryptSecret` are removed from `Service`.
-- **A one-time idempotent walk converts existing rows.**
-  `Service.ReencryptLegacySecrets` scans `client_push` for unbound values,
-  unwraps each with `cryptox.DeprecatedOpenLegacy` — falling back to
-  `cryptox.DeprecatedLegacyKey` for a blob sealed under the pre-PBKDF2
-  derivation — and rewrites it bound. `cmd/server` calls it once before any
-  worker starts; a value already bound is left untouched, so the walk is a
-  no-op on a second start and costs nothing on a fresh instance. It returns
-  counts and logs a warning per row it could not convert rather than failing
-  startup.
+- **A one-time idempotent walk converts existing rows.** The migrator is a
+  separate command, `cmd/migrate-secrets` (with `internal/migratesecrets`), not
+  a startup step: it must run before the new binary reads a secret, and a
+  standalone tool keeps the application free of any pre-AAD knowledge and lets
+  an operator preview the change with `-dry-run`. It is built into the runtime
+  image so an operator needs no Go toolchain, and it duplicates the AAD strings
+  and the legacy envelope rather than importing `internal/app`, so deleting it
+  later leaves nothing behind.
 - **The PBKDF2 password path is removed.** `CheckPassword` and
   `CheckPasswordContext` verify only an Argon2id encoding; a `pbkdf2-sha256`
   row returns false (the caller reports "not found"), so that account needs a
   password reset. `checkLegacyPBKDF2`, `pbkdf2SHA256` and the legacy parameter
   bounds are deleted, and the lazy upgrade in `internal/store` is now only the
   Argon2id cost upgrade.
-- **Temporary residue, to delete later.** `cryptox.DeprecatedOpenLegacy`,
-  `cryptox.DeprecatedLegacyKey`, `Service.ReencryptLegacySecrets`, the two
-  scans and two rewrite helpers in `internal/store/client_secrets.go`, and the
-  `cmd/server` call all exist only for the walk. Remove them once every
-  deployment has started at least once on this version; that is the last
-  remaining compatibility surface, and it is clearly marked.
+- **Temporary residue, to delete later.** `cmd/migrate-secrets` and
+  `internal/migratesecrets`, plus the `Dockerfile` build and `COPY` lines for
+  the migrator. Remove them once every instance has been migrated; they are the
+  last remaining compatibility surface, and they are clearly marked.
+- **The migrator covers every encrypted column, not just `client_push`.** The
+  descriptor table in `internal/migratesecrets/migrate.go` names each column
+  with its row key and the exact AAD the read path uses. This is deliberate: an
+  earlier revision migrated only the two tables whose call sites it converted
+  and left provider configs, Dial MX seeds and MX receiver credentials unreadable
+  on an existing instance. A new encrypted column must be added to that table
+  until the migrator is deleted.
 
 **Reason:** The shims were the project's only pre-release compatibility debt.
 The AAD binding is what stops a database-write attacker relabelling a secret

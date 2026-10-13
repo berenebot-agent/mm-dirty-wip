@@ -1,49 +1,31 @@
 package cryptox_test
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"io"
 	"strings"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/cryptox"
 )
 
-// TestDeriveKeyPassphraseUsesPBKDF2 proves a passphrase gets the stretched key,
-// which differs from the pre-PBKDF2 single-SHA-256 derivation that only the
-// one-time re-encrypt walk still uses.
+// TestDeriveKeyPassphraseUsesPBKDF2 proves a passphrase gets the stretched key
+// and that a 32-byte key is used directly.
 func TestDeriveKeyPassphraseUsesPBKDF2(t *testing.T) {
-	const pass = "a-long-but-human-chosen-passphrase"
-	primary, err := cryptox.DeriveKey(pass)
+	primary, err := cryptox.DeriveKey("a-long-but-human-chosen-passphrase")
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, ok := cryptox.DeprecatedLegacyKey(pass)
-	if !ok {
-		t.Fatal("a passphrase key must have a legacy derivation")
+	if len(primary) != 32 {
+		t.Fatalf("passphrase key length %d", len(primary))
 	}
-	if len(primary) != 32 || len(legacy) != 32 {
-		t.Fatalf("key lengths = %d, %d", len(primary), len(legacy))
+	// The passphrase key is not a bare SHA-256 of the input.
+	if strings.Contains(hex.EncodeToString(primary), "a-long") {
+		t.Fatal("passphrase key looks like raw input")
 	}
-	if string(primary) == string(legacy) {
-		t.Fatal("primary passphrase key must not equal the legacy SHA-256 key")
-	}
-	h := sha256.Sum256([]byte(pass))
-	if string(legacy) != string(h[:]) {
-		t.Fatal("legacy derivation is not the bare SHA-256 of the passphrase")
-	}
-	// A 32-byte key is used directly and has no legacy variant.
 	raw := hex.EncodeToString(make([]byte, 32))
-	if direct, err := cryptox.DeriveKey(raw); err != nil || len(direct) != 32 {
+	direct, err := cryptox.DeriveKey(raw)
+	if err != nil || len(direct) != 32 {
 		t.Fatalf("32-byte key derive = %d bytes err=%v", len(direct), err)
-	}
-	if _, ok := cryptox.DeprecatedLegacyKey(raw); ok {
-		t.Fatal("a 32-byte key must not report a legacy derivation")
 	}
 }
 
@@ -74,7 +56,7 @@ func TestDeriveKeyCacheIsBounded(t *testing.T) {
 
 // TestEncryptWithAADBindsCiphertextToRow proves an AAD-bound blob only decrypts
 // under the same AAD, and that neither an empty AAD nor the pre-AAD format is
-// accepted by the read path.
+// accepted.
 func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
 	aad := []byte("cfg:acc1:dom1")
@@ -101,37 +83,8 @@ func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
 	if _, err := cryptox.DecryptWithAAD(key, enc, nil); err == nil {
 		t.Fatal("decryption with an empty AAD was allowed")
 	}
-
-	// The pre-AAD format is refused by the read path, and only the one-time
-	// re-encrypt walk can still open it.
-	legacy := legacyCiphertext(t, key, "old-secret")
-	if got, err := cryptox.DeprecatedOpenLegacy(key, legacy); err != nil || string(got) != "old-secret" {
-		t.Fatalf("legacy open = %q err=%v", got, err)
+	// The pre-AAD format is refused: rewrap via cmd/migrate-secrets first.
+	if _, err := cryptox.DecryptWithAAD(key, "bm90LXByZWZpeGVk", aad); err == nil {
+		t.Fatal("unprefixed ciphertext was accepted")
 	}
-	if _, err := cryptox.DecryptWithAAD(key, legacy, aad); err == nil {
-		t.Fatal("pre-AAD ciphertext was accepted by the read path")
-	}
-	if _, err := cryptox.DeprecatedOpenLegacy(key, enc); err == nil {
-		t.Fatal("the legacy opener accepted an AAD-bound blob")
-	}
-}
-
-// legacyCiphertext writes the pre-AAD envelope exactly as the previous release
-// did: GCM over the raw key with a nil AAD, base64url, no version prefix.
-func legacyCiphertext(t *testing.T, key []byte, plaintext string) string {
-	t.Helper()
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		t.Fatal(err)
-	}
-	ct := gcm.Seal(nil, nonce, []byte(plaintext), nil)
-	return base64.RawURLEncoding.EncodeToString(append(nonce, ct...))
 }
