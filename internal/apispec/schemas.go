@@ -423,12 +423,14 @@ var schemas = map[string]any{
 		"delivery_trigger":                str("When auto-actions fire: any (first delivery) or all (every connector present at receipt, the default)."),
 	}),
 	"MailboxPermissions": obj(map[string]any{
-		"role":        str("Effective role for this inbox: read, assistant, owner or admin."),
-		"can_read":    boolean("Whether the credential can read messages and threads."),
-		"can_draft":   boolean("Whether the credential can create and edit drafts."),
-		"can_send":    boolean("Whether the credential can send and reply."),
-		"can_approve": boolean("Whether the credential can approve a pending draft send."),
-	}, "role", "can_read", "can_draft", "can_send", "can_approve"),
+		"role":               str("Effective role for this inbox: read, assistant, owner or admin."),
+		"can_read":           boolean("Whether the credential can read messages and threads."),
+		"can_draft":          boolean("Whether the credential can create and edit drafts."),
+		"can_send":           boolean("Whether the credential can send and reply."),
+		"can_approve":        boolean("Whether the credential can approve a pending draft send."),
+		"send_any_in_domain": boolean("Whether the credential may set `sender` to any address on the inbox's domain, not only its primary or managed aliases."),
+		"send_any_domain":    str("The domain `send_any_in_domain` applies to. Present only when it is true."),
+	}, "role", "can_read", "can_draft", "can_send", "can_approve", "send_any_in_domain"),
 
 	"Bootstrap": obj(map[string]any{
 		"account_id":    str("Account id."),

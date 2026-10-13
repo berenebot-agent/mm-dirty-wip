@@ -276,6 +276,141 @@ func TestInboxAccessDomainWideSending(t *testing.T) {
 	}
 }
 
+// TestBootstrapExposesDomainWideSending proves an agent can discover the
+// domain-wide sending grant from GET /v1/bootstrap: the permission reports
+// send_any_in_domain and the domain it applies to, and a key without the grant
+// does not advertise it.
+func TestBootstrapExposesDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, grantedToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "granted", false, map[string]string{box.ID: "owner"}, map[string]bool{box.ID: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, plainToken, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "plain", false, map[string]string{box.ID: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bootstrap := func(token string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/v1/bootstrap", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("bootstrap = %d body=%s", rr.Code, rr.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	perm := func(body map[string]any) map[string]any {
+		t.Helper()
+		perms, _ := body["permissions"].(map[string]any)
+		p, _ := perms[box.ID].(map[string]any)
+		if p == nil {
+			t.Fatalf("no permissions for %s: %#v", box.ID, perms)
+		}
+		return p
+	}
+
+	// The granted key advertises the capability and the domain it covers.
+	gp := perm(bootstrap(grantedToken))
+	if gp["send_any_in_domain"] != true {
+		t.Fatalf("granted key send_any_in_domain = %#v, want true", gp["send_any_in_domain"])
+	}
+	if gp["send_any_domain"] != d.Name {
+		t.Fatalf("granted key send_any_domain = %#v, want %q", gp["send_any_domain"], d.Name)
+	}
+	if gp["can_send"] != true {
+		t.Fatalf("granted key can_send = %#v, want true", gp["can_send"])
+	}
+
+	// An ordinary Owner of the same inbox does not.
+	pp := perm(bootstrap(plainToken))
+	if pp["send_any_in_domain"] != false {
+		t.Fatalf("plain key send_any_in_domain = %#v, want false", pp["send_any_in_domain"])
+	}
+	if _, present := pp["send_any_domain"]; present {
+		t.Fatalf("plain key advertised send_any_domain: %#v", pp)
+	}
+}
+
+// TestKeyDialogDomainWideSending proves the Clients tab's key dialog carries the
+// domain-wide sending control: the matrix renders the Domain send box only on
+// the domain's enabled catch-all inbox, the checkbox sets the grant (forcing
+// owner) on save, and the dashboard marks the catch-all inbox for the operator.
+func TestKeyDialogDomainWideSending(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "other", "Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// The dashboard marks the catch-all inbox and only that inbox.
+	dash := httptest.NewRequest("GET", "/", nil)
+	dash.AddCookie(cookie)
+	dashRR := httptest.NewRecorder()
+	h.ServeHTTP(dashRR, dash)
+	if dashRR.Code != http.StatusOK {
+		t.Fatalf("dashboard = %d", dashRR.Code)
+	}
+	body := dashRR.Body.String()
+	if !strings.Contains(body, "domainsend_"+box.ID) {
+		t.Fatal("key matrix missing the domain-send control on the catch-all inbox")
+	}
+	if strings.Contains(body, "domainsend_"+other.ID) {
+		t.Fatal("key matrix offered the domain-send control on a non-catch-all inbox")
+	}
+	if !strings.Contains(body, "catchall-tag") {
+		t.Fatal("dashboard did not mark the catch-all inbox")
+	}
+
+	// Saving the key dialog's matrix checkbox sets the grant and forces owner.
+	form := url.Values{"_csrf": {csrf}, "name": {"Agent"}, "role_" + box.ID: {"read"}, "domainsend_" + box.ID: {"1"}}
+	req := httptest.NewRequest("POST", "/ui/keys", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated && rr.Code != http.StatusSeeOther {
+		t.Fatalf("create key = %d body=%s", rr.Code, rr.Body.String())
+	}
+	keys, err := svc.Store.ListAPIKeys(ctx, u.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, k := range keys {
+		if k.Name != "Agent" {
+			continue
+		}
+		found = true
+		if !k.DomainSend[box.ID] {
+			t.Fatalf("grant not applied from key dialog: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("grant did not force owner: %#v", k.Roles)
+		}
+	}
+	if !found {
+		t.Fatal("created key not found")
+	}
+}
+
 func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)

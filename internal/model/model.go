@@ -754,6 +754,12 @@ type Principal struct {
 	SystemAdmin  bool
 	MailboxRoles map[string]string
 	ViaSession   bool
+	// DomainSend lists the inbox ids where this principal holds a live
+	// domain-wide sending grant: it may put any address on that inbox's domain in
+	// the From of a message it sends from that inbox. It is the send-authority
+	// counterpart to MailboxRoles and is empty for an account Admin (which holds
+	// the capability implicitly) and for sessions.
+	DomainSend map[string]bool
 	// Timezone is the effective display time zone (IANA name) for this session,
 	// resolved from the user override then the account default. Empty means UTC.
 	// It is only populated for web-UI sessions.

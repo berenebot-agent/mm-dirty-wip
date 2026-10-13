@@ -50,7 +50,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 			"curl":   "/examples/curl",
 		},
 		"bootstrap":    "/v1/bootstrap",
-		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "hermes-relay"},
+		"capabilities": []string{"inboxes", "identities", "messages", "threads", "search", "labels", "attachments", "events", "drafts", "draft-approval", "outbox", "send", "send-any-in-domain", "hermes-relay"},
 		"limits":       s.discoveryLimits(),
 	})
 }
@@ -114,7 +114,18 @@ func (s *Server) apiBootstrap(w http.ResponseWriter, r *http.Request) {
 		mapStoreError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
+	// Domain names resolve a live domain-wide sending grant to the domain it
+	// applies to, so a client can send `sender` addresses directly.
+	domainNames := make(map[string]string, len(p.DomainSend))
+	for _, b := range boxes {
+		if !p.DomainSend[b.ID] {
+			continue
+		}
+		if d, derr := s.Service.Store.GetDomain(r.Context(), p.AccountID, b.DomainID); derr == nil {
+			domainNames[b.DomainID] = d.Name
+		}
+	}
+	writeJSON(w, 200, map[string]any{"account_id": p.AccountID, "admin": p.Admin, "mailbox_roles": p.MailboxRoles, "permissions": effectiveMailboxPermissions(p, boxes, domainNames), "inboxes": boxes, "events": map[string]string{"list": "/v1/events", "wait": "/v1/events/wait", "stream": "/v1/events/stream"}, "limits": s.discoveryLimits()})
 }
 
 type mailboxPermissions struct {
@@ -123,22 +134,34 @@ type mailboxPermissions struct {
 	CanDraft   bool   `json:"can_draft"`
 	CanSend    bool   `json:"can_send"`
 	CanApprove bool   `json:"can_approve"`
+	// SendAnyInDomain reports that this principal may send from any address on
+	// the inbox's domain, not only its primary or managed aliases. When true,
+	// SendAnyDomain names that domain and a `sender` in POST /v1/send may use any
+	// local part on it.
+	SendAnyInDomain bool   `json:"send_any_in_domain"`
+	SendAnyDomain   string `json:"send_any_domain,omitempty"`
 }
 
-func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox) map[string]mailboxPermissions {
+func effectiveMailboxPermissions(p model.Principal, boxes []model.Inbox, domainNames map[string]string) map[string]mailboxPermissions {
 	out := make(map[string]mailboxPermissions, len(boxes))
 	for _, box := range boxes {
 		role := p.Role(box.ID)
 		if p.Admin {
 			role = "admin"
 		}
-		out[box.ID] = mailboxPermissions{
+		anyDomain := p.Admin || p.DomainSend[box.ID]
+		perm := mailboxPermissions{
 			Role:       role,
 			CanRead:    p.CanRead(box.ID),
 			CanDraft:   p.CanAssist(box.ID),
 			CanSend:    p.CanOwn(box.ID),
 			CanApprove: p.CanOwn(box.ID),
 		}
+		if anyDomain {
+			perm.SendAnyInDomain = true
+			perm.SendAnyDomain = domainNames[box.DomainID]
+		}
+		out[box.ID] = perm
 	}
 	return out
 }
