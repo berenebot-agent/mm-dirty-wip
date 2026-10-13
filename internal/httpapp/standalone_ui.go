@@ -331,6 +331,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
 	sidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
+	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
 
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
 	msgs, err := s.folderMessages(r, p, box, target, before)
@@ -363,6 +364,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		Folder:         "folder",
 		ActiveFolderID: target.ID,
 		Folders:        sidebar,
+		UnifiedLabels: unifiedLabels,
 		MoveTargets:    s.buildMoveTargets(r.Context(), p.AccountID, box.ID, []string{target.ID}),
 		UnreadCount:    unread[id],
 		SpamCount:      spamCount,
@@ -558,6 +560,8 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
 	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
+	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
+	unifiedLabels = selectedMailboxLabels(unifiedLabels, m)
 	// The conversation thread is read from the cached remote index only: opening
 	// a message must never block on IMAP. A thread with no cached ancestors is
 	// simply not shown.
@@ -584,6 +588,9 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Inbox:          &box,
 		Folder:         folder,
 		Folders:        folderSidebar,
+		UnifiedLabels: unifiedLabels,
+		MessageLabels: unifiedLabels,
+		CanTypeLabel: s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, box.ID) || s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, box.ID),
 		Labels:         inboxLabels,
 		LabelUnread:    labelUnread,
 		UnreadCount:    unread[box.ID],
