@@ -18,6 +18,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Security
 
+- Stored secrets are now always bound to the row that owns them. A webhook
+  client's signing secret binds to its account and inbox, and a relay
+  connection's secret and delivery key bind to its gateway id; a value that
+  lacks the `v2.` binding prefix is refused on read rather than decrypted
+  unbound. Existing values are rewritten in place by an idempotent walk at
+  startup, so upgrading needs no manual step. See `D118`.
+- Password login now accepts only an Argon2id hash. A pre-Argon2id
+  `pbkdf2-sha256` row can no longer verify and needs a password reset; the
+  break-glass `ADMIN_PASSWORD` path still works. See `D118`.
+
 - A post-login `next` value containing an ASCII tab or newline could survive into
   the `Location` header, which a browser then strips to form an off-site
   redirect (`/\t/evil.com` → `//evil.com`); `safeNextPath` now rejects control

@@ -180,7 +180,7 @@ func (w *WebhookWorker) dispatch(ctx context.Context, d store.PendingWebhookDeli
 			return err
 		}
 	}
-	secret, err := w.svc.DecryptSecret(d.Client.SecretEncrypted)
+	secret, err := w.svc.DecryptSecretAAD(WebhookSecretAAD(d.Client.AccountID, d.Client.InboxID), d.Client.SecretEncrypted)
 	if err != nil {
 		return err
 	}

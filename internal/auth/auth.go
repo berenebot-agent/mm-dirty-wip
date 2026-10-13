@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -31,22 +30,12 @@ const (
 // from the stored row, which a database-write attacker controls, so an
 // unbounded request could force a huge allocation or workload through the
 // four-slot admission gate. The caps are generous enough never to reject a hash
-// this code emits or a near-future cost increase, and are the Argon2id
-// counterpart of the legacy PBKDF2 iteration bound (legacyMinIterations and
-// legacyMaxIterations). argonMaxMemoryKiB keeps the gate's peak at 1 GiB
-// (4 x 256 MiB).
+// this code emits or a near-future cost increase. argonMaxMemoryKiB keeps the
+// gate's peak at 1 GiB (4 x 256 MiB).
 const (
 	argonMaxMemoryKiB   = 4 * argonMemory
 	argonMaxIterations  = 32
 	argonMaxParallelism = 64
-)
-
-// Legacy PBKDF2 parameters, retained only so existing stored hashes keep
-// verifying. New hashes are always Argon2id.
-const (
-	legacyDefaultIterations = 310000
-	legacyMinIterations     = 100000
-	legacyMaxIterations     = 2000000
 )
 
 // argonAdmission bounds how many Argon2id computations run at once,
@@ -101,8 +90,8 @@ func acquireArgonSlotContext(ctx context.Context, timeout time.Duration) error {
 // than block; every other caller keeps using the blocking CheckPassword.
 func CheckPasswordContext(ctx context.Context, encoded, password string, timeout time.Duration) (bool, error) {
 	if !strings.HasPrefix(encoded, "$argon2id$") {
-		// Legacy PBKDF2 is not gated by the Argon2 slots; verify it directly.
-		return CheckPassword(encoded, password), nil
+		// Not an Argon2id hash, so it cannot verify and needs no slot.
+		return false, nil
 	}
 	if err := acquireArgonSlotContext(ctx, timeout); err != nil {
 		return false, err
@@ -185,23 +174,19 @@ func HashPassword(password string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash)), nil
 }
 
-// CheckPassword verifies a password against a stored hash. It dispatches on the
-// encoded prefix so legacy pbkdf2-sha256 rows (from earlier releases) keep
-// verifying; new hashes are Argon2id.
+// CheckPassword verifies a password against a stored Argon2id hash. Any other
+// encoded form (including a pre-Argon2id pbkdf2-sha256 row) cannot verify: such
+// a hash must be replaced through a password reset.
 func CheckPassword(encoded, password string) bool {
-	switch {
-	case strings.HasPrefix(encoded, "$argon2id$"):
-		return checkArgon2id(encoded, password)
-	case strings.HasPrefix(encoded, "pbkdf2-sha256$"):
-		return checkLegacyPBKDF2(encoded, password)
-	default:
+	if !strings.HasPrefix(encoded, "$argon2id$") {
 		return false
 	}
+	return checkArgon2id(encoded, password)
 }
 
 // NeedsRehash reports whether a stored hash should be replaced with the current
-// algorithm/parameters after a successful verification. Legacy PBKDF2 rows and
-// Argon2id rows below the current cost both return true.
+// Argon2id parameters after a successful verification. A hash that is not
+// Argon2id cannot have verified, so the guard is defensive only.
 func NeedsRehash(encoded string) bool {
 	if !strings.HasPrefix(encoded, "$argon2id$") {
 		return true
@@ -265,33 +250,6 @@ func verifyArgon2id(encoded, password string) bool {
 	return subtle.ConstantTimeCompare(got, want) == 1
 }
 
-// checkLegacyPBKDF2 verifies a pre-Argon2 pbkdf2-sha256 hash. It exists purely
-// for backward compatibility; such rows are upgraded lazily by the caller after
-// a successful login.
-func checkLegacyPBKDF2(encoded, password string) bool {
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
-		return false
-	}
-	iterations, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return false
-	}
-	if iterations < legacyMinIterations || iterations > legacyMaxIterations {
-		return false
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
-	if err != nil || len(salt) < 16 {
-		return false
-	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[3])
-	if err != nil || len(want) < 32 {
-		return false
-	}
-	got := pbkdf2SHA256([]byte(password), salt, iterations, len(want))
-	return subtle.ConstantTimeCompare(got, want) == 1
-}
-
 var (
 	dummyHashOnce sync.Once
 	dummyHash     string
@@ -305,36 +263,4 @@ func DummyPasswordCheckContext(ctx context.Context, password string, timeout tim
 		dummyHash, _ = HashPassword("mailmoose-dummy-password")
 	})
 	return CheckPasswordContext(ctx, dummyHash, password, timeout)
-}
-
-// pbkdf2SHA256 implements PBKDF2-HMAC-SHA256 as specified by RFC 8018. It is
-// retained only to verify legacy stored hashes (see checkLegacyPBKDF2); new
-// passwords use Argon2id.
-func pbkdf2SHA256(password, salt []byte, iterations, keyLen int) []byte {
-	hLen := sha256.Size
-	blocks := (keyLen + hLen - 1) / hLen
-	out := make([]byte, 0, blocks*hLen)
-	var counter [4]byte
-	for block := 1; block <= blocks; block++ {
-		counter[0] = byte(block >> 24)
-		counter[1] = byte(block >> 16)
-		counter[2] = byte(block >> 8)
-		counter[3] = byte(block)
-
-		mac := hmac.New(sha256.New, password)
-		_, _ = mac.Write(salt)
-		_, _ = mac.Write(counter[:])
-		u := mac.Sum(nil)
-		t := append([]byte(nil), u...)
-		for i := 1; i < iterations; i++ {
-			mac = hmac.New(sha256.New, password)
-			_, _ = mac.Write(u)
-			u = mac.Sum(nil)
-			for j := range t {
-				t[j] ^= u[j]
-			}
-		}
-		out = append(out, t...)
-	}
-	return out[:keyLen]
 }

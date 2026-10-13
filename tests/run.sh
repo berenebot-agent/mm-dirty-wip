@@ -23,8 +23,7 @@
 #   lint     dead-code gate (staticcheck -checks U1000 ./...)
 #   js       Antler dialog interaction checks (node tests/antler-wizard-check.cjs)
 #   smoke    slow gated tests (MAILMOOSE_SMOKE=1): the process-level receiver
-#            binary smoke and the production-cost legacy PBKDF2 round-trip.
-#            Deliberately NOT part of the default preset.
+#            binary smoke. Deliberately NOT part of the default preset.
 #
 # Output levels (all written to the run folder every time):
 #   L1  summary.txt   per-tier pass/fail + elapsed + first error + folder path
@@ -239,13 +238,13 @@ for t in "${SELECTED[@]}"; do
             fi
             ;;
         smoke)
-            # Slow gated tests: the process-level receiver binary smoke and the
-            # production-cost legacy PBKDF2 round-trip. MAILMOOSE_SMOKE=1 makes
-            # tests/support/smoke.Require run them instead of skipping; it is
-            # passed through to the container by mailmoose-go.sh.
+            # Slow gated tests: the process-level receiver binary smoke.
+            # MAILMOOSE_SMOKE=1 makes tests/support/smoke.Require run them
+            # instead of skipping; it is passed through to the container by
+            # mailmoose-go.sh.
             MAILMOOSE_SMOKE=1 MAILMOOSE_TEST_DIR="$RUN_DIR/smoke" \
                 ./mailmoose-go.sh test -race -count=1 -timeout=60s -v \
-                ./tests/unit/dialmx/receiver/ ./tests/unit/auth/ >/dev/null 2>&1 || rc=$?
+                ./tests/unit/dialmx/receiver/ >/dev/null 2>&1 || rc=$?
             ;;
     esac
     tier_end=$(date +%s.%N)

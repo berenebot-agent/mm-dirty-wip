@@ -149,20 +149,33 @@ mailbox credentials already gate who can place mail in the connected inbox.
 DKIM verification proposed for `D058`/`D059`. Revisit only alongside an explicit
 decision to change approval behaviour.
 
-### Legacy ciphertext is AAD-less and the passphrase KDF uses a fixed salt
+### Legacy ciphertext is rejected on read and the passphrase KDF uses a fixed salt
 
-**Status:** accepted risk — decision `D117` in `docs/DECISIONS.md`.
+**Status:** accepted risk — decision `D117` in `docs/DECISIONS.md`, updated by
+the status note at the end of that entry.
 
 Provider credentials are encrypted with AES-GCM under `APP_ENCRYPTION_KEY`.
-Ciphertext written before the AAD binding was introduced carries no `v2.` prefix
-and is decrypted with a nil additional-authenticated-data value so pre-migration
-rows keep working (`internal/cryptox`). A holder of database-write access can
-therefore swap such a blob between rows that were never migrated, and the
-passphrase fallback stretches the key with PBKDF2 under a fixed application salt,
-so such a holder can also re-derive that key. Both require the same
-database-write access the encryption is designed to survive, all new writes use
-the authenticated (`v2.`) format, and the migration that would re-wrap every
-legacy blob with its row's AAD is tracked in `D117`.
+Every stored secret is bound to the identity of the row that owns it (an
+additional-authenticated-data value), and a value without the `v2.` prefix is
+**refused** by every read path. Ciphertext written before the binding existed is
+rewritten in place by a one-time, idempotent walk at startup
+(`Service.ReencryptLegacySecrets`), so no reader ever opens an unbound blob.
+
+Two residual risks remain, both requiring database-write access — the same
+access the encryption is designed to survive:
+
+- The passphrase fallback still stretches the key with PBKDF2 under a fixed
+  application salt, so a database-write attacker who also knows the
+  `APP_ENCRYPTION_KEY` passphrase can re-derive that key (the fixed salt is
+  required because there is nowhere in the envelope to store a per-installation
+  one).
+- The walk itself can open pre-AAD blobs, using the primitive
+  `cryptox.DeprecatedOpenLegacy` and, for a passphrase key derived before the
+  PBKDF2 change, `cryptox.DeprecatedLegacyKey`. Those two functions, the walk
+  and the store scans behind it are temporary: delete them once every deployment
+  has started at least once on this version.
+
+A 32-byte `APP_ENCRYPTION_KEY` has no legacy derivation and is used directly.
 
 ## Supported versions
 
@@ -215,10 +228,11 @@ credential rotation always restores `password_auth_enabled`.
 
 Human passwords are hashed with Argon2id (`m=65536`, `t=3`, `p=4`). Because
 Argon2id commits 64 MiB per derivation, a process-wide admission gate admits at
-most four concurrent hashes/verifications, bounding peak memory at 256 MiB. A
-legacy PBKDF2-SHA256 hash (from earlier releases) still verifies and is upgraded
-to Argon2id transparently on the next successful login. Machine tokens (API
-keys, session cookies) are 256-bit random values stored only as SHA-256 hashes.
+most four concurrent hashes/verifications, bounding peak memory at 256 MiB. Only
+an Argon2id encoding verifies: a pre-Argon2id `pbkdf2-sha256` row cannot log in
+and needs a password reset (the break-glass `ADMIN_PASSWORD` path still works).
+Machine tokens (API keys, session cookies) are 256-bit random values stored only
+as SHA-256 hashes.
 
 Passkeys use the `go-webauthn/webauthn` library with attestation explicitly not
 requested and no extensions, so the heavy attestation/TPM code paths are never

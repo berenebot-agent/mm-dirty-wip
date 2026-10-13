@@ -32,8 +32,4 @@ func TestDomainConfigAADBindsToDomain(t *testing.T) {
 	if _, err := svc.DecryptDomainSendingConfig(swapped); err == nil {
 		t.Fatal("ciphertext decrypted after being relabelled to another domain")
 	}
-	// And an AAD-bound blob must not decrypt through the legacy AAD-less path.
-	if _, err := svc.DecryptSecret(savedA.EncryptedConfig); err == nil {
-		t.Fatal("AAD-bound config decrypted via the legacy AAD-less path")
-	}
 }
