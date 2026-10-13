@@ -13,15 +13,22 @@ import (
 func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName string) error {
 	p := principal(r)
 	mb, err := s.resolveMailbox(r.Context(), p, r.PathValue("id"))
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
 		return model.NewMailboxError(model.ErrKindForbidden, "forbidden", false, nil)
 	}
 	catalog, err := s.mailboxLabels(r.Context(), p, mb.inbox)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var label *mailLabel
 	for i := range catalog {
-		if catalog[i].ID == labelID { label = &catalog[i]; break }
+		if catalog[i].ID == labelID {
+			label = &catalog[i]
+			break
+		}
 	}
 	if label == nil {
 		return model.NewMailboxError(model.ErrKindNotFound, "label not found", false, nil)
@@ -52,34 +59,43 @@ func (s *Server) manageMailboxLabel(r *http.Request, labelID, operation, newName
 	}
 	events, err := s.Service.Store.ManageDefinedLabel(r.Context(), p, mb.inbox.ID, label.Name, newName, operation)
 	if err == nil {
-		for _, ev := range events { s.Service.Hub.Publish(ev) }
+		for _, ev := range events {
+			s.Service.Hub.Publish(ev)
+		}
 	}
 	return err
 }
 
 func (s *Server) apiMailboxLabelItem(w http.ResponseWriter, r *http.Request) {
-	var in struct { Name string `json:"name"` }
+	var in struct {
+		Name string `json:"name"`
+	}
 	operation := "delete"
 	if r.Method == http.MethodPatch {
 		operation = "rename"
-		if !decodeJSON(w,r,&in) { return }
+		if !decodeJSON(w, r, &in) {
+			return
+		}
 	}
 	if err := s.manageMailboxLabel(r, r.PathValue("labelId"), operation, in.Name); err != nil {
-		mapMailboxError(w,err); return
+		mapMailboxError(w, err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) uiMailboxLabelRename(w http.ResponseWriter, r *http.Request) {
 	if err := s.manageMailboxLabel(r, r.PathValue("labelId"), "rename", r.Form.Get("name")); err != nil {
-		s.uiError(w,err,400); return
+		s.uiError(w, err, 400)
+		return
 	}
-	http.Redirect(w,r,"/ui/inboxes/"+url.PathEscape(r.PathValue("id"))+"?notice="+url.QueryEscape("Label renamed"),http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(r.PathValue("id"))+"?notice="+url.QueryEscape("Label renamed"), http.StatusSeeOther)
 }
 
 func (s *Server) uiMailboxLabelDelete(w http.ResponseWriter, r *http.Request) {
 	if err := s.manageMailboxLabel(r, r.PathValue("labelId"), "delete", ""); err != nil {
-		s.uiError(w,err,400); return
+		s.uiError(w, err, 400)
+		return
 	}
-	http.Redirect(w,r,"/ui/inboxes/"+url.PathEscape(r.PathValue("id"))+"?notice="+url.QueryEscape("Label deleted"),http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(r.PathValue("id"))+"?notice="+url.QueryEscape("Label deleted"), http.StatusSeeOther)
 }
