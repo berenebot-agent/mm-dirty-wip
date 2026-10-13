@@ -741,6 +741,13 @@ address that is neither the primary nor an alias is rejected with `403`. Omit
 `sender` to send from the inbox primary (or its `default_sender`, when set for
 UI compose).
 
+When the sending key holds a **domain-wide sending grant** on the inbox — see
+`send_any_in_domain` in `GET /v1/bootstrap` — `sender` may instead be **any
+address on the inbox's domain**, for example `billing@example.com`. The grant is
+live only while the inbox is its domain's enabled catch-all and is checked at
+send time, so a revoked grant rejects the send with the same `403`. A session
+(the web UI) never has the grant, so it keeps the primary-or-alias rule.
+
 ### Reply
 
 ```http

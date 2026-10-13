@@ -735,6 +735,7 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 	}
 	p.Admin = admin != 0
 	p.MailboxRoles = map[string]string{}
+	p.DomainSend = map[string]bool{}
 	if !p.Admin {
 		rows, err := s.read.QueryContext(ctx, `SELECT inbox_id,role FROM client_inbox_bindings WHERE client_id=?`, p.APIKeyID)
 		if err != nil {
@@ -747,6 +748,28 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 				return p, err
 			}
 			p.MailboxRoles[id] = role
+		}
+		if err := rows.Err(); err != nil {
+			return p, err
+		}
+		// The domain-wide sending grant is reported only where it is live: the
+		// binding is on that domain's current, enabled catch-all. A dormant grant
+		// is not advertised, so a client is never told it can send as any address
+		// when the send itself would be refused.
+		grows, err := s.read.QueryContext(ctx, `SELECT b.inbox_id FROM client_inbox_bindings b JOIN inboxes i ON i.id=b.inbox_id JOIN domains d ON d.id=i.domain_id WHERE b.client_id=? AND b.send_any_in_domain=1 AND d.catch_all_inbox_id=i.id AND i.enabled=1`, p.APIKeyID)
+		if err != nil {
+			return p, err
+		}
+		defer grows.Close()
+		for grows.Next() {
+			var id string
+			if err = grows.Scan(&id); err != nil {
+				return p, err
+			}
+			p.DomainSend[id] = true
+		}
+		if err := grows.Err(); err != nil {
+			return p, err
 		}
 	}
 	_, _ = s.write.ExecContext(ctx, `UPDATE client_api_keys SET last_used_at=? WHERE client_id=?`, nowText(), p.APIKeyID)
@@ -862,7 +885,8 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 // read first and re-applied, so a role-only save that omits them cannot silently
 // wipe a grant. A nil map means "leave the grants as they are"; a non-nil map is
 // authoritative for the inboxes named in roles (any grant outside roles is
-// dropped, since the binding row no longer exists).
+// dropped, since the binding row no longer exists). A grant and the owner role
+// are a single state: a grant forces owner, and a role below owner drops it.
 func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string, admin bool, roles map[string]string, domainSend map[string]bool) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
@@ -922,16 +946,17 @@ func (s *Store) replaceBindings(ctx context.Context, tx *sql.Tx, accountID, keyI
 	if admin {
 		return nil
 	}
-	grant := func(inboxID string) bool {
-		// A non-nil domainSend is authoritative only for the inboxes it names;
-		// every other binding keeps the grant it already had, so a staged change
-		// to one inbox cannot drop another's.
+	grant := func(inboxID string) (granted bool, requested bool) {
+		// A non-nil domainSend is authoritative for the inboxes it names: a
+		// requested grant forces owner, and a requested clear drops it. Every
+		// other binding keeps the grant it already had, so a staged change to one
+		// inbox cannot drop another's.
 		if domainSend != nil {
 			if v, named := domainSend[inboxID]; named {
-				return v
+				return v, true
 			}
 		}
-		return existing[inboxID]
+		return existing[inboxID], false
 	}
 	for inboxID, role := range roles {
 		role = strings.ToLower(role)
@@ -942,11 +967,18 @@ func (s *Store) replaceBindings(ctx context.Context, tx *sql.Tx, accountID, keyI
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
 			return ErrForbidden
 		}
-		// Domain-wide sending implies owner: the grant is a rung above owner and
-		// cannot be held with a lesser role.
-		granted := grant(inboxID)
-		if granted {
-			role = "owner"
+		// Domain-wide sending and owner are a single state. A granted binding is
+		// always owner, so the grant pins the role to owner; a requested grant on
+		// a lesser role is resolved in favour of the grant. A grant carried over
+		// from an existing row, however, cannot outlive a role that an operator
+		// has since lowered below owner: dropping the role drops the grant.
+		granted, requested := grant(inboxID)
+		if granted && role != "owner" {
+			if requested {
+				role = "owner"
+			} else {
+				granted = false
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role,send_any_in_domain) VALUES(?,?,?,?)`, keyID, inboxID, role, boolInt(granted)); err != nil {
 			return err
