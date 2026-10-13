@@ -66,6 +66,14 @@ func TestNativeNewLabelIsAdditive(t *testing.T) {
 	if err != nil || len(labels) != 1 || labels[0] != "NewAdditiveLabel" {
 		t.Fatalf("defined labels: %v %v", labels, err)
 	}
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := svc.Store.ManageDefinedLabel(context.Background(), p, box.ID, "NewAdditiveLabel", "NewAdditiveLabel", "rename"); err != nil {
+		t.Fatalf("same-name rename: %v", err)
+	}
+	labels, err = svc.Store.ListDefinedLabels(context.Background(), u.AccountID, box.ID)
+	if err != nil || len(labels) != 1 || labels[0] != "NewAdditiveLabel" {
+		t.Fatalf("same-name rename deleted catalogue row: %v %v", labels, err)
+	}
 	folders, err := svc.Store.ListFolders(context.Background(), u.AccountID, box.ID)
 	if err != nil {
 		t.Fatal(err)
