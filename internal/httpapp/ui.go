@@ -3995,7 +3995,7 @@ func (s *Server) uiMessage(w http.ResponseWriter, r *http.Request) {
 		draftCount, _ = s.Service.Store.CountDrafts(r.Context(), p, box.ID)
 		outboxCount, _ = s.Service.Store.CountOutbox(r.Context(), p, box.ID)
 		inboxLabels, _ = s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
-		labelUnread, _ = s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
+		labelUnread = s.unifiedLabelUnreadCounts(r.Context(), p, *box)
 		folderSidebar = s.buildFolderSidebar(r.Context(), p.AccountID, box.ID)
 	}
 	var unifiedLabels []mailLabel

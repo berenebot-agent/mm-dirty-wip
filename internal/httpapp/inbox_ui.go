@@ -293,7 +293,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
-	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
+	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
 	handoffs, _ := s.Service.Store.ListAssistantHandlingForInbox(r.Context(), p, box.ID, 50)
 	handoffByDraft := make(map[string]model.AssistantHandlingRequest, len(handoffs))
 	for _, h := range handoffs {
@@ -395,7 +395,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 	spamCount, _ := s.Service.Store.CountSpam(r.Context(), p, box.ID)
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
-	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, box.ID)
+	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
 	s.renderMail(w, r, outboxBody, pageData{
 		Title:       box.Address + " · Outbox",
 		Page:        "inbox",
@@ -725,7 +725,7 @@ func (s *Server) renderMailboxFiltered(w http.ResponseWriter, r *http.Request, f
 	draftCount, _ := s.Service.Store.CountDrafts(r.Context(), p, id)
 	outboxCount, _ := s.Service.Store.CountOutbox(r.Context(), p, id)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, id)
-	labelUnread, _ := s.Service.Store.InboxLabelUnreadCounts(r.Context(), p, id)
+	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
 	acc, _ := s.Service.Store.GetAccount(r.Context(), p.AccountID)
 	folderSidebar := s.buildFolderSidebar(r.Context(), p.AccountID, id)
 	unifiedLabels, _ := s.mailboxLabels(r.Context(), p, box)
