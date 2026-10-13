@@ -200,6 +200,78 @@ func TestInboxAccessSetKeyRoleAndRemove(t *testing.T) {
 	}
 }
 
+// TestInboxAccessDomainWideSending proves the "Domain-wide sending" control is a
+// staged binding change: the inbox settings Save sets the grant (forcing owner)
+// and the panel only offers it on the domain's catch-all inbox.
+func TestInboxAccessDomainWideSending(t *testing.T) {
+	svc, h, u, d, box := httpFixture(t)
+	ctx := context.Background()
+	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	key, _, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "Agent", false, map[string]string{box.ID: "read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := uiSession(t, svc, u.ID)
+
+	// The dashboard advertises the catch-all marker for this inbox, which is what
+	// makes the control appear.
+	dash := httptest.NewRequest("GET", "/", nil)
+	dash.AddCookie(cookie)
+	dashRR := httptest.NewRecorder()
+	h.ServeHTTP(dashRR, dash)
+	if dashRR.Code != http.StatusOK {
+		t.Fatalf("dashboard = %d", dashRR.Code)
+	}
+
+	// Ticking the control is committed by the same Save as the role ladder.
+	set := url.Values{"_csrf": {csrf}, "access_domain_send_" + key.ID: {"1"}}
+	setReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(set.Encode()))
+	setReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setReq.AddCookie(cookie)
+	setRR := httptest.NewRecorder()
+	h.ServeHTTP(setRR, setReq)
+	if setRR.Code != http.StatusSeeOther {
+		t.Fatalf("set domain-send = %d body=%s", setRR.Code, setRR.Body.String())
+	}
+	keys, _ := svc.Store.ListAPIKeys(ctx, u.AccountID)
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if !k.DomainSend[box.ID] {
+			t.Fatalf("grant not applied: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("grant did not force owner: %#v", k.Roles)
+		}
+	}
+
+	// Unticking clears the grant but leaves the role as owner.
+	clear := url.Values{"_csrf": {csrf}, "access_domain_send_" + key.ID: {"0"}}
+	clearReq := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader(clear.Encode()))
+	clearReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	clearReq.AddCookie(cookie)
+	clearRR := httptest.NewRecorder()
+	h.ServeHTTP(clearRR, clearReq)
+	if clearRR.Code != http.StatusSeeOther {
+		t.Fatalf("clear domain-send = %d body=%s", clearRR.Code, clearRR.Body.String())
+	}
+	keys, _ = svc.Store.ListAPIKeys(ctx, u.AccountID)
+	for _, k := range keys {
+		if k.ID != key.ID {
+			continue
+		}
+		if k.DomainSend[box.ID] {
+			t.Fatalf("grant not cleared: %#v", k.DomainSend)
+		}
+		if k.Roles[box.ID] != "owner" {
+			t.Fatalf("clearing the grant demoted the role: %#v", k.Roles)
+		}
+	}
+}
+
 func TestInboxAccessRejectsAdminKeyEdit(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	adminKey, _, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "Admin", true, nil)

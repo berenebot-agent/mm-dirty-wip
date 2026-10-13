@@ -3956,9 +3956,59 @@ function clearUrlParams(names) {
       input.value = stagedKeyRoles[keyID];
       form.appendChild(input);
     });
+    form.querySelectorAll('input[data-access-domain-send]').forEach(function (el) {
+      el.remove();
+    });
+    Object.keys(stagedKeyDomainSend).forEach(function (keyID) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.setAttribute('data-access-domain-send', '1');
+      input.name = 'access_domain_send_' + keyID;
+      input.value = stagedKeyDomainSend[keyID] ? '1' : '0';
+      form.appendChild(input);
+    });
   }
 
-  function accessKeyRow(k) {
+  // stagedKeyDomainSend holds the staged "Domain-wide sending" checkbox per key,
+  // keyed by client id. It is only offered on a domain's catch-all inbox.
+  var stagedKeyDomainSend = {};
+
+  // accessDomainSendToggle renders the "Domain-wide sending" checkbox. Checking
+  // it forces the key's role to Owner (domain-wide sending implies owner), so the
+  // role segment is driven to Owner at the same time.
+  function accessDomainSendToggle(k, row) {
+    var label = document.createElement('label');
+    label.className = 'access-domain-send';
+    label.title = 'This key may send as any address on the domain. Requires an enabled catch-all on the domain. Checking this sets the role to Owner.';
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!k.domain_send;
+    stagedKeyDomainSend[k.id] = !!k.domain_send;
+    var text = document.createElement('span');
+    text.textContent = 'Domain-wide sending';
+    label.appendChild(box);
+    label.appendChild(text);
+    box.addEventListener('change', function () {
+      stagedKeyDomainSend[k.id] = box.checked;
+      if (box.checked) {
+        // Domain-wide sending implies owner: drive the role segment to Owner so
+        // the two controls never disagree.
+        stagedKeyRoles[k.id] = 'owner';
+        var seg = row.querySelector('.access-role');
+        if (seg) {
+          seg.querySelectorAll('button').forEach(function (b) {
+            var active = b.textContent === 'Owner';
+            b.className = active ? 'active' : '';
+            b.setAttribute('aria-pressed', active ? 'true' : 'false');
+          });
+        }
+      }
+      syncStagedKeyRoles();
+    });
+    return label;
+  }
+
+  function accessKeyRow(k, catchAll) {
     var row = document.createElement('div');
     row.className = 'access-row';
     var main = document.createElement('div');
@@ -3978,6 +4028,11 @@ function clearUrlParams(names) {
       pill.textContent = 'Admin';
       row.appendChild(pill);
       return row;
+    }
+    // The domain-wide sending control is offered only on a domain's enabled
+    // catch-all inbox; it sits to the left of the role ladder.
+    if (catchAll) {
+      row.appendChild(accessDomainSendToggle(k, row));
     }
     row.appendChild(accessRoleSeg(k.id, k.role));
     var remove = document.createElement('button');
@@ -4065,7 +4120,7 @@ function clearUrlParams(names) {
         accessKeysList.appendChild(accessEmpty('No clients have access to this inbox.'));
       } else {
         keys.forEach(function (k) {
-          accessKeysList.appendChild(accessKeyRow(k));
+          accessKeysList.appendChild(accessKeyRow(k, !!editAccess.catch_all));
         });
       }
     }

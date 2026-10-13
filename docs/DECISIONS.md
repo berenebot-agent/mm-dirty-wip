@@ -4246,6 +4246,81 @@ with a shared notice writer and body renderer; two call sites in `MarkFailed`
 and a `deleted_at=NULL` addition to `RequeueFailed`. No new dependency, table or
 migration.
 
+## D115 — Domain-wide sending: a per-key grant anchored on the catch-all inbox
+
+**Requirement:** A client key sometimes needs to send from an address that does
+not exist as an inbox or alias on the domain — a role address such as
+`billing@example.com`, or an address an agent invents per conversation. Today
+`resolveSendingTargetQuery` (`internal/store/sending.go`) permits only the inbox
+primary or one of the inbox's managed aliases, so every such address needs a
+hand-made alias first.
+
+**Decision (2026-10-13, human approved):**
+
+- **The grant is per key, not per domain.** It is a flag on the key's existing
+  binding row: `client_inbox_bindings.send_any_in_domain` (migration 074). There
+  is no new table and no key→domain row; the domain is reached through the inbox,
+  as it already is for every other key authority. A key holding the grant may put
+  **any local part** on the grant's domain in `From`, including one that is
+  already a real inbox or alias.
+- **The grant is anchored on the domain's catch-all inbox, and is live only
+  while that inbox is the domain's enabled catch-all.** The catch-all is not
+  merely a place to hang the flag: it is what makes an arbitrary address
+  **replyable**. A domain with no catch-all cannot use the feature; a cleared,
+  moved or disabled catch-all makes the flag dormant without deleting it, and
+  pointing the catch-all back restores it. The condition is evaluated at send
+  time, never stored.
+- **Domain-wide sending implies owner.** Ticking the grant forces the binding's
+  role to `owner`. Clearing it leaves the role alone: the system may raise a role
+  to owner as a side effect of the grant, and never lowers a role on its own.
+  Only an operator demotes a key, by hand.
+- **Account Admin keys get the capability for free** (implicit Owner everywhere);
+  the flag is meaningful only for non-admin keys. A session, system mail and the
+  principal-free approval path hold no key, so they keep the exact primary/alias
+  rule.
+- **The grant is checked at send, against the sending principal's key.** There is
+  no frozen-key column and no separate resolution-time freeze: the address is
+  frozen into the draft/message as before (D032), but the permission is
+  re-evaluated when the message is enqueued. Revoking the grant, or clearing or
+  disabling the catch-all, therefore stops a queued or already-approved wildcard
+  send. The outbox retry reuses the stored address and does not re-resolve, so a
+  message that is already durably queued still delivers.
+- **The wholesale binding rewrite preserves the grant.** `UpdateAPIKey` deletes
+  and re-inserts every binding row, so a role-only save carries each existing
+  grant through unless the caller supplied the grant set; a staged change to one
+  inbox never drops another inbox's grant.
+- **Provider, DKIM, SPF and DMARC are unmodified.** We sign the domain, so the
+  local part is free and the wildcard `From` authenticates on the domain's own
+  SPF/DKIM/DMARC records. Providers that constrain the sending identity (Google,
+  Microsoft) may rewrite or reject an address the account does not own; that is
+  accepted rather than gated per provider. The residual risk is reputation, not
+  authentication, and the reply path is guaranteed by the catch-all condition.
+- **UI.** The Clients & Access panel of a domain's catch-all inbox gains a
+  "Domain-wide sending" control, shown only there and only while the inbox is an
+  enabled catch-all. It is staged and committed by the same footer Save as the
+  role ladder, which it drives to Owner when ticked. `create-key` gains an
+  optional `domain_send` list for API parity.
+
+**Reason:** The motivating case is an agent that must correspond as a role
+address without an operator pre-creating each one. Anchoring on the catch-all —
+rather than on a bare domain flag — makes the capability impossible to enable on
+a domain that cannot receive replies, which is the deliverability guarantee that
+makes a wildcard `From` honest. Keeping the grant per key (a flag on the existing
+binding row) avoids both a new table and the "every owner inherits it" widening
+that a domain-level flag would cause.
+
+**Complexity:** One migration (`client_inbox_bindings.send_any_in_domain`), one
+new store module (`internal/store/domain_send.go`), a `keyID` parameter through
+`resolveSendingTargetQuery`/`ResolveSendingTarget`/`resolveSenderQuery` and its
+callers, a `SenderKeyID` field on `SendInput`, a `DomainSend` map on
+`model.APIKey`, and the Clients & Access control. No new dependency, transport or
+runtime service.
+
+**Deliberately not done:** a domain with no catch-all cannot use this (by
+design); Google/Microsoft unowned-address behaviour is not gated; and a wildcard
+address cannot be approved from the web UI or sent by system mail, because those
+paths hold no key.
+
 ## Future extension register
 
 - additional inbound transport adapters

@@ -618,7 +618,14 @@ func (s *Store) userMailboxRoles(ctx context.Context, userID string) (map[string
 	return out, rows.Err()
 }
 
-func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin bool, roles map[string]string) (model.APIKey, string, error) {
+// CreateAPIKey mints an API key with the given per-inbox roles. domainSend, when
+// non-nil, names the inboxes (a domain's catch-all) that hold the domain-wide
+// sending grant; setting the grant forces that binding's role to owner.
+func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin bool, roles map[string]string, domainSendOpt ...map[string]bool) (model.APIKey, string, error) {
+	domainSend := map[string]bool(nil)
+	if len(domainSendOpt) > 0 {
+		domainSend = domainSendOpt[0]
+	}
 	plain, err := auth.RandomToken(32)
 	if err != nil {
 		return model.APIKey{}, "", err
@@ -646,23 +653,8 @@ func (s *Store) CreateAPIKey(ctx context.Context, accountID, name string, admin 
 	if err = s.syncLegacyAPIKey(ctx, tx, id); err != nil {
 		return model.APIKey{}, "", err
 	}
-	if !admin {
-		for inboxID, role := range roles {
-			role = strings.ToLower(role)
-			if role != "read" && role != "assistant" && role != "owner" {
-				return model.APIKey{}, "", fmt.Errorf("invalid role %q", role)
-			}
-			var n int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
-				return model.APIKey{}, "", ErrForbidden
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role) VALUES(?,?,?)`, id, inboxID, role); err != nil {
-				return model.APIKey{}, "", err
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, id, inboxID, role); err != nil {
-				return model.APIKey{}, "", err
-			}
-		}
+	if err = s.replaceBindings(ctx, tx, accountID, id, admin, roles, domainSend, nil); err != nil {
+		return model.APIKey{}, "", err
 	}
 	if err = tx.Commit(); err != nil {
 		return model.APIKey{}, "", err
@@ -705,7 +697,7 @@ func (s *Store) APIKeyPrincipal(ctx context.Context, token string) (model.Princi
 	return p, nil
 }
 func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIKey, error) {
-	rows, err := s.read.QueryContext(ctx, `SELECT c.id,c.name,k.key_prefix,k.is_admin,c.created_at,r.inbox_id,r.role FROM clients c JOIN client_api_keys k ON k.client_id=c.id LEFT JOIN client_inbox_bindings r ON r.client_id=c.id WHERE c.account_id=? AND c.type='api_key' AND c.revoked_at IS NULL ORDER BY c.created_at DESC, c.id`, accountID)
+	rows, err := s.read.QueryContext(ctx, `SELECT c.id,c.name,k.key_prefix,k.is_admin,c.created_at,r.inbox_id,r.role,COALESCE(r.send_any_in_domain,0) FROM clients c JOIN client_api_keys k ON k.client_id=c.id LEFT JOIN client_inbox_bindings r ON r.client_id=c.id WHERE c.account_id=? AND c.type='api_key' AND c.revoked_at IS NULL ORDER BY c.created_at DESC, c.id`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -717,7 +709,8 @@ func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIK
 		var admin int
 		var created string
 		var inboxID, role sql.NullString
-		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &admin, &created, &inboxID, &role); err != nil {
+		var domainSend int
+		if err := rows.Scan(&k.ID, &k.Name, &k.Prefix, &admin, &created, &inboxID, &role, &domainSend); err != nil {
 			return nil, err
 		}
 		idx, ok := index[k.ID]
@@ -732,8 +725,32 @@ func (s *Store) ListAPIKeys(ctx context.Context, accountID string) ([]model.APIK
 		if inboxID.Valid && role.Valid {
 			out[idx].Roles[inboxID.String] = role.String
 		}
+		if inboxID.Valid && domainSend != 0 {
+			if out[idx].DomainSend == nil {
+				out[idx].DomainSend = map[string]bool{}
+			}
+			out[idx].DomainSend[inboxID.String] = true
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Enrich each grant with its live condition: the grant only applies while the
+	// inbox is that domain's enabled catch-all.
+	for i := range out {
+		if len(out[i].DomainSend) == 0 {
+			continue
+		}
+		for inboxID := range out[i].DomainSend {
+			var live int
+			err := s.read.QueryRowContext(ctx, `SELECT CASE WHEN d.catch_all_inbox_id=i.id AND i.enabled=1 THEN 1 ELSE 0 END FROM inboxes i JOIN domains d ON d.id=i.domain_id WHERE i.id=?`, inboxID).Scan(&live)
+			if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			out[i].DomainSend[inboxID] = live != 0
+		}
+	}
+	return out, nil
 }
 func (s *Store) RevokeAPIKey(ctx context.Context, accountID, keyID string) error {
 	tx, err := s.write.BeginTx(ctx, nil)
@@ -783,7 +800,14 @@ func (s *Store) RotateAPIKey(ctx context.Context, accountID, keyID string) (stri
 
 // UpdateAPIKey changes a key's name and permissions. Admin keys carry no
 // per-mailbox roles, so any supplied roles are ignored and cleared for them.
-func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string, admin bool, roles map[string]string) error {
+//
+// domainSend is the desired set of inboxes holding the domain-wide sending
+// grant. Because the bindings are replaced wholesale, the existing grants are
+// read first and re-applied, so a role-only save that omits them cannot silently
+// wipe a grant. A nil map means "leave the grants as they are"; a non-nil map is
+// authoritative for the inboxes named in roles (any grant outside roles is
+// dropped, since the binding row no longer exists).
+func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string, admin bool, roles map[string]string, domainSend map[string]bool) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -799,32 +823,81 @@ func (s *Store) UpdateAPIKey(ctx context.Context, accountID, keyID, name string,
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM client_inbox_bindings WHERE client_id=?`, keyID); err != nil {
+	// Preserve any grant the caller did not mention. A key edit that only touches
+	// roles must not clear a domain-wide sending grant.
+	existing := map[string]bool{}
+	rows, err := tx.QueryContext(ctx, `SELECT inbox_id FROM client_inbox_bindings WHERE client_id=? AND send_any_in_domain=1`, keyID)
+	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE api_key_id=?`, keyID); err != nil {
-		return err
-	}
-	if !admin {
-		for inboxID, role := range roles {
-			role = strings.ToLower(role)
-			if role != "read" && role != "assistant" && role != "owner" {
-				return fmt.Errorf("invalid role %q", role)
-			}
-			var n int
-			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
-				return ErrForbidden
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
-				return err
-			}
+	for rows.Next() {
+		var inboxID string
+		if err := rows.Scan(&inboxID); err != nil {
+			rows.Close()
+			return err
 		}
+		existing[inboxID] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err = s.replaceBindings(ctx, tx, accountID, keyID, admin, roles, domainSend, existing); err != nil {
+		return err
 	}
 	if err = s.syncLegacyAPIKey(ctx, tx, keyID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// replaceBindings deletes and re-inserts a key's unified and legacy binding rows,
+// applying the domain-wide sending grant. Setting the grant forces the binding's
+// role to owner; clearing it leaves the role as supplied. existing names the
+// grants carried over from the previous rows, used when the caller named no
+// domainSend for an inbox.
+func (s *Store) replaceBindings(ctx context.Context, tx *sql.Tx, accountID, keyID string, admin bool, roles map[string]string, domainSend map[string]bool, existing map[string]bool) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM client_inbox_bindings WHERE client_id=?`, keyID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM api_key_mailbox_roles WHERE api_key_id=?`, keyID); err != nil {
+		return err
+	}
+	if admin {
+		return nil
+	}
+	grant := func(inboxID string) bool {
+		// A non-nil domainSend is authoritative only for the inboxes it names;
+		// every other binding keeps the grant it already had, so a staged change
+		// to one inbox cannot drop another's.
+		if domainSend != nil {
+			if v, named := domainSend[inboxID]; named {
+				return v
+			}
+		}
+		return existing[inboxID]
+	}
+	for inboxID, role := range roles {
+		role = strings.ToLower(role)
+		if role != "read" && role != "assistant" && role != "owner" {
+			return fmt.Errorf("invalid role %q", role)
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&n); err != nil || n != 1 {
+			return ErrForbidden
+		}
+		// Domain-wide sending implies owner: the grant is a rung above owner and
+		// cannot be held with a lesser role.
+		granted := grant(inboxID)
+		if granted {
+			role = "owner"
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO client_inbox_bindings(client_id,inbox_id,role,send_any_in_domain) VALUES(?,?,?,?)`, keyID, inboxID, role, boolInt(granted)); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO api_key_mailbox_roles(api_key_id,inbox_id,role) VALUES(?,?,?)`, keyID, inboxID, role); err != nil {
+			return err
+		}
+	}
+	return nil
 }

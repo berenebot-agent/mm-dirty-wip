@@ -735,6 +735,11 @@ type APIKey struct {
 	Admin     bool              `json:"admin"`
 	Roles     map[string]string `json:"mailboxes,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
+	// DomainSend lists the inbox ids (a domain's catch-all) where this key holds
+	// the domain-wide sending grant, keyed to whether the grant is currently
+	// live (the inbox is still the enabled catch-all). It is never set for an
+	// Admin key, which already may send as anything.
+	DomainSend map[string]bool `json:"domain_send,omitempty"`
 }
 
 type Principal struct {
