@@ -77,26 +77,6 @@ func deriveKey(raw string) ([]byte, error) {
 	return pbkdf2.Key([]byte(raw), kdfSalt, kdfIterations, 32, sha256.New), nil
 }
 
-// DeprecatedLegacyKey returns the pre-PBKDF2 derivation of a passphrase key (a
-// bare, unsalted SHA-256 of the input), or ok=false for a 32-byte key, which
-// never had a legacy variant.
-//
-// It exists for exactly one purpose: unwrapping pre-AAD ciphertext during the
-// one-time re-encrypt walk (Service.ReencryptLegacySecrets, with
-// DeprecatedOpenLegacy). No read path calls it. Delete this function, that one
-// and the walk once every deployment has started at least once on this version.
-func DeprecatedLegacyKey(raw string) ([]byte, bool) {
-	raw = strings.TrimSpace(raw)
-	if _, ok := decode32(raw); ok {
-		return nil, false
-	}
-	if len(raw) < 24 {
-		return nil, false
-	}
-	h := sha256.Sum256([]byte(raw))
-	return h[:], true
-}
-
 // decode32 decodes a 32-byte key from base64 (raw or std) or hex.
 func decode32(raw string) ([]byte, bool) {
 	if b, err := base64.RawStdEncoding.DecodeString(raw); err == nil && len(b) == 32 {
@@ -141,25 +121,17 @@ func EncryptWithAAD(key, plaintext, aad []byte) (string, error) {
 const envelopeAADPrefix = "v2."
 
 // DecryptWithAAD decrypts an AAD-bound ("v2.") ciphertext. A value without the
-// prefix is pre-AAD ciphertext and is refused rather than read unbound: the
-// one-time re-encrypt walk rewrites every such value before a reader sees it.
+// prefix is pre-AAD ciphertext and is refused rather than read unbound; an
+// instance that still holds one must be migrated with cmd/migrate-secrets
+// before this code reads it.
 func DecryptWithAAD(key []byte, encoded string, aad []byte) ([]byte, error) {
 	if !strings.HasPrefix(encoded, envelopeAADPrefix) {
-		return nil, fmt.Errorf("cryptox: unsupported pre-AAD ciphertext")
+		return nil, fmt.Errorf("cryptox: unsupported pre-AAD ciphertext (run cmd/migrate-secrets)")
 	}
 	if len(aad) == 0 {
 		return nil, fmt.Errorf("cryptox: an aad binding is required")
 	}
 	return open(key, strings.TrimPrefix(encoded, envelopeAADPrefix), aad)
-}
-
-// DeprecatedOpenLegacy decrypts a pre-AAD ciphertext (no prefix, nil AAD). Only
-// the one-time re-encrypt walk calls it; no read path does.
-func DeprecatedOpenLegacy(key []byte, encoded string) ([]byte, error) {
-	if strings.HasPrefix(encoded, envelopeAADPrefix) {
-		return nil, fmt.Errorf("cryptox: ciphertext is already aad-bound")
-	}
-	return open(key, encoded, nil)
 }
 
 func open(key []byte, encoded string, aad []byte) ([]byte, error) {

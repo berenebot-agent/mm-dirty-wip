@@ -331,3 +331,50 @@ except the deliberate alias removal:
 
 No manual database edit is required. Back up `/data` and `APP_ENCRYPTION_KEY`
 before upgrading, as above.
+
+### This release: stored secrets now carry an AAD binding (one-shot migration)
+
+Upgrading across this release needs one extra step. Stored secrets (provider
+configs, relay and webhook secrets, Dial MX private seeds, the MX receiver
+credentials, and the connected-inbox tokens) are now always bound to the row
+that owns them, and the application **refuses** to read a value written in the
+older, unbound format. An instance created before this release therefore holds
+values the new binary cannot read.
+
+A one-shot migrator is built into the image to rewrite them in place. With the
+application stopped, and `APP_ENCRYPTION_KEY` available in the environment:
+
+```bash
+# From the directory holding docker-compose.yml and .env
+
+# 1. Back up first. Both the data and the key are required to restore.
+docker compose stop mailmoose
+sudo tar czf mailmoose-data-$(date +%F).tgz data   # or a filesystem snapshot
+cp .env .env.bak
+
+# 2. Preview what would change (writes nothing).
+docker compose run --rm --user 65532:65532 --entrypoint migrate-secrets \
+  mailmoose -data-dir /data -dry-run
+
+# 3. Apply it.
+docker compose run --rm --user 65532:65532 --entrypoint migrate-secrets \
+  mailmoose -data-dir /data
+
+# 4. Start the application and confirm it is healthy.
+docker compose up -d mailmoose
+```
+
+The migrator prints the number of values rewritten per table and then re-reads
+every secret through the application's own decrypt path, reporting
+`N value(s) verified readable`. It exits non-zero and lists any value it could
+not read: that credential was sealed under a **different** `APP_ENCRYPTION_KEY`
+(such as a key rotated without re-encrypting the data) and must be re-entered in
+the UI. Everything else is migrated. The command is idempotent and safe to run
+again; a second run reports `TOTAL 0`.
+
+`--user 65532:65532` runs it as the data's owner (the image's default runtime
+user), so the database files stay owned correctly. Omit it only if your
+deployment overrides `user:` in Compose, in which case pass the same uid.
+
+The migrator and its `internal/migratesecrets` package are temporary: they are
+removed once every instance has been migrated.

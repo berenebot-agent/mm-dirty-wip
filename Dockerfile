@@ -18,6 +18,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/mailmoose-mx ./dialmx/cmd/receiver
+# TEMPORARY: the one-shot secret migrator (cmd/migrate-secrets). It rewrites
+# ciphertext written before stored secrets carried an AAD binding, so an
+# instance created earlier keeps working. Built into the image so an operator
+# needs no Go toolchain: docker compose run --rm --entrypoint migrate-secrets
+# mailmoose -data-dir /data. Remove this build, the COPY below and
+# cmd/migrate-secrets once every instance has been migrated.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/migrate-secrets ./cmd/migrate-secrets
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata libsqlite3-0 && rm -rf /var/lib/apt/lists/*
@@ -32,6 +41,8 @@ RUN mkdir -p /data && chown ${MAILMOOSE_UID}:${MAILMOOSE_GID} /data
 
 COPY --from=build /out/mailmoose /usr/local/bin/mailmoose
 COPY --from=build /out/mailmoose-mx /usr/local/bin/mailmoose-mx
+# TEMPORARY: the one-shot secret migrator; see the build stage above.
+COPY --from=build /out/migrate-secrets /usr/local/bin/migrate-secrets
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/local/share/doc/mailmoose/
 VOLUME ["/data"]
 EXPOSE 8081 8082
