@@ -149,6 +149,35 @@ func (s *Store) GetFolderByPath(ctx context.Context, accountID, inboxID, path st
 	return f, err
 }
 
+// GetFolderByID resolves one folder of an inbox by its stable id. A move
+// destination may be supplied either as a folder id (the unified Labels API's
+// `folder:<id>` form) or as a path, so the move paths resolve an id through this
+// lookup rather than treating every destination as a path.
+func (s *Store) GetFolderByID(ctx context.Context, accountID, inboxID, folderID string) (model.Folder, error) {
+	f, err := scanFolder(s.read.QueryRowContext(ctx, `SELECT `+folderColumns+` FROM inbox_folders WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, folderID))
+	if err == sql.ErrNoRows {
+		return f, ErrNotFound
+	}
+	return f, err
+}
+
+// GetFolderDestination resolves a move destination that may be either a folder
+// id or a folder path. An id is tried first (ids are unique and are never a
+// valid path), then the path. This lets the unified Labels API pass a folder id
+// while the browser bulk-move form and API clients may pass a path.
+func (s *Store) GetFolderDestination(ctx context.Context, accountID, inboxID, dest string) (model.Folder, error) {
+	dest = strings.TrimSpace(dest)
+	if dest == "" {
+		return model.Folder{}, ErrNotFound
+	}
+	if f, err := s.GetFolderByID(ctx, accountID, inboxID, dest); err == nil {
+		return f, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return model.Folder{}, err
+	}
+	return s.GetFolderByPath(ctx, accountID, inboxID, dest)
+}
+
 // inboxKind returns the kind of an inbox in the account.
 func (s *Store) inboxKind(ctx context.Context, accountID, inboxID string) (string, error) {
 	var kind string

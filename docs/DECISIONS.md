@@ -4691,9 +4691,48 @@ through the API" gap (no `POST /v1/messages/{id}/move` route; a folder-label
 `remove` still returns 409) is unchanged and remains tracked in
 `docs/proposals/label-findings-fix-plan.md`.
 
-## Future extension register
+## D120 — A move destination may be a folder id or a folder path
 
-- additional inbound transport adapters
+**Context:** Applying a folder-backed label to a message in a Microsoft (Outlook) standalone inbox
+queued a `move` action that failed with the opaque "Action could not be completed". The unified
+Labels API (`labelAction`, `internal/httpapp/unified_labels.go`) sends the folder **id**
+(`folder:<id>`) as the move destination for a Microsoft inbox, but `moveMicrosoft` resolved that
+destination with `Store.GetFolder(ctx, accountID, inboxID, dest)`, which matches on **path**. A local
+folder id is never a path, so the lookup returned `ErrNotFound` before any provider call. Because a
+store error is not a `*model.MailboxError`, the worker fell through to its generic reason, which is
+why every provider's failures looked identical.
+
+For a Microsoft inbox the folder row's `path` column stores the **Graph folder id** (`AQMkADAw...`),
+which is exactly what `Microsoft.Move` needs as `destinationId`. So `Destination` already carried two
+meanings — a local folder id from the Labels API, a path from the bulk-move form — with only the
+path form implemented.
+
+**Decision:** A move destination is resolved as **either** a folder id **or** a folder path, by a new
+`Store.GetFolderDestination`, which tries the id first (ids are unique and never a valid path) and
+then the path. `moveMicrosoft` uses it, so a label-driven move reaches the provider. An unknown
+destination is still `ErrNotFound`.
+
+`ActionWorker.execute` also gained actionable reasons for the common non-provider errors
+(`ErrNotFound` → "the destination folder could not be found", `ErrConflict` → "the destination is not
+a valid move target", `ErrForbidden` → "not permitted"), so a failure is legible without a container
+log.
+
+**Scope correction:** the failure was **not** present on every provider, contrary to the initial
+report. The Gmail-**via-IMAP** inbox's destination was a valid path; its observed failure was a
+connector timeout (the inbox's sync reached a 45 s ceiling and reported `context canceled`),
+classified `ambiguous` — a slow/flaky connector, not a destination bug. The Google and One inboxes
+project every provider folder as an additive `tag`, so `labelAction` never produces a folder move for
+them. Only the Microsoft path was broken.
+
+**Consequences:** A folder-backed label applied to an Outlook inbox moves the message. `moveGoogle`
+is unchanged (it is not reachable through the labels grammar, and its `add`/`remove` arguments are
+Gmail label ids, which a path-based destination would not satisfy). No API surface change.
+
+**Complexity:** `internal/store/folders.go` (two lookup helpers), `internal/app/microsoft_mailbox.go`
+(the destination resolution), `internal/app/message_actions.go` (the error reasons) and one
+store-level regression test. No new dependency, table or migration.
+
+## Future extension register
 - custom-domain automation improvements
 - optional managed outbound
 - object storage
