@@ -1,14 +1,16 @@
-// Command migrate-secrets is a TEMPORARY one-shot migration tool. It rewrites
-// ciphertext written before stored secrets carried an AAD binding, so an
-// instance created before that change keeps working. Run it once, with the
-// application stopped:
+// Command migrate-secrets migrates ciphertext written before stored secrets
+// carried an AAD binding, so an instance created before that change keeps
+// working. Run it once per instance, with the application stopped:
 //
-//	DATA_DIR=/data APP_ENCRYPTION_KEY=... ./migrate-secrets
-//	./migrate-secrets -data-dir /data -dry-run
+//	# From the directory holding docker-compose.yml and .env
+//	docker compose run --rm --user 65532:65532 --entrypoint migrate-secrets \
+//	  mailmoose -data-dir /data -dry-run
+//	docker compose run --rm --user 65532:65532 --entrypoint migrate-secrets \
+//	  mailmoose -data-dir /data
 //
-// It prints a per-column count and any row it could not convert. It is
-// idempotent. Delete this command and internal/migratesecrets once every
-// instance has been migrated.
+// It prints a per-column count and any value it could not convert. It is
+// idempotent: a second run reports TOTAL 0. See the upgrade section in
+// docs/SELFHOSTING.md.
 package main
 
 import (
