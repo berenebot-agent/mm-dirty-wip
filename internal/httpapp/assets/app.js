@@ -702,11 +702,21 @@
     });
   }
 
-  function setDomainRoles(domainID, value) {
+  // scopeGroup resolves a seg's data-set-scope to the tbody it controls. A
+  // domain scope is the domain id; the standalone inboxes share one tbody that
+  // no domain id matches, so that scope is keyed by the literal "standalone".
+  function scopeGroup(scope) {
     if (!matrix) {
-      return;
+      return null;
     }
-    var group = matrix.querySelector('tbody[data-domain="' + domainID + '"]');
+    if (scope === 'standalone') {
+      return matrix.querySelector('tbody[data-standalone]');
+    }
+    return matrix.querySelector('tbody[data-domain="' + scope + '"]');
+  }
+
+  function setScopeRoles(scope, value) {
+    var group = scopeGroup(scope);
     if (!group) {
       return;
     }
@@ -716,17 +726,10 @@
   }
 
   function scopeRadios(scope) {
-    if (!matrix) {
-      return [];
-    }
     if (scope === 'all') {
       return rolesRadios();
     }
-    var group = matrix.querySelector('tbody[data-domain="' + scope + '"]') ||
-      matrix.querySelector('tbody[data-standalone]');
-    if (scope === 'standalone') {
-      group = matrix.querySelector('tbody[data-standalone]');
-    }
+    var group = scopeGroup(scope);
     return group ? group.querySelectorAll('input[type=radio][name^=role_]') : [];
   }
 
@@ -1248,20 +1251,17 @@
   }
   document.querySelectorAll('#key-matrix [data-set-role]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var domain = btn.getAttribute('data-domain');
+      var scope = btn.getAttribute('data-domain');
       var role = btn.getAttribute('data-set-role');
-      if (domain) {
-        setDomainRoles(domain, role);
+      if (scope) {
+        setScopeRoles(scope, role);
       } else {
         setAllRoles(role);
       }
       // A bulk role below Owner drops the matching domain-wide sending grants, so
       // the "grant and owner are one state" rule holds through the bulk controls.
       if (role !== 'owner') {
-        var group = domain && domain !== 'standalone' ? matrix.querySelector('tbody[data-domain="' + domain + '"]') : matrix;
-        if (domain === 'standalone') {
-          group = matrix.querySelector('tbody[data-standalone]');
-        }
+        var group = scope ? scopeGroup(scope) : matrix;
         if (group) {
           group.querySelectorAll('input[type=checkbox][name^=domainsend_]').forEach(function (box) {
             box.checked = false;
