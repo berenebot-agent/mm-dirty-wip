@@ -3279,7 +3279,6 @@ function clearUrlParams(names) {
   // the authoring endpoint when the dialog is saved.
   var authoringMode = document.getElementById('inbox-authoring-mode');
   var authoringNotify = document.getElementById('inbox-authoring-notify');
-  var authoringDefault = document.getElementById('inbox-authoring-default');
   var authoringStates = document.getElementById('inbox-authoring-states');
   var authDefaultMode = 'mailmoose_approval';
   // The current inbox is standalone (remote) or not. A domain inbox is preset to
@@ -3354,7 +3353,8 @@ function clearUrlParams(names) {
     var notifyLabel = document.getElementById('inbox-authoring-notify-label');
     var notifyNote = document.getElementById('inbox-authoring-notify-note');
     if (authoringMode) {
-      authoringMode.value = data.mode || '';
+      // Display the effective mode for existing inboxes with no explicit override.
+      authoringMode.value = data.mode || data.default_mode || authDefaultMode;
     }
     if (authoringNotify) {
       authoringNotify.value = data.notify_address || '';
@@ -3377,10 +3377,6 @@ function clearUrlParams(names) {
     }
     if (notifyNote) {
       notifyNote.hidden = !authStandalone;
-    }
-    if (authoringDefault) {
-      var def = data.default_mode === 'remote_draft' ? 'Remote draft handoff' : 'MailMoose approval';
-      authoringDefault.textContent = 'Default for this inbox kind: ' + def + '.';
     }
     // The tab is "Approvals" for a standalone inbox; the approver field is
     // enabled by the EFFECTIVE mode, so switching to remote_draft disables the
