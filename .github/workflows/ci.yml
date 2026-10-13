@@ -24,6 +24,9 @@ jobs:
             if [ -n "$unformatted" ]; then
               echo "Unformatted Go files:"
               echo "$unformatted"
+              while IFS= read -r file; do
+                [ -z "$file" ] || gofmt -d "$file"
+              done <<< "$unformatted"
               exit 1
             fi
           } 2>&1 | tee ci-logs/gofmt.log
