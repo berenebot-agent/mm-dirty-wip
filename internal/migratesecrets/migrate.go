@@ -1,17 +1,17 @@
-// Package migratesecrets is a TEMPORARY one-shot migrator. It rewrites
-// ciphertext written before stored secrets carried an AAD binding: it scans
-// every encrypted column, opens each pre-AAD ("unprefixed") value with the
-// instance key (falling back to the pre-PBKDF2 derivation), and writes it back
-// in the current AAD-bound ("v2.") envelope.
+// Package migratesecrets migrates ciphertext written before stored secrets
+// carried an AAD binding: it scans every encrypted column, opens each pre-AAD
+// ("unprefixed") value with the instance key (falling back to the pre-PBKDF2
+// derivation), and writes it back in the current AAD-bound ("v2.") envelope.
 //
-// It exists because the application read paths refuse unbound ciphertext. Run it
-// once per instance, with the application stopped, then delete this package and
-// cmd/migrate-secrets. It is idempotent: an already-bound value is skipped, so a
+// It exists because the application read paths refuse unbound ciphertext, so an
+// instance created before the binding must be migrated once, with the
+// application stopped. It is idempotent: an already-bound value is skipped, so a
 // second run reports zero migrations.
 //
 // It deliberately duplicates the AAD strings and the legacy envelope rather than
-// importing internal/app, so removing it leaves the application free of any
-// pre-AAD knowledge.
+// importing internal/app, so the application read paths stay free of any
+// pre-AAD knowledge. Keep the descriptor table in step with every encrypted
+// column: a new one that opens through DecryptSecretAAD belongs here too.
 package migratesecrets
 
 import (
