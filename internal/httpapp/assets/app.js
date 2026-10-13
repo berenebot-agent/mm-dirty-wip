@@ -788,7 +788,9 @@
     }
     var btn = matrixDomainSendButton(inboxID);
     if (btn) {
-      btn.className = on ? 'active' : '';
+      // Toggle the class rather than replacing className: the button carries
+      // key-matrix-domainsend-btn, which every lookup here relies on.
+      btn.classList.toggle('active', on);
       btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     }
     var ownerRadio = matrix.querySelector('input[type=radio][name="role_' + inboxID + '"][value=owner]');
