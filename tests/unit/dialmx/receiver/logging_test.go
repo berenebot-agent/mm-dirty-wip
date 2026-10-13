@@ -252,6 +252,7 @@ func newCaptureLogger(sink *jsonSink) *slog.Logger {
 // compact [MX]-tagged text the core uses: no JSON braces, an "[MX]" tag, and a
 // DEBUG level that is filtered at the default INFO level.
 func TestNewLoggerEmitsMatchedTextFormat(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	log := receiver.NewLogger(slog.LevelInfo, &buf)
 	log.Debug("dialmx session opened", "stage", "opened")
@@ -277,6 +278,7 @@ func TestNewLoggerEmitsMatchedTextFormat(t *testing.T) {
 // TestSessionTransportRecordsAreDebug asserts the connect/session transport
 // events are DEBUG (hidden by default) while mail receipt/transfer stay INFO.
 func TestSessionTransportRecordsAreDebug(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	_, srv := newLoggedServer(t, sink, receiver.Config{})
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: rootTLS(t, srv), ForceAttemptHTTP2: true}}
@@ -320,6 +322,7 @@ func TestSessionTransportRecordsAreDebug(t *testing.T) {
 // through the same [MX] logger as the receiver, so a shared edge record and a
 // receiver record interleave in one format.
 func TestSharedSMTPRecordsUseSameLogger(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -349,6 +352,7 @@ func TestSharedSMTPRecordsUseSameLogger(t *testing.T) {
 // auth" summary (terminal phase, result and folded steps), that the per-step
 // detail is DEBUG, and that no raw TXT record or public key material leaks.
 func TestDomainAuthSummaryLogging(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := mxwire.DomainTXT("key1", pub)
 	dns := func(context.Context, string) ([]string, error) { return []string{txt}, nil }
@@ -423,6 +427,7 @@ func TestDomainAuthSummaryLogging(t *testing.T) {
 // TestResolveNoBindingLogging proves an unknown domain is logged as a
 // no_binding routing selection with the full recipient.
 func TestResolveNoBindingLogging(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	r, _ := newLoggedServer(t, sink, receiver.Config{})
 
@@ -461,6 +466,7 @@ func TestResolveNoBindingLogging(t *testing.T) {
 // routing event names the authenticated core connection, key, channel and wire
 // transaction for the accepted recipient.
 func TestResolveRecipientCoreCorrelation(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -516,6 +522,7 @@ func TestResolveRecipientCoreCorrelation(t *testing.T) {
 // outcome names the full recipient. A valid response is "acknowledged", not
 // "ok".
 func TestHandoffOutcomeLogging(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	sink := &jsonSink{}
@@ -590,6 +597,7 @@ func TestHandoffOutcomeLogging(t *testing.T) {
 // post-IngestEnd wait failure is classified "unknown" (never "fail") because the
 // core may have committed.
 func TestHandoffPartialAndUnknownOutcomes(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	dns := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 
@@ -672,6 +680,7 @@ func TestHandoffPartialAndUnknownOutcomes(t *testing.T) {
 // real Server+ConnState loop: a completed session logs accepted then closed with
 // a transport id, peer port and numeric duration.
 func TestTransportTrackerLifecycle(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	log := receiver.NewLogger(slog.LevelDebug, sink)
 	tracker := receiver.NewTransportTracker(log)
@@ -742,6 +751,7 @@ func TestTransportTrackerLifecycle(t *testing.T) {
 // completes is logged as a TLS failure AND as a close with an aborted reason,
 // never omitting the close.
 func TestTransportTLSFailureLogsFailureAndClose(t *testing.T) {
+	t.Parallel()
 	sink := &jsonSink{}
 	log := receiver.NewLogger(slog.LevelDebug, sink)
 	tracker := receiver.NewTransportTracker(log)

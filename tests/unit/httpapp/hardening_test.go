@@ -19,9 +19,11 @@ import (
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 func TestSendForbiddenForReadAndAssistant(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	for _, role := range []string{"read", "assistant"} {
@@ -41,6 +43,7 @@ func TestSendForbiddenForReadAndAssistant(t *testing.T) {
 }
 
 func TestRawMIMERouteIsCanonical(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, box := httpFixture(t)
 	req := signedMGRequest(t, testMailgunKey, "raw-mime-1", box.Address, inboundRawMessage())
 	req.URL.Path = "/internal/ingest/mailgun/raw-mime"
@@ -56,6 +59,7 @@ func TestRawMIMERouteIsCanonical(t *testing.T) {
 // so a client can page past the first page. This is the local counterpart of the
 // merged account-wide pagination.
 func TestMessagesScopedBeforeCursorPaginates(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", false, map[string]string{box.ID: "owner"})
@@ -157,6 +161,7 @@ func TestEventsWaitReturnsNewEvent(t *testing.T) {
 }
 
 func TestSSEReplayAndLive(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -221,6 +226,7 @@ func TestSSEReplayAndLive(t *testing.T) {
 }
 
 func TestSearchFiltersFromToBefore(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -269,11 +275,9 @@ func TestSearchFiltersFromToBefore(t *testing.T) {
 }
 
 func TestUnconfiguredInstanceClaimIsOneShot(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
@@ -343,6 +347,7 @@ func TestUnconfiguredInstanceClaimIsOneShot(t *testing.T) {
 }
 
 func TestSendRejectsHeaderInjection(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
 	if err != nil {
@@ -360,13 +365,11 @@ func TestSendRejectsHeaderInjection(t *testing.T) {
 }
 
 func TestUntrustedProxyHeaderIgnored(t *testing.T) {
+	t.Parallel()
 	newHandler := func(t *testing.T, trusted string) http.Handler {
 		t.Helper()
 		dir := t.TempDir()
-		st, err := store.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
+		st := testdb.OpenAt(t, dir)
 		t.Cleanup(func() { st.Close() })
 		cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 		if trusted != "" {
@@ -413,13 +416,11 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 // appending proxy preserves the attacker's entry as
 // "fake, real", and the limiter must see the proxy-observed address.
 func TestClientIPSpoofingResistsAppendingProxy(t *testing.T) {
+	t.Parallel()
 	newLoginHandler := func(t *testing.T, trusted string) http.Handler {
 		t.Helper()
 		dir := t.TempDir()
-		st, err := store.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
+		st := testdb.OpenAt(t, dir)
 		t.Cleanup(func() { st.Close() })
 		cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 1, SendLimitPerMinute: 60}
 		if trusted != "" {

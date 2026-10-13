@@ -13,6 +13,7 @@ import (
 // TestTrashRestorePurgeLifecycle covers the durable Trash contract: delete
 // hides but retains, restore returns, and purge erases and reclaims storage.
 func TestTrashRestorePurgeLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -103,6 +104,7 @@ func TestTrashRestorePurgeLifecycle(t *testing.T) {
 // trashing and purging both require at least Assistant (Read is refused), since
 // the only difference between Assistant and Owner is sending.
 func TestTrashRequiresAssistantAndPurgeRequiresAssistant(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -132,6 +134,7 @@ func TestTrashRequiresAssistantAndPurgeRequiresAssistant(t *testing.T) {
 // TestEmptyTrash purges every trashed message in an inbox and returns their raw
 // paths, leaving untrashed mail intact.
 func TestEmptyTrash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -174,6 +177,7 @@ func TestEmptyTrash(t *testing.T) {
 // TestPurgeExpiredTrash verifies the retention sweep honors the per-account
 // window and skips accounts configured to keep trash forever (0).
 func TestPurgeExpiredTrash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -227,6 +231,7 @@ func TestPurgeExpiredTrash(t *testing.T) {
 // TestTrashRetentionSetting covers the account preference round-trip and
 // validation.
 func TestTrashRetentionSetting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -248,6 +253,7 @@ func TestTrashRetentionSetting(t *testing.T) {
 // override reads back as nil (inherit), a set value round-trips, a value of 0
 // is distinct from unset, and clearing returns to inherit.
 func TestInboxTrashRetentionOverride(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -305,6 +311,7 @@ func TestInboxTrashRetentionOverride(t *testing.T) {
 // longer) the effective window, and an inbox override of 0 keeps its trash even
 // when the account auto-purges.
 func TestPurgeExpiredTrashInboxOverride(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box, other := boxes[0], boxes[1]

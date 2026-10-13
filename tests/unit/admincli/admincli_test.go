@@ -13,6 +13,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/admincli"
 	"github.com/dellarb/mailmoose/internal/auth"
 	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 func TestMain(m *testing.M) {
@@ -29,10 +30,7 @@ func seedInstance(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		st.Close()
@@ -133,10 +131,7 @@ func TestResetPasswordRefusesNonInteractive(t *testing.T) {
 func TestResetPasswordRefusesSystemAdmin(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	if _, _, err := st.SyncSystemAdmin(context.Background(), "MailMoose", "root@example.com", "correct horse battery staple", 50<<20); err != nil {
 		st.Close()
 		t.Fatal(err)
@@ -157,10 +152,7 @@ func TestResetPasswordRefusesSystemAdmin(t *testing.T) {
 func TestRevokeAPIKeys(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	u, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20)
 	if err != nil {
 		t.Fatal(err)

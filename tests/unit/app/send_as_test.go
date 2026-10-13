@@ -14,6 +14,7 @@ import (
 // alias resolves the provider from the alias's own domain and writes the
 // alias's display name into the stored From header.
 func TestSendAsAliasUsesAliasDomainAndName(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -54,6 +55,7 @@ func TestSendAsAliasUsesAliasDomainAndName(t *testing.T) {
 // TestSendRejectsUnknownAliasSender proves a sender that is neither the primary
 // nor one of the inbox's aliases is rejected before anything is enqueued.
 func TestSendRejectsUnknownAliasSender(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -67,6 +69,7 @@ func TestSendRejectsUnknownAliasSender(t *testing.T) {
 // already-reviewed draft, and the approved send uses the frozen name exactly as
 // the approver saw it.
 func TestDraftFromFrozenInApproval(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}

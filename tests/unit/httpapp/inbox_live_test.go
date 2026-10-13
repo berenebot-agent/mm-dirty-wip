@@ -14,6 +14,7 @@ import (
 // message rows as the full inbox page (same templates), carries the data-row-id
 // and data-live-list markers the client swaps on, and is session-scoped.
 func TestInboxLiveListFragment(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "live-1", "<live-1@test>", "Hello", "body")
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -43,6 +44,7 @@ func TestInboxLiveListFragment(t *testing.T) {
 // byte-identical to the list section embedded in the full page — so the fragment
 // and the page it replaces can never drift.
 func TestInboxPageCarriesLiveMarkersAndMatchesFragment(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	seedInbound(t, svc, box, "match-1", "<match-1@test>", "One", "body")
 	seedInbound(t, svc, box, "match-2", "<match-2@test>", "Two", "body")
@@ -75,6 +77,7 @@ func TestInboxPageCarriesLiveMarkersAndMatchesFragment(t *testing.T) {
 // TestInboxLiveRequiresSession proves an unauthenticated fragment request is
 // refused (a session redirect/denial, never the list).
 func TestInboxLiveRequiresSession(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, box := httpFixture(t)
 	req := httptest.NewRequest(http.MethodGet, "/ui/inboxes/"+box.ID+"/live?part=list&folder=inbox", nil)
 	rr := httptest.NewRecorder()
@@ -88,6 +91,7 @@ func TestInboxLiveRequiresSession(t *testing.T) {
 // view the page is on: an unrecognised folder (or a requests request on a
 // non-inbox folder) is refused rather than silently rendered.
 func TestInboxLiveRejectsUnknownFolder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -110,6 +114,7 @@ func TestInboxLiveRejectsUnknownFolder(t *testing.T) {
 // carries the data-live-requests marker and the pending draft, matching the full
 // page's card.
 func TestInboxLiveRequestsFragment(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	// Seed a pending send request the same way the UI flow does.
 	admin := model.Principal{AccountID: u.AccountID, Admin: true}

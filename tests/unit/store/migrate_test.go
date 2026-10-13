@@ -31,6 +31,7 @@ func markerCount(t *testing.T, st *store.Store, version string) int {
 }
 
 func TestMigrateFresh(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -83,6 +84,7 @@ func TestMigrateFresh(t *testing.T) {
 // to include the terminal "skipped" outcome, on both a fresh database and an
 // upgrade from the v012 fixture.
 func TestMigration035EnvelopeFromAndSkippedStatus(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		open func(t *testing.T) *store.Store
@@ -135,6 +137,7 @@ func TestMigration035EnvelopeFromAndSkippedStatus(t *testing.T) {
 // one-receiver-per-account index. It also proves the unique index rejects a
 // duplicate non-empty receiver URL while permitting many empty ones.
 func TestMigration049Indexes(t *testing.T) {
+	t.Parallel()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

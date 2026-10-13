@@ -12,6 +12,7 @@ import (
 )
 
 func TestReceiverTLSCustomCAKeepsHostnameVerification(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) }))
 	defer srv.Close()
 	path := filepath.Join(t.TempDir(), "ca.pem")

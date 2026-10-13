@@ -17,6 +17,7 @@ import (
 )
 
 func TestOutboxWorkerDeliversPending(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -60,6 +61,7 @@ func TestOutboxWorkerDeliversPending(t *testing.T) {
 // message still references, and must never touch the staging directory or a file
 // young enough to belong to a message whose row is not committed yet.
 func TestOutboxWorkerSweepsOrphanedRawMIME(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -153,6 +155,7 @@ func TestOutboxWorkerSweepsOrphanedRawMIME(t *testing.T) {
 // retry backoff) so the worker delivers them immediately instead of waiting out
 // the hold or backoff timer.
 func TestSaveSendingConfigRequeuesPending(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -222,6 +225,7 @@ func TestSaveSendingConfigRequeuesPending(t *testing.T) {
 // the poll period is set far longer than the test, so a message enqueued after
 // the worker is running can only be delivered through Wake, never the ticker.
 func TestOutboxWorkerWakeDeliversImmediately(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -274,6 +278,7 @@ func (c *countingWaker) Wake() { c.calls.Add(1) }
 // TestSendWakesOutbox verifies an enqueued send requests an immediate delivery
 // pass through the OutboxWaker seam.
 func TestSendWakesOutbox(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, dom.ID, "brevo", map[string]any{"api_key": "k", "api_base": "http://127.0.0.1:1"})
@@ -289,6 +294,7 @@ func TestSendWakesOutbox(t *testing.T) {
 }
 
 func TestDraftSendFlow(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32

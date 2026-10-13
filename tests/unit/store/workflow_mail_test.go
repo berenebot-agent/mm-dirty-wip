@@ -10,6 +10,7 @@ import (
 )
 
 func TestUpdateInboxMissingReturnsNotFound(t *testing.T) {
+	t.Parallel()
 	s, u, _, _ := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	if err := s.UpdateInbox(context.Background(), p, "inb_missing", "name", nil); !errors.Is(err, store.ErrNotFound) {
@@ -22,6 +23,7 @@ func TestUpdateInboxMissingReturnsNotFound(t *testing.T) {
 // reachable through any principal-facing read surface, while the provider and
 // worker can still reach it by id.
 func TestInternalWorkflowMailHiddenFromReads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -70,6 +72,7 @@ func TestInternalWorkflowMailHiddenFromReads(t *testing.T) {
 // TestInternalWorkflowMailDoesNotSuppressNormalEvents guards the suppression:
 // ordinary outbound mail still emits message.sent.
 func TestInternalWorkflowMailDoesNotSuppressNormalEvents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]

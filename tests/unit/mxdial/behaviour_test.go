@@ -24,6 +24,7 @@ func domainFor(t *testing.T, rc *fakeReceiver, name string) mxdial.Domain {
 // connection and asserts the manager reconnects, re-authenticates and clears
 // per-connection state.
 func TestReconnectResetsStateAndReauthenticates(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -48,6 +49,7 @@ func TestReconnectResetsStateAndReauthenticates(t *testing.T) {
 // TestConfigDisabledStopsSession verifies a domain removed from the backend
 // configuration stops its session and clears status without restarting.
 func TestConfigDisabledStopsSession(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -76,6 +78,7 @@ func TestConfigDisabledStopsSession(t *testing.T) {
 // TestDomainsErrorKeepsExistingSession verifies a transient backend error does
 // not tear down or restart an already-ready session.
 func TestDomainsErrorKeepsExistingSession(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -94,6 +97,7 @@ func TestDomainsErrorKeepsExistingSession(t *testing.T) {
 // TestAuthRejectRetriesWithoutResolving verifies an unauthenticated receiver
 // can never resolve, and that a later successful auth is reached by retry.
 func TestAuthRejectRetriesWithoutResolving(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.mode("reject")
 	var resolved atomic.Int64
@@ -132,6 +136,7 @@ func TestAuthRejectRetriesWithoutResolving(t *testing.T) {
 // disconnect cancels the transaction but does not delete the staging file out
 // from under an in-flight backend ingest.
 func TestCancelWhileBackendIngestingKeepsFileUntilWorkerExits(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -199,6 +204,7 @@ func TestCancelWhileBackendIngestingKeepsFileUntilWorkerExits(t *testing.T) {
 // budget yields a temporary per-recipient result without tearing the session,
 // and that the receiver can resolve again once the budget frees.
 func TestGlobalTransactionCapAnswersPerRecipient(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))
@@ -257,6 +263,7 @@ func TestGlobalTransactionCapAnswersPerRecipient(t *testing.T) {
 // TestWrongSequenceCleansUpStaging verifies an out-of-order chunk closes the
 // session and removes the staging file.
 func TestWrongSequenceCleansUpStaging(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	b := &scriptedBackend{}
 	b.setDomains(domainFor(t, rc, "example.test"))

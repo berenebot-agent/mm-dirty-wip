@@ -8,6 +8,7 @@ import (
 )
 
 func TestMetadataSyncMigration069AndDurableScope(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	s, err := store.Open(dir)

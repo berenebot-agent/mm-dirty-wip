@@ -62,6 +62,7 @@ func remoteTestEnv(t *testing.T) (*app.Service, model.User, model.Inbox, *app.Re
 }
 
 func TestCachedNavigationDoesNotWaitForIMAPAndCoalesces(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	started := make(chan struct{}, 1)
@@ -92,6 +93,7 @@ func TestCachedNavigationDoesNotWaitForIMAPAndCoalesces(t *testing.T) {
 }
 
 func TestCachedPartialFirstPageDoesNotDialAndCountsIndexedRows(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -123,6 +125,7 @@ func TestCachedPartialFirstPageDoesNotDialAndCountsIndexedRows(t *testing.T) {
 }
 
 func TestReconcileRemoteUsesConfiguredGlobalConcurrency(t *testing.T) {
+	t.Parallel()
 	svc, u, first, _ := remoteTestEnv(t)
 	svc.Config.RemoteSyncConcurrency = 1
 	rm := app.NewRemoteMailboxService(svc)
@@ -691,6 +694,7 @@ func (s *fakeSession) Close() error { return s.fake.Close() }
 // tree with live UIDVALIDITY and caches message headers, marking the index
 // complete.
 func TestRemoteReconcileIndexesFoldersAndHeaders(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -735,6 +739,7 @@ func TestRemoteReconcileIndexesFoldersAndHeaders(t *testing.T) {
 // TestRemoteReadDoesNotMarkSeen proves listing/reading headers never issues a
 // \Seen flag change.
 func TestRemoteReadDoesNotMarkSeen(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -760,6 +765,7 @@ func TestRemoteReadDoesNotMarkSeen(t *testing.T) {
 // TestRemoteSetReadMarksSeenOnlyOnDemand proves an explicit read-state change sets
 // \Seen and mirrors it locally.
 func TestRemoteSetReadMarksSeenOnlyOnDemand(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -791,6 +797,7 @@ func TestRemoteSetReadMarksSeenOnlyOnDemand(t *testing.T) {
 // changed) is never used to fetch a body: the store drops stale rows and the
 // service re-resolves by Message-ID.
 func TestRemoteUIDValidityChangeNoWrongFetch(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -837,6 +844,7 @@ func TestRemoteUIDValidityChangeNoWrongFetch(t *testing.T) {
 // row is relocated to the new generation, rather than silently serving the stale
 // locator.
 func TestRemoteGetMessageReresolveOnValidityChange(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -882,6 +890,7 @@ func TestRemoteGetMessageReresolveOnValidityChange(t *testing.T) {
 // TestRemoteMoveStableIDAndLabels proves a remote move relocates the cached
 // metadata to the destination under the same stable id and preserves labels.
 func TestRemoteMoveStableIDAndLabels(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -918,6 +927,7 @@ func TestRemoteMoveStableIDAndLabels(t *testing.T) {
 // TestRemoteSearchLocalLabelIntersection proves a live search result is
 // intersected with a local label filter.
 func TestRemoteSearchLocalLabelIntersection(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -945,6 +955,7 @@ func TestRemoteSearchLocalLabelIntersection(t *testing.T) {
 // TestRemoteThreadsScoped proves thread listing aggregates only the inbox's own
 // cached remote messages.
 func TestRemoteThreadsScoped(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -979,6 +990,7 @@ func TestRemoteThreadsScoped(t *testing.T) {
 // TestRemoteScopeEnforcedForIDs proves an operation on a path outside an explicit
 // root scope is rejected before any remote call.
 func TestRemoteScopeEnforcedForIDs(t *testing.T) {
+	t.Parallel()
 	svc, u, _, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	box, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{
@@ -1009,6 +1021,7 @@ func TestRemoteScopeEnforcedForIDs(t *testing.T) {
 // TestRemoteSentCopyNotResubmittedOnCopyFail proves a failed sent copy is confined
 // to the copy job and never re-runs the (already successful) SMTP send.
 func TestRemoteSentCopyNotResubmittedOnCopyFail(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1049,6 +1062,7 @@ func TestRemoteSentCopyNotResubmittedOnCopyFail(t *testing.T) {
 // confirmed by a Message-ID lookup and settled Copied, never left ambiguous when
 // the message is found exactly once.
 func TestRemoteSentCopyVerifiedByMessageID(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1078,6 +1092,7 @@ func TestRemoteSentCopyVerifiedByMessageID(t *testing.T) {
 // TestRemoteConfigureKeepsNonSecretFields proves configuring secrets does not blank
 // the non-secret remote description, and the encrypted credentials decrypt.
 func TestRemoteConfigureKeepsNonSecretFields(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "smtp-pw")
@@ -1096,6 +1111,7 @@ func TestRemoteConfigureKeepsNonSecretFields(t *testing.T) {
 // TestRemoteStandaloneSenderResolvesSMTP proves the standalone sender resolver
 // builds the inbox's own SMTP config and the existing decrypt path reads it.
 func TestRemoteStandaloneSenderResolvesSMTP(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	// Bind an SMTP server on the inbox.
@@ -1131,6 +1147,7 @@ func TestRemoteStandaloneSenderResolvesSMTP(t *testing.T) {
 // is exercised in its own package tests; here we assert the shared classification
 // the outbox relies on.
 func TestRemoteSMTPAmbiguousClassification(t *testing.T) {
+	t.Parallel()
 	if !transport.AsAmbiguous(&transport.AmbiguousError{Err: errors.New("timeout awaiting verdict")}) {
 		t.Fatal("AmbiguousError not recognized")
 	}
@@ -1144,6 +1161,7 @@ func TestRemoteSMTPAmbiguousClassification(t *testing.T) {
 // adapter: reconcile indexes a folder, the message is listed, and its raw body is
 // fetched without marking it seen.
 func TestRemoteRealAdapterInMemoryServer(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 
@@ -1278,6 +1296,7 @@ func (l *stringLiteral) Read(p []byte) (int, error) {
 // publisher and the standalone sender resolver onto the service/store, and that
 // TestStandaloneRemote validates a live configuration against the real adapter.
 func TestRemoteBridgesInstallAndTest(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	rm.InstallRemoteBridges()
@@ -1304,6 +1323,7 @@ func TestRemoteBridgesInstallAndTest(t *testing.T) {
 // (it does not know a folder has children) the server's refusal to delete a
 // non-empty folder is still surfaced as ErrFolderNotEmpty, not a generic error.
 func TestRemoteDeleteFolderServerRefusalMapped(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1338,6 +1358,7 @@ func TestRemoteDeleteFolderServerRefusalMapped(t *testing.T) {
 // duplicate, and reports the confirmed move as successful. A later reconcile
 // re-indexes it without inviting a duplicate move.
 func TestRemoteMoveAmbiguousMessageIDNotMerged(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1368,6 +1389,7 @@ func TestRemoteMoveAmbiguousMessageIDNotMerged(t *testing.T) {
 // truncated at the batch size) and that a remotely-deleted message is pruned once
 // a complete snapshot is seen.
 func TestRemoteReconcileBackfillsWholeFolder(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1476,6 +1498,7 @@ func (c *condStoreSession) Status(ctx context.Context, folder string) (imap.Mail
 // flag fetch (FlagsChangedSince) rather than re-fetching the newest window: the
 // stored modseq is seeded first, then a changed flag is mirrored.
 func TestRemoteQuiescentCondStoreFlagSync(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1512,6 +1535,7 @@ func TestRemoteQuiescentCondStoreFlagSync(t *testing.T) {
 // in the Trash-role folder, and uses a UID-targeted delete (never a blanket
 // expunge).
 func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1561,6 +1585,7 @@ func TestRemotePurgeRequiresAssistantAndTrash(t *testing.T) {
 // TestRemoteDeleteFolderRefusesNonEmpty proves deleting a remote folder refuses
 // when it still has a cached child folder, before any provider call.
 func TestRemoteDeleteFolderRefusesNonEmpty(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1594,6 +1619,7 @@ func TestRemoteDeleteFolderRefusesNonEmpty(t *testing.T) {
 // TestSetRemoteFolderRolePersists proves an explicit role mapping of an
 // arbitrarily-named existing folder survives a reconcile.
 func TestSetRemoteFolderRolePersists(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1641,6 +1667,7 @@ func TestSetRemoteFolderRolePersists(t *testing.T) {
 // message (no local row) resolves through the installed remote bridge, and a
 // forward carries the remotely-parsed body.
 func TestRemoteReplyAndForwardResolve(t *testing.T) {
+	t.Parallel()
 	_, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	rm.InstallRemoteBridges()
@@ -1676,6 +1703,7 @@ func TestRemoteReplyAndForwardResolve(t *testing.T) {
 // different mailbox drops the cached remote index, so old locators/labels are not
 // associated with the new mailbox.
 func TestRemoteRebindResetsCachedState(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	configureSecrets(t, rm, u, box, "imap-pw", "")
@@ -1832,6 +1860,7 @@ func fakeLocalSMTP(t *testing.T, wantUser, wantPass string, sent *bool) (host st
 // The job must remain verifiable after the message is purged (which unlinks the
 // message's raw), otherwise a pending or ambiguous copy would be lost.
 func TestStandaloneSentCopyFreezesOwnRaw(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	svc.Store.SetStandaloneSenderResolver(&app.RemoteStandaloneSender{Service: svc})
@@ -1894,6 +1923,7 @@ func TestStandaloneSentCopyFreezesOwnRaw(t *testing.T) {
 // not yet recorded the message (detection is independent of the index). The
 // resolver bridges the arrival id to a materialized metadata record.
 func TestResolveRemoteReplyFromArrivalID(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	ctx := context.Background()
 	arrival, _, err := svc.Store.RecordRemoteArrival(ctx, u.AccountID, box.ID, store.RemoteArrivalInput{

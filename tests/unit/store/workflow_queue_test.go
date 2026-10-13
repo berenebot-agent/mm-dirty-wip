@@ -11,6 +11,7 @@ import (
 )
 
 func TestWorkflowQueueLifecycleAndRedaction(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -87,6 +88,7 @@ func TestWorkflowQueueLifecycleAndRedaction(t *testing.T) {
 }
 
 func TestWorkflowTerminalFailureNotifiesRequest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -119,6 +121,7 @@ func TestWorkflowTerminalFailureNotifiesRequest(t *testing.T) {
 }
 
 func TestRecoverStaleIdempotency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]

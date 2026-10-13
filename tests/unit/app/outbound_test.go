@@ -21,6 +21,7 @@ import (
 )
 
 func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -83,6 +84,7 @@ func TestSendBrevoWithAttachmentRoundTrip(t *testing.T) {
 }
 
 func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	var gotName, gotContent string
@@ -122,6 +124,7 @@ func TestSendMailgunWithAttachmentRoundTrip(t *testing.T) {
 // that id rather than the locally synthesized one. The reply must still join
 // the original conversation.
 func TestOutboundWireIDThreadsExternalReply(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -168,6 +171,7 @@ func TestOutboundWireIDThreadsExternalReply(t *testing.T) {
 }
 
 func TestUnknownSendingProviderRejected(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	_, err := svc.SaveDomainSendingConfig(context.Background(), u.AccountID, d.ID, "not-a-provider", map[string]any{"api_key": "k"})
 	if !errors.Is(err, app.ErrInvalidConfig) {
@@ -179,6 +183,7 @@ func TestUnknownSendingProviderRejected(t *testing.T) {
 }
 
 func TestDeliverRecordsDeliveryAttempts(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	var calls atomic.Int32

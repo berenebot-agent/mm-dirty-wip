@@ -19,6 +19,7 @@ import (
 // provider is unavailable or metadata sync is incomplete. No worker is started:
 // pending jobs prove the POST did not execute the remote operation itself.
 func TestRemoteBulkQueuesWithoutProvider(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"delete", "read", "unread", "restore", "move", "purge"} {
 		t.Run(action, func(t *testing.T) {
 			ctx := context.Background()
@@ -104,6 +105,7 @@ func TestRemoteBulkQueuesWithoutProvider(t *testing.T) {
 }
 
 func TestRemoteBulkDeleteSettles(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box, fake := standaloneFixture(t)
 	fake.folders["Trash"] = 100
 	for _, subject := range []string{"First", "Second", "Keep"} {

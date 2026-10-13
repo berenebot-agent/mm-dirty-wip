@@ -146,6 +146,7 @@ func handOffWorkflow(t *testing.T, svc *app.Service, accountID, inboxID string) 
 }
 
 func TestApproverImpliesExternalRequest(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
@@ -195,6 +196,7 @@ func TestApproverImpliesExternalRequest(t *testing.T) {
 }
 
 func TestExternalRequestRequiresConfiguredApprover(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	asst := assistantPrincipal(u.AccountID, box.ID)
@@ -208,6 +210,7 @@ func TestExternalRequestRequiresConfiguredApprover(t *testing.T) {
 }
 
 func TestExternalApprovalApproveByEmail(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -280,6 +283,7 @@ func TestExternalApprovalApproveByEmail(t *testing.T) {
 }
 
 func TestExternalApprovalApproveByWindows1252Subject(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -328,6 +332,7 @@ func TestExternalApprovalApproveByWindows1252Subject(t *testing.T) {
 }
 
 func TestExternalApprovalRejectByEmailCarriesFeedback(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -363,6 +368,7 @@ func TestExternalApprovalRejectByEmailCarriesFeedback(t *testing.T) {
 }
 
 func TestExternalApprovalSenderMismatchIsConsumedButIgnored(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -394,6 +400,7 @@ func TestExternalApprovalSenderMismatchIsConsumedButIgnored(t *testing.T) {
 }
 
 func TestExternalApprovalSurvivesInboxApproverChange(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -426,6 +433,7 @@ func TestExternalApprovalSurvivesInboxApproverChange(t *testing.T) {
 }
 
 func TestFrozenFingerprintCoversAttachmentBytes(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	asst := assistantPrincipal(u.AccountID, box.ID)
@@ -478,6 +486,7 @@ func controlRequestFor(t *testing.T, svc *app.Service, u model.User, box model.I
 // TestExternalApprovalEnvelopeBinding proves the approval decision is bound to
 // the provider-attested envelope sender, not the spoofable MIME From header.
 func TestExternalApprovalEnvelopeBinding(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("spoofed MIME From is rejected", func(t *testing.T) {
@@ -565,6 +574,7 @@ func pendingRequestStillOpen(t *testing.T, svc *app.Service, u model.User, box m
 // mailbox message: it cannot be read, listed or used as a forward/reply source,
 // so the token cannot be exfiltrated through the mailbox surface.
 func TestWorkflowMailIsNotMailboxContent(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetInboxApprover(ctx, u.AccountID, box.ID, approverAddress); err != nil {
@@ -625,6 +635,7 @@ func replyBody(firstLine, token string) string {
 }
 
 func TestExternalApprovalApproveByReplyFirstLine(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -648,6 +659,7 @@ func TestExternalApprovalApproveByReplyFirstLine(t *testing.T) {
 }
 
 func TestExternalApprovalRejectByReplyFirstLine(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -669,6 +681,7 @@ func TestExternalApprovalRejectByReplyFirstLine(t *testing.T) {
 // always contains the word "Approve" and the control tokens, cannot select the
 // action when the approver's own first line is a rejection.
 func TestExternalApprovalReplyQuoteCannotApprove(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -688,6 +701,7 @@ func TestExternalApprovalReplyQuoteCannotApprove(t *testing.T) {
 }
 
 func TestExternalApprovalApproveByHTMLReply(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -707,6 +721,7 @@ func TestExternalApprovalApproveByHTMLReply(t *testing.T) {
 }
 
 func TestExternalApprovalReplyFirstLineVariants(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		first   string
@@ -769,6 +784,7 @@ func TestExternalApprovalReplyFirstLineVariants(t *testing.T) {
 }
 
 func TestExternalApprovalReplySenderMismatchIsConsumed(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -793,6 +809,7 @@ func TestExternalApprovalReplySenderMismatchIsConsumed(t *testing.T) {
 // TestExternalApprovalReplySurvivesApproverChange proves a reply is bound to the
 // request's stored approver, not the inbox's current setting.
 func TestExternalApprovalReplySurvivesApproverChange(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
@@ -816,6 +833,7 @@ func TestExternalApprovalReplySurvivesApproverChange(t *testing.T) {
 // exact sendable message: the hidden Bcc recipients and the HTML alternative
 // (shown as source, never rendered) are present, alongside the text body.
 func TestApprovalEmailShowsBccAndHTMLAlternative(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()

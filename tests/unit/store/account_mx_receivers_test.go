@@ -11,6 +11,7 @@ import (
 // TestAccountMXReceiverStoreLifecycle covers the per-account receiver row's
 // create, CAS update, conflict, clear and the in-use / listing helpers.
 func TestAccountMXReceiverStoreLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateAccountAndAdmin(ctx, "A", "admin@a.test", "correct horse battery staple", 50<<20)

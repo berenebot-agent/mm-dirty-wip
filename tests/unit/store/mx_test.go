@@ -26,6 +26,7 @@ func inboundMX(t *testing.T, st *store.Store, box model.Inbox, provider, rcpt, d
 // TestMXReceiptSurvivesDelete verifies the receipt is durable across message
 // deletion so a retry still deduplicates.
 func TestMXReceiptSurvivesDelete(t *testing.T) {
+	t.Parallel()
 	st, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	box := boxes[0]
@@ -52,6 +53,7 @@ func TestMXReceiptSurvivesDelete(t *testing.T) {
 }
 
 func TestMXReceiptSweep(t *testing.T) {
+	t.Parallel()
 	st, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	box := boxes[0]
@@ -68,6 +70,7 @@ func TestMXReceiptSweep(t *testing.T) {
 // TestMXReceiptCustomTTL verifies the configured MXReceiptRetention is honored:
 // a short TTL expires well before the 7-day default.
 func TestMXReceiptCustomTTL(t *testing.T) {
+	t.Parallel()
 	st, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	box := boxes[0]
@@ -90,6 +93,7 @@ func TestMXReceiptCustomTTL(t *testing.T) {
 // TestSpamVisibility verifies Spam is excluded from normal lists and unread
 // counts, and included only in the explicit Spam view.
 func TestSpamVisibility(t *testing.T) {
+	t.Parallel()
 	st, u, _, boxes := testStore(t)
 	ctx := context.Background()
 	box := boxes[0]

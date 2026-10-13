@@ -18,6 +18,7 @@ import (
 )
 
 func TestIMAPPreviewOnlyForNewArrivalsInBackground(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box, fake := standaloneFixture(t)
 	ctx := context.Background()
 	rm := app.NewRemoteMailboxService(svc)
@@ -100,6 +101,7 @@ func TestIMAPPreviewOnlyForNewArrivalsInBackground(t *testing.T) {
 }
 
 func TestGoogleDirectionUsesAllNativeLabels(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, folder, want string
 		labels             []string
@@ -137,6 +139,7 @@ func TestGoogleDirectionUsesAllNativeLabels(t *testing.T) {
 }
 
 func TestRemoteDirectionAndSafeReplyDefaults(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box, fake := standaloneFixture(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
@@ -234,6 +237,7 @@ func TestRemoteDirectionAndSafeReplyDefaults(t *testing.T) {
 // Public storage APIs expose the pending preview state without back-generating
 // old rows; generated metadata survives subsequent header-only upserts.
 func TestRemotePreviewFailureRetainsFallback(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, box, fake := standaloneFixture(t)
 	ctx := context.Background()
 	rec, err := svc.Store.UpsertRemoteMessage(ctx, u.AccountID, box.ID, store.RemoteMessageInput{FolderPath: "INBOX", UIDValidity: 100, UID: 99})

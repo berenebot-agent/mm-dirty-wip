@@ -70,6 +70,7 @@ func domainPost(t *testing.T, h http.Handler, cookie *http.Cookie, path string, 
 }
 
 func TestUIDomainPagePickersAndInstructions(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, box := httpFixture(t)
 	ctx := context.Background()
 	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "resend", map[string]any{"api_key": "re_live_secret", "api_base": "https://api.resend.com"}); err != nil {
@@ -127,6 +128,7 @@ func TestUIDomainPagePickersAndInstructions(t *testing.T) {
 }
 
 func TestUIDomainSendingSaveRetainsSecretAndClears(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -178,6 +180,7 @@ func TestUIDomainSendingSaveRetainsSecretAndClears(t *testing.T) {
 }
 
 func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -224,6 +227,7 @@ func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
 // TestUIDomainReceivingWorkerPageErrors proves the setup page is scoped: an
 // unknown domain is a 404 and a non-Cloudflare receive path is a 400.
 func TestUIDomainReceivingWorkerPageErrors(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -254,6 +258,7 @@ func TestUIDomainReceivingWorkerPageErrors(t *testing.T) {
 // an existing shared secret to reuse one Worker across domains: the value is
 // stored verbatim, nothing is generated, and no one-time code page is shown.
 func TestUIDomainReceivingWorkerSuppliedSecretReused(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -284,6 +289,7 @@ func TestUIDomainReceivingWorkerSuppliedSecretReused(t *testing.T) {
 }
 
 func TestUIDomainReceivingRegenerateChangesSecret(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	saved, generated, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", nil, false)
@@ -314,6 +320,7 @@ func TestUIDomainReceivingRegenerateChangesSecret(t *testing.T) {
 }
 
 func TestUIDomainCatchAllOnlyOwnInboxes(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, own := httpFixture(t)
 	ctx := context.Background()
 	other, err := svc.Store.CreateDomain(ctx, u.AccountID, "other.example")
@@ -350,6 +357,7 @@ func TestUIDomainCatchAllOnlyOwnInboxes(t *testing.T) {
 // non-secret fields, and that a non-numeric field is a user-safe validation
 // error that never leaks the secret or mutates the stored config.
 func TestUIDomainPageRepeatedViewHidesSecretAndValidatesNumericInput(t *testing.T) {
+	t.Parallel()
 	const secret = "smtp-password-secret"
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
@@ -413,6 +421,7 @@ func TestUIDomainPageRepeatedViewHidesSecretAndValidatesNumericInput(t *testing.
 // flash can neither be read nor consumed by a different user or domain, and is
 // shown exactly once to its owner.
 func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -475,6 +484,7 @@ func TestUIDomainWorkerFlashBoundToPrincipalAndDomain(t *testing.T) {
 // secret renders a blank input that never echoes the stored value, and viewing
 // the page never rotates the stored secret.
 func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", map[string]any{"webhook_secret": "known-cf-secret"}, false); err != nil {
@@ -512,6 +522,7 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 // steps are visible before any receiving config exists, and that viewing them
 // does not save anything.
 func TestUIDomainReceivingSetupBeforeSaved(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "fresh.example")
@@ -534,6 +545,7 @@ func TestUIDomainReceivingSetupBeforeSaved(t *testing.T) {
 // editor renders the shared secret as an optional, blank, non-required input
 // before a config exists, so an operator can paste an existing one.
 func TestUIDomainCloudflarePresaveShowsOptionalSecret(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "fresh.example")
@@ -564,6 +576,7 @@ func TestUIDomainCloudflarePresaveShowsOptionalSecret(t *testing.T) {
 // TestUIDomainMutationRequiresCSRF proves every domain-config mutation is
 // CSRF-protected before it touches state.
 func TestUIDomainMutationRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	routes := []struct {
 		name string
 		path func(string) string
@@ -606,6 +619,7 @@ func TestUIDomainMutationRequiresCSRF(t *testing.T) {
 // TestUIDomainCrossAccountControls proves another account cannot view or mutate
 // a domain's configuration through the human UI.
 func TestUIDomainCrossAccountControls(t *testing.T) {
+	t.Parallel()
 	svc, h, _, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	b, err := svc.Store.CreateAccountAndAdmin(ctx, "B", "b@example.com", "correct horse battery staple", 50<<20)
@@ -648,6 +662,7 @@ func TestUIDomainCrossAccountControls(t *testing.T) {
 // to its owner and domain: a foreign domain cannot consume it, and the owner
 // still sees the error.
 func TestUIDomainNoticeFlashBoundToOwner(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -680,6 +695,7 @@ func TestUIDomainNoticeFlashBoundToOwner(t *testing.T) {
 // TestUIDomainHistorySurvivesConfigDelete proves the delivery history is scoped
 // by domain, not by the presence of a current config.
 func TestUIDomainHistorySurvivesConfigDelete(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
@@ -714,6 +730,7 @@ func TestUIDomainHistorySurvivesConfigDelete(t *testing.T) {
 // choice) while secret inputs stay truly empty, and that an explicit Edit link
 // opens the current provider's editor.
 func TestUIDomainSendingEditorPrefillsStoredNonsecret(t *testing.T) {
+	t.Parallel()
 	const secret = "smtp-fresh-secret"
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
@@ -745,6 +762,7 @@ func TestUIDomainSendingEditorPrefillsStoredNonsecret(t *testing.T) {
 // TestUIDomainEditorDefaultsOnCreateAndSwitch proves a new or switched provider
 // starts from schema defaults rather than the previous provider's values.
 func TestUIDomainEditorDefaultsOnCreateAndSwitch(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -781,6 +799,7 @@ func TestUIDomainEditorDefaultsOnCreateAndSwitch(t *testing.T) {
 // GETs cannot both render the same one-time Worker code. Each round mints a
 // fresh flash and fires a burst of requests at it.
 func TestUIDomainWorkerFlashConcurrentSingleUse(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	if rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/receiving", url.Values{"_csrf": {csrf}, "provider": {"cloudflare"}}); rr.Code != 303 {
@@ -847,6 +866,7 @@ func TestUIDomainWorkerFlashConcurrentSingleUse(t *testing.T) {
 // pointed the Resend webhook at /internal/ingest/mailgun/raw-mime, where the
 // Mailgun adapter rejected the JSON body as a terminal error and returned 406.
 func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -892,6 +912,7 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 // before its parent can pick "Inherited (from parent)" in the sending/receiving
 // provider menus, and that saving links it to the parent and inherits.
 func TestUIDomainProviderInheritLinksLateParent(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 
@@ -932,6 +953,7 @@ func TestUIDomainProviderInheritLinksLateParent(t *testing.T) {
 // handler: it resolves the URL within the button's provider group instead of
 // the whole dialog.
 func TestDashboardWebhookCopyScopesToProviderGroup(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	req := httptest.NewRequest("GET", "/assets/app.js", nil)
 	rr := httptest.NewRecorder()

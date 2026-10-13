@@ -12,6 +12,7 @@ import (
 // Migration tests reconstruct a real pre-072 database rather than using the
 // migrated template, proving the upgrade does not generate historical previews.
 func TestMigration072DoesNotBackGeneratePreviews(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
@@ -73,6 +74,7 @@ func TestMigration072DoesNotBackGeneratePreviews(t *testing.T) {
 }
 
 func TestRemotePreviewStorageAccountingAndHeaderRefresh(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	box, err := s.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "preview@remote.test"})
@@ -105,6 +107,7 @@ func TestRemotePreviewStorageAccountingAndHeaderRefresh(t *testing.T) {
 }
 
 func TestEventReplayOmitsLegacyIMAPIdentifiers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	box, err := s.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "events@remote.test"})

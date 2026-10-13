@@ -107,6 +107,27 @@ func OpenDir(t *testing.T) (*store.Store, string) {
 	return st, dir
 }
 
+// OpenAt is OpenDir for a caller-provided directory: it copies the migrated
+// template into dir and opens it there, but does not register a cleanup — the
+// caller owns the store's lifetime, exactly as with store.Open. It exists so a
+// test that already builds its own temp dir can swap its store.Open call for the
+// template copy without restructuring the fixture.
+func OpenAt(t *testing.T, dir string) *store.Store {
+	t.Helper()
+	templateOnce.Do(buildTemplate)
+	if templateErr != nil {
+		t.Fatal(templateErr)
+	}
+	if err := copyFile(templatePath, filepath.Join(dir, "inbox.db")); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

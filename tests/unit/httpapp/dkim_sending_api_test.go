@@ -15,6 +15,7 @@ import (
 // per-domain sending API: the private key must never be echoed, while the
 // public key, record name and TXT value the operator needs must always be.
 func TestDomainSendingDKIMResponse(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -89,6 +90,7 @@ func TestDomainSendingDKIMResponse(t *testing.T) {
 // used, and the reported public key is derived from it so the record an operator
 // publishes always matches what MailMoose signs with.
 func TestDomainSendingDKIMKeyIsGeneratedAndDerived(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

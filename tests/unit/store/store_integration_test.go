@@ -42,6 +42,7 @@ func inbound(box model.Inbox, delivery, rfc, inReply string, refs []string, subj
 }
 
 func TestPermissionsThreadIsolationDedupSearchEvents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	_, key, err := s.CreateAPIKey(ctx, u.AccountID, "mixed", false, map[string]string{b[0].ID: "owner", b[1].ID: "assistant", b[2].ID: "read"})
@@ -116,6 +117,7 @@ func TestPermissionsThreadIsolationDedupSearchEvents(t *testing.T) {
 // references a provider's wire Message-ID joins the outbound thread even for a
 // row persisted before the id was promoted to rfc_message_id.
 func TestInboundReplyThreadsViaProviderMessageIDFallback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, _, _, b := testStore(t)
 	box := b[0]
@@ -133,6 +135,7 @@ func TestInboundReplyThreadsViaProviderMessageIDFallback(t *testing.T) {
 }
 
 func TestSQLiteConcurrentWritesSerialized(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	var wg sync.WaitGroup
@@ -155,6 +158,7 @@ func TestSQLiteConcurrentWritesSerialized(t *testing.T) {
 }
 
 func TestQuotaEnforcementInboundAndOutbound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -178,6 +182,7 @@ func TestQuotaEnforcementInboundAndOutbound(t *testing.T) {
 }
 
 func TestPurgeDomainCleansStorageAndFiles(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	box := b[0]
@@ -222,6 +227,7 @@ func TestPurgeDomainCleansStorageAndFiles(t *testing.T) {
 }
 
 func TestIdempotencyReserveIsAtomic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	// First caller wins the reservation.
@@ -257,6 +263,7 @@ func TestIdempotencyReserveIsAtomic(t *testing.T) {
 }
 
 func TestBackupRestoreRoundTrip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	s, err := store.Open(dir)
 	if err != nil {

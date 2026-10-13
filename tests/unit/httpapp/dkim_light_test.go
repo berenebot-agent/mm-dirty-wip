@@ -18,6 +18,7 @@ import (
 // that signs: grey while the record is unconfirmed, green once it is published
 // and matching, and never for a domain that does not sign.
 func TestDashboardSendingLightRendersForSigningDomain(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, domain.ID, mx.Provider, map[string]any{
@@ -94,6 +95,7 @@ func TestDashboardSendingLightRendersForSigningDomain(t *testing.T) {
 // domain renders no sending light at all, matching "no traffic lights when DKIM
 // is off".
 func TestDashboardSendingLightAbsentWhenSigningOff(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, err := svc.SaveDomainSendingConfig(ctx, u.AccountID, domain.ID, mx.Provider, map[string]any{

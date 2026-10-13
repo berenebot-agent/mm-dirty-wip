@@ -22,6 +22,7 @@ func draftPayload(inboxID string, extra map[string]any) string {
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
 func TestAPICreateDraftWithInlineAttachments(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "asst", false, map[string]string{box.ID: "assistant"})
@@ -58,6 +59,7 @@ func TestAPICreateDraftWithInlineAttachments(t *testing.T) {
 }
 
 func TestAPIPatchDraftIsPartial(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "asst", false, map[string]string{box.ID: "assistant"})
@@ -81,6 +83,7 @@ func TestAPIPatchDraftIsPartial(t *testing.T) {
 }
 
 func TestAPIOneShotRequestSendFromAssistant(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "asst", false, map[string]string{box.ID: "assistant"})
@@ -115,6 +118,7 @@ func TestAPIOneShotRequestSendFromAssistant(t *testing.T) {
 }
 
 func TestAPIRequestSendEndpointWithAttachments(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "asst", false, map[string]string{box.ID: "assistant"})
@@ -133,6 +137,7 @@ func TestAPIRequestSendEndpointWithAttachments(t *testing.T) {
 }
 
 func TestAPIDraftUnknownAction(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, ownerKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -146,6 +151,7 @@ func TestAPIDraftUnknownAction(t *testing.T) {
 }
 
 func TestAPIOneShotSendFromOwnerWithOverride(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, ownerKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -164,6 +170,7 @@ func TestAPIOneShotSendFromOwnerWithOverride(t *testing.T) {
 }
 
 func TestAPIDraftSenderAliasAndListPaging(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, ownerKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "owner", true, nil)
@@ -188,6 +195,7 @@ func TestAPIDraftSenderAliasAndListPaging(t *testing.T) {
 }
 
 func TestAPIInboxCreateAcceptsLocalpartSpelling(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, adminKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

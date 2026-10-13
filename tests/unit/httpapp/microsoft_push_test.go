@@ -74,6 +74,7 @@ func (h *microsoftPushLogSink) containsValue(value string) bool {
 }
 
 func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
+	t.Parallel()
 	svc, _, user, _, _, fake := standaloneFixture(t)
 	ctx := context.Background()
 	logSink := &microsoftPushLogSink{}
@@ -396,6 +397,7 @@ func TestMicrosoftPushLifecycleAndDurableDelivery(t *testing.T) {
 }
 
 func TestMicrosoftPushSharedAndHTTPSFallback(t *testing.T) {
+	t.Parallel()
 	svc, _, user, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	svc.Config.BaseURL = "http://localhost:8080"

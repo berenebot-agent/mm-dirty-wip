@@ -23,6 +23,7 @@ const actualMaxDomains = 128
 // capacity-packed shard count. It then adds one more domain and proves existing
 // domains are not re-authenticated (their grants are unchanged).
 func TestReceiverMaxDomainsCapacityPacking(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{127, 128, 129, 256, 257} {
 		t.Run(fmt.Sprintf("domains=%d", n), func(t *testing.T) {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)

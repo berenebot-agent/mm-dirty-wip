@@ -16,6 +16,7 @@ import (
 )
 
 func TestSingleCoreSessionDelivery(t *testing.T) {
+	t.Parallel()
 	for _, encrypted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("TLS=%v", encrypted), func(t *testing.T) {
 			r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key", LookupTXT: func(context.Context, string) ([]string, error) {
@@ -83,6 +84,7 @@ func TestSingleCoreSessionDelivery(t *testing.T) {
 }
 
 func TestSingleCoreRejectsInvalidBearer(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key"})
 	for _, header := range []string{"", "Bearer wrong-key", "Basic private-key"} {
 		q := httptest.NewRequest(http.MethodPost, mxwire.SessionPath, nil)

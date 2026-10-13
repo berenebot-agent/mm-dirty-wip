@@ -16,6 +16,7 @@ import (
 // advertises a small domain cap, the core opens one stable shard per group of
 // domains rather than forcing every domain onto one session.
 func TestSharedModeShardsByAdvertisedMaxDomains(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.setCaps(1, 0)
 	b := &scriptedBackend{}
@@ -42,6 +43,7 @@ func TestSharedModeShardsByAdvertisedMaxDomains(t *testing.T) {
 // stable: after every connection is dropped, the same number of shards is
 // re-established and all domains return to ready without churn.
 func TestSharedModeShardCountStableAcrossReconnect(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.setCaps(1, 0)
 	b := &scriptedBackend{}
@@ -104,6 +106,7 @@ func TestSharedModeShardCountStableAcrossReconnect(t *testing.T) {
 // TestSingleModeStaysOneSession proves private single mode is never sharded,
 // even when the configured domains would otherwise exceed a small cap.
 func TestSingleModeStaysOneSession(t *testing.T) {
+	t.Parallel()
 	// Single mode is keyed by cfg.ReceiverURL and the backend returns no
 	// domains; use a bare manager with a receiver URL and assert that only one
 	// session is created regardless of advertised caps.
@@ -133,6 +136,7 @@ func TestSingleModeStaysOneSession(t *testing.T) {
 // lowest shard with spare capacity instead of reshuffling, and that raising the
 // advertised cap does NOT compact healthy shards.
 func TestShardCapacityPackingAndNoCompaction(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.setCaps(2, 0)
 	b := &scriptedBackend{}
@@ -179,6 +183,7 @@ func TestShardCapacityPackingAndNoCompaction(t *testing.T) {
 // advertised cap and no more shards may be opened, an extra domain is reported
 // as deferred rather than folded into an oversized shard.
 func TestShardCapacityExhaustionDefers(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.setCaps(1, 0)
 	b := &scriptedBackend{}
@@ -229,6 +234,7 @@ func TestShardCapacityExhaustionDefers(t *testing.T) {
 // receiver and a budget of one, only a single DomainAuth is sent even when
 // many domains are configured.
 func TestAuthPacingBoundsInflight(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.mode("silent")
 	var mu sync.Mutex
@@ -270,6 +276,7 @@ func TestAuthPacingBoundsInflight(t *testing.T) {
 // receiver-issued Challenge on the existing channel: the core answers with a
 // ChallengeResponse and never sends a second DomainAuth.
 func TestReceiverDrivenRenewalKeepsBinding(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	var authFrames atomic.Int64
 	var proofFrames atomic.Int64

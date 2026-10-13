@@ -13,6 +13,7 @@ import (
 )
 
 func TestUIDomainCreateNameOnlyRedirectsToDomainPage(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{"name": {"brand-new.example"}, "_csrf": {csrf}}
@@ -30,6 +31,7 @@ func TestUIDomainCreateNameOnlyRedirectsToDomainPage(t *testing.T) {
 }
 
 func TestUIDomainSendingConfigWorkflow(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -81,6 +83,7 @@ func TestUIDomainSendingConfigWorkflow(t *testing.T) {
 }
 
 func TestAPIInboxNoOutboundCredentialField(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -119,6 +122,7 @@ func TestAPIInboxNoOutboundCredentialField(t *testing.T) {
 }
 
 func TestAPICreateDomainNameOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -152,6 +156,7 @@ func TestAPICreateDomainNameOnly(t *testing.T) {
 }
 
 func TestDashboardInboxIssueDot(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")
@@ -191,6 +196,7 @@ func TestDashboardInboxIssueDot(t *testing.T) {
 }
 
 func TestDashboardInboxIssueDotReceiveOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "norcv.example")
@@ -218,6 +224,7 @@ func TestDashboardInboxIssueDotReceiveOnly(t *testing.T) {
 }
 
 func TestInboxViewPerInboxBanners(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, fixtureBox := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")
@@ -260,6 +267,7 @@ func TestInboxViewPerInboxBanners(t *testing.T) {
 }
 
 func TestMessageViewPerInboxBanners(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, fixtureBox := httpFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.CreateDomain(ctx, u.AccountID, "broken.example")

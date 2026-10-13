@@ -53,6 +53,7 @@ func oneReconnectFixture(t *testing.T) (http.Handler, *app.Service, model.User, 
 // linked to the inbox Identity tab, and that a healthy connection renders no
 // such flag.
 func TestDashboardConnectionFlagForDisconnectedOneInbox(t *testing.T) {
+	t.Parallel()
 	h, svc, _, cookie, _, box := oneReconnectFixture(t)
 	ctx := context.Background()
 	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
@@ -81,6 +82,7 @@ func TestDashboardConnectionFlagForDisconnectedOneInbox(t *testing.T) {
 // remote config reports the provider connection state, so the client can render
 // the reconnect prompt without a second request.
 func TestRemoteConfigViewCarriesConnectionState(t *testing.T) {
+	t.Parallel()
 	h, svc, u, _, _, box := oneReconnectFixture(t)
 	ctx := context.Background()
 	key := adminKey(t, svc, u)
@@ -127,6 +129,7 @@ func TestRemoteConfigViewCarriesConnectionState(t *testing.T) {
 // TestRemoteConfigViewOmitsConnectionForIMAPInbox proves an IMAP-only standalone
 // inbox reports no connection state, so no reconnect light or prompt renders.
 func TestRemoteConfigViewOmitsConnectionForIMAPInbox(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	key := adminKey(t, svc, u)
 	rr := apiGet(t, h, "/v1/inboxes/"+standalone.ID+"/remote", key)
@@ -149,6 +152,7 @@ func TestRemoteConfigViewOmitsConnectionForIMAPInbox(t *testing.T) {
 // validates and stores a replacement key, refuses a wrong-identity key with a
 // JSON verdict, requires CSRF, and refuses a non-One inbox.
 func TestOneReconnectEndpointSavesAndChecks(t *testing.T) {
+	t.Parallel()
 	h, svc, _, cookie, csrf, box := oneReconnectFixture(t)
 	ctx := context.Background()
 	post := func(body string, csrfToken string) *httptest.ResponseRecorder {
@@ -208,6 +212,7 @@ func TestOneReconnectEndpointSavesAndChecks(t *testing.T) {
 // TestOneReconnectEndpointRefusesNonOneInbox proves the endpoint cannot be used
 // to attach a One key to an inbox that is not One-bound.
 func TestOneReconnectEndpointRefusesNonOneInbox(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, standalone, _ := standaloneFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	req := httptest.NewRequest(http.MethodPost, "/ui/connections/one/reconnect",
@@ -227,6 +232,7 @@ func TestOneReconnectEndpointRefusesNonOneInbox(t *testing.T) {
 // provider reports the account disconnected, and open the in-place One dialog
 // rather than leaving for the full wizard.
 func TestInboxConnectionScriptWiring(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 	rr := httptest.NewRecorder()
@@ -255,6 +261,7 @@ func TestInboxConnectionScriptWiring(t *testing.T) {
 // explicit reconnect message) flags the inbox, while a retryable failure does
 // not — the classification stays conservative.
 func TestDashboardConnectionFlagForReconnectRequiredGmailSync(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	box, err := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "flag-gmail@example.net"})
@@ -295,6 +302,7 @@ func TestDashboardConnectionFlagForReconnectRequiredGmailSync(t *testing.T) {
 // TestDashboardRendersOneReconnectDialog proves the in-place One reconnect
 // dialog markup is present on the dashboard, so app.js can open it.
 func TestDashboardRendersOneReconnectDialog(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _, _ := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	body := uiGet(t, h, cookie, "/").Body.String()

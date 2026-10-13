@@ -13,7 +13,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/config"
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // forceHTTPSHandler builds a handler whose config forces HTTPS, for testing the
@@ -21,12 +21,9 @@ import (
 func forceHTTPSHandler(t *testing.T) http.Handler {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
-	cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", ForceHTTPS: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", ForceHTTPS: true, AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +44,7 @@ func adminToken(t *testing.T, svc *app.Service, accountID string) string {
 // returning the oldest message instantly: with no cursor it must block for a
 // new message, not hand back history.
 func TestMessagesWaitDoesNotReplayBacklog(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	token := adminToken(t, svc, u.AccountID)
 	if _, _, err := svc.IngestInbound(context.Background(), "mailgun", signedMGRequest(t, testMailgunKey, "wait-seed", box.Address, inboundRawMessage())); err != nil {
@@ -68,6 +66,7 @@ func TestMessagesWaitDoesNotReplayBacklog(t *testing.T) {
 // TestWaitRejectsMalformedCursor asserts a non-evt_ cursor is a 400 rather than
 // silently treated as the start of history.
 func TestWaitRejectsMalformedCursor(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	token := adminToken(t, svc, u.AccountID)
 	for _, path := range []string{
@@ -85,6 +84,7 @@ func TestWaitRejectsMalformedCursor(t *testing.T) {
 }
 
 func TestV1LimitsEndpoint(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	token := adminToken(t, svc, u.AccountID)
 	req := httptest.NewRequest(http.MethodGet, "/v1/limits", nil)
@@ -106,6 +106,7 @@ func TestV1LimitsEndpoint(t *testing.T) {
 // TestSendRequiresSubject asserts an empty subject is a descriptive 400 at send
 // time rather than a later provider failure.
 func TestSendRequiresSubject(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	token := adminToken(t, svc, u.AccountID)
 	body := `{"inbox_id":"` + box.ID + `","to":["friend@example.net"],"text":"hi"}`
@@ -123,6 +124,7 @@ func TestSendRequiresSubject(t *testing.T) {
 }
 
 func TestHealthAliasAndDocsRedirect(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	for _, path := range []string{"/health", "/healthz", "/v1/health"} {
 		rr := httptest.NewRecorder()
@@ -141,6 +143,7 @@ func TestHealthAliasAndDocsRedirect(t *testing.T) {
 // TestExamplesDefaultToRequestOrigin asserts a downloaded client points at the
 // instance it came from instead of localhost.
 func TestExamplesDefaultToRequestOrigin(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	get := func(path string) string {
 		t.Helper()
@@ -162,6 +165,7 @@ func TestExamplesDefaultToRequestOrigin(t *testing.T) {
 }
 
 func TestForceHTTPSRedirectsAndAdvertisesHTTPS(t *testing.T) {
+	t.Parallel()
 	h := forceHTTPSHandler(t)
 
 	// The redirect target is the canonical BASE_URL host

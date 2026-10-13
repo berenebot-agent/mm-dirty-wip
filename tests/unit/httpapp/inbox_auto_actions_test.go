@@ -12,6 +12,7 @@ import (
 // explicit null clears the auto-trash window, an invalid trigger is rejected,
 // and a non-positive hour count is rejected.
 func TestAPIInboxAutoActionsPatch(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

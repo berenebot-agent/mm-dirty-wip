@@ -12,6 +12,7 @@ import (
 )
 
 func TestActionQueueOrderingRecoveryAndScope(t *testing.T) {
+	t.Parallel()
 	svc, u, box, _ := remoteTestEnv(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -61,6 +62,7 @@ func TestActionQueueOrderingRecoveryAndScope(t *testing.T) {
 }
 
 func TestActionWorkerRemoteReadThenUnread(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -104,6 +106,7 @@ func TestActionWorkerRemoteReadThenUnread(t *testing.T) {
 // make an unbounded recheck safe for absolute-state patches: a failed patch is
 // retried, but not when a newer unsettled action for the same message exists.
 func TestRecheckFailedRetriesPatchAndSupersedesStaleAction(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -181,6 +184,7 @@ func TestRecheckFailedRetriesPatchAndSupersedesStaleAction(t *testing.T) {
 // effect already visible at the provider settles as done, while one still in the
 // source folder is safe to retry. An ambiguous row is never reconsidered.
 func TestRecheckFailedRespectsRemoteLocation(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -234,6 +238,7 @@ func makeRecheckDue(t *testing.T, svc *app.Service, id string) {
 // failure eventually takes effect without a human. It also proves an ambiguous
 // row is left alone.
 func TestRecheckEndToEndRetriesFailedPatchThroughWorker(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -300,6 +305,7 @@ func TestRecheckEndToEndRetriesFailedPatchThroughWorker(t *testing.T) {
 // absence-based outcome: a purge whose message is already gone settles as done,
 // while one whose message still exists is retried.
 func TestRecheckFailedSettlesAppliedPurgeAndRetriesPendingPurge(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	ctx := context.Background()
@@ -359,6 +365,7 @@ func TestRecheckFailedSettlesAppliedPurgeAndRetriesPendingPurge(t *testing.T) {
 // stale failure from being replayed, or the replay would silently undo the
 // user's later instruction.
 func TestRecheckFailedDoesNotOverrideCompletedNewerAction(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -415,6 +422,7 @@ func TestRecheckFailedDoesNotOverrideCompletedNewerAction(t *testing.T) {
 // TestRecheckFailedOlderActionDoesNotSupersede proves ordering is directional: a
 // failed action is not blocked by an action enqueued before it.
 func TestRecheckFailedOlderActionDoesNotSupersede(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()
@@ -471,6 +479,7 @@ func TestRecheckFailedOlderActionDoesNotSupersede(t *testing.T) {
 // resolved from the provider's current state, never replayed blindly. A spam
 // patch whose effect is already visible settles as done instead of moving again.
 func TestRecheckSpamPatchIsDecidedByProviderState(t *testing.T) {
+	t.Parallel()
 	svc, u, box, rm := remoteTestEnv(t)
 	configureSecrets(t, rm, u, box, "pw", "")
 	fake := newFakeRemoteServer()

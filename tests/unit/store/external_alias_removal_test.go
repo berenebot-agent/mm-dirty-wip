@@ -13,6 +13,7 @@ import (
 // three attribution columns and their indexes are all gone, and the marker is
 // recorded exactly once.
 func TestMigration053RemovesExternalAliases(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -58,6 +59,7 @@ func TestMigration053RemovesExternalAliases(t *testing.T) {
 // leaves managed-domain aliases (inbox_aliases) and ordinary mail intact, since
 // only the external sending-alias feature is removed.
 func TestManagedAliasesSurviveExternalAliasRemoval(t *testing.T) {
+	t.Parallel()
 	st := openStore(t)
 	ctx := context.Background()
 	u, err := st.CreateAccountAndAdmin(ctx, "A", "admin@example.com", "correct horse battery staple", 50<<20)

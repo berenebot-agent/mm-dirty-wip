@@ -16,6 +16,7 @@ import (
 )
 
 func TestAPIDraftSendAndOutbox(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -84,6 +85,7 @@ func TestAPIDraftSendAndOutbox(t *testing.T) {
 }
 
 func TestAPISendWaitTrue(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32

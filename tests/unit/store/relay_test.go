@@ -10,6 +10,7 @@ import (
 )
 
 func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 
@@ -57,6 +58,7 @@ func TestHermesEnrollRejectsCrossAccountGateway(t *testing.T) {
 }
 
 func TestHermesEnrollSameAccountRotates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	tok1, err := s.CreateHermesEnrollToken(ctx, u.AccountID, b[0].ID, "first", time.Hour)
@@ -86,6 +88,7 @@ func TestHermesEnrollSameAccountRotates(t *testing.T) {
 // TestHermesOutboundRoleSetAndValidate proves the role defaults to owner,
 // accepts assistant, and rejects anything else.
 func TestHermesOutboundRoleSetAndValidate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	conn, err := s.CreateHermesConnection(ctx, store.EnrollRecord{AccountID: u.AccountID, InboxID: b[0].ID, Name: "gw"}, "gw-role", "sec", "del")
@@ -115,6 +118,7 @@ func TestHermesOutboundRoleSetAndValidate(t *testing.T) {
 // kind=openclaw, listed only by the OpenClaw list, and both kinds are
 // addressed by the shared relay lookup.
 func TestOpenClawConnectorKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 
@@ -182,6 +186,7 @@ func TestOpenClawConnectorKind(t *testing.T) {
 // connector kind, so claiming it creates an OpenClaw connector, and that an
 // invalid kind is refused at mint time.
 func TestRelayEnrollTokenCarriesKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 

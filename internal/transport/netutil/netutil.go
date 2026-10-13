@@ -174,12 +174,20 @@ func ResolvePublicHost(ctx context.Context, host string) ([]net.IP, error) {
 	return public, nil
 }
 
-// ValidateBaseURL validates a user-supplied provider API base. When enforcement
-// is active the URL must use HTTPS and must not name a loopback, private,
-// link-local or otherwise non-public IP literal; hostnames are resolved at dial
-// time so DNS cannot rebind between validation and connection. An empty base is
-// allowed and means the caller uses the provider default.
+// ValidateBaseURL validates a user-supplied provider API base against the
+// process-wide outbound policy. See ValidateBaseURLPolicy for the semantics.
 func ValidateBaseURL(raw string) error {
+	return ValidateBaseURLPolicy(raw, requirePublic.Load())
+}
+
+// ValidateBaseURLPolicy is ValidateBaseURL against an explicit policy, so a
+// caller that owns its own policy (for example a Service built from its Config)
+// validates against that policy rather than the process-wide default. When
+// enforcement is active the URL must use HTTPS and must not name a loopback,
+// private, link-local or otherwise non-public IP literal; hostnames are resolved
+// at dial time so DNS cannot rebind between validation and connection. An empty
+// base is allowed and means the caller uses the provider default.
+func ValidateBaseURLPolicy(raw string, requirePublic bool) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -191,7 +199,7 @@ func ValidateBaseURL(raw string) error {
 	if u.Host == "" {
 		return fmt.Errorf("base URL has no host")
 	}
-	if !requirePublic.Load() {
+	if !requirePublic {
 		return nil
 	}
 	if u.Scheme != "https" {

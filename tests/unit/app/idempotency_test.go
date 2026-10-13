@@ -14,6 +14,7 @@ import (
 // an account-wide idempotency key must only replay the message from the mailbox
 // the caller asked for and owns.
 func TestIdempotencyReplayScopedToMailbox(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	other, err := svc.Store.CreateInbox(ctx, u.AccountID, d.ID, "other", "Other")

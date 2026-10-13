@@ -38,6 +38,7 @@ func seedAccessAccount(t *testing.T) (*store.Store, model.User, model.Inbox, mod
 // Clients & Access tab uses to change one inbox's role without disturbing the
 // key's other bindings, and to remove a single binding.
 func TestUpdateAPIKeyPerInboxRoleChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, b1, b2 := seedAccessAccount(t)
 
@@ -84,6 +85,7 @@ func TestUpdateAPIKeyPerInboxRoleChange(t *testing.T) {
 // TestSetUserRolesMerge verifies adding a mailbox user by merging a role into
 // their existing map, then removing just that one inbox.
 func TestSetUserRolesMerge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, b1, b2 := seedAccessAccount(t)
 
@@ -141,6 +143,7 @@ func TestSetUserRolesMerge(t *testing.T) {
 // TestSetUserRolesRejectsAdmin verifies an account Admin (implicit access) is
 // not editable through the per-inbox access tab's store path.
 func TestSetUserRolesRejectsAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, b1, _ := seedAccessAccount(t)
 	if err := s.SetUserRoles(ctx, u.AccountID, u.ID, map[string]string{b1.ID: "owner"}); err == nil {

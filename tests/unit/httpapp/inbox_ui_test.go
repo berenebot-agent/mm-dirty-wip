@@ -83,6 +83,7 @@ func multipartBody(t *testing.T, fields map[string]string, filename, content str
 }
 
 func TestUIInboxViewListsMessages(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	seedInbound(t, svc, box, "d1", "<m1@test>", "First subject", "one")
 	seedInbound(t, svc, box, "d2", "<m2@test>", "Second subject", "two")
@@ -104,6 +105,7 @@ func TestUIInboxViewListsMessages(t *testing.T) {
 }
 
 func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	seedInbound(t, svc, box, "d1", "<m1@test>", "Subject", "body")
 	// Two drafts.
@@ -164,6 +166,7 @@ func TestUIDraftsOutboxCountsAndDate(t *testing.T) {
 }
 
 func TestUIDraftsOutboxCountsEmpty(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -184,6 +187,7 @@ func TestUIDraftsOutboxCountsEmpty(t *testing.T) {
 const testInboxPageSize = 50
 
 func TestUIInboxPagination(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	for i := 0; i < testInboxPageSize+1; i++ {
 		seedInbound(t, svc, box, fmt.Sprintf("d%d", i), fmt.Sprintf("<m%d@test>", i), fmt.Sprintf("Subject %02d", i), "body")
@@ -228,6 +232,7 @@ func TestUIInboxPagination(t *testing.T) {
 }
 
 func TestUIMessageAutoMarksRead(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "d1", "<m1@test>", "Unread message", "hello")
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -252,6 +257,7 @@ func TestUIMessageAutoMarksRead(t *testing.T) {
 }
 
 func TestUIReadToggle(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "d1", "<m1@test>", "Toggle", "hello")
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -272,6 +278,7 @@ func TestUIReadToggle(t *testing.T) {
 }
 
 func TestUIReadToggleRequiresCSRF(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "d1", "<m1@test>", "Toggle", "hello")
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -287,6 +294,7 @@ func TestUIReadToggleRequiresCSRF(t *testing.T) {
 }
 
 func TestUIDeleteMessage(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "d1", "<m1@test>", "Delete me", "bye")
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -343,6 +351,7 @@ func TestUIDeleteMessage(t *testing.T) {
 }
 
 func TestUITrashFolderAndEmpty(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	a := seedInbound(t, svc, box, "ui-t1", "<ui-t1@test>", "one", "one")
@@ -390,6 +399,7 @@ func TestUITrashFolderAndEmpty(t *testing.T) {
 }
 
 func TestUIAttachmentDownloadAndInline(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	raw, err := mailparse.BuildMessage(
 		mailparse.Address{Address: "alice@outside.test"}, []string{box.Address}, nil, nil,
@@ -447,6 +457,7 @@ func TestUIAttachmentDownloadAndInline(t *testing.T) {
 }
 
 func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m, _, _, err := svc.Store.CommitInbound(context.Background(), store.InboundRecord{
 		Inbox: box, Provider: "mailgun", ProviderDeliveryID: "html-1", RFCMessageID: "<html@test>",
@@ -511,6 +522,7 @@ func TestUIMessageHTMLIsFramableAndSandboxed(t *testing.T) {
 }
 
 func TestUIComposeCSRFAndSend(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -555,6 +567,7 @@ func TestUIComposeCSRFAndSend(t *testing.T) {
 }
 
 func TestUIComposeAttachmentDropUI(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -581,6 +594,7 @@ func TestUIComposeAttachmentDropUI(t *testing.T) {
 }
 
 func TestUIReplyAndForward(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	original := seedInbound(t, svc, box, "d1", "<orig@test>", "Original", "original body")
@@ -661,6 +675,7 @@ func writeFile(path string, data []byte) error {
 }
 
 func TestUIMessageHTMLRewritesOnlyImageCIDs(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	rel := filepath.Join("messages", "cid.eml")
 	if err := writeFile(filepath.Join(svc.Config.DataDir, rel), []byte("From: alice@outside.test\r\n\r\n")); err != nil {
@@ -706,6 +721,7 @@ func TestUIMessageHTMLRewritesOnlyImageCIDs(t *testing.T) {
 }
 
 func TestUIDraftSendDeletesDraft(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -773,6 +789,7 @@ func TestUIDraftSendDeletesDraft(t *testing.T) {
 // inline directly below the email address, as a two-column grid holding "Check for
 // new mail" and "Full sync", and keeps the push-status note.
 func TestUISyncScheduleInlineUnderAddress(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -826,6 +843,7 @@ func TestUISyncScheduleInlineUnderAddress(t *testing.T) {
 // inbox address so the dialog can display it, and that the existing delete
 // route still works.
 func TestUIDeleteInboxConfirmDialog(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -874,6 +892,7 @@ func TestUIDeleteInboxConfirmDialog(t *testing.T) {
 // the client dialog carries a typed-confirm input, and the domain dialog is
 // fed the mailboxes the delete will destroy (plus a subdomain note).
 func TestUIDeleteDialogsRenderCopyAndInboxList(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 

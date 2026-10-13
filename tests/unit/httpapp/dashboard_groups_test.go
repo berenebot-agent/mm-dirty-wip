@@ -8,6 +8,7 @@ import (
 )
 
 func TestDashboardLoadsGroupedSortableTablesForPrincipal(t *testing.T) {
+	t.Parallel()
 	svc, handler, user, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, user.ID)
 

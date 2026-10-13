@@ -13,6 +13,7 @@ import (
 )
 
 func TestSendEmptyBodyRejected(t *testing.T) {
+	t.Parallel()
 	svc, u, _, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
@@ -23,6 +24,7 @@ func TestSendEmptyBodyRejected(t *testing.T) {
 }
 
 func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +61,7 @@ func TestDeliverPermanentErrorFailsImmediately(t *testing.T) {
 }
 
 func TestDeliverTransientErrorRetries(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

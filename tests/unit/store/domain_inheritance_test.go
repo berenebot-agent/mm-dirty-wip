@@ -12,6 +12,7 @@ import (
 // configuration and resolves inbound bindings without its own credential, while
 // still resolving to its own domain id.
 func TestSubdomainInheritsReceiving(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", "enc-parent", store.ConfigVersion{}); err != nil {
@@ -52,6 +53,7 @@ func TestSubdomainInheritsReceiving(t *testing.T) {
 // An own configuration always wins over the inherited one, and deleting it
 // falls back to the parent again.
 func TestSubdomainOwnConfigOverridesInherited(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", "enc-parent", store.ConfigVersion{}); err != nil {
@@ -83,6 +85,7 @@ func TestSubdomainOwnConfigOverridesInherited(t *testing.T) {
 
 // A subdomain with inheritance disabled and no own config does not resolve.
 func TestSubdomainInheritanceDisabledRejects(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", "enc-parent", store.ConfigVersion{}); err != nil {
@@ -110,6 +113,7 @@ func TestSubdomainInheritanceDisabledRejects(t *testing.T) {
 // A deep subdomain inherits from the nearest configured ancestor, and a
 // subdomain never inherits from another account's domain of the same name.
 func TestSubdomainNestingAndAccountIsolation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainReceivingConfig(ctx, u.AccountID, d.ID, "cloudflare", "enc-root", store.ConfigVersion{}); err != nil {
@@ -162,6 +166,7 @@ func TestSubdomainNestingAndAccountIsolation(t *testing.T) {
 
 // Sending configuration inherits the same way.
 func TestSubdomainInheritsSending(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.SaveDomainSendingConfig(ctx, u.AccountID, d.ID, "brevo", "enc-send-parent", store.ConfigVersion{}); err != nil {
@@ -183,6 +188,7 @@ func TestSubdomainInheritsSending(t *testing.T) {
 
 // The parent-name override must name a genuine ancestor in the same account.
 func TestCreateSubdomainParentOverrideRejectsNonAncestor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	if _, err := s.CreateDomainWithOptions(ctx, u.AccountID, "nope.test", store.DomainCreateOptions{ParentDomainID: d.ID}); err == nil {
@@ -194,6 +200,7 @@ func TestCreateSubdomainParentOverrideRejectsNonAncestor(t *testing.T) {
 // inheriting its connector while keeping the child domain id. Unlinking clears
 // the switch and stops resolution.
 func TestLinkSubdomainToParentAddedLater(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	// Subdomain first: no ancestor exists, so it is created as a root domain.
@@ -254,6 +261,7 @@ func TestLinkSubdomainToParentAddedLater(t *testing.T) {
 // Linking rejects a parent that is not an ancestor, the domain itself, or a
 // descendant that would form a cycle.
 func TestLinkSubdomainRejectsInvalidParents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	sub, err := s.CreateDomain(ctx, u.AccountID, "agent.example.com")

@@ -30,6 +30,7 @@ func (w *signalWriter) Flush() {
 // TestEventStreamCappedPerCredential verifies one credential cannot park an
 // unbounded number of SSE streams: the cap is 16 and the next is refused.
 func TestEventStreamCappedPerCredential(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "stream", true, nil)
@@ -51,7 +52,11 @@ func TestEventStreamCappedPerCredential(t *testing.T) {
 	for i, w := range writers {
 		select {
 		case <-w.ready:
-		case <-time.After(5 * time.Second):
+		case <-time.After(30 * time.Second):
+			// The handler registers with the hub and arms on-demand detection
+			// before its first flush, so under a heavily loaded -race run all 16
+			// goroutines can take well over the old 5s to reach the flush. The
+			// cap assertion below is what matters, not how fast setup ran.
 			t.Fatalf("stream %d did not start", i)
 		}
 	}
@@ -70,6 +75,7 @@ func TestEventStreamCappedPerCredential(t *testing.T) {
 // TestHSTSWhenForceHTTPS verifies the header is present on an HTTPS deployment
 // that requires TLS.
 func TestHSTSWhenForceHTTPS(t *testing.T) {
+	t.Parallel()
 	svc, h, _, _, _ := httpFixture(t)
 	svc.Config.ForceHTTPS = true
 	req := httptest.NewRequest("GET", "/healthz", nil)

@@ -50,6 +50,7 @@ func seedStandaloneWithFolders(t *testing.T) (*store.Store, string, model.Inbox,
 // folder's unread is excluded, matching the local inbox definition (inbound, not
 // spam, not deleted).
 func TestRemoteInboxUnreadCountsCountsOnlyInboxRoleFolder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, acct, in, wantUnread := seedStandaloneWithFolders(t)
 	p := model.Principal{AccountID: acct, Admin: true, MailboxRoles: map[string]string{}}
@@ -67,6 +68,7 @@ func TestRemoteInboxUnreadCountsCountsOnlyInboxRoleFolder(t *testing.T) {
 // inbox-role mapping falls back to its namespace root, matching the folder the
 // Inbox view lists.
 func TestRemoteInboxUnreadCountsNamespaceFallback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, acct := seedStandaloneAccount(t)
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -96,6 +98,7 @@ func TestRemoteInboxUnreadCountsNamespaceFallback(t *testing.T) {
 // standalone inbox's unread only when they hold a role on it, and that another
 // account's inbox is never counted.
 func TestRemoteInboxUnreadCountsPrincipalScoping(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, acct, in, wantUnread := seedStandaloneWithFolders(t)
 

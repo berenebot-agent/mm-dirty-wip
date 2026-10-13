@@ -58,6 +58,7 @@ func indexOf(list []string, want string) int {
 // direct adapter fixture test in tests/unit/transport/sendgrid keeps covering it
 // independently of registration.
 func TestReceivingProviderOrder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	body := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving").Body.String(), "domain-receiving-dialog-"+domain.ID)
@@ -82,6 +83,7 @@ func TestReceivingProviderOrder(t *testing.T) {
 // TestSendingProviderOrder pins the sending dropdown order: SMTP then Direct MX
 // lead, and every other provider follows alphabetically by display label.
 func TestSendingProviderOrder(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	dialog := dialogHTML(t, domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=sending").Body.String(), "domain-sending-dialog-"+domain.ID)

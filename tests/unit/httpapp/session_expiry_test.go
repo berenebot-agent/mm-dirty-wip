@@ -15,6 +15,7 @@ import (
 // flash that preserves the typed message, and that the login page carries the
 // notice and the next path forward.
 func TestExpiredSessionComposePreserved(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 
 	var buf bytes.Buffer
@@ -101,6 +102,7 @@ func TestExpiredSessionComposePreserved(t *testing.T) {
 // TestExpiredSessionNonComposeGetsNotice proves a non-compose POST with no
 // session gets the plain expiry notice (no content to preserve).
 func TestExpiredSessionNonComposeGetsNotice(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, box := httpFixture(t)
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/edit", strings.NewReader("x=1"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

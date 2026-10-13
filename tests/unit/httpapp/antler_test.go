@@ -96,6 +96,7 @@ func dnsLights(t *testing.T, body map[string]any) map[string]string {
 // checks, with a green verdict for matching MX and TXT records and a red one for a
 // mismatch.
 func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -213,6 +214,7 @@ func TestDialMXAntlerReceivingAPITrafficLights(t *testing.T) {
 // each pass re-resolves DNS, so a record changed between two passes is reflected
 // in the receiving API rather than served from a stale cache.
 func TestDialMXWatcherRefreshesVerdict(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -271,6 +273,7 @@ func TestDialMXWatcherRefreshesVerdict(t *testing.T) {
 // cached verdict and runs no resolver lookup of its own: repeated status reads do
 // not move the resolver counters.
 func TestDialMXReceivingStatusRunsNoLookup(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -323,6 +326,7 @@ func TestDialMXReceivingStatusRunsNoLookup(t *testing.T) {
 // watcher-owned value, so the two surfaces cannot disagree about whether a rogue
 // MX record exists.
 func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -390,6 +394,7 @@ func TestDialMXExtraMXVerdictIsSharedAcrossSurfaces(t *testing.T) {
 // rows without their remediation until the first fetch lands. It is what makes a
 // red receiver's DNS problem appear immediately, matching the dashboard light.
 func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -453,6 +458,7 @@ func TestDialMXStatusViewSeedsFixPrompts(t *testing.T) {
 // matched lists the receiver that is actually pointed at, and the other is left
 // out of matched (so its connector row is not painted by the aggregate check).
 func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -511,6 +517,7 @@ func TestDialMXAntlerPartialMXSetIsHealthy(t *testing.T) {
 // The browser uses session-scoped setup routes; saves require the existing
 // CSRF guard, and reads require a browser session.
 func TestAntlerWizardSessionSetup(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
 		{ID: "antler-1", SessionURL: "https://antler1.example.test", SMTPHostname: "antler1.example.test", MXPriority: 10},
@@ -601,6 +608,7 @@ func TestAntlerWizardSessionSetup(t *testing.T) {
 // field is not present in the Antler MX dialog (it lives only in an inert
 // template), but is present and editable for the custom service.
 func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -644,6 +652,7 @@ func TestDialMXAntlerDialogHidesReceiverURLs(t *testing.T) {
 // client-supplied receiver_urls for the Antler service, so a crafted request
 // cannot point the domain at an arbitrary receiver.
 func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	svc.AntlerEndpoints = fixedAntler{receivers: []mxdial.AntlerReceiver{
@@ -677,6 +686,7 @@ func TestDialMXAntlerAPIRejectsReceiverURLs(t *testing.T) {
 // that the watcher computes no MX check for it (the MX hostname is the operator's
 // own), only the TXT check.
 func TestDialMXCustomReceivingAPIHasNoAntlerInstructions(t *testing.T) {
+	t.Parallel()
 	svc, _, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example"}, false); err != nil {

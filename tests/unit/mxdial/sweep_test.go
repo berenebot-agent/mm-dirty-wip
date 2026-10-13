@@ -14,6 +14,7 @@ import (
 // older than the grace window at startup, leaves recent files and other
 // namespaces alone, and does not touch files outside its own namespace.
 func TestRunSweepsStaleStagingFiles(t *testing.T) {
+	t.Parallel()
 	dataDir := t.TempDir()
 	tmp := filepath.Join(dataDir, "messages", ".tmp")
 	if err := os.MkdirAll(tmp, 0o700); err != nil {

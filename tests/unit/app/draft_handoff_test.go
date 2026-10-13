@@ -115,6 +115,7 @@ func standaloneDraft(t *testing.T, svc *app.Service, accountID string, box model
 // draft, creates a handling record and queues a notification, and never creates a
 // MailMoose approval request.
 func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "agent@remote.example")
@@ -169,6 +170,7 @@ func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
 // remote Drafts folder through the injected publisher, carries the handoff
 // header, and cleans up the local draft while retaining the handoff state.
 func TestRemoteDraftHandoffEndToEnd(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "handoff@remote.example")
@@ -211,6 +213,7 @@ func TestRemoteDraftHandoffEndToEnd(t *testing.T) {
 // TestRemoteDraftHandoffVerifiedByLookup proves an append with no APPENDUID is
 // confirmed by lookup and only then settled as published.
 func TestRemoteDraftHandoffVerifiedByLookup(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "lookup@remote.example")
@@ -236,6 +239,7 @@ func TestRemoteDraftHandoffVerifiedByLookup(t *testing.T) {
 // APPENDUID and whose lookup cannot confirm is recorded as an explicit ambiguous
 // state and is never re-appended.
 func TestRemoteDraftHandoffAmbiguousWhenUnverifiable(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "amb@remote.example")
@@ -263,6 +267,7 @@ func TestRemoteDraftHandoffAmbiguousWhenUnverifiable(t *testing.T) {
 // on the next pass (never a blind re-append), rather than being terminalised as
 // ambiguous.
 func TestRemoteDraftHandoffTransientVerificationRetries(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "verify@remote.example")
@@ -296,6 +301,7 @@ func TestRemoteDraftHandoffTransientVerificationRetries(t *testing.T) {
 // when no publisher is installed (the remote integration is a later wave), rather
 // than being failed.
 func TestRemoteDraftHandoffNoPublisherHolds(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "hold@remote.example")
@@ -315,6 +321,7 @@ func TestRemoteDraftHandoffNoPublisherHolds(t *testing.T) {
 // TestRemoteDraftHandoffPermanentFailure proves a terminal append error settles
 // the handoff as failed and unfreezes the draft.
 func TestRemoteDraftHandoffPermanentFailure(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "fail@remote.example")
@@ -340,6 +347,7 @@ func TestRemoteDraftHandoffPermanentFailure(t *testing.T) {
 // TestRemoteDraftRequestRequiresCanAssist proves a read-only principal cannot
 // request a handoff.
 func TestRemoteDraftRequestRequiresCanAssist(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "perm@remote.example")
@@ -354,6 +362,7 @@ func TestRemoteDraftRequestRequiresCanAssist(t *testing.T) {
 // flipping the inbox setting to MailMooseApproval after a handoff is created does
 // not convert the in-flight handoff.
 func TestRemoteDraftModeSnapshotImmutable(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "snap@remote.example")
@@ -383,6 +392,7 @@ func TestRemoteDraftModeSnapshotImmutable(t *testing.T) {
 // request with a queued notification even though the inbox has no domain provider
 // (the notification is queued and held, not failed).
 func TestRemoteDraftModeMailMooseOptIn(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
@@ -421,6 +431,7 @@ func TestRemoteDraftModeMailMooseOptIn(t *testing.T) {
 // approval path authorizes on the exact nominated From address alone — no envelope
 // is fabricated — and consumes the message.
 func TestHandleRemoteApprovalControlMatchesFromWithoutEnvelope(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
@@ -457,6 +468,7 @@ func TestHandleRemoteApprovalControlMatchesFromWithoutEnvelope(t *testing.T) {
 // TestHandleRemoteApprovalControlRejectsMismatchedFrom proves a From that is not
 // the nominated approver does not authorize the request.
 func TestHandleRemoteApprovalControlRejectsMismatchedFrom(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
@@ -491,6 +503,7 @@ func TestHandleRemoteApprovalControlRejectsMismatchedFrom(t *testing.T) {
 // TestHandleRemoteApprovalControlExcludesHandoffNotification proves a message
 // carrying the handoff correlation header is excluded from approval handling.
 func TestHandleRemoteApprovalControlExcludesHandoffNotification(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	svc.Config.ApprovalExpiryHours = 48
 	ctx := context.Background()
@@ -526,6 +539,7 @@ func TestHandleRemoteApprovalControlExcludesHandoffNotification(t *testing.T) {
 // error leaves the handoff pending and it is retried on the next pass, without
 // spinning within a single pass.
 func TestRemoteDraftHandoffTransientFailureRetriesNextPass(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "transient@remote.example")
@@ -559,6 +573,7 @@ func TestRemoteDraftHandoffTransientFailureRetriesNextPass(t *testing.T) {
 // converted to a handoff: it queues a normal outbound message (held for lack of a
 // provider) rather than creating a handling record.
 func TestOwnerSendOnStandaloneIsNotHandoff(t *testing.T) {
+	t.Parallel()
 	svc, u, _, _ := testService(t)
 	ctx := context.Background()
 	box := standaloneInbox(t, svc, u.AccountID, "owner-send@remote.example")

@@ -12,6 +12,7 @@ import (
 // becomes state "rejected" with reason "not_mx", distinct from the generic
 // authentication_failed that any other unknown reason collapses to.
 func TestNotMXReasonMapsToRejected(t *testing.T) {
+	t.Parallel()
 	rc := newFakeReceiver(t)
 	rc.onAuth = func(fc *fakeConn, ch uint64, a mxwire.DomainAuth) {
 		fc.send(mxwire.FrameAuthResult, 0, ch, mxwire.AuthResult{Domain: a.Domain, KeyID: a.KeyID, Accepted: false, Reason: "not_mx"})

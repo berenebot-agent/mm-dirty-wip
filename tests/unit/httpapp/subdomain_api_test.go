@@ -13,6 +13,7 @@ import (
 // the effective provider (inherited from the parent), and the inheritance flags
 // can be toggled for a slot.
 func TestAPICreateSubdomainInheritsParent(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -88,6 +89,7 @@ func TestAPICreateSubdomainInheritsParent(t *testing.T) {
 // TestAPILinkSubdomainToParentAddedLater covers linking a subdomain to a parent
 // created after it via PATCH parent_domain_id, and unlinking it.
 func TestAPILinkSubdomainToParentAddedLater(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

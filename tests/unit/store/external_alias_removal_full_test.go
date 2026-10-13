@@ -59,6 +59,7 @@ func reAddPre053ExternalAliasSchema(t *testing.T, db *sql.DB) {
 //   - the raw files are queued for post-commit cleanup and then unlinked;
 //   - the schema is clean and PRAGMA foreign_key_check passes.
 func TestMigration053RetiresExternalAliasData(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	// 1. Create a migrated database and a real account/domain/inbox + files.
 	st, err := store.Open(dir)
