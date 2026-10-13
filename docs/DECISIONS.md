@@ -4334,8 +4334,9 @@ The two live-confirmed issues were an open redirect through the post-login `next
 path and an unauthenticated compose body being parsed and cached in the shared
 flash store. The hardening items were the `Secure` cookie gate behind a
 TLS-terminating proxy, the CSRF token travelling in form-action URLs, a
-per-IP-only login throttle, a blocking Argon2 admission gate, and the inbound
-semaphore being taken before the provider signature is verified.
+per-IP-only login throttle, a blocking Argon2 admission gate, the inbound
+semaphore being taken before the provider signature is verified, and passkey
+sign-in being offered on an origin where the browser refuses WebAuthn.
 
 **Decision:**
 
@@ -4389,6 +4390,13 @@ semaphore being taken before the provider signature is verified.
   cap. The signature-before-body ordering is unchanged — Mailgun's signature is
   in the form body, so the body must still be read before it can be verified —
   but one source can no longer hold every slot and starve real deliveries.
+- **Passkeys require a browser secure context.** `Config.SecureContext()` reports
+  whether the canonical origin is an https origin or a loopback host
+  (`localhost`, `127.0.0.1`, `::1`), the two cases browsers treat as secure. The
+  WebAuthn service is built only when that holds, so a plain-HTTP deployment
+  reached by IP or hostname no longer renders the passkey sign-in button; its
+  account page shows a short explanation in place of the passkey controls
+  instead of offering a ceremony the browser would refuse to run.
 
 **Reason:** Each live-confirmed issue was directly exploitable (an off-site
 redirect after login; unauthenticated memory pinning and eviction of one-time

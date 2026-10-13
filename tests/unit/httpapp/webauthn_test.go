@@ -26,7 +26,9 @@ func passkeyFixture(t *testing.T) (*app.Service, http.Handler) {
 	dir := t.TempDir()
 	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
-	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	// A secure context (https) so the WebAuthn service is built; passkeys are
+	// gated on Config.SecureContext().
+	cfg := config.Config{DataDir: dir, BaseURL: "https://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, err := app.New(cfg, st, events.NewHub())
 	if err != nil {
 		t.Fatal(err)
