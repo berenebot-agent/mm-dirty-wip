@@ -58,6 +58,12 @@ func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
 	if _, err := rm.ReconcileRemote(ctx, u.AccountID, inbox); err != nil {
 		t.Fatal(err)
 	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+inbox+"/label-catalog", adminKey(t, svc, u))
+	if catalog.Code != http.StatusOK || !svc.Store.IsGoogle(ctx, u.AccountID, inbox) {
+		t.Fatalf("One/Gmail should share unified label API: %d %s", catalog.Code, catalog.Body.String())
+	}
 	id, err := svc.Store.GoogleLocalID(ctx, u.AccountID, inbox, "message-one")
 	if err != nil {
 		t.Fatal(err)

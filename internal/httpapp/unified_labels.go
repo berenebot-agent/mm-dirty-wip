@@ -339,3 +339,20 @@ func (s *Server) uiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(mb.inbox.ID)+"?notice="+url.QueryEscape("Label created"), http.StatusSeeOther)
 }
+
+// unifiedLabelUnreadCounts provides the same badge data on initial render
+// and status refresh, from each mailbox's authoritative cached metadata.
+func (s *Server) unifiedLabelUnreadCounts(ctx context.Context, p model.Principal, box model.Inbox) map[string]int {
+	if box.Kind == model.InboxKindStandalone {
+		counts, err := s.Service.Store.RemoteInboxLabelUnreadCounts(ctx, p.AccountID, box.ID)
+		if err == nil {
+			return counts
+		}
+		return map[string]int{}
+	}
+	counts, _ := s.Service.Store.InboxLabelUnreadCounts(ctx, p, box.ID)
+	if counts == nil {
+		return map[string]int{}
+	}
+	return counts
+}

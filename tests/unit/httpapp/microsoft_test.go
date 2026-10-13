@@ -132,6 +132,13 @@ func TestMicrosoftMailboxMovesAndPermissions(t *testing.T) {
 	if e != nil || len(v.Labels) != 1 {
 		t.Fatalf("categories %#v %v", v, e)
 	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"name":"Projects"`) ||
+		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
+		t.Fatalf("Graph categories should be additive labels: %d %s", catalog.Code, catalog.Body.String())
+	}
 	v, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "archive-id")
 	if e != nil || v.ID != id || v.FolderPath != "archive-id" {
 		t.Fatalf("move %#v %v", v, e)

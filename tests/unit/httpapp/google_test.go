@@ -88,6 +88,13 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 	if e != nil || len(other.Items) != 1 || other.Items[0].ID != id {
 		t.Fatalf("label membership %#v %v", other, e)
 	}
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	catalog := apiGet(t, srv.Handler(), "/v1/inboxes/"+box.ID+"/label-catalog", adminKey(t, svc, u))
+	if catalog.Code != http.StatusOK || strings.Count(catalog.Body.String(), `"name":"Projects"`) != 1 ||
+		!strings.Contains(catalog.Body.String(), `"membership":"multiple"`) {
+		t.Fatalf("Gmail label should be additive and deduplicated: %d %s", catalog.Code, catalog.Body.String())
+	}
 	if _, e = rm.MoveRemoteMessage(ctx, p, box.ID, id, "ARCHIVE"); e != nil {
 		t.Fatal(e)
 	}
