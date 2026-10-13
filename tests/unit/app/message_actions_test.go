@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -537,5 +539,50 @@ func TestRecheckSpamPatchIsDecidedByProviderState(t *testing.T) {
 	settled, err := svc.Store.GetMessageAction(ctx, p, failed.ID)
 	if err != nil || settled.State != "done" {
 		t.Fatalf("applied spam patch not settled by provider state: %+v %v", settled, err)
+	}
+}
+
+// TestFailedMoveSurfacesProviderReason proves a failed remote move records the
+// provider's own error text rather than the opaque "Action could not be
+// completed" fallback. A raw transport error normalises to an internal
+// MailboxError with no public message; without the cause fallback the operator
+// saw only the generic string and could not tell why every folder move failed.
+func TestFailedMoveSurfacesProviderReason(t *testing.T) {
+	t.Parallel()
+	svc, u, box, rm := remoteTestEnv(t)
+	configureSecrets(t, rm, u, box, "pw", "")
+	fake := newFakeRemoteServer()
+	fake.addMessage("INBOX", "body", "<movefail@test>", "MoveFail")
+	fake.moveFail = errors.New("imap: UID MOVE: server said destination is not selectable")
+	rm.SetRemoteDialer(func(context.Context, imap.Config) (app.RemoteSession, error) { return fake, nil })
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	if _, err := rm.ReconcileRemote(ctx, u.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := rm.ListRemoteMessagesCached(ctx, p, box.ID, "INBOX", 10, "")
+	if err != nil || len(res.Items) != 1 {
+		t.Fatalf("messages: %+v %v", res, err)
+	}
+	a, err := svc.EnqueueInboxAction(ctx, p, box.ID, res.Items[0].ID, store.MessageActionInput{Kind: "move", Destination: "Drafts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := app.NewActionWorker(svc, rm)
+	svc.ActionWaker = w
+	w.Start()
+	defer w.Stop()
+	settled, err := svc.WaitForInboxAction(ctx, p, a.ID, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.State != "failed" {
+		t.Fatalf("state = %q, want failed: %+v", settled.State, settled)
+	}
+	if !strings.Contains(settled.LastError, "not selectable") {
+		t.Fatalf("failure reason %q does not surface the provider cause", settled.LastError)
+	}
+	if settled.LastError == "Action could not be completed" {
+		t.Fatalf("failure reason is still the opaque generic string")
 	}
 }
