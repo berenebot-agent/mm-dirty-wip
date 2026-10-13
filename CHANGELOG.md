@@ -6,6 +6,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- A key may hold a **domain-wide sending** grant on a domain's catch-all inbox,
+  so it can send from any address on that domain (for example `billing@`) without
+  a hand-made alias. The grant is live only while that inbox is the domain's
+  enabled catch-all, forces the key's role to Owner, and is checked at send time,
+  so revoking it or changing the catch-all stops a pending send. Migration 074
+  adds `client_inbox_bindings.send_any_in_domain`; `POST /v1/admin/keys` accepts a
+  `domain_send` list. See `D115`.
+
 ### Changed
 
 - A terminal outbound send failure (permanent provider rejection, ambiguous

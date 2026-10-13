@@ -1584,6 +1584,10 @@ type SendInput struct {
 	ReplyToMessageID   string           `json:"reply_to_message_id,omitempty"`
 	ForwardOfMessageID string           `json:"forward_of_message_id,omitempty"`
 	Attachments        []SendAttachment `json:"attachments,omitempty"`
+	// SenderKeyID is the API key whose domain-wide sending grant may widen the
+	// From address space. Empty for a web session, system mail or the
+	// principal-free approval path. It is never accepted from API JSON.
+	SenderKeyID string `json:"-"`
 	// DraftID, when set, consumes the draft in the same transaction that
 	// enqueues the message. It is never accepted from API JSON.
 	DraftID string `json:"-"`
@@ -1636,6 +1640,9 @@ func (s *Service) Send(ctx context.Context, p model.Principal, in SendInput, ide
 	if !p.CanOwn(in.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
+	// Only an API key may carry the domain-wide sending grant; a session or an
+	// Admin principal has no key id and keeps the primary/alias rule.
+	in.SenderKeyID = p.APIKeyID
 	if err := s.setClient(ctx, p, &in); err != nil {
 		return SendResult{}, err
 	}
@@ -1711,7 +1718,7 @@ func (s *Service) sendWithLimit(ctx context.Context, accountID string, in SendIn
 	// an empty one).
 	var from model.Address
 	var sendingTarget store.SendingTarget
-	from, sendingTarget, err = s.Store.ResolveSendingTarget(ctx, accountID, inbox.ID, in.FromAddress)
+	from, sendingTarget, err = s.Store.ResolveSendingTarget(ctx, accountID, inbox.ID, in.SenderKeyID, in.FromAddress)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -1920,6 +1927,8 @@ func (s *Service) SendDraft(ctx context.Context, p model.Principal, draftID stri
 	if !p.CanOwn(d.InboxID) {
 		return SendResult{}, store.ErrForbidden
 	}
+	// Carry the key's domain-wide sending grant into the principal-free core.
+	in.SenderKeyID = p.APIKeyID
 	if in.InboxID == "" {
 		in.InboxID = d.InboxID
 	}

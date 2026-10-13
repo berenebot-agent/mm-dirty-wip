@@ -37,31 +37,31 @@ func TestResolveSendingTarget(t *testing.T) {
 	// Empty and primary (in any case) both resolve to the primary with the
 	// inbox name/domain.
 	for _, requested := range []string{"", box.Address, strings.ToUpper(box.Address)} {
-		from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, requested)
+		from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", requested)
 		if err != nil || from.Address != box.Address || from.Name != "Acme" || target.DomainID != d.ID {
 			t.Fatalf("primary %q -> %+v target=%+v err=%v", requested, from, target, err)
 		}
 	}
 
 	// Same-domain alias uses its own display name and the inbox domain.
-	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "sales@example.com")
+	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "sales@example.com")
 	if err != nil || from.Address != "sales@example.com" || from.Name != "Acme Sales" || target.DomainID != d.ID {
 		t.Fatalf("same-domain alias -> %+v target=%+v err=%v", from, target, err)
 	}
 
 	// Cross-domain alias resolves its own domain and falls back to the inbox
 	// display name when it has none.
-	from, target, err = s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "billing@other.com")
+	from, target, err = s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "billing@other.com")
 	if err != nil || from.Address != "billing@other.com" || from.Name != "Acme" || target.DomainID != d2.ID {
 		t.Fatalf("cross-domain alias -> %+v target=%+v err=%v", from, target, err)
 	}
 
 	// An address that is neither primary nor alias is rejected.
-	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "nope@example.com"); !errors.Is(err, store.ErrForbidden) {
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "nope@example.com"); !errors.Is(err, store.ErrForbidden) {
 		t.Fatalf("unknown sender err=%v, want forbidden", err)
 	}
 	// A foreign inbox is not found.
-	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, "in_missing", ""); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := s.ResolveSendingTarget(ctx, u.AccountID, "in_missing", "", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("missing inbox err=%v, want not found", err)
 	}
 
@@ -100,7 +100,7 @@ func TestSendAsMessageRecordsSendingDomain(t *testing.T) {
 	if err := s.SetInboxAliases(ctx, u.AccountID, box.ID, []store.AliasInput{{DomainID: d2.ID, LocalPart: "sales"}}); err != nil {
 		t.Fatal(err)
 	}
-	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "sales@other.com")
+	from, target, err := s.ResolveSendingTarget(ctx, u.AccountID, box.ID, "", "sales@other.com")
 	if err != nil {
 		t.Fatal(err)
 	}
