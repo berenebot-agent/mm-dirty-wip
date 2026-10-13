@@ -53,6 +53,7 @@ func authOnce(t *testing.T, s *rawSession, priv ed25519.PrivateKey, ch uint64, d
 // TXT authority proof, a receiver whose own SMTP hostname is not in the domain's
 // MX answers rejected/not_mx rather than installing a binding.
 func TestGate2NotMXRejectsInitialAuth(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	mx := func(context.Context, string) ([]*net.MX, error) {
@@ -72,6 +73,7 @@ func TestGate2NotMXRejectsInitialAuth(t *testing.T) {
 // TestGate2MXPresentAccepts proves the positive path: a receiver that is named in
 // the domain's MX completes the binding as before.
 func TestGate2MXPresentAccepts(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	mx := func(context.Context, string) ([]*net.MX, error) {
@@ -92,6 +94,7 @@ func TestGate2MXPresentAccepts(t *testing.T) {
 // NOT the not_mx verdict: the receiver reports the retryable dns_unavailable and
 // reserves not_mx for a successful lookup that omits it.
 func TestGate2ResolverErrorIsDeferrable(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	mx := func(context.Context, string) ([]*net.MX, error) { return nil, errors.New("resolver down") }
@@ -112,6 +115,7 @@ func TestGate2ResolverErrorIsDeferrable(t *testing.T) {
 // verdict on a successful lookup alone would leave the binding deferred forever
 // and the traffic light green after the record was deleted.
 func TestGate2NoMXRecordIsNotMX(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	txt := func(context.Context, string) ([]string, error) { return []string{mxwire.DomainTXT("key1", pub)}, nil }
 	mx := func(context.Context, string) ([]*net.MX, error) {
@@ -133,6 +137,7 @@ func TestGate2NoMXRecordIsNotMX(t *testing.T) {
 // search-suffix failure then masks a clean NODATA as IsTemporary — which is
 // what turns "the MX record was deleted" into an eternal dns_unavailable defer.
 func TestProofLookupsQueryAbsoluteNames(t *testing.T) {
+	t.Parallel()
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	var txtName, mxName string
 	txt := func(_ context.Context, name string) ([]string, error) {

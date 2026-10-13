@@ -9,6 +9,7 @@ import (
 )
 
 func TestDialMXCredentialAccountIsolationAndDomainCascade(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, _ := testStore(t)
 	credential, created, err := s.EnsureDialMXCredential(ctx, u.AccountID, d.ID, "key1", "cipher1", "pub1")

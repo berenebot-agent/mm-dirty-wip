@@ -23,7 +23,6 @@ import (
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
@@ -66,18 +65,16 @@ func seedInboundCredential(t *testing.T, svc *app.Service, accountID, domainID, 
 }
 
 func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	defer st.Close()
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 	svc, _ := app.New(cfg, st, events.NewHub())
 	h := httpapp.New(svc, nil).Handler()
 	// The system administrator now comes from ADMIN_* at startup, so seed an
 	// ordinary account Admin directly for this HTTP-level test.
-	if _, err = st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes); err != nil {
+	if _, err := st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes); err != nil {
 		t.Fatal(err)
 	}
 	rr := httptest.NewRecorder()
@@ -132,15 +129,13 @@ func TestPreAuthAndAuthenticatedCSRF(t *testing.T) {
 }
 
 func TestSecureCookieFollowsActualConnection(t *testing.T) {
+	t.Parallel()
 	newHandler := func(t *testing.T, baseURL string, trustProxy bool) http.Handler {
 		t.Helper()
 		dir := t.TempDir()
-		st, err := store.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
+		st := testdb.OpenAt(t, dir)
 		t.Cleanup(func() { st.Close() })
-		if _, err = st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20); err != nil {
+		if _, err := st.CreateInitialAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", 50<<20); err != nil {
 			t.Fatal(err)
 		}
 		cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", AllowPrivateOutbound: true, TrustProxyHeaders: trustProxy, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
@@ -227,6 +222,7 @@ func signedMGRequest(t *testing.T, key, token, recipient, raw string) *http.Requ
 }
 
 func TestAgentAPIAndAttachmentDownload(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	raw := strings.Join([]string{"From: sender@outside.test", "To: hermes@example.com", "Subject: attachment", "Message-ID: <a@test>", "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=x", "", "--x", "Content-Type: text/plain", "", "hello searchable", "--x", "Content-Type: text/html; name=attack.html", "Content-Disposition: attachment; filename=attack.html", "Content-Transfer-Encoding: base64", "", "PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "--x--", ""}, "\r\n")
@@ -276,6 +272,7 @@ func TestAgentAPIAndAttachmentDownload(t *testing.T) {
 }
 
 func TestUnknownRecipientIs406(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	raw := "From: x@y.test\r\nTo: missing@example.com\r\n\r\nhi"
 	rr := httptest.NewRecorder()
@@ -286,6 +283,7 @@ func TestUnknownRecipientIs406(t *testing.T) {
 }
 
 func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, _ := httpFixture(t)
 	ctx := context.Background()
 	_, adminKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -376,6 +374,7 @@ func TestOpenAgentCompatibilityCommonFlow(t *testing.T) {
 // decode error. apiSeen defaulted to seen=true, so a malformed body silently
 // marked a message read; it must now be a 400 and must not touch the message.
 func TestMalformedJSONIsRejected(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

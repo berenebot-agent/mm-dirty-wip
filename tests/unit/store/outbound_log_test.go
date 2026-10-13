@@ -11,6 +11,7 @@ import (
 )
 
 func TestDeliveryLogRecordListAndPrune(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	box := b[0]
@@ -114,6 +115,7 @@ func deliveryLogCount(t *testing.T, s *store.Store, accountID string) int {
 // an interrupted attempt marks the previous in-flight row "interrupted" rather
 // than leaving a dangling "sending" row forever.
 func TestDeliveryStartedRecordsInFlightAndInterruptsStale(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	box := b[0]
@@ -166,6 +168,7 @@ func TestDeliveryStartedRecordsInFlightAndInterruptsStale(t *testing.T) {
 // TestOutboxMarksSendingInFlight proves the outbox view distinguishes a message
 // whose delivery is in flight from one merely queued.
 func TestOutboxMarksSendingInFlight(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -195,6 +198,7 @@ func TestOutboxMarksSendingInFlight(t *testing.T) {
 }
 
 func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	box := b[0]

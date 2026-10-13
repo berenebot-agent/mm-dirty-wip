@@ -24,6 +24,7 @@ func setInboxQuota(t *testing.T, s *store.Store, accountID, inboxID string, quot
 // inbound and outbound mail that the account quota would otherwise accept, and
 // that an uncapped sibling inbox is unaffected.
 func TestInboxQuotaEnforcedIndependentlyOfAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box, other := b[0], b[1]
@@ -73,6 +74,7 @@ func TestInboxQuotaEnforcedIndependentlyOfAccount(t *testing.T) {
 // TestInboxQuotaRefundedOnPurge proves purging a message returns its bytes to
 // the inbox counter so the cap can be reused.
 func TestInboxQuotaRefundedOnPurge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -110,6 +112,7 @@ func TestInboxQuotaRefundedOnPurge(t *testing.T) {
 
 // TestInboxQuotaChargesDrafts proves a draft body counts against its inbox cap.
 func TestInboxQuotaChargesDrafts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -141,6 +144,7 @@ func TestInboxQuotaChargesDrafts(t *testing.T) {
 // an upgraded install would have) is initialized from its existing stored bytes
 // on the first adjustment, then enforced.
 func TestInboxQuotaLazyInitFromSum(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -196,6 +200,7 @@ func TestInboxQuotaLazyInitFromSum(t *testing.T) {
 // TestSetInboxStorageQuotaValidation proves negative caps are rejected and a
 // nil cap clears the limit.
 func TestSetInboxStorageQuotaValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -228,6 +233,7 @@ func TestSetInboxStorageQuotaValidation(t *testing.T) {
 // inbox storage columns on both a fresh database and an upgrade from the v012
 // fixture, and that the upgraded counter starts NULL so lazy init can run.
 func TestInboxQuotaMigrationFreshAndUpgrade(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh", func(t *testing.T) {
 		st, err := store.Open(t.TempDir())
 		if err != nil {
@@ -268,6 +274,7 @@ func TestInboxQuotaMigrationFreshAndUpgrade(t *testing.T) {
 // inbox whose counter is still NULL (a pre-migration inbox) initializes it
 // first, so the refund does not clobber the remaining usage to zero.
 func TestInboxQuotaPurgeFromUninitializedCounter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]

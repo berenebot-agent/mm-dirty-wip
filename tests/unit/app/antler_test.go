@@ -33,6 +33,7 @@ func antlerReceivers() []mxdial.AntlerReceiver {
 // the contact email, resolves the live manifest, snapshots both receiver URLs
 // and hostnames, and assigns a stable setup id that a resave retains.
 func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	stub := &stubAntler{receivers: antlerReceivers()}
 	svc.AntlerEndpoints = stub
@@ -86,6 +87,7 @@ func TestDialMXAntlerSetupSnapshotsEndpoints(t *testing.T) {
 // operator works through its steps, so a re-save must not silently re-point the
 // domain at a different receiver.
 func TestDialMXAntlerResaveKeepsReceiverSnapshot(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	stub := &stubAntler{receivers: antlerReceivers()}
 	svc.AntlerEndpoints = stub
@@ -125,6 +127,7 @@ func TestDialMXAntlerResaveKeepsReceiverSnapshot(t *testing.T) {
 // updates the contact email and the enforcement policy while preserving the
 // receiver snapshot, setup identity and the domain credential.
 func TestUpdateAntlerSettingsEditsInPlace(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	stub := &stubAntler{receivers: antlerReceivers()}
 	svc.AntlerEndpoints = stub
@@ -173,6 +176,7 @@ func TestUpdateAntlerSettingsEditsInPlace(t *testing.T) {
 // is never caller-controlled: an explicit receiver_urls is a validation error
 // rather than a silent discard, and no config is written.
 func TestDialMXAntlerRejectsSuppliedReceiverURLs(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	stub := &stubAntler{receivers: antlerReceivers()}
 	svc.AntlerEndpoints = stub
@@ -194,6 +198,7 @@ func TestDialMXAntlerRejectsSuppliedReceiverURLs(t *testing.T) {
 }
 
 func TestDialMXAntlerRequiresValidContactEmail(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	svc.AntlerEndpoints = &stubAntler{receivers: antlerReceivers()}
 	ctx := context.Background()
@@ -208,6 +213,7 @@ func TestDialMXAntlerRequiresValidContactEmail(t *testing.T) {
 }
 
 func TestDialMXAntlerManifestFailureIsInvalidConfig(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	svc.AntlerEndpoints = &stubAntler{err: errors.New("network down")}
 	_, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, d.ID, "dialmx", map[string]any{
@@ -221,6 +227,7 @@ func TestDialMXAntlerManifestFailureIsInvalidConfig(t *testing.T) {
 // TestDialMXLegacyCustomSaveStaysCustom proves the service default never
 // silently migrates a legacy receiver_urls-only save to Antler MX.
 func TestDialMXLegacyCustomSaveStaysCustom(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	stub := &stubAntler{receivers: antlerReceivers()}
 	svc.AntlerEndpoints = stub
@@ -253,6 +260,7 @@ func TestDialMXLegacyCustomSaveStaysCustom(t *testing.T) {
 // TestDialMXSwitchFromCustomToAntler proves an explicit service switch replaces
 // the custom URLs with the resolved Antler snapshot.
 func TestDialMXSwitchFromCustomToAntler(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	svc.AntlerEndpoints = &stubAntler{receivers: antlerReceivers()}
 	ctx := context.Background()

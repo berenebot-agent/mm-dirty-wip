@@ -43,6 +43,7 @@ func rateLimitedService(t *testing.T, limit int) (*app.Service, model.User, mode
 // centrally in the service, so an account cannot bypass it by using the
 // draft-send path instead of the plain send path.
 func TestSendRateLimitCoversDraftPath(t *testing.T) {
+	t.Parallel()
 	svc, u, box := rateLimitedService(t, 2)
 	ctx := context.Background()
 	admin := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -68,6 +69,7 @@ func TestSendRateLimitCoversDraftPath(t *testing.T) {
 }
 
 func TestIdempotentReplayDoesNotConsumeSendAllowance(t *testing.T) {
+	t.Parallel()
 	svc, u, box := rateLimitedService(t, 1)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	in := app.SendInput{InboxID: box.ID, To: []string{"a@b.test"}, Subject: "hi", Text: "body"}
@@ -85,6 +87,7 @@ func TestIdempotentReplayDoesNotConsumeSendAllowance(t *testing.T) {
 }
 
 func TestExternalApprovalRateLimitKeepsRequestPending(t *testing.T) {
+	t.Parallel()
 	svc, u, box := rateLimitedService(t, 1)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true}

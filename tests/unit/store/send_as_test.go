@@ -16,6 +16,7 @@ import (
 // that is neither the primary nor an alias. It also proves the default sender
 // is validated and cleared when its alias is removed.
 func TestResolveSendingTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	box := boxes[0]
@@ -89,6 +90,7 @@ func TestResolveSendingTarget(t *testing.T) {
 // message with the alias's own domain, and that delivery/requeue resolve that
 // domain's config rather than the inbox's.
 func TestSendAsMessageRecordsSendingDomain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]
@@ -144,6 +146,7 @@ func TestSendAsMessageRecordsSendingDomain(t *testing.T) {
 // TestAliasDisplayNameValidation rejects names that would corrupt the From
 // header or the parallel-field encoding.
 func TestAliasDisplayNameValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, boxes := testStore(t)
 	box := boxes[0]
@@ -167,6 +170,7 @@ func TestAliasDisplayNameValidation(t *testing.T) {
 // TestRequeuePendingForSendingDomain proves saving an alias domain's config
 // requeues that alias domain's pending sends.
 func TestRequeuePendingForSendingDomain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	box := boxes[0]

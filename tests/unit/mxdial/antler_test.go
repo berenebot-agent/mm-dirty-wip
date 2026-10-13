@@ -21,6 +21,7 @@ const validManifest = `{
 }`
 
 func TestEmbeddedAntlerManifestIsValid(t *testing.T) {
+	t.Parallel()
 	receivers := mxdial.EmbeddedAntlerReceivers()
 	if len(receivers) != 2 {
 		t.Fatalf("embedded manifest receivers = %d, want 2", len(receivers))
@@ -31,6 +32,7 @@ func TestEmbeddedAntlerManifestIsValid(t *testing.T) {
 }
 
 func TestParseAntlerManifestValidates(t *testing.T) {
+	t.Parallel()
 	// Unknown fields are tolerated so the hosted document can grow without
 	// breaking older cores; known fields are still validated strictly.
 	if _, err := mxdial.ParseAntlerManifest([]byte(validManifest)); err != nil {
@@ -59,6 +61,7 @@ func TestParseAntlerManifestValidates(t *testing.T) {
 // and that a fetch failure falls back to the last known good copy rather than
 // failing setup.
 func TestAntlerResolverFetchesAndFallsBack(t *testing.T) {
+	t.Parallel()
 	var fail atomic.Bool
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if fail.Load() {
@@ -90,6 +93,7 @@ func TestAntlerResolverFetchesAndFallsBack(t *testing.T) {
 // TestAntlerResolverUsesEmbeddedWhenNeverFetched proves setup still works with
 // no network at all: the embedded manifest is used.
 func TestAntlerResolverUsesEmbeddedWhenNeverFetched(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "down", http.StatusBadGateway)
 	}))

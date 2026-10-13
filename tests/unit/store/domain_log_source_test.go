@@ -14,6 +14,7 @@ import (
 // (received, blocked and consumed approval-control) and the sending credential
 // label on outbound attempts.
 func TestDomainLogSourceLabelsBothDirections(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	box := b[0]

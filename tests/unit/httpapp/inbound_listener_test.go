@@ -24,6 +24,7 @@ func inboundRawMessage() string {
 }
 
 func TestInboundHandlerExposesOnlyConnector(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _, _ := httpFixture(t)
 	h := httpapp.New(svc, nil).InboundHandler()
 
@@ -52,6 +53,7 @@ func TestInboundHandlerExposesOnlyConnector(t *testing.T) {
 }
 
 func TestInboundHandlerAcceptsWebhook(t *testing.T) {
+	t.Parallel()
 	svc, _, _, _, box := httpFixture(t)
 	h := httpapp.New(svc, nil).InboundHandler()
 
@@ -64,6 +66,7 @@ func TestInboundHandlerAcceptsWebhook(t *testing.T) {
 }
 
 func TestMainHandlerStillServesInbound(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, box := httpFixture(t)
 
 	req := signedMGRequest(t, testMailgunKey, "inbound-main", box.Address, inboundRawMessage())

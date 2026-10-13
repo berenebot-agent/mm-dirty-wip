@@ -18,6 +18,7 @@ import (
 )
 
 func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	ctx := context.Background()
 	box, e := svc.Store.CreateStandaloneInbox(ctx, u.AccountID, store.StandaloneCreate{Address: "google@example.net"})
@@ -114,6 +115,7 @@ func TestGoogleCacheStableLabelsAndScopedAccess(t *testing.T) {
 }
 
 func TestGoogleOAuthPasteExpiryAndReplay(t *testing.T) {
+	t.Parallel()
 	svc, _, u, _, _, _ := standaloneFixture(t)
 	svc.Config.BaseURL = "https://mail.example.com"
 	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

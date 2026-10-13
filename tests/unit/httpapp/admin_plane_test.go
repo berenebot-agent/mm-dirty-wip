@@ -15,7 +15,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // systemAdminFixture builds a service whose bootstrap user is the installation
@@ -24,10 +24,7 @@ import (
 func systemAdminFixture(t *testing.T) (*app.Service, http.Handler, model.User, model.Inbox) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { _ = st.Close() })
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 50, SendLimitPerMinute: 60, AdminAccountName: "MailMoose"}
 	svc, err := app.New(cfg, st, events.NewHub())
@@ -119,6 +116,7 @@ func acceptInvite(t *testing.T, h http.Handler, token, password string) *http.Co
 }
 
 func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusForbidden {
@@ -134,6 +132,7 @@ func TestAdminPlaneRequiresSystemAdmin(t *testing.T) {
 }
 
 func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, root.ID)
 	token := createInvite(t, h, cookie, csrf, "/ui/account/operators/invites", "/account?tab=account", url.Values{"email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
@@ -148,6 +147,7 @@ func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
 }
 
 func TestSystemAdminInvitesNewAccount(t *testing.T) {
+	t.Parallel()
 	svc, h, root, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, root.ID)
 	if rr := uiGet(t, h, cookie, "/admin"); rr.Code != http.StatusOK {
@@ -171,6 +171,7 @@ func TestSystemAdminInvitesNewAccount(t *testing.T) {
 }
 
 func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	d, err := svc.Store.GetDomain(ctx, root.AccountID, mailerBox.DomainID)
@@ -229,6 +230,7 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 }
 
 func TestAccountMailerSendsOperatorInvite(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	if err := svc.Store.SetAccountMailerInbox(ctx, root.AccountID, mailerBox.ID); err != nil {
@@ -255,6 +257,7 @@ func TestAccountMailerSendsOperatorInvite(t *testing.T) {
 }
 
 func TestReissueRotatesOperatorLink(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, root.ID)
@@ -282,6 +285,7 @@ func TestReissueRotatesOperatorLink(t *testing.T) {
 }
 
 func TestSystemAdminSendsNewAccountInviteFromOwnMailer(t *testing.T) {
+	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
 	if err := svc.Store.SetAccountMailerInbox(ctx, root.AccountID, mailerBox.ID); err != nil {
@@ -304,6 +308,7 @@ func TestSystemAdminSendsNewAccountInviteFromOwnMailer(t *testing.T) {
 }
 
 func TestSystemAdminEditsAccountStorageQuota(t *testing.T) {
+	t.Parallel()
 	svc, h, root, _ := systemAdminFixture(t)
 	ctx := context.Background()
 	cookie, csrf := uiSession(t, svc, root.ID)
@@ -364,6 +369,7 @@ func TestSystemAdminEditsAccountStorageQuota(t *testing.T) {
 }
 
 func TestSystemAdminCannotChangeLoginInUI(t *testing.T) {
+	t.Parallel()
 	svc, h, root, _ := systemAdminFixture(t)
 	cookie, csrf := uiSession(t, svc, root.ID)
 	rr := domainPost(t, h, cookie, "/ui/account/password", url.Values{"_csrf": {csrf}, "current_password": {"correct horse battery staple"}, "new_password": {"another correct horse battery staple"}, "confirm_password": {"another correct horse battery staple"}})

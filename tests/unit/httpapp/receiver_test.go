@@ -12,6 +12,7 @@ import (
 )
 
 func TestReceiverURLAndRoutes(t *testing.T) {
+	t.Parallel()
 	svc, _, u, dom, _ := httpFixture(t)
 	svc.Config.BaseURL = "https://mail.example.com"
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)

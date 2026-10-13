@@ -17,6 +17,7 @@ import (
 // rotation, the returned TXT record is public and the private seed is never
 // leaked. It then reads the UI wizard for the configured domain.
 func TestDialMXAPIKeyRotationAndTXTWizard(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -114,6 +115,7 @@ func TestDialMXAPIKeyRotationAndTXTWizard(t *testing.T) {
 // Dial MX from its parent still gets its own exact key on read and rotation,
 // without materialising a receiving configuration of its own.
 func TestDialMXInheritedExactKeyAndNoOwnConfig(t *testing.T) {
+	t.Parallel()
 	svc, h, u, parent, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
@@ -210,6 +212,7 @@ func TestDialMXInheritedExactKeyAndNoOwnConfig(t *testing.T) {
 // the regenerate action must sit outside the configuration form so the markup is
 // valid HTML.
 func TestDialMXUINoNestedForm(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example", "enforcement": "moderate"}, false); err != nil {
@@ -233,6 +236,7 @@ func TestDialMXUINoNestedForm(t *testing.T) {
 // The session-authenticated wizard rotation endpoint must return the newly
 // persisted DNS key and preserve the saved connector settings.
 func TestDialMXWizardRotationReturnsCurrentDNS(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	ctx := context.Background()
 	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, domain.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example", "enforcement": "hard"}, false); err != nil {
@@ -290,6 +294,7 @@ func TestDialMXWizardRotationReturnsCurrentDNS(t *testing.T) {
 // Dial MX; a domain viewed with ?provider=dialmx but configured for something
 // else must neither show the action nor mint a key.
 func TestDialMXRegenerateIsScopedToSelectedProvider(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domain, _ := httpFixture(t)
 	// httpFixture seeds a mailgun receiving config on the fixture domain.
 	cookie, csrf := uiSession(t, svc, u.ID)

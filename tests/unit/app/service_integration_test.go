@@ -91,6 +91,7 @@ func mgRequest(t *testing.T, key, token, recipient, raw string) *http.Request {
 }
 
 func TestMailgunIngestOutboundReplyAndIdempotency(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	seedInbound(t, svc, u.AccountID, dom.ID, "mailgun", map[string]any{"signing_key": testMailgunKey})
 	ctx := context.Background()

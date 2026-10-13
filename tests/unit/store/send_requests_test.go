@@ -19,6 +19,7 @@ func owner(b model.Inbox, accountID string) model.Principal {
 }
 
 func TestSendRequestFreezeCancelReject(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -120,6 +121,7 @@ func TestSendRequestFreezeCancelReject(t *testing.T) {
 }
 
 func TestSendRequestApproveClaimsAndSurvivesConsumption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -178,6 +180,7 @@ func TestSendRequestApproveClaimsAndSurvivesConsumption(t *testing.T) {
 }
 
 func TestSendRequestDeliveryFailureAndSingleWinner(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -240,6 +243,7 @@ func TestSendRequestDeliveryFailureAndSingleWinner(t *testing.T) {
 }
 
 func TestExternalRequestExpiryReleasesDraft(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -294,6 +298,7 @@ func TestExternalRequestExpiryReleasesDraft(t *testing.T) {
 }
 
 func TestFindByTokenAndRejectInternal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	box := b[0]
@@ -335,6 +340,7 @@ func TestFindByTokenAndRejectInternal(t *testing.T) {
 }
 
 func TestApprovalSubjectLabel(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		outcome string
 		subject string

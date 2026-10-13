@@ -20,6 +20,7 @@ func mxSendingGroup(t *testing.T, page, domainID string) string {
 // the sending editor, with the private key available on demand rather than
 // splashed on the page.
 func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -73,6 +74,7 @@ func TestDKIMRecordShownInlineWithSigning(t *testing.T) {
 // key is kept whether signing is on or off (so the record is ready the moment it
 // is switched back on), but the panel is hidden while signing is off.
 func TestDKIMSigningOffHidesTheRecord(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
@@ -107,6 +109,7 @@ func TestDKIMSigningOffHidesTheRecord(t *testing.T) {
 // TestDKIMRevealIsCSRFProtectedAndSingleUse proves the private key can be
 // retrieved deliberately, but not by a bare navigation and not twice.
 func TestDKIMRevealIsCSRFProtectedAndSingleUse(t *testing.T) {
+	t.Parallel()
 	svc, h, u, d, _ := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{

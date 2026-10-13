@@ -10,6 +10,7 @@ import (
 )
 
 func TestInboxAliasResolvePrecedenceAndCrossDomain(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	target := b[0]
@@ -61,6 +62,7 @@ func TestInboxAliasResolvePrecedenceAndCrossDomain(t *testing.T) {
 }
 
 func TestInboxAliasListedOnInbox(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	target := b[0]
@@ -86,6 +88,7 @@ func TestInboxAliasListedOnInbox(t *testing.T) {
 }
 
 func TestInboxAliasRejectsCollisionsAndForeignScope(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 
@@ -130,6 +133,7 @@ func TestInboxAliasRejectsCollisionsAndForeignScope(t *testing.T) {
 }
 
 func TestInboxAliasDisabledTargetAndCascade(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	target := b[0]
@@ -167,6 +171,7 @@ func TestInboxAliasDisabledTargetAndCascade(t *testing.T) {
 }
 
 func TestInboxAliasValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, d, b := testStore(t)
 	if err := s.SetInboxAliases(ctx, u.AccountID, b[0].ID, []store.AliasInput{{DomainID: d.ID, LocalPart: "bad local"}}); err == nil {

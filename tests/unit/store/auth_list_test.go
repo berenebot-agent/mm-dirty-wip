@@ -7,6 +7,7 @@ import (
 )
 
 func TestListAPIKeysIncludesRoleless(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	if _, _, err := s.CreateAPIKey(ctx, u.AccountID, "roleless", false, nil); err != nil {
@@ -35,6 +36,7 @@ func TestListAPIKeysIncludesRoleless(t *testing.T) {
 }
 
 func TestListAPIKeysConcurrentCompletes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	for i := 0; i < 4; i++ {

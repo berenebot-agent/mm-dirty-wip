@@ -11,6 +11,7 @@ import (
 )
 
 func TestAPIMessageLabelsPatch(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	m := seedInbound(t, svc, box, "api-lbl-1", "<api-lbl-1@test>", "Label me", "body")
@@ -55,6 +56,7 @@ func TestAPIMessageLabelsPatch(t *testing.T) {
 }
 
 func TestAPIMessagesLabelFilter(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	both := seedInbound(t, svc, box, "api-flt-both", "<api-flt-both@test>", "Both labels", "body")
@@ -90,6 +92,7 @@ func TestAPIMessagesLabelFilter(t *testing.T) {
 }
 
 func TestAPILabels(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	m := seedInbound(t, svc, box, "api-list-1", "<api-list-1@test>", "List", "body")
@@ -118,6 +121,7 @@ func TestAPILabels(t *testing.T) {
 }
 
 func TestUIMessageLabelsAddRemove(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	m := seedInbound(t, svc, box, "ui-lbl-1", "<ui-lbl-1@test>", "Tagged", "body")
 	cookie, csrf := uiSession(t, svc, u.ID)
@@ -164,6 +168,7 @@ func TestUIMessageLabelsAddRemove(t *testing.T) {
 }
 
 func TestUIInboxShowsLabelPills(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	tagged := seedInbound(t, svc, box, "ui-flt-tagged", "<ui-flt-tagged@test>", "Tagged subject", "body")

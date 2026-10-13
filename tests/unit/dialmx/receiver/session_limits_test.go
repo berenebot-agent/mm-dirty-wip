@@ -22,6 +22,7 @@ import (
 // auth-inflight and renewal limits in Ready so a dialer can shard and pace
 // itself.
 func TestReadyAdvertisesSessionLimits(t *testing.T) {
+	t.Parallel()
 	pub, _, err0 := ed25519.GenerateKey(rand.Reader)
 	if err0 != nil {
 		t.Fatal(err0)
@@ -84,6 +85,7 @@ func TestReadyAdvertisesSessionLimits(t *testing.T) {
 // TestIdleSessionSurvivesWriteDeadline exercises real HTTP/2 stream deadlines:
 // a completed Ready write must not leave the ten-second deadline armed.
 func TestIdleSessionSurvivesWriteDeadline(t *testing.T) {
+	t.Parallel()
 	smoke.Require(t)
 	_, srv, tlsConfig := newReceiverServer(t, receiver.Config{})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -248,6 +250,7 @@ func (d *renewalDialer) run(resp *http.Response, domains []string) {
 // past the source's auth capacity, and never revokes a binding merely because a
 // renewal could not start immediately.
 func TestReceiverDrivenRenewalIsPaced(t *testing.T) {
+	t.Parallel()
 	const domains = 25
 	const renewalsInFlight = 4
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -305,6 +308,7 @@ func TestReceiverDrivenRenewalIsPaced(t *testing.T) {
 // the source is at its temporary authentication capacity is deferred, not
 // treated as a failed proof: no binding is revoked before its grant expires.
 func TestRenewalSourceLimitDoesNotRevoke(t *testing.T) {
+	t.Parallel()
 	const domains = 12
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

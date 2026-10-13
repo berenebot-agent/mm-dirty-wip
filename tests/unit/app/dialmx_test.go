@@ -14,6 +14,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/netutil"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // newMXServiceWithOutboundPolicy builds a minimal service whose public-outbound
@@ -22,10 +23,7 @@ import (
 func newMXServiceWithOutboundPolicy(t *testing.T, allowPrivate bool) (*app.Service, model.User, model.Domain) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{
 		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted",
@@ -56,6 +54,9 @@ func newMXServiceWithOutboundPolicy(t *testing.T, allowPrivate bool) (*app.Servi
 // dialmx receiver URL validation rejects loopback and private-literal origins
 // while the public-destination policy is enforced.
 func TestDialMXReceiverURLPrivateLiteralGuardedWhenPublicRequired(t *testing.T) {
+	// Serial: newMXServiceWithOutboundPolicy(false) installs a strict process-wide
+	// netutil policy that send-time provider validation reads, so it must not
+	// overlap another test's service.
 	svc, u, d := newMXServiceWithOutboundPolicy(t, false)
 	ctx := context.Background()
 	for _, private := range []string{
@@ -73,6 +74,7 @@ func TestDialMXReceiverURLPrivateLiteralGuardedWhenPublicRequired(t *testing.T) 
 // TestDialMXReceiverURLPrivateLiteralAllowedOnOptOut proves the explicit
 // private-outbound opt-out admits loopback and private-literal origins.
 func TestDialMXReceiverURLPrivateLiteralAllowedOnOptOut(t *testing.T) {
+	t.Parallel()
 	svc, u, d := newMXServiceWithOutboundPolicy(t, true)
 	ctx := context.Background()
 	for _, private := range []string{
@@ -87,6 +89,7 @@ func TestDialMXReceiverURLPrivateLiteralAllowedOnOptOut(t *testing.T) {
 }
 
 func TestDialMXProviderIsolationAndMXIdentity(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := mxService(t)
 	// Clear the receiver so the mx-routed path is disabled while the dialmx
 	// per-domain path stays configured.
@@ -127,6 +130,7 @@ func TestDialMXProviderIsolationAndMXIdentity(t *testing.T) {
 }
 
 func TestDialMXReceiverURLValidationAndEncryptedCredentialRotation(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 	for _, invalid := range []string{"http://receiver.example", "https://u:p@receiver.example", "https://receiver.example/path", "https://receiver.example/path?q=1", "https://receiver.example/#f", "https://receiver.example,not-a-url"} {

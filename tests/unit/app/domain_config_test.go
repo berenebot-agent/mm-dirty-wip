@@ -32,6 +32,7 @@ func configInt(t *testing.T, v any) int {
 // wrong types, invalid select values and bad numbers are rejected before any
 // write, leaving the stored configuration and revision untouched.
 func TestSendingConfigValidationWithoutMutation(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -80,6 +81,7 @@ func TestSendingConfigValidationWithoutMutation(t *testing.T) {
 // for an optional (non-required) SMTP password, while non-secret fields follow
 // whole-config replacement semantics.
 func TestSMTPSendingBlankPasswordRetained(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -121,6 +123,7 @@ func TestSMTPSendingBlankPasswordRetained(t *testing.T) {
 // provider never reuses the previous provider's fields or secrets, and that a
 // required secret must be supplied afresh.
 func TestProviderChangeDropsOldSecrets(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -163,6 +166,7 @@ func TestProviderChangeDropsOldSecrets(t *testing.T) {
 // TestDomainConfigsAreIsolated verifies that one domain's configuration is
 // independent of another's: updates and deletes never affect the sibling.
 func TestDomainConfigsAreIsolated(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -202,6 +206,7 @@ func TestDomainConfigsAreIsolated(t *testing.T) {
 // only on explicit request, accept an explicitly supplied secret, and mint a
 // fresh secret after a provider change.
 func TestCloudflareReceivingSecretLifecycle(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -297,6 +302,7 @@ func TestCloudflareReceivingSecretLifecycle(t *testing.T) {
 // provider call is in flight, still records the sent outcome and its delivery
 // attempt against the message's domain.
 func TestProviderAcceptedWhileConfigDeletedStillRecordsSent(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 
@@ -352,6 +358,7 @@ func TestProviderAcceptedWhileConfigDeletedStillRecordsSent(t *testing.T) {
 // sending config holds its queued message without consuming a retry, and then
 // delivers once a config is saved.
 func TestNoConfigQueuesWithoutRetryConsumption(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}
@@ -399,6 +406,7 @@ func TestNoConfigQueuesWithoutRetryConsumption(t *testing.T) {
 // TestDomainConfigCASConflict verifies that a stale revision is rejected with
 // ErrConflict rather than overwriting a concurrent rotation.
 func TestDomainConfigCASConflict(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 

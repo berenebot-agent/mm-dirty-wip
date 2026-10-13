@@ -38,6 +38,7 @@ func createDraft(t *testing.T, h http.Handler, key, boxID string) model.Draft {
 }
 
 func TestAPIDraftApprovalWorkflow(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "hermes", false, map[string]string{box.ID: "assistant"})
@@ -103,6 +104,7 @@ func TestAPIDraftApprovalWorkflow(t *testing.T) {
 }
 
 func TestAPIDraftAttachmentsAndFreeze(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "hermes", false, map[string]string{box.ID: "assistant"})
@@ -150,6 +152,7 @@ func TestAPIDraftAttachmentsAndFreeze(t *testing.T) {
 }
 
 func TestAPIDirectSendResolvesRequest(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	_, asstKey, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "hermes", false, map[string]string{box.ID: "assistant"})

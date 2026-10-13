@@ -14,6 +14,7 @@ import (
 // standalone inbox, labelled with its provider and safe state, and no row for a
 // domain inbox. The existing items/csrf payload must be untouched.
 func TestActionQueueExposesMetadataSyncs(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, _ := standaloneFixture(t)
 	if err := svc.Store.SaveMetadataSyncState(context.Background(), u.AccountID, standalone.ID, "waiting", "initial", "Waiting to retry provider request"); err != nil {
 		t.Fatal(err)
@@ -75,6 +76,7 @@ func TestActionQueueExposesMetadataSyncs(t *testing.T) {
 // stable empty array (not null/absent) when the account has no remote inbox to
 // report, so the client can iterate it unconditionally.
 func TestActionQueueSyncsEmptyArrayWithoutRemoteInboxes(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 	rr := uiGet(t, h, cookie, "/ui/actions")
@@ -100,6 +102,7 @@ func TestActionQueueSyncsEmptyArrayWithoutRemoteInboxes(t *testing.T) {
 // views, and is absent from a domain inbox view where there is no remote
 // metadata to sync.
 func TestInboxSyncBannerRenderedForStandaloneViews(t *testing.T) {
+	t.Parallel()
 	svc, h, u, domainBox, standalone, fake := standaloneFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
 
@@ -153,6 +156,7 @@ func TestInboxSyncBannerRenderedForStandaloneViews(t *testing.T) {
 // the banner, rows and counts read the initial-sync filter while the header
 // spinner still reads every reported status.
 func TestActionQueueScriptWiresSyncStatus(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	req := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
 	rr := httptest.NewRecorder()

@@ -10,6 +10,7 @@ import (
 )
 
 func TestDraftStorageAccounting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -66,6 +67,7 @@ func TestDraftStorageAccounting(t *testing.T) {
 }
 
 func TestSendDraftConsumesWithoutDoubleCount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
@@ -100,6 +102,7 @@ func TestSendDraftConsumesWithoutDoubleCount(t *testing.T) {
 }
 
 func TestPurgeInboxAccountsDraftBytes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}

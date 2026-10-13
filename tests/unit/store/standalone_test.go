@@ -15,6 +15,7 @@ import (
 // uses store.Open on a real temp dir, not the shared testdb template, because it
 // asserts migration behaviour.
 func TestMigration052Foundation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -72,6 +73,7 @@ func seedStandaloneAccount(t *testing.T) (*store.Store, string) {
 // TestStandaloneInboxCRUD proves a standalone inbox can be created, listed and
 // fetched independently of any managed domain, and that its kind is immutable.
 func TestStandaloneInboxCRUD(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 
@@ -137,6 +139,7 @@ func TestStandaloneInboxCRUD(t *testing.T) {
 
 // TestStandaloneAddressValidation proves plaintext/TLS and address validation.
 func TestStandaloneAddressValidation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		addr string
@@ -165,6 +168,7 @@ func TestStandaloneAddressValidation(t *testing.T) {
 // STARTTLS and plain are accepted as explicit choices, an unknown mode is
 // rejected, and the conventional port is applied per mode.
 func TestStandaloneRemoteSecurity(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	if _, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{
@@ -198,6 +202,7 @@ func TestStandaloneRemoteSecurity(t *testing.T) {
 // TestStandaloneAddressCollision proves a standalone address may not collide
 // with another standalone inbox or a managed mailbox in the same account.
 func TestStandaloneAddressCollision(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	if _, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "dup@remote.example"}); err != nil {
@@ -211,6 +216,7 @@ func TestStandaloneAddressCollision(t *testing.T) {
 // TestFoldersHierarchy proves folders can be reconciled with a custom hierarchy
 // and that paths removed from the input are pruned.
 func TestFoldersHierarchy(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -264,6 +270,7 @@ func TestFoldersHierarchy(t *testing.T) {
 // TestRemoteMessageMetadata proves remote message headers can be upserted and
 // read back by UID and by id, with bodies never stored.
 func TestRemoteMessageMetadata(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -332,6 +339,7 @@ func TestRemoteMessageMetadata(t *testing.T) {
 // TestStandaloneRequiresStandalone proves folder/remote operations reject a
 // domain inbox.
 func TestStandaloneRequiresStandalone(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	dom, err := st.CreateDomain(ctx, acct, "example.com")
@@ -358,6 +366,7 @@ func TestStandaloneRequiresStandalone(t *testing.T) {
 // are both NULL). The outcome must persist with an empty delivery-log domain
 // rather than failing on a NULL->string scan.
 func TestStandaloneOutboundOutcomeNoDomain(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{

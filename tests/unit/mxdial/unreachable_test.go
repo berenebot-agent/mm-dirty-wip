@@ -17,6 +17,7 @@ import (
 // the first case: presenting the second for the first sends them looking for a
 // DNS problem that does not exist.
 func TestUnreachableReceiverIsReportedNotConnecting(t *testing.T) {
+	t.Parallel()
 	// A port with nothing bound to it: the connection is refused immediately,
 	// so the failure is attributable to reachability and not to a timeout.
 	addr := reserveLoopbackAddr(t)
@@ -51,6 +52,7 @@ func TestUnreachableReceiverIsReportedNotConnecting(t *testing.T) {
 // row a caller ever sees is one a completed handshake produced, and an
 // unreachable receiver is indistinguishable from one that was never looked at.
 func TestSingleModeStatusIncludesConnectionRow(t *testing.T) {
+	t.Parallel()
 	srv := startSingleReceiver(t, "private-key")
 	m := startManager(t, mxdial.Config{
 		DataDir:                  t.TempDir(),
@@ -74,6 +76,7 @@ func TestSingleModeStatusIncludesConnectionRow(t *testing.T) {
 // failure shape maps to. Several of these are reachable-but-unusable, which is a
 // different problem from an unreachable receiver and must not be reported as one.
 func TestConnectionFailureReasonClassification(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		err  error

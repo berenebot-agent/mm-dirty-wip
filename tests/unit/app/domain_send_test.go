@@ -16,6 +16,7 @@ import (
 // from an arbitrary address on the catch-all's domain, and a key without it
 // cannot, even though both are Owners of the catch-all inbox.
 func TestSendDomainWideKeyCarriesGrantToSendPath(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 
@@ -71,6 +72,7 @@ func TestSendDomainWideKeyCarriesGrantToSendPath(t *testing.T) {
 // draft from an arbitrary address and send it, so the flow works through the
 // draft path (which re-resolves the frozen address at send).
 func TestSendDomainWideDraftCarriesGrant(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	if err := svc.Store.SetDomainCatchAll(ctx, u.AccountID, d.ID, box.ID); err != nil {

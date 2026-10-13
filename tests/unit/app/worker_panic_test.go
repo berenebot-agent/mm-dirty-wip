@@ -34,6 +34,7 @@ func init() { transport.RegisterOutbound(panicTransport{}) }
 // as a failed attempt (so it backs off rather than re-panicking hot), and a
 // healthy message queued behind it still delivers.
 func TestOutboxWorkerSurvivesDeliveryPanic(t *testing.T) {
+	t.Parallel()
 	svc, u, dom, box := testService(t)
 	ctx := context.Background()
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}

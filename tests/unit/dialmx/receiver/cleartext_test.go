@@ -76,39 +76,14 @@ func h2cClient() *http.Client {
 // admission gate refused it before any session state existed.
 func cleartextSession(t *testing.T, base string) int {
 	t.Helper()
-	pr, pw := io.Pipe()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+mxwire.SessionPath, pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan *http.Response, 1)
-	go func() {
-		resp, _ := h2cClient().Do(req)
-		done <- resp
-	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "test"})
-	if err := mxwire.WriteFrame(pw, hello); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case resp := <-done:
-		if resp == nil {
-			t.Fatal("no response")
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode
-	case <-time.After(5 * time.Second):
-		t.Fatal("cleartext handshake timeout")
-		return 0
-	}
+	return cleartextSessionBearer(t, base, "")
 }
 
 // TestSharedModeRejectsCleartextWithoutTrustedProxy proves the default: with an
 // empty allowlist a cleartext shared-mode session from a routable peer is
 // refused with 426.
 func TestSharedModeRejectsCleartextWithoutTrustedProxy(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "shared"})
 	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
 	if code := cleartextSession(t, srv.URL); code != http.StatusUpgradeRequired {
@@ -119,6 +94,7 @@ func TestSharedModeRejectsCleartextWithoutTrustedProxy(t *testing.T) {
 // TestSharedModeAdmitsCleartextFromTrustedProxy proves the allowlist path: a
 // peer inside the allowlist is admitted and the session reaches Ready.
 func TestSharedModeAdmitsCleartextFromTrustedProxy(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "shared", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("203.0.113.9/32")}})
 	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
 	if code := cleartextSession(t, srv.URL); code != http.StatusOK {
@@ -130,6 +106,7 @@ func TestSharedModeAdmitsCleartextFromTrustedProxy(t *testing.T) {
 // receiver dials 127.0.0.1 cleartext without being in the allowlist. It also
 // checks that an h2c GET reaches the health endpoint.
 func TestSharedModeCleartextLoopback(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "shared"})
 	srv := newCleartextH2Server(t, r, "127.0.0.1:5555")
 	if code := cleartextSession(t, srv.URL); code != http.StatusOK {
@@ -145,8 +122,8 @@ func TestSharedModeCleartextLoopback(t *testing.T) {
 	}
 }
 
-// cleartextSessionBearer opens a cleartext session with a bearer header and
-// returns the HTTP status.
+// cleartextSessionBearer opens a cleartext session with an optional bearer
+// header and returns the HTTP status.
 func cleartextSessionBearer(t *testing.T, base, bearer string) int {
 	t.Helper()
 	pr, pw := io.Pipe()
@@ -159,22 +136,27 @@ func cleartextSessionBearer(t *testing.T, base, bearer string) int {
 	if bearer != "" {
 		req.Header.Set("Authorization", bearer)
 	}
-	done := make(chan *http.Response, 1)
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	done := make(chan result, 1)
 	go func() {
-		resp, _ := h2cClient().Do(req)
-		done <- resp
+		resp, err := h2cClient().Do(req)
+		done <- result{resp, err}
 	}()
 	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "test"})
-	if err := mxwire.WriteFrame(pw, hello); err != nil {
-		t.Fatal(err)
-	}
+	// The admission gate may refuse and close the connection before the hello
+	// frame is written, so a write error is expected on rejection and must not
+	// fail the test: the response status below is authoritative.
+	_ = mxwire.WriteFrame(pw, hello)
 	select {
-	case resp := <-done:
-		if resp == nil {
-			t.Fatal("no response")
+	case r := <-done:
+		if r.resp == nil {
+			t.Fatalf("no response: %v", r.err)
 		}
-		defer resp.Body.Close()
-		return resp.StatusCode
+		defer r.resp.Body.Close()
+		return r.resp.StatusCode
 	case <-time.After(5 * time.Second):
 		t.Fatal("cleartext handshake timeout")
 		return 0
@@ -185,6 +167,7 @@ func cleartextSessionBearer(t *testing.T, base, bearer string) int {
 // single-mode receiver admits a routable, correctly authenticated core by
 // default (self-hosting must not be blocked).
 func TestSingleModeCleartextAllowedByDefault(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key"})
 	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
 	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusOK {
@@ -195,6 +178,7 @@ func TestSingleModeCleartextAllowedByDefault(t *testing.T) {
 // TestSingleModeRequireTLSRejectsRoutableCleartext proves DIALMX_REQUIRE_TLS
 // refuses cleartext from a routable peer in single mode.
 func TestSingleModeRequireTLSRejectsRoutableCleartext(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key", RequireTLS: true})
 	srv := newCleartextH2Server(t, r, "203.0.113.9:5555")
 	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusUpgradeRequired {
@@ -205,6 +189,7 @@ func TestSingleModeRequireTLSRejectsRoutableCleartext(t *testing.T) {
 // TestSingleModeRequireTLSAdmitsLoopback proves RequireTLS still admits loopback
 // cleartext (the embedded receiver dials 127.0.0.1).
 func TestSingleModeRequireTLSAdmitsLoopback(t *testing.T) {
+	t.Parallel()
 	r := newReceiver(t, receiver.Config{Mode: "single", CoreKey: "private-key", RequireTLS: true})
 	srv := newCleartextH2Server(t, r, "127.0.0.1:5555")
 	if code := cleartextSessionBearer(t, srv.URL, "Bearer private-key"); code != http.StatusOK {

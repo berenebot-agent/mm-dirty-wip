@@ -12,6 +12,7 @@ import (
 // TestMigration056RemoteIndex proves migration 056 adds the remote-index columns,
 // the local-label table and the sent-copy queue on a genuinely fresh database.
 func TestMigration056RemoteIndex(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -54,6 +55,7 @@ func TestMigration056RemoteIndex(t *testing.T) {
 // TestRemoteIndexAndLabels proves remote metadata reconcile, folder validity,
 // labels and sent-copy durability.
 func TestRemoteIndexAndLabels(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -122,6 +124,7 @@ func TestRemoteIndexAndLabels(t *testing.T) {
 // obsolete. This is the regression guard for "recent mail vanished while a sync
 // ran".
 func TestRemotePartialValidityChangeKeepsCachedRows(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -183,6 +186,7 @@ func TestRemotePartialValidityChangeKeepsCachedRows(t *testing.T) {
 // does not delete a remote folder (and its cached messages) while it still holds
 // cached rows, and that an empty discovery prunes nothing at all.
 func TestRemoteFolderPruneKeepsFoldersWithMessages(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -231,6 +235,7 @@ func TestRemoteFolderPruneKeepsFoldersWithMessages(t *testing.T) {
 // TestMigration058RoleLockAndSentCopy proves migration 058 adds the role-lock and
 // sent-copy columns and the notification-message-id column on a fresh database.
 func TestMigration058RoleLockAndSentCopy(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -271,6 +276,7 @@ func TestMigration058RoleLockAndSentCopy(t *testing.T) {
 // TestMigration060RemoteSyncColumns proves the per-inbox sync-cadence columns are
 // added and round-trip through SetInboxRemoteSync and a full-inbox read.
 func TestMigration060RemoteSyncColumns(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	st, err := store.Open(dir)
 	if err != nil {
@@ -303,6 +309,7 @@ func TestMigration060RemoteSyncColumns(t *testing.T) {
 // TestSetInboxRemoteSyncRoundTrip proves the per-inbox sync cadence overrides set,
 // clear, and read back through the full inbox projection.
 func TestSetInboxRemoteSyncRoundTrip(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -365,6 +372,7 @@ func TestSetInboxRemoteSyncRoundTrip(t *testing.T) {
 // arbitrarily-named existing folder is durable: a later remote reconcile that
 // re-infers roles from names must not reset it.
 func TestSetFolderRolePersistsThroughReconcile(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -418,6 +426,7 @@ func TestSetFolderRolePersistsThroughReconcile(t *testing.T) {
 // TestRemoteThreadKeyGroupsReplies proves a reply joins its parent's thread by
 // In-Reply-To/References rather than becoming a separate thread.
 func TestRemoteThreadKeyGroupsReplies(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -454,6 +463,7 @@ func TestRemoteThreadKeyGroupsReplies(t *testing.T) {
 // references a grandparent not yet seen) is merged onto the eventual root, and all
 // members share one stable thread key.
 func TestRemoteThreadGraphOutOfOrder(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -500,6 +510,7 @@ func TestRemoteThreadGraphOutOfOrder(t *testing.T) {
 // shared by more than one cached row is not followed, so distinct messages are not
 // merged into one thread by an ambiguous reference.
 func TestRemoteThreadDuplicateMessageIDNotConflated(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -530,6 +541,7 @@ func TestRemoteThreadDuplicateMessageIDNotConflated(t *testing.T) {
 // TestRemoteReconcileCompleteOnlyWhenValidityResolved proves an unresolvable
 // folder UIDVALIDITY does not yield a "complete" index status.
 func TestRemoteReconcileCompleteOnlyWhenValidityResolved(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -556,6 +568,7 @@ func TestRemoteReconcileCompleteOnlyWhenValidityResolved(t *testing.T) {
 // separate: a transient failure returns the job to pending, a terminal failure
 // marks it failed, and a confirmed copy marks it copied.
 func TestRemoteSentCopyStatesDurable(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -601,6 +614,7 @@ func TestRemoteSentCopyStatesDurable(t *testing.T) {
 // the boundary second; the keyset on (received_at, id) must exhaust the folder
 // exactly once with no gaps or duplicates.
 func TestRemoteMessagesKeysetPaginationNoSkip(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})
@@ -666,6 +680,7 @@ func TestRemoteMessagesKeysetPaginationNoSkip(t *testing.T) {
 // resumes by a thread-key cursor on (latest_received_at, thread_key) so a merged
 // account-wide page never loses a thread that sorts below the global key.
 func TestRemoteThreadsKeysetPaginationNoSkip(t *testing.T) {
+	t.Parallel()
 	st, acct := seedStandaloneAccount(t)
 	ctx := context.Background()
 	in, err := st.CreateStandaloneInbox(ctx, acct, store.StandaloneCreate{Address: "a@remote.example"})

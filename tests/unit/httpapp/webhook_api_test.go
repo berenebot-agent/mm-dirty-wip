@@ -15,6 +15,7 @@ import (
 )
 
 func TestWebhookClientAPI(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "admin", true, nil)
 	if err != nil {
@@ -93,6 +94,7 @@ func TestWebhookClientAPI(t *testing.T) {
 // dashboard and its delivery-log route renders the outcome. Webhook and Hermes
 // connectors expose logs while API-key clients do not.
 func TestClientDeliveryLogPage(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -146,6 +148,7 @@ func TestClientDeliveryLogPage(t *testing.T) {
 }
 
 func TestWebhookCreateViaDashboard(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	cookie, csrf := uiSession(t, svc, u.ID)
 	form := url.Values{
@@ -208,6 +211,7 @@ func TestWebhookCreateViaDashboard(t *testing.T) {
 }
 
 func TestWebhookSuppliedBearerSecret(t *testing.T) {
+	t.Parallel()
 	for _, viaUI := range []bool{false, true} {
 		name := "API"
 		if viaUI {

@@ -26,6 +26,9 @@ type fakeServer struct {
 	mu        sync.Mutex
 	overrides sessionOverrides
 	closeOnce sync.Once
+	// serveDone is closed once Serve has returned, so Close can stop the accept
+	// loop before closing the server (see Close).
+	serveDone chan struct{}
 }
 
 type sessionOverrides struct {
@@ -98,7 +101,11 @@ func newFakeServer(t *testing.T, cfg serverConfig) *fakeServer {
 	}
 	fs.ln = ln
 	fs.addr = ln.Addr().String()
-	go func() { _ = fs.server.Serve(ln) }()
+	fs.serveDone = make(chan struct{})
+	go func() {
+		defer close(fs.serveDone)
+		_ = fs.server.Serve(ln)
+	}()
 	t.Cleanup(fs.Close)
 	return fs
 }
@@ -161,11 +168,19 @@ func (fs *fakeServer) overridesSnapshot() sessionOverrides {
 
 func (fs *fakeServer) Close() {
 	fs.closeOnce.Do(func() {
-		if fs.server != nil {
-			_ = fs.server.Close()
-		}
+		// Stop the accept loop first, then let Serve return before closing the
+		// server. imapserver.Serve performs an unsynchronised
+		// listenerWaitGroup.Add that races with the Wait in Close, and its
+		// per-listener bookkeeping races with a concurrent Close, so the two
+		// must not overlap. Closing the listener makes Serve's Accept return.
 		if fs.ln != nil {
 			_ = fs.ln.Close()
+		}
+		if fs.serveDone != nil {
+			<-fs.serveDone
+		}
+		if fs.server != nil {
+			_ = fs.server.Close()
 		}
 	})
 }

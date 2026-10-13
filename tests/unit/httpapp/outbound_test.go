@@ -16,6 +16,7 @@ import (
 )
 
 func TestAPISendWithBase64Attachment(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -70,6 +71,7 @@ func TestAPISendWithBase64Attachment(t *testing.T) {
 }
 
 func TestCSPAllowsSelfScripts(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/healthz", nil))
@@ -79,6 +81,7 @@ func TestCSPAllowsSelfScripts(t *testing.T) {
 }
 
 func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +123,7 @@ func TestAPIDeliveryLogAdminOnlyAndScoped(t *testing.T) {
 }
 
 func TestUIDomainDeliveriesShowsActivity(t *testing.T) {
+	t.Parallel()
 	svc, h, u, dom, box := httpFixture(t)
 	ctx := context.Background()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +159,7 @@ func TestUIDomainDeliveriesShowsActivity(t *testing.T) {
 }
 
 func TestAppJSServed(t *testing.T) {
+	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("GET", "/assets/app.js", nil))

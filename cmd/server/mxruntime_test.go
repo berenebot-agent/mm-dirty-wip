@@ -30,8 +30,8 @@ import (
 	"github.com/dellarb/mailmoose/internal/config"
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/model"
-	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 )
 
 // newTestService builds a service on a temporary store for the cmd/server
@@ -39,10 +39,7 @@ import (
 func newTestService(t *testing.T) *app.Service {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted", AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour}
 	svc, err := app.New(cfg, st, events.NewHub())
@@ -64,6 +61,7 @@ func newTestService(t *testing.T) *app.Service {
 }
 
 func TestMXRuntimeLastDomainStandbyAndRestart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	edge := &fakeEdge{}
@@ -259,6 +257,7 @@ func (f *fakeEdge) calls() (configures, deactivates int, active bool) {
 
 // TestImportLegacyMXSettings covers the one-time environment transition.
 func TestImportLegacyMXSettings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 
@@ -302,6 +301,7 @@ func TestImportLegacyMXSettings(t *testing.T) {
 // every legacy included SMTP tunable and reads the STARTTLS files into the
 // persisted PEM pair.
 func TestImportLegacyIncludedTunablesAndTLS(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	certPEM, keyPEM := tlsTestPair(t)
@@ -341,6 +341,7 @@ func TestImportLegacyIncludedTunablesAndTLS(t *testing.T) {
 // receiver without TLS: no row is written, so the core keeps running
 // unconfigured for the operator to fix.
 func TestImportLegacyUnusableTLSFilesAbortsImport(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, imp := range map[string]config.MXReceiverImport{
 		"missing files":    {Set: true, Mode: "included", TLSCertFile: "/nonexistent/cert.pem", TLSKeyFile: "/nonexistent/key.pem"},
@@ -362,6 +363,7 @@ func TestImportLegacyUnusableTLSFilesAbortsImport(t *testing.T) {
 // environment is rejected only when it is actually imported, and never blocks a
 // deployment whose settings are already persisted.
 func TestImportLegacyPartialRemoteRejectedOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	// A remote mode with no key must not create a row.
@@ -374,6 +376,7 @@ func TestImportLegacyPartialRemoteRejectedOnce(t *testing.T) {
 // TestTLSConfigFromPEM verifies the runtime TLS hook: system roots by default,
 // a custom pool for a valid bundle, and a hard error for non-PEM input.
 func TestTLSConfigFromPEM(t *testing.T) {
+	t.Parallel()
 	cfg, err := tlsConfigFromPEM("")
 	if err != nil || cfg.RootCAs != nil {
 		t.Fatalf("empty CA = %+v, %v", cfg, err)
@@ -400,6 +403,7 @@ func TestTLSConfigFromPEM(t *testing.T) {
 // remote goes to connecting (never a false active) and starts the private
 // dialer.
 func TestMXRuntimeReconcileStates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	rt := newMXRuntime(svc, nil, testLogger())
@@ -466,6 +470,7 @@ func TestMXRuntimeReconcileStates(t *testing.T) {
 // fails with "already active", and that the private dialer is stopped only after
 // the drain.
 func TestMXRuntimeActiveConfigUpdate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	edge := &fakeEdge{}
@@ -511,6 +516,7 @@ func TestMXRuntimeActiveConfigUpdate(t *testing.T) {
 // field, including the STARTTLS PEM pair, reaches the child through the control
 // Settings.
 func TestMXRuntimeForwardsIncludedSMTPFields(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	edge := &fakeEdge{}
@@ -557,6 +563,7 @@ func TestMXRuntimeForwardsIncludedSMTPFields(t *testing.T) {
 // advance the applied revision, so the next tick retries, and that success then
 // advances it.
 func TestMXRuntimeRetriesFailedActivation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	edge := &fakeEdge{cfgErr: errors.New("boom")}
@@ -605,6 +612,7 @@ func TestMXRuntimeRetriesFailedActivation(t *testing.T) {
 // as failed and forces a re-apply (the child cannot be respawned, so the retry
 // fails and the status stays honestly failed).
 func TestMXRuntimeChildExitForcesRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	svc := newTestService(t)
 	edge := &fakeEdge{}

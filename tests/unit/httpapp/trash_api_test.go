@@ -14,6 +14,7 @@ import (
 // DELETE moves to Trash, the trashed filter lists it, restore returns it, and
 // purge erases it.
 func TestAPIMessageTrashLifecycle(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	m := seedInbound(t, svc, box, "api-trash-1", "<api-trash-1@test>", "Trash me", "body")
@@ -77,6 +78,7 @@ func TestAPIMessageTrashLifecycle(t *testing.T) {
 
 // TestAPIInboxTrashEmpty exercises the empty-trash route.
 func TestAPIInboxTrashEmpty(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	a := seedInbound(t, svc, box, "api-et-1", "<api-et-1@test>", "a", "a")
@@ -109,6 +111,7 @@ func TestAPIInboxTrashEmpty(t *testing.T) {
 
 // TestAPIAccountSettingsTrashRetention covers the account settings route.
 func TestAPIAccountSettingsTrashRetention(t *testing.T) {
+	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	ctx := context.Background()
 	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)

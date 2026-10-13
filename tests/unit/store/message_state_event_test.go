@@ -12,6 +12,7 @@ import (
 // to the same value is a no-op returning no event, and that the event is visible
 // through the durable event list (so a reconnecting UI can catch up).
 func TestUpdateMessageStateEmitsEvent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, boxes := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{}}

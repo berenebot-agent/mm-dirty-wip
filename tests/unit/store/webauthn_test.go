@@ -20,6 +20,7 @@ func cred(name string, marker byte) model.WebAuthnCredential {
 }
 
 func TestAddAndListWebAuthnCredentials(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -46,6 +47,7 @@ func TestAddAndListWebAuthnCredentials(t *testing.T) {
 }
 
 func TestWebAuthnCredentialLookupByCredentialID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -68,6 +70,7 @@ func TestWebAuthnCredentialLookupByCredentialID(t *testing.T) {
 }
 
 func TestDeleteWebAuthnCredentialLastMethodGuard(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -106,6 +109,7 @@ func TestDeleteWebAuthnCredentialLastMethodGuard(t *testing.T) {
 }
 
 func TestPasswordlessLoginFailsPasswordPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -126,6 +130,7 @@ func TestPasswordlessLoginFailsPasswordPath(t *testing.T) {
 // TestSyncSystemAdminPreservesPasskeys guards the break-glass invariant: the
 // config-owned password rotation must never delete a sysadmin's passkeys.
 func TestSyncSystemAdminPreservesPasskeys(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -155,6 +160,7 @@ func TestSyncSystemAdminPreservesPasskeys(t *testing.T) {
 // TestSetPasswordAuthRefusesWithoutPasskey guards against locking an account
 // out: password auth cannot be disabled until a passkey exists.
 func TestSetPasswordAuthRefusesWithoutPasskey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateAccountAndAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -188,6 +194,7 @@ func TestSetPasswordAuthRefusesWithoutPasskey(t *testing.T) {
 // library hard-fails an assertion when the reconstructed BackupEligible does not
 // match the authenticator's flag. Synced passkeys set it.
 func TestWebAuthnBackupFlagsRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, err := s.CreateInitialAdmin(ctx, "Acme", "admin@example.com", "correct horse battery staple", 50<<20)
@@ -234,6 +241,7 @@ func TestWebAuthnBackupFlagsRoundTrip(t *testing.T) {
 // the config-owned sysadmin password must never be disabled by the passkey
 // "only sign-in method" flow.
 func TestSetPasswordAuthRefusesForSystemAdmin(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	u, _, err := s.SyncSystemAdmin(ctx, "MailMoose", "admin@example.com", "correct horse battery staple", 50<<20)

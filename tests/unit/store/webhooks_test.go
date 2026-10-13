@@ -15,6 +15,7 @@ import (
 // existing API keys and Hermes connections keep working through the unified
 // client tables.
 func TestMigration032MigratesLegacyClients(t *testing.T) {
+	t.Parallel()
 	dir := newV012(t)
 	seedV012(t, dir)
 	db := rawDB(t, filepath.Join(dir, "inbox.db"))
@@ -59,6 +60,7 @@ func TestMigration032MigratesLegacyClients(t *testing.T) {
 }
 
 func TestWebhookClientLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 
@@ -137,6 +139,7 @@ func TestWebhookClientLifecycle(t *testing.T) {
 }
 
 func TestWebhookDeliverySchedulesInOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	c, err := s.CreateWebhookClient(ctx, u.AccountID, b[0].ID, "ep", "https://hooks.example.test/x", "notify", "signature", "enc")
@@ -195,6 +198,7 @@ func TestWebhookDeliverySchedulesInOrder(t *testing.T) {
 // outcome, that it is account-scoped, and that retention prunes terminal rows
 // while preserving an outstanding pending row.
 func TestClientDeliveryLogTracksOutcomes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	c, err := s.CreateWebhookClient(ctx, u.AccountID, b[0].ID, "ep", "https://hooks.example.test/x", "notify", "signature", "enc")
@@ -280,6 +284,7 @@ func TestClientDeliveryLogTracksOutcomes(t *testing.T) {
 }
 
 func TestWebhookDeliveryExhaustionAdvances(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, b := testStore(t)
 	c, err := s.CreateWebhookClient(ctx, u.AccountID, b[0].ID, "ep", "https://hooks.example.test/x", "notify", "signature", "enc")

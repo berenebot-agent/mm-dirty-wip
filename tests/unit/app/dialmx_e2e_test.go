@@ -26,6 +26,7 @@ import (
 	"github.com/dellarb/mailmoose/internal/mxwire"
 	"github.com/dellarb/mailmoose/internal/store"
 	"github.com/dellarb/mailmoose/internal/transport/mxdial"
+	"github.com/dellarb/mailmoose/tests/support/testdb"
 	"github.com/emersion/go-smtp"
 )
 
@@ -42,10 +43,7 @@ type dialMXCore struct {
 func dialMXDomain(t *testing.T, name, local string) (*dialMXCore, model.Inbox) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := store.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testdb.OpenAt(t, dir)
 	t.Cleanup(func() { st.Close() })
 	cfg := config.Config{
 		DataDir: dir, BaseURL: "http://example.test", Mode: "selfhosted",
@@ -315,6 +313,7 @@ const dialMXRaw = "From: Sender <sender@outside.test>\r\nTo: A <a@first.example.
 // recipients deduplicate. A Bcc-only recipient is delivered even though it
 // never appears in a header.
 func TestDialMXEndToEndFanoutRetry(t *testing.T) {
+	t.Parallel()
 	coreA, boxA := dialMXDomain(t, "first.example.com", "a")
 	boxC, err := coreA.svc.Store.CreateInbox(context.Background(), coreA.user.AccountID, coreA.domain.ID, "c", "C")
 	if err != nil {
@@ -402,6 +401,7 @@ func TestDialMXEndToEndFanoutRetry(t *testing.T) {
 // re-sends byte-identical MIME and must deduplicate to one message, one quota
 // charge and one event, with the original bytes preserved exactly.
 func TestDialMXLostACKDeduplicates(t *testing.T) {
+	t.Parallel()
 	core, box := dialMXDomain(t, "lost.example.com", "inbox")
 	records := &dialMXRecords{m: map[string]string{}}
 	r, srv, client := dialMXReceiver(t, records)

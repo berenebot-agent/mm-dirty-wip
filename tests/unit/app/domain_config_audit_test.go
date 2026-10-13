@@ -15,6 +15,7 @@ import (
 // field is rejected with the ErrInvalidConfig sentinel and that the error text
 // never contains the supplied value (which could be a secret).
 func TestConfigTypeValidationNeverLeaksAValue(t *testing.T) {
+	t.Parallel()
 	svc, u, d, _ := testService(t)
 	ctx := context.Background()
 
@@ -56,6 +57,7 @@ func TestConfigTypeValidationNeverLeaksAValue(t *testing.T) {
 // account-scoped: a foreign account never resolves or records against another
 // account's message/domain.
 func TestDomainConfigCrossAccountLookups(t *testing.T) {
+	t.Parallel()
 	svc, u, d, box := testService(t)
 	ctx := context.Background()
 	seedSending(t, svc, u.AccountID, d.ID, "brevo", map[string]any{"api_key": "k"})

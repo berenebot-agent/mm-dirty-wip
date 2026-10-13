@@ -22,7 +22,22 @@
 # RAM safety:
 #   --memory/-m limits the container's hard memory ceiling (OOM inside, not host OOM)
 #   --memory-swap = same value => no swap growth for this container
-#   GOFLAGS=-p=2 caps compiler parallelism to cut peak RAM further
+#   GOFLAGS=-p=<cores> sets build parallelism and test-binary package concurrency
+#   to the host's logical CPU count (nproc), which is also Go's own default for
+#   -p/GOMAXPROCS. The heavy packages (httpapp/app/store) overlap enough to keep
+#   the tier under the 60s per-binary -timeout. Overrides: MAILMOOSE_GO_PARALLEL
+#   sets -p explicitly; MAILMOOSE_GO_MEM sets the RAM cap. By default the cap is
+#   half the host's physical RAM (a ceiling, not a reservation).
+#
+# Scratch disk:
+#   The suite is SQLite-heavy: every store-backed test creates and migrates a DB
+#   under TMPDIR and fsyncs it. Without help that lands on the host's real disk
+#   (the container's overlay /tmp), where fsync dominates. The container's /tmp
+#   is therefore a tmpfs so those files live in RAM where fsync is free. Its size
+#   is a ceiling only (tmpfs allocates lazily), so it can be generous; it is
+#   capped so a runaway test cannot exhaust the container. Override with
+#   MAILMOOSE_GO_TMPFS (e.g. 8g); set MAILMOOSE_GO_TMPFS=0 to disable and use
+#   the container's normal /tmp.
 
 set -eu
 
@@ -31,7 +46,65 @@ GO_IMAGE="${MAILMOOSE_GO_IMAGE:-mailmoose-go:1.27}"
 CACHE_DIR="${MAILMOOSE_GO_CACHE:-$HOME/.cache/mailmoose-go}"
 MOD_CACHE="$CACHE_DIR/mod"
 BUILD_CACHE="$CACHE_DIR/build"
-MEM_LIMIT="${MAILMOOSE_GO_MEM:-2g}"   # hard RAM cap for the container (-race needs headroom)
+
+# Logical CPU count, used as the default -p.
+CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+case "$CORES" in
+    ''|*[!0-9]*) CORES=2 ;;
+esac
+[ "$CORES" -lt 1 ] && CORES=1
+GO_PARALLEL="${MAILMOOSE_GO_PARALLEL:-$CORES}"
+case "$GO_PARALLEL" in
+    ''|*[!0-9]*) GO_PARALLEL=$CORES ;;
+esac
+
+# Hard RAM cap for the container: half the host's physical RAM by default (a
+# ceiling, not a reservation), floored at 2g so a small box still builds -race.
+if [ -n "${MAILMOOSE_GO_MEM:-}" ]; then
+    MEM_LIMIT="$MAILMOOSE_GO_MEM"
+else
+    MEM_TOTAL_KB="$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    case "$MEM_TOTAL_KB" in
+        ''|*[!0-9]*) MEM_TOTAL_KB=0 ;;
+    esac
+    if [ "$MEM_TOTAL_KB" -gt 0 ]; then
+        HALF_G=$(( MEM_TOTAL_KB / 2 / 1024 / 1024 ))
+        [ "$HALF_G" -lt 2 ] && HALF_G=2
+        MEM_LIMIT="${HALF_G}g"
+    else
+        MEM_LIMIT="4g"
+    fi
+fi
+
+# Numeric GiB of the RAM cap (for sizing the scratch tmpfs below).
+MEM_LIMIT_G="$(printf '%s' "$MEM_LIMIT" | tr -dc '0-9')"
+case "$MEM_LIMIT_G" in
+    ''|*[!0-9]*) MEM_LIMIT_G=4 ;;
+esac
+[ "$MEM_LIMIT_G" -lt 1 ] && MEM_LIMIT_G=1
+
+# Scratch tmpfs: a ceiling, not a reservation (tmpfs allocates lazily), so it can
+# be generous. Default is the whole RAM cap: the suite's temp data is small in
+# practice, and if it ever did grow, the cgroup would reclaim before the host
+# felt it. MAILMOOSE_GO_TMPFS=0 disables the tmpfs (container uses its own /tmp);
+# MAILMOOSE_GO_TMPFS=<n>g sets the size explicitly.
+if [ "${MAILMOOSE_GO_TMPFS:-auto}" = "0" ]; then
+    SCRATCH_FLAGS=""
+else
+    TMPFS_G="${MAILMOOSE_GO_TMPFS:-auto}"
+    if [ "$TMPFS_G" = "auto" ]; then
+        TMPFS_G=$MEM_LIMIT_G
+    fi
+    TMPFS_G="$(printf '%s' "$TMPFS_G" | tr -dc '0-9')"
+    case "$TMPFS_G" in
+        ''|*[!0-9]*) TMPFS_G=$MEM_LIMIT_G ;;
+    esac
+    [ "$TMPFS_G" -lt 1 ] && TMPFS_G=1
+    # /tmp is the container's TMPDIR: t.TempDir(), os.MkdirTemp and the testdb
+    # template all live here, so an in-RAM /tmp makes SQLite fsync ~free. exec is
+    # required because Go builds and runs test binaries under $TMPDIR.
+    SCRATCH_FLAGS="--tmpfs /tmp:rw,exec,size=${TMPFS_G}g,mode=1777"
+fi
 
 # Create cache dirs if absent
 mkdir -p "$MOD_CACHE" "$BUILD_CACHE"
@@ -53,7 +126,8 @@ fi
 TTY_FLAG=""
 if [ -t 1 ]; then TTY_FLAG="-it"; fi
 
-ENV_FLAGS="-e GOFLAGS=-p=2 -e CGO_ENABLED=1"
+# Build/test parallelism follows the host core count (or MAILMOOSE_GO_PARALLEL).
+ENV_FLAGS="-e GOFLAGS=-p=${GO_PARALLEL} -e CGO_ENABLED=1 -e GOMAXPROCS=${GO_PARALLEL}"
 
 # Optional contract-fixture passthrough: when BILLBOT_CONTRACT_FIXTURE names a
 # file, mount its parent directory at the identical container path and pass the
@@ -110,6 +184,7 @@ if [ "${1:-}" = "gofmt" ]; then
     docker run $TTY_FLAG --rm \
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
+        $SCRATCH_FLAGS \
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \
@@ -124,6 +199,7 @@ else
     docker run $TTY_FLAG --rm \
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
+        $SCRATCH_FLAGS \
         $ENV_FLAGS \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \

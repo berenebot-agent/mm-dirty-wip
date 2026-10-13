@@ -11,6 +11,7 @@ import (
 // TestTimezoneSetting covers the account default and per-user override
 // round-trips, validation, and the effective zone resolved on a session.
 func TestTimezoneSetting(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true, UserID: u.ID}
@@ -73,6 +74,7 @@ func TestTimezoneSetting(t *testing.T) {
 // TestSessionPrincipalResolvesTimezone verifies the effective zone carried on a
 // web session: user override beats the account default, which beats UTC.
 func TestSessionPrincipalResolvesTimezone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	admin := model.Principal{AccountID: u.AccountID, Admin: true, UserID: u.ID}
@@ -124,6 +126,7 @@ func TestSessionPrincipalResolvesTimezone(t *testing.T) {
 // TestMigration040AddsTimezoneColumns verifies both columns exist with an empty
 // default after the migration chain runs on a fresh store.
 func TestMigration040AddsTimezoneColumns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s, u, _, _ := testStore(t)
 	if !columnPresent(t, s, "accounts", "timezone") {
