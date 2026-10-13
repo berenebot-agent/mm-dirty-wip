@@ -3,6 +3,9 @@ package app_test
 import (
 	"context"
 	"errors"
+	"io"
+	"mime/quotedprintable"
+	"net/mail"
 	"strings"
 	"testing"
 
@@ -112,7 +115,7 @@ func standaloneDraft(t *testing.T, svc *app.Service, accountID string, box model
 
 // TestRequestSendStandaloneDefaultsToRemoteDraft proves a standalone inbox's
 // default authoring mode is a one-way remote handoff: RequestSend freezes the
-// draft, creates a handling record and queues a notification, and never creates a
+// draft, creates a handling record, and never creates a
 // MailMoose approval request.
 func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
 	t.Parallel()
@@ -148,21 +151,43 @@ func TestRequestSendStandaloneDefaultsToRemoteDraft(t *testing.T) {
 	if h.Publication != model.HandoffPending {
 		t.Fatalf("handoff publication=%q want pending", h.Publication)
 	}
-	// The handoff notification is queued through the existing workflow queue with
-	// the handoff kind and no approval token.
-	wfID, err := svc.Store.HandoffNotificationWorkflowID(ctx, u.AccountID, h.ID)
-	if err != nil || wfID == "" {
-		t.Fatalf("no handoff notification workflow queued: %v", err)
-	}
-	w, err := svc.Store.GetWorkflowInternal(ctx, u.AccountID, wfID)
+}
+
+func TestRemoteDraftHandoffPreservesDraftBody(t *testing.T) {
+	t.Parallel()
+	svc, u, _, _ := testService(t)
+	ctx := context.Background()
+	box := standaloneInbox(t, svc, u.AccountID, "content@remote.example")
+	assistant := assistantPrincipal(u.AccountID, box.ID)
+	want := "\tExact draft, verbatim.\r\nNo assistant preamble.\r\nUnicode: café — 🚀\r\n  trailing spaces  "
+	d, err := svc.Store.CreateDraft(ctx, assistant, model.Draft{
+		InboxID: box.ID,
+		To:      []string{"x@y.test"},
+		Subject: "Verbatim draft",
+		Text:    want,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w.Kind != model.WorkflowKindHandoff {
-		t.Fatalf("notification workflow kind=%q want %q", w.Kind, model.WorkflowKindHandoff)
+	if _, err := svc.RequestSend(ctx, assistant, d.ID, false); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(w.Text, "[GH-") || strings.Contains(w.HTML, "[GH-") {
-		t.Fatalf("handoff notification carries an approval token marker")
+	fake := &fakeHandoff{confirmed: true}
+	svc.SetHandoffPublisher(fake)
+	svc.PublishHandoffs(ctx)
+	if len(fake.appends) != 1 {
+		t.Fatalf("appends=%d want 1", len(fake.appends))
+	}
+	message, err := mail.ReadMessage(strings.NewReader(string(fake.appends[0].raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(quotedprintable.NewReader(message.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(decoded); got != want {
+		t.Fatalf("remote draft body differs from API-supplied content\n got: %q\nwant: %q", got, want)
 	}
 }
 

@@ -259,8 +259,8 @@ PUT /v1/inboxes/{id}/authoring
 - `GET /handoffs` lists the inbox's RemoteDraft handoffs newest first as the
   shared envelope, retaining terminal records (`published`, `ambiguous`,
   `failed`/`cancelled`) even after the source draft is cleaned up. Each record
-  carries its `publication` and `notification_status` independently and never an
-  approval token or the frozen content hash.
+  carries its `publication` state and never an approval token or frozen content
+  hash. Remote-draft handoffs do not send a notification email.
 - `GET`/`PUT /authoring` read/write the assistant authoring mode
   (`mailmoose_approval` or `remote_draft`) and the notify override. A standalone
   inbox defaults to `remote_draft`; a domain inbox is **preset** to
@@ -670,20 +670,18 @@ GET  /v1/send-requests?inbox={id}&active=true
 The inbox's **authoring mode** decides how a request is handled (snapshotted at
 creation). **MailMoose approvals** (domain default) is the workflow above.
 **Remote draft handoff** (standalone default) is a one-way handoff to the
-connected mailbox's remote Drafts folder instead: MailMoose never sends it, a
-notification without a token tells the human it is waiting, and publication,
-notification and Sent-copy states advance independently. The handoff events are
+connected mailbox's remote Drafts folder instead: MailMoose never sends it and
+does not send a notification email. The handoff events are
 `draft.handoff_requested`, `draft.handoff_published`, `draft.handoff_ambiguous`,
-`draft.handoff_failed`, `draft.handoff_cancelled`, `draft.handoff_notification_sent`
-and `draft.handoff_notification_failed`. An unverifiable remote append is
+`draft.handoff_failed` and `draft.handoff_cancelled`. An unverifiable remote append is
 reported `ambiguous`, never retried blindly. A handoff on an inbox with no remote
 Drafts folder is refused.
 
 A draft response carries a **`handoff`** object when a RemoteDraft handoff is
-active or most recent, exposing the immutable `handoff_id` and the independent
-`publication` (`pending`/`published`/`ambiguous`/`failed`) and
-`notification_status` states, so a client that requested a handoff can act on
-its outcome rather than only seeing the frozen draft. The full history is at
+active or most recent, exposing the immutable `handoff_id` and
+`publication` (`pending`/`published`/`ambiguous`/`failed`), so a client that
+requested a handoff can act on its outcome rather than only seeing the frozen
+draft. The full history is at
 `GET /v1/inboxes/{id}/handoffs` (terminal records are retained after the local
 draft is cleaned up).
 
