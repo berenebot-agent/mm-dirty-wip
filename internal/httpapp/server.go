@@ -141,7 +141,11 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		streamLimiter:        newConcurrentLimiter(maxConcurrentLongLived),
 		waitLimiter:          newConcurrentLimiter(maxConcurrentLongLived),
 		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute)}
-	if rpID := svc.Config.WebAuthnRPID(); rpID != "" {
+	// Passkeys require a browser secure context: an https origin, or a loopback
+	// host. A plain-HTTP deployment reached by IP or hostname has no usable
+	// WebAuthn origin, so the service is not built and every passkey ceremony
+	// reports 501 rather than offering a button that cannot work.
+	if rpID := svc.Config.WebAuthnRPID(); rpID != "" && svc.Config.SecureContext() {
 		wa, err := auth.NewWebAuthnService(auth.WebAuthnConfig{
 			RPDisplayName: "MailMoose",
 			RPID:          rpID,

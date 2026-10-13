@@ -531,6 +531,33 @@ func (c Config) BaseHost() string {
 	return ""
 }
 
+// SecureContext reports whether the canonical origin is a browser secure
+// context, which WebAuthn (passkeys) requires. A context is secure when the
+// scheme is https, or the host is a loopback address: browsers treat
+// http://localhost (and 127.0.0.1 / ::1) as secure for local development. A
+// plain-HTTP deployment reached by IP or hostname is not, and the browser
+// refuses to run a WebAuthn ceremony there.
+func (c Config) SecureContext() bool {
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return true
+	}
+	if !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.IsLoopback()
+	}
+	return false
+}
+
 // WebAuthnRPID returns the relying-party id for passkeys: the canonical host
 // with any port removed. WebAuthn scopes a credential to a registrable domain,
 // so the port must not be included; a bare "localhost" stays "localhost" for

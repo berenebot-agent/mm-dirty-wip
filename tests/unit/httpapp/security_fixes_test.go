@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -306,4 +307,94 @@ func TestInboundPerIPCap(t *testing.T) {
 	if refused == 0 {
 		t.Fatalf("per-IP inbound cap did not refuse any of %d concurrent requests from one address", n)
 	}
+}
+
+// passkeyOriginFixture builds a handler for a given BASE_URL with one admin
+// account, so the passkey secure-context gate can be exercised per origin.
+func passkeyOriginFixture(t *testing.T, baseURL string) (*app.Service, http.Handler) {
+	t.Helper()
+	dir := t.TempDir()
+	st := testdb.OpenAt(t, dir)
+	t.Cleanup(func() { st.Close() })
+	cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+	svc, err := app.New(cfg, st, events.NewHub())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateAccountAndAdmin(context.Background(), "A", "admin@example.com", "correct horse battery staple", cfg.DefaultQuotaBytes); err != nil {
+		t.Fatal(err)
+	}
+	return svc, httpapp.New(svc, nil).Handler()
+}
+
+// signIn signs the fixture admin in and returns the session cookie.
+func signIn(t *testing.T, h http.Handler) *http.Cookie {
+	t.Helper()
+	csrf := csrfFromLogin(t, h)
+	v := url.Values{"email": {"admin@example.com"}, "password": {"correct horse battery staple"}, "_csrf": {csrf.Value}}
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(v.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login = %d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "mmm_session" {
+			return c
+		}
+	}
+	t.Fatal("no session cookie")
+	return nil
+}
+
+// TestPasskeysRequireSecureContext covers the passkey gating: a plain-HTTP
+// deployment reached by IP or hostname must not offer passkeys (the browser
+// refuses WebAuthn outside a secure context), and its account page must explain
+// why instead of rendering controls. An https origin, and http on localhost,
+// keep passkeys enabled.
+func TestPasskeysRequireSecureContext(t *testing.T) {
+	t.Parallel()
+	t.Run("http by hostname is disabled", func(t *testing.T) {
+		t.Parallel()
+		_, h := passkeyOriginFixture(t, "http://mail.example.test")
+		// The login page must not offer the passkey button.
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))
+		if strings.Contains(rr.Body.String(), "passkey-signin") {
+			t.Fatal("login page offers passkey sign-in over plain HTTP")
+		}
+		// The account page must explain the requirement, not show the controls.
+		session := signIn(t, h)
+		rr = httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/account", nil)
+		req.AddCookie(session)
+		h.ServeHTTP(rr, req)
+		body := rr.Body.String()
+		if strings.Contains(body, `id="passkey-add"`) {
+			t.Fatal("account page shows passkey-add over plain HTTP")
+		}
+		if !strings.Contains(body, "Passkeys need HTTPS") {
+			t.Fatal("account page does not explain the HTTPS requirement")
+		}
+	})
+	t.Run("https is enabled", func(t *testing.T) {
+		t.Parallel()
+		_, h := passkeyOriginFixture(t, "https://mail.example.test")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))
+		if !strings.Contains(rr.Body.String(), "passkey-signin") {
+			t.Fatal("login page omits passkey sign-in over HTTPS")
+		}
+	})
+	t.Run("http on localhost is enabled", func(t *testing.T) {
+		t.Parallel()
+		_, h := passkeyOriginFixture(t, "http://localhost:8081")
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/login", nil))
+		if !strings.Contains(rr.Body.String(), "passkey-signin") {
+			t.Fatal("login page omits passkey sign-in on localhost")
+		}
+	})
 }

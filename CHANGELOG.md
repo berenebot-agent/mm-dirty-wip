@@ -41,6 +41,10 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - Concurrent inbound webhook requests are capped per source address, so one
   caller can no longer hold every shared inbound slot before its signature is
   verified.
+- Passkeys are offered only from a browser secure context. A plain-HTTP
+  deployment reached by IP or hostname no longer shows the passkey sign-in
+  button, and its account page explains that HTTPS is required instead of
+  offering controls the browser would refuse to run.
 
 ### Changed
 

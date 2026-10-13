@@ -9,6 +9,31 @@ import (
 
 const testKey = "01234567890123456789012345678901"
 
+// TestSecureContext covers the browser secure-context rule used to gate
+// passkeys: https anywhere, or http on a loopback host.
+func TestSecureContext(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://mail.example.com", true},
+		{"https://192.168.1.50:8443", true},
+		{"http://localhost:8081", true},
+		{"http://127.0.0.1:8081", true},
+		{"http://[::1]:8081", true},
+		{"http://192.168.1.50:8081", false},
+		{"http://mail.example.com", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		cfg := config.Config{BaseURL: tc.baseURL}
+		if got := cfg.SecureContext(); got != tc.want {
+			t.Errorf("SecureContext(%q) = %v, want %v", tc.baseURL, got, tc.want)
+		}
+	}
+}
+
 func TestDedicatedReceiverConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name, enabled, port, url, listen string
