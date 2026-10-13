@@ -4633,6 +4633,65 @@ primitives), `internal/app` (the `AAD` helpers, the walk and the removed
 one import) and `cmd/server` (the startup call). No new dependency, table or
 migration: the rewrite is in place rather than a schema change.
 
+## D119 — Standalone workflow delivery no longer fails on a NULL inbox domain, and a failed action reports its real cause
+
+**Context:** A run of RemoteDraft handoffs against standalone inboxes exposed two
+independent defects that together read in the UI as "update labels action cannot
+be completed" plus a permanently "publication queued" badge.
+
+1. **Every standalone workflow delivery failed before the provider call.** The
+   delivery-log attribution query in `insertWorkflowAttemptTx`
+   (`internal/store/workflow.go`) read `inboxes.domain_id` into a plain `string`.
+   A standalone inbox has no managed domain, so its `domain_id` is `NULL`, and
+   the scan failed with `converting NULL to string is unsupported`. Because
+   `RecordWorkflowDeliveryStarted` runs immediately before the provider send in
+   `DeliverWorkflow`, the approval request or handoff notification was claimed
+   and then failed on every pass: the handoff published correctly (publication
+   and notification are independent), but `notification_status` stayed `queued`
+   forever while the worker logged the scan error. The sibling read in
+   `resolveAttemptDomainTx` (`internal/store/outbound_log.go`) and
+   `DomainSendingConfigForWorkflow` already handled the NULL correctly; this was
+   the one remaining raw scan on the path.
+
+2. **A failed action discarded the provider's reason.** A raw transport error is
+   normalised by `normalizeRemoteError` into a `MailboxError` of kind `internal`
+   with an empty public message. `ActionWorker.execute` only replaced its generic
+   "Action could not be completed" reason when the public message was non-empty,
+   so the underlying cause was dropped. An operator saw the same opaque string
+   whether the provider refused a folder, a connector was misconfigured, or a
+   move targeted an unselectable destination.
+
+**Decision:**
+
+- Read `domain_id` as `sql.NullString` in `insertWorkflowAttemptTx` and pass
+  `domainID.String` through `nullString`, so a standalone workflow attempt is
+  recorded with a NULL domain exactly like a standalone message attempt. A
+  missing inbox row still records an unattributed attempt.
+- When a `MailboxError` carries no public message, `ActionWorker.execute` falls
+  back to the error's own text (`MailboxError.Error()`, which already prefers
+  `Message` and otherwise returns the wrapped cause) instead of the generic
+  string. The public string is still preferred whenever one is set, so no
+  transport-specific detail leaks for errors that deliberately carry a curated
+  message.
+
+**Consequences:** A standalone inbox's approval and handoff notifications now
+reach the provider-resolution step (and are held only for a genuinely missing
+provider, as designed), and a failed action's queue entry names the real cause.
+The behaviour in `docs/API.md` — publication and notification advancing
+independently, and a handoff on an inbox with no remote/outbound provider staying
+queued — is unchanged.
+
+**Complexity:** `internal/store/workflow.go` (one nullable scan), `internal/app/
+message_actions.go` (a reason fallback), two regression tests
+(`tests/unit/store/workflow_standalone_test.go`, and a failed-move case in
+`tests/unit/app/message_actions_test.go`) and a `moveFail` seam on the test's
+fake remote server. No new dependency, table or migration.
+
+**Not fixed here:** the separate "a folder-backed label cannot be moved back out
+through the API" gap (no `POST /v1/messages/{id}/move` route; a folder-label
+`remove` still returns 409) is unchanged and remains tracked in
+`docs/proposals/label-findings-fix-plan.md`.
+
 ## Future extension register
 
 - additional inbound transport adapters

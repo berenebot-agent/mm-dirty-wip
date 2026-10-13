@@ -412,11 +412,18 @@ func getWorkflowTx(ctx context.Context, tx *sql.Tx, accountID, id string) (Workf
 // insertWorkflowAttemptTx appends a delivery-log row attributed to a workflow
 // job rather than a message, so per-domain activity is complete without a
 // messages row.
+//
+// domain_id is read as a nullable value: a standalone inbox has no managed
+// domain, so its domain_id is NULL. Scanning that into a plain string fails
+// with "converting NULL to string is unsupported", which would otherwise fail
+// every workflow delivery for a standalone inbox (an approval request or a
+// RemoteDraft handoff notification) before the provider call is even made.
+// A missing inbox row is still treated as an unattributed attempt.
 func (s *Store) insertWorkflowAttemptTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, provider, workflowID, status, providerMessageID, errorText string) error {
-	var domainID string
+	var domainID sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT domain_id FROM inboxes WHERE id=? AND account_id=?`, inboxID, accountID).Scan(&domainID); err != nil {
 		if err == sql.ErrNoRows {
-			domainID = ""
+			domainID = sql.NullString{}
 		} else {
 			return err
 		}
@@ -426,7 +433,7 @@ func (s *Store) insertWorkflowAttemptTx(ctx context.Context, tx *sql.Tx, account
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_delivery_log(account_id,domain_id,provider,message_id,workflow_id,attempt,status,provider_message_id,error_text,created_at) VALUES(?,?,?,NULL,?,?,?,?,?,?)`,
-		accountID, nullString(domainID), provider, workflowID, attempt, status, providerMessageID, errorText, nowText()); err != nil {
+		accountID, nullString(domainID.String), provider, workflowID, attempt, status, providerMessageID, errorText, nowText()); err != nil {
 		return err
 	}
 	return s.pruneDeliveryLogTx(ctx, tx, accountID)

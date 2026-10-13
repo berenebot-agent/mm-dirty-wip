@@ -237,6 +237,9 @@ type fakeRemoteServer struct {
 	// succeeds but reports no COPYUID (DestinationUID 0), forcing the caller to
 	// re-resolve by Message-ID.
 	moveNoUID bool
+	// moveFail, when set, makes MoveMessage fail with that error so a test can
+	// exercise the failure classification and its public reason.
+	moveFail error
 	// fetchFail, keyed by UID, makes FetchRawMIME fail for that message so a test
 	// can exercise the fail-closed classification path.
 	fetchFail map[uint32]error
@@ -494,6 +497,9 @@ func (f *fakeRemoteServer) MoveMessage(_ context.Context, loc imap.Locator, dest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.moveCalled++
+	if f.moveFail != nil {
+		return imap.MoveResult{}, f.moveFail
+	}
 	m := f.find(loc)
 	if m == nil {
 		return imap.MoveResult{}, model.NewMailboxError(model.ErrKindNotFound, "no message", false, imap.ErrNotFound)

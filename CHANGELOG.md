@@ -293,6 +293,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- A standalone inbox's approval-request and draft-handoff notifications no longer
+  fail before they reach the provider. The delivery-log attribution read the
+  inbox's `domain_id` into a non-nullable string, so every workflow job for a
+  standalone inbox (whose `domain_id` is `NULL`) failed with `converting NULL to
+  string is unsupported` and its notification stayed **queued** forever while the
+  handoff itself published normally. A standalone attempt is now recorded with no
+  domain, exactly like a standalone message. See `D119`.
+- A failed message action now reports the provider's actual reason instead of a
+  bare **Action could not be completed**. A remote error normalised without a
+  curated message (for example a refused folder move) previously had its cause
+  discarded, so every failure looked identical in the action queue. See `D119`.
 - The Antler MX status view and setup wizard no longer tell you to publish a
   record when the DNS lookup simply failed. A record that is definitely absent
   still shows its publish prompt, but a lookup that could not be completed reads
