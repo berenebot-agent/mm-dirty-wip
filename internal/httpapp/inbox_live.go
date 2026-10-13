@@ -156,6 +156,29 @@ func (s *Server) buildMessageList(r *http.Request, p model.Principal, id, folder
 		return nil, false, "", "", store.ErrInvalidSearchQuery
 	}
 	if box, gerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id); gerr == nil && box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
+		if folder == "label" {
+			records, err := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, id, store.RemoteMessageFilter{
+				Label: label, Before: before, Limit: inboxPageSize + 1,
+			})
+			if err != nil {
+				return nil, false, "", "", err
+			}
+			for _, rec := range records {
+				rec.Labels, _ = s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, id, rec.ID)
+				msgs = append(msgs, remoteMessageToModel(s.remoteMailbox().ViewOf(rec), nil))
+			}
+			hasMore = len(msgs) > inboxPageSize
+			if hasMore {
+				msgs = msgs[:inboxPageSize]
+			}
+			if len(msgs) > 0 {
+				cursor = msgs[len(msgs)-1].ID
+			}
+			if cursor != "" {
+				pagerURL = basePath + "?name=" + url.QueryEscape(label) + "&before=" + url.QueryEscape(cursor)
+			}
+			return msgs, hasMore, cursor, pagerURL, nil
+		}
 		return s.buildRemoteMessageList(r, p, box, folder, before)
 	}
 	f.Before = before

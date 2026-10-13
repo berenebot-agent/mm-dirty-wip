@@ -305,6 +305,27 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, newEnvelope(s.messageResponses(r, msgs, false), cursor, model.CompletenessComplete, nil))
 		return
 	}
+	if label := strings.TrimSpace(firstQuery(r, "label")); label != "" {
+		records, lerr := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, mb.inbox.ID, store.RemoteMessageFilter{
+			FolderPath: r.URL.Query().Get("folder"), Label: label, Limit: limit + 1, Before: before,
+		})
+		if lerr != nil {
+			mapStoreError(w, lerr)
+			return
+		}
+		cursor := ""
+		if len(records) > limit {
+			records = records[:limit]
+			cursor = records[len(records)-1].ID
+		}
+		items := make([]model.Message, 0, len(records))
+		for _, rec := range records {
+			rec.Labels, _ = s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, mb.inbox.ID, rec.ID)
+			items = append(items, remoteMessageToModel(mb.remote.ViewOf(rec), nil))
+		}
+		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessPartial, nil))
+		return
+	}
 	res, rerr := mb.remote.ListRemoteMessages(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, before)
 	if rerr != nil {
 		mapMailboxError(w, rerr)
