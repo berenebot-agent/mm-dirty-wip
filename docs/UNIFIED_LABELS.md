@@ -46,8 +46,7 @@ message. Newly named tags can be applied through `tag:<name>` for native,
 Gmail or Microsoft mailboxes; on IMAP an existing remote folder must be chosen.
 
 The existing `/folders`, `/labels` and `PATCH /v1/messages/{id}` routes remain
-available to integrations and old clients. There is no schema migration and
-no destructive conversion of message records.
+available to integrations and old clients. Migration 075 only adds a durable catalogue for empty native labels; there is no destructive conversion of message records.
 
 ## UI
 
@@ -55,8 +54,9 @@ There is one **Labels** section for custom tags and folder-backed labels. The
 message view displays a selector that marks exclusive labels as moving the
 message, while keeping free-text creation for providers that support additive
 labels. System destinations remain separate. New remote folder-backed labels
-continue to use the existing remote folder-management action; native local
-free-text labels are created when applied to a message.
+continue to use the existing remote folder-management action; native labels can be created before they are applied to a message using a small durable catalogue (migration 075).
 
 The action queue, live mailbox index and remote adapter still own mutations.
 Provider failures therefore surface via the existing action-queue feedback.
+
+`POST /v1/inboxes/{id}/label-catalog` accepts `{"name":"Invoices"}` and creates a durable additive native label. Connected Gmail mailboxes create a native provider label. IMAP and Microsoft folder-backed labels are created through the existing provider adapter, with exclusive membership. Existing labels are not migrated or deleted.

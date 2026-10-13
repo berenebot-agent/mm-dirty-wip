@@ -54,6 +54,33 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	if err != nil || len(after.Labels) != 0 { t.Fatalf("remove tag: %+v %v", after.Labels, err) }
 }
 
+func TestNativeNewLabelIsAdditive(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	rr := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/labels", "_csrf="+csrf+"&name=NewAdditiveLabel")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("create label: %d %s", rr.Code, rr.Body.String())
+	}
+	labels, err := svc.Store.ListDefinedLabels(context.Background(), u.AccountID, box.ID)
+	if err != nil || len(labels) != 1 || labels[0] != "NewAdditiveLabel" {
+		t.Fatalf("defined labels: %v %v", labels, err)
+	}
+	folders, err := svc.Store.ListFolders(context.Background(), u.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range folders {
+		if f.Name == "NewAdditiveLabel" {
+			t.Fatal("a native label must not create an exclusive folder")
+		}
+	}
+	body := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(body, "NewAdditiveLabel") {
+		t.Fatal("empty native label absent from sidebar")
+	}
+}
+
 func TestUnifiedLabelSidebarAndPicker(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, box := httpFixture(t)

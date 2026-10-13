@@ -254,6 +254,7 @@ func migrations(dataDir string) []migration {
 		{version: "072", sql: migration072, detect: allOf(columnAdded("messages", "snippet"), columnAdded("inbox_remote_messages", "snippet_pending"))},
 		{version: "073", sql: migration073, detect: stateOf(columnAdded("domains", "dkim_private_key"))},
 		{version: "074", sql: migration074, detect: stateOf(columnAdded("client_inbox_bindings", "send_any_in_domain"))},
+		{version: "075", sql: migration075, detect: stateOf(tableExists("inbox_defined_labels"))},
 	}
 }
 
