@@ -113,7 +113,11 @@ func (s *Server) submitMessageAction(w http.ResponseWriter, r *http.Request, id 
 	}
 	if ui {
 		notice := queuedNotice(actionLabel(in), 1, "")
-		http.Redirect(w, r, "/ui/inboxes/"+mb.inbox.ID+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
+		target := "/ui/inboxes/" + url.PathEscape(mb.inbox.ID)
+		if strings.HasPrefix(r.URL.Path, "/ui/messages/") && strings.HasSuffix(r.URL.Path, "/labels") {
+			target = "/ui/messages/" + url.PathEscape(m.ID)
+		}
+		http.Redirect(w, r, target+"?notice="+url.QueryEscape(notice), http.StatusSeeOther)
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {

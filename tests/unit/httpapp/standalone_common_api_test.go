@@ -887,7 +887,7 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 		t.Fatalf("standalone inbox %d: %s", rr.Code, rr.Body.String())
 	}
 	page := rr.Body.String()
-	for _, want := range []string{"/remote", "New folder", `data-folder-new`, "Inbox"} {
+	for _, want := range []string{"/remote", "New label", `data-folder-new`, "Inbox"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("standalone inbox missing %q", want)
 		}

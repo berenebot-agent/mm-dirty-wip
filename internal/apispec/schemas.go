@@ -207,6 +207,26 @@ var schemas = map[string]any{
 	"MessageList":    arrayOf("Message", "Newest-first list of messages."),
 	"AttachmentList": arrayOf("Attachment", "Message attachments."),
 	"LabelList":      stringList("Distinct labels in use."),
+	"MailboxLabel": obj(map[string]any{
+		"id": str("Label id: tag:Name or folder:<id>."),
+		"name": str("Human-readable label name."),
+		"kind": str("tag (additive) or folder (move destination)."),
+		"membership": str("multiple for tags or exclusive for folder-backed labels."),
+		"source": str("provider or local."),
+		"folder_id": str("Underlying folder id when applicable."),
+		"can_remove": boolean("Can remove membership without a move."),
+		"can_rename": boolean("Can rename label through the provider or local store."),
+		"can_delete": boolean("Can delete label through the provider or local store."),
+	}, "id", "name", "kind", "membership", "source"),
+	"MailboxLabelEnvelope": commonEnvelopeSchema("MailboxLabel", "Unified provider-aware label catalogue."),
+	"MailboxLabelCreate": obj(map[string]any{"name": str("New label name.")}, "name"),
+	"MailboxLabelRename": obj(map[string]any{"name": str("Replacement label name.")}, "name"),
+	"MailboxLabelAction": obj(map[string]any{
+		"name": str("Free-text label name. Either name or label_id is required."),
+		"label_id": str("Explicit label identity, including folder-backed destinations."),
+		"operation": str("add or remove."),
+	}, "operation"),
+
 	"IdentityList":   obj(map[string]any{"identities": arrayOf("Identity", "Accessible identities.")}, "identities"),
 
 	"InboxFailure": obj(map[string]any{
