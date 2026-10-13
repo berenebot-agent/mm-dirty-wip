@@ -219,7 +219,7 @@ func (s *Server) webauthnLoginBegin(w http.ResponseWriter, r *http.Request) {
 	if s.webauthnUnavailable(w) {
 		return
 	}
-	if s.webauthnLoginLimiter != nil && !s.webauthnLoginLimiter.Allow(clientIP(r, s.Service.Config)) {
+	if s.webauthnLoginLimiter != nil && !s.webauthnLoginLimiter.Allow(rateLimitKey(clientIP(r, s.Service.Config))) {
 		writeError(w, http.StatusTooManyRequests, "too many passkey attempts, try again later")
 		return
 	}
@@ -238,7 +238,7 @@ func (s *Server) webauthnLoginFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := clientIP(r, s.Service.Config)
-	if s.webauthnLoginLimiter != nil && !s.webauthnLoginLimiter.Allow(ip) {
+	if s.webauthnLoginLimiter != nil && !s.webauthnLoginLimiter.Allow(rateLimitKey(ip)) {
 		writeError(w, http.StatusTooManyRequests, "too many passkey attempts, try again later")
 		return
 	}

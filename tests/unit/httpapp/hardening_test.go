@@ -364,14 +364,14 @@ func TestSendRejectsHeaderInjection(t *testing.T) {
 	}
 }
 
-func TestUntrustedProxyHeaderIgnored(t *testing.T) {
+func TestSecureCookieFollowsBaseURL(t *testing.T) {
 	t.Parallel()
-	newHandler := func(t *testing.T, trusted string) http.Handler {
+	newHandler := func(t *testing.T, baseURL, trusted string) http.Handler {
 		t.Helper()
 		dir := t.TempDir()
 		st := testdb.OpenAt(t, dir)
 		t.Cleanup(func() { st.Close() })
-		cfg := config.Config{DataDir: dir, BaseURL: "https://mail.example.test", Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
+		cfg := config.Config{DataDir: dir, BaseURL: baseURL, Mode: "selfhosted", AllowPrivateOutbound: true, AppEncryptionKey: "01234567890123456789012345678901", MaxMessageBytes: 5 << 20, DefaultQuotaBytes: 50 << 20, SessionTTL: time.Hour, LoginLimitPerMinute: 20, SendLimitPerMinute: 60}
 		if trusted != "" {
 			cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix(trusted)}
 		}
@@ -381,33 +381,38 @@ func TestUntrustedProxyHeaderIgnored(t *testing.T) {
 		}
 		return httpapp.New(svc, nil).Handler()
 	}
-	// Untrusted peer: spoofed X-Forwarded-Proto must NOT set Secure cookies.
-	h := newHandler(t, "")
-	req := httptest.NewRequest("GET", "/login", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
-	req.RemoteAddr = "203.0.113.5:1234"
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	for _, c := range rr.Result().Cookies() {
-		if c.Secure {
-			t.Fatalf("untrusted peer set Secure cookie: %#v", c)
+	cookieSecure := func(t *testing.T, h http.Handler, spoofProto bool, remoteAddr string) bool {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/login", nil)
+		if spoofProto {
+			req.Header.Set("X-Forwarded-Proto", "https")
 		}
-	}
-	// Trusted peer: X-Forwarded-Proto https sets Secure cookies.
-	h = newHandler(t, "203.0.113.0/24")
-	req = httptest.NewRequest("GET", "/login", nil)
-	req.Header.Set("X-Forwarded-Proto", "https")
-	req.RemoteAddr = "203.0.113.5:1234"
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	found := false
-	for _, c := range rr.Result().Cookies() {
-		if c.Secure {
-			found = true
+		req.RemoteAddr = remoteAddr
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		for _, c := range rr.Result().Cookies() {
+			if c.Name == "mmm_csrf" {
+				return c.Secure
+			}
 		}
+		t.Fatal("no mmm_csrf cookie")
+		return false
 	}
-	if !found {
-		t.Fatal("trusted peer should set Secure cookies")
+	// An https BASE_URL marks cookies Secure even on a plain-HTTP request that
+	// arrives behind a TLS-terminating proxy with no trusted proxy configured:
+	// the canonical origin is https, so the browser stores and returns the
+	// cookie over TLS regardless of what the app sees on the wire. A spoofed
+	// X-Forwarded-Proto from an untrusted peer changes nothing.
+	if !cookieSecure(t, newHandler(t, "https://mail.example.test", ""), false, "203.0.113.5:1234") {
+		t.Fatal("https BASE_URL should set Secure cookies behind a bare proxy")
+	}
+	if !cookieSecure(t, newHandler(t, "https://mail.example.test", ""), true, "203.0.113.5:1234") {
+		t.Fatal("https BASE_URL should set Secure cookies regardless of X-Forwarded-Proto")
+	}
+	// An http BASE_URL does not, so a self-hosted plain-HTTP deployment still
+	// receives usable cookies.
+	if cookieSecure(t, newHandler(t, "http://example.test", ""), true, "203.0.113.5:1234") {
+		t.Fatal("http BASE_URL should not set Secure cookies")
 	}
 }
 

@@ -16,6 +16,32 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   adds `client_inbox_bindings.send_any_in_domain`; `POST /v1/admin/keys` accepts a
   `domain_send` list. See `D115`.
 
+### Security
+
+- A post-login `next` value containing an ASCII tab or newline could survive into
+  the `Location` header, which a browser then strips to form an off-site
+  redirect (`/\t/evil.com` → `//evil.com`); `safeNextPath` now rejects control
+  characters and any value that is not a plain root-relative path.
+- Session and CSRF cookies are now `Secure` whenever `BASE_URL` is `https://`,
+  including behind a TLS-terminating proxy with no configured trusted proxy,
+  where they were previously issued without the flag.
+- The CSRF token for compose, reply and forward forms no longer travels in the
+  form-action URL (which leaked it into proxy and access logs); it is read from
+  the hidden `_csrf` field of the multipart body, or the `X-CSRF-Token` header.
+- An unauthenticated `POST` to a compose path no longer has its body parsed or
+  cached in the shared flash store, closing an anonymous memory-pinning and
+  flash-eviction path; the flash store's ceiling is also reduced from 64 MiB to
+  8 MiB.
+- Password login now carries a per-account throttle in addition to the per-IP
+  one, and IPv6 rate-limit keys are masked to `/64` so a client cannot rotate
+  within its prefix to exhaust the limiter.
+- Unauthenticated password login acquires its Argon2 admission slot with a
+  timeout and returns `503` rather than blocking indefinitely behind a login
+  flood.
+- Concurrent inbound webhook requests are capped per source address, so one
+  caller can no longer hold every shared inbound slot before its signature is
+  verified.
+
 ### Changed
 
 - A terminal outbound send failure (permanent provider rejection, ambiguous
