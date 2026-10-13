@@ -829,7 +829,7 @@ func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest := "/login"
-	if tok := s.flashes.put(authFlash{Title: "Log In", Error: "Your session expired. Please sign in and try again."}, 96); tok != "" {
+	if tok := s.putFlash(w, r, authFlash{Title: "Log In", Error: "Your session expired. Please sign in and try again."}, 96); tok != "" {
 		dest += "?_flash=" + url.QueryEscape(tok)
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -838,14 +838,20 @@ func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
 // preserveComposeOnExpiry recognizes a compose/reply/forward POST and stores its
 // fields in a compose flash so they survive the login round-trip. It returns the
 // post-login GET path and the flash token (both empty when the request is not a
-// compose form or the body cannot be read). It does nothing when the request
-// carried no session cookie at all: an anonymous caller has no draft to
-// preserve, and parsing its body would let it consume flash-store memory
-// unauthenticated.
+// compose form or the body cannot be read). Only a recently expired, unrevoked
+// session record may preserve a draft. A fabricated cookie is rejected before
+// reading the body, and the form must carry that session's CSRF token.
 func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request) (next, token string) {
-	if _, err := r.Cookie("mmm_session"); err != nil {
+	c, err := r.Cookie("mmm_session")
+	if err != nil {
 		return "", ""
 	}
+	p, want, err := s.Service.Store.ExpiredSessionDraftPrincipal(r.Context(), c.Value)
+	if err != nil {
+		return "", ""
+	}
+	ctx := context.WithValue(r.Context(), principalKey, p)
+	r = r.WithContext(ctx)
 	path := r.URL.Path
 	var title, cancel string
 	switch {
@@ -869,6 +875,13 @@ func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request)
 		// notice rather than losing the destination.
 		return next, ""
 	}
+	if r.MultipartForm != nil {
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
+	}
+	got := r.PostForm.Get("_csrf")
+	if want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return next, ""
+	}
 	in := app.SendInput{
 		InboxID:     r.PathValue("id"),
 		FromAddress: strings.TrimSpace(r.Form.Get("sender")),
@@ -886,13 +899,13 @@ func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request)
 	if strings.HasPrefix(path, "/ui/messages/") {
 		in.InboxID = ""
 	}
-	if v, ok := s.flashes.peek(r.Form.Get("_flash")); ok {
+	if v, ok := s.peekFlash(r, r.Form.Get("_flash")); ok {
 		if old, ok := v.(composeFlash); ok {
 			in.Attachments = append(in.Attachments, old.Input.Attachments...)
 		}
 	}
 	f := composeFlash{Title: title, Action: path, Cancel: cancel, Input: in}
-	return next, s.flashes.put(f, composeFlashSize(f))
+	return next, s.putFlash(w, r, f, composeFlashSize(f))
 }
 func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1537,6 +1550,9 @@ func inboundPerIPLimit(conc int) int {
 	limit := conc / 4
 	if limit < 2 {
 		limit = 2
+	}
+	if limit >= conc {
+		limit = conc - 1
 	}
 	return limit
 }

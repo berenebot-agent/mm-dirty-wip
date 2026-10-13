@@ -158,7 +158,7 @@ func composeFlashSize(f composeFlash) int {
 }
 
 func (s *Server) peekComposeFlash(r *http.Request) (composeFlash, bool) {
-	if v, ok := s.flashes.peek(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.peekFlash(r, r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(composeFlash); ok {
 			return f, true
 		}
@@ -1337,7 +1337,7 @@ func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.P
 		return
 	}
 	if tok := r.Form.Get("_flash"); tok != "" {
-		s.flashes.take(tok)
+		s.takeFlash(r, tok)
 	}
 	http.Redirect(w, r, returnTo(r, in.InboxID, "sent"), 303)
 }
@@ -1347,7 +1347,7 @@ func (s *Server) submitMessage(w http.ResponseWriter, r *http.Request, p model.P
 func (s *Server) renderComposeError(w http.ResponseWriter, r *http.Request, title, formURL, action, cancel string, in app.SendInput, err error) {
 	f := composeFlash{Title: title, Action: action, Cancel: cancel, Err: safeErrorMessage(err, "Could not send the message. Please try again."), Input: in}
 	dest := formURL
-	if tok := s.flashes.put(f, composeFlashSize(f)); tok != "" {
+	if tok := s.putFlash(w, r, f, composeFlashSize(f)); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -1362,7 +1362,7 @@ func (s *Server) parseMessageForm(w http.ResponseWriter, r *http.Request) (app.S
 	if err != nil {
 		return app.SendInput{}, err
 	}
-	if v, ok := s.flashes.peek(r.Form.Get("_flash")); ok {
+	if v, ok := s.peekFlash(r, r.Form.Get("_flash")); ok {
 		if f, ok := v.(composeFlash); ok {
 			atts = append(atts, f.Input.Attachments...)
 		}

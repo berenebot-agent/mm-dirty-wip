@@ -83,7 +83,7 @@ func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
 	if _, err := cryptox.DecryptWithAAD(key, enc, nil); err == nil {
 		t.Fatal("decryption with an empty AAD was allowed")
 	}
-	// The pre-AAD format is refused: rewrap via cmd/migrate-secrets first.
+	// The unsupported pre-AAD format is refused, never read without a binding.
 	if _, err := cryptox.DecryptWithAAD(key, "bm90LXByZWZpeGVk", aad); err == nil {
 		t.Fatal("unprefixed ciphertext was accepted")
 	}

@@ -86,7 +86,7 @@ type inviteFlash struct {
 }
 
 func (s *Server) peekInviteLink(r *http.Request) string {
-	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.takeFlash(r, r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(inviteFlash); ok {
 			return f.Link
 		}
@@ -164,7 +164,7 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, accountID,
 		http.Redirect(w, r, redirect+"?notice=Invitation+created", 303)
 		return
 	}
-	if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
+	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
 		redirect += "?_flash=" + tok
 	}
 	http.Redirect(w, r, redirect, 303)
@@ -206,7 +206,7 @@ func (s *Server) uiAdminReissueInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dest := "/admin"
-	if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
+	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, 303)
@@ -351,7 +351,7 @@ func (s *Server) uiOperatorReissueInvite(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	dest := "/account?tab=account"
-	if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
+	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
 		dest += "&_flash=" + tok
 	}
 	http.Redirect(w, r, dest, 303)
@@ -705,7 +705,7 @@ func (s *Server) uiInboxAccessInvite(w http.ResponseWriter, r *http.Request) {
 	s.Service.Store.Audit(r.Context(), p.AccountID, "invite.created", inv.Email)
 	notice := "Invitation created"
 	if token != "" {
-		if tok := s.flashes.put(inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
+		if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
 			notice = "Invitation created — setup link on the Account page"
 		}
 	}

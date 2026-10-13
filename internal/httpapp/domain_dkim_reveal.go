@@ -45,7 +45,7 @@ func (s *Server) uiDomainSendingDKIMReveal(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	f := dkimKeyFlash{AccountID: p.AccountID, UserID: p.UserID, DomainID: d.ID, PrivateKey: keyPEM}
-	tok := s.flashes.put(f, len(keyPEM)+64)
+	tok := s.putFlash(w, r, f, len(keyPEM)+64)
 	if tok == "" {
 		s.uiError(w, errors.New("could not prepare the key for display; try again"), 500)
 		return

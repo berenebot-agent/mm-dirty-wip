@@ -2847,6 +2847,12 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 	case <-r.Context().Done():
 		http.Error(w, "request cancelled", 499)
 		return
+	default:
+		// Never queue unauthenticated callers behind the shared pool. A socket
+		// read timeout does not bound time spent waiting without reading.
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "too many concurrent inbound requests", http.StatusTooManyRequests)
+		return
 	}
 	ctx := r.Context()
 	if provider == "resend" {
