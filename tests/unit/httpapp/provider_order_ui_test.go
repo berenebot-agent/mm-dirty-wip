@@ -41,15 +41,6 @@ func attrValue(frag, name string) string {
 	return ""
 }
 
-func indexOf(list []string, want string) int {
-	for i, v := range list {
-		if v == want {
-			return i
-		}
-	}
-	return -1
-}
-
 // TestReceivingProviderOrder pins the receiving dropdown order: Antler MX,
 // Direct MX and Remote MX lead in that fixed order, and every other provider
 // follows alphabetically by display label. SendGrid is intentionally absent:

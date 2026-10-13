@@ -439,9 +439,6 @@ func (c *Client) CreateDraft(ctx context.Context, t, mailbox string, raw io.Read
 	}
 	return c.mimeDraft(ctx, t, path, bytes.NewReader(b))
 }
-func (c *Client) CreateReply(ctx context.Context, t, mailbox, id string, raw io.Reader) (Message, error) {
-	return c.mimeDraft(ctx, t, mailboxPath(mailbox)+"/messages/"+url.PathEscape(id)+"/createReply", raw)
-}
 func (c *Client) mimeDraft(ctx context.Context, t, path string, raw io.Reader) (Message, error) {
 	b, e := io.ReadAll(io.LimitReader(raw, (30<<20)+1))
 	if e != nil || len(b) > 30<<20 {

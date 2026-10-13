@@ -361,18 +361,6 @@ func (s *Store) SetDomainCatchAll(ctx context.Context, accountID, domainID, inbo
 	return nil
 }
 
-func (s *Store) DeleteDomain(ctx context.Context, accountID, domainID string) error {
-	res, err := s.write.ExecContext(ctx, `DELETE FROM domains WHERE id=? AND account_id=?`, domainID, accountID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // PurgeDomain permanently deletes a domain and every inbox and message it owns,
 // returning the raw .eml paths the caller must unlink from disk. It mirrors
 // PurgeInbox but across all inboxes of the domain, and clears message_fts,

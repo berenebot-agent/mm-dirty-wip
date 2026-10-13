@@ -132,9 +132,18 @@ func TestEventReplayOmitsLegacyIMAPIdentifiers(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE events SET payload_json=json_set(payload_json,'$.remote_uid',1,'$.uid_validity',100) WHERE id=?`, ev.ID); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := s.GetEvent(ctx, u.AccountID, ev.ID)
+	events, err := s.ListEvents(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, ev.ID-1, "", 10)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var replayed model.Event
+	for _, e := range events {
+		if e.ID == ev.ID {
+			replayed = e
+		}
+	}
+	if replayed.ID != ev.ID {
+		t.Fatalf("event %d missing from replay: %+v", ev.ID, events)
 	}
 	for _, key := range []string{"uid", "remote_uid", "uid_validity"} {
 		if _, exists := replayed.Payload[key]; exists {

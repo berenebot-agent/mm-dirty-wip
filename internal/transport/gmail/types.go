@@ -153,17 +153,6 @@ type attachmentBody struct {
 	Size int64  `json:"size"`
 }
 
-// rawPayload is the request shape of messages.send.
-type rawPayload struct {
-	Raw      string `json:"raw"`
-	ThreadID string `json:"threadId,omitempty"`
-}
-
-// draftPayload is the request shape of drafts.create.
-type draftPayload struct {
-	Message rawPayload `json:"message"`
-}
-
 // modifyPayload is the request shape of messages.modify.
 type modifyPayload struct {
 	AddLabelIDs    []string `json:"addLabelIds"`

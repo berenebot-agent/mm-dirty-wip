@@ -729,8 +729,6 @@ type rawSession struct {
 	pr     *io.PipeReader
 	pw     *io.PipeWriter
 	resp   *http.Response
-	mu     sync.Mutex
-	ch     uint64
 }
 
 func newRawSession(t *testing.T, client *http.Client, base string) *rawSession {

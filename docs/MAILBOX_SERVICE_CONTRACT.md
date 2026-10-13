@@ -6,6 +6,10 @@ workflow, HTTP/API and UI layers depend on. It records the shared model, the
 per-backend ownership, and the honest limits of the remote index. SQLite's exact
 schema is described by the migrations; this file describes behaviour.
 
+The `MailboxRouter`/`StandaloneMailboxService`/`MailboxBackend` seam that §3
+originally specified was removed as unreachable code (see §3); the live boundary
+is `RemoteMailboxService` plus `internal/httpapp/mailbox_access.go`.
+
 Authoritative tree: `repo/`. Every path below is relative to `repo/`.
 
 ### Google extension (D098)
@@ -173,21 +177,21 @@ External aliases are removed, so sending has one target shape per kind:
 
 ## 3. Application boundary (`internal/app`)
 
-### Router, capability surface and config (`internal/app/mailbox_service.go`)
-- `MailboxBackendKind` — `BackendLocal` (domain) / `BackendRemote` (standalone).
-- `MailboxRoute{Inbox, Backend, Capabilities, Remote}`.
-- `MailboxRouter` — `NewMailboxRouter` / `Route` / `RouteInternal` /
-  `CapabilitiesOf` / `RemoteLocatorFor` / `BackendFor`. One store read, no
-  remote I/O.
-- `StandaloneMailboxService` — `CreateStandalone` (account **Admin** only),
-  `ListStandalone`, `GetStandalone`, `ReconcileFolders`, `ListFolders`.
+### Capability surface and config (`internal/app/mailbox_boundary.go`)
+- `MailboxBackendKind` — `BackendLocal` (domain) / `BackendRemote` (standalone),
+  reported by `internal/httpapp/mailbox_access.go`.
 - `mapStoreError` normalizes store errors to `*model.MailboxError`.
-- `ErrRemoteNotBound` / `ErrLocalOnly`.
-- The `MailboxBackend` interface (`Kind`, `Capabilities`, `ListFolders`) and its
-  `LocalBackend`/`RemoteBackend` implementations remain a thin capability
-  surface. The full live remote implementation is `RemoteMailboxService` below;
-  production dispatch happens in `internal/httpapp/mailbox_access.go`, which
-  resolves an inbox to its backend once and routes every read/mutation.
+- `ErrRemoteNotBound` — a remote operation on a standalone inbox with no
+  configured remote connector.
+- The router seam this section originally specified (`MailboxRoute`,
+  `MailboxRouter`, `StandaloneMailboxService`, the `MailboxBackend` interface and
+  its `LocalBackend`/`RemoteBackend` scaffolds) was removed as unreachable code:
+  no workflow, HTTP or UI path ever constructed it. Production dispatch happens
+  in `internal/httpapp/mailbox_access.go`, which resolves an inbox to its backend
+  once and routes every read/mutation; the live remote implementation is
+  `RemoteMailboxService` below. Inbox **Admin**-only creation is enforced at the
+  two live entry points: `adminOnly` in `internal/httpapp/api.go` and the
+  `p.Admin` check in `uiCreateStandalone`.
 
 ### Live remote surface (`internal/app/remote_mailbox.go`,
 `remote_mailbox_ops.go`, `remote_mailbox_more.go`)

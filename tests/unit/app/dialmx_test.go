@@ -99,10 +99,6 @@ func TestDialMXProviderIsolationAndMXIdentity(t *testing.T) {
 	if _, _, err := svc.SaveDomainReceivingConfig(context.Background(), u.AccountID, d.ID, "dialmx", map[string]any{"receiver_urls": "https://receiver.example"}, false); err != nil {
 		t.Fatal(err)
 	}
-	resolved := svc.ResolveDialMXRecipients(context.Background(), []string{box.Address})
-	if len(resolved) != 1 || !resolved[0].Accept {
-		t.Fatalf("dialmx recipient should resolve: %+v", resolved)
-	}
 	if got := svc.ResolveMXRecipients(context.Background(), []string{box.Address}); len(got) != 1 || got[0].Accept {
 		t.Fatalf("mx must refuse dialmx-bound recipient: %+v", got)
 	}

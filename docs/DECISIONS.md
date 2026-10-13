@@ -3281,6 +3281,18 @@ is unsupported the scope is deliberately conservative (the explicit root,
 default `INBOX`, and its children). See `docs/MAILBOX_SERVICE_CONTRACT.md`
 §1/§3/§5.
 
+**Status update (dead-code removal, 2026-10-13):** The `MailboxRouter` /
+`StandaloneMailboxService` / `MailboxBackend` seam described above was
+unreachable — no workflow, HTTP or UI code constructed it (only its own unit
+test did) — so it was removed with that test. The surviving declarations
+(`MailboxBackendKind` with `BackendLocal`/`BackendRemote`, `mapStoreError` and
+`ErrRemoteNotBound`; `ErrLocalOnly` was unreferenced and went with the rest)
+moved to `internal/app/mailbox_boundary.go`. The live boundary is unchanged:
+`internal/httpapp/mailbox_access.go` for dispatch and `RemoteMailboxService` for
+remote operations, with Admin-only standalone creation still enforced at both
+live entry points. `docs/MAILBOX_SERVICE_CONTRACT.md` §3 was updated to match;
+the rest of this entry stands.
+
 ## D098 — BYO Google connected inboxes
 
 **Requirement:** Connect a Google mailbox through the standalone wizard, using

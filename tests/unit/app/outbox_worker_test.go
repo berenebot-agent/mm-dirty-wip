@@ -344,7 +344,7 @@ func TestDraftSendFlow(t *testing.T) {
 	for _, path := range paths {
 		_ = os.Remove(filepath.Join(svc.Config.DataDir, filepath.FromSlash(path)))
 	}
-	if err = svc.Store.DeleteDraft(ctx, p, d.ID); err != nil {
+	if _, err = svc.Store.DeleteDraftCascade(ctx, p, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Draft is gone.

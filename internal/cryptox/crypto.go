@@ -26,14 +26,6 @@ var kdfSalt = []byte("github.com/dellarb/mailmoose/app-encryption-key/v2")
 
 const kdfIterations = 210_000
 
-// DeriveKey returns the key for the given APP_ENCRYPTION_KEY. A 32-byte
-// base64/hex key is used directly; a passphrase is stretched with
-// PBKDF2-HMAC-SHA256.
-func DeriveKey(raw string) ([]byte, error) {
-	primary, _, err := DeriveKeys(raw)
-	return primary, err
-}
-
 // derivedKeys caches derivations keyed by the SHA-256 of the raw input (so the
 // raw secret is not retained as a map key). Stretching a passphrase is
 // deliberately expensive and deterministic, so repeated New() calls (notably

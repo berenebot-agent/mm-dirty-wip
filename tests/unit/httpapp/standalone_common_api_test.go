@@ -82,7 +82,6 @@ type fakeIMAP struct {
 	folders      map[string]uint32
 	messages     []*fakeIMAPMsg
 	nextUID      uint32
-	failOpen     bool
 	previewCalls int
 }
 

@@ -352,7 +352,6 @@ type scriptedBackend struct {
 	ingestDelay  time.Duration
 	ingestEnter  chan struct{}
 	ingestHold   chan struct{}
-	ingestErr    error
 	resolveFn    func(domain string, recipients []string) mxwire.ResolveResponse
 	ingestFn     func(domains []string, meta mxwire.IngestMetadata, path, receiverURL string) (mxwire.IngestResponse, error)
 }

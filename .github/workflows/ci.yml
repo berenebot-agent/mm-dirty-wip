@@ -26,6 +26,16 @@ jobs:
           } 2>&1 | tee ci-logs/gofmt.log
       - name: vet
         run: go vet ./... 2>&1 | tee ci-logs/vet.log
+      # Dead-code gate: U1000 reports unused unexported functions, types, fields
+      # and methods (test files included). Kept in step with tests/run.sh --lint.
+      - name: lint
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -checks U1000 ./... 2>&1 | tee ci-logs/lint.log
+      # Advisory only, never a gate: deadcode exits 0 even with findings, and its
+      # RTA call graph treats exported methods of reflectively-reachable types as
+      # live (false negatives) while flagging test-only seams (false positives).
+      # The log is uploaded as an artifact for reading, not for failing the build.
+      - name: deadcode (advisory)
+        run: go run golang.org/x/tools/cmd/deadcode@v0.51.0 ./... 2>&1 | tee ci-logs/deadcode.log
       - name: build
         run: go build -buildvcs=false ./cmd/... ./dialmx/cmd/... 2>&1 | tee ci-logs/build.log
       # The Antler dialog interaction checks drive the real app.js closure against

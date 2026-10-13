@@ -2744,19 +2744,6 @@ func normalizeAliasForms(raw []string) ([]aliasForm, error) {
 	return out, nil
 }
 
-// aliasNamesForForms builds a name lookup keyed by lowercased address for a
-// submitted alias set, so a names-only update can be merged onto the existing
-// aliases.
-func aliasNamesForForms(forms []aliasForm) map[string]string {
-	out := map[string]string{}
-	for _, f := range forms {
-		if f.DisplayName != "" {
-			out[strings.ToLower(f.LocalPart+"@"+f.DomainName)] = f.DisplayName
-		}
-	}
-	return out
-}
-
 const maxInboxAliasesForm = 100
 
 // inboxConfig holds the per-inbox settings shared by the create and edit

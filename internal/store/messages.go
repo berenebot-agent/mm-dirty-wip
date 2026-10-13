@@ -1571,40 +1571,6 @@ func (s *Store) GetBlockedMessage(ctx context.Context, accountID, id string) (mo
 	return m, err
 }
 
-func (s *Store) ListBlockedMessages(ctx context.Context, p model.Principal, limit int) ([]model.BlockedMessage, error) {
-	q := blockedSelect + ` WHERE account_id=?`
-	args := []any{p.AccountID}
-	if !p.Admin {
-		ids := principalInboxIDs(p)
-		if len(ids) == 0 {
-			return []model.BlockedMessage{}, nil
-		}
-		q += ` AND inbox_id IN (` + placeholders(len(ids)) + `)`
-		for _, id := range ids {
-			args = append(args, id)
-		}
-	}
-	if limit <= 0 || limit > limits.PageSizeMaxList {
-		limit = limits.PageSizeDefault
-	}
-	q += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.read.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []model.BlockedMessage{}
-	for rows.Next() {
-		m, err := scanBlockedMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) SearchMessages(ctx context.Context, p model.Principal, q, inboxID string, limit int) ([]model.Message, error) {
 	return s.SearchMessagesFiltered(ctx, p, q, MessageFilter{InboxID: inboxID, Limit: limit})
 }

@@ -630,14 +630,6 @@ func (s *Store) RecoverStaleIdempotency(ctx context.Context, now time.Time) (int
 	return n, nil
 }
 
-func (s *Store) LatestMessageInThread(ctx context.Context, accountID, threadID string) (model.Message, error) {
-	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.thread_id=? AND m.internal=0 AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 1`, accountID, threadID))
-	if err == sql.ErrNoRows {
-		return m, ErrNotFound
-	}
-	return m, err
-}
-
 func (s *Store) LatestInboundMessageInThread(ctx context.Context, accountID, inboxID, threadID string) (model.Message, error) {
 	m, err := scanMessage(s.read.QueryRowContext(ctx, messageSelect+` FROM messages m WHERE m.account_id=? AND m.inbox_id=? AND m.thread_id=? AND m.direction='inbound' AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 1`, accountID, inboxID, threadID))
 	if err == sql.ErrNoRows {

@@ -297,13 +297,6 @@ var (
 	dummyHash     string
 )
 
-// DummyPasswordCheck performs a hash comparison against a fixed dummy hash. It
-// is used on the unknown-account path so login timing cannot be used to confirm
-// whether an account exists.
-func DummyPasswordCheck(password string) {
-	_, _ = DummyPasswordCheckContext(context.Background(), password, 0)
-}
-
 // DummyPasswordCheckContext is DummyPasswordCheck with an Argon2 admission
 // timeout. It returns ErrArgonBusy when no slot became free in time, so an
 // unknown-account login is shed under flood instead of blocking.

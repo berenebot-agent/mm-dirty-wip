@@ -1101,68 +1101,6 @@ func (s *Server) apiInboxAuthoringSet(w http.ResponseWriter, r *http.Request) {
 	s.apiInboxAuthoringGet(w, r)
 }
 
-// patchRemoteMessage applies a read/labels patch to a standalone inbox's remote
-// message: read toggles the live \Seen flag (a state change, Assistant/Owner), and
-// labels are local free-text metadata. Spam is not a remote server concept, so it
-// is ignored. It writes the resulting message.
-func (s *Server) patchRemoteMessage(w http.ResponseWriter, r *http.Request, p model.Principal, mb mailboxBackend, id string, read *bool, labels *[]string) {
-	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
-		writeError(w, 403, "forbidden")
-		return
-	}
-	if read != nil {
-		if _, err := mb.remote.SetRemoteRead(r.Context(), p, mb.inbox.ID, id, *read); err != nil {
-			mapMailboxError(w, err)
-			return
-		}
-	}
-	if labels != nil {
-		if _, err := mb.remote.SetRemoteLabels(r.Context(), p, mb.inbox.ID, id, *labels); err != nil {
-			mapMailboxError(w, err)
-			return
-		}
-	}
-	updated, err := s.resolveRemoteMessage(r.Context(), p, mb, id)
-	if err != nil {
-		mapMailboxError(w, err)
-		return
-	}
-	writeJSON(w, 200, s.messageResponse(r, updated))
-}
-
-// resolveRemoteMessage re-reads a remote message projection as a common message.
-func (s *Server) resolveRemoteMessage(ctx context.Context, p model.Principal, mb mailboxBackend, id string) (model.Message, error) {
-	v, err := mb.remote.GetRemoteMessage(ctx, p, mb.inbox.ID, id)
-	if err != nil {
-		return model.Message{}, err
-	}
-	return remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}), nil
-}
-
-// trashRemoteMessage moves a standalone inbox's remote message to the inbox's
-// Trash-role folder. When the inbox has no mapped Trash folder the operation is
-// refused rather than silently deleting. It requires Assistant/Owner.
-func (s *Server) trashRemoteMessage(ctx context.Context, p model.Principal, mb mailboxBackend, id string) error {
-	if !p.CanAssist(mb.inbox.ID) && !p.Admin {
-		return model.NewMailboxError(model.ErrKindForbidden, "not permitted", false, store.ErrForbidden)
-	}
-	return s.moveRemoteToRole(ctx, p, mb, id, model.FolderRoleTrash)
-}
-
-// moveRemoteToRole moves a remote message to the inbox's folder carrying a role
-// (Trash for a delete, Inbox for a restore). A missing role folder is a permanent
-// refusal.
-func (s *Server) moveRemoteToRole(ctx context.Context, p model.Principal, mb mailboxBackend, id, role string) error {
-	folder, ok := s.remoteRoleFolder(ctx, p.AccountID, mb.inbox.ID, role)
-	if !ok || strings.TrimSpace(folder.Path) == "" {
-		return model.NewMailboxError(model.ErrKindUnsupported, "this inbox has no remote "+role+" folder mapped", false, nil)
-	}
-	if _, err := mb.remote.MoveRemoteMessage(ctx, p, mb.inbox.ID, id, folder.Path); err != nil {
-		return err
-	}
-	return nil
-}
-
 // remoteMessageContent streams a remote message body; see apiInboxMessageContent.
 // It is the shared implementation used by both the original and common content
 // routes.

@@ -1588,21 +1588,6 @@ func credentialKey(p model.Principal) string {
 	return "anonymous"
 }
 
-func baseWSURL(base string) string {
-	u, err := url.Parse(base)
-	if err != nil {
-		return strings.TrimRight(base, "/")
-	}
-	if u.Scheme == "https" {
-		u.Scheme = "wss"
-	} else {
-		u.Scheme = "ws"
-	}
-	u.Path = "/relay"
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
-}
 func idemKey(r *http.Request) string { return strings.TrimSpace(r.Header.Get("Idempotency-Key")) }
 func formatBytes(n int64) string {
 	const unit = 1024
