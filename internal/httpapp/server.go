@@ -77,15 +77,20 @@ type Server struct {
 	Log             *slog.Logger
 	loginLimiter    *limiter
 	keyLoginLimiter *limiter
-	unroutedLim     *limiter
-	passwordLimiter *limiter
-	registerLimiter *limiter
+	// accountLoginLimiter throttles password login per account, so a caller
+	// rotating source addresses (an IPv6 /64, or a trusted XFF it can vary)
+	// cannot spray attempts at one account behind the per-IP limiter.
+	accountLoginLimiter *limiter
+	unroutedLim         *limiter
+	passwordLimiter     *limiter
+	registerLimiter     *limiter
 	// setupLimiter bounds first-run setup claim attempts per source address,
 	// separate from the registration limiter so neither can exhaust the other.
 	setupLimiter  *limiter
 	flashes       *flashStore
 	assetVersion  string
 	inboundSem    chan struct{}
+	inboundPerIP  *concurrentLimiter
 	streamLimiter *concurrentLimiter
 	waitLimiter   *concurrentLimiter
 	// webauthn is the passkey ceremony service. It is nil when the deployment
@@ -124,13 +129,15 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 	srv := &Server{Service: svc, Relay: hermesrelay.New(svc), Log: log,
 		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		keyLoginLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
+		accountLoginLimiter:  newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		unroutedLim:          newLimiter(1, time.Minute),
 		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		registerLimiter:      newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
 		setupLimiter:         newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
-		flashes:              newFlashStore(64, 64<<20),
+		flashes:              newFlashStore(64, flashStoreMaxBytes),
 		assetVersion:         fmt.Sprintf("%x", sum[:6]),
 		inboundSem:           make(chan struct{}, conc),
+		inboundPerIP:         newConcurrentLimiter(inboundPerIPLimit(conc)),
 		streamLimiter:        newConcurrentLimiter(maxConcurrentLongLived),
 		waitLimiter:          newConcurrentLimiter(maxConcurrentLongLived),
 		webauthnLoginLimiter: newLimiter(svc.Config.LoginLimitPerMinute, time.Minute)}
@@ -778,8 +785,14 @@ func (s *Server) expiredSession(w http.ResponseWriter, r *http.Request) {
 // preserveComposeOnExpiry recognizes a compose/reply/forward POST and stores its
 // fields in a compose flash so they survive the login round-trip. It returns the
 // post-login GET path and the flash token (both empty when the request is not a
-// compose form or the body cannot be read).
+// compose form or the body cannot be read). It does nothing when the request
+// carried no session cookie at all: an anonymous caller has no draft to
+// preserve, and parsing its body would let it consume flash-store memory
+// unauthenticated.
 func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request) (next, token string) {
+	if _, err := r.Cookie("mmm_session"); err != nil {
+		return "", ""
+	}
 	path := r.URL.Path
 	var title, cancel string
 	switch {
@@ -832,6 +845,17 @@ func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		got := r.Form.Get("_csrf")
+		// ParseForm does not read multipart/form-data bodies, so a compose or
+		// reply form (which carries files) would otherwise never expose its
+		// hidden _csrf field. Parse the multipart body with a bounded memory
+		// budget so the token can be read from the form field rather than from
+		// a query string, which would leak it into proxy and access logs.
+		if got == "" && strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			if err := r.ParseMultipartForm(4 << 20); err == nil && r.MultipartForm != nil {
+				defer func() { _ = r.MultipartForm.RemoveAll() }()
+				got = r.Form.Get("_csrf")
+			}
+		}
 		if got == "" {
 			got = r.Header.Get("X-CSRF-Token")
 		}
@@ -865,24 +889,16 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "mmm_session", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.cookieSecure(r), SameSite: http.SameSiteLaxMode})
 }
 
-// cookieSecure marks cookies Secure only when the deployment is HTTPS
-// (BaseURL) and the current connection actually arrived over TLS, directly
-// or via a trusted proxy. This keeps direct plain-HTTP access (self-hosted
-// LAN, healthchecks) working: browsers drop Secure cookies set over HTTP,
-// which previously broke setup/login CSRF validation entirely.
+// cookieSecure marks cookies Secure when the deployment is served over HTTPS.
+// The canonical origin is BaseURL: when it is https the deployment is intended
+// to be reached over TLS, so cookies are always Secure. That is deliberate even
+// for a request that arrives over plain HTTP behind a TLS-terminating proxy
+// with no configured trusted proxy, where the per-request signal is absent but
+// the browser will still store and send the cookie over the HTTPS origin. The
+// previous per-request gate (r.TLS or a trusted proxy's X-Forwarded-Proto) left
+// the common proxy setup with non-Secure session and CSRF cookies.
 func (s *Server) cookieSecure(r *http.Request) bool {
-	if !strings.HasPrefix(strings.ToLower(s.Service.Config.BaseURL), "https://") {
-		return false
-	}
-	if r.TLS != nil {
-		return true
-	}
-	if s.Service.Config.IsTrustedProxy(r.RemoteAddr) {
-		if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); strings.EqualFold(proto, "https") {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(strings.ToLower(s.Service.Config.BaseURL), "https://")
 }
 func redirectLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -1266,6 +1282,28 @@ func clientIP(r *http.Request, cfg config.Config) string {
 	return addrs[len(addrs)-1].String()
 }
 
+// rateLimitKey normalizes a client identity for rate limiting. An IPv6 client
+// usually controls a whole /64 (a residential prefix), so keying on the full
+// address lets one caller rotate addresses within its prefix and burn distinct
+// limiter entries, which eventually makes the limiter fail closed for every
+// client. Masking IPv6 to /64 makes the whole prefix one bucket. IPv4 and
+// unparsable values are returned unchanged.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if !addr.Is6() {
+		return addr.String()
+	}
+	prefix, err := addr.Prefix(64)
+	if err != nil {
+		return addr.String()
+	}
+	return prefix.String()
+}
+
 // remoteIP extracts the host part of a host:port remote address, tolerating
 // bare IPs, missing ports and IPv6 zones.
 func remoteIP(remoteAddr string) string {
@@ -1352,6 +1390,13 @@ func prefixContains(prefixes []netip.Prefix, addr netip.Addr) bool {
 // a caller rotating X-Forwarded-For cannot grow the map without limit.
 const maxTrackedIPs = 1 << 16
 
+// argonAdmissionTimeout bounds how long an unauthenticated password login waits
+// for one of the process-wide Argon2 admission slots. Four slots at 64 MiB each
+// is the memory ceiling; a login that cannot get a slot within this window is
+// shed with a 503 rather than queued indefinitely behind a flood. Inline
+// password, registration and reset paths keep the blocking acquire.
+const argonAdmissionTimeout = 5 * time.Second
+
 type limiter struct {
 	mu        sync.Mutex
 	max       int
@@ -1411,10 +1456,37 @@ func (l *limiter) sweepLocked(now time.Time) {
 	}
 }
 
+// Reset clears the bucket for a key, so a successful login does not count
+// against the account's throttle window.
+func (l *limiter) Reset(k string) {
+	l.mu.Lock()
+	delete(l.m, k)
+	l.mu.Unlock()
+}
+
 // maxConcurrentLongLived bounds the number of simultaneous SSE streams and
 // long-polls a single credential may hold, so one key cannot exhaust server
 // connections while a request is parked.
 const maxConcurrentLongLived = 16
+
+// inboundPerIPLimit caps how many of the shared inbound slots one source address
+// may hold at once. The inbound semaphore is taken before the provider's
+// signature is verified (Mailgun's signature is in the form body, so the body
+// must be read first), which means an unauthenticated caller can take slots. A
+// per-IP cap stops one source from holding all of them and starving real
+// deliveries, without changing the signature-before-body ordering.
+func inboundPerIPLimit(conc int) int {
+	if conc < 2 {
+		return 1
+	}
+	// A quarter of the pool, at least 2, so one source cannot monopolize it but
+	// a legitimate provider fan-out still has room.
+	limit := conc / 4
+	if limit < 2 {
+		limit = 2
+	}
+	return limit
+}
 
 // concurrentLimiter bounds the number of in-flight long-lived requests a single
 // credential may hold at once. Unlike limiter it counts live work and releases

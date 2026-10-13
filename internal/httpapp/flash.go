@@ -7,6 +7,14 @@ import (
 	"github.com/dellarb/mailmoose/internal/auth"
 )
 
+// flashStoreMaxBytes bounds the total bytes held by the flash store. Compose
+// flashes can carry attachments, so it is larger than a status notice, but it
+// is deliberately far below the 64 MiB the initial design allowed: the store is
+// process-wide and not keyed by user, so a smaller ceiling limits how much a
+// single caller can pin and how much a legitimate user's flashes (invite links,
+// API secrets) can have evicted under pressure.
+const flashStoreMaxBytes = 8 << 20
+
 // flashStore holds short-lived, one-shot state between a POST that redirects
 // and the GET that renders it (Post/Redirect/Get). It exists so refreshing a
 // page never re-submits a form and never triggers the browser's resubmission

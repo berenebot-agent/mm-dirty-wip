@@ -2821,6 +2821,16 @@ func (s *Server) ingestProvider(w http.ResponseWriter, r *http.Request, provider
 	// transport itself applies a tighter per-message cap; this is a hard
 	// ceiling that also covers multipart overhead and form fields.
 	r.Body = http.MaxBytesReader(w, r.Body, s.Service.Config.MaxMessageBytes*3+1<<20)
+	// Cap concurrent in-flight ingests per source address so an unauthenticated
+	// caller cannot hold every shared slot while its signature is still
+	// unverified and starve real deliveries.
+	ipKey := rateLimitKey(clientIP(r, s.Service.Config))
+	if !s.inboundPerIP.acquire(ipKey) {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "too many concurrent inbound requests", http.StatusTooManyRequests)
+		return
+	}
+	defer s.inboundPerIP.release(ipKey)
 	select {
 	case s.inboundSem <- struct{}{}:
 		defer func() { <-s.inboundSem }()

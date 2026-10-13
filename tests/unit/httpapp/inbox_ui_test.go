@@ -527,7 +527,8 @@ func TestUIComposeCSRFAndSend(t *testing.T) {
 	setDomainBrevo(t, svc, u.AccountID, dom.ID)
 	cookie, csrf := uiSession(t, svc, u.ID)
 
-	// Missing CSRF (multipart body token is not parsed by ParseForm) must be rejected.
+	// Missing CSRF entirely (no query token, no multipart field, no header)
+	// must be rejected.
 	body, ctype := multipartBody(t, map[string]string{"to": "friend@example.net", "subject": "No token", "text": "hi"}, "", "")
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/ui/inboxes/"+box.ID+"/send", body)
