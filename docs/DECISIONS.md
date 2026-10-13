@@ -4523,8 +4523,9 @@ passphrase key predates the PBKDF2 change, the pre-PBKDF2 derivation. The PBKDF2
 *password* path is gone too:
 only an Argon2id hash verifies, so an account that has not logged in since the
 Argon2id switch needs a password reset (accepted by the operator). The fixed KDF
-salt is unchanged, and the migrator is temporary — delete it once every instance
-has been migrated.
+salt is unchanged. The migrator is kept in the code so any instance can be
+migrated with the same command, and its descriptor table must be extended when a
+new encrypted column is added.
 `SECURITY.md` records the same. See `D118`.
 
 ## D118 — Stored secrets always carry an AAD binding; the PBKDF2 password path is removed
@@ -4570,13 +4571,13 @@ an account that has not logged in since the Argon2id switch).
   `internal/migratesecrets`, plus the `Dockerfile` build and `COPY` lines for
   the migrator. Remove them once every instance has been migrated; they are the
   last remaining compatibility surface, and they are clearly marked.
-- **The migrator covers every encrypted column, not just `client_push`.** The
-  descriptor table in `internal/migratesecrets/migrate.go` names each column
-  with its row key and the exact AAD the read path uses. This is deliberate: an
-  earlier revision migrated only the two tables whose call sites it converted
-  and left provider configs, Dial MX seeds and MX receiver credentials unreadable
-  on an existing instance. A new encrypted column must be added to that table
-  until the migrator is deleted.
+- **Migrate every encrypted column, not just `client_push`.** The descriptor
+  table in `internal/migratesecrets/migrate.go` names each column with its row
+  key and the exact AAD the read path uses, and is kept in the code rather than
+  treated as a one-off. This is deliberate: an earlier revision migrated only the
+  two tables whose call sites it converted and left provider configs, Dial MX
+  seeds and MX receiver credentials unreadable on an existing instance. A new
+  encrypted column must be added to that table.
 
 **Reason:** The shims were the project's only pre-release compatibility debt.
 The AAD binding is what stops a database-write attacker relabelling a secret

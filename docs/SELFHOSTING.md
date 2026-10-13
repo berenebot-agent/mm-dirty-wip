@@ -376,5 +376,6 @@ again; a second run reports `TOTAL 0`.
 user), so the database files stay owned correctly. Omit it only if your
 deployment overrides `user:` in Compose, in which case pass the same uid.
 
-The migrator and its `internal/migratesecrets` package are temporary: they are
-removed once every instance has been migrated.
+The migrator and its `internal/migratesecrets` package are kept in the code so
+any instance — including one you deploy later — can be migrated with the same
+command. Add a new encrypted column to its descriptor table when you add one.

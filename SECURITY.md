@@ -173,8 +173,9 @@ access the encryption is designed to survive:
   one).
 - The migrator itself can open pre-AAD blobs, so its legacy-envelope primitive
   is the last code that does. `cmd/migrate-secrets` and
-  `internal/migratesecrets` are temporary: delete them once every instance has
-  been migrated.
+  `internal/migratesecrets` are kept in the code so any instance can be migrated
+  with the same command, and must be extended when a new encrypted column is
+  added.
 
 A 32-byte `APP_ENCRYPTION_KEY` has no legacy derivation and is used directly.
 
