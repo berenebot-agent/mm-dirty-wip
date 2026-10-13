@@ -7707,7 +7707,7 @@ function hideInboxSubview(dlg) {
   var newBtn = sidebar.querySelector('[data-folder-new]');
   if (newBtn && newDlg && typeof newDlg.showModal === 'function') {
     newBtn.addEventListener('click', function () {
-      var input = newDlg.querySelector('input[name=path]');
+      var input = newDlg.querySelector('input[name=name], input[name=path]');
       if (input) { input.value = ''; }
       newDlg.showModal();
       if (input) { input.focus(); }
@@ -7717,9 +7717,9 @@ function hideInboxSubview(dlg) {
   if (!manageDlg || typeof manageDlg.showModal !== 'function') { return; }
   sidebar.querySelectorAll('[data-folder-manage]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      var id = btn.getAttribute('data-folder-id') || '';
+      var id = btn.getAttribute('data-label-id') || btn.getAttribute('data-folder-id') || '';
       var name = btn.getAttribute('data-folder-name') || '';
-      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/folders/' + encodeURIComponent(id);
+      var base = '/ui/inboxes/' + encodeURIComponent(inboxID) + '/labels/' + encodeURIComponent(id);
       var renameForm = manageDlg.querySelector('[data-folder-rename-form]');
       var deleteForm = manageDlg.querySelector('[data-folder-delete-form]');
       var input = manageDlg.querySelector('[data-folder-rename-input]');

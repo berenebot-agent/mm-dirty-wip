@@ -57,6 +57,9 @@ func queuedNotice(action string, count int, dest string) string {
 // input: read/unread/spam/labels arrive as a "patch" with the specific field
 // set, so the display label is derived from the field rather than the kind.
 func actionLabel(in store.MessageActionInput) string {
+	if in.Kind == "label" {
+		return "labels"
+	}
 	if in.Kind == "patch" {
 		switch {
 		case in.Read != nil && *in.Read:

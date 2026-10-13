@@ -27,7 +27,7 @@ func (s *Store) ListDefinedLabels(ctx context.Context, accountID, inboxID string
 	return out, rows.Err()
 }
 
-// CreateDefinedLabel persists an empty native additive label. The insert is
+// CreateDefinedLabel persists an empty additive label. The insert is
 // inbox-scoped (and cannot reference an inbox of a different account).
 func (s *Store) CreateDefinedLabel(ctx context.Context, p model.Principal, inboxID, name string) (string, error) {
 	if !p.CanAssist(inboxID) && !p.Admin {
@@ -39,18 +39,18 @@ func (s *Store) CreateDefinedLabel(ctx context.Context, p model.Principal, inbox
 		return "", ErrInvalidSearchQuery
 	}
 	result, err := s.write.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_defined_labels(account_id,inbox_id,name)
-		SELECT account_id,id,? FROM inboxes WHERE id=? AND account_id=? AND kind='domain'`,
+		SELECT account_id,id,? FROM inboxes WHERE id=? AND account_id=? `,
 		name, inboxID, p.AccountID)
 	if err != nil {
 		return "", err
 	}
 	if n, err := result.RowsAffected(); err != nil || n == 0 {
-		// Existing labels are idempotent; a non-domain/missing inbox is not.
+		// Existing labels are idempotent; a missing inbox is not.
 		if err != nil {
 			return "", err
 		}
 		var exists int
-		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=? AND kind='domain'`,
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM inboxes WHERE id=? AND account_id=? `,
 			inboxID, p.AccountID).Scan(&exists); err != nil {
 			return "", err
 		}

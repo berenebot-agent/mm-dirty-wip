@@ -2991,3 +2991,18 @@ func TestStandaloneEditRemoteSaveVerifyGate(t *testing.T) {
 		t.Fatalf("unverified host was persisted: %+v", box.Remote)
 	}
 }
+
+func TestUnifiedIMAPLabelCatalogExclusive(t *testing.T) {
+	t.Parallel()
+	svc,h,u,_,box,fake := standaloneFixture(t)
+	fake.mu.Lock()
+	fake.folders["Projects"] = 150
+	fake.mu.Unlock()
+	key := adminKey(t,svc,u)
+	refreshRemote(t,h,box.ID,key)
+	rr := apiGet(t,h,"/v1/inboxes/"+box.ID+"/label-catalog",key)
+	if rr.Code != 200 { t.Fatalf("IMAP catalogue: %d %s",rr.Code,rr.Body.String()) }
+	if !strings.Contains(rr.Body.String(),`"name":"Projects"`) || !strings.Contains(rr.Body.String(),`"membership":"exclusive"`) {
+		t.Fatalf("IMAP folder-backed label missing: %s",rr.Body.String())
+	}
+}
