@@ -128,8 +128,18 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 	state, reason = "failed", "Action could not be completed"
 	var mb *model.MailboxError
 	if errors.As(err, &mb) {
-		if mb.Message != "" {
+		// Prefer the public message. When a provider error was normalised with no
+		// public detail (an internal/unclassified remote failure), fall back to the
+		// error's own text so the real cause reaches the action queue instead of the
+		// opaque generic string. MailboxError.Error() already prefers Message and
+		// otherwise returns the wrapped cause.
+		switch {
+		case mb.Message != "":
 			reason = mb.Message
+		default:
+			if text := strings.TrimSpace(err.Error()); text != "" {
+				reason = text
+			}
 		}
 		if mb.Retryable && a.Input.Kind == "patch" && a.Input.Spam == nil && a.Attempts < 5 {
 			state = "pending"
