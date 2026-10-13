@@ -24,6 +24,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   naming the domain), the `/v1` capabilities list gains `send-any-in-domain`, and
   the `/agent` guide explains the widened `sender` rule. See `D115`.
 
+### Fixed
+
+- Clearing **Domain send** on the Clients tab's edit-client screen now persists.
+  The control submits an explicit `1`/`0` rather than relying on an unchecked
+  checkbox, which submits nothing and was indistinguishable server-side from an
+  untouched row. The control also sits immediately left of the role ladder (it
+  had been placed before the key name), so it reads as a permission and every
+  role ladder stays aligned.
+
 ### Security
 
 - Stored secrets are now always bound to the row that owns them. A webhook
