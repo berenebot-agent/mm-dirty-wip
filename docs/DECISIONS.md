@@ -4732,6 +4732,58 @@ Gmail label ids, which a path-based destination would not satisfy). No API surfa
 (the destination resolution), `internal/app/message_actions.go` (the error reasons) and one
 store-level regression test. No new dependency, table or migration.
 
+## D119 — One label membership projection, one filter resolution, and catalogue capabilities
+
+**Date:** 2026-10-13. **Approved by:** Ben.
+
+**Requirement:** The unified Labels system shipped a provider-aware catalogue,
+but the read contract still exposed only additive names. A folder-backed label
+was invisible to API clients (they had to interpret `folder_path` themselves),
+and equivalent routes disagreed: the inbox-scoped listing applied only the
+**first** `label` value while the account-wide route required every one, so the
+same query returned different messages and different `completeness`. An empty
+catalogue also told a generic client nothing, create and list descriptors could
+disagree, and OpenAPI described the label mutation as a plain `200` result.
+
+**Decision:** `Message.label_ids` is the single unified membership projection for
+every inbox kind and every route: additively-addressed `tag:<Name>` plus the one
+folder-addressed `folder:<id>`, always present and `[]` when empty. The legacy
+`labels` array stays as the additive-name view only. Folder ids resolve through a
+per-inbox folder index built once per response, so no client has to reconstruct
+folder semantics.
+
+`label` and `label_id` are resolved by one shared helper on all four listing and
+search surfaces. Repeated values AND together; a bare name and `tag:<Name>` are
+equivalent; `folder:<id>` selects the single folder-backed label and requires an
+`inbox=` scope account-wide; more than one `folder:` id is rejected; an id that is
+not a label-eligible folder of the scoped inbox is `404`. Inbox-scoped and
+account-wide queries with the same resolved filter return the same page and the
+same completeness, which is now derived from one rule rather than hard-coded per
+branch.
+
+The catalogue reports `capabilities` (`can_create`, `create_kind`,
+`create_membership`, `can_rename`, `can_delete`) so an empty catalogue still
+describes the inbox. One descriptor projection serves both create and list so
+they cannot drift. Provider-owned label names (Gmail user labels, Outlook
+categories) are validated by a provider rule that allows hierarchical names; the
+MailMoose-native rule still rejects path separators. The action queue records
+which rule applied. OpenAPI declares the alternate `202` queued-action response
+on async-default mutations and documents the label filter parameters.
+
+**Reason:** A label is one concept in the UI, so it must be one concept in the
+API. Making membership a single projection and filter resolution a single helper
+removes the per-branch divergence that produced the route disagreement, and the
+capability block lets a generic client work against a new inbox without provider
+knowledge.
+
+**Complexity/resource budget:** No migration and no new dependency or runtime.
+One response field, one per-inbox folder index, one filter resolver, one
+capability helper, one descriptor helper, a provider-name validator, and OpenAPI
+alternate responses. Deterministic HTTP/store/spec tests cover five backends,
+route parity, empty catalogues, hierarchical provider names, and descriptor
+consistency. Folder-path normalization and Microsoft category rename/delete stay
+out of scope.
+
 ## Future extension register
 - custom-domain automation improvements
 - optional managed outbound

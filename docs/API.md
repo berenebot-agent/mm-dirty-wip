@@ -314,6 +314,15 @@ received/sent timestamps survive every projection. Unknown delivery `status`,
 `is_spam`, or `created_at` remain absent. `created_at` is not synthesized from
 receipt or indexing time; `indexed_at` can advance on a remote header refresh.
 
+`label_ids` is the canonical unified label membership for the owning inbox's
+label catalogue: additive labels are `tag:<Name>` and the single folder-backed
+label is `folder:<id>`. It is always present and `[]` when the message carries no
+label, and it is the same projection on every inbox kind and route. The legacy
+`labels` array remains the additive-name view only (folder-backed labels are
+absent from it); new clients should read `label_ids` and filter with `label_id`.
+See [`UNIFIED_LABELS.md`](UNIFIED_LABELS.md) for the resolution and validation
+rules.
+
 `snippet` is always a plain-text string, normalized to at most 200 Unicode
 characters. `"-"` means no usable preview is available: not yet generated,
 generation failed, or the body was empty. New local messages cache previews on
@@ -345,10 +354,17 @@ remote MIME to manufacture body parity. Send/reply results retain their returned
 body; mutation responses use the same message schema without fetching a remote
 body just to acknowledge an action.
 
+Messages can be filtered by label with `label` (legacy name) or `label_id`
+(catalogue id); repeated values AND together and both forms resolve identically
+on the inbox-scoped and account-wide routes. A folder-backed `label_id` requires
+an `inbox=` scope account-wide. See [`UNIFIED_LABELS.md`](UNIFIED_LABELS.md).
+
 **Compatibility:** Clients that used list or thread responses to read local
 message bodies must now fetch a message detail. Clients that relied on empty
 remote direction must now handle `unknown`; synthesized remote `created_at`
-remains absent. This is a development-time contract change: no native aliases
+remains absent. Native message mutations answer `202` with a queued action unless
+`?wait=true` settles them into the primary body, and OpenAPI documents both.
+This is a development-time contract change: no native aliases
 for old provider names or IMAP identifiers are retained. The explicit
 openagent.email compatibility projections remain separate and unchanged.
 

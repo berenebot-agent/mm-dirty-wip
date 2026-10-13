@@ -10,6 +10,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Messages now expose `label_ids`, the canonical unified label membership for the
+  owning inbox: `tag:<Name>` for additive labels and `folder:<id>` for the single
+  folder-backed label, always present and `[]` when empty. The older `labels`
+  array remains as the additive-name view only. Label filtering now resolves
+  `label` and `label_id` through one shared rule on every list and search route:
+  repeated values AND together, a bare name and `tag:<Name>` are equivalent,
+  `folder:<id>` requires an `inbox=` scope account-wide, and an inbox-scoped and
+  account-wide query with the same filter return the same page and completeness.
+  The label catalogue reports `capabilities` so an empty catalogue still describes
+  the inbox, create and list descriptors no longer drift, and provider-owned
+  label names (Gmail user labels, Outlook categories) may be hierarchical. OpenAPI
+  documents the `202` queued-action response on async-default mutations.
+
 ### Added
 
 - A key may hold a **domain-wide sending** grant on a domain's catch-all inbox,

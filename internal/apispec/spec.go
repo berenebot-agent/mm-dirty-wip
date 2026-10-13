@@ -52,6 +52,10 @@ type Route struct {
 	Response string
 	// Query documents the operation's query parameters.
 	Query []Param
+	// Alternates declares extra success responses the operation can return in
+	// addition to its primary one, such as the queued action an async-default
+	// mutation answers with before ?wait=true settles it.
+	Alternates []AlternateResponse
 }
 
 // Status returns the effective primary success status code for the route.

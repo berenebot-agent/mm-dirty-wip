@@ -1,8 +1,10 @@
 package httpapp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/htmlsanitize"
@@ -45,23 +47,27 @@ type messageResponse struct {
 	DeletedAt           *time.Time              `json:"deleted_at,omitempty"`
 	DeliveryActionDueAt *time.Time              `json:"delivery_action_due_at,omitempty"`
 	Deliveries          []model.MessageDelivery `json:"deliveries,omitempty"`
-	Labels              []string                `json:"labels,omitempty"`
-	HasAttachments      bool                    `json:"has_attachments"`
-	SizeBytes           int64                   `json:"size_bytes"`
-	MailboxID           string                  `json:"mailbox_id,omitempty"`
-	FolderPath          string                  `json:"folder_path,omitempty"`
-	Status              string                  `json:"status,omitempty"`
-	Attempts            int                     `json:"attempts,omitempty"`
-	LastError           string                  `json:"last_error,omitempty"`
-	NextRetry           string                  `json:"next_retry,omitempty"`
-	Sending             bool                    `json:"sending,omitempty"`
-	Snippet             string                  `json:"snippet"`
-	Flagged             *bool                   `json:"flagged,omitempty"`
-	Answered            *bool                   `json:"answered,omitempty"`
-	Draft               *bool                   `json:"draft,omitempty"`
-	Flags               []string                `json:"flags,omitempty"`
-	InternalDate        *time.Time              `json:"internal_date,omitempty"`
-	IndexedAt           *time.Time              `json:"indexed_at,omitempty"`
+	// Labels is the legacy additive-name view: free-text tags and provider
+	// category names. LabelIDs is the canonical unified membership view and adds
+	// folder-backed labels, which is why both are projected.
+	Labels         []string   `json:"labels,omitempty"`
+	LabelIDs       []string   `json:"label_ids"`
+	HasAttachments bool       `json:"has_attachments"`
+	SizeBytes      int64      `json:"size_bytes"`
+	MailboxID      string     `json:"mailbox_id,omitempty"`
+	FolderPath     string     `json:"folder_path,omitempty"`
+	Status         string     `json:"status,omitempty"`
+	Attempts       int        `json:"attempts,omitempty"`
+	LastError      string     `json:"last_error,omitempty"`
+	NextRetry      string     `json:"next_retry,omitempty"`
+	Sending        bool       `json:"sending,omitempty"`
+	Snippet        string     `json:"snippet"`
+	Flagged        *bool      `json:"flagged,omitempty"`
+	Answered       *bool      `json:"answered,omitempty"`
+	Draft          *bool      `json:"draft,omitempty"`
+	Flags          []string   `json:"flags,omitempty"`
+	InternalDate   *time.Time `json:"internal_date,omitempty"`
+	IndexedAt      *time.Time `json:"indexed_at,omitempty"`
 }
 
 func messageResponseOf(m model.Message, body bool) messageResponse {
@@ -106,12 +112,22 @@ func messageResponseOf(m model.Message, body bool) messageResponse {
 	return out
 }
 
+// inboxIdentity is the per-inbox context the message projection needs: the
+// backend that owns the message and the folder index that turns a message's
+// membership into the unified label_ids the catalogue advertises. It is resolved
+// once per inbox per response, never per message.
+type inboxIdentity struct {
+	kind     string
+	provider string
+	byID     map[string]model.Folder
+	byPath   map[string]model.Folder
+}
+
 // messageResponses resolves inbox identity once per inbox, never per item. It
 // does not fetch message bodies or expose any connection/credential data.
 func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool) []messageResponse {
 	out := make([]messageResponse, 0, len(ms))
-	type identity struct{ kind, provider string }
-	identities := map[string]identity{}
+	identities := map[string]inboxIdentity{}
 	p := principal(r)
 	for _, m := range ms {
 		id, ok := identities[m.InboxID]
@@ -133,6 +149,7 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 						id.provider = "imap"
 					}
 				}
+				id.byID, id.byPath = s.labelFolderIndex(r.Context(), p, box)
 			}
 			identities[m.InboxID] = id
 		}
@@ -141,7 +158,52 @@ func (s *Server) messageResponses(r *http.Request, ms []model.Message, body bool
 		if id.kind == model.InboxKindStandalone {
 			v.MessageTransport = id.provider
 		}
+		v.LabelIDs = labelIDsFor(m, id)
 		out = append(out, v)
+	}
+	return out
+}
+
+// labelFolderIndex indexes an inbox's label-eligible folders by id and by path so
+// a message's single folder membership can be projected as a unified label id on
+// every backend, including Microsoft's provider folder ids.
+func (s *Server) labelFolderIndex(ctx context.Context, p model.Principal, box model.Inbox) (map[string]model.Folder, map[string]model.Folder) {
+	folders, err := s.Service.Store.ListFolders(ctx, p.AccountID, box.ID)
+	if err != nil {
+		return nil, nil
+	}
+	byID := map[string]model.Folder{}
+	byPath := map[string]model.Folder{}
+	for _, f := range folders {
+		if !labelEligibleFolder(f) {
+			continue
+		}
+		byID[f.ID] = f
+		byPath[f.Path] = f
+	}
+	return byID, byPath
+}
+
+// labelIDsFor composes the unified membership ids for one message. Additive
+// names are name-addressed (tag:<Name>) exactly as the action API addresses them;
+// folder membership is id-addressed (folder:<id>) exactly as the catalogue
+// advertises it. A message has one folder membership, so at most one folder id is
+// emitted.
+func labelIDsFor(m model.Message, id inboxIdentity) []string {
+	out := make([]string, 0, len(m.Labels)+1)
+	for _, name := range m.Labels {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = appendUniqueFold(out, "tag:"+name)
+	}
+	folder, ok := id.byID[m.MailboxID]
+	if !ok && m.FolderPath != "" {
+		folder, ok = id.byPath[m.FolderPath]
+	}
+	if ok {
+		out = appendUniqueFold(out, "folder:"+folder.ID)
 	}
 	return out
 }
