@@ -446,6 +446,8 @@ var v1Routes = []apiRoute{
 	{"GET /v1/inboxes/{id}/threads/{threadId}", (*Server).apiInboxThread},
 	{"GET /v1/inboxes/{id}/search", (*Server).apiInboxSearch},
 	{"GET /v1/inboxes/{id}/labels", (*Server).apiInboxLabels},
+	{"GET /v1/inboxes/{id}/label-catalog", (*Server).apiMailboxLabelCatalog},
+	{"POST /v1/inboxes/{id}/messages/{messageId}/labels", (*Server).apiUnifiedMessageLabels},
 	{"GET /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteGet},
 	{"PUT /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteSave},
 	{"POST /v1/inboxes/{id}/remote/test", (*Server).apiInboxRemoteTest},

@@ -216,7 +216,7 @@ func TestSidebarFolderManagementMarkup(t *testing.T) {
 		`data-folder-id="` + folder.ID + `"`,
 		`id="folder-new-dialog"`,
 		`id="folder-manage-dialog"`,
-		`New folder`,
+		`New label`,
 		// The manage dialog keeps Delete on the same actions row as
 		// Cancel/Rename, left-aligned via .dialog-actions>form: the delete
 		// form is the row's first child and Rename submits the external
