@@ -101,14 +101,23 @@ func TestRemoteIndexAndLabels(t *testing.T) {
 	if _, err := st.SetRemoteMessageLabels(ctx, acct, in.ID, msgs[0].ID, []string{"keep", "work"}); err != nil {
 		t.Fatal(err)
 	}
-	filtered, err := st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Label: "keep"})
+	filtered, err := st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Labels: []string{"keep"}})
 	if err != nil || len(filtered) != 1 {
 		t.Fatalf("label filter: %d err=%v", len(filtered), err)
+	}
+	// Multiple labels AND together, so a repeatable filter never widens a result.
+	filtered, err = st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Labels: []string{"keep", "work"}})
+	if err != nil || len(filtered) != 1 {
+		t.Fatalf("two-label AND filter: %d err=%v", len(filtered), err)
+	}
+	filtered, err = st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Labels: []string{"keep", "absent"}})
+	if err != nil || len(filtered) != 0 {
+		t.Fatalf("unmatched AND filter returned rows: %d err=%v", len(filtered), err)
 	}
 	if _, err := st.RemoveRemoteMessageLabels(ctx, acct, in.ID, msgs[0].ID, []string{"keep"}); err != nil {
 		t.Fatal(err)
 	}
-	filtered, _ = st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Label: "keep"})
+	filtered, _ = st.ListRemoteMessagesFiltered(ctx, acct, in.ID, store.RemoteMessageFilter{FolderPath: "INBOX", Labels: []string{"keep"}})
 	if len(filtered) != 0 {
 		t.Fatalf("label removal not applied: %d", len(filtered))
 	}

@@ -59,14 +59,21 @@ func RenderOpenAPI(baseURL string, routes []Route) map[string]any {
 // documented query parameters are emitted after the path parameters.
 func openAPIOperation(r Route) map[string]any {
 	status := r.Status()
+	responses := map[string]any{
+		strconv.Itoa(status): successResponse(r, status),
+		"401":                errorResponse("Unauthorized"),
+		"default":            errorResponse("Unexpected error"),
+	}
+	for _, alt := range r.Alternates {
+		if alt.Status == 0 || alt.Status == status {
+			continue
+		}
+		responses[strconv.Itoa(alt.Status)] = alternateResponse(alt)
+	}
 	op := map[string]any{
-		"summary": r.Summary,
-		"tags":    []string{r.Group},
-		"responses": map[string]any{
-			strconv.Itoa(status): successResponse(r, status),
-			"401":                errorResponse("Unauthorized"),
-			"default":            errorResponse("Unexpected error"),
-		},
+		"summary":   r.Summary,
+		"tags":      []string{r.Group},
+		"responses": responses,
 	}
 	if r.Auth == AuthSession {
 		// Session-authenticated installation route: override the global bearer
@@ -108,6 +115,19 @@ func successResponse(r Route, status int) map[string]any {
 	if r.Response != "" {
 		resp["content"] = map[string]any{
 			"application/json": map[string]any{"schema": Ref(r.Response)},
+		}
+	}
+	return resp
+}
+
+// alternateResponse builds an extra success response so an async-default route
+// documents both the queued action and the settled body it returns under
+// ?wait=true.
+func alternateResponse(alt AlternateResponse) map[string]any {
+	resp := map[string]any{"description": successDescription(alt.Status)}
+	if alt.Schema != "" {
+		resp["content"] = map[string]any{
+			"application/json": map[string]any{"schema": Ref(alt.Schema)},
 		}
 	}
 	return resp

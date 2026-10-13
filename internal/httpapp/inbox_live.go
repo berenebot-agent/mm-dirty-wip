@@ -158,7 +158,7 @@ func (s *Server) buildMessageList(r *http.Request, p model.Principal, id, folder
 	if box, gerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id); gerr == nil && box.Kind == model.InboxKindStandalone && box.RemoteConfigured && box.Remote != nil {
 		if folder == "label" {
 			records, err := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, id, store.RemoteMessageFilter{
-				Label: label, Before: before, Limit: inboxPageSize + 1,
+				Labels: labelList(label), Before: before, Limit: inboxPageSize + 1,
 			})
 			if err != nil {
 				return nil, false, "", "", err

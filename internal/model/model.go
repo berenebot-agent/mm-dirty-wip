@@ -352,6 +352,24 @@ func NormalizeLabel(raw string) (string, bool) {
 	return v, true
 }
 
+// NormalizeProviderLabel validates a provider-owned label name (a Gmail user
+// label or an Outlook category). Providers allow hierarchical names such as
+// "Projects/2026", so the path-separator rule that protects MailMoose-native
+// label URLs does not apply. Control characters, empty names and over-long names
+// are still rejected, and the returned name is what the provider stores.
+func NormalizeProviderLabel(raw string) (string, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" || len([]rune(v)) > MaxLabelLength {
+		return "", false
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return v, true
+}
+
 type Message struct {
 	// ReadMetadata carries optional cached mailbox metadata through read surfaces.
 	// It is not persisted in messages and is serialized only by the API projection.

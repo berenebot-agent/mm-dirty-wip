@@ -12,6 +12,17 @@ type routeIO struct {
 	RequestContentType string
 	Response           string
 	Query              []Param
+	// Alternates declares extra success responses this operation can return, so a
+	// documented contract can describe an async-default route that answers with
+	// either a queued action or, under ?wait=true, the settled body. Each entry's
+	// status must not collide with the primary status (Route.Status).
+	Alternates []AlternateResponse
+}
+
+// AlternateResponse is one extra success payload for an operation.
+type AlternateResponse struct {
+	Status int
+	Schema string
 }
 
 // query parameter shorthands.
@@ -40,7 +51,12 @@ var (
 	qSubject     = p("subject", "string", false, "Match the subject line.")
 	qFilename    = p("filename", "string", false, "Attachment download file name to advertise for a remote part.")
 	qContentType = p("content_type", "string", false, "IANA media type to advertise for a remote attachment download.")
+	qLabelID     = p("label_id", "array", false, "Repeatable unified label id from the label catalogue: tag:<Name> for additive labels, or folder:<id> for a folder-backed label (single-inbox scope required account-wide).")
 )
+
+// queuedAction is the async-default success payload shared by mutations that
+// answer with a durable action until ?wait=true settles them.
+var queuedAction = AlternateResponse{Status: 202, Schema: "MessageActionResult"}
 
 var routeIOByKey = map[string]routeIO{
 	// Discovery.
@@ -59,27 +75,28 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/inboxes/{id}/folders":                                {Request: "FolderCreate", Response: "Folder"},
 	"PATCH /v1/inboxes/{id}/folders/{folderId}":                    {Request: "FolderRename", Response: "Folder"},
 	"DELETE /v1/inboxes/{id}/folders/{folderId}":                   {},
-	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qFrom, qTo, qLimit}},
+	"GET /v1/inboxes/{id}/messages":                                {Response: "MessageEnvelope", Query: []Param{qFolder, qBefore, qLabel, qLabelID, qFrom, qTo, qLimit}},
 	"GET /v1/inboxes/{id}/messages/{messageId}":                    {Response: "Message"},
 	"GET /v1/inboxes/{id}/messages/{messageId}/content":            {},
 	"GET /v1/inboxes/{id}/messages/{messageId}/attachments/{part}": {Query: []Param{qFilename, qContentType}},
 	"GET /v1/inboxes/{id}/threads":                                 {Response: "ThreadEnvelope", Query: []Param{qFolder, qLimit}},
 	"GET /v1/inboxes/{id}/threads/{threadId}":                      {Response: "ThreadDetail"},
-	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qLabel, qLimit}},
+	"GET /v1/inboxes/{id}/search":                                  {Response: "MessageEnvelope", Query: []Param{qQ, qFolder, qFrom, qTo, qLabel, qLabelID, qLimit}},
 	"GET /v1/inboxes/{id}/labels":                                  {Response: "LabelList"},
-	"GET /v1/inboxes/{id}/label-catalog":                           {Response: "MailboxLabelEnvelope"},
+	"GET /v1/inboxes/{id}/label-catalog":                           {Response: "MailboxLabelCatalog"},
 	"POST /v1/inboxes/{id}/label-catalog":                          {Request: "MailboxLabelCreate", Response: "MailboxLabel"},
 	"PATCH /v1/inboxes/{id}/label-catalog/{labelId}":               {Request: "MailboxLabelRename"},
 	"DELETE /v1/inboxes/{id}/label-catalog/{labelId}":              {},
-	"POST /v1/inboxes/{id}/messages/{messageId}/labels":            {Request: "MailboxLabelAction", Response: "MessageActionResult", Query: []Param{qWait}},
-	"GET /v1/inboxes/{id}/remote":                                  {Response: "RemoteConfig"},
-	"PUT /v1/inboxes/{id}/remote":                                  {Request: "RemoteConfigPut", Response: "Inbox"},
-	"POST /v1/inboxes/{id}/remote/test":                            {Request: "RemoteConfigTest", Response: "RemoteTestResult"},
-	"POST /v1/inboxes/{id}/remote/refresh":                         {Response: "RemoteRefreshResult"},
-	"POST /v1/inboxes/{id}/remote/roles/{role}":                    {Request: "RemoteRoleMap", Response: "RemoteRoleResult"},
-	"GET /v1/inboxes/{id}/authoring":                               {Response: "AuthoringSettings"},
-	"PUT /v1/inboxes/{id}/authoring":                               {Request: "AuthoringSettingsPut", Response: "AuthoringSettings"},
-	"GET /v1/inboxes/{id}/handoffs":                                {Response: "HandoffList", Query: []Param{qLimit}},
+	"POST /v1/inboxes/{id}/messages/{messageId}/labels": {Request: "MailboxLabelAction", Response: "Message",
+		Query: []Param{qWait}, Alternates: []AlternateResponse{{Status: 202, Schema: "MessageActionResult"}}},
+	"GET /v1/inboxes/{id}/remote":               {Response: "RemoteConfig"},
+	"PUT /v1/inboxes/{id}/remote":               {Request: "RemoteConfigPut", Response: "Inbox"},
+	"POST /v1/inboxes/{id}/remote/test":         {Request: "RemoteConfigTest", Response: "RemoteTestResult"},
+	"POST /v1/inboxes/{id}/remote/refresh":      {Response: "RemoteRefreshResult"},
+	"POST /v1/inboxes/{id}/remote/roles/{role}": {Request: "RemoteRoleMap", Response: "RemoteRoleResult"},
+	"GET /v1/inboxes/{id}/authoring":            {Response: "AuthoringSettings"},
+	"PUT /v1/inboxes/{id}/authoring":            {Request: "AuthoringSettingsPut", Response: "AuthoringSettings"},
+	"GET /v1/inboxes/{id}/handoffs":             {Response: "HandoffList", Query: []Param{qLimit}},
 
 	// Identities (openagent.email compatibility).
 	"GET /v1/identities":              {Response: "IdentityList"},
@@ -88,7 +105,7 @@ var routeIOByKey = map[string]routeIO{
 
 	// Messages.
 	"GET /v1/messages": {Response: "MessageEnvelope", Query: []Param{
-		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qSpam, qInclSpam, qBefore, qLimit, qAddress, qFolder,
+		qInbox, p("thread", "string", false, "Scope to one thread id."), qFrom, qTo, qUnread, qHasAtt, qLabel, qLabelID, qSpam, qInclSpam, qBefore, qLimit, qAddress, qFolder,
 	}},
 	"GET /v1/messages/wait": {Response: "Message", Query: []Param{
 		qInbox, qAfter, qTimeout, qInclSpam,
@@ -97,10 +114,10 @@ var routeIOByKey = map[string]routeIO{
 		qInbox, qAfter, qTimeout, qInclSpam,
 	}},
 	"GET /v1/messages/{id}":             {Response: "Message", Query: []Param{p("action", "string", false, "Return the scoped action status instead of message content; works after purge.")}},
-	"PATCH /v1/messages/{id}":           {Request: "MessagePatch", Response: "MessageActionResult", Query: []Param{qWait}},
+	"PATCH /v1/messages/{id}":           {Request: "MessagePatch", Response: "Message", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
 	"DELETE /v1/messages/{id}":          {Response: "MessageActionResult", Query: []Param{qWait}},
 	"POST /v1/messages/{id}/seen":       {Request: "SeenBody", Response: "MessageActionResult", Query: []Param{qWait}},
-	"POST /v1/messages/{id}/restore":    {Response: "MessageActionResult", Query: []Param{qWait}},
+	"POST /v1/messages/{id}/restore":    {Response: "Message", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
 	"DELETE /v1/messages/{id}/purge":    {Response: "MessageActionResult", Query: []Param{qWait}},
 	"POST /v1/inboxes/{id}/trash/empty": {Query: []Param{qWait}},
 
@@ -237,6 +254,7 @@ func decorate(routes []Route) []Route {
 		out[i].RequestContentType = io.RequestContentType
 		out[i].Response = io.Response
 		out[i].Query = io.Query
+		out[i].Alternates = io.Alternates
 	}
 	return out
 }

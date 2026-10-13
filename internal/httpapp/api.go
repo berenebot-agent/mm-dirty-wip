@@ -650,6 +650,20 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 	// inbox, every authorized standalone inbox via the remote index.
 	folder := strings.TrimSpace(r.URL.Query().Get("folder"))
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	// A label_id that names a folder-backed destination is resolved through the
+	// scoped inbox's catalogue so the account-wide route behaves exactly like the
+	// inbox-scoped one.
+	if labels, problem := s.accountLabelFilter(r.Context(), p, f.InboxID, r.URL.Query()); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	} else {
+		f.Labels = labels.Names
+		if labels.Scope != "" {
+			folder = labels.Scope
+			f.FolderScoped = true
+			f.MailboxID = labels.Scope
+		}
+	}
 	items, cursor, failures, err := s.listMessagesUnified(r.Context(), p, f, folder, before, limit)
 	if err != nil {
 		mapMailboxError(w, err)
@@ -663,7 +677,39 @@ func (s *Server) apiMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"messages": out})
 		return
 	}
-	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessComplete, failures))
+	completeness := model.CompletenessComplete
+	if len(failures) > 0 {
+		completeness = model.CompletenessPartial
+	}
+	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, completeness, failures))
+}
+
+// accountLabelFilter resolves label/label_id query parameters for the
+// account-wide routes. A tag-only filter needs no inbox, but a folder-backed
+// label_id is single-inbox state, so it requires the caller to scope the query
+// with inbox= rather than guessing across mailboxes.
+func (s *Server) accountLabelFilter(ctx context.Context, p model.Principal, inboxID string, q url.Values) (labelFilter, string) {
+	if strings.TrimSpace(inboxID) != "" {
+		mb, err := s.resolveMailbox(ctx, p, inboxID)
+		if err != nil {
+			return labelFilter{}, "inbox not found"
+		}
+		return s.labelFilterFromQuery(ctx, p, mb.inbox, q)
+	}
+	var out labelFilter
+	for _, v := range append(append([]string{}, q["label"]...), q["label_id"]...) {
+		v = strings.TrimSpace(v)
+		switch {
+		case v == "":
+		case strings.HasPrefix(v, "folder:"):
+			return labelFilter{}, "a folder-backed label_id requires an inbox= scope"
+		case strings.HasPrefix(v, "tag:"):
+			out.Names = appendUniqueFold(out.Names, strings.TrimPrefix(v, "tag:"))
+		default:
+			out.Names = appendUniqueFold(out.Names, v)
+		}
+	}
+	return out, ""
 }
 
 // listMessagesUnified returns the account-wide common message listing: local
@@ -1145,8 +1191,26 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 	from := r.URL.Query().Get("from")
 	to := r.URL.Query().Get("to")
 	subject := r.URL.Query().Get("subject")
-	label := firstQuery(r, "label")
 	folder := r.URL.Query().Get("folder")
+	var labels labelFilter
+	if inbox != "" {
+		mb, merr := s.resolveMailbox(r.Context(), p, inbox)
+		if merr != nil {
+			mapMailboxError(w, merr)
+			return
+		}
+		var problem string
+		labels, problem = s.labelFilterFromQuery(r.Context(), p, mb.inbox, r.URL.Query())
+		if problem != "" {
+			writeError(w, http.StatusBadRequest, problem)
+			return
+		}
+	} else if resolved, problem := s.accountLabelFilter(r.Context(), p, "", r.URL.Query()); problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	} else {
+		labels = resolved
+	}
 	cur, cok := decodeCursorOrLegacy(r.URL.Query().Get("before"))
 	if !cok {
 		writeError(w, 400, "invalid cursor")
@@ -1160,16 +1224,21 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !mb.routed {
-			items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, store.MessageFilter{
+			f := store.MessageFilter{
 				InboxID:       inbox,
 				From:          from,
 				To:            to,
 				Unread:        unread,
 				HasAttachment: hasAttachment,
-				Labels:        labelList(label),
+				Labels:        labels.Names,
 				Before:        cur.sourceCursor("local"),
 				Limit:         limit + 1,
-			})
+			}
+			if labels.Scope != "" {
+				f.FolderScoped = true
+				f.MailboxID = labels.Scope
+			}
+			items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, f)
 			if lerr != nil {
 				mapStoreError(w, lerr)
 				return
@@ -1185,8 +1254,12 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.demandDetection(r.Context(), []mailboxBackend{mb})
+		scope := folder
+		if labels.Scope != "" {
+			scope = labels.Scope
+		}
 		res, rerr := mb.remote.SearchRemote(r.Context(), p, mb.inbox.ID, app.RemoteSearchQuery{
-			FolderPath: folder, From: from, To: to, Subject: subject, Text: q, Unread: unread, Label: label, Limit: limit,
+			FolderPath: scope, From: from, To: to, Subject: subject, Text: q, Unread: unread, Limit: limit,
 		})
 		if rerr != nil {
 			mapMailboxError(w, rerr)
@@ -1199,11 +1272,14 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request) {
 			}
 			items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 		}
+		if len(labels.Names) > 0 {
+			items = filterByLabelNames(items, labels.Names)
+		}
 		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), "", res.Completeness, nil))
 		return
 	}
 	// Account-wide merged search.
-	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, q, folder, from, to, subject, label, unread, hasAttachment, cur, limit)
+	items, cursor, completeness, failures, err := s.mergeSearch(r.Context(), p, q, folder, from, to, subject, labels, unread, hasAttachment, cur, limit)
 	if err != nil {
 		mapMailboxError(w, err)
 		return

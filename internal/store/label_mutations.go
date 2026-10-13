@@ -12,8 +12,12 @@ import (
 // ModifyMessageLabel applies a single additive mutation in one transaction.
 // Unlike replacing a snapshot of the full label array, queued add/add and
 // add/remove operations cannot silently erase other pending changes.
-func (s *Store) ModifyMessageLabel(ctx context.Context, p model.Principal, id, raw, operation string) (*model.Event, error) {
-	label, ok := model.NormalizeLabel(raw)
+func (s *Store) ModifyMessageLabel(ctx context.Context, p model.Principal, id, raw, operation string, providerLabel bool) (*model.Event, error) {
+	normalize := model.NormalizeLabel
+	if providerLabel {
+		normalize = model.NormalizeProviderLabel
+	}
+	label, ok := normalize(raw)
 	if !ok || (operation != "add" && operation != "remove") {
 		return nil, fmt.Errorf("%w: invalid label action", ErrConflict)
 	}

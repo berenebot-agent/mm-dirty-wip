@@ -28,6 +28,55 @@ type mailLabel struct {
 	CanDelete  bool   `json:"can_delete"`
 }
 
+// mailboxLabelCapabilities describes what an inbox supports before it has any
+// labels. Without it an empty catalogue tells a client nothing, and it would have
+// to branch on the mailbox backend to know whether creating a label is additive
+// or a move.
+type mailboxLabelCapabilities struct {
+	CanCreate        bool   `json:"can_create"`
+	CreateKind       string `json:"create_kind"`
+	CreateMembership string `json:"create_membership"`
+	CanRename        bool   `json:"can_rename"`
+	CanDelete        bool   `json:"can_delete"`
+}
+
+// labelCapabilities mirrors createMailboxLabel's provider rules, so the declared
+// capability and the actual create behaviour cannot disagree.
+func (s *Server) labelCapabilities(ctx context.Context, p model.Principal, box model.Inbox) mailboxLabelCapabilities {
+	switch {
+	case box.Kind == model.InboxKindDomain:
+		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple", CanRename: true, CanDelete: true}
+	case s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID):
+		// Graph categories are additive; category rename/delete are not exposed.
+		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple"}
+	case s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID):
+		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "tag", CreateMembership: "multiple", CanRename: true, CanDelete: true}
+	default:
+		// Raw IMAP: a label is a remote folder, so creation is a move destination.
+		return mailboxLabelCapabilities{CanCreate: true, CreateKind: "folder", CreateMembership: "exclusive", CanRename: true, CanDelete: true}
+	}
+}
+
+// newMailLabel projects one catalogue entry through a single helper so a create
+// response and the subsequent catalogue listing can never advertise different
+// descriptors for the same label.
+func newMailLabel(name, kind, membership, source, folderID string, canRename, canDelete bool, url string) mailLabel {
+	return mailLabel{
+		ID: labelIDFor(kind, name, folderID), Name: name, Kind: kind, Membership: membership,
+		Source: source, FolderID: folderID, URL: url, CanRemove: kind == "tag",
+		CanRename: canRename, CanDelete: canDelete,
+	}
+}
+
+// labelIDFor is the single definition of a catalogue identity: additive labels
+// are name-addressed, folder-backed labels are id-addressed.
+func labelIDFor(kind, name, folderID string) string {
+	if kind == "folder" {
+		return "folder:" + folderID
+	}
+	return "tag:" + name
+}
+
 func (s *Server) mailboxLabels(ctx context.Context, p model.Principal, box model.Inbox) ([]mailLabel, error) {
 	folders, err := s.Service.Store.ListFolders(ctx, p.AccountID, box.ID)
 	if err != nil {
@@ -42,23 +91,19 @@ func (s *Server) mailboxLabels(ctx context.Context, p model.Principal, box model
 		if folder.IsSystem || !folder.Selectable || (folder.Role != model.FolderRoleFolder && folder.Role != model.FolderRoleLabel) {
 			continue
 		}
-		entry := mailLabel{
-			ID: "folder:" + folder.ID, Name: folder.Name, Kind: "folder",
-			Membership: "exclusive", Source: "local", FolderID: folder.ID,
-			FolderPath: folder.Path, URL: prefix + "/folder?folder=" + url.QueryEscape(folder.ID),
-			CanRename: true, CanDelete: true,
-		}
+		url := prefix + "/folder?folder=" + url.QueryEscape(folder.ID)
+		entry := newMailLabel(folder.Name, "folder", "exclusive", "local", folder.ID, true, true, url)
 		if box.Kind == model.InboxKindStandalone {
 			entry.Source = "provider"
+		}
+		if entry.FolderID == "" {
+			entry.FolderID = folder.ID
 		}
 		if google {
 			// The Gmail custom-label index also appears as remote folders.
 			// Project it once, as a multi-valued label, with a folder-indexed
 			// view (Google stores membership by provider label ID).
-			entry.ID = "tag:" + folder.Name
-			entry.Kind = "tag"
-			entry.Membership = "multiple"
-			entry.CanRemove = true
+			entry = newMailLabel(folder.Name, "tag", "multiple", "provider", folder.ID, true, true, url)
 			seen[strings.ToLower(folder.Name)] = true
 		}
 		out = append(out, entry)
@@ -91,11 +136,7 @@ func (s *Server) mailboxLabels(ctx context.Context, p model.Principal, box model
 		if microsoft || google {
 			source = "provider"
 		}
-		out = append(out, mailLabel{
-			ID: "tag:" + name, Name: name, Kind: "tag", Membership: "multiple",
-			Source: source, CanRemove: true, CanRename: editable, CanDelete: editable,
-			URL: prefix + "/label?name=" + url.QueryEscape(name),
-		})
+		out = append(out, newMailLabel(name, "tag", "multiple", source, "", editable, editable, prefix+"/label?name="+url.QueryEscape(name)))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if strings.EqualFold(out[i].Name, out[j].Name) {
@@ -157,15 +198,28 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 		}
 	}
 	if target == nil {
-		clean, valid := model.NormalizeLabel(name)
-		if !valid || clean != name {
-			return store.MessageActionInput{}, "invalid label name", nil
-		}
+		// A name from the catalogue is accepted verbatim: a provider may allow a
+		// hierarchical name that the MailMoose-native rule rejects.
+		provider := s.providerLabelInbox(ctx, p, box)
 		for i := range catalog {
 			if strings.EqualFold(catalog[i].Name, name) {
 				// Tag wins if Outlook also has a folder with the same name.
 				if target == nil || catalog[i].Kind == "tag" {
 					target = &catalog[i]
+				}
+			}
+		}
+		if target == nil {
+			if provider {
+				clean, valid := model.NormalizeProviderLabel(name)
+				if !valid {
+					return store.MessageActionInput{}, "invalid label name", nil
+				}
+				name = clean
+			} else {
+				clean, valid := model.NormalizeLabel(name)
+				if !valid || clean != name {
+					return store.MessageActionInput{}, "invalid label name", nil
 				}
 			}
 		}
@@ -195,7 +249,17 @@ func (s *Server) labelAction(ctx context.Context, p model.Principal, box model.I
 		}
 		return store.MessageActionInput{Kind: "move", Destination: destination}, "", nil
 	}
-	return store.MessageActionInput{Kind: "label", Label: target.Name, LabelOp: operation}, "", nil
+	return store.MessageActionInput{Kind: "label", Label: target.Name, LabelOp: operation, ProviderLabel: s.providerLabelInbox(ctx, p, box)}, "", nil
+}
+
+// providerLabelInbox reports whether an inbox's additive labels are owned by the
+// provider (Gmail user labels, Outlook categories), where names may be
+// hierarchical, rather than local MailMoose metadata.
+func (s *Server) providerLabelInbox(ctx context.Context, p model.Principal, box model.Inbox) bool {
+	if box.Kind != model.InboxKindStandalone {
+		return false
+	}
+	return s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) || s.remoteMailbox().IsMicrosoft(ctx, p.AccountID, box.ID)
 }
 
 func (s *Server) apiMailboxLabelCatalog(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +277,19 @@ func (s *Server) apiMailboxLabelCatalog(w http.ResponseWriter, r *http.Request) 
 	if labels == nil {
 		labels = []mailLabel{}
 	}
-	writeJSON(w, http.StatusOK, newEnvelope(labels, "", model.CompletenessComplete, nil))
+	resp := mailboxLabelCatalogResponse{Items: labels, Completeness: model.CompletenessComplete, Capabilities: s.labelCapabilities(r.Context(), p, mb.inbox)}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mailboxLabelCatalogResponse is the common listing envelope plus the inbox's
+// label capabilities, so an empty catalogue still describes what the inbox
+// supports.
+type mailboxLabelCatalogResponse struct {
+	Items        []mailLabel              `json:"items"`
+	NextCursor   string                   `json:"next_cursor,omitempty"`
+	Completeness model.ListCompleteness   `json:"completeness"`
+	Errors       []model.InboxFailure     `json:"errors,omitempty"`
+	Capabilities mailboxLabelCapabilities `json:"capabilities"`
 }
 
 // POST /v1/inboxes/{id}/messages/{messageId}/labels
@@ -298,7 +374,7 @@ func (s *Server) createMailboxLabel(ctx context.Context, p model.Principal, box 
 		if err != nil {
 			return mailLabel{}, err
 		}
-		return mailLabel{ID: "tag:" + created, Name: created, Kind: "tag", Membership: "multiple", Source: "local", CanRemove: true, CanRename: box.Kind == model.InboxKindDomain, CanDelete: box.Kind == model.InboxKindDomain}, nil
+		return newMailLabel(created, "tag", "multiple", "local", "", box.Kind == model.InboxKindDomain, box.Kind == model.InboxKindDomain, ""), nil
 	}
 	path := clean
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
@@ -318,9 +394,9 @@ func (s *Server) createMailboxLabel(ctx context.Context, p model.Principal, box 
 		return mailLabel{}, err
 	}
 	if s.remoteMailbox().IsGoogle(ctx, p.AccountID, box.ID) {
-		return mailLabel{ID: "tag:" + folder.Name, Name: folder.Name, Kind: "tag", Membership: "multiple", Source: "provider", CanRemove: true, CanRename: true, CanDelete: true, FolderID: folder.ID}, nil
+		return newMailLabel(folder.Name, "tag", "multiple", "provider", folder.ID, true, true, ""), nil
 	}
-	return mailLabel{ID: "folder:" + folder.ID, Name: folder.Name, Kind: "folder", Membership: "exclusive", Source: "provider", FolderID: folder.ID, CanRename: true, CanDelete: true}, nil
+	return newMailLabel(folder.Name, "folder", "exclusive", "provider", folder.ID, true, true, ""), nil
 }
 
 func (s *Server) apiMailboxLabelCreate(w http.ResponseWriter, r *http.Request) {

@@ -161,6 +161,9 @@ func TestMessageContractAcrossInboxKinds(t *testing.T) {
 					t.Fatalf("lost known sent timestamp: %+v", item)
 				}
 			}
+			if _, ok := item["label_ids"]; !ok {
+				t.Fatalf("label_ids must always be present: %+v", item)
+			}
 			for _, removed := range []string{"uid", "uid_validity", "inbox_provider"} {
 				if _, ok := item[removed]; ok {
 					t.Errorf("removed field remains: %s", removed)
