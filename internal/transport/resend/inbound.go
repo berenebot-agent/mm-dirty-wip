@@ -50,7 +50,10 @@ const (
 	// Inline images are requested as cid references so the response stays
 	// small; the cap only guards against an unexpectedly huge body.
 	maxMetadataBytes = 32 << 20
-	signatureMaxAge  = 5 * time.Minute
+	// signatureMaxAge bounds how old a Svix-signed webhook may be. The Svix id
+	// deduplicates a replayed delivery, so the window only bounds how long a
+	// captured signature stays usable; it is kept tight.
+	signatureMaxAge = 5 * time.Minute
 	// maxRecipients bounds how many To/Cc/Bcc addresses one webhook may carry.
 	// The service resolves each recipient with a database lookup, so an
 	// unbounded recipient list is a cheap amplification vector.

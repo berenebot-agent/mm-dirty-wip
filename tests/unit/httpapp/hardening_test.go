@@ -438,9 +438,26 @@ func TestClientIPSpoofingResistsAppendingProxy(t *testing.T) {
 		return httpapp.New(svc, nil).Handler()
 	}
 	login := func(h http.Handler, remoteAddr, xff string) int {
-		req := httptest.NewRequest("POST", "/login", strings.NewReader("email=a@b&password=x&_csrf=csrf"))
+		// The pre-auth CSRF token is signed, so fetch a real one from the login
+		// page rather than a fixed dummy. GET /login does not consume the login
+		// rate limit, so the limiter still sees only the POST attempts.
+		grr := httptest.NewRecorder()
+		gre := httptest.NewRequest("GET", "/login", nil)
+		gre.RemoteAddr = remoteAddr
+		h.ServeHTTP(grr, gre)
+		var csrf *http.Cookie
+		for _, c := range grr.Result().Cookies() {
+			if c.Name == "mmm_csrf" {
+				csrf = c
+			}
+		}
+		if csrf == nil {
+			t.Fatal("login page did not set a pre-auth CSRF cookie")
+		}
+		form := url.Values{"email": {"a@b"}, "password": {"x"}, "_csrf": {csrf.Value}}
+		req := httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.AddCookie(&http.Cookie{Name: "mmm_csrf", Value: "csrf"})
+		req.AddCookie(csrf)
 		req.RemoteAddr = remoteAddr
 		if xff != "" {
 			req.Header.Set("X-Forwarded-For", xff)

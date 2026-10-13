@@ -367,9 +367,13 @@ func setField(out *InboundForm, name, value string, seen map[string]bool) error 
 }
 
 // signatureMaxAge bounds how old a Mailgun timestamp may be. Mailgun warns that
-// webhook processing can be delayed well beyond 15 minutes, and token-based
-// deduplication already prevents replays, so a generous window avoids dropping
-// legitimately delayed deliveries.
+// webhook processing can be delayed well beyond 15 minutes, and the signature
+// covers only timestamp+token, so a captured triple stays usable (with a forged
+// body) until its token is recorded by the durable delivery dedupe. A generous
+// window keeps legitimately delayed deliveries; it is deliberately not shrunk
+// further without confirmation that Mailgun re-signs a retry with a fresh
+// timestamp. Resend, whose Svix signature has the same shape, uses a much
+// tighter window.
 const signatureMaxAge = 24 * time.Hour
 
 func VerifySignature(signingKey, timestamp, token, signature string) bool {

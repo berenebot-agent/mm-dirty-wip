@@ -36,8 +36,12 @@ func Join(root, rel string) (string, error) {
 		return "", fmt.Errorf("safepath: path escapes root")
 	}
 	joined := filepath.Join(root, clean)
-	// Re-check after joining: a symlinked root or a platform quirk must not
-	// silently place the result outside root.
+	// Re-check after joining with a lexical containment test. This is a second
+	// guard against a platform quirk in filepath.Join; it is NOT a symlink
+	// defence: the check is purely lexical, so a symlinked root or an
+	// intermediate symlink is still followed by the filesystem when the path is
+	// used, not detected here. Stored paths are server-generated, so that is
+	// acceptable for a defence-in-depth guard.
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
