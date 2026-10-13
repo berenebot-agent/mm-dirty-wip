@@ -766,41 +766,75 @@
     });
   }
 
-  // syncMatrixDomainSend keeps the matrix consistent with the domain-wide sending
-  // boxes: a checked box and Owner are one state, so checking it pins the role to
-  // Owner, and choosing any role below Owner clears the box.
-  function syncMatrixDomainSend(changed) {
-    document.querySelectorAll('#key-matrix input[type=checkbox][name^=domainsend_]').forEach(function (box) {
-      var inboxID = box.name.slice(11);
-      if (box.checked) {
-        var ownerRadio = matrix.querySelector('input[type=radio][name="role_' + inboxID + '"][value=owner]');
-        if (ownerRadio) {
-          ownerRadio.checked = true;
-        }
-      } else if (changed && changed.type === 'radio' && changed.name === 'role_' + inboxID) {
-        // Choosing a role below Owner drops the grant.
-        box.checked = false;
-      }
+  // matrixDomainSend holds the matrix's staged domain-wide sending state per
+  // inbox id. It is written to the hidden field on every change so the value is
+  // always submitted (an unticked checkbox would submit nothing, making "clear"
+  // indistinguishable from "untouched").
+  function matrixDomainSendField(inboxID) {
+    return matrix ? matrix.querySelector('input[type=hidden][name="domainsend_' + inboxID + '"]') : null;
+  }
+
+  function matrixDomainSendButton(inboxID) {
+    return matrix ? matrix.querySelector('button.key-matrix-domainsend-btn[data-inbox="' + inboxID + '"]') : null;
+  }
+
+  // setMatrixDomainSend records the state for one inbox: writes the hidden field
+  // (1 or 0), lights the button, pins the ladder to Owner when on, and disables
+  // the sub-owner rungs so the pair cannot be broken.
+  function setMatrixDomainSend(inboxID, on) {
+    var field = matrixDomainSendField(inboxID);
+    if (field) {
+      field.value = on ? '1' : '0';
+    }
+    var btn = matrixDomainSendButton(inboxID);
+    if (btn) {
+      btn.className = on ? 'active' : '';
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    var ownerRadio = matrix.querySelector('input[type=radio][name="role_' + inboxID + '"][value=owner]');
+    if (on && ownerRadio) {
+      ownerRadio.checked = true;
+    }
+    matrix.querySelectorAll('input[type=radio][name="role_' + inboxID + '"]').forEach(function (r) {
+      r.disabled = on && r.value !== 'owner';
     });
-    // A checked box disables the sub-owner rungs so the pair cannot be broken.
-    document.querySelectorAll('#key-matrix input[type=checkbox][name^=domainsend_]').forEach(function (box) {
-      var inboxID = box.name.slice(11);
-      matrix.querySelectorAll('input[type=radio][name="role_' + inboxID + '"]').forEach(function (r) {
-        r.disabled = box.checked && r.value !== 'owner';
-      });
+  }
+
+  // syncMatrixDomainSend re-derives every row's state from the radios and the
+  // staged grant, after a bulk change. changed, when given, is the element the
+  // operator just acted on.
+  function syncMatrixDomainSend(changed) {
+    if (!matrix) {
+      return;
+    }
+    matrix.querySelectorAll('button.key-matrix-domainsend-btn').forEach(function (btn) {
+      var inboxID = btn.getAttribute('data-inbox');
+      var on = btn.classList.contains('active');
+      if (changed && changed.type === 'radio' && changed.name === 'role_' + inboxID && changed.value !== 'owner') {
+        // Choosing a role below Owner drops the grant.
+        on = false;
+      }
+      setMatrixDomainSend(inboxID, on);
     });
     syncScopeButtons();
   }
 
   if (matrix) {
-    matrix.addEventListener('change', function (e) {
-      var t = e.target;
-      if (!t) {
+    // The Domain send control is a button plus a hidden field, so clicking it
+    // always submits an explicit 1 or 0.
+    matrix.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest('button.key-matrix-domainsend-btn') : null;
+      if (!btn) {
         return;
       }
-      if (t.type === 'checkbox' && t.name && t.name.indexOf('domainsend_') === 0) {
-        syncMatrixDomainSend(t);
-      } else if (t.type === 'radio' && t.name && t.name.indexOf('role_') === 0 && t.value !== 'owner') {
+      e.preventDefault();
+      var inboxID = btn.getAttribute('data-inbox');
+      setMatrixDomainSend(inboxID, !btn.classList.contains('active'));
+      syncScopeButtons();
+    });
+    matrix.addEventListener('change', function (e) {
+      var t = e.target;
+      if (t && t.type === 'radio' && t.name && t.name.indexOf('role_') === 0) {
         syncMatrixDomainSend(t);
       }
     });
@@ -820,13 +854,14 @@
           }
         });
         adminSendSnapshot = [];
-        document.querySelectorAll('#key-matrix input[type=checkbox][name^=domainsend_]').forEach(function (el) {
-          if (el.checked) {
-            adminSendSnapshot.push(el.name);
+        matrix.querySelectorAll('button.key-matrix-domainsend-btn').forEach(function (btn) {
+          var inboxID = btn.getAttribute('data-inbox');
+          if (btn.classList.contains('active')) {
+            adminSendSnapshot.push(inboxID);
           }
           // Admin keys get domain-wide sending implicitly, so the per-inbox
           // control is cleared while Admin is ticked and restored on untick.
-          el.checked = false;
+          setMatrixDomainSend(inboxID, false);
         });
       }
       setAllRoles('owner');
@@ -841,11 +876,8 @@
         }
       });
       adminSnapshot = null;
-      (adminSendSnapshot || []).forEach(function (name) {
-        var el = form.querySelector('input[type=checkbox][name="' + name + '"]');
-        if (el) {
-          el.checked = true;
-        }
+      (adminSendSnapshot || []).forEach(function (inboxID) {
+        setMatrixDomainSend(inboxID, true);
       });
       adminSendSnapshot = null;
     }
@@ -1040,18 +1072,17 @@
       rolesRadios().forEach(function (el) {
         el.checked = el.value === (roles[el.name.slice(5)] || '');
       });
-      // Domain-wide sending checkboxes. Only live grants are reported, so an
-      // unchecked box that was never on stays untouched.
+      // Domain-wide sending. Only live grants are reported, so an inbox that was
+      // never granted stays off.
       var sends = [];
       try {
         sends = JSON.parse(btn.dataset.domainsend || '[]') || [];
       } catch (e) {
         sends = [];
       }
-      document.querySelectorAll('#key-matrix input[type=checkbox][name^=domainsend_]').forEach(function (el) {
-        el.checked = sends.indexOf(el.name.slice(11)) !== -1;
+      matrix.querySelectorAll('button.key-matrix-domainsend-btn').forEach(function (b) {
+        setMatrixDomainSend(b.getAttribute('data-inbox'), sends.indexOf(b.getAttribute('data-inbox')) !== -1);
       });
-      syncMatrixDomainSend();
     } else if (kind === 'webhook') {
       var wf = form.querySelector('.key-fields[data-type=webhook]');
       var wInbox = wf.querySelector('select[name=inbox]');
@@ -1263,8 +1294,8 @@
       if (role !== 'owner') {
         var group = scope ? scopeGroup(scope) : matrix;
         if (group) {
-          group.querySelectorAll('input[type=checkbox][name^=domainsend_]').forEach(function (box) {
-            box.checked = false;
+          group.querySelectorAll('button.key-matrix-domainsend-btn').forEach(function (b) {
+            setMatrixDomainSend(b.getAttribute('data-inbox'), false);
           });
         }
       }
@@ -4121,18 +4152,10 @@ function clearUrlParams(names) {
   function accessKeyRow(k, catchAll) {
     var row = document.createElement('div');
     row.className = 'access-row';
+    var ladder;
     if (!k.admin) {
-      // Build the ladder first so the leading Domain send control can drive it.
-      var ladder = accessRoleSeg(k.id, k.role);
-      if (catchAll) {
-        // The control leads the row so the name and the role ladder of every
-        // other row stay aligned; a row without it keeps a spacer of equal width.
-        row.appendChild(accessDomainSendToggle(k, ladder));
-      } else {
-        var spacer = document.createElement('div');
-        spacer.className = 'access-domain-send access-domain-send-spacer';
-        row.appendChild(spacer);
-      }
+      // Build the ladder first so the Domain send control beside it can drive it.
+      ladder = accessRoleSeg(k.id, k.role);
     }
     var main = document.createElement('div');
     main.className = 'access-main';
@@ -4151,6 +4174,16 @@ function clearUrlParams(names) {
       pill.textContent = 'Admin';
       row.appendChild(pill);
       return row;
+    }
+    // The Domain send control sits immediately left of the role ladder, as a
+    // permission rather than a label for the key. A row that cannot hold the
+    // grant keeps a spacer of equal width so every ladder stays aligned.
+    if (catchAll) {
+      row.appendChild(accessDomainSendToggle(k, ladder));
+    } else {
+      var spacer = document.createElement('div');
+      spacer.className = 'access-domain-send access-domain-send-spacer';
+      row.appendChild(spacer);
     }
     row.appendChild(ladder);
     // A live grant pins the ladder to Owner from the first render.
