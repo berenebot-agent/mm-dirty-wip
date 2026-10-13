@@ -819,7 +819,10 @@ func remoteLastSegment(path string) string {
 // metadata id (the UI's own "load older" cursor), so the id is required here.
 type RemoteMessageFilter struct {
 	FolderPath string
-	Label      string
+	// Labels filters to messages carrying every listed additive label (AND).
+	// It is a slice so a repeatable label filter cannot silently mean "the
+	// first label only", which is the bug a single-value field allowed.
+	Labels     []string
 	UnreadOnly bool
 	Flagged    bool
 	Limit      int
@@ -873,9 +876,13 @@ func (s *Store) ListRemoteMessagesFiltered(ctx context.Context, accountID, inbox
 			args = append(args, recv, recv, f.Before)
 		}
 	}
-	if strings.TrimSpace(f.Label) != "" {
+	for _, label := range f.Labels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
 		q += ` AND id IN (SELECT remote_message_id FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND label=?)`
-		args = append(args, accountID, inboxID, strings.TrimSpace(f.Label))
+		args = append(args, accountID, inboxID, label)
 	}
 	q += ` ORDER BY COALESCE(received_at,'') DESC, id DESC`
 	if f.Limit > 0 {

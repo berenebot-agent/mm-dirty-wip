@@ -276,19 +276,28 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := strings.TrimSpace(r.URL.Query().Get("before"))
+	labels, problem := s.labelFilterFromQuery(r.Context(), p, mb.inbox, r.URL.Query())
+	if problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
 	if !mb.routed {
 		f := store.MessageFilter{
 			InboxID:   mb.inbox.ID,
 			Direction: r.URL.Query().Get("direction"),
 			From:      r.URL.Query().Get("from"),
 			To:        r.URL.Query().Get("to"),
-			Labels:    r.URL.Query()["label"],
+			Labels:    labels.Names,
 			Before:    before,
 			Limit:     limit + 1,
 		}
-		if folder := strings.TrimSpace(r.URL.Query().Get("folder")); folder != "" {
+		scope := strings.TrimSpace(r.URL.Query().Get("folder"))
+		if labels.Scope != "" {
+			scope = labels.Scope
+		}
+		if scope != "" {
 			f.FolderScoped = true
-			f.MailboxID = folder
+			f.MailboxID = scope
 		}
 		msgs, lerr := s.Service.Store.ListMessages(r.Context(), p, f)
 		if lerr != nil {
@@ -305,9 +314,13 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, newEnvelope(s.messageResponses(r, msgs, false), cursor, model.CompletenessComplete, nil))
 		return
 	}
-	if label := strings.TrimSpace(firstQuery(r, "label")); label != "" {
+	scopeFolder := strings.TrimSpace(r.URL.Query().Get("folder"))
+	if labels.Scope != "" {
+		scopeFolder = labels.Scope
+	}
+	if len(labels.Names) > 0 {
 		records, lerr := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, mb.inbox.ID, store.RemoteMessageFilter{
-			FolderPath: r.URL.Query().Get("folder"), Label: label, Limit: limit + 1, Before: before,
+			FolderPath: scopeFolder, Labels: labels.Names, Limit: limit + 1, Before: before,
 		})
 		if lerr != nil {
 			mapStoreError(w, lerr)
@@ -323,10 +336,10 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 			rec.Labels, _ = s.Service.Store.RemoteMessageLabels(r.Context(), p.AccountID, mb.inbox.ID, rec.ID)
 			items = append(items, remoteMessageToModel(mb.remote.ViewOf(rec), nil))
 		}
-		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, model.CompletenessPartial, nil))
+		writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), cursor, s.remoteIndexCompleteness(r.Context(), p.AccountID, mb.inbox.ID), nil))
 		return
 	}
-	res, rerr := mb.remote.ListRemoteMessages(r.Context(), p, mb.inbox.ID, r.URL.Query().Get("folder"), limit, before)
+	res, rerr := mb.remote.ListRemoteMessages(r.Context(), p, mb.inbox.ID, scopeFolder, limit, before)
 	if rerr != nil {
 		mapMailboxError(w, rerr)
 		return
@@ -335,7 +348,64 @@ func (s *Server) apiInboxMessages(w http.ResponseWriter, r *http.Request) {
 	for _, v := range res.Items {
 		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
 	}
+	if labels.Scope != "" {
+		items = filterByFolderScope(items, labels.Scope)
+	}
 	writeJSON(w, 200, newEnvelope(s.messageResponses(r, items, false), res.NextCursor, res.Completeness, nil))
+}
+
+// filterByFolderScope keeps only messages whose folder membership matches an
+// explicit folder-backed label, so a folder: filter still narrows a listing the
+// metadata source cannot express directly.
+func filterByFolderScope(items []model.Message, folderID string) []model.Message {
+	out := items[:0]
+	for _, m := range items {
+		if m.MailboxID == folderID || m.FolderPath == folderID {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// filterByLabelNames keeps only messages carrying every requested additive
+// label, matching the AND semantics the store and account-wide merge use.
+func filterByLabelNames(items []model.Message, names []string) []model.Message {
+	out := items[:0]
+	for _, m := range items {
+		keep := true
+		for _, want := range names {
+			found := false
+			for _, have := range m.Labels {
+				if strings.EqualFold(strings.TrimSpace(have), strings.TrimSpace(want)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// remoteIndexCompleteness reports whether a remote inbox's metadata index can
+// currently enumerate its whole result set. Label-filtered reads and unfiltered
+// reads must agree, so both derive completeness from the same source instead of
+// one hard-coding partial and the other complete.
+func (s *Server) remoteIndexCompleteness(ctx context.Context, accountID, inboxID string) model.ListCompleteness {
+	status, err := s.Service.Store.GetRemoteIndexStatus(ctx, accountID, inboxID)
+	if err != nil {
+		return model.CompletenessUnknown
+	}
+	if status.Status == store.RemoteIndexComplete {
+		return model.CompletenessComplete
+	}
+	return model.CompletenessPartial
 }
 
 // apiInboxMessage returns the common message detail, including the body. Remote
@@ -584,15 +654,25 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	labels, problem := s.labelFilterFromQuery(r.Context(), p, mb.inbox, r.URL.Query())
+	if problem != "" {
+		writeError(w, http.StatusBadRequest, problem)
+		return
+	}
 	if !mb.routed {
-		items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, store.MessageFilter{
+		f := store.MessageFilter{
 			InboxID: mb.inbox.ID,
 			From:    r.URL.Query().Get("from"),
 			To:      r.URL.Query().Get("to"),
-			Labels:  r.URL.Query()["label"],
+			Labels:  labels.Names,
 			Before:  strings.TrimSpace(r.URL.Query().Get("before")),
 			Limit:   limit,
-		})
+		}
+		if labels.Scope != "" {
+			f.FolderScoped = true
+			f.MailboxID = labels.Scope
+		}
+		items, lerr := s.Service.Store.SearchMessagesFiltered(r.Context(), p, q, f)
 		if lerr != nil {
 			mapStoreError(w, lerr)
 			return
@@ -607,12 +687,11 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sq := app.RemoteSearchQuery{
-		FolderPath:     r.URL.Query().Get("folder"),
+		FolderPath:     labels.Scope,
 		From:           r.URL.Query().Get("from"),
 		To:             r.URL.Query().Get("to"),
 		Subject:        r.URL.Query().Get("subject"),
 		Text:           q,
-		Label:          firstQuery(r, "label"),
 		Limit:          limit,
 		Cursor:         cursorUID,
 		ProviderCursor: strings.TrimSpace(r.URL.Query().Get("cursor")),
@@ -625,6 +704,9 @@ func (s *Server) apiInboxSearch(w http.ResponseWriter, r *http.Request) {
 	items := make([]model.Message, 0, len(res.Items))
 	for _, v := range res.Items {
 		items = append(items, remoteMessageToModel(v, &model.Folder{Path: v.FolderPath}))
+	}
+	if len(labels.Names) > 0 {
+		items = filterByLabelNames(items, labels.Names)
 	}
 	cursor := ""
 	if res.NextCursor != 0 {

@@ -133,6 +133,9 @@ func (s *Server) mergeMessages(ctx context.Context, p model.Principal, f store.M
 
 	// Local source.
 	localFilter := f
+	// A folder-backed label scope is a folder id; the store applies it through
+	// FolderScoped/MailboxID, which the scoped route sets directly and this merge
+	// must carry through for the account-wide route to agree.
 	localFilter.Before = cur.sourceCursor("local")
 	localFilter.Limit = limit + 1
 	msgs, lerr := s.Service.Store.ListMessages(ctx, p, localFilter)
@@ -410,7 +413,7 @@ func (s *Server) mergeThreads(ctx context.Context, p model.Principal, folder str
 // strictly below its own resumable UID cursor (carried in the common cursor), so a
 // later page resumes the server search instead of re-reading the newest window.
 // Completeness is partial when a remote source participates or a failure occurs.
-func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, folder, from, to, subject, label string, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
+func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, folder, from, to, subject string, labels labelFilter, unread, hasAttachment *bool, cur commonCursor, limit int) ([]model.Message, string, model.ListCompleteness, []model.InboxFailure, error) {
 	if limit <= 0 {
 		limit = 1
 	}
@@ -419,12 +422,13 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		To:            to,
 		Unread:        unread,
 		HasAttachment: hasAttachment,
-		Labels:        nil,
+		Labels:        labels.Names,
 		Before:        cur.sourceCursor("local"),
 		Limit:         limit + 1,
 	}
-	if label != "" {
-		localFilter.Labels = []string{label}
+	if labels.Scope != "" {
+		localFilter.FolderScoped = true
+		localFilter.MailboxID = labels.Scope
 	}
 	entries := make([]mergedItem, 0, limit+1)
 	local, lerr := s.Service.Store.SearchMessagesFiltered(ctx, p, q, localFilter)
@@ -477,18 +481,21 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 		if rawLimit < remoteFilterScanPage {
 			rawLimit = remoteFilterScanPage
 		}
+		searchFolder := folder
+		if labels.Scope != "" {
+			searchFolder = labels.Scope
+		}
 		collected := 0
 		exhausted := false
 		var rerr error
 		for scan := 0; scan < remoteFilterScanMaxPages && collected <= limit; scan++ {
 			res, e := mb.remote.SearchRemote(ctx, p, mb.inbox.ID, app.RemoteSearchQuery{
-				FolderPath:     folder,
+				FolderPath:     searchFolder,
 				From:           from,
 				To:             to,
 				Subject:        subject,
 				Text:           q,
 				Unread:         unread,
-				Label:          label,
 				Limit:          rawLimit,
 				Cursor:         scanUID,
 				ProviderCursor: scanProvider,
@@ -505,6 +512,9 @@ func (s *Server) mergeSearch(ctx context.Context, p model.Principal, q string, f
 					continue
 				}
 				m := remoteMessageToModel(v, &model.Folder{Path: v.FolderPath})
+				if len(labels.Names) > 0 && len(filterByLabelNames([]model.Message{m}, labels.Names)) == 0 {
+					continue
+				}
 				ts := messageSortTime(m)
 				// The item's own UID is the resume point after it.
 				cur := ""

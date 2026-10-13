@@ -244,7 +244,7 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	}
 	switch in.Kind {
 	case "label":
-		ev, err := w.svc.Store.ModifyMessageLabel(ctx, p, a.MessageID, in.Label, in.LabelOp)
+		ev, err := w.svc.Store.ModifyMessageLabel(ctx, p, a.MessageID, in.Label, in.LabelOp, in.ProviderLabel)
 		return publish(ev, err)
 	case "patch":
 		if in.Read != nil {
@@ -336,7 +336,14 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 	}
 	switch in.Kind {
 	case "label":
-		if _, ok := model.NormalizeLabel(in.Label); !ok || (in.LabelOp != "add" && in.LabelOp != "remove") {
+		if in.LabelOp != "add" && in.LabelOp != "remove" {
+			return store.MessageAction{}, store.ErrConflict
+		}
+		if in.ProviderLabel {
+			if _, ok := model.NormalizeProviderLabel(in.Label); !ok {
+				return store.MessageAction{}, store.ErrConflict
+			}
+		} else if _, ok := model.NormalizeLabel(in.Label); !ok {
 			return store.MessageAction{}, store.ErrConflict
 		}
 	case "patch":
