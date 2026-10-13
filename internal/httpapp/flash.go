@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"net/http"
 	"sync"
 	"time"
 
@@ -9,11 +10,13 @@ import (
 
 // flashStoreMaxBytes bounds the total bytes held by the flash store. Compose
 // flashes can carry attachments, so it is larger than a status notice, but it
-// is deliberately far below the 64 MiB the initial design allowed: the store is
-// process-wide and not keyed by user, so a smaller ceiling limits how much a
-// single caller can pin and how much a legitimate user's flashes (invite links,
-// API secrets) can have evicted under pressure.
+// is deliberately far below the 64 MiB the initial design allowed. Owner quotas
+// and admission without cross-owner eviction keep one caller from displacing
+// another caller's drafts or secrets.
 const flashStoreMaxBytes = 8 << 20
+
+const flashOwnerMaxEntries = 8
+const flashOwnerMaxBytes = 2 << 20
 
 // flashStore holds short-lived, one-shot state between a POST that redirects
 // and the GET that renders it (Post/Redirect/Get). It exists so refreshing a
@@ -29,6 +32,7 @@ type flashStore struct {
 }
 
 type flashEntry struct {
+	owner   string
 	value   any
 	size    int
 	expires time.Time
@@ -43,7 +47,10 @@ func newFlashStore(maxEntries, maxBytes int) *flashStore {
 
 // put stores v and returns a random token. It returns "" when v is larger than
 // the whole store or a token cannot be generated.
-func (f *flashStore) put(v any, size int) string {
+func (f *flashStore) put(owner string, v any, size int) string {
+	if owner == "" {
+		return ""
+	}
 	if size < 0 {
 		size = 0
 	}
@@ -57,27 +64,31 @@ func (f *flashStore) put(v any, size int) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneLocked(time.Now())
-	for f.maxBytes > 0 && len(f.entries) > 0 && f.bytes+size > f.maxBytes {
-		f.evictOldestLocked()
+	var ownerN, ownerBytes int
+	for _, e := range f.entries {
+		if e.owner == owner {
+			ownerN++
+			ownerBytes += e.size
+		}
 	}
-	for len(f.entries) >= f.maxN {
-		f.evictOldestLocked()
+	if ownerN >= flashOwnerMaxEntries || size > flashOwnerMaxBytes-ownerBytes || len(f.entries) >= f.maxN || (f.maxBytes > 0 && size > f.maxBytes-f.bytes) {
+		return ""
 	}
-	f.entries[tok] = flashEntry{value: v, size: size, expires: time.Now().Add(f.ttl)}
+	f.entries[tok] = flashEntry{owner: owner, value: v, size: size, expires: time.Now().Add(f.ttl)}
 	f.bytes += size
 	return tok
 }
 
 // peek returns the stored value without consuming it, so the GET render and a
 // subsequent resubmit can both read it.
-func (f *flashStore) peek(tok string) (any, bool) {
+func (f *flashStore) peek(owner, tok string) (any, bool) {
 	if tok == "" {
 		return nil, false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	e, ok := f.entries[tok]
-	if !ok {
+	if !ok || owner == "" || e.owner != owner {
 		return nil, false
 	}
 	if time.Now().After(e.expires) {
@@ -88,14 +99,14 @@ func (f *flashStore) peek(tok string) (any, bool) {
 }
 
 // take consumes and returns the stored value.
-func (f *flashStore) take(tok string) (any, bool) {
+func (f *flashStore) take(owner, tok string) (any, bool) {
 	if tok == "" {
 		return nil, false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	e, ok := f.entries[tok]
-	if !ok {
+	if !ok || owner == "" || e.owner != owner {
 		return nil, false
 	}
 	f.removeLocked(tok)
@@ -113,22 +124,50 @@ func (f *flashStore) pruneLocked(now time.Time) {
 	}
 }
 
-func (f *flashStore) evictOldestLocked() {
-	var oldest string
-	var oldestExp time.Time
-	for k, e := range f.entries {
-		if oldest == "" || e.expires.Before(oldestExp) {
-			oldest, oldestExp = k, e.expires
-		}
-	}
-	if oldest != "" {
-		f.removeLocked(oldest)
-	}
-}
-
 func (f *flashStore) removeLocked(tok string) {
 	if e, ok := f.entries[tok]; ok {
 		f.bytes -= e.size
 		delete(f.entries, tok)
 	}
+}
+
+// User/client identity survives re-login, but never permits a different user
+// (even in the same account) to read a draft or one-time secret.
+func (s *Server) flashOwner(r *http.Request) string {
+	p := principal(r)
+	if p.UserID != "" {
+		return "user:" + p.AccountID + ":" + p.UserID
+	}
+	if p.APIKeyID != "" {
+		return "key:" + p.AccountID + ":" + p.APIKeyID
+	}
+	if c, err := r.Cookie(preAuthCSRFCookie); err == nil && s.validPreAuthCSRF(c.Value) {
+		return "browser:" + auth.HashToken(c.Value)
+	}
+	return ""
+}
+
+func (s *Server) putFlash(w http.ResponseWriter, r *http.Request, v any, size int) string {
+	p := principal(r)
+	if p.UserID == "" && p.APIKeyID == "" && size > 4096 {
+		return ""
+	}
+	owner := s.flashOwner(r)
+	if owner == "" {
+		// Anonymous auth notices are browser-bound and deliberately small.
+		tok := s.setPreAuthCSRF(w, r)
+		if tok == "" {
+			return ""
+		}
+		owner = "browser:" + auth.HashToken(tok)
+	}
+	return s.flashes.put(owner, v, size)
+}
+
+func (s *Server) peekFlash(r *http.Request, tok string) (any, bool) {
+	return s.flashes.peek(s.flashOwner(r), tok)
+}
+
+func (s *Server) takeFlash(r *http.Request, tok string) (any, bool) {
+	return s.flashes.take(s.flashOwner(r), tok)
 }

@@ -157,25 +157,17 @@ the status note at the end of that entry.
 Provider credentials are encrypted with AES-GCM under `APP_ENCRYPTION_KEY`.
 Every stored secret is bound to the identity of the row that owns it (an
 additional-authenticated-data value), and a value without the `v2.` prefix is
-**refused** by every read path. Ciphertext written before the binding existed is
-rewritten in place by a one-shot, idempotent migrator
-(`cmd/migrate-secrets`) that the operator runs once with the application
-stopped; see the upgrade section in `docs/SELFHOSTING.md`. No reader ever opens
-an unbound blob.
+**refused** by every read path. Only the current bound format is supported; the
+temporary legacy-secret upgrade tool has been retired after both existing
+instances were upgraded. No reader ever opens an unbound blob.
 
-Two residual risks remain, both requiring database-write access — the same
-access the encryption is designed to survive:
+The fixed passphrase KDF salt remains an accepted risk:
 
 - The passphrase fallback still stretches the key with PBKDF2 under a fixed
   application salt, so a database-write attacker who also knows the
   `APP_ENCRYPTION_KEY` passphrase can re-derive that key (the fixed salt is
   required because there is nowhere in the envelope to store a per-installation
   one).
-- The migrator itself can open pre-AAD blobs, so its legacy-envelope primitive
-  is the last code that does. `cmd/migrate-secrets` and
-  `internal/migratesecrets` are kept in the code so any instance can be migrated
-  with the same command, and must be extended when a new encrypted column is
-  added.
 
 A 32-byte `APP_ENCRYPTION_KEY` has no legacy derivation and is used directly.
 
@@ -240,4 +232,3 @@ Passkeys use the `go-webauthn/webauthn` library with attestation explicitly not
 requested and no extensions, so the heavy attestation/TPM code paths are never
 exercised. A user cannot remove their last remaining sign-in method (the store
 refuses to delete the only passkey of a password-disabled account).
-

@@ -22,8 +22,9 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   client's signing secret binds to its account and inbox, and a relay
   connection's secret and delivery key bind to its gateway id; a value that
   lacks the `v2.` binding prefix is refused on read rather than decrypted
-  unbound. Existing values are rewritten in place by an idempotent walk at
-  startup, so upgrading needs no manual step. See `D118`.
+  unbound. Both existing instances have been upgraded; only the current bound
+  format is supported. The temporary legacy-secret migration tool and its
+  operator instructions have been removed. See `D118`.
 - Password login now accepts only an Argon2id hash. A pre-Argon2id
   `pbkdf2-sha256` row can no longer verify and needs a password reset; the
   break-glass `ADMIN_PASSWORD` path still works. See `D118`.
@@ -38,10 +39,21 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 - The CSRF token for compose, reply and forward forms no longer travels in the
   form-action URL (which leaked it into proxy and access logs); it is read from
   the hidden `_csrf` field of the multipart body, or the `X-CSRF-Token` header.
-- An unauthenticated `POST` to a compose path no longer has its body parsed or
-  cached in the shared flash store, closing an anonymous memory-pinning and
-  flash-eviction path; the flash store's ceiling is also reduced from 64 MiB to
-  8 MiB.
+- Draft recovery requires a real, unrevoked session expired within the last
+  15 minutes and its form CSRF token; fabricated cookies are rejected before
+  reading the body. All flash reads and consumes are owner-checked, including
+  attachment reuse and one-time secrets. Drafts survive re-login only for the
+  same user or API client. The store admits at most eight entries and 2 MiB per
+  owner, with global ceilings of 64 entries and 8 MiB; capacity pressure rejects
+  new entries rather than evicting another owner's data. Anonymous auth notices
+  are bound to a signed browser cookie.
+- All password hashing and verification paths now bound Argon2 admission to
+  five seconds by default, including ordinary `CheckPassword` and callers that
+  supply a nonpositive timeout. The four-slot memory ceiling is unchanged.
+- Inbound admission rejects immediately with `429` and `Retry-After` when the
+  shared pool is full, instead of queuing unauthenticated requests. A two-slot
+  pool now limits each source to one slot. Body reads still precede verification
+  for body-carried signatures and remain bounded by the server read timeout.
 - Password login now carries a per-account throttle in addition to the per-IP
   one, and IPv6 rate-limit keys are masked to `/64` so a client cannot rotate
   within its prefix to exhaust the limiter.
@@ -115,11 +127,8 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 - Stored secrets are now always bound to the row that owns them (an AAD
   binding), so a value written in the older unbound format is refused on read.
-  Upgrading an instance created before this release needs a one-shot migration:
-  a `migrate-secrets` command is built into the image and rewrites the affected
-  values in place; see the upgrade section in `docs/SELFHOSTING.md`. The command
-  verifies every secret through the application's own decrypt path and is
-  idempotent.
+  Only the current format is supported; the temporary upgrade tool has been
+  retired after the two existing instances were upgraded.
 
 ### Added
 

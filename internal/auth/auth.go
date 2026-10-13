@@ -40,12 +40,11 @@ const (
 
 // argonAdmission bounds how many Argon2id computations run at once,
 // process-wide. Argon2id commits argonMemory (64 MiB) per check, so the
-// capacity is the KDF memory bound: 4 x 64 MiB = 256 MiB peak. Blocking (not
-// rejecting) admits every request while keeping the ceiling fixed; without it a
-// burst of login attempts would park gigabytes on a small host.
+// capacity is the KDF memory bound: 4 x 64 MiB = 256 MiB peak. Admission waits
+// are bounded as well, so bursts cannot park callers indefinitely.
 var argonAdmission = make(chan struct{}, 4)
 
-func acquireArgonSlot() { argonAdmission <- struct{}{} }
+const defaultArgonAdmissionTimeout = 5 * time.Second
 
 func releaseArgonSlot() { <-argonAdmission }
 
@@ -57,20 +56,14 @@ func releaseArgonSlot() { <-argonAdmission }
 var ErrArgonBusy = errors.New("argon2 admission unavailable")
 
 // acquireArgonSlotContext acquires an admission slot, waiting no longer than
-// timeout. Unlike the blocking acquireArgonSlot it is cancellable, so a login
-// flood cannot park unbounded goroutines behind the four slots.
+// timeout. It is cancellable, so a login flood cannot park goroutines
+// indefinitely behind the four slots. Nonpositive timeouts use the default.
 func acquireArgonSlotContext(ctx context.Context, timeout time.Duration) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if timeout <= 0 {
-		// Fall back to the blocking path with cancellation only.
-		select {
-		case argonAdmission <- struct{}{}:
-			return nil
-		case <-ctx.Done():
-			return ErrArgonBusy
-		}
+		timeout = defaultArgonAdmissionTimeout
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -87,7 +80,7 @@ func acquireArgonSlotContext(ctx context.Context, timeout time.Duration) error {
 // CheckPasswordContext verifies a password like CheckPassword but acquires the
 // Argon2 admission slot with a timeout, returning ErrArgonBusy when the slots
 // stay saturated. Callers on unauthenticated paths use it to shed load rather
-// than block; every other caller keeps using the blocking CheckPassword.
+// than block; CheckPassword uses the same bounded default admission.
 func CheckPasswordContext(ctx context.Context, encoded, password string, timeout time.Duration) (bool, error) {
 	if !strings.HasPrefix(encoded, "$argon2id$") {
 		// Not an Argon2id hash, so it cannot verify and needs no slot.
@@ -167,7 +160,9 @@ func HashPassword(password string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	acquireArgonSlot()
+	if err := acquireArgonSlotContext(context.Background(), defaultArgonAdmissionTimeout); err != nil {
+		return "", err
+	}
 	defer releaseArgonSlot()
 	hash := argon2.IDKey([]byte(password), salt, iterations, memory, parallelism, keyLen)
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", memory, iterations, parallelism,
@@ -209,14 +204,16 @@ func NeedsRehash(encoded string) bool {
 }
 
 func checkArgon2id(encoded, password string) bool {
-	acquireArgonSlot()
+	if err := acquireArgonSlotContext(context.Background(), defaultArgonAdmissionTimeout); err != nil {
+		return false
+	}
 	defer releaseArgonSlot()
 	return verifyArgon2id(encoded, password)
 }
 
 // verifyArgon2id performs the Argon2id computation for a stored hash. The
 // caller owns the admission slot; this helper does no gating, so both the
-// blocking and the context-aware acquire paths can share it.
+// ordinary and the context-aware acquire paths can share it.
 func verifyArgon2id(encoded, password string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {

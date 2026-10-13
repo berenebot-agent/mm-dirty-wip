@@ -4340,6 +4340,40 @@ paths hold no key.
 
 ## D116 — Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness
 
+**Flash follow-up (2026-10-13):** the initial cookie-presence check below did not
+prove authentication: `mmm_session=x` bypassed it. Draft preservation now resolves
+a real unrevoked session that expired no more than 15 minutes ago, before parsing
+the body, and requires the record's CSRF token. Expired records remain available
+for that recovery window only; normal session authorization still rejects them.
+Revocation deletes the record and therefore prevents recovery. Recovery is not an
+authorization mechanism for other application actions.
+
+All flash entries now bind to the user (account plus user ID), API client, or a
+signed pre-auth browser cookie for anonymous auth notices. `peek`, `take`, and
+attachment reuse enforce the binding; an unauthorized `take` does not consume
+the owner's entry. Login carries an opaque draft token without reading its
+contents, and the new authenticated request must match the original owner.
+Non-consuming draft reads remain necessary for render then resubmit; successful
+submission consumes them. Owner quotas are eight entries and 2 MiB; global
+ceilings remain 64 entries and 8 MiB. Admission rejects capacity overflow rather
+than evicting another owner's entry. The recovery multipart temporary files are
+removed after parsing. No new dependencies, services, or schema changes.
+
+**Admission follow-up (2026-10-13):** all Argon2 hashing and verification paths
+now use bounded admission, with a five-second default even when a caller passes
+a nonpositive timeout. The ordinary boolean password verifier fails closed when
+busy; hashing and context-aware verification return `ErrArgonBusy`. The
+four-slot KDF memory ceiling is unchanged. A deterministic saturation test runs
+in the smoke tier and CI. The login limiter's 65,536-key fail-closed ceiling is
+covered directly, alongside the existing account-throttle HTTP tests.
+
+Inbound shared-pool admission now returns retryable `429` immediately instead
+of queueing unauthenticated requests (read timeouts do not bound a wait that
+does not read). A source may hold at most one slot in a two-slot pool. Per-IP
+and shared slots are released on rejection, cancellation, and completion.
+Body-carried signatures still require a bounded body read before verification;
+distributed saturation is mitigated, not eliminated.
+
 **Context:** A follow-up external review (findings 3–9; 1–2 handled elsewhere)
 confirmed two issues against a live instance and flagged five hardening items.
 The two live-confirmed issues were an open redirect through the post-login `next`
@@ -4516,16 +4550,12 @@ connections were the rows still being written unbound; they now bind to their
 row identity — `WebhookSecretAAD(accountID, inboxID)` (the client row id does not
 exist when the handler seals the secret, and a webhook client never moves inbox)
 and `RelaySecretAAD(gatewayID)` (unique and immutable for the connection's life).
-A one-time, idempotent migrator (`cmd/migrate-secrets`, run by the operator with
-the application stopped; see the upgrade section in `docs/SELFHOSTING.md`)
-rewrites pre-AAD values in place, opening each with the current key and, where a
-passphrase key predates the PBKDF2 change, the pre-PBKDF2 derivation. The PBKDF2
-*password* path is gone too:
+The temporary legacy-secret upgrade tool has since been retired after the
+operator confirmed both existing instances are upgraded. The PBKDF2 *password*
+path is gone too:
 only an Argon2id hash verifies, so an account that has not logged in since the
 Argon2id switch needs a password reset (accepted by the operator). The fixed KDF
-salt is unchanged. The migrator is kept in the code so any instance can be
-migrated with the same command, and its descriptor table must be extended when a
-new encrypted column is added.
+salt is unchanged. No legacy-secret format support remains.
 `SECURITY.md` records the same. See `D118`.
 
 ## D118 — Stored secrets always carry an AAD binding; the PBKDF2 password path is removed
@@ -4533,7 +4563,7 @@ new encrypted column is added.
 **Requirement:** Retire the pre-release compatibility shims once every instance
 has been updated: the AAD-less ciphertext format in `internal/cryptox` and the
 legacy `pbkdf2-sha256` password verifier in `internal/auth`. The operator
-accepted the consequences (a one-time startup rewrite, and a password reset for
+accepted the consequences (a one-time upgrade, and a password reset for
 an account that has not logged in since the Argon2id switch).
 
 **Decision (2026-10-13):**
@@ -4553,31 +4583,18 @@ an account that has not logged in since the Argon2id switch).
   relay secret and delivery key bind to `RelaySecretAAD(gatewayID)`, which is
   unique and immutable for the connection's life and, unlike the row id, exists
   at seal time. `EncryptSecret`/`DecryptSecret` are removed from `Service`.
-- **A one-time idempotent walk converts existing rows.** The migrator is a
-  separate command, `cmd/migrate-secrets` (with `internal/migratesecrets`), not
-  a startup step: it must run before the new binary reads a secret, and a
-  standalone tool keeps the application free of any pre-AAD knowledge and lets
-  an operator preview the change with `-dry-run`. It is built into the runtime
-  image so an operator needs no Go toolchain, and it duplicates the AAD strings
-  and the legacy envelope rather than importing `internal/app`, so deleting it
-  later leaves nothing behind.
+- **The temporary upgrade support is retired.** On 2026-10-13 the operator
+  confirmed only two instances exist and both are upgraded. The standalone
+  legacy-secret conversion command, implementation, Docker image build/copy
+  steps, and operator migration instructions are removed. Normal versioned
+  schema migrations remain; only the current bound ciphertext format is
+  supported.
 - **The PBKDF2 password path is removed.** `CheckPassword` and
   `CheckPasswordContext` verify only an Argon2id encoding; a `pbkdf2-sha256`
   row returns false (the caller reports "not found"), so that account needs a
   password reset. `checkLegacyPBKDF2`, `pbkdf2SHA256` and the legacy parameter
   bounds are deleted, and the lazy upgrade in `internal/store` is now only the
   Argon2id cost upgrade.
-- **Temporary residue, to delete later.** `cmd/migrate-secrets` and
-  `internal/migratesecrets`, plus the `Dockerfile` build and `COPY` lines for
-  the migrator. Remove them once every instance has been migrated; they are the
-  last remaining compatibility surface, and they are clearly marked.
-- **Migrate every encrypted column, not just `client_push`.** The descriptor
-  table in `internal/migratesecrets/migrate.go` names each column with its row
-  key and the exact AAD the read path uses, and is kept in the code rather than
-  treated as a one-off. This is deliberate: an earlier revision migrated only the
-  two tables whose call sites it converted and left provider configs, Dial MX
-  seeds and MX receiver credentials unreadable on an existing instance. A new
-  encrypted column must be added to that table.
 
 **Reason:** The shims were the project's only pre-release compatibility debt.
 The AAD binding is what stops a database-write attacker relabelling a secret

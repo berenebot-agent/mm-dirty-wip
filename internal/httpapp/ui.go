@@ -1158,13 +1158,22 @@ func (s *Server) renderAuth(w http.ResponseWriter, r *http.Request, title string
 		// A resumed request always came from an expired session; tell the user.
 		data.Notice = "Your session expired. Please sign in to continue."
 	}
-	if v, ok := s.flashes.peek(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.peekFlash(r, r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
-			s.flashes.take(r.URL.Query().Get("_flash"))
+			s.takeFlash(r, r.URL.Query().Get("_flash"))
 			data.Title, data.Notice, data.Email = f.Title, f.Error, f.Email
-		} else if _, ok := v.(composeFlash); ok && data.Next != "" {
-			data.Next += "?_flash=" + url.QueryEscape(r.URL.Query().Get("_flash"))
 		}
+	}
+	// Carry only an opaque token through login. Draft contents cannot be read
+	// until a newly authenticated request resolves to the original owner.
+	if tok := r.URL.Query().Get("_flash"); tok != "" && data.Next != "" {
+		u, _ := url.Parse(data.Next)
+		q := u.Query()
+		if q.Get("_flash") == "" {
+			q.Set("_flash", tok)
+		}
+		u.RawQuery = q.Encode()
+		data.Next = u.String()
 	}
 	body := strings.Replace(authBody, `href="/login/key"`, `href="/login/key?next={{.Next | querystring}}"`, 1)
 	s.render(w, r, body, data)
@@ -1177,7 +1186,7 @@ func (s *Server) flashAuth(w http.ResponseWriter, r *http.Request, dest, title, 
 		query.Set("next", next)
 	}
 	msg = safeErrorMessage(errors.New(msg), "Something went wrong. Please try again.")
-	if tok := s.flashes.put(authFlash{Title: title, Error: msg, Email: email}, len(title)+len(msg)+len(email)+32); tok != "" {
+	if tok := s.putFlash(w, r, authFlash{Title: title, Error: msg, Email: email}, len(title)+len(msg)+len(email)+32); tok != "" {
 		query.Set("_flash", tok)
 	}
 	if len(query) > 0 {
@@ -1203,7 +1212,7 @@ func (s *Server) setupGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := pageData{Title: "Set up MailMoose", CSRF: s.setPreAuthCSRF(w, r)}
-	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.takeFlash(r, r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(setupFlash); ok {
 			data.Notice, data.Email, data.SetupAccountName = f.Error, f.Email, f.AccountName
 		}
@@ -1281,7 +1290,7 @@ func (s *Server) setupPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) flashSetup(w http.ResponseWriter, r *http.Request, msg, email, accountName string) {
 	msg = safeErrorMessage(errors.New(msg), "Could not complete setup. Please try again.")
 	dest := "/setup"
-	if tok := s.flashes.put(setupFlash{Error: msg, Email: email, AccountName: accountName}, len(msg)+len(email)+len(accountName)+32); tok != "" {
+	if tok := s.putFlash(w, r, setupFlash{Error: msg, Email: email, AccountName: accountName}, len(msg)+len(email)+len(accountName)+32); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -1326,7 +1335,7 @@ func (s *Server) loginGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) keyLoginGet(w http.ResponseWriter, r *http.Request) {
 	data := pageData{Title: "Sign in with an API key", CSRF: s.setPreAuthCSRF(w, r)}
 	data.Next = safeNextPath(r.URL.Query().Get("next"))
-	if v, ok := s.flashes.take(r.URL.Query().Get("_flash")); ok {
+	if v, ok := s.takeFlash(r, r.URL.Query().Get("_flash")); ok {
 		if f, ok := v.(authFlash); ok {
 			data.Notice = f.Error
 		}
@@ -1507,7 +1516,7 @@ func (s *Server) settingsRedirect(w http.ResponseWriter, r *http.Request, notice
 	if r.Form.Get("_tab") == "account" {
 		dest = "/account?tab=account"
 	}
-	if tok := s.flashes.put(settingsFlash{Error: errMsg, Notice: notice}, len(notice)+len(errMsg)+32); tok != "" {
+	if tok := s.putFlash(w, r, settingsFlash{Error: errMsg, Notice: notice}, len(notice)+len(errMsg)+32); tok != "" {
 		if r.Form.Get("_tab") == "account" {
 			dest += "&_flash=" + tok
 		} else {
@@ -1559,16 +1568,16 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	// The account page can receive two flash kinds: a settings result and a
 	// one-time invitation link. Dispatch on the stored type.
 	if tok := r.URL.Query().Get("_flash"); tok != "" {
-		if v, ok := s.flashes.peek(tok); ok {
+		if v, ok := s.peekFlash(r, tok); ok {
 			switch v.(type) {
 			case settingsFlash:
-				if taken, ok := s.flashes.take(tok); ok {
+				if taken, ok := s.takeFlash(r, tok); ok {
 					if tf, ok := taken.(settingsFlash); ok {
 						data.Error, data.Notice = tf.Error, tf.Notice
 					}
 				}
 			case inviteFlash:
-				if taken, ok := s.flashes.take(tok); ok {
+				if taken, ok := s.takeFlash(r, tok); ok {
 					if tf, ok := taken.(inviteFlash); ok {
 						data.InviteLink = tf.Link
 					}
@@ -2323,7 +2332,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if d.ID == openID && openKind == "receiving" {
-				if f, ok := s.takeMXFormFlash(r.URL.Query().Get("_flash"), p.UserID, d.ID); ok {
+				if f, ok := s.takeMXFormFlash(r, r.URL.Query().Get("_flash"), p.UserID, d.ID); ok {
 					applyMXFlash(&form, f)
 				} else {
 					form.Error = r.URL.Query().Get("error")
@@ -2372,10 +2381,10 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	// A connector flash is consumed only after the domain set is known, so a
 	// stale flash is never applied to the wrong domain.
 	if tok := r.URL.Query().Get("_flash"); tok != "" {
-		if v, ok := s.flashes.peek(tok); ok {
+		if v, ok := s.peekFlash(r, tok); ok {
 			switch f := v.(type) {
 			case secretFlash:
-				if taken, ok := s.flashes.take(tok); ok {
+				if taken, ok := s.takeFlash(r, tok); ok {
 					if tf, ok := taken.(secretFlash); ok {
 						notice, secretLabel, secret = tf.Notice, tf.Label, tf.Secret
 					}
@@ -2385,7 +2394,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				// (/ui/domains/{id}/receiving/worker), never on the dashboard.
 			case dkimKeyFlash:
 				if f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == openID {
-					if taken, ok := s.flashes.take(tok); ok {
+					if taken, ok := s.takeFlash(r, tok); ok {
 						if tf, ok := taken.(dkimKeyFlash); ok && tf.PrivateKey == f.PrivateKey && tf.AccountID == p.AccountID && tf.UserID == p.UserID && tf.DomainID == f.DomainID {
 							dkimPrivateKey = tf.PrivateKey
 						}
@@ -2394,7 +2403,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			case domainCredentialFlash:
 				if f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == openID {
 					if rc, err := s.Service.Store.GetDomainReceivingConfig(ctx, p.AccountID, f.DomainID); err == nil && rc.ID == f.ConfigID && rc.Revision == f.Revision {
-						if taken, ok := s.flashes.take(tok); ok {
+						if taken, ok := s.takeFlash(r, tok); ok {
 							if tf, ok := taken.(domainCredentialFlash); ok && tf.Secret == f.Secret && tf.ConfigID == f.ConfigID && tf.Revision == f.Revision && tf.AccountID == p.AccountID && tf.UserID == p.UserID && tf.DomainID == f.DomainID {
 								credentialTitle, credentialInstructions, credentialWebhookURL, credentialSecret = tf.Title, tf.Instructions, tf.WebhookURL, tf.Secret
 							}
@@ -2403,7 +2412,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 				}
 			case domainNoticeFlash:
 				if f.AccountID == p.AccountID && f.UserID == p.UserID && f.DomainID == openID {
-					if taken, ok := s.flashes.take(tok); ok {
+					if taken, ok := s.takeFlash(r, tok); ok {
 						if tf, ok := taken.(domainNoticeFlash); ok && tf.AccountID == p.AccountID && tf.UserID == p.UserID && tf.DomainID == f.DomainID && tf.Error == f.Error {
 							if tf.Kind == "sending" {
 								for _, e := range sendingEditors[tf.DomainID] {
@@ -3445,7 +3454,7 @@ func wantsJSON(r *http.Request) bool {
 // consumes it (Post/Redirect/Get). A refresh then shows a plain dashboard.
 func (s *Server) flashSecret(w http.ResponseWriter, r *http.Request, notice, label, secret string) {
 	dest := "/"
-	if tok := s.flashes.put(secretFlash{Notice: notice, Label: label, Secret: secret}, len(notice)+len(label)+len(secret)+64); tok != "" {
+	if tok := s.putFlash(w, r, secretFlash{Notice: notice, Label: label, Secret: secret}, len(notice)+len(label)+len(secret)+64); tok != "" {
 		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
