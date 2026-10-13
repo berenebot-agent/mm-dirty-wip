@@ -70,7 +70,7 @@ const handoffFolderRole = model.FolderRoleDrafts
 // connected remote Drafts folder. It requires Assistant or Owner on the inbox.
 // The frozen raw MIME (with the handoff correlation header) is written once and
 // is immutable; the worker appends it. The draft is never sent by MailMoose, and
-// its own notification is queued independently of publication.
+// no notification email is sent.
 func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d model.Draft) (model.Draft, error) {
 	to, err := cleanAddresses(d.To)
 	if err != nil {
@@ -127,7 +127,7 @@ func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d m
 	}
 	rel, _ := filepath.Rel(s.Config.DataDir, path)
 
-	created, events, err := s.Store.CreateAssistantHandling(ctx, p, store.AssistantHandlingInsert{
+	_, events, err := s.Store.CreateAssistantHandling(ctx, p, store.AssistantHandlingInsert{
 		DraftID:      d.ID,
 		InboxID:      d.InboxID,
 		Mode:         model.AuthoringRemoteDraft,
@@ -143,13 +143,6 @@ func (s *Service) requestRemoteDraft(ctx context.Context, p model.Principal, d m
 		return model.Draft{}, err
 	}
 	s.publishAll(events)
-	// The notification is a separate concern from publication: if it cannot be
-	// queued (for example no outbound provider), the handoff is still created and
-	// remains publishable, and the notification is reported unavailable rather
-	// than failing the request.
-	if err := s.enqueueHandoffNotification(ctx, p.AccountID, created); err != nil {
-		s.Log.Warn("handoff notification not queued", "handoff_id", created.HandoffID, "inbox_id", created.InboxID, "error", err)
-	}
 	return s.Store.GetDraft(ctx, p, d.ID)
 }
 
@@ -449,87 +442,4 @@ func (s *Service) publishEventPtr(ev *model.Event) {
 		return
 	}
 	s.publish(*ev)
-}
-
-// handoffNotificationSubject is the human-readable subject of a handoff
-// notification. It never carries a control token.
-func handoffNotificationSubject(draftSubject string) string {
-	draftSubject = strings.TrimSpace(draftSubject)
-	if draftSubject == "" {
-		draftSubject = "(no subject)"
-	}
-	return "Draft placed in your Drafts folder: " + draftSubject
-}
-
-// enqueueHandoffNotification queues a notification that the handoff was created,
-// through the existing outbound_workflow queue. The job records only the
-// notification kind (model.WorkflowKindHandoff) and carries no approval token;
-// the human reaches the draft in their own mail client's Drafts folder.
-//
-// Publication and notification are separate: a handoff whose notification cannot
-// be queued or delivered is still published. When the inbox's domain has no
-// outbound provider (the standalone case before the SMTP bridge is wired), the
-// job is still enqueued and held, so a later integration can deliver it without
-// re-creating the handoff or re-appending the draft.
-func (s *Service) enqueueHandoffNotification(ctx context.Context, accountID string, r model.AssistantHandlingRequest) error {
-	inbox, err := s.Store.GetInboxInternal(ctx, accountID, r.InboxID)
-	if err != nil {
-		return err
-	}
-	settings, err := s.Store.GetInboxAuthoringSettingsInternal(ctx, accountID, r.InboxID)
-	if err != nil {
-		return err
-	}
-	to := strings.TrimSpace(settings.NotifyAddress)
-	if to == "" {
-		// Blank override means the inbox's own connected address; if even that is
-		// unavailable the notification cannot be addressed and is reported
-		// unavailable rather than silently dropped.
-		return fmt.Errorf("no notification address available for this inbox")
-	}
-	// The reviewed subject is read from the stored draft; the draft row still
-	// exists at this point (it is cleaned up only after publication).
-	d, derr := s.Store.GetDraftInternal(ctx, accountID, r.DraftID)
-	subject := r.MessageID
-	text := "A draft has been placed in the Drafts folder of your connected mailbox, ready for you to review and send from your own email client.\r\n\r\nThis message is a notification only; it is not an approval request and carries no token."
-	if derr == nil {
-		subject = d.Subject
-		text = "A draft has been placed in the Drafts folder of your connected mailbox, ready for you to review and send from your own email client.\r\n\r\nSubject: " + d.Subject + "\r\n\r\nThis message is a notification only; it is not an approval request and carries no token."
-	}
-	from := model.Address{Name: inbox.DisplayName, Address: inbox.Address}
-	msgID := fmt.Sprintf("<%s@%s>", strings.TrimPrefix(idgen.New("msg"), "msg_"), domainOf(inbox.Address))
-	// The notification MIME carries the handoff correlation header so remote
-	// detection can exclude it, but no approval token markers.
-	body := mailparse.Address{Name: from.Name, Address: from.Address}
-	raw, err := mailparse.BuildMessage(body, []string{to}, nil, nil, handoffNotificationSubject(subject), text, "", msgID, "", nil, time.Now().UTC(), nil)
-	if err != nil {
-		return err
-	}
-	raw = injectHandoffHeader(raw, r.HandoffID)
-	path := s.handoffPath()
-	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	if err = os.WriteFile(path, raw, 0o600); err != nil {
-		return err
-	}
-	rel, _ := filepath.Rel(s.Config.DataDir, path)
-	provider := ""
-	if sending, cerr := s.sendingConfigForInbox(ctx, accountID, inbox); cerr == nil {
-		provider = sending.Provider
-	}
-	if _, err := s.Store.CommitHandoffNotification(ctx, accountID, r, store.WorkflowRecord{
-		Inbox:     inbox,
-		From:      from,
-		To:        []string{to},
-		Subject:   handoffNotificationSubject(subject),
-		Text:      text,
-		HTML:      "",
-		RawPath:   filepath.ToSlash(rel),
-		SizeBytes: int64(len(raw)),
-	}, provider, "", msgID); err != nil {
-		_ = os.Remove(path)
-		return err
-	}
-	return nil
 }
