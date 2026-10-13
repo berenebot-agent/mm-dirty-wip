@@ -86,7 +86,7 @@ func TestWebhookForwardEnvelopeHeadersAndExactMIME(t *testing.T) {
 	messageID, wantBody := seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, sender, raw)
 
 	const token = "forward-bearer-token"
-	enc, _ := svc.EncryptSecret([]byte(token))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte(token))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestWebhookForwardMissingSenderEmitsEmptyHeader(t *testing.T) {
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: no sender\r\nMessage-ID: <fwd-nosender@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, "", raw)
 
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestWebhookRetryKeepsEnvelopeMetadata(t *testing.T) {
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: retry\r\nMessage-ID: <fwd-retry@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, "retry-sender@outside.test", raw)
 
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestWebhookSpamSkipsWithoutNetworkAndReleaseDelivers(t *testing.T) {
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: spam skip\r\nMessage-ID: <fwd-spam@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, "spam-sender@outside.test", raw)
 
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "fork", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func TestWebhookDeletedMessageDoesNotStall(t *testing.T) {
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: deleted\r\nMessage-ID: <fwd-deleted@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	messageID, _ := seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, "s@outside.test", raw)
 
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +351,7 @@ func TestWebhookDeliveryIsScopedToOwnInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	encOne, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 
 	var inboxOne, inboxTwo []string
 	srvOne := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -367,11 +367,12 @@ func TestWebhookDeliveryIsScopedToOwnInbox(t *testing.T) {
 	}))
 	defer srvTwo.Close()
 
-	clOne, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "one", srvOne.URL, "notify", "bearer", enc)
+	clOne, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "one", srvOne.URL, "notify", "bearer", encOne)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clTwo, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, second.ID, "two", srvTwo.URL, "notify", "bearer", enc)
+	encTwo, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, second.ID), []byte("tok"))
+	clTwo, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, second.ID, "two", srvTwo.URL, "notify", "bearer", encTwo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +389,8 @@ func TestWebhookDeliveryIsScopedToOwnInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Store.CreateWebhookClient(ctx, other.AccountID, otherBox.ID, "other", srvTwo.URL, "notify", "bearer", enc); err != nil {
+	encOther, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(other.AccountID, otherBox.ID), []byte("tok"))
+	if _, err := svc.Store.CreateWebhookClient(ctx, other.AccountID, otherBox.ID, "other", srvTwo.URL, "notify", "bearer", encOther); err != nil {
 		t.Fatal(err)
 	}
 	_ = clTwo
@@ -435,7 +437,7 @@ func TestWebhookRetrySkippedWhenMessageBecomesSpam(t *testing.T) {
 	raw := "From: Header <header@outside.test>\r\nTo: " + box.Address + "\r\nSubject: retry spam\r\nMessage-ID: <retry-spam@test>\r\nDate: " + time.Now().Format(time.RFC1123Z) + "\r\n\r\nbody"
 	seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, "s@outside.test", raw)
 
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -518,7 +520,7 @@ func TestWebhookForwardContractFixture(t *testing.T) {
 	seedForwardMessage(t, svc, u.AccountID, dom.ID, box.Address, sender, raw)
 
 	const token = "fixture-bearer-token"
-	enc, _ := svc.EncryptSecret([]byte(token))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte(token))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)

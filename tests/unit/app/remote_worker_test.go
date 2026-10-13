@@ -869,7 +869,7 @@ func TestRemoteWorkerWebhookForwardRaw(t *testing.T) {
 	rm.InstallRemoteBridges()
 
 	const token = "remote-forward-token"
-	enc, _ := svc.EncryptSecret([]byte(token))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(box.AccountID, box.ID), []byte(token))
 	cl, err := svc.Store.CreateWebhookClient(ctx, box.AccountID, box.ID, "ep", "https://hooks.example.test/x", "forward", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -917,7 +917,7 @@ func TestRemoteWorkerWebhookNotifyJSON(t *testing.T) {
 	svc, box, rm, fake, w := workerEnv(t)
 	ctx := context.Background()
 	rm.InstallRemoteBridges()
-	enc, _ := svc.EncryptSecret([]byte("tok"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(box.AccountID, box.ID), []byte("tok"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, box.AccountID, box.ID, "ep", "https://hooks.example.test/x", "notify", "bearer", enc)
 	if err != nil {
 		t.Fatal(err)

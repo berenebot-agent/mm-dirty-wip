@@ -107,7 +107,7 @@ func (s *Server) Enroll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
 	}
-	secEnc, err := s.Service.EncryptSecret([]byte(secret))
+	secEnc, err := s.Service.EncryptSecretAAD(app.RelaySecretAAD(req.GatewayID), []byte(secret))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "enrollment failed"})
 		return
@@ -196,7 +196,7 @@ func (s *Server) ServeWebSocket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown gateway", http.StatusUnauthorized)
 		return
 	}
-	secret, err := s.Service.DecryptSecret(h.SecretEncrypted)
+	secret, err := s.Service.DecryptSecretAAD(app.RelaySecretAAD(h.GatewayID), h.SecretEncrypted)
 	if err != nil {
 		http.Error(w, "relay credential error", http.StatusUnauthorized)
 		return

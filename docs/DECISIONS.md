@@ -4423,10 +4423,11 @@ timeout-aware password check). One new constant pair (`flashStoreMaxBytes`,
 method, and one test file (`tests/unit/httpapp/security_fixes_test.go`). No new
 dependency, schema, transport or runtime service.
 
-**Deliberately not done:** compose flashes stay `peek`-readable rather than
-session-bound; the legacy PBKDF2 path is not moved behind the Argon2 timeout (it
-is not gated by the Argon2 slots); and the Mailgun/Cloudflare unattested envelope
-sender accepted risk (`D058`) is untouched.
+**Deliberately not done (at the time):** compose flashes stay `peek`-readable
+rather than session-bound; the legacy PBKDF2 path was left outside the Argon2
+timeout (it is not gated by the Argon2 slots — that path is now removed, see the
+status note at the end of this section); and the Mailgun/Cloudflare unattested
+envelope sender accepted risk (`D058`) is untouched.
 
 ## D117 — Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF
 
@@ -4504,6 +4505,96 @@ provider-behaviour fact that is not yet established.
 `internal/httpapp` (CSP, signed pre-auth CSRF, `no-store`), `internal/htmlsanitize`
 (regex), `internal/transport/{mailgun,resend}` (comment) and `internal/hermesrelay`
 (comment). No new dependency, schema, transport or runtime service.
+
+**Status update (2026-10-13): the AAD-less read path and the pre-PBKDF2 key
+candidate are gone.** The two retained items above were closed rather than kept.
+`internal/cryptox` no longer exposes a writer for the unbound format (`Encrypt`,
+`Decrypt`, `DecryptFirst`, `DecryptFirstAAD` and the candidate-key list are
+deleted), an empty AAD is refused on both encrypt and decrypt, and a value
+without the `v2.` prefix is refused on read. Webhook clients and relay
+connections were the rows still being written unbound; they now bind to their
+row identity — `WebhookSecretAAD(accountID, inboxID)` (the client row id does not
+exist when the handler seals the secret, and a webhook client never moves inbox)
+and `RelaySecretAAD(gatewayID)` (unique and immutable for the connection's life).
+A one-time, idempotent walk (`Service.ReencryptLegacySecrets`, called from
+`cmd/server` before any worker starts) rewrites pre-AAD values in place using
+`cryptox.DeprecatedOpenLegacy` and, where a passphrase key predates the PBKDF2
+change, `cryptox.DeprecatedLegacyKey`. The PBKDF2 *password* path is gone too:
+only an Argon2id hash verifies, so an account that has not logged in since the
+Argon2id switch needs a password reset (accepted by the operator). The fixed KDF
+salt is unchanged, and the walk plus those two deprecated primitives are
+temporary — delete them once every deployment has started once on this version.
+`SECURITY.md` records the same. See `D118`.
+
+## D118 — Stored secrets always carry an AAD binding; the PBKDF2 password path is removed
+
+**Requirement:** Retire the pre-release compatibility shims once every instance
+has been updated: the AAD-less ciphertext format in `internal/cryptox` and the
+legacy `pbkdf2-sha256` password verifier in `internal/auth`. The operator
+accepted the consequences (a one-time startup rewrite, and a password reset for
+an account that has not logged in since the Argon2id switch).
+
+**Decision (2026-10-13):**
+
+- **The unbound format is no longer readable or writable.** `cryptox.Encrypt`,
+  `Decrypt`, `DecryptFirst`, `DecryptFirstAAD` and `DeriveKeys` are deleted.
+  `EncryptWithAAD` refuses an empty AAD instead of silently producing the old
+  format, and `DecryptWithAAD` refuses any value without the `v2.` prefix
+  instead of falling back to a nil AAD. `DeriveKey` returns the single key the
+  instance uses; the candidate-key list that carried the pre-PBKDF2 derivation
+  is gone with it.
+- **The rows still written unbound are bound now.** Webhook clients and relay
+  connections were the two remaining `EncryptSecret` writers. A webhook
+  signing secret binds to `WebhookSecretAAD(accountID, inboxID)` — the client
+  row id does not exist when the handler seals the secret, and a webhook client
+  never moves inbox, so the immutable account/inbox pair is its identity. A
+  relay secret and delivery key bind to `RelaySecretAAD(gatewayID)`, which is
+  unique and immutable for the connection's life and, unlike the row id, exists
+  at seal time. `EncryptSecret`/`DecryptSecret` are removed from `Service`.
+- **A one-time idempotent walk converts existing rows.**
+  `Service.ReencryptLegacySecrets` scans `client_push` for unbound values,
+  unwraps each with `cryptox.DeprecatedOpenLegacy` — falling back to
+  `cryptox.DeprecatedLegacyKey` for a blob sealed under the pre-PBKDF2
+  derivation — and rewrites it bound. `cmd/server` calls it once before any
+  worker starts; a value already bound is left untouched, so the walk is a
+  no-op on a second start and costs nothing on a fresh instance. It returns
+  counts and logs a warning per row it could not convert rather than failing
+  startup.
+- **The PBKDF2 password path is removed.** `CheckPassword` and
+  `CheckPasswordContext` verify only an Argon2id encoding; a `pbkdf2-sha256`
+  row returns false (the caller reports "not found"), so that account needs a
+  password reset. `checkLegacyPBKDF2`, `pbkdf2SHA256` and the legacy parameter
+  bounds are deleted, and the lazy upgrade in `internal/store` is now only the
+  Argon2id cost upgrade.
+- **Temporary residue, to delete later.** `cryptox.DeprecatedOpenLegacy`,
+  `cryptox.DeprecatedLegacyKey`, `Service.ReencryptLegacySecrets`, the two
+  scans and two rewrite helpers in `internal/store/client_secrets.go`, and the
+  `cmd/server` call all exist only for the walk. Remove them once every
+  deployment has started at least once on this version; that is the last
+  remaining compatibility surface, and it is clearly marked.
+
+**Reason:** The shims were the project's only pre-release compatibility debt.
+The AAD binding is what stops a database-write attacker relabelling a secret
+onto a row they control, so leaving a readable unbound path open defeats the
+binding for exactly the rows that were never migrated. The password path had no
+migration at all — only a lazy upgrade on a successful login — so it could not
+converge on its own. Both are now closed with a bounded, observable one-time
+cost.
+
+**Accepted risk:** A pre-AAD blob that cannot be unwrapped (an
+`APP_ENCRYPTION_KEY` that is not the one it was sealed with) stays unreadable:
+the affected webhook stops delivering or the relay needs re-enrolment, and the
+walk logs a warning per row. The passphrase KDF keeps its fixed application salt
+because there is nowhere in the envelope to store a per-installation salt; that
+residual is recorded in `SECURITY.md`.
+
+**Complexity:** `internal/cryptox` (the format and the two deprecated
+primitives), `internal/app` (the `AAD` helpers, the walk and the removed
+`Service` wrappers), `internal/store` (one new file, `client_secrets.go`, plus
+`internal/store/auth.go` comment), `internal/httpapp` and `internal/hermesrelay`
+(the eight call sites that now bind), `internal/auth` (the removed verifier and
+one import) and `cmd/server` (the startup call). No new dependency, table or
+migration: the rewrite is in place rather than a schema change.
 
 ## Future extension register
 

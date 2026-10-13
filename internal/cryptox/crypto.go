@@ -19,9 +19,8 @@ import (
 // kdfSalt is a fixed application salt for the passphrase fallback. A
 // per-installation random salt would be stronger, but it must be stored
 // alongside the ciphertext to be recoverable and there is no place for it in
-// the pre-existing envelope; PBKDF2 with a fixed salt and a high iteration
-// count is still a large, backward-compatible improvement over a single
-// unsalted SHA-256.
+// the envelope; PBKDF2 with a fixed salt and a high iteration count is a large
+// improvement over a single unsalted SHA-256.
 var kdfSalt = []byte("github.com/dellarb/mailmoose/app-encryption-key/v2")
 
 const kdfIterations = 210_000
@@ -32,7 +31,7 @@ const kdfIterations = 210_000
 // across tests) do not re-pay the cost. The number of distinct keys in a
 // process is tiny in production; the cap bounds growth when many distinct keys
 // are seen (tests).
-var derivedKeys sync.Map // map[[32]byte]derived
+var derivedKeys sync.Map // map[[32]byte][]byte
 
 // derivedKeyCacheMax bounds the cache so a caller that varies the key cannot
 // grow it without limit.
@@ -40,51 +39,62 @@ const derivedKeyCacheMax = 64
 
 var derivedKeyCount atomic.Int64
 
-type derived struct {
-	primary    []byte
-	candidates [][]byte
-	err        error
-}
-
 func derivedCacheKey(raw string) [32]byte {
 	return sha256.Sum256([]byte(raw))
 }
 
-// DeriveKeys returns the primary encryption key and every key that may still
-// decrypt existing ciphertext, newest first. The second key is the legacy
-// single-SHA-256 derivation of a passphrase, retained so data encrypted before
-// the PBKDF2 change keeps decrypting; a 32-byte key has no legacy variant.
-func DeriveKeys(raw string) (primary []byte, candidates [][]byte, err error) {
+// DeriveKey returns the AES key for the given APP_ENCRYPTION_KEY. A 32-byte
+// base64/hex key is used directly; a passphrase is stretched with
+// PBKDF2-HMAC-SHA256 under a fixed application salt.
+func DeriveKey(raw string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	ck := derivedCacheKey(raw)
 	if v, ok := derivedKeys.Load(ck); ok {
-		d := v.(derived)
-		return d.primary, d.candidates, d.err
+		return v.([]byte), nil
 	}
-	primary, candidates, err = deriveKeys(raw)
+	key, err := deriveKey(raw)
+	if err != nil {
+		return nil, err
+	}
 	if derivedKeyCount.Load() < derivedKeyCacheMax {
-		if _, loaded := derivedKeys.LoadOrStore(ck, derived{primary, candidates, err}); !loaded {
+		if _, loaded := derivedKeys.LoadOrStore(ck, key); !loaded {
 			derivedKeyCount.Add(1)
 		}
 	}
-	return primary, candidates, err
+	return key, nil
 }
 
-func deriveKeys(raw string) (primary []byte, candidates [][]byte, err error) {
+func deriveKey(raw string) ([]byte, error) {
 	if raw == "" {
-		return nil, nil, fmt.Errorf("empty key")
+		return nil, fmt.Errorf("empty key")
 	}
 	if b, ok := decode32(raw); ok {
-		return b, [][]byte{b}, nil
+		return b, nil
 	}
 	if len(raw) < 24 {
-		return nil, nil, fmt.Errorf("APP_ENCRYPTION_KEY must be at least 24 characters or a 32-byte base64/hex key")
+		return nil, fmt.Errorf("APP_ENCRYPTION_KEY must be at least 24 characters or a 32-byte base64/hex key")
 	}
-	primary = pbkdf2.Key([]byte(raw), kdfSalt, kdfIterations, 32, sha256.New)
+	return pbkdf2.Key([]byte(raw), kdfSalt, kdfIterations, 32, sha256.New), nil
+}
+
+// DeprecatedLegacyKey returns the pre-PBKDF2 derivation of a passphrase key (a
+// bare, unsalted SHA-256 of the input), or ok=false for a 32-byte key, which
+// never had a legacy variant.
+//
+// It exists for exactly one purpose: unwrapping pre-AAD ciphertext during the
+// one-time re-encrypt walk (Service.ReencryptLegacySecrets, with
+// DeprecatedOpenLegacy). No read path calls it. Delete this function, that one
+// and the walk once every deployment has started at least once on this version.
+func DeprecatedLegacyKey(raw string) ([]byte, bool) {
+	raw = strings.TrimSpace(raw)
+	if _, ok := decode32(raw); ok {
+		return nil, false
+	}
+	if len(raw) < 24 {
+		return nil, false
+	}
 	h := sha256.Sum256([]byte(raw))
-	legacy := make([]byte, len(h))
-	copy(legacy, h[:])
-	return primary, [][]byte{primary, legacy}, nil
+	return h[:], true
 }
 
 // decode32 decodes a 32-byte key from base64 (raw or std) or hex.
@@ -101,41 +111,14 @@ func decode32(raw string) ([]byte, bool) {
 	return nil, false
 }
 
-// DecryptFirst tries each key in order and returns the first successful
-// plaintext, so a rotated or upgraded derivation still reads old ciphertext.
-func DecryptFirst(keys [][]byte, encoded string) ([]byte, error) {
-	return DecryptFirstAAD(keys, encoded, nil)
-}
-
-// DecryptFirstAAD is DecryptFirst with an AAD binding. An AAD-bound ("v2.")
-// blob requires the same aad; a legacy blob ignores it, so a migrated call site
-// reads both old and new rows.
-func DecryptFirstAAD(keys [][]byte, encoded string, aad []byte) ([]byte, error) {
-	var last error
-	for _, k := range keys {
-		b, err := DecryptWithAAD(k, encoded, aad)
-		if err == nil {
-			return b, nil
-		}
-		last = err
-	}
-	if last == nil {
-		last = fmt.Errorf("no decryption key available")
-	}
-	return nil, last
-}
-
-func Encrypt(key, plaintext []byte) (string, error) {
-	return EncryptWithAAD(key, plaintext, nil)
-}
-
 // EncryptWithAAD encrypts plaintext and binds the ciphertext to aad, so a blob
-// copied to a different row (a different account/domain/kind) fails to decrypt
-// under its new owner. The envelope is versioned: a "v2." prefix marks an
-// AAD-bound blob, while an unprefixed value is the legacy AAD-less format.
-// Passing a nil/empty aad produces the legacy format, preserving compatibility
-// for callers not yet migrated.
+// copied to a different row (a different account, inbox or connection) fails to
+// decrypt under its new owner. Every stored secret carries such a binding, so
+// an empty aad is refused instead of writing an unbound blob.
 func EncryptWithAAD(key, plaintext, aad []byte) (string, error) {
+	if len(aad) == 0 {
+		return "", fmt.Errorf("cryptox: an aad binding is required")
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -150,32 +133,36 @@ func EncryptWithAAD(key, plaintext, aad []byte) (string, error) {
 	}
 	ct := gcm.Seal(nil, nonce, plaintext, aad)
 	out := append(nonce, ct...)
-	enc := base64.RawURLEncoding.EncodeToString(out)
-	if len(aad) == 0 {
-		return enc, nil
-	}
-	return envelopeAADPrefix + enc, nil
+	return envelopeAADPrefix + base64.RawURLEncoding.EncodeToString(out), nil
 }
 
-// envelopeAADPrefix marks an AAD-bound ciphertext. The legacy format has no
-// prefix, so DecryptWithAAD can tell them apart.
+// envelopeAADPrefix marks an AAD-bound ciphertext. Pre-AAD ciphertext has no
+// prefix, and is refused on read.
 const envelopeAADPrefix = "v2."
 
-// Decrypt decrypts a legacy (AAD-less) ciphertext.
-func Decrypt(key []byte, encoded string) ([]byte, error) {
-	return DecryptWithAAD(key, encoded, nil)
+// DecryptWithAAD decrypts an AAD-bound ("v2.") ciphertext. A value without the
+// prefix is pre-AAD ciphertext and is refused rather than read unbound: the
+// one-time re-encrypt walk rewrites every such value before a reader sees it.
+func DecryptWithAAD(key []byte, encoded string, aad []byte) ([]byte, error) {
+	if !strings.HasPrefix(encoded, envelopeAADPrefix) {
+		return nil, fmt.Errorf("cryptox: unsupported pre-AAD ciphertext")
+	}
+	if len(aad) == 0 {
+		return nil, fmt.Errorf("cryptox: an aad binding is required")
+	}
+	return open(key, strings.TrimPrefix(encoded, envelopeAADPrefix), aad)
 }
 
-// DecryptWithAAD decrypts a ciphertext, using aad when the blob is AAD-bound (a
-// "v2." prefix) and ignoring the supplied aad for a legacy blob. This lets a
-// migrated call site read both old and new rows.
-func DecryptWithAAD(key []byte, encoded string, aad []byte) ([]byte, error) {
-	bound := strings.HasPrefix(encoded, envelopeAADPrefix)
-	if bound {
-		encoded = strings.TrimPrefix(encoded, envelopeAADPrefix)
-	} else {
-		aad = nil
+// DeprecatedOpenLegacy decrypts a pre-AAD ciphertext (no prefix, nil AAD). Only
+// the one-time re-encrypt walk calls it; no read path does.
+func DeprecatedOpenLegacy(key []byte, encoded string) ([]byte, error) {
+	if strings.HasPrefix(encoded, envelopeAADPrefix) {
+		return nil, fmt.Errorf("cryptox: ciphertext is already aad-bound")
 	}
+	return open(key, encoded, nil)
+}
+
+func open(key []byte, encoded string, aad []byte) ([]byte, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err

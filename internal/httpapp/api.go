@@ -2467,7 +2467,7 @@ func (s *Server) apiWebhookClients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]string{"error": "webhook client creation failed"})
 		return
 	}
-	encrypted, err := s.Service.EncryptSecret([]byte(secret))
+	encrypted, err := s.Service.EncryptSecretAAD(app.WebhookSecretAAD(p.AccountID, in.InboxID), []byte(secret))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "webhook client creation failed"})
 		return
@@ -2511,10 +2511,15 @@ func (s *Server) apiWebhookClient(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	hook, err := s.Service.Store.GetWebhookClient(r.Context(), p.AccountID, id)
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
 	encrypted := ""
 	if in.BearerSecret != "" {
 		var err error
-		encrypted, err = s.Service.EncryptSecret([]byte(in.BearerSecret))
+		encrypted, err = s.Service.EncryptSecretAAD(app.WebhookSecretAAD(hook.AccountID, hook.InboxID), []byte(in.BearerSecret))
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": "webhook client update failed"})
 			return
@@ -2532,12 +2537,17 @@ func (s *Server) apiWebhookRotate(w http.ResponseWriter, r *http.Request) {
 	if !adminOnly(w, p) {
 		return
 	}
+	hook, err := s.Service.Store.GetWebhookClient(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		mapStoreError(w, err)
+		return
+	}
 	secret, err := auth.RandomToken(32)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "secret rotation failed"})
 		return
 	}
-	encrypted, err := s.Service.EncryptSecret([]byte(secret))
+	encrypted, err := s.Service.EncryptSecretAAD(app.WebhookSecretAAD(hook.AccountID, hook.InboxID), []byte(secret))
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": "secret rotation failed"})
 		return

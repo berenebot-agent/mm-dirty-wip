@@ -32,10 +32,10 @@ const (
 // at the offending field.
 var ErrMXInvalidInput = errors.New("invalid MX receiver settings")
 
-// mxSettingsAAD binds the installation MX receiver's stored secret and config
+// MXSettingsAAD binds the installation MX receiver's stored secret and config
 // blob to the installation row. There is exactly one row, so a fixed scope id
 // is sufficient.
-const mxSettingsAAD = "mx_settings"
+const MXSettingsAAD = "mx_settings"
 
 // mxTLSMaxPEMBytes bounds the combined STARTTLS certificate+key PEM size. The
 // pair is delivered to the included child inside one control-channel frame,
@@ -190,7 +190,7 @@ func (s *Service) MXReceiverSettingsForRuntime(ctx context.Context) (MXReceiverS
 		return MXReceiverSettings{}, err
 	}
 	if m.EncryptedSecret != "" {
-		secret, derr := s.DecryptSecretAAD(mxSettingsAAD, m.EncryptedSecret)
+		secret, derr := s.DecryptSecretAAD(MXSettingsAAD, m.EncryptedSecret)
 		if derr != nil {
 			return MXReceiverSettings{}, derr
 		}
@@ -315,7 +315,7 @@ func (s *Service) SaveMXReceiverSettings(ctx context.Context, p model.Principal,
 			if serr != nil {
 				return MXReceiverSettings{}, serr
 			}
-			enc, eerr := s.EncryptSecretAAD(mxSettingsAAD, []byte(secret))
+			enc, eerr := s.EncryptSecretAAD(MXSettingsAAD, []byte(secret))
 			if eerr != nil {
 				return MXReceiverSettings{}, eerr
 			}
@@ -329,7 +329,7 @@ func (s *Service) SaveMXReceiverSettings(ctx context.Context, p model.Principal,
 		// valid remote credential.
 		switch {
 		case strings.TrimSpace(in.BearerKey) != "":
-			enc, eerr := s.EncryptSecretAAD(mxSettingsAAD, []byte(strings.TrimSpace(in.BearerKey)))
+			enc, eerr := s.EncryptSecretAAD(MXSettingsAAD, []byte(strings.TrimSpace(in.BearerKey)))
 			if eerr != nil {
 				return MXReceiverSettings{}, eerr
 			}
@@ -344,7 +344,7 @@ func (s *Service) SaveMXReceiverSettings(ctx context.Context, p model.Principal,
 	if merr != nil {
 		return MXReceiverSettings{}, merr
 	}
-	encryptedConfig, eerr := s.EncryptSecretAAD(mxSettingsAAD, raw)
+	encryptedConfig, eerr := s.EncryptSecretAAD(MXSettingsAAD, raw)
 	if eerr != nil {
 		return MXReceiverSettings{}, eerr
 	}
@@ -538,7 +538,7 @@ func (s *Service) decryptMXStoredConfig(m store.MXSettings) (mxStoredConfig, err
 	if m.EncryptedConfig == "" {
 		return mxStoredConfig{}, nil
 	}
-	raw, err := s.DecryptSecretAAD(mxSettingsAAD, m.EncryptedConfig)
+	raw, err := s.DecryptSecretAAD(MXSettingsAAD, m.EncryptedConfig)
 	if err != nil {
 		return mxStoredConfig{}, err
 	}

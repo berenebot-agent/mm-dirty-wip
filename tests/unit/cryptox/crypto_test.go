@@ -1,91 +1,83 @@
 package cryptox_test
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/cryptox"
 )
 
-// TestDeriveKeysPassphraseUsesPBKDF2AndKeepsLegacyReadable verifies a
-// passphrase gets the stronger primary key while the legacy single-SHA-256 key
-// is retained so pre-upgrade ciphertext still decrypts.
-func TestDeriveKeysPassphraseUsesPBKDF2AndKeepsLegacyReadable(t *testing.T) {
+// TestDeriveKeyPassphraseUsesPBKDF2 proves a passphrase gets the stretched key,
+// which differs from the pre-PBKDF2 single-SHA-256 derivation that only the
+// one-time re-encrypt walk still uses.
+func TestDeriveKeyPassphraseUsesPBKDF2(t *testing.T) {
 	const pass = "a-long-but-human-chosen-passphrase"
-	primary, candidates, err := cryptox.DeriveKeys(pass)
+	primary, err := cryptox.DeriveKey(pass)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %d, want 2 (primary + legacy)", len(candidates))
+	legacy, ok := cryptox.DeprecatedLegacyKey(pass)
+	if !ok {
+		t.Fatal("a passphrase key must have a legacy derivation")
 	}
-	legacy := sha256.Sum256([]byte(pass))
-
-	// Ciphertext written with the legacy key must still decrypt via the
-	// candidate list (this is the pre-upgrade data path).
-	encLegacy, err := cryptox.Encrypt(legacy[:], []byte("provider-secret"))
-	if err != nil {
-		t.Fatal(err)
+	if len(primary) != 32 || len(legacy) != 32 {
+		t.Fatalf("key lengths = %d, %d", len(primary), len(legacy))
 	}
-	got, err := cryptox.DecryptFirst(candidates, encLegacy)
-	if err != nil {
-		t.Fatalf("legacy ciphertext no longer decrypts: %v", err)
-	}
-	if string(got) != "provider-secret" {
-		t.Fatalf("legacy plaintext = %q", got)
-	}
-
-	// New writes use the primary (PBKDF2) key, which must differ from the
-	// legacy key.
-	if string(primary) == string(legacy[:]) {
+	if string(primary) == string(legacy) {
 		t.Fatal("primary passphrase key must not equal the legacy SHA-256 key")
 	}
-	encNew, err := cryptox.Encrypt(primary, []byte("new-secret"))
-	if err != nil {
-		t.Fatal(err)
+	h := sha256.Sum256([]byte(pass))
+	if string(legacy) != string(h[:]) {
+		t.Fatal("legacy derivation is not the bare SHA-256 of the passphrase")
 	}
-	if _, err := cryptox.Decrypt(legacy[:], encNew); err == nil {
-		t.Fatal("new ciphertext must not decrypt with the legacy key")
+	// A 32-byte key is used directly and has no legacy variant.
+	raw := hex.EncodeToString(make([]byte, 32))
+	if direct, err := cryptox.DeriveKey(raw); err != nil || len(direct) != 32 {
+		t.Fatalf("32-byte key derive = %d bytes err=%v", len(direct), err)
 	}
-	got, err = cryptox.DecryptFirst(candidates, encNew)
-	if err != nil || string(got) != "new-secret" {
-		t.Fatalf("new ciphertext decrypt = %q err=%v", got, err)
+	if _, ok := cryptox.DeprecatedLegacyKey(raw); ok {
+		t.Fatal("a 32-byte key must not report a legacy derivation")
 	}
 }
 
-// TestDeriveKeysCacheIsBounded proves the derivation cache does not grow without
+// TestDeriveKeyCacheIsBounded proves the derivation cache does not grow without
 // limit when many distinct keys are seen (it keys by a hash and caps the count).
 // 32-byte raw keys are used directly, so this stays fast.
-func TestDeriveKeysCacheIsBounded(t *testing.T) {
+func TestDeriveKeyCacheIsBounded(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		b := make([]byte, 32)
 		for j := range b {
 			b[j] = byte(i*7 + j + 1)
 		}
-		primary, _, err := cryptox.DeriveKeys(hex.EncodeToString(b))
+		key, err := cryptox.DeriveKey(hex.EncodeToString(b))
 		if err != nil {
 			t.Fatalf("derive %d: %v", i, err)
 		}
-		if len(primary) != 32 {
-			t.Fatalf("primary length %d", len(primary))
+		if len(key) != 32 {
+			t.Fatalf("key length %d", len(key))
 		}
 	}
 	// A previously derived key still returns a deterministic result.
-	a, _, _ := cryptox.DeriveKeys(hex.EncodeToString(make([]byte, 32)))
-	b, _, _ := cryptox.DeriveKeys(hex.EncodeToString(make([]byte, 32)))
+	a, _ := cryptox.DeriveKey(hex.EncodeToString(make([]byte, 32)))
+	b, _ := cryptox.DeriveKey(hex.EncodeToString(make([]byte, 32)))
 	if string(a) != string(b) {
 		t.Fatal("derivation is not deterministic")
 	}
 }
 
 // TestEncryptWithAADBindsCiphertextToRow proves an AAD-bound blob only decrypts
-// with the same AAD, so a blob copied to another row fails, while a legacy
-// AAD-less blob still decrypts through DecryptWithAAD.
+// under the same AAD, and that neither an empty AAD nor the pre-AAD format is
+// accepted by the read path.
 func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
 	key := []byte("01234567890123456789012345678901")
-	aad := []byte("domain_sending:acc1:dom1")
+	aad := []byte("cfg:acc1:dom1")
 
 	enc, err := cryptox.EncryptWithAAD(key, []byte("provider-password"), aad)
 	if err != nil {
@@ -99,24 +91,47 @@ func TestEncryptWithAADBindsCiphertextToRow(t *testing.T) {
 		t.Fatalf("same-AAD decrypt = %q err=%v", got, err)
 	}
 	// A different row's AAD must not decrypt it.
-	if _, err := cryptox.DecryptWithAAD(key, enc, []byte("domain_sending:acc2:dom2")); err == nil {
+	if _, err := cryptox.DecryptWithAAD(key, enc, []byte("cfg:acc2:dom2")); err == nil {
 		t.Fatal("ciphertext decrypted under a different AAD")
 	}
-	// The legacy AAD-less decrypt must also fail on a bound blob.
-	if _, err := cryptox.Decrypt(key, enc); err == nil {
-		t.Fatal("bound ciphertext decrypted without its AAD")
+	// A binding must be supplied on both sides.
+	if _, err := cryptox.EncryptWithAAD(key, []byte("x"), nil); err == nil {
+		t.Fatal("encryption with an empty AAD was allowed")
+	}
+	if _, err := cryptox.DecryptWithAAD(key, enc, nil); err == nil {
+		t.Fatal("decryption with an empty AAD was allowed")
 	}
 
-	// A legacy AAD-less blob still decrypts through DecryptWithAAD (which
-	// ignores the supplied AAD for the legacy format).
-	legacy, err := cryptox.Encrypt(key, []byte("old-secret"))
+	// The pre-AAD format is refused by the read path, and only the one-time
+	// re-encrypt walk can still open it.
+	legacy := legacyCiphertext(t, key, "old-secret")
+	if got, err := cryptox.DeprecatedOpenLegacy(key, legacy); err != nil || string(got) != "old-secret" {
+		t.Fatalf("legacy open = %q err=%v", got, err)
+	}
+	if _, err := cryptox.DecryptWithAAD(key, legacy, aad); err == nil {
+		t.Fatal("pre-AAD ciphertext was accepted by the read path")
+	}
+	if _, err := cryptox.DeprecatedOpenLegacy(key, enc); err == nil {
+		t.Fatal("the legacy opener accepted an AAD-bound blob")
+	}
+}
+
+// legacyCiphertext writes the pre-AAD envelope exactly as the previous release
+// did: GCM over the raw key with a nil AAD, base64url, no version prefix.
+func legacyCiphertext(t *testing.T, key []byte, plaintext string) string {
+	t.Helper()
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.HasPrefix(legacy, "v2.") {
-		t.Fatal("legacy ciphertext wrongly carries the version prefix")
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, err := cryptox.DecryptWithAAD(key, legacy, aad); err != nil || string(got) != "old-secret" {
-		t.Fatalf("legacy decrypt via AAD path = %q err=%v", got, err)
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		t.Fatal(err)
 	}
+	ct := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	return base64.RawURLEncoding.EncodeToString(append(nonce, ct...))
 }

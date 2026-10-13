@@ -38,6 +38,7 @@ make fmt         # gofmt -w (rewrites files; not the gate)
 | `unit` | `go test -race -count=1 -timeout=60s -v ./...` |
 | `vet` | `go vet ./...` |
 | `fmt` | `gofmt -l cmd internal tests dialmx` (fails on output) |
+| `lint` | `staticcheck -checks U1000 ./...` (dead code; fails on output) |
 | `smoke` | slow gated tests with `MAILMOOSE_SMOKE=1` |
 
 The `smoke` tier holds tests that are valuable but expensive, so they are **not**
@@ -45,8 +46,6 @@ in the default preset:
 
 - `TestBinaryHTTP2AndSMTP` — compiles and runs the real `dialmx/cmd/receiver`
   binary and drives it over HTTP/2 and SMTP.
-- `TestLegacyPBKDF2StillVerifies` — a production-cost (310k-iteration) PBKDF2
-  round-trip guarding the pre-Argon2id compatibility path.
 
 They gate on `tests/support/smoke.Require`, which skips unless
 `MAILMOOSE_SMOKE=1`. CI runs them as an explicit step so coverage is never

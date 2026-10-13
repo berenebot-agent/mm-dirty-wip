@@ -3373,7 +3373,7 @@ func (s *Server) uiCreateKey(w http.ResponseWriter, r *http.Request) {
 			s.uiError(w, err, 400)
 			return
 		}
-		enc, err := s.Service.EncryptSecret([]byte(plain))
+		enc, err := s.Service.EncryptSecretAAD(app.WebhookSecretAAD(p.AccountID, r.Form.Get("inbox")), []byte(plain))
 		if err != nil {
 			s.uiError(w, err, 400)
 			return
@@ -3544,10 +3544,15 @@ func (s *Server) uiUpdateWebhook(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, err, 400)
 		return
 	}
+	hook, err := s.Service.Store.GetWebhookClient(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
 	encrypted := ""
 	if secret := r.Form.Get("bearer_secret"); secret != "" {
 		var err error
-		encrypted, err = s.Service.EncryptSecret([]byte(secret))
+		encrypted, err = s.Service.EncryptSecretAAD(app.WebhookSecretAAD(hook.AccountID, hook.InboxID), []byte(secret))
 		if err != nil {
 			http.Error(w, "webhook client update failed", 500)
 			return
@@ -3566,12 +3571,17 @@ func (s *Server) uiRotateWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin required", 403)
 		return
 	}
+	hook, err := s.Service.Store.GetWebhookClient(r.Context(), p.AccountID, r.PathValue("id"))
+	if err != nil {
+		s.uiError(w, err, 400)
+		return
+	}
 	plain, err := auth.RandomToken(32)
 	if err != nil {
 		s.uiError(w, err, 400)
 		return
 	}
-	enc, err := s.Service.EncryptSecret([]byte(plain))
+	enc, err := s.Service.EncryptSecretAAD(app.WebhookSecretAAD(hook.AccountID, hook.InboxID), []byte(plain))
 	if err != nil {
 		s.uiError(w, err, 400)
 		return

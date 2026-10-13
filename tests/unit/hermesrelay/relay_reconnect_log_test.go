@@ -75,8 +75,8 @@ func TestRelayRapidReconnectLogsAtDebug(t *testing.T) {
 	box, _ := st.CreateInbox(ctx, u.AccountID, d.ID, "hermes", "Hermes")
 	rec := store.EnrollRecord{AccountID: u.AccountID, InboxID: box.ID, Name: "Hermes"}
 	secret := "relay-secret-abcdefghijklmnopqrstuvwxyz"
-	se, _ := cryptox.Encrypt(svc.EncryptionKey, []byte(secret))
-	de, _ := cryptox.Encrypt(svc.EncryptionKey, []byte("delivery-secret"))
+	se, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte(secret), []byte(app.RelaySecretAAD("gateway-logtest")))
+	de, _ := cryptox.EncryptWithAAD(svc.EncryptionKey, []byte("delivery-secret"), []byte(app.RelaySecretAAD("gateway-logtest")))
 	conn, err := st.CreateHermesConnection(ctx, rec, "gateway-logtest", se, de)
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
 	"github.com/dellarb/mailmoose/internal/store"
 )
@@ -98,7 +99,7 @@ func TestClientDeliveryLogPage(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	ctx := context.Background()
 	cookie, _ := uiSession(t, svc, u.ID)
-	enc, _ := svc.EncryptSecret([]byte("s"))
+	enc, _ := svc.EncryptSecretAAD(app.WebhookSecretAAD(u.AccountID, box.ID), []byte("s"))
 	cl, err := svc.Store.CreateWebhookClient(ctx, u.AccountID, box.ID, "Hooks", "https://hooks.example.test/x", "notify", "signature", enc)
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +280,7 @@ func TestWebhookSuppliedBearerSecret(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				plain, err := svc.DecryptSecret(client.SecretEncrypted)
+				plain, err := svc.DecryptSecretAAD(app.WebhookSecretAAD(client.AccountID, client.InboxID), client.SecretEncrypted)
 				if err != nil || string(plain) != want || client.SecretEncrypted == want {
 					t.Fatalf("stored secret not encrypted/preserved: %v", err)
 				}
@@ -327,7 +328,7 @@ func TestWebhookSuppliedBearerSecret(t *testing.T) {
 				if client.ID == id {
 					continue
 				}
-				plain, err := svc.DecryptSecret(client.SecretEncrypted)
+				plain, err := svc.DecryptSecretAAD(app.WebhookSecretAAD(client.AccountID, client.InboxID), client.SecretEncrypted)
 				if err != nil || len(plain) != 43 {
 					t.Fatalf("generated token: length %d, error %v", len(plain), err)
 				}
