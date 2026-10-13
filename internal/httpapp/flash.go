@@ -2,6 +2,7 @@ package httpapp
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,11 @@ const flashStoreMaxBytes = 8 << 20
 
 const flashOwnerMaxEntries = 8
 const flashOwnerMaxBytes = 2 << 20
+
+// Anonymous auth notices use a separate budget so fresh pre-auth cookies
+// cannot consume capacity needed by authenticated drafts or one-time secrets.
+const flashAnonymousMaxEntries = 16
+const flashAnonymousMaxBytes = 64 << 10
 
 // flashStore holds short-lived, one-shot state between a POST that redirects
 // and the GET that renders it (Post/Redirect/Get). It exists so refreshing a
@@ -64,14 +70,29 @@ func (f *flashStore) put(owner string, v any, size int) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pruneLocked(time.Now())
-	var ownerN, ownerBytes int
+	var ownerN, ownerBytes, anonymousN, anonymousBytes int
+	var authenticatedN, authenticatedBytes int
 	for _, e := range f.entries {
 		if e.owner == owner {
 			ownerN++
 			ownerBytes += e.size
 		}
+		if strings.HasPrefix(e.owner, "browser:") {
+			anonymousN++
+			anonymousBytes += e.size
+		} else {
+			authenticatedN++
+			authenticatedBytes += e.size
+		}
 	}
-	if ownerN >= flashOwnerMaxEntries || size > flashOwnerMaxBytes-ownerBytes || len(f.entries) >= f.maxN || (f.maxBytes > 0 && size > f.maxBytes-f.bytes) {
+	if ownerN >= flashOwnerMaxEntries || size > flashOwnerMaxBytes-ownerBytes {
+		return ""
+	}
+	if strings.HasPrefix(owner, "browser:") {
+		if anonymousN >= flashAnonymousMaxEntries || size > flashAnonymousMaxBytes-anonymousBytes {
+			return ""
+		}
+	} else if authenticatedN >= f.maxN || (f.maxBytes > 0 && size > f.maxBytes-authenticatedBytes) {
 		return ""
 	}
 	f.entries[tok] = flashEntry{owner: owner, value: v, size: size, expires: time.Now().Add(f.ttl)}

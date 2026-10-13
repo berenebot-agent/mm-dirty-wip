@@ -3451,13 +3451,19 @@ func wantsJSON(r *http.Request) bool {
 }
 
 // flashSecret stores a one-time secret and redirects to the dashboard, which
-// consumes it (Post/Redirect/Get). A refresh then shows a plain dashboard.
+// consumes it (Post/Redirect/Get). If storage is unavailable, it displays the
+// secret inline so a successful create/rotation never loses the only copy.
 func (s *Server) flashSecret(w http.ResponseWriter, r *http.Request, notice, label, secret string) {
-	dest := "/"
 	if tok := s.putFlash(w, r, secretFlash{Notice: notice, Label: label, Secret: secret}, len(notice)+len(label)+len(secret)+64); tok != "" {
-		dest += "?_flash=" + tok
+		http.Redirect(w, r, "/?_flash="+tok, http.StatusSeeOther)
+		return
 	}
-	http.Redirect(w, r, dest, http.StatusSeeOther)
+	// The secret has already been created/rotated and cannot be retrieved again.
+	// If flash storage is unavailable, show it in this no-store response rather
+	// than redirecting and silently losing the only copy.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = template.Must(template.New("secret-fallback").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Notice}}</title></head><body><h1>{{.Notice}}</h1><p>{{.Label}}</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{.Secret}}</pre><p><a href="/">Continue</a></p></body></html>`)).Execute(w, secretFlash{Notice: notice, Label: label, Secret: secret})
 }
 
 func (s *Server) uiUpdateKey(w http.ResponseWriter, r *http.Request) {
