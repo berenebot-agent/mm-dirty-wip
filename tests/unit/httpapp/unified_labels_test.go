@@ -17,11 +17,17 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	folder, err := svc.Store.CreateFolder(context.Background(), p, box.ID, store.FolderCreate{Path: "Projects"})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := seedInbound(t, svc, box, "unified-label", "<unified-label@test>", "Organise", "body")
-	if _, err := svc.Store.ReplaceMessageLabels(context.Background(), p, m.ID, []string{"Invoices"}); err != nil { t.Fatal(err) }
+	if _, err := svc.Store.ReplaceMessageLabels(context.Background(), p, m.ID, []string{"Invoices"}); err != nil {
+		t.Fatal(err)
+	}
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "labels test", true, nil)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -31,27 +37,43 @@ func TestUnifiedLabelsCatalogAndMessageAction(t *testing.T) {
 		return w
 	}
 	got := request(http.MethodGet, "/v1/inboxes/"+box.ID+"/label-catalog", "")
-	if got.Code != 200 { t.Fatalf("catalog %d: %s", got.Code, got.Body.String()) }
-	var envelope struct { Items []struct {
-		ID string `json:"id"`
-		Membership string `json:"membership"`
-		Kind string `json:"kind"`
-	} `json:"items"` }
-	if err := json.Unmarshal(got.Body.Bytes(), &envelope); err != nil { t.Fatal(err) }
+	if got.Code != 200 {
+		t.Fatalf("catalog %d: %s", got.Code, got.Body.String())
+	}
+	var envelope struct {
+		Items []struct {
+			ID         string `json:"id"`
+			Membership string `json:"membership"`
+			Kind       string `json:"kind"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(got.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
 	seen := map[string]string{}
-	for _, item := range envelope.Items { seen[item.ID] = item.Membership }
+	for _, item := range envelope.Items {
+		seen[item.ID] = item.Membership
+	}
 	if seen["tag:Invoices"] != "multiple" || seen["folder:"+folder.ID] != "exclusive" {
 		t.Fatalf("catalog labels: %#v", seen)
 	}
-	path := "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/labels?wait=true"
+	path := "/v1/inboxes/" + box.ID + "/messages/" + m.ID + "/labels?wait=true"
 	got = request(http.MethodPost, path, `{"label_id":"folder:`+folder.ID+`","operation":"remove"}`)
-	if got.Code != http.StatusConflict { t.Fatalf("remove folder %d: %s", got.Code, got.Body.String()) }
+	if got.Code != http.StatusConflict {
+		t.Fatalf("remove folder %d: %s", got.Code, got.Body.String())
+	}
 	got = request(http.MethodPost, path, `{"label_id":"folder:not_this_inbox","operation":"add"}`)
-	if got.Code != http.StatusNotFound { t.Fatalf("unknown folder %d: %s", got.Code, got.Body.String()) }
+	if got.Code != http.StatusNotFound {
+		t.Fatalf("unknown folder %d: %s", got.Code, got.Body.String())
+	}
 	got = request(http.MethodPost, path, `{"label_id":"tag:Invoices","operation":"remove"}`)
-	if got.Code != 200 { t.Fatalf("remove tag %d: %s", got.Code, got.Body.String()) }
+	if got.Code != 200 {
+		t.Fatalf("remove tag %d: %s", got.Code, got.Body.String())
+	}
 	after, err := svc.Store.GetMessage(context.Background(), p, m.ID)
-	if err != nil || len(after.Labels) != 0 { t.Fatalf("remove tag: %+v %v", after.Labels, err) }
+	if err != nil || len(after.Labels) != 0 {
+		t.Fatalf("remove tag: %+v %v", after.Labels, err)
+	}
 }
 
 func TestReaderLabelActionPreservesReader(t *testing.T) {
@@ -109,7 +131,9 @@ func TestUnifiedLabelSidebarAndPicker(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	_, err := svc.Store.CreateFolder(context.Background(), p, box.ID, store.FolderCreate{Path: "Projects"})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := seedInbound(t, svc, box, "unified-ui", "<unified-ui@test>", "Organise", "body")
 	cookie, _ := uiSession(t, svc, u.ID)
 	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
@@ -134,7 +158,9 @@ func TestNativeLabelActionsComposeWithoutLostUpdates(t *testing.T) {
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	m := seedInbound(t, svc, box, "lbl-race-add", "<lbl-race-add@test>", "Queue labels", "body")
 	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "label delta", true, nil)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"Alpha", "Beta"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/labels?wait=true",
 			strings.NewReader(`{"name":"`+name+`","operation":"add"}`))
@@ -157,18 +183,28 @@ func TestNativeLabelRenameDeleteAndSidebar(t *testing.T) {
 	svc, h, u, _, box := httpFixture(t)
 	p := model.Principal{AccountID: u.AccountID, Admin: true}
 	msg := seedInbound(t, svc, box, "label-manage", "<label-manage@test>", "Manage", "body")
-	if _, err := svc.Store.ReplaceMessageLabels(context.Background(), p, msg.ID, []string{"Old"}); err != nil { t.Fatal(err) }
+	if _, err := svc.Store.ReplaceMessageLabels(context.Background(), p, msg.ID, []string{"Old"}); err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, u.ID)
-	rename := uiPost(t,h,cookie,"/ui/inboxes/"+box.ID+"/labels/tag:Old/rename","_csrf="+csrf+"&name=Renamed")
-	if rename.Code != http.StatusSeeOther { t.Fatalf("rename: %d %s",rename.Code,rename.Body.String()) }
+	rename := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/labels/tag:Old/rename", "_csrf="+csrf+"&name=Renamed")
+	if rename.Code != http.StatusSeeOther {
+		t.Fatalf("rename: %d %s", rename.Code, rename.Body.String())
+	}
 	after, err := svc.Store.GetMessage(context.Background(), p, msg.ID)
-	if err != nil || len(after.Labels) != 1 || after.Labels[0] != "Renamed" { t.Fatalf("rename labels %+v %v",after.Labels,err) }
-	page := uiGet(t,h,cookie,"/ui/inboxes/"+box.ID).Body.String()
-	if !strings.Contains(page,"Renamed") || !strings.Contains(page,`class="navgroup labelgroup-head"`) {
+	if err != nil || len(after.Labels) != 1 || after.Labels[0] != "Renamed" {
+		t.Fatalf("rename labels %+v %v", after.Labels, err)
+	}
+	page := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(page, "Renamed") || !strings.Contains(page, `class="navgroup labelgroup-head"`) {
 		t.Fatal("renamed label or compact sidebar missing")
 	}
-	del := uiPost(t,h,cookie,"/ui/inboxes/"+box.ID+"/labels/tag:Renamed/delete","_csrf="+csrf)
-	if del.Code != http.StatusSeeOther { t.Fatalf("delete: %d %s",del.Code,del.Body.String()) }
+	del := uiPost(t, h, cookie, "/ui/inboxes/"+box.ID+"/labels/tag:Renamed/delete", "_csrf="+csrf)
+	if del.Code != http.StatusSeeOther {
+		t.Fatalf("delete: %d %s", del.Code, del.Body.String())
+	}
 	after, err = svc.Store.GetMessage(context.Background(), p, msg.ID)
-	if err != nil || len(after.Labels) != 0 { t.Fatalf("delete labels %+v %v",after.Labels,err) }
+	if err != nil || len(after.Labels) != 0 {
+		t.Fatalf("delete labels %+v %v", after.Labels, err)
+	}
 }

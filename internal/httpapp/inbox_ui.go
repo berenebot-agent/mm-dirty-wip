@@ -328,7 +328,7 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 			labels, _ := s.mailboxLabels(r.Context(), p, box)
 			return labels
 		}(),
-		Notice:         r.URL.Query().Get("notice"),
+		Notice: r.URL.Query().Get("notice"),
 	})
 }
 
@@ -419,7 +419,7 @@ func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
 			labels, _ := s.mailboxLabels(r.Context(), p, box)
 			return labels
 		}(),
-		Notice:      r.URL.Query().Get("notice"),
+		Notice: r.URL.Query().Get("notice"),
 	})
 }
 

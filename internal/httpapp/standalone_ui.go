@@ -364,7 +364,7 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		Folder:         "folder",
 		ActiveFolderID: target.ID,
 		Folders:        sidebar,
-		UnifiedLabels: unifiedLabels,
+		UnifiedLabels:  unifiedLabels,
 		UnreadCount:    unread[id],
 		SpamCount:      spamCount,
 		TrashCount:     trashCount,
@@ -590,8 +590,8 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Inbox:          &box,
 		Folder:         folder,
 		Folders:        folderSidebar,
-		UnifiedLabels: unifiedLabels,
-		MessageLabels: unifiedLabels,
+		UnifiedLabels:  unifiedLabels,
+		MessageLabels:  unifiedLabels,
 		Labels:         inboxLabels,
 		LabelUnread:    labelUnread,
 		UnreadCount:    unread[box.ID],
@@ -783,8 +783,6 @@ func (s *Server) uiRemoteMessageAttachment(w http.ResponseWriter, r *http.Reques
 	}
 	http.Error(w, "message not found", http.StatusNotFound)
 }
-
-
 
 // uiInboxAuthoringSave saves an inbox's assistant authoring settings (mode and
 // notify override) from the Approvals tab. It requires Owner. The mode is

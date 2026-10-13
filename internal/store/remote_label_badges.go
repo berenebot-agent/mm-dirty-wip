@@ -11,13 +11,17 @@ func (s *Store) RemoteInboxLabelUnreadCounts(ctx context.Context, accountID, inb
 		JOIN inbox_remote_messages m ON m.id=ml.remote_message_id
 		WHERE ml.account_id=? AND ml.inbox_id=? AND m.account_id=? AND m.inbox_id=? AND m.is_read=0
 		GROUP BY ml.label`, accountID, inboxID, accountID, inboxID)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	out := map[string]int{}
 	for rows.Next() {
 		var name string
 		var n int
-		if err = rows.Scan(&name,&n); err != nil { return nil, err }
+		if err = rows.Scan(&name, &n); err != nil {
+			return nil, err
+		}
 		out[name] = n
 	}
 	return out, rows.Err()
