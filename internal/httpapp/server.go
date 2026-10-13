@@ -287,6 +287,8 @@ func (s *Server) Handler() http.Handler {
 	// Common folder management for both inbox kinds (session + CSRF).
 	m.HandleFunc("POST /ui/inboxes/{id}/folders", s.withSession(s.withCSRF(s.uiInboxFolderCreate)))
 	m.HandleFunc("POST /ui/inboxes/{id}/labels", s.withSession(s.withCSRF(s.uiMailboxLabelCreate)))
+	m.HandleFunc("POST /ui/inboxes/{id}/labels/{labelId}/rename", s.withSession(s.withCSRF(s.uiMailboxLabelRename)))
+	m.HandleFunc("POST /ui/inboxes/{id}/labels/{labelId}/delete", s.withSession(s.withCSRF(s.uiMailboxLabelDelete)))
 	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/rename", s.withSession(s.withCSRF(s.uiInboxFolderRename)))
 	m.HandleFunc("POST /ui/inboxes/{id}/folders/{folderId}/delete", s.withSession(s.withCSRF(s.uiInboxFolderDelete)))
 	// Standalone remote connector setup.
@@ -449,6 +451,8 @@ var v1Routes = []apiRoute{
 	{"GET /v1/inboxes/{id}/labels", (*Server).apiInboxLabels},
 	{"GET /v1/inboxes/{id}/label-catalog", (*Server).apiMailboxLabelCatalog},
 	{"POST /v1/inboxes/{id}/label-catalog", (*Server).apiMailboxLabelCreate},
+	{"PATCH /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
+	{"DELETE /v1/inboxes/{id}/label-catalog/{labelId}", (*Server).apiMailboxLabelItem},
 	{"POST /v1/inboxes/{id}/messages/{messageId}/labels", (*Server).apiUnifiedMessageLabels},
 	{"GET /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteGet},
 	{"PUT /v1/inboxes/{id}/remote", (*Server).apiInboxRemoteSave},

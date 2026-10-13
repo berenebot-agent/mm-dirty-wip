@@ -154,6 +154,16 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 	}
 	in := a.Input
 	if remote {
+		// Resolve label membership when executing the queued action, not when
+		// accepting it. Concurrent adds must not overwrite one another.
+		if in.Kind == "label" {
+			if in.LabelOp == "add" {
+				_, err = w.remote.AddRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
+			} else {
+				_, err = w.remote.RemoveRemoteLabels(ctx, p, box.ID, a.MessageID, []string{in.Label})
+			}
+			return err
+		}
 		if in.Kind == "patch" {
 			if in.Read != nil {
 				if _, err = w.remote.SetRemoteRead(ctx, p, box.ID, a.MessageID, *in.Read); err != nil {
@@ -211,6 +221,9 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 		return e
 	}
 	switch in.Kind {
+	case "label":
+		ev, err := w.svc.Store.ModifyMessageLabel(ctx, p, a.MessageID, in.Label, in.LabelOp)
+		return publish(ev, err)
 	case "patch":
 		if in.Read != nil {
 			ev, e := w.svc.Store.UpdateMessageState(ctx, p, a.MessageID, in.Read)
@@ -300,6 +313,10 @@ func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inb
 		}
 	}
 	switch in.Kind {
+	case "label":
+		if _, ok := model.NormalizeLabel(in.Label); !ok || (in.LabelOp != "add" && in.LabelOp != "remove") {
+			return store.MessageAction{}, store.ErrConflict
+		}
 	case "patch":
 		if in.Read == nil && in.Spam == nil && in.Labels == nil {
 			return store.MessageAction{}, store.ErrConflict

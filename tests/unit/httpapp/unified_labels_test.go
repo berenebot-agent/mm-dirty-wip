@@ -94,7 +94,58 @@ func TestUnifiedLabelSidebarAndPicker(t *testing.T) {
 		t.Fatalf("expected single Labels navigation section")
 	}
 	msg := uiGet(t, h, cookie, "/ui/messages/"+m.ID).Body.String()
-	if !strings.Contains(msg, `aria-label="Apply label"`) || !strings.Contains(msg, "(moves message)") {
-		t.Fatal("message selector must disclose folder-backed move semantics")
+	if !strings.Contains(msg, `name="label" list="mail-label-suggestions"`) || !strings.Contains(msg, `aria-label="Add label"`) {
+		t.Fatal("message must use one free-text label control with suggestions")
 	}
+	if strings.Contains(msg, `<select name="label_id"`) || strings.Contains(msg, `class="move-select"`) {
+		t.Fatal("legacy label or move dropdown still rendered")
+	}
+	if strings.Index(page, `data-folder="trash"`) > strings.Index(page, `class="navgroup labelgroup-head"`) {
+		t.Fatal("system destinations should appear above Labels")
+	}
+}
+
+func TestNativeLabelActionsComposeWithoutLostUpdates(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	m := seedInbound(t, svc, box, "lbl-race-add", "<lbl-race-add@test>", "Queue labels", "body")
+	_, key, err := svc.Store.CreateAPIKey(context.Background(), u.AccountID, "label delta", true, nil)
+	if err != nil { t.Fatal(err) }
+	for _, name := range []string{"Alpha", "Beta"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/inboxes/"+box.ID+"/messages/"+m.ID+"/labels?wait=true",
+			strings.NewReader(`{"name":"`+name+`","operation":"add"}`))
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("add %q: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	after, err := svc.Store.GetMessage(context.Background(), p, m.ID)
+	if err != nil || len(after.Labels) != 2 {
+		t.Fatalf("label additions lost: %+v %v", after.Labels, err)
+	}
+}
+
+func TestNativeLabelRenameDeleteAndSidebar(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, box := httpFixture(t)
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	msg := seedInbound(t, svc, box, "label-manage", "<label-manage@test>", "Manage", "body")
+	if _, err := svc.Store.ReplaceMessageLabels(context.Background(), p, msg.ID, []string{"Old"}); err != nil { t.Fatal(err) }
+	cookie, csrf := uiSession(t, svc, u.ID)
+	rename := uiPost(t,h,cookie,"/ui/inboxes/"+box.ID+"/labels/tag:Old/rename","_csrf="+csrf+"&name=Renamed")
+	if rename.Code != http.StatusSeeOther { t.Fatalf("rename: %d %s",rename.Code,rename.Body.String()) }
+	after, err := svc.Store.GetMessage(context.Background(), p, msg.ID)
+	if err != nil || len(after.Labels) != 1 || after.Labels[0] != "Renamed" { t.Fatalf("rename labels %+v %v",after.Labels,err) }
+	page := uiGet(t,h,cookie,"/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(page,"Renamed") || !strings.Contains(page,`class="navgroup labelgroup-head"`) {
+		t.Fatal("renamed label or compact sidebar missing")
+	}
+	del := uiPost(t,h,cookie,"/ui/inboxes/"+box.ID+"/labels/tag:Renamed/delete","_csrf="+csrf)
+	if del.Code != http.StatusSeeOther { t.Fatalf("delete: %d %s",del.Code,del.Body.String()) }
+	after, err = svc.Store.GetMessage(context.Background(), p, msg.ID)
+	if err != nil || len(after.Labels) != 0 { t.Fatalf("delete labels %+v %v",after.Labels,err) }
 }
