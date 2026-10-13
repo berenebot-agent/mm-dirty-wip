@@ -802,7 +802,7 @@ func (s *Server) remoteMessageHTML(w http.ResponseWriter, r *http.Request, p mod
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "+imgSrc+"; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Cache-Control", "private, max-age=300")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, body)
 		return true
 	}

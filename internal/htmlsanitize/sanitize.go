@@ -9,11 +9,15 @@ import (
 	"github.com/microcosm-cc/bluemonday"
 )
 
-// remoteImgRe matches <img> tags whose src is an absolute remote URL. The
-// sanitize policy allows remote images through; StripRemoteImages removes them
-// from the default (non-opt-in) rendering so opening mail cannot phone the
-// sender. CID rewrites are same-origin and untouched, as are data: images.
-var remoteImgRe = regexp.MustCompile(`(?i)<img\b[^>]*\bsrc\s*=\s*("https?://[^"]*"|'https?://[^']*'|https?://[^\s>]+)[^>]*>`)
+// remoteImgRe matches <img> tags whose src is an absolute (http/https) or
+// protocol-relative ("//host/...") remote URL. The sanitize policy allows
+// remote images through; StripRemoteImages removes them from the default
+// (non-opt-in) rendering so opening mail cannot phone the sender. Same-origin
+// paths (CID rewrites, /ui/attachments/...), cid: and data: images are
+// untouched. A protocol-relative URL inherits the page scheme, so it is just as
+// remote as an absolute one; the CSP blocks it either way, but stripping it
+// keeps the "no remote images" render honest.
+var remoteImgRe = regexp.MustCompile(`(?i)<img\b[^>]*\bsrc\s*=\s*("(?:https?:)?//[^"]*"|'(?:https?:)?//[^']*'|(?:https?:)?//[^\s>]+)[^>]*>`)
 
 // StripRemoteImages removes remote-src <img> tags from already-sanitized HTML.
 func StripRemoteImages(s string) string {

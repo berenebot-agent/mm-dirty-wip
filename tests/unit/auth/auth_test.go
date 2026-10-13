@@ -10,6 +10,44 @@ import (
 	"github.com/dellarb/mailmoose/tests/support/smoke"
 )
 
+// argonTestSalt and argonTestHash are valid base64-raw encodings used to build
+// malformed stored hashes without running the KDF.
+const (
+	argonTestSalt = "MDEyMzQ1Njc4OWFiY2RlZg"                      // 16 bytes
+	argonTestHash = "G33eWH4HzmUuCbDixK08x1/nRbrOAEEKU7d108gnqpg" // 32 bytes
+)
+
+// TestArgon2idParameterBoundsRejected proves a stored hash cannot demand an
+// unbounded Argon2 workload. t.Parallel() is safe: each out-of-range case is
+// rejected before any KDF work, and the read-only admission gate guards the
+// one in-range case.
+func TestArgon2idParameterBoundsRejected(t *testing.T) {
+	t.Parallel()
+	const prefix = "$argon2id$v=19$"
+	cases := map[string]string{
+		"huge memory":               prefix + "m=4294967295,t=3,p=4$" + argonTestSalt + "$" + argonTestHash,
+		"huge iterations":           prefix + "m=65536,t=100000,p=4$" + argonTestSalt + "$" + argonTestHash,
+		"byte-overflow parallelism": prefix + "m=65536,t=3,p=260$" + argonTestSalt + "$" + argonTestHash,
+		"zero parallelism":          prefix + "m=65536,t=3,p=0$" + argonTestSalt + "$" + argonTestHash,
+	}
+	for name, enc := range cases {
+		if auth.CheckPassword(enc, "correct horse battery staple") {
+			t.Errorf("%s: out-of-range hash verified", name)
+		}
+	}
+}
+
+// TestNeedsRehashDoesNotTruncateParallelism guards the same byte-overflow case
+// on the upgrade path: a stored p=260 must be flagged for rehash rather than
+// compared as the truncated p=4. t.Parallel() is safe (no global mutation).
+func TestNeedsRehashDoesNotTruncateParallelism(t *testing.T) {
+	t.Parallel()
+	enc := "$argon2id$v=19$m=65536,t=3,p=260$" + argonTestSalt + "$" + argonTestHash
+	if !auth.NeedsRehash(enc) {
+		t.Fatal("stored p=260 was not flagged for rehash")
+	}
+}
+
 func TestLiveArgon2idRoundTrip(t *testing.T) {
 	enc, err := auth.HashPassword("correct horse battery staple")
 	if err != nil {

@@ -1470,7 +1470,7 @@ func (s *Server) uiMessageHTML(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; "+imgSrc+"; frame-ancestors 'self'; base-uri 'none'; form-action 'none'")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = io.WriteString(w, body)
 }
 
@@ -1503,7 +1503,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline 
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": a.Filename}))
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Cache-Control", "no-store")
 	path, perr := s.dataPath(m.RawPath)
 	if perr != nil {
 		s.Log.Error("attachment path rejected", "error", perr)

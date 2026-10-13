@@ -149,6 +149,21 @@ mailbox credentials already gate who can place mail in the connected inbox.
 DKIM verification proposed for `D058`/`D059`. Revisit only alongside an explicit
 decision to change approval behaviour.
 
+### Legacy ciphertext is AAD-less and the passphrase KDF uses a fixed salt
+
+**Status:** accepted risk — decision `D117` in `docs/DECISIONS.md`.
+
+Provider credentials are encrypted with AES-GCM under `APP_ENCRYPTION_KEY`.
+Ciphertext written before the AAD binding was introduced carries no `v2.` prefix
+and is decrypted with a nil additional-authenticated-data value so pre-migration
+rows keep working (`internal/cryptox`). A holder of database-write access can
+therefore swap such a blob between rows that were never migrated, and the
+passphrase fallback stretches the key with PBKDF2 under a fixed application salt,
+so such a holder can also re-derive that key. Both require the same
+database-write access the encryption is designed to survive, all new writes use
+the authenticated (`v2.`) format, and the migration that would re-wrap every
+legacy blob with its row's AAD is tracked in `D117`.
+
 ## Supported versions
 
 MailMoose is at V1. Only the latest release and the current `main`
