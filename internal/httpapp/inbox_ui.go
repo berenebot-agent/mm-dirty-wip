@@ -58,7 +58,9 @@ const (
 	// iconCatchAllSvg marks a domain's catch-all inbox: a wide mouth narrowing
 	// into a tray, reading as "collects every address".
 	iconCatchAllSvg = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h12l-4.3 5.2v4.3L6.3 13.5V8.2Z"/></svg>`
-	// catchAllTag is the inline marker placed before a catch-all inbox address.
+	// catchAllTag marks a domain's catch-all inbox. It leads the dashboard inbox
+	// list's flags column with the other inbox markers, and sits inline beside the
+	// address in the client key matrix.
 	catchAllTag = `<span class="catchall-tag" title="Catch-all inbox" aria-label="Catch-all inbox">` + iconCatchAllSvg + `</span>`
 )
 
