@@ -30,14 +30,16 @@ services:
     volumes:
       - ./data:/data
     ports:
-      # :8081 = API + web UI + webhook delivery connector. Published on all
-      # interfaces; expose it publicly only behind an HTTPS reverse proxy or
-      # TLS terminator (see docs/SELFHOSTING.md), since it serves bearer and
-      # session credentials and untrusted message content.
       - "0.0.0.0:8081:8081"
-      # Optional dedicated webhook listener: uncomment to publish its port.
-      # Keep commented when DEDICATED_RECEIVER_ENABLE=false to free the host port.
-      # - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
-      # :25 = direct SMTP when using this as an Included MX receiver. Uncomment
-      # to publish it (and set Admin -> MX receiver to Included).
-      # - "0.0.0.0:25:2525"
+      # Dedicated inbound webhook listener (:8082). This is the receiver the
+      # Cloudflare Worker and the Microsoft push subscription post to (via
+      # DEDICATED_RECEIVER_URL), and it is the only listener that serves the
+      # /internal/ingest/* connector. It must stay published for any provider
+      # webhook to reach the app: the front end forwards to a host port, so the
+      # mapping cannot depend on the container's address, which changes on
+      # every recreate.
+      - "0.0.0.0:${DEDICATED_RECEIVER_PORT:-8082}:${DEDICATED_RECEIVER_PORT:-8082}"
+      # :25 = direct SMTP when using this as an Included MX receiver (the edge
+      # listens on :2525 inside the container). Published for Included; keep it
+      # published when MX_RECEIVE_ENABLED=true.
+      - "0.0.0.0:25:2525"
