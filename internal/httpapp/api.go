@@ -273,6 +273,17 @@ func (s *Server) apiInbox(w http.ResponseWriter, r *http.Request) {
 				writeError(w, 400, err.Error())
 				return
 			}
+			// A remote-draft inbox never uses an approver: its request to send
+			// just places the draft in the connected Drafts folder. The field is
+			// accepted for compatibility but stored empty, so switching modes
+			// later cannot resurrect a stale approver and no approval email can be
+			// sent by this inbox.
+			if box, gerr := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, id); gerr == nil {
+				settings, serr := s.Service.Store.GetInboxAuthoringSettingsInternal(r.Context(), p.AccountID, id)
+				if serr == nil && model.NormalizeAuthoringMode(box.Kind, settings.Mode) == model.AuthoringRemoteDraft {
+					normalized = ""
+				}
+			}
 			if err := s.Service.Store.SetInboxApprover(r.Context(), p.AccountID, id, normalized); err != nil {
 				mapStoreError(w, err)
 				return

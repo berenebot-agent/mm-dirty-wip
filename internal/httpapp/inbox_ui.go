@@ -135,7 +135,7 @@ const draftsBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displ
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{template "select-banner" .}}
-<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{with index $.HandoffByDraft .ID}}{{template "handoff-badge" .}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section>{{template "handoff-history" .}}</div></div>`
+<section class="card" data-live-list>{{if .Drafts}}<div class="mailheader drafts"><span class="mailcheck"><input type="checkbox" id="select-all" aria-label="Select all drafts"></span><span></span><span>To</span><span>Subject</span><span class="hcenter">Updated</span><span></span></div><div class="mailrows">{{range .Drafts}}<div class="mailrow drafts" data-row-id="{{.ID}}"><span class="mailcheck"><input type="checkbox" name="ids" value="{{.ID}}" form="drafts-bulk-form" aria-label="Select draft"></span><a class="mailrowlink" href="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/edit"><span class="maildot"></span><span class="mailsender">{{join .To ", "}}</span><span class="mailsubject">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<span class="draft-status pending"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 8h10"/><path d="m8.5 3.5 4.5 4.5-4.5 4.5"/></svg>Pending Send</span> {{else if eq .SendRequest.Status "rejected"}}<span class="draft-status rejected">Rejected</span> {{else if eq .SendRequest.Status "approved"}}<span class="draft-status sent">Sent</span> {{end}}{{end}}{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}{{if .Text}} <span class="mailsnippet">— {{snippet .Text 80}}</span>{{end}}</span><span class="maildate">{{mailDate .UpdatedAt}}</span></a><span class="mailaction">{{if .SendRequest}}{{if eq .SendRequest.Status "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/approve" data-confirm="Approve and send this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="btn-sm">Send</button></form>{{end}}{{end}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.ID}}/delete"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary icon-btn danger" data-confirm="Delete this draft?" title="Delete" aria-label="Delete">` + iconTrash + `</button></form></span></div>{{end}}</div>{{if .HasMore}}<p><a href="{{.PagerURL}}">Load older →</a></p>{{end}}{{else}}<p class="muted">No drafts yet.</p>{{end}}</section></div></div>`
 
 const outboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar">{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}</div>
@@ -301,77 +301,33 @@ func (s *Server) uiDrafts(w http.ResponseWriter, r *http.Request) {
 	trashCount, _ := s.Service.Store.CountTrash(r.Context(), p, box.ID)
 	inboxLabels, _ := s.Service.Store.ListInboxLabels(r.Context(), p, box.ID)
 	labelUnread := s.unifiedLabelUnreadCounts(r.Context(), p, box)
-	handoffs, _ := s.Service.Store.ListAssistantHandlingForInbox(r.Context(), p, box.ID, 50)
-	handoffByDraft := make(map[string]model.AssistantHandlingRequest, len(handoffs))
-	for _, h := range handoffs {
-		if _, ok := handoffByDraft[h.DraftID]; !ok {
-			handoffByDraft[h.DraftID] = h
-		}
-	}
 	s.renderMail(w, r, draftsBody, pageData{
-		Title:          box.Address + " · Drafts",
-		Page:           "inbox",
-		Principal:      p,
-		CSRF:           csrf(r),
-		Account:        acc,
-		Inbox:          &box,
-		Drafts:         drafts,
-		Handoffs:       handoffs,
-		HandoffByDraft: handoffByDraft,
-		Folder:         "drafts",
-		HasMore:        hasMore,
-		Before:         cursor,
-		PagerURL:       pagerURL,
-		TotalCount:     draftCount,
-		Labels:         inboxLabels,
-		LabelUnread:    labelUnread,
-		UnreadCount:    unread[box.ID],
-		SpamCount:      spamCount,
-		TrashCount:     trashCount,
-		DraftCount:     draftCount,
-		OutboxCount:    outboxCount,
-		Folders:        s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
+		Title:       box.Address + " · Drafts",
+		Page:        "inbox",
+		Principal:   p,
+		CSRF:        csrf(r),
+		Account:     acc,
+		Inbox:       &box,
+		Drafts:      drafts,
+		Folder:      "drafts",
+		HasMore:     hasMore,
+		Before:      cursor,
+		PagerURL:    pagerURL,
+		TotalCount:  draftCount,
+		Labels:      inboxLabels,
+		LabelUnread: labelUnread,
+		UnreadCount: unread[box.ID],
+		SpamCount:   spamCount,
+		TrashCount:  trashCount,
+		DraftCount:  draftCount,
+		OutboxCount: outboxCount,
+		Folders:     s.buildFolderSidebar(r.Context(), p.AccountID, box.ID),
 		UnifiedLabels: func() []mailLabel {
 			labels, _ := s.mailboxLabels(r.Context(), p, box)
 			return labels
 		}(),
 		Notice: r.URL.Query().Get("notice"),
 	})
-}
-
-// uiDraftCancelHandoff withdraws an outstanding (pending or ambiguous) RemoteDraft
-// handoff and returns the draft to editable. It requires Assistant/Owner. An
-// ambiguous handoff can be resolved here so its frozen draft is not trapped.
-func (s *Server) uiDraftCancelHandoff(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "inbox not found", 404)
-		return
-	}
-	if _, _, err := s.Service.Store.CancelHandoff(r.Context(), p, r.PathValue("draftId")); err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice="+url.QueryEscape("Handoff cancelled"), 303)
-}
-
-// uiDraftRetryHandoff re-requests a RemoteDraft handoff for a draft whose previous
-// handoff reached a terminal state (failed/cancelled). It routes through the
-// inbox's effective authoring mode, so it only produces a handoff when the inbox
-// is in remote_draft mode.
-func (s *Server) uiDraftRetryHandoff(w http.ResponseWriter, r *http.Request) {
-	p := principal(r)
-	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
-	if err != nil {
-		http.Error(w, "inbox not found", 404)
-		return
-	}
-	if _, err := s.Service.RequestSend(r.Context(), p, r.PathValue("draftId"), false); err != nil {
-		s.uiError(w, err, 400)
-		return
-	}
-	http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/drafts?notice="+url.QueryEscape("Handoff re-requested"), 303)
 }
 
 func (s *Server) uiOutbox(w http.ResponseWriter, r *http.Request) {
@@ -1608,15 +1564,3 @@ func rewriteCIDs(body string, atts []model.Attachment) string {
 	}
 	return body
 }
-
-// handoffBadge renders a draft's latest RemoteDraft handoff state on the drafts
-// list so a handoff draft is never shown as a plain (or approval) draft. It shows
-// the publication state and, independently, an unavailable/failed notification.
-const handoffBadge = `{{define "handoff-badge"}}{{if eq .Publication "published"}}<span class="draft-status sent">Handoff published</span> {{else if eq .Publication "ambiguous"}}<span class="draft-status rejected">Handoff ambiguous</span> {{else if eq .Publication "failed"}}{{if eq .LastError "cancelled"}}<span class="draft-status rejected">Handoff cancelled</span> {{else}}<span class="draft-status rejected">Handoff failed</span> {{end}}{{else}}<span class="draft-status pending">Handoff pending</span> {{end}}{{end}}`
-
-// handoffHistory is the RemoteDraft handoff history panel. It is independent of
-// the local draft: a published handoff's local draft is cleaned up, but the
-// terminal record (with its publication and notification state) is retained. A
-// pending handoff can be cancelled; a terminal (failed/cancelled) one can be
-// re-requested. It never offers approval controls for a remote job.
-const handoffHistory = `{{define "handoff-history"}}{{if .Handoffs}}<section class="card" data-live-list><div class="card-head"><h2>Draft handoffs</h2></div><p class="muted small">One-way handoffs of drafts to this inbox's connected remote Drafts folder. Publication and notification are tracked separately; the record is kept after the local draft is cleaned up.</p><div class="mailheader"><span></span><span></span><span>Subject</span><span>Publication</span><span>Notification</span><span>Requested</span><span></span></div><div class="mailrows">{{range .Handoffs}}<div class="mailrow"><span class="mailcheck"></span><span class="maildot"></span><span class="mailsubject">{{if eq .Publication "published"}}<span class="draft-status sent">Published</span> {{else if eq .Publication "ambiguous"}}<span class="draft-status rejected">Ambiguous</span> {{else if eq .Publication "failed"}}{{if eq .LastError "cancelled"}}<span class="draft-status rejected">Cancelled</span> {{else}}<span class="draft-status rejected">Failed</span> {{end}}{{else}}<span class="draft-status pending">Pending</span> {{end}}{{if .MessageID}}<span class="muted small">{{.MessageID}}</span>{{end}}{{if .RemoteFolder}} <span class="muted small">→ {{.RemoteFolder}}</span>{{end}}{{if .LastError}} <span class="muted small">— {{.LastError}}</span>{{end}}</span><span>{{if eq .NotificationStatus "sent"}}<span class="pill">sent</span>{{else if eq .NotificationStatus "queued"}}<span class="pill amber">queued</span>{{else if eq .NotificationStatus "failed"}}<span class="pill danger">notification failed</span>{{else}}<span class="muted small">notification unavailable</span>{{end}}</span><span class="maildate">{{mailDate .RequestedAt}}</span><span class="mailaction">{{if eq .Publication "pending"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/cancel-handoff" data-confirm="Withdraw this handoff? The remote draft is not removed."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Cancel</button></form>{{else if eq .Publication "ambiguous"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/cancel-handoff" data-confirm="Resolve this ambiguous handoff and return the draft to editable? A remote copy, if any, is not removed."><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Resolve</button></form>{{else if eq .Publication "failed"}}<form method="post" action="/ui/inboxes/{{$.Inbox.ID}}/drafts/{{.DraftID}}/retry-handoff" data-confirm="Re-request the handoff for this draft?"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="secondary btn-sm">Retry</button></form>{{end}}</span></div>{{end}}</div></section>{{end}}{{end}}`

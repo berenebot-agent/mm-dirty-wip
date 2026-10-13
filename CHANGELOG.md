@@ -1,8 +1,11 @@
 # Changelog
 
-- Remote-draft handoffs now place only the requested draft in the connected
-  Drafts folder; they no longer send a separate notification email. The draft
-  body is preserved as supplied by the API.
+- Remote-draft mode now just places the draft in the connected mailbox's Drafts
+  folder. The web UI no longer shows any handoff surface (the "Draft handoffs"
+  pane, per-draft handoff badges, and the cancel/retry controls are gone), no
+  notification email is ever sent (any previously queued handoff notification is
+  retired), an ambiguous or failed append unfreezes the local draft, and
+  switching a standalone inbox to remote-draft clears any approver.
 
 All notable changes to MailMoose are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
