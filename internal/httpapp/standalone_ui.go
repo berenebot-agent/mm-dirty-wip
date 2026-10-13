@@ -365,7 +365,6 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 		ActiveFolderID: target.ID,
 		Folders:        sidebar,
 		UnifiedLabels: unifiedLabels,
-		MoveTargets:    s.buildMoveTargets(r.Context(), p.AccountID, box.ID, []string{target.ID}),
 		UnreadCount:    unread[id],
 		SpamCount:      spamCount,
 		TrashCount:     trashCount,
@@ -438,6 +437,9 @@ func (s *Server) folderMessageCount(r *http.Request, p model.Principal, box mode
 // remoteMessageToModel projects a cached remote message onto the common message
 // shape so the local message list template renders it unchanged.
 func remoteMessageToModel(v app.RemoteMessageView, folder *model.Folder) model.Message {
+	if folder == nil {
+		folder = &model.Folder{Path: v.FolderPath}
+	}
 	m := model.Message{
 		ID:             v.ID,
 		InboxID:        v.InboxID,
@@ -494,7 +496,7 @@ func remoteTimestamp(value *string) *time.Time {
 // message list template and the mailbox sidebar (with custom folder management),
 // so a domain inbox and a standalone inbox render identically.
 const folderBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
-<div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{if .MoveTargets}}<select name="dest" aria-label="Move to folder" class="move-select"><option value="">Move to…</option>{{range .MoveTargets}}<option value="{{.Path}}">{{.Name}}</option>{{end}}</select><button name="action" value="move" class="secondary" title="Move to folder">Move</button>{{end}}</form></div>
+<div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button></form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}` + syncBanner + `
 {{template "select-banner" .}}
@@ -590,7 +592,6 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		Folders:        folderSidebar,
 		UnifiedLabels: unifiedLabels,
 		MessageLabels: unifiedLabels,
-		CanTypeLabel: s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, box.ID) || s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, box.ID),
 		Labels:         inboxLabels,
 		LabelUnread:    labelUnread,
 		UnreadCount:    unread[box.ID],
@@ -783,27 +784,7 @@ func (s *Server) uiRemoteMessageAttachment(w http.ResponseWriter, r *http.Reques
 	http.Error(w, "message not found", http.StatusNotFound)
 }
 
-// buildMoveTargets returns the selectable folders a bulk move can target: every
-// selectable folder of the inbox (custom and role-bearing but not the implicit
-// system Inbox or the current folder). It is common to both inbox kinds.
-func (s *Server) buildMoveTargets(ctx context.Context, accountID, inboxID string, exclude []string) []folderSidebarItem {
-	folders, err := s.Service.Store.ListFolders(ctx, accountID, inboxID)
-	if err != nil {
-		return nil
-	}
-	skip := map[string]bool{}
-	for _, id := range exclude {
-		skip[id] = true
-	}
-	var out []folderSidebarItem
-	for _, f := range folders {
-		if !f.Selectable || skip[f.ID] || f.Role == model.FolderRoleInbox {
-			continue
-		}
-		out = append(out, folderSidebarItem{ID: f.ID, Path: f.Path, Name: f.Name, Role: f.Role, Count: f.MessageCount})
-	}
-	return out
-}
+
 
 // uiInboxAuthoringSave saves an inbox's assistant authoring settings (mode and
 // notify override) from the Approvals tab. It requires Owner. The mode is

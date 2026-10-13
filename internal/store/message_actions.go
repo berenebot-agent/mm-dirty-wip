@@ -29,6 +29,8 @@ type MessageActionInput struct {
 	Read        *bool     `json:"read,omitempty"`
 	Spam        *bool     `json:"spam,omitempty"`
 	Labels      *[]string `json:"labels,omitempty"`
+	Label       string    `json:"label,omitempty"`
+	LabelOp     string    `json:"label_op,omitempty"`
 }
 
 type MessageAction struct {
