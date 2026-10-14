@@ -155,6 +155,56 @@ func TestAPICreateDomainNameOnly(t *testing.T) {
 	}
 }
 
+// TestAPICreateDomainDuplicateIsSpecific proves a duplicate name answers a 409
+// that names the conflict instead of the previous generic "conflict".
+func TestAPICreateDomainDuplicateIsSpecific(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, _ := httpFixture(t)
+	ctx := context.Background()
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/admin/domains", strings.NewReader(`{"name":"`+d.Name+`"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("duplicate domain status = %d %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "already exists") {
+		t.Fatalf("duplicate domain should name the conflict: %s", rr.Body.String())
+	}
+}
+
+// TestUICreateDomainDuplicateShowsError proves re-adding a name the account
+// owns redirects back to the dashboard with a message that names the cause
+// rather than the generic engine-fault fallback.
+func TestUICreateDomainDuplicateShowsError(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, _ := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	rr := domainPost(t, h, cookie, "/ui/domains", url.Values{"_csrf": {csrf}, "name": {d.Name}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("duplicate domain status = %d, want 303", rr.Code)
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "error=") {
+		t.Fatalf("duplicate domain should redirect with an error, got %q", loc)
+	}
+	if strings.Contains(loc, "Could+not+create+it") || strings.Contains(loc, "Could%20not%20create%20it") {
+		t.Fatalf("duplicate domain fell back to the generic error: %q", loc)
+	}
+	parsed, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := parsed.Query().Get("error"); !strings.Contains(msg, "already exists") {
+		t.Fatalf("duplicate domain message = %q, want it to name the conflict", msg)
+	}
+}
+
 func TestDashboardInboxIssueDot(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
