@@ -3379,7 +3379,7 @@ function clearUrlParams(names) {
     }
     if (desc) {
       desc.textContent = authStandalone
-        ? 'How this inbox handles a request to send. MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email). Remote draft places the draft in the connected mailbox\'s Drafts folder and never sends it.'
+        ? 'How this inbox handles a request to send. MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email). Create draft places the draft in the connected mailbox\'s Drafts folder and never sends it.'
         : 'Approvals for this inbox use the MailMoose approval workflow: a request to send keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).';
     }
     if (controls) {
@@ -3388,8 +3388,8 @@ function clearUrlParams(names) {
       controls.hidden = !authStandalone;
     }
     // The tab is "Approvals" for a standalone inbox; the approver field is
-    // enabled by the EFFECTIVE mode, so switching to remote_draft disables (and
-    // clears) the approver and a remote job never shows approval controls.
+    // enabled by the EFFECTIVE mode, so switching to create-draft disables (and
+    // clears) the approver and a create-draft job never shows approval controls.
     var tab = document.querySelector('[data-inbox-tab="approver"]');
     if (tab) {
       tab.textContent = data.standalone ? 'Approvals' : 'Approver';

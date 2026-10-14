@@ -24,12 +24,19 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   Outlook connectors pull the equivalent label/folder.
 
 - Domain setup, domain sending/receiving settings, and inbox setup/settings now
-  share a responsive 1080px maximum modal width. Height fits the current content
-  instead of reserving a fixed 880px inbox-settings panel. Form controls stay at
-  a readable maximum width, while DNS tables and richer settings can use the
-  full shell. Overflow remains available when content exceeds the viewport or
-  browser zoom makes it necessary; confirmation and credential popups remain
-  compact.
+  share a responsive 1080px maximum modal width. The domain setup dialogs fit
+  their current content; the inbox settings dialog keeps a content-independent
+  tabbed height so its panel area stays the single scrolling region. Form
+  controls stay at a readable maximum width, while DNS tables and richer
+  settings can use the full shell. Overflow remains available when content
+  exceeds the viewport or browser zoom makes it necessary; confirmation and
+  credential popups remain compact.
+
+- The inbox settings **Approver** tab's send-handling mode is labelled
+  **MailMoose approval** and **Create draft** (previously the terse
+  "MailMoose" / "Remote"), and the mode selector no longer flashes on a domain
+  inbox before the dialog's script runs. Both are labelling/layout fixes: the
+  underlying modes and their behaviour are unchanged.
 
 - **Add Domain** now guides users through Domain → Receiving → Sending →
   Summary, using the existing provider dropdowns and configuration forms.
