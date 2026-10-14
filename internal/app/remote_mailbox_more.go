@@ -961,7 +961,11 @@ func (m *RemoteMailboxService) copyOneSentCopy(ctx context.Context, pub *RemoteS
 	}
 	if err := m.Service.Store.MarkRemoteSentCopyDone(ctx, job.AccountID, job.ID, outcome.UIDValidity, outcome.RemoteUID); err != nil {
 		m.Service.Log.Warn("mark sent-copy done", "copy_id", job.ID, "error", err)
+		return
 	}
+	// The copy is confirmed in the remote Sent folder; pull just that folder so
+	// the copy is visible without waiting for the next deep pass.
+	m.Service.requestRoleFolderRefresh(job.AccountID, job.InboxID, model.FolderRoleSent)
 }
 
 func (m *RemoteMailboxService) verifySentCopyByLookup(ctx context.Context, pub *RemoteSentCopyPublisher, job store.RemoteSentCopy) {
@@ -975,6 +979,9 @@ func (m *RemoteMailboxService) verifySentCopyByLookup(ctx context.Context, pub *
 		return
 	}
 	_ = m.Service.Store.MarkRemoteSentCopyDone(ctx, job.AccountID, job.ID, outcome.UIDValidity, outcome.RemoteUID)
+	// The copy is confirmed present in the remote Sent folder; pull just that
+	// folder so it is visible without waiting for the next deep pass.
+	m.Service.requestRoleFolderRefresh(job.AccountID, job.InboxID, model.FolderRoleSent)
 }
 
 func (m *RemoteMailboxService) settleSentCopyError(ctx context.Context, job store.RemoteSentCopy, err error) {

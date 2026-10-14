@@ -15,6 +15,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- A standalone inbox's connected **Drafts** folder is now pulled into its cached
+  index immediately after a remote-draft handoff is confirmed placed, and its
+  **Sent** folder immediately after a sent copy is confirmed. Previously the
+  placed item stayed invisible to reads until the next scheduled full sync. The
+  pull is folder-scoped, coalesced per inbox and folder, asynchronous and
+  best-effort, so it never blocks or fails the write that triggered it; Gmail and
+  Outlook connectors pull the equivalent label/folder.
+
 - Domain setup, domain sending/receiving settings, and inbox setup/settings now
   share a responsive 1080px maximum modal width. Height fits the current content
   instead of reserving a fixed 880px inbox-settings panel. Form controls stay at

@@ -284,6 +284,19 @@ SEARCH plus a header fetch). The full UID snapshot, prune and backfill batch are
 skipped. A new arrival or a deletion moves the max UID or the count and falls
 through to the full pass.
 
+### Immediate folder pull after a confirmed write
+A **confirmed** remote write refreshes just the folder it landed in, so the new
+item is visible to reads without waiting for the next deep reconcile. When a
+RemoteDraft handoff settles `published` (confirmed by APPENDUID or verified by
+lookup) the inbox's Drafts folder is pulled; when a sent copy settles `copied`
+the Sent folder is pulled. `RemoteMailboxService.PullRoleFolder` resolves the
+role folder per connector — an IMAP folder reconcile for the mapped role path, a
+Gmail system-label (`DRAFT`/`SENT`) message page, or an Outlook folder delta —
+and stores metadata only. It is scheduled asynchronously on the same bounded
+refresh pool as the deep reconcile, coalesced per inbox+role, and is best-effort:
+it never blocks or fails the write, and a miss is still covered by the normal
+cadence. An `ambiguous` or `failed` append pulls nothing (nothing was confirmed).
+
 ### Sync cadence (per-inbox) and the manual refresh
 Each standalone inbox carries two optional overrides (`inboxes.remote_poll_seconds`,
 `inboxes.remote_full_sync_minutes`; NULL inherits the process default, clamped to
@@ -340,7 +353,9 @@ transient scope/`LIST` shortfall or a generation flip.
 - **`RemoteDraft`** (a standalone inbox's default): a one-way handoff that
   appends the frozen draft to the connected remote Drafts folder. MailMoose
   never sends it and sends no notification email. The frozen draft carries the
-  correlation header used to verify publication.
+  correlation header used to verify publication. Once publication is confirmed
+  the Drafts folder is pulled immediately (see "Immediate folder pull after a
+  confirmed write").
 - The mode is snapshotted onto each request at creation, so an inbox setting
   change never affects an in-flight request. A standalone inbox can be switched
   to `MailMooseApproval` (its approver identity is matched against the message
