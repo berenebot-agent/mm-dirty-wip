@@ -1237,7 +1237,7 @@ func domainReceivingSteps(provider string) []string {
 			"For a custom service, add each receiver base URL as an HTTPS origin; multiple receivers can be comma separated.",
 			"Save to generate the domain key, then publish the shown MM1 TXT record at _mailmoose-mx.<this-domain> and the shown MX records.",
 			"After regenerating the key, replace this domain's TXT record; the core will re-authenticate with each receiver.",
-			"Choose moderate or hard authentication enforcement, then save.",
+			"Choose moderate or hard receiver authentication enforcement, then save.",
 		}
 	case "mx":
 		return []string{
