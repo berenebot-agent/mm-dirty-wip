@@ -85,6 +85,24 @@ grep -n '--- FAIL' tests/logs/latest/full.log
 `./tests/run.sh --last` prints the newest summary, the exact paths, and the last
 few ledger entries in one shot.
 
+## Profiling where the unit tier spends its time
+
+`timings.txt` gives per-test times for a run, but to optimise the suite you want
+per-package attribution and a machine-readable source. That is what
+`tests/scripts/go-test-timings.sh` is for: it runs `go test -json ./...` and
+reports total wall time, the slowest packages, and the slowest tests.
+
+```bash
+./tests/scripts/go-test-timings.sh              # -race -count=1 -timeout=60s (tier parity)
+./tests/scripts/go-test-timings.sh --no-race    # faster pass; relative hotspots only
+./tests/scripts/go-test-timings.sh --save-json  # keep raw go test -json under tests/logs/
+```
+
+It defaults to the unit tier's CI command (`-race -count=1 -timeout=60s`) so the
+numbers match what CI and `run.sh` actually pay, and it exits non-zero if any
+test failed. Note that package wall times overlap (packages run in parallel), so
+their sum exceeds the tier's wall time — use the per-package ranking, not the sum.
+
 ## Retention
 
 Runs are **retained in full** — there is no automatic pruning, so an earlier
