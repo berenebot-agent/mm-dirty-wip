@@ -36,7 +36,7 @@ func (Transport) Description() string { return "Direct MX (SMTP to the MailMoose
 // the two shipped modes; there is no inactive ARC toggle or auth-delete action.
 func (Transport) ConfigFields() []transport.ConfigField {
 	return []transport.ConfigField{
-		{Name: "enforcement", Label: "Authentication enforcement", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
+		{Name: "enforcement", Label: "Receiver authentication enforcement", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
 			{Value: "moderate", Label: "Moderate (Spam on definitive DMARC failure, or SPF and DKIM both failed)"},
 			{Value: "hard", Label: "Hard (Spam on any one of SPF, DKIM or definitive DMARC failure)"},
 		}},
