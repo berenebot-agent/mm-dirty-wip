@@ -133,7 +133,7 @@ docker compose -f docker-compose.advanced.yml up -d
 
 ## Direct SMTP (MX) deployment
 
-### true (one container, Compose default)
+### Embedded edge (`MX_ENABLE=true`, one container, Compose default)
 
 ```bash
 # .env — MX_ENABLE=true is already the docker-compose.yml default
@@ -242,6 +242,26 @@ webhook registrations and regenerate/redeploy Cloudflare Worker code.
 | `OUTBOUND_HTTP_TIMEOUT_SECONDS` | `300` (5 minutes) | Overall timeout for one outbound provider HTTP request (connect, upload body, wait for response headers) for the Brevo, Resend and Mailgun adapters. Raise it if large attachment sends time out on a slow uplink. |
 | `OUTBOUND_CONCURRENCY` | `5` | Sender goroutines running outbox deliveries at once (1–32). Higher values send large batches in parallel but raise peak memory, since each in-flight send holds its attachments in RAM. |
 | `REMOTE_SYNC_CONCURRENCY` | `2` | Maximum number of standalone mailbox metadata syncs running at once, across startup, background, push-triggered and manual syncs (1–32). |
+| `NOINDEX` | `false` | Ask search and AI crawlers to stay out of the human UI; see below. |
+
+#### Search and AI indexing
+
+Set `NOINDEX=true` to ask crawlers to skip the human UI. When enabled:
+
+- HTML pages carry `X-Robots-Tag: noindex, nofollow` and a matching
+  `<meta name="robots">` element;
+- `GET /robots.txt` returns a blanket `Disallow: /`.
+
+It is **off by default**: the hosted deployment wants its signup pages
+discoverable, and a self-hoster opts in. The REST API, `/.well-known/mailmoose`
+and `/openapi.json` are never marked, so agents can still discover and
+bootstrap against the instance — a noindex deployment depends on that path
+itself.
+
+This is hygiene, not access control. `robots.txt` and the `noindex` directives
+are advisory: reputable crawlers honour them, but a determined scraper ignores
+them. The real protection for a private instance is that every route that
+matters requires authentication.
 
 Edge service (`mailmoose-mx`):
 

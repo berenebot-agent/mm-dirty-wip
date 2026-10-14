@@ -370,6 +370,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /.well-known/mailmoose", s.discovery)
 	m.HandleFunc("GET /agent", s.agentGuide)
 	m.HandleFunc("GET /docs", s.docsRedirect)
+	m.HandleFunc("GET /robots.txt", s.robotstxt)
 	m.HandleFunc("GET /openapi.json", s.openapi)
 	// Versioned health path so /v1/health and /health agree. Unauthenticated
 	// and deliberately outside v1Routes, so it is not part of the bearer API.
@@ -618,8 +619,40 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		if s.Service.Config.ForceHTTPS {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
+		s.applyNoIndex(w, r)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// applyNoIndex asks crawlers to skip the human UI when NOINDEX is enabled. It
+// is applied here rather than per-handler so new UI pages are covered by
+// default, and it deliberately skips the REST API and the discovery document:
+// those exist to be found by the agents this server is built for, and
+// suppressing them would break the bootstrap path that a noindex deployment
+// still depends on. The header is a hint only — a determined scraper ignores
+// it — so this is hygiene, not an access control.
+func (s *Server) applyNoIndex(w http.ResponseWriter, r *http.Request) {
+	if !s.Service.Config.NoIndex {
+		return
+	}
+	p := r.URL.Path
+	if strings.HasPrefix(p, "/v1/") || strings.HasPrefix(p, "/.well-known/") || p == "/openapi.json" || p == "/robots.txt" {
+		return
+	}
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+}
+
+// robotstxt serves a blanket disallow while NOINDEX is enabled and 404s
+// otherwise, so an indexing deployment gets a normal "no robots.txt" response
+// instead of a file that disagrees with its policy.
+func (s *Server) robotstxt(w http.ResponseWriter, r *http.Request) {
+	if !s.Service.Config.NoIndex {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = io.WriteString(w, "User-agent: *\nDisallow: /\n")
 }
 
 func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
