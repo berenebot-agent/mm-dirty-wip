@@ -320,6 +320,12 @@ func (s *Service) settleHandoffPublished(ctx context.Context, accountID string, 
 	if err := s.Store.CleanupPublishedHandoffLocalDraft(ctx, accountID, r.ID); err != nil {
 		s.Log.Warn("cleanup published handoff local draft", "handoff_id", r.HandoffID, "error", err)
 	}
+	// The append is confirmed on the remote server, but the cached index of the
+	// target folder stays stale until the next deep pass. Ask the remote bridge to
+	// pull just that folder so the placed draft is visible immediately. The
+	// publication is already settled, so a missing bridge or a failed pull can
+	// never affect it.
+	s.requestRoleFolderRefresh(accountID, r.InboxID, handoffFolderRole)
 }
 
 // settleHandoffError classifies an append failure. A permanent error is

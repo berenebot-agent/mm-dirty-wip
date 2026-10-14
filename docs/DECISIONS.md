@@ -4852,3 +4852,51 @@ notification lookup removed), `internal/app/remote_worker.go`, the handoff
 removal in `internal/httpapp/{inbox_ui,ui,server,api,standalone_api,standalone_ui}.go`
 and `assets/app.js`, the CLI table columns, a migration (`076`), apispec and docs,
 and the affected tests. No new dependency.
+
+## D122 — Immediate, folder-scoped pull after a confirmed remote write
+
+**Date:** 2026-10-14. **Approved by:** Ben.
+
+**Context:** A standalone inbox in `remote_draft` mode appends a frozen draft to
+its connected mailbox's Drafts folder, and a standalone send appends a copy to its
+Sent folder. The MailMoose read model for those folders is the cached remote index
+(`inbox_remote_messages`), which was only refreshed by the whole-inbox deep
+reconcile (`ReconcileRemote`) on the worker's full-sync cadence or an explicit
+`POST /v1/inboxes/{id}/remote/refresh`. A read reconciles on demand only when a
+folder's UIDVALIDITY is unknown or it has never been indexed, so an
+already-indexed Drafts/Sent folder is served from cache. The result was that the
+just-appended draft (or sent copy) did not appear to reads/agents until the next
+deep pass — a visible lag after an assistant's draft-mode "send".
+
+**Decision:** After a **confirmed** remote write — a RemoteDraft handoff settled
+as published (whether confirmed by APPENDUID or verified by lookup), or a sent
+copy settled as copied — immediately pull just the target folder role
+(`drafts`/`sent`) into the cached index:
+
+- A new role-scoped pull (`RemoteMailboxService.PullRoleFolder`) resolves the
+  role folder per connector — an IMAP folder reconcile for the mapped role path,
+  a Gmail system-label (`DRAFT`/`SENT`) message page, or an Outlook folder delta —
+  and never stores a body.
+- It is scheduled asynchronously on the existing bounded refresh pool
+  (`ScheduleRoleFolderRefresh`: coalesced per inbox+role, sharing `refreshSlots`
+  and `refreshContext` so `Stop` drains it). It never blocks or fails the write
+  that requested it; a failure is logged and the normal cadence still covers the
+  folder.
+- The trigger is a narrow `Service.RemoteFolderRefresher` seam installed by
+  `InstallRemoteBridges`, so a deployment with no remote integration (or a test
+  with a fake) simply does nothing.
+
+**Scope:** the confirmed-published and confirmed-copied paths only. An ambiguous
+or failed append never pulls (nothing was confirmed on the server). The browser
+Drafts page keeps listing local drafts and is unchanged; the deep reconcile and
+its cadence are unchanged.
+
+**Consequences:** A placed draft and a sent copy are visible to reads immediately
+after their append is confirmed, with no change to what is stored (metadata only)
+or to the append's exactly-once/lookup semantics. No new dependency, no schema
+change, no migration.
+
+**Complexity:** `internal/app/service.go` (the `RemoteFolderRefresher` seam),
+`internal/app/remote_folder_refresh.go` (the pull and its scheduler),
+`internal/app/remote_mailbox.go` (bridge install), `internal/app/draft_handoff.go`
+and `internal/app/remote_mailbox_more.go` (the two hooks), and the new tests.
