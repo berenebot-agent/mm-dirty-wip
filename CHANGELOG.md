@@ -23,14 +23,20 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   best-effort, so it never blocks or fails the write that triggered it; Gmail and
   Outlook connectors pull the equivalent label/folder.
 
-- Domain setup, domain sending/receiving settings, and inbox setup/settings now
-  share a responsive 1080px maximum modal width. The domain setup dialogs fit
-  their current content; the inbox settings dialog keeps a content-independent
-  tabbed height so its panel area stays the single scrolling region. Form
-  controls stay at a readable maximum width, while DNS tables and richer
-  settings can use the full shell. Overflow remains available when content
-  exceeds the viewport or browser zoom makes it necessary; confirmation and
-  credential popups remain compact.
+- Domain setup and sending/receiving settings now use a compact responsive
+  720px shell with `height: fit-content`, avoiding both oversized empty space
+  and the stretching caused by `height: auto` on a modal dialog. The Add Domain
+  wizard has one footer and one primary Next action: provider setup advances
+  through that same navigation rather than adding another set of buttons.
+  Credential configuration and provider instructions use separate screens;
+  instruction help preserves unsaved edits. Antler's DNS records are copyable
+  blocks shown one per screen, pending receiver status does not trap setup, and generated webhook
+  credentials appear in the same shell rather than a stacked popup. Remote MX
+  account settings save through the domain's Next action, with optional CA and
+  private-network settings collapsed. Ordinary domain settings show one
+  Close/Save footer, with instructions and destructive actions in disclosures.
+  Inbox settings keep their wider 1080px tabbed shell: related dialogs share
+  styling, not forced dimensions. Overflow remains a small-screen/zoom fallback.
 
 - The inbox settings **Approver** tab's send-handling mode is labelled
   **MailMoose approval** and **Create draft** (previously the terse

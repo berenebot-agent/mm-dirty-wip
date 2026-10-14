@@ -5506,9 +5506,35 @@ function hideInboxSubview(dlg) {
   });
 })();
 
+function prepareReceivingInstructions(dlg, collapsible) {
+  var sections = [];
+  dlg.querySelectorAll('.provider-fields').forEach(function (group) {
+    var nodes = [];
+    var children = Array.prototype.slice.call(group.children);
+    children.forEach(function (child, index) {
+      if (child.querySelector('.setup-webhook-url')) {
+        if (index && children[index - 1].tagName === 'P') { nodes.push(children[index - 1]); }
+        nodes.push(child);
+      } else if (child.matches('ol.steps,.setup-copy-note') || child.querySelector('.setup-copy')) { nodes.push(child); }
+    });
+    if (!nodes.length) { return; }
+    var section = document.createElement(collapsible ? 'details' : 'section');
+    section.className = 'receiving-instructions'; section.dataset.provider = group.dataset.provider;
+    if (collapsible) {
+      var title = document.createElement('summary'); title.textContent = 'Provider setup instructions'; section.appendChild(title);
+    }
+    nodes.forEach(function (node) { section.appendChild(node); });
+    if (!group.querySelector('input,select,textarea') && !group.querySelector('.error')) { group.classList.add('provider-fields--empty'); }
+    if (collapsible) { group.insertBefore(section, group.firstChild); }
+    else { section.hidden = true; dlg.insertBefore(section, dlg.querySelector(':scope > .dialog-actions')); }
+    sections.push(section);
+  });
+  return sections;
+}
+
 (function () {
-  // Reuse the existing editors: only their navigation changes during addition.
-  // The server validates wizard IDs against the account's domain list.
+  // Share editor fields and persistence, not editor navigation. There is one
+  // footer and one submit control; provider steps use that same control.
   var state = document.getElementById('domain-wizard-state');
   if (!state || !state.dataset.domain || (state.dataset.step !== 'receiving' && state.dataset.step !== 'sending')) { return; }
   var kind = state.dataset.step;
@@ -5518,6 +5544,7 @@ function hideInboxSubview(dlg) {
   var footer = dlg.querySelector(':scope > .dialog-actions');
   var save = dlg.querySelector('[data-save-provider]');
   var provider = form.querySelector('.provider-select');
+  var instructions = kind === 'receiving' ? prepareReceivingInstructions(dlg, false) : [];
   var inheritance = provider.querySelector('option[value="inherited"]');
   if (inheritance) {
     if (state.dataset.inherit !== 'true') { inheritance.remove(); }
@@ -5536,36 +5563,136 @@ function hideInboxSubview(dlg) {
   var note = document.createElement('p'); note.className = 'muted small';
   note.textContent = 'The domain is saved. Close keeps saved progress; Skip ignores unsaved edits. You can finish setup from the Domains list later.';
   progress.insertAdjacentElement('afterend', note);
-  Array.prototype.forEach.call(footer.children, function (child) { child.hidden = child !== save; });
-  // Antler's own setup buttons remain above the domain-level navigation.
-  function innerActions() { footer.hidden = kind !== 'receiving' || provider.value !== 'dialmx'; }
-  provider.addEventListener('change', innerActions); innerActions();
-  var actions = document.createElement('div'); actions.className = 'dialog-actions domain-wizard-actions';
-  actions.innerHTML = '<button type="button" class="secondary" data-close-dialog>Close</button>' +
-    '<a class="btn secondary" data-wizard-back>Back</a><span class="spacer"></span>' +
-    '<a class="btn secondary" data-wizard-skip>Skip</a><button type="submit" data-wizard-next>Next</button>';
-  actions.querySelector('[data-wizard-back]').href = state.dataset.back;
-  actions.querySelector('[data-wizard-skip]').href = state.dataset.next;
-  var next = actions.querySelector('[data-wizard-next]'); next.setAttribute('form', form.id);
-  function syncNext() { next.disabled = !provider.value; }
-  provider.addEventListener('change', syncNext); syncNext();
-  dlg.appendChild(actions);
-  // Account receiver settings are a secondary save, not an advancement.
+  var configurationProgress = progress.textContent, configurationNote = note.textContent;
+  function showConfiguration() {
+    delete dlg.dataset.wizardGuide;
+    form.hidden = false; save.type = 'submit';
+    instructions.forEach(function (section) { section.hidden = true; });
+    progress.textContent = configurationProgress; note.textContent = configurationNote;
+  }
+  if (instructions.length) {
+    var guide = document.createElement('button'); guide.type = 'button'; guide.className = 'secondary btn-sm provider-guide';
+    guide.textContent = 'Setup instructions'; provider.insertAdjacentElement('afterend', guide);
+    function guideAvailable() {
+      guide.hidden = !instructions.some(function (section) { return section.dataset.provider === provider.value; }) || provider.value === 'dialmx' || provider.value === 'remotemx';
+    }
+    provider.addEventListener('change', guideAvailable); guideAvailable();
+    guide.addEventListener('click', function () {
+      dlg.dataset.wizardGuide = '1'; form.hidden = true; save.type = 'button';
+      instructions.forEach(function (section) { section.hidden = section.dataset.provider !== provider.value; });
+      progress.textContent = 'Receiving · Provider instructions';
+      note.textContent = 'Use these instructions to obtain your provider credentials. Next returns to configuration without saving or discarding your edits.';
+    });
+    save.addEventListener('click', function (event) {
+      if (dlg.dataset.wizardGuide) { event.preventDefault(); showConfiguration(); }
+    });
+  }
+  footer.replaceChildren();
+  footer.classList.add('domain-wizard-actions');
+  footer.innerHTML = '<button type="button" class="secondary" data-close-dialog>Close</button>' +
+    '<button type="button" class="secondary" data-wizard-back>Back</button><span class="spacer"></span>' +
+    '<a class="btn secondary" data-wizard-skip>Skip</a>';
+  footer.querySelector('[data-wizard-back]').addEventListener('click', function () {
+    // Antler owns Back while one of its receiving screens is active.
+    if (dlg.dataset.wizardGuide) { showConfiguration(); }
+    else if (dlg.dataset.wizardReview || dlg.dataset.wizardCredential) {
+      window.location.assign('/?domain=' + encodeURIComponent(state.dataset.domain) + '&domain_wizard=receiving');
+    } else if (provider.value !== 'dialmx') { window.location.assign(state.dataset.back); }
+  });
+  dlg.dataset.wizardBack = state.dataset.back;
+  footer.querySelector('[data-wizard-skip]').href = state.dataset.next;
+  save.setAttribute('data-wizard-next', ''); save.textContent = 'Next'; footer.appendChild(save);
+  // Remote receiver fields belong to the main receiving form in wizard mode.
+  // Next saves account receiver settings and the domain choice, without a
+  // second form or an independent Save receiver button.
   dlg.querySelectorAll('form[action="/ui/account/mx"]').forEach(function (receiverForm) {
     var returnID = document.createElement('input');
     returnID.type = 'hidden'; returnID.name = 'domain_wizard_domain'; returnID.value = state.dataset.domain;
-    receiverForm.appendChild(returnID);
+    form.appendChild(returnID);
+    var receiverMarker = document.createElement('input');
+    receiverMarker.type = 'hidden'; receiverMarker.name = 'wizard_receiver_settings'; receiverMarker.value = '1';
+    form.appendChild(receiverMarker);
+    receiverForm.querySelectorAll('input,select,textarea').forEach(function (input) {
+      if (input.name === '_csrf') { input.remove(); } else { input.setAttribute('form', form.id); }
+    });
+    receiverForm.querySelectorAll('.dialog-actions').forEach(function (actions) { actions.remove(); });
+    var fields = document.createElement('div');
+    while (receiverForm.firstChild) { fields.appendChild(receiverForm.firstChild); }
+    receiverForm.replaceWith(fields);
+    var ca = fields.querySelector('[name="rx_ca"]');
+    var privateOption = fields.querySelector('.inherit-option');
+    if (ca && privateOption) {
+      var caLabel = ca.previousElementSibling, privateNote = privateOption.nextElementSibling;
+      var advanced = document.createElement('details'); advanced.className = 'remote-mx-advanced';
+      var title = document.createElement('summary'); title.textContent = 'Advanced receiver options'; advanced.appendChild(title);
+      advanced.appendChild(privateOption);
+      if (privateNote && privateNote.tagName === 'P') { advanced.appendChild(privateNote); }
+      if (caLabel && caLabel.tagName === 'LABEL') { advanced.appendChild(caLabel); }
+      advanced.appendChild(ca); fields.appendChild(advanced);
+    }
+    function receivingFields() {
+      fields.querySelectorAll('input,select,textarea').forEach(function (input) { input.disabled = provider.value !== 'remotemx'; });
+      receiverMarker.disabled = provider.value !== 'remotemx';
+    }
+    provider.addEventListener('change', receivingFields); receivingFields();
   });
+  dlg.querySelectorAll('[data-remote-mx-panel] form').forEach(function (secondary) { secondary.remove(); });
+  if (state.dataset.review === 'true') {
+    dlg.dataset.wizardReview = '1'; form.hidden = true;
+    progress.textContent = 'Receiving · Provider instructions';
+    note.textContent = 'Receiving configuration is saved. Complete these steps with your provider; you can continue while DNS is pending.';
+    instructions.forEach(function (section) {
+      section.hidden = section.dataset.provider !== provider.value;
+      if (!section.hidden) {
+        section.querySelectorAll('p').forEach(function (p) {
+          if (p.textContent.indexOf('before saving:') !== -1) { p.textContent = p.textContent.replace('before saving:', 'to finish receiving setup:'); }
+        });
+        section.querySelectorAll('li').forEach(function (li) {
+          if (li.textContent.indexOf('below') !== -1 && li.textContent.indexOf('save') !== -1) {
+            li.textContent = 'Your credentials are saved. Use Back if these values need updating.';
+          }
+        });
+      }
+    });
+    save.type = 'button'; save.removeAttribute('form'); save.disabled = false;
+    save.addEventListener('click', function () { window.location.assign(state.dataset.next); });
+  }
   var credential = document.getElementById('domain-credential-dialog');
   if (kind === 'receiving' && credential) {
-    var done = credential.querySelector('[data-close-dialog]');
-    done.removeAttribute('data-close-dialog'); done.textContent = 'Next';
-    done.addEventListener('click', function () { window.location.assign(state.dataset.next); });
-    var close = document.createElement('button'); close.type = 'button'; close.className = 'secondary';
-    close.textContent = 'Close';
-    close.addEventListener('click', function () { window.location.assign('/'); });
-    credential.querySelector('.dialog-actions').prepend(close);
+    dlg.dataset.wizardCredential = '1';
+    // Display the bound one-time flash in this shell, never a stacked modal.
+    var copy = credential.querySelector('#domain-credential-copy');
+    credential.querySelectorAll('.dialog-actions,h2').forEach(function (node) { node.remove(); });
+    Array.prototype.slice.call(dlg.children).forEach(function (node) {
+      if (node !== heading && node !== progress && node !== note && node !== footer) { node.remove(); }
+    });
+    while (credential.firstChild) { dlg.insertBefore(credential.firstChild, footer); }
+    if (copy) { dlg.insertBefore(copy, footer); }
+    credential.remove();
+    save.removeAttribute('form'); save.type = 'button'; save.disabled = false;
+    save.addEventListener('click', function () { window.location.assign(state.dataset.next); });
   }
+})();
+
+(function () {
+  document.querySelectorAll('dialog[id^="domain-sending-dialog-"],dialog[id^="domain-receiving-dialog-"]').forEach(function (dlg) {
+    if (dlg.dataset.domainWizard) { return; }
+    if (dlg.id.indexOf('domain-receiving-dialog-') === 0) { prepareReceivingInstructions(dlg, true); }
+    var footer = dlg.querySelector(':scope > .dialog-actions');
+    var danger = footer && footer.querySelector('.dialog-danger');
+    if (danger) {
+      var advanced = document.createElement('details'); advanced.className = 'domain-settings-advanced';
+      var title = document.createElement('summary'); title.textContent = 'Advanced actions';
+      advanced.appendChild(title); advanced.appendChild(danger); dlg.insertBefore(advanced, footer);
+    }
+    if (footer) {
+      footer.classList.add('domain-wizard-actions');
+      var close = footer.querySelector('[data-close-dialog]');
+      if (close) { close.textContent = 'Close'; }
+      var spacer = document.createElement('span'); spacer.className = 'spacer';
+      footer.insertBefore(spacer, footer.querySelector('[data-save-provider]'));
+    }
+  });
 })();
 
 (function () {
@@ -5675,18 +5802,14 @@ function hideInboxSubview(dlg) {
       });
     });
   }
-  // syncSaveLabel picks the submit label. A provider whose editor has a
-  // server-generated secret offers "Next", because saving first reveals the
-  // generated value the operator must copy. Every other provider reads "Save".
+  // The shell owns the primary action: Next during addition, Save in settings.
   function syncSaveLabel(dlg) {
     var sel = dlg.querySelector('.provider-select');
     var save = dlg.querySelector('[data-save-provider]');
     if (!sel || !save) {
       return;
     }
-    var opt = sel.options[sel.selectedIndex];
-    var next = !!(opt && opt.getAttribute('data-next'));
-    save.textContent = next ? 'Next' : 'Save';
+    save.textContent = dlg.dataset.domainWizard ? 'Next' : 'Save';
   }
   function sync(dlg) {
     var sel = dlg.querySelector('.provider-select');
@@ -5769,7 +5892,8 @@ function hideInboxSubview(dlg) {
     var enforcement = group.querySelector('[name="cfg_dialmx_enforcement"]');
     var save = dlg.querySelector('[data-save-provider]');
     var oldSetup = dlg.querySelector('.dialmx-setup');
-    var statusMode = !!oldSetup && provider.value === 'dialmx';
+    var domainFlow = !!dlg.dataset.domainWizard;
+    var statusMode = !domainFlow && !!oldSetup && provider.value === 'dialmx';
     var entered = statusMode;
     var custom = service.value === 'custom';
     // The saved status view draws its connector table from the names and live
@@ -5805,7 +5929,7 @@ function hideInboxSubview(dlg) {
     var close = dlg.querySelector('[data-close-dialog]');
     if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
-    var step = 0, busy = false, ready = false, rotating = false;
+    var step = 0, dnsPage = 0, busy = false, ready = false, rotating = false;
     var state = null, savedEmail = null, timer = null;
     var wizard = document.createElement('section');
     wizard.className = 'antler-wizard';
@@ -5880,9 +6004,11 @@ function hideInboxSubview(dlg) {
     }
     // Back is part of the dialog's bottom navigation, not the upper form.
     var footer = save.closest('.dialog-actions');
-    var back = document.createElement('button');
-    back.type = 'button'; back.className = 'secondary antler-back'; back.textContent = 'Back'; back.hidden = true;
-    if (footer) { footer.insertBefore(back, footer.firstChild); }
+    var back = domainFlow ? footer.querySelector('[data-wizard-back]') : document.createElement('button');
+    if (!domainFlow) {
+      back.type = 'button'; back.className = 'secondary antler-back'; back.textContent = 'Back'; back.hidden = true;
+      if (footer) { footer.insertBefore(back, footer.firstChild); }
+    }
     function active() { return provider.value === 'dialmx'; }
     function fail(message) { error.textContent = message; error.hidden = !message; }
     function api(method, config, regenerate) {
@@ -6261,6 +6387,21 @@ function hideInboxSubview(dlg) {
         return td;
       }
       function recordRow(name, type, priority, value, rowLight) {
+        if (domainFlow) {
+          var card = document.createElement('section'); card.className = 'wizard-dns-record';
+          var title = document.createElement('b'); title.textContent = type + (type === 'MX' ? ' · Priority ' + priority : '');
+          card.appendChild(title); card.appendChild(rowLight.span); card.appendChild(rowLight.text);
+          [['Name', name], ['Value', value]].forEach(function (field) {
+            var label = document.createElement('div'); label.className = 'muted small'; label.textContent = field[0];
+            var code = document.createElement('code'); code.textContent = field[1];
+            var copy = document.createElement('button'); copy.type = 'button'; copy.className = 'secondary btn-sm'; copy.textContent = 'Copy ' + field[0].toLowerCase();
+            window.mailmooseCopy.wire(copy, { text: field[1], select: code });
+            var row = document.createElement('div'); row.className = 'wizard-dns-value'; row.appendChild(code); row.appendChild(copy);
+            card.appendChild(label); card.appendChild(row);
+          });
+          records.appendChild(card);
+          return;
+        }
         var tr = document.createElement('tr');
         tr.dataset.dnsKind = type.toLowerCase();
         [name, type, priority, value].forEach(function (text, index) {
@@ -6283,18 +6424,16 @@ function hideInboxSubview(dlg) {
       (instructions.mx || []).forEach(function (mx) { recordRow(mxName, 'MX', String(mx.priority), mx.hostname, mxRowLight(dnsByKind.mx, mx.hostname)); });
       if (instructions.txt_value) { recordRow(instructions.txt_name, 'TXT', '—', instructions.txt_value, lightFor(dnsByKind.txt)); }
       table.appendChild(tbody);
-      records.appendChild(table);
+      if (!domainFlow) { records.appendChild(table); }
       renderReceivers(data.status);
       // The receivers step of the new-setup wizard carries the same inline
       // remediation, so an operator completing setup can publish the MX record
       // they need without leaving the step.
-      wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data.dns || [], instructions, mxName));
+      if (!domainFlow) { wizard.querySelector('.antler-receivers').appendChild(remediationBlock(data.dns || [], instructions, mxName)); }
       update();
     }
     function update() {
       var enabled = active();
-      var domainNext = dlg.querySelector('[data-wizard-next]');
-      if (domainNext) { domainNext.disabled = busy || !provider.value; }
       dlg.classList.toggle('antler-dialog', enabled);
       if (rotate) { rotate.querySelector('button').disabled = busy || rotating; }
       provider.disabled = busy;
@@ -6319,14 +6458,15 @@ function hideInboxSubview(dlg) {
         wizard.hidden = provider.value !== 'dialmx';
         panels.forEach(function (panel, index) { panel.hidden = index !== 0 && index !== 3; });
         wizard.querySelector('.antler-progress').hidden = true;
-        back.hidden = true;
+        back.hidden = !domainFlow;
+        if (domainFlow) { save.textContent = 'Next'; }
         wizard.querySelector('.antler-checks').hidden = true;
         wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = true; });
         if (provider.value === 'dialmx') { save.textContent = 'Save'; save.disabled = false; }
         return;
       }
       wizard.querySelectorAll('h3, [data-antler-step] > p').forEach(function (el) { el.hidden = false; });
-      wizard.querySelector('.antler-progress').hidden = statusMode;
+      wizard.querySelector('.antler-progress').hidden = domainFlow || statusMode;
       wizard.querySelector('.antler-progress').textContent = rotating ? 'New receiving key · DNS → Receivers' : custom ? 'Custom Antler MX · Contact → Receiver URLs → DNS → Receivers → Enforcement' : 'Antler MX · Contact → DNS → Receivers → Enforcement';
       wizard.querySelector('[data-antler-step="1"] h3').textContent = rotating ? 'Replace your authorization TXT record' : statusMode ? 'Antler MX status' : 'Publish your DNS records';
       wizard.querySelector('[data-antler-step="1"] > p').textContent = rotating ? 'The previous key is invalid. Replace the existing authorization TXT record with the new value below. Your MX records stay the same. Receiving can resume once DNS propagates and a receiver reconnects.' : 'Add these records at your DNS provider. You can continue while DNS propagates.';
@@ -6345,19 +6485,28 @@ function hideInboxSubview(dlg) {
       if (statusMode) { wizard.querySelector('[data-antler-step="1"] > p').hidden = true; }
       // Rotation's new-TXT step cannot go back to the pre-rotation state, but
       // its receiver step can.
-      back.hidden = statusMode || (step === 0 && !entered) || (rotating && step === 1);
+      back.hidden = !domainFlow && (statusMode || (step === 0 && !entered) || (rotating && step === 1));
       back.disabled = busy;
       wizard.querySelector('.antler-checks').hidden = statusMode ? false : (step !== 1 && step !== 2);
       placeFields();
       settings.hidden = !statusMode;
-      save.hidden = statusMode ? (custom || inherited || !settingsDirty()) : false;
-      save.textContent = busy ? 'Please wait…' : statusMode ? 'Save settings' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
+      save.hidden = !domainFlow && statusMode ? (custom || inherited || !settingsDirty()) : false;
+      save.textContent = busy ? 'Please wait…' : domainFlow ? 'Next' : statusMode ? 'Save' : (rotating && step === 2) || step === 3 ? 'Finish' : 'Next';
+      if (domainFlow) {
+        var dnsCards = wizard.querySelector('.antler-records').children;
+        dnsPage = Math.min(dnsPage, Math.max(0, dnsCards.length - 1));
+        Array.prototype.forEach.call(dnsCards, function (card, index) { card.hidden = index !== dnsPage; });
+        var progress = dlg.querySelector('.domain-wizard-progress');
+        var label = step === 1 && dnsCards.length ? 'DNS record ' + (dnsPage + 1) + ' of ' + dnsCards.length : ['Contact details', 'DNS records', 'Receiver status', 'Authentication policy', 'Receiver URLs'][step];
+        if (progress) { progress.textContent = 'Receiving · ' + label; }
+        wizard.querySelector('[data-antler-step="2"] > p').textContent = 'Check receiver status, or continue while DNS and authorization are pending.';
+      }
       if (state) { ready = (state.status || []).some(isReady); }
       // Only the receivers step requires a ready receiver to advance. Key
       // rotation and the enforcement-step Finish are never readiness-gated: the
       // receiver re-authorizes on its own and the status view shows it as in
       // progress.
-      save.disabled = busy || (!statusMode && !rotating && step === 2 && !ready);
+      save.disabled = busy || (!domainFlow && !statusMode && !rotating && step === 2 && !ready);
       // While a check is in flight, pending amber dots animate as spinners so a
       // not-yet-resolved connector or DNS record reads as "in progress" rather
       // than a settled amber state.
@@ -6447,6 +6596,11 @@ function hideInboxSubview(dlg) {
       });
     }
     back.addEventListener('click', function () {
+      if (domainFlow && (!active() || step === 0)) {
+        if (active()) { window.location.assign(dlg.dataset.wizardBack); }
+        return;
+      }
+      if (domainFlow && step === 1 && dnsPage > 0) { dnsPage--; fail(''); update(); return; }
       if (step === 0) { entered = false; }
       else if (step === 4) { step = 0; }
       else if (step === 1 && custom) { step = 4; }
@@ -6456,20 +6610,7 @@ function hideInboxSubview(dlg) {
     form.addEventListener('submit', function (event) {
       if (!active()) { return; }
       event.preventDefault();
-      // Domain-level Next may leave saved receiving setup while DNS/receivers
-      // are pending. Antler's own buttons still walk through its full setup.
-      if (dlg.dataset.domainWizard && event.submitter && event.submitter.hasAttribute('data-wizard-next') && (state || statusMode)) {
-        if (busy) { return; }
-        if (!custom && !email.value.trim()) { fail('Enter a contact email.'); return; }
-        if (custom && !urls.value.trim()) { fail('Enter at least one receiver URL.'); return; }
-        var config = { service: custom ? 'custom' : 'antler', enforcement: enforcement.value };
-        if (custom) { config.receiver_urls = urls.value; } else { config.contact_email = email.value; }
-        busy = true; fail(''); update();
-        api('PUT', config).then(function () { window.location.assign(dlg.dataset.wizardNext); })
-          .catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
-        return;
-      }
-      if (busy || (!statusMode && !rotating && step === 2 && !ready)) { return; }
+      if (busy || (!domainFlow && !statusMode && !rotating && step === 2 && !ready)) { return; }
       // Rotation finishes regardless of readiness; the receiver re-authorizes on
       // its own and the status view reports it as in progress.
       if (rotating && step === 2) {
@@ -6488,6 +6629,9 @@ function hideInboxSubview(dlg) {
       }
       entered = true;
       if (step === 0 && custom) { step = 4; update(); return; }
+      if (domainFlow && step === 1 && dnsPage + 1 < wizard.querySelector('.antler-records').children.length) {
+        dnsPage++; update(); return;
+      }
       if (step === 1 || step === 2) { step++; update(); if (step === 2) { refresh(); } return; }
       if (!custom && !email.reportValidity()) { return; }
       if (step === 4 && !urls.value.trim()) { fail('Enter at least one receiver URL.'); return; }
@@ -6514,8 +6658,9 @@ function hideInboxSubview(dlg) {
       }).then(function (data) {
         if (!finishing) { enforcement.value = data.config.enforcement || 'moderate'; }
         savedEmail = email.value; render(data);
-        if (finishing) { statusMode = true; render(data); fail(''); }
-        else { step = 1; }
+        if (finishing && domainFlow) { window.location.assign(dlg.dataset.wizardNext); }
+        else if (finishing) { statusMode = true; render(data); fail(''); }
+        else { step = 1; dnsPage = 0; }
       }).catch(function (err) { fail(err.message); }).finally(function () { busy = false; update(); });
     });
     provider.addEventListener('change', update);
