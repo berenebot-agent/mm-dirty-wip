@@ -30,6 +30,7 @@ class Element {
     this.children = [];
     this.events = {};
     this.attrs = {};
+    this.dataset = {};
     this.value = '';
     this.hidden = false;
     this.disabled = false;

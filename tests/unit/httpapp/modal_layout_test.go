@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestSetupDialogsShareWidthAndUseContentHeight(t *testing.T) {
+func TestDomainDialogsUseCompactContentHeightShell(t *testing.T) {
 	t.Parallel()
 	svc, h, u, _, _ := httpFixture(t)
 	cookie, _ := uiSession(t, svc, u.ID)
@@ -27,10 +27,10 @@ func TestSetupDialogsShareWidthAndUseContentHeight(t *testing.T) {
 	}
 	styles := body[start : start+end]
 	for _, want := range []string{
-		"--setup-dialog-width:1080px", "--setup-form-width:640px",
+		"--setup-dialog-width:720px", "--inbox-dialog-width:1080px", "--setup-form-width:640px",
 		"dialog.domain-wizard", `dialog[id^="domain-sending-dialog-"]`,
 		`dialog[id^="domain-receiving-dialog-"]`,
-		"height:auto", "max-height:calc(100dvh - 2 * var(--setup-dialog-gutter))",
+		"height:fit-content", "max-height:calc(100dvh - 2 * var(--setup-dialog-gutter))",
 		"max-width:var(--setup-form-width)",
 	} {
 		if !strings.Contains(styles, want) {
@@ -40,7 +40,7 @@ func TestSetupDialogsShareWidthAndUseContentHeight(t *testing.T) {
 	// The inbox settings dialog is the tabbed shell: it keeps a bounded,
 	// content-independent height so its panel area stays the single scrolling
 	// region and the left navigation rail never stretches with a tall tab. It
-	// must share the width rule but not the content-height rule.
+	// has its own wider shell; domain forms must not inherit its dimensions.
 	ruleStart := strings.Index(styles, "dialog.domain-wizard,dialog[id^=\"domain-sending-dialog-\"],dialog[id^=\"domain-receiving-dialog-\"]{")
 	if ruleStart < 0 {
 		t.Fatal("shared content-height rule missing")
@@ -57,8 +57,8 @@ func TestSetupDialogsShareWidthAndUseContentHeight(t *testing.T) {
 	if !strings.Contains(inboxRule, "height:min(90dvh,880px)") {
 		t.Errorf("inbox settings dialog must keep a bounded height, got %q", inboxRule)
 	}
-	if !strings.Contains(inboxRule, "--setup-dialog-width") {
-		t.Errorf("inbox settings dialog must share the shell width, got %q", inboxRule)
+	if !strings.Contains(inboxRule, "--inbox-dialog-width") || strings.Contains(inboxRule, "--setup-dialog-width") {
+		t.Errorf("inbox settings dialog must use its own wider shell, got %q", inboxRule)
 	}
 	// Do not enlarge unrelated confirmations or one-time credential popups.
 	for _, unwanted := range []string{"dialog.domain-dialog{", "domain-delete-dialog", "domain-credential-dialog", "dkim-key-dialog"} {

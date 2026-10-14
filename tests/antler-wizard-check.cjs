@@ -135,6 +135,7 @@ function harness(mode) {
     dns: [],
     unexpected: [],
     copied: [],
+    destinations: [],
     timers: [],
     nextTimer: 1,
     windowEvents: {},
@@ -184,6 +185,16 @@ function harness(mode) {
   };
   group.children = [service.previousElementSibling, service];
   dlg.nodes = { '[data-save-provider]': save, '[data-close-dialog]': close };
+  if (mode.startsWith('domain')) {
+    dlg.dataset.domainWizard = 'receiving';
+    dlg.dataset.wizardNext = '/?domain=domain-1&domain_wizard=sending';
+    dlg.dataset.wizardBack = '/?domain=domain-1&domain_wizard=domain';
+    dlg.nodes['.domain-wizard-progress'] = new Element('P');
+    const back = new Element('BUTTON'); back.textContent = 'Back';
+    footer.nodes['[data-wizard-back]'] = back;
+    footer.appendChild(back); footer.appendChild(save);
+    if (mode === 'domain-custom') { service.value = 'custom'; }
+  }
   if (mode === 'status' || mode === 'status-two') { dlg.nodes['.dialmx-setup'] = new Element('SECTION'); }
   const rotate = new Element('FORM');
   rotate.nodes.button = new Element('BUTTON');
@@ -241,7 +252,10 @@ function harness(mode) {
     addEventListener(name, fn) { (world.windowEvents[name] = world.windowEvents[name] || []).push(fn); },
     removeEventListener(name, fn) { world.windowEvents[name] = (world.windowEvents[name] || []).filter(f => f !== fn); },
     dispatchEvent(event) { (world.windowEvents[event.type] || []).slice().forEach(fn => fn(event)); return true; },
-    location: { assign() {} },
+    location: { assign(url) { world.destinations.push(url); } },
+    mailmooseCopy: { wire(button, options) {
+      button.addEventListener('click', () => { world.copied.push(typeof options.text === 'function' ? options.text() : options.text); });
+    } },
     Event: function (type) { this.type = type; },
     mailmooseEventsSource: null
   };
@@ -261,7 +275,7 @@ function harness(mode) {
   vm.runInNewContext(source.slice(start, end), sandbox);
 
   const wizard = group.children.at(-1);
-  const back = footer.children.find(child => child.className.includes('antler-back'));
+  const back = footer.nodes['[data-wizard-back]'] || footer.children.find(child => child.className.includes('antler-back'));
   const flush = () => new Promise(resolve => setImmediate(resolve));
   const settle = async () => { for (let i = 0; i < 6; i++) { await flush(); } };
   const submit = async () => { form.emit('submit', { preventDefault() {} }); await settle(); };
@@ -384,7 +398,7 @@ async function statusSettings() {
   h.email.value = 'changed@example.com';
   h.email.emit('input');
   assert.equal(h.save.hidden, false, 'Save appears once the contact email changes');
-  if (HAVE.statusSettings) { assert.equal(h.save.textContent, 'Save settings'); }
+  if (HAVE.statusSettings) { assert.equal(h.save.textContent, 'Save'); }
 
   // Enforcement alone also counts as dirty.
   h.email.value = 'ops@example.com';
@@ -473,7 +487,7 @@ async function wizard(mode) {
   await h.submit();
 
   // Finishing saves the config once and lands on the status view.
-  assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save settings' : 'Save email', 'Finish returns to the saved status view');
+  assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save' : 'Save email', 'Finish returns to the saved status view');
   assert.match(h.collect(h.wizard.nodes['.antler-records']), /Connector Status/, 'the status table is shown after Finish');
   const expectConfig = mode === 'custom'
     ? { service: 'custom', enforcement: 'hard', receiver_urls: 'https://custom.example.com' }
@@ -517,7 +531,7 @@ async function rotation() {
   await h.submit();
   h.world.statuses = [{ state: 'disconnected' }];
   await h.submit();
-  assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save settings' : 'Save email', 'rotation Finish returns to the status view');
+  assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save' : 'Save email', 'rotation Finish returns to the status view');
   assert.equal(h.world.requests.filter(r => r.options.method === 'PUT').length, before + 1, 'Finish does not rotate again');
 
   // A failed rotation is reported and never retried automatically.
@@ -562,7 +576,53 @@ async function liveUpdates() {
   assert.equal(h.save.hidden, true, 'an unchanged contact email offers no Save');
 }
 
+async function domainWizard(mode = 'domain') {
+  const h = harness(mode);
+  assert.equal(h.footer.children.length, 2, 'reuse the existing Back and primary button; add no provider footer');
+  assert.equal(h.back.hidden, false, 'Back remains available at the contact screen');
+  h.back.emit('click');
+  assert.equal(h.world.destinations.pop(), h.dlg.dataset.wizardBack);
+  await h.submit();
+  if (mode === 'domain-custom') {
+    assert.equal(h.wizard.nodes['[data-antler-step="4"]'].hidden, false, 'custom receivers have a focused URL screen');
+    h.wizard.querySelector('.antler-custom-urls').value = 'https://custom.example.com';
+    await h.submit();
+  }
+  assert.equal(h.save.textContent, 'Next');
+  assert.equal(h.wizard.nodes['[data-antler-step="1"]'].hidden, false, 'Next shows DNS, rather than jumping straight to Sending');
+  const records = h.wizard.nodes['.antler-records'];
+  assert.ok(records.children.every(node => node.tagName !== 'TABLE'), 'DNS uses compact copyable blocks');
+  assert.match(h.collect(records), /Copy name/);
+  assert.match(h.collect(records), /Copy value/);
+  for (let index = 0; index < records.children.length; index++) {
+    assert.equal(records.children.filter(card => !card.hidden).length, 1, 'one DNS record is visible at a time');
+    assert.equal(records.children[index].hidden, false);
+    if (index > 0) {
+      h.back.emit('click');
+      assert.equal(records.children[index - 1].hidden, false, 'Back visits the preceding DNS record');
+      await h.submit();
+    }
+    await h.submit();
+  }
+  assert.equal(h.wizard.nodes['[data-antler-step="2"]'].hidden, false);
+  assert.equal(h.save.disabled, false, 'pending receivers never trap the adding-domain wizard');
+  await h.submit();
+  assert.equal(h.wizard.nodes['[data-antler-step="3"]'].hidden, false);
+  h.enforcement.value = 'hard';
+  h.world.rejectSave = true;
+  await h.submit();
+  assert.equal(h.world.destinations.length, 0, 'a failed save stays on this screen');
+  h.world.rejectSave = false;
+  await h.submit();
+  assert.equal(h.world.saved.config.enforcement, 'hard');
+  if (mode === 'domain-custom') { assert.equal(h.world.saved.config.receiver_urls, 'https://custom.example.com'); }
+  assert.deepEqual(h.world.destinations, [h.dlg.dataset.wizardNext], 'only successful final save advances to Sending');
+  assert.equal(h.footer.children.length, 2, 'no duplicate buttons appear after finishing');
+}
+
 const SUITES = {
+  domainWizard,
+  domainWizardCustom: () => domainWizard('domain-custom'),
   statusView,
   statusSettings,
   wizardHosted: () => wizard('hosted'),
@@ -574,7 +634,7 @@ const SUITES = {
 (async () => {
   // The suites that pass against the shipped behaviour. statusSettings is the S5
   // feature suite; run it by name to see what it is waiting on.
-  const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'rotation', 'liveUpdates'];
+  const defaultSuites = ['statusView', 'wizardHosted', 'wizardSubdomain', 'wizardCustom', 'rotation', 'liveUpdates', 'domainWizard', 'domainWizardCustom'];
   const names = process.argv.slice(2).length ? process.argv.slice(2) : defaultSuites;
   for (const name of names) {
     const fn = SUITES[name];
