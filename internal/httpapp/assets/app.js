@@ -99,6 +99,116 @@
   render();
 })();
 
+// Shared copy-to-clipboard helper. The async Clipboard API only exists in a
+// secure context (HTTPS or localhost), so a page served over plain HTTP cannot
+// copy. Every copy control routes through here: a secure context copies the
+// value; any other origin, or a refused write, selects the value where it can
+// and shows one shared message telling the operator how to copy it manually.
+(function () {
+  'use strict';
+  var SELECTED_MESSAGE = 'Copying to the clipboard needs HTTPS. The value is selected — press Ctrl+C (⌘C on Mac) to copy it.';
+  var PLAIN_MESSAGE = 'Copying to the clipboard needs HTTPS. Select the value and copy it manually.';
+  var message = null;
+  var messageTimer = null;
+
+  function hideMessage() {
+    window.clearTimeout(messageTimer);
+    if (!message) {
+      return;
+    }
+    var node = message;
+    message = null;
+    node.classList.add('dismissing');
+    window.setTimeout(function () { node.remove(); }, 300);
+  }
+
+  // announce shows the shared transient message. tone 'ok' is the green success
+  // toast; the default warns that the clipboard is unavailable without HTTPS.
+  function announce(text, tone) {
+    if (!message) {
+      message = document.createElement('div');
+      message.setAttribute('role', 'status');
+      message.setAttribute('aria-live', 'polite');
+      message.addEventListener('click', hideMessage);
+      document.body.appendChild(message);
+    }
+    message.className = tone === 'ok' ? 'ok notice' : 'notice warn';
+    message.textContent = text;
+    message.classList.remove('dismissing');
+    /* Force reflow so a repeated message restarts the fade-out animation. */
+    void message.offsetWidth;
+    window.clearTimeout(messageTimer);
+    messageTimer = window.setTimeout(hideMessage, 5000);
+  }
+
+  function copyText(text) {
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    return Promise.reject(new Error('clipboard unavailable'));
+  }
+
+  // select highlights a node's contents so the operator can copy manually.
+  // target may be an element, a selector, or a function returning either.
+  function select(target) {
+    var node = typeof target === 'function' ? target() : target;
+    if (typeof node === 'string') {
+      node = document.querySelector(node);
+    }
+    if (!node || !window.getSelection || !document.createRange) {
+      return false;
+    }
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
+  // wire gives a control the standard copy behaviour. opts.text is a string or a
+  // function returning one; opts.select is an element, selector or function
+  // identifying what to highlight when a copy is not possible; opts.onSuccess
+  // overrides the default "Copied!" label flash; opts.label overrides the label
+  // restored after the flash.
+  function wire(btn, opts) {
+    if (!btn) {
+      return;
+    }
+    opts = opts || {};
+    var label = opts.label || btn.textContent;
+    function activate() {
+      var text = typeof opts.text === 'function' ? opts.text() : opts.text;
+      if (text == null) {
+        text = btn.getAttribute('data-copy') || '';
+      }
+      copyText(text).then(function () {
+        if (opts.onSuccess) {
+          opts.onSuccess();
+          return;
+        }
+        btn.textContent = 'Copied!';
+        window.setTimeout(function () { btn.textContent = label; }, 1500);
+      }).catch(function () {
+        announce(select(opts.select) ? SELECTED_MESSAGE : PLAIN_MESSAGE);
+      });
+    }
+    btn.addEventListener('click', activate);
+    // Native buttons already turn Enter/Space into a click; only the
+    // role="button" spans need the explicit key handler.
+    if ((btn.tagName || '').toLowerCase() !== 'button') {
+      btn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate();
+        }
+      });
+    }
+  }
+
+  window.mailmooseCopy = { text: copyText, wire: wire, announce: announce, select: select };
+})();
+
 // The existing header status flag is also the durable action queue entry point.
 (function () {
   'use strict';
@@ -580,7 +690,6 @@
   var resultLabel = document.getElementById('key-result-label');
   var resultSecret = document.getElementById('key-result-secret');
   var copyBtn = document.getElementById('key-copy');
-  var copyNote = document.getElementById('key-copy-note');
   var errorBox = document.getElementById('key-error');
   var doneBtn = document.getElementById('key-done');
   var matrix = document.getElementById('key-matrix');
@@ -941,9 +1050,6 @@
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
-    if (copyNote) {
-      copyNote.hidden = true;
-    }
   }
 
   function showResult(data) {
@@ -956,21 +1062,7 @@
     if (copyBtn) {
       copyBtn.textContent = 'Copy';
     }
-    if (copyNote) {
-      copyNote.hidden = true;
-    }
     result.hidden = false;
-  }
-
-  function selectSecret() {
-    if (!window.getSelection || !document.createRange) {
-      return;
-    }
-    var range = document.createRange();
-    range.selectNodeContents(resultSecret);
-    var selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
   }
 
   function setAPIOptionVisible(visible) {
@@ -1168,26 +1260,9 @@
   });
 
   if (copyBtn) {
-    copyBtn.addEventListener('click', function () {
-      var text = resultSecret.textContent;
-      if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function () {
-          copyBtn.textContent = 'Copied!';
-          setTimeout(function () {
-            copyBtn.textContent = 'Copy';
-          }, 1500);
-        }).catch(function () {
-          if (copyNote) {
-            copyNote.hidden = false;
-          }
-          selectSecret();
-        });
-        return;
-      }
-      if (copyNote) {
-        copyNote.hidden = false;
-      }
-      selectSecret();
+    window.mailmooseCopy.wire(copyBtn, {
+      text: function () { return resultSecret.textContent; },
+      select: resultSecret
     });
   }
 
@@ -4891,10 +4966,9 @@ function bindInboxSettingsShell(dlg) {
       root.querySelector('[data-google-begin] button[type=submit], [data-google-begin] button:last-child').disabled = true;
     }
   }).catch(function (e) { status.textContent = e.message; });
-  root.querySelector('[data-google-copy]').addEventListener('click', function () {
-    var input = root.querySelector('[data-google-callback]');
-    if (navigator.clipboard) { navigator.clipboard.writeText(input.value).catch(function () { input.select(); }); }
-    else { input.select(); }
+  window.mailmooseCopy.wire(root.querySelector('[data-google-copy]'), {
+    text: function () { return root.querySelector('[data-google-callback]').value; },
+    select: function () { return root.querySelector('[data-google-callback]'); }
   });
   root.querySelectorAll('[data-google-begin], [data-google-finish]').forEach(function (form) {
     form.addEventListener('submit', function (event) {
@@ -5309,30 +5383,15 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
+  // Copy-code button on the one-time Cloudflare Worker setup page.
   var btn = document.getElementById('cf-copy');
   if (!btn) {
     return;
   }
   var code = document.getElementById('cf-code');
-  var note = document.getElementById('cf-copy-note');
-  btn.addEventListener('click', function () {
-    var text = code ? code.textContent : '';
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () {
-          btn.textContent = 'Copy code';
-        }, 1500);
-      }).catch(function () {
-        if (note) {
-          note.hidden = false;
-        }
-      });
-      return;
-    }
-    if (note) {
-      note.hidden = false;
-    }
+  window.mailmooseCopy.wire(btn, {
+    text: function () { return code ? code.textContent : ''; },
+    select: code
   });
 })();
 
@@ -5343,25 +5402,9 @@ function hideInboxSubview(dlg) {
     return;
   }
   var val = document.getElementById('dkim-private-key');
-  var note = document.getElementById('dkim-key-copy-note');
-  btn.addEventListener('click', function () {
-    var text = val ? val.textContent : '';
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () {
-          btn.textContent = 'Copy key';
-        }, 1500);
-      }).catch(function () {
-        if (note) {
-          note.hidden = false;
-        }
-      });
-      return;
-    }
-    if (note) {
-      note.hidden = false;
-    }
+  window.mailmooseCopy.wire(btn, {
+    text: function () { return val ? val.textContent : ''; },
+    select: val
   });
 })();
 
@@ -5371,73 +5414,19 @@ function hideInboxSubview(dlg) {
     return;
   }
   var url = document.getElementById('domain-credential-url');
-  var note = document.getElementById('domain-credential-copy-note');
-  btn.addEventListener('click', function () {
-    var text = url ? url.textContent : '';
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () {
-          btn.textContent = 'Copy URL';
-        }, 1500);
-      }).catch(function () {
-        if (note) {
-          note.hidden = false;
-        }
-      });
-      return;
-    }
-    if (note) {
-      note.hidden = false;
-    }
-  });
-})();
-
-(function () {
-  // Copy-code button on the one-time Cloudflare Worker setup page.
-  var btn = document.getElementById('cf-copy');
-  var code = document.getElementById('cf-code');
-  if (!btn || !code) {
-    return;
-  }
-  var note = document.getElementById('cf-copy-note');
-  btn.addEventListener('click', function () {
-    var text = code.textContent || '';
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () {
-          btn.textContent = 'Copy code';
-        }, 1500);
-      }).catch(function () {
-        if (note) {
-          note.hidden = false;
-        }
-      });
-      return;
-    }
-    if (note) {
-      note.hidden = false;
-    }
+  window.mailmooseCopy.wire(btn, {
+    text: function () { return url ? url.textContent : ''; },
+    select: url
   });
 })();
 
 (function () {
   // Copy-to-clipboard for a value the server rendered into an attribute, used by
-  // the DKIM record's Copy name / Copy value buttons.
+  // the DKIM TXT record's Copy button on the sending dialog.
   document.querySelectorAll('[data-copy-value]').forEach(function (btn) {
-    var label = btn.textContent;
-    btn.addEventListener('click', function () {
-      var text = btn.getAttribute('data-copy-value') || '';
-      if (!(window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText)) {
-        return;
-      }
-      navigator.clipboard.writeText(text).then(function () {
-        btn.textContent = 'Copied!';
-        setTimeout(function () {
-          btn.textContent = label;
-        }, 1500);
-      });
+    window.mailmooseCopy.wire(btn, {
+      text: function () { return btn.getAttribute('data-copy-value') || ''; },
+      select: function () { return btn.previousElementSibling; }
     });
   });
 })();
@@ -5506,29 +5495,13 @@ function hideInboxSubview(dlg) {
 (function () {
   document.querySelectorAll('.setup-copy').forEach(function (btn) {
     var dlg = btn.closest('dialog') || document;
-    // Each provider group owns its own webhook URL and note. Resolve them from
-    // the button's group so a copy never picks up another provider's URL.
+    // Each provider group owns its own webhook URL. Resolve it from the button's
+    // group so a copy never picks up another provider's URL.
     var scope = btn.closest('.provider-fields') || dlg;
     var url = scope.querySelector('.setup-webhook-url');
-    var note = scope.querySelector('.setup-copy-note');
-    btn.addEventListener('click', function () {
-      var text = url ? url.textContent : '';
-      if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(function () {
-          btn.textContent = 'Copied!';
-          setTimeout(function () {
-            btn.textContent = 'Copy webhook URL';
-          }, 1500);
-        }).catch(function () {
-          if (note) {
-            note.hidden = false;
-          }
-        });
-        return;
-      }
-      if (note) {
-        note.hidden = false;
-      }
+    window.mailmooseCopy.wire(btn, {
+      text: function () { return url ? url.textContent : ''; },
+      select: url
     });
   });
 })();
@@ -5970,14 +5943,14 @@ function hideInboxSubview(dlg) {
         deferred: 'Waiting to retry'
       }[status.state] || 'Waiting';
     }
-    // copyField copies one exact string to the clipboard and reports success on
-    // the button itself, falling back to a manual-copy hint when blocked.
+    // copyField copies one exact string to the clipboard, selecting it with the
+    // shared manual-copy message when the clipboard is unavailable (plain HTTP).
     function copyField(text) {
       var copy = document.createElement('button');
       copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy';
-      copy.addEventListener('click', function () {
-        if (!navigator.clipboard) { fail('Copying needs HTTPS. Select the value and copy it manually.'); return; }
-        navigator.clipboard.writeText(text).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the value and copy it manually.'); });
+      window.mailmooseCopy.wire(copy, {
+        text: text,
+        select: function () { return copy.previousElementSibling; }
       });
       return copy;
     }
@@ -6301,9 +6274,9 @@ function hideInboxSubview(dlg) {
         var action = document.createElement('td');
         var copy = document.createElement('button');
         copy.type = 'button'; copy.className = 'secondary'; copy.textContent = 'Copy value';
-        copy.addEventListener('click', function () {
-          if (!navigator.clipboard) { fail('Select the record value and copy it manually. Clipboard access needs HTTPS.'); return; }
-          navigator.clipboard.writeText(value).then(function () { copy.textContent = 'Copied!'; }).catch(function () { fail('Select the record value and copy it manually.'); });
+        window.mailmooseCopy.wire(copy, {
+          text: value,
+          select: function () { return tr.querySelector('.antler-value'); }
         });
         action.appendChild(copy); tr.appendChild(action); tbody.appendChild(tr);
       }
@@ -6895,56 +6868,26 @@ function hideInboxSubview(dlg) {
 })();
 
 (function () {
-  var toast = null;
-  var toastTimer = null;
-
-  function showToast(message) {
-    if (!toast) {
-      toast = document.createElement('div');
-      toast.className = 'ok notice';
-      toast.setAttribute('role', 'status');
-      toast.setAttribute('aria-live', 'polite');
-      document.body.appendChild(toast);
-    }
-    toast.textContent = message;
-    toast.classList.remove('dismissing');
-    /* Force reflow so a repeated copy restarts the fade-out animation. */
-    void toast.offsetWidth;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () {
-      toast.classList.add('dismissing');
-      setTimeout(function () {
-        if (toast) {
-          toast.remove();
-          toast = null;
-        }
-      }, 300);
-    }, 1500);
-  }
-
-  function copyText(text) {
-    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text);
-    }
-    return Promise.reject(new Error('clipboard unavailable'));
-  }
-
+  // Copy controls that carry their value in a data-copy attribute: the inbox
+  // address heading and the delete-dialog name/address copy buttons. A successful
+  // copy flashes the green highlight; on a plain-HTTP page the value is selected
+  // and the shared HTTPS message is shown instead.
   document.querySelectorAll('[data-copy]').forEach(function (el) {
-    function activate() {
-      var text = el.getAttribute('data-copy');
-      copyText(text).then(function () {
+    window.mailmooseCopy.wire(el, {
+      text: function () { return el.getAttribute('data-copy') || ''; },
+      select: function () {
+        // The delete-dialog icon buttons have no text of their own; the nearby
+        // name/address is the selectable value.
+        if ((el.tagName || '').toLowerCase() === 'button') {
+          var scope = el.closest('p');
+          return scope ? scope.querySelector('.confirm-name') : null;
+        }
+        return el;
+      },
+      onSuccess: function () {
         el.classList.add('copied');
-        setTimeout(function () { el.classList.remove('copied'); }, 1200);
-        showToast('Copied to clipboard');
-      }).catch(function () {
-        /* Clipboard blocked; selection fallback would be intrusive here. */
-      });
-    }
-    el.addEventListener('click', activate);
-    el.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        activate();
+        window.setTimeout(function () { el.classList.remove('copied'); }, 1200);
+        window.mailmooseCopy.announce('Copied to clipboard', 'ok');
       }
     });
   });
