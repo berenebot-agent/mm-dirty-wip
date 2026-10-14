@@ -102,15 +102,19 @@ type RemoteMailboxService struct {
 	oneLimiters     map[string]*one.Limiter
 	// dial opens a session. When nil, imap.Dial is used. It is injectable so a
 	// test can point the backend at an in-memory IMAP4rev2 server.
-	dial             RemoteDialer
-	refreshMu        sync.Mutex
-	refreshing       map[string]bool
-	refreshContext   context.Context
-	refreshCancel    context.CancelFunc
-	refreshWG        sync.WaitGroup
-	refreshSlots     chan struct{}
-	syncSlots        chan struct{}
-	reconciling      map[string]*remoteReconcileCall
+	dial           RemoteDialer
+	refreshMu      sync.Mutex
+	refreshing     map[string]bool
+	refreshContext context.Context
+	refreshCancel  context.CancelFunc
+	refreshWG      sync.WaitGroup
+	refreshSlots   chan struct{}
+	syncSlots      chan struct{}
+	reconciling    map[string]*remoteReconcileCall
+	// roleRefreshing coalesces folder-scoped pulls (a Drafts/Sent pull scheduled
+	// right after a remote write lands) per inbox+role, independent of the
+	// whole-inbox refresh coalescing so one never suppresses the other.
+	roleRefreshing   map[string]bool
 	metadataTotals   map[string]map[string]int64
 	metadataChecking map[string]int
 }
@@ -128,7 +132,7 @@ func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	if concurrency < 1 {
 		concurrency = 2
 	}
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), roleRefreshing: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs
@@ -646,6 +650,9 @@ func (m *RemoteMailboxService) InstallRemoteBridges() {
 	// The remote message resolver lets a reply/forward target a remote message
 	// whose body lives only on the server.
 	m.Service.RemoteMessages = m
+	// The folder refresher lets a confirmed remote write (a RemoteDraft handoff,
+	// a sent copy) immediately pull just the folder it landed in.
+	m.Service.RemoteFolderRefresher = m
 	m.Service.GmailMailboxClient = m.GoogleMailboxClient
 }
 

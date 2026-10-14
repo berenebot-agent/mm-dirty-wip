@@ -126,11 +126,20 @@ type Service struct {
 	// source when it is not a locally-persisted message. cmd/server installs the
 	// remote bridge; when nil a reply/forward to a remote message is not
 	// resolvable and the send is refused as not found. It is never a global.
-	RemoteMessages     RemoteMessageResolver
-	GmailMailboxClient func(context.Context, string, string) (*gmail.Client, string, error)
-	unroutedLim        *rateLimiter
-	sendLim            *rateLimiter
-	dialMXIngestSem    chan struct{}
+	RemoteMessages RemoteMessageResolver
+	// RemoteFolderRefresher schedules an immediate, folder-scoped pull of a
+	// standalone inbox's cached remote index after a write lands in one of its
+	// remote folders (a RemoteDraft handoff into Drafts, a sent copy into Sent),
+	// so the new item is visible without waiting for the next full-sync pass.
+	// InstallRemoteBridges installs it; when nil (tests, or a deployment that
+	// wires no remote integration) the write still succeeds and the folder is
+	// picked up by the normal cadence. It is never a global: one bridge per
+	// Service.
+	RemoteFolderRefresher RemoteFolderRefresher
+	GmailMailboxClient    func(context.Context, string, string) (*gmail.Client, string, error)
+	unroutedLim           *rateLimiter
+	sendLim               *rateLimiter
+	dialMXIngestSem       chan struct{}
 }
 
 // AntlerEndpointResolver resolves the current Antler MX receiver set. It is
@@ -143,6 +152,26 @@ type AntlerEndpointResolver interface {
 // *OutboxWorker and stubbed in tests.
 type OutboxWaker interface {
 	Wake()
+}
+
+// RemoteFolderRefresher schedules an immediate, folder-scoped pull of a
+// standalone inbox's cached remote index for one folder role (for example the
+// Drafts folder after a RemoteDraft handoff is placed, or the Sent folder after
+// a sent copy lands). The pull is asynchronous, coalesced per inbox+role and
+// best-effort: it must never block or fail the write that requested it. It is
+// satisfied by *RemoteMailboxService and stubbed in tests.
+type RemoteFolderRefresher interface {
+	ScheduleRoleFolderRefresh(accountID, inboxID, role string)
+}
+
+// requestRoleFolderRefresh asks the installed remote folder refresher to pull one
+// folder role into the cached remote index. It is a no-op when no refresher is
+// installed, and it never blocks or fails the write that requested it.
+func (s *Service) requestRoleFolderRefresh(accountID, inboxID, role string) {
+	if s.RemoteFolderRefresher == nil {
+		return
+	}
+	s.RemoteFolderRefresher.ScheduleRoleFolderRefresh(accountID, inboxID, role)
 }
 
 // wakeOutbox nudges the attached outbox worker, if any, after a successful
