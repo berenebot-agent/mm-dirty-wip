@@ -23,27 +23,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   best-effort, so it never blocks or fails the write that triggered it; Gmail and
   Outlook connectors pull the equivalent label/folder.
 
-- Domain setup and sending/receiving settings now use a compact responsive
-  720px shell with `height: fit-content`, avoiding both oversized empty space
-  and the stretching caused by `height: auto` on a modal dialog. The Add Domain
-  wizard has one footer and one primary Next action: provider setup advances
-  through that same navigation rather than adding another set of buttons.
-  Credential configuration and provider instructions use separate screens;
-  instruction help preserves unsaved edits. Antler's DNS records are copyable
-  blocks shown one per screen, pending receiver status does not trap setup, and generated webhook
-  credentials appear in the same shell rather than a stacked popup. Remote MX
-  account settings save through the domain's Next action, with optional CA and
-  private-network settings collapsed. Ordinary domain settings show one
-  Close/Save footer, with instructions and destructive actions in disclosures.
-  Inbox settings keep their wider 1080px tabbed shell: related dialogs share
-  styling, not forced dimensions. Overflow remains a small-screen/zoom fallback.
-
 - The inbox settings **Approver** tab's send-handling mode is labelled
   **MailMoose approval** and **Create draft** (previously the terse
   "MailMoose" / "Remote"), and the mode selector no longer flashes on a domain
   inbox before the dialog's script runs. Both are labelling/layout fixes: the
   underlying modes and their behaviour are unchanged.
-
 - **Add Domain** now guides users through Domain → Receiving → Sending →
   Summary, using the existing provider dropdowns and configuration forms.
   The first Next saves the domain; each provider step saves independently.
