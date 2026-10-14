@@ -567,18 +567,6 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if provider == "remotemx" && domainWizardSubmission(r) && r.Form.Get("wizard_receiver_settings") == "1" {
-		// The wizard has one save action. Account receiver fields are submitted
-		// with the domain form, retaining the existing validation/encryption path.
-		if _, err := s.Service.SaveAccountMXReceiver(ctx, p, accountMXInputFromForm(r)); err != nil {
-			r.Form.Set("domain_wizard_domain", d.ID)
-			s.accountMXUIError(w, r, err)
-			return
-		}
-		if s.Service.RemoteMXRuntime != nil {
-			s.Service.RemoteMXRuntime.WakeRemoteMX()
-		}
-	}
 	saved, generated, err := s.Service.SaveDomainReceivingConfig(ctx, p.AccountID, d.ID, provider, cfg, false)
 	if err != nil {
 		s.domainSaveError(w, r, d.ID, "receiving", provider, err)
@@ -605,11 +593,6 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 	}
 	if user, pass := generated["username"], generated["password"]; user != "" && pass != "" {
 		s.flashDomainCredential(w, r, p, d.ID, saved, provider, user, pass)
-		return
-	}
-	if domainWizardSubmission(r) && domainIngestURL(s.Service.Config.ReceiverURL(), t) != "" {
-		q := url.Values{"domain": {d.ID}, "domain_wizard": {"receiving"}, "receiver_review": {"1"}}
-		http.Redirect(w, r, "/?"+q.Encode(), http.StatusSeeOther)
 		return
 	}
 	if !s.domainWizardAdvance(w, r, "receiving") {
