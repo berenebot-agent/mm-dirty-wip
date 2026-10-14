@@ -243,7 +243,28 @@ function harness(mode) {
     dispatchEvent(event) { (world.windowEvents[event.type] || []).slice().forEach(fn => fn(event)); return true; },
     location: { assign() {} },
     Event: function (type) { this.type = type; },
-    mailmooseEventsSource: null
+    mailmooseEventsSource: null,
+    // The real app.js installs window.mailmooseCopy (assets/app.js) and every
+    // copy control routes through it. The closure under test calls
+    // window.mailmooseCopy.wire(btn, opts) while building the Antler
+    // remediation block, so the harness must provide the same surface or that
+    // path throws before the block is built. Behaviour mirrors the real wire:
+    // a function opts.text wins, then opts.text, then btn[data-copy]; a click
+    // records the copied value.
+    mailmooseCopy: {
+      text: value => String(value == null ? '' : value),
+      announce: text => { world.copied.push(text); },
+      select: target => target,
+      wire(btn, opts) {
+        if (!btn) { return; }
+        opts = opts || {};
+        btn.addEventListener('click', () => {
+          let text = typeof opts.text === 'function' ? opts.text() : opts.text;
+          if (text == null) { text = btn.getAttribute('data-copy') || ''; }
+          world.copied.push(text);
+        });
+      }
+    }
   };
 
   const sandbox = {
