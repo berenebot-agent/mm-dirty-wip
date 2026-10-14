@@ -21,6 +21,7 @@ type domainWizardView struct {
 	Receiving  string
 	Sending    string
 	CanInherit bool
+	Review     bool
 }
 
 func domainWizardURL(domainID, step string) string {
@@ -72,6 +73,7 @@ func domainWizardForRequest(r *http.Request, domains []model.Domain) *domainWiza
 	if v.Domain == nil {
 		return nil
 	}
+	v.Review = step == "receiving" && r.URL.Query().Get("receiver_review") == "1" && v.Domain.ReceivingProvider != "" && v.Domain.ReceivingProvider != "dialmx"
 	for _, parent := range domains {
 		if parent.ID == v.Domain.ParentDomainID {
 			v.CanInherit = (step == "receiving" && parent.ReceivingProvider != "") || (step == "sending" && parent.SendingProvider != "")
@@ -115,7 +117,7 @@ const domainWizardDialogs = `<style>
 .domain-wizard-summary dd{margin-bottom:12px}.domain-wizard-summary dt{font-weight:600}
 </style>
 {{with .DomainWizard}}
-<div hidden id="domain-wizard-state" data-step="{{.Step}}" data-domain="{{with .Domain}}{{.ID}}{{end}}" data-back="{{.BackURL}}" data-next="{{.NextURL}}" data-inherit="{{.CanInherit}}"></div>
+<div hidden id="domain-wizard-state" data-step="{{.Step}}" data-domain="{{with .Domain}}{{.ID}}{{end}}" data-back="{{.BackURL}}" data-next="{{.NextURL}}" data-inherit="{{.CanInherit}}" data-review="{{.Review}}"></div>
 {{if and .Domain (or (eq .Step "domain") (eq .Step "summary"))}}
 <dialog id="domain-wizard-dialog" class="domain-dialog domain-wizard" data-open="1" aria-labelledby="domain-wizard-title">
 <h2 id="domain-wizard-title">{{if eq .Step "domain"}}Add domain{{else}}Domain setup summary{{end}} · {{.Name}}</h2>

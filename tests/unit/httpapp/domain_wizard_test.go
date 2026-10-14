@@ -72,7 +72,14 @@ func TestUIDomainWizardSavesAndSkipPreservesConfiguration(t *testing.T) {
 		"_csrf": {csrf}, "domain_wizard": {"1"}, "provider": {"resend"},
 		"cfg_resend_api_key": {"receiving-secret"}, "cfg_resend_webhook_secret": {"whsec_dGVzdA=="},
 	})
-	wizardLocation(t, rr.Header().Get("Location"), "sending")
+	wizardLocation(t, rr.Header().Get("Location"), "receiving")
+	if !strings.Contains(rr.Header().Get("Location"), "receiver_review=1") {
+		t.Fatal("saving credentials must open the focused provider-instructions screen")
+	}
+	review := domainGet(t, h, cookie, rr.Header().Get("Location"))
+	if review.Code != http.StatusOK || !strings.Contains(review.Body.String(), `data-review="true"`) {
+		t.Fatal("saved receiving configuration lost its instructions screen")
+	}
 	rr = domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/sending", url.Values{
 		"_csrf": {csrf}, "domain_wizard": {"1"}, "provider": {"resend"}, "cfg_resend_api_key": {"sending-secret"},
 	})
@@ -170,6 +177,33 @@ func TestUIDomainWizardReceiverSettingsValidationReturnsToReceiving(t *testing.T
 	rr = domainGet(t, h, cookie, rr.Header().Get("Location"))
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `<option value="remotemx" selected`) {
 		t.Fatalf("receiver error lost wizard/provider: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestUIDomainWizardNextSavesRemoteReceiverAndDomainTogether(t *testing.T) {
+	t.Parallel()
+	svc, h, u, d, _ := httpFixture(t)
+	cookie, csrf := uiSession(t, svc, u.ID)
+	form := url.Values{
+		"_csrf": {csrf}, "domain_wizard": {"1"}, "provider": {"remotemx"}, "wizard_receiver_settings": {"1"},
+		"rx_url": {"not a URL"}, "rx_bearer_key": {"private-preview-key-12345678901234567890"},
+	}
+	rr := domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/receiving", form)
+	wizardLocation(t, rr.Header().Get("Location"), "receiving")
+	if strings.Contains(rr.Header().Get("Location"), form.Get("rx_bearer_key")) {
+		t.Fatal("receiver validation leaked a secret")
+	}
+	// One Next saves the account-owned receiver and selects it for this domain.
+	form.Set("rx_url", "https://receiver.example")
+	rr = domainPost(t, h, cookie, "/ui/domains/"+d.ID+"/receiving", form)
+	wizardLocation(t, rr.Header().Get("Location"), "sending")
+	settings, err := svc.GetAccountMXReceiver(context.Background(), u.AccountID)
+	if err != nil || !settings.KeyConfigured || settings.URL != "https://receiver.example" {
+		t.Fatalf("receiver settings = %+v, err %v", settings, err)
+	}
+	cfg, err := svc.Store.GetDomainReceivingConfig(context.Background(), u.AccountID, d.ID)
+	if err != nil || cfg.Provider != "remotemx" {
+		t.Fatalf("domain receiving = %+v, err %v", cfg, err)
 	}
 }
 

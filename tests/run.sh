@@ -234,6 +234,9 @@ for t in "${SELECTED[@]}"; do
             # required on the host.
             node tests/antler-wizard-check.cjs >"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             if [ "$rc" -eq 0 ]; then
+                node tests/domain-wizard-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
+            fi
+            if [ "$rc" -eq 0 ]; then
                 node tests/dkim-toggle-check.cjs >>"$RUN_DIR/js/out.log" 2>&1 || rc=$?
             fi
             ;;

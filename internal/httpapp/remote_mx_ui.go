@@ -23,19 +23,21 @@ func (s *Server) uiAccountMXSave(w http.ResponseWriter, r *http.Request) {
 	if s.Service.RemoteMXRuntime != nil {
 		defer s.Service.RemoteMXRuntime.WakeRemoteMX()
 	}
-	rev, _ := strconv.ParseInt(strings.TrimSpace(r.Form.Get("rx_revision")), 10, 64)
-	in := app.AccountMXReceiverInput{
-		URL:          r.Form.Get("rx_url"),
-		BearerKey:    r.Form.Get("rx_bearer_key"),
-		CA:           r.Form.Get("rx_ca"),
-		AllowPrivate: r.Form.Get("rx_allow_private") == "1" || strings.EqualFold(r.Form.Get("rx_allow_private"), "true"),
-		Revision:     rev,
-	}
+	in := accountMXInputFromForm(r)
 	if _, err := s.Service.SaveAccountMXReceiver(r.Context(), p, in); err != nil {
 		s.accountMXUIError(w, r, err)
 		return
 	}
 	http.Redirect(w, r, s.accountMXDestination(r, url.Values{"notice": {"Remote MX receiver saved"}}), http.StatusSeeOther)
+}
+
+func accountMXInputFromForm(r *http.Request) app.AccountMXReceiverInput {
+	rev, _ := strconv.ParseInt(strings.TrimSpace(r.Form.Get("rx_revision")), 10, 64)
+	return app.AccountMXReceiverInput{
+		URL: r.Form.Get("rx_url"), BearerKey: r.Form.Get("rx_bearer_key"), CA: r.Form.Get("rx_ca"),
+		AllowPrivate: r.Form.Get("rx_allow_private") == "1" || strings.EqualFold(r.Form.Get("rx_allow_private"), "true"),
+		Revision:     rev,
+	}
 }
 
 // uiAccountMXClear removes the account's Remote MX receiver. It is refused while
