@@ -171,7 +171,14 @@ type Config struct {
 	// ForceHTTPS redirects plaintext requests to https and reports https in
 	// discovery documents. It is for deployments that terminate TLS at a
 	// reverse proxy and never want the app to answer over cleartext.
-	ForceHTTPS       bool
+	ForceHTTPS bool
+	// NoIndex asks search and AI crawlers to stay out of the human UI. When
+	// set, HTML pages carry X-Robots-Tag and a robots meta element, and
+	// /robots.txt disallows everything. It is off by default: the hosted
+	// deployment wants its signup pages discoverable, and a self-hoster opts
+	// in. It never covers the REST API or the discovery document, which agents
+	// are meant to find.
+	NoIndex          bool
 	AppEncryptionKey string
 	// AdminEmail/AdminPassword are the configured system-administrator
 	// credentials. When present they are authoritative: on every start the
@@ -317,6 +324,7 @@ func Load() (Config, error) {
 		AllowRegistration:       envBool("ALLOW_REGISTRATION", false),
 		TrustProxyHeaders:       envBool("TRUST_PROXY_HEADERS", false),
 		ForceHTTPS:              envBool("FORCE_HTTPS", false),
+		NoIndex:                 envBool("NOINDEX", false),
 		AppEncryptionKey:        strings.TrimSpace(os.Getenv("APP_ENCRYPTION_KEY")),
 		AdminEmail:              admin.email,
 		AdminPassword:           admin.password,

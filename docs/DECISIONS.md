@@ -4900,3 +4900,48 @@ change, no migration.
 `internal/app/remote_folder_refresh.go` (the pull and its scheduler),
 `internal/app/remote_mailbox.go` (bridge install), `internal/app/draft_handoff.go`
 and `internal/app/remote_mailbox_more.go` (the two hooks), and the new tests.
+
+## D123 — `NOINDEX` asks crawlers to skip the human UI
+
+**Date:** 2026-10-14. **Approved by:** Ben.
+
+**Context:** The application served no robots directives of any kind, so the
+human UI pages (`/`, `/login`, `/setup`, `/register`, `/invite/{token}`, the
+mailbox views) were as indexable as a public marketing site. A self-hoster who
+does not want a login page, an instance hostname, or an invite link surfaced in
+search results — or fed to AI crawlers — had no switch to say so.
+
+**Decision (2026-10-14):**
+
+- **New `NOINDEX` environment variable, default `false`.** Off keeps the
+  hosted deployment's public signup pages discoverable; a self-hoster opts in.
+  It is read once in `internal/config` alongside `FORCE_HTTPS` and surfaced as
+  `Config.NoIndex`.
+- **Three coordinated signals, all conditional on the flag:** the
+  `X-Robots-Tag: noindex, nofollow` header, a matching
+  `<meta name="robots" content="noindex,nofollow">` element in the page shell,
+  and `GET /robots.txt` returning a blanket `Disallow: /` (404 when the flag is
+  off, so the file never contradicts the deployment's policy).
+- **Header applied in the existing `securityHeaders` middleware, not
+  per-handler**, so new UI pages are covered by default. The meta element is
+  injected through a `noindex` template function so every render path — the
+  page shell and the inline secret-fallback page — stays in agreement with the
+  header.
+- **The REST API, `/.well-known/mailmoose` and `/openapi.json` are deliberately
+  excluded.** Those exist to be found by the agents the product is built for,
+  and a noindex deployment still depends on that bootstrap path.
+
+**Scope:** advisory hygiene, not access control. `robots.txt` and the
+`noindex` directives are honoured by reputable crawlers and ignored by a
+determined scraper; the real protection for a private instance remains that
+every route that matters requires authentication. This is documented as such so
+it is not mistaken for a security control.
+
+**Consequences:** A self-hosted instance can opt out of search and AI indexing
+with one variable, at no cost to the agent-facing discovery surface. No new
+dependency, no schema change, no migration.
+
+**Complexity:** `internal/config/config.go` (the field and `envBool` read),
+`internal/httpapp/server.go` (`applyNoIndex`, `robotstxt`, the route), and
+`internal/httpapp/ui.go` (the `noindex` template func and the meta element in
+the two shells).
