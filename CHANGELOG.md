@@ -70,6 +70,16 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- The inbox settings **Identity** tab lays its fields out as label-left /
+  control-right rows, matching the rest of the app. **Display name**, **Email
+  address** and **Dashboard group** previously rendered as bare label/input
+  pairs, so a label could sit on the same line as its input and the inputs had
+  inconsistent widths — on a standalone inbox the disabled **Email address**
+  field was the browser's default narrow width while its neighbours filled the
+  panel. All three are now `.setting-row` blocks that collapse to a single
+  column on narrow screens; the Dashboard group hint moved under its label. No
+  behaviour change: the field names, ids and the save path are unchanged.
+
 - Adding a domain that already exists now reports **"a domain with that name
   already exists"** in the dashboard and as a `409` with that message from
   `POST /v1/admin/domains`, instead of the generic "Could not create it. Please
