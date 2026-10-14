@@ -1144,8 +1144,11 @@ merges this with the sending side into one two-way timeline. Both logs are
 scoped by domain rather than by the current provider config.
 
 Domain creation accepts `name` only, and `PATCH /v1/admin/domains/{id}` accepts
-`catch_all_inbox_id` only. The domain object exposes the configured provider
-names (`sending_provider`, `receiving_provider`) but no secrets or settings.
+`catch_all_inbox_id` only. A `name` that is already registered — in the caller's
+own account or, under global domain uniqueness, in any other — answers `409`
+with `a domain with that name already exists`; the other owner is never
+disclosed. The domain object exposes the configured provider names
+(`sending_provider`, `receiving_provider`) but no secrets or settings.
 
 This configuration surface is provider-facing (Admin role) rather than
 agent-facing.
