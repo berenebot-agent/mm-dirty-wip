@@ -350,9 +350,7 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 			s.domainSaveError(w, r, d.ID, "sending", provider, err)
 			return
 		}
-		if !s.domainWizardAdvance(w, r, "sending") {
-			s.domainNotice(w, r, "Sending configuration now inherits from the parent domain")
-		}
+		s.domainNotice(w, r, "Sending configuration now inherits from the parent domain")
 		return
 	}
 	fields, ok := outboundSchemaFields(provider)
@@ -380,9 +378,7 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 	// Saving closes the dialog like every other provider: the Direct MX DKIM
 	// record is always available (the key lives on the domain), so there is
 	// nothing that only appears after a save that would justify reopening it.
-	if !s.domainWizardAdvance(w, r, "sending") {
-		s.domainNotice(w, r, "Sending configuration saved")
-	}
+	s.domainNotice(w, r, "Sending configuration saved")
 }
 
 // setSendingInherited makes a subdomain reuse its parent's sending connector:
@@ -547,9 +543,7 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 			s.domainSaveError(w, r, d.ID, "receiving", provider, err)
 			return
 		}
-		if !s.domainWizardAdvance(w, r, "receiving") {
-			s.domainNotice(w, r, "Receiving configuration now inherits from the parent domain")
-		}
+		s.domainNotice(w, r, "Receiving configuration now inherits from the parent domain")
 		return
 	}
 	t, ok := transport.LookupInbound(provider)
@@ -581,9 +575,6 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if provider == "dialmx" {
-		if s.domainWizardAdvance(w, r, "receiving") {
-			return
-		}
 		http.Redirect(w, r, "/?"+url.Values{"domain": {d.ID}, "kind": {"receiving"}, "provider": {"dialmx"}}.Encode(), http.StatusSeeOther)
 		return
 	}
@@ -595,9 +586,7 @@ func (s *Server) uiDomainReceiving(w http.ResponseWriter, r *http.Request) {
 		s.flashDomainCredential(w, r, p, d.ID, saved, provider, user, pass)
 		return
 	}
-	if !s.domainWizardAdvance(w, r, "receiving") {
-		s.domainNotice(w, r, "Receiving configuration saved")
-	}
+	s.domainNotice(w, r, "Receiving configuration saved")
 }
 
 // setReceivingInherited makes a subdomain reuse its parent's receiving
@@ -782,9 +771,6 @@ func (s *Server) domainEditorError(w http.ResponseWriter, r *http.Request, domai
 	q.Set("domain", domainID)
 	q.Set("kind", kind)
 	q.Set("provider", provider)
-	if domainWizardSubmission(r) {
-		q.Set("domain_wizard", kind)
-	}
 	values := submittedEditorValues(kind, provider, r)
 	size := len(msg) + 32
 	for k, v := range values {
@@ -873,15 +859,8 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 	}
 	dest := "/ui/domains/" + url.PathEscape(domainID) + "/receiving/worker"
-	q := url.Values{}
 	if tok := s.putFlash(w, r, f, len(code)+128); tok != "" {
-		q.Set("_flash", tok)
-	}
-	if domainWizardSubmission(r) {
-		q.Set("domain_wizard", "receiving")
-	}
-	if len(q) != 0 {
-		dest += "?" + q.Encode()
+		dest += "?_flash=" + tok
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
@@ -892,8 +871,6 @@ func (s *Server) flashDomainWorker(w http.ResponseWriter, r *http.Request, p mod
 // regeneration instead.
 type domainWorkerSetupView struct {
 	DomainID   string
-	Wizard     bool
-	NextURL    string
 	WebhookURL string
 	WorkerCode string
 	// Warning is a user-safe note shown when the receiver host cannot be
@@ -923,8 +900,6 @@ func (s *Server) uiDomainReceivingWorker(w http.ResponseWriter, r *http.Request)
 	base := s.Service.Config.ReceiverURL()
 	view := &domainWorkerSetupView{
 		DomainID:   d.ID,
-		Wizard:     r.URL.Query().Get("domain_wizard") == "receiving",
-		NextURL:    domainWizardURL(d.ID, "sending"),
 		WebhookURL: strings.TrimRight(base, "/") + "/internal/ingest/cloudflare",
 		Warning:    cloudflareReachabilityWarning(base),
 	}
@@ -1003,9 +978,6 @@ func (s *Server) flashDomainCredential(w http.ResponseWriter, r *http.Request, p
 		Secret:       user + ":" + pass,
 	}
 	dest := "/?domain=" + url.PathEscape(domainID)
-	if domainWizardSubmission(r) {
-		dest += "&domain_wizard=receiving"
-	}
 	if tok := s.putFlash(w, r, f, len(basicURL)+len(f.Secret)+256); tok != "" {
 		dest += "&_flash=" + tok
 	}
@@ -1250,18 +1222,17 @@ func domainReceivingSteps(provider string) []string {
 	}
 }
 
-const domainWorkerBody = `<div class="toolbar"><a class="btn secondary" href="{{if .DomainWorkerSetup.Wizard}}/{{else}}/?domain={{.DomainWorkerSetup.DomainID}}{{end}}">{{if .DomainWorkerSetup.Wizard}}Close{{else}}← Domain{{end}}</a></div>
-{{if .DomainWorkerSetup.Wizard}}<p class="domain-wizard-progress">Step 2 of 4 · Domain → Receiving → Sending → Summary</p><p class="muted small">Receiving configuration is saved. Copy the Worker code before continuing; you can finish DNS and routing setup later.</p>{{end}}
+const domainWorkerBody = `<div class="toolbar"><a class="btn secondary" href="/?domain={{.DomainWorkerSetup.DomainID}}">← Domain</a></div>
 <section class="card"><h1>Cloudflare Worker setup</h1>
 {{if .DomainWorkerSetup.WorkerCode}}<p class="muted">Paste the code below into a Cloudflare Worker. It already contains your shared secret, which is shown only on this page.</p>
 <ol class="steps"><li>In Cloudflare, open <b>Workers &amp; Pages</b> → <b>Create application</b> → <b>Start with Hello World</b> → <b>Deploy</b>.</li><li>Open the Worker, choose <b>Edit code</b>, replace the stub with the code below, then <b>Deploy</b>.</li><li>In the domain, open <b>Email</b> → <b>Email Routing</b>, onboard it, and apply the <b>DNS records</b> Cloudflare lists (the MX record, and any SPF/TXT records).</li><li>Under <b>Routing rules</b>, add one <b>catch-all</b> rule set to <b>Send to a Worker</b>, select this Worker, and <b>Enable</b> the catch-all rule. A single catch-all rule covers every address, so new inboxes need no further Cloudflare changes.</li></ol>
 {{if .DomainWorkerSetup.Warning}}<div class="banner warn">{{.DomainWorkerSetup.Warning}}</div>{{end}}
 <pre class="cf-code" id="cf-code">{{.DomainWorkerSetup.WorkerCode}}</pre>
-<div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button>{{if not .DomainWorkerSetup.Wizard}}<a class="btn" href="/?domain={{.DomainWorkerSetup.DomainID}}">Done</a>{{end}}</div>
+<p class="copy-note" id="cf-copy-note" hidden>Copying to the clipboard needs HTTPS. Select the code above and copy it manually.</p>
+<div class="dialog-actions"><button type="button" class="secondary" id="cf-copy">Copy code</button><a class="btn" href="/?domain={{.DomainWorkerSetup.DomainID}}">Done</a></div>
 {{else}}<p class="muted">The shared secret is shown only once, so the Worker code is no longer available. Regenerate to get a new secret and fresh code. The current Worker stops working as soon as you regenerate.</p>
-<form method="post" action="/ui/domains/{{.DomainWorkerSetup.DomainID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}">{{if .DomainWorkerSetup.Wizard}}<input type="hidden" name="domain_wizard" value="1">{{end}}<button class="amber">Regenerate secret</button></form>
+<form method="post" action="/ui/domains/{{.DomainWorkerSetup.DomainID}}/receiving/regenerate" data-confirm="Regenerate the Worker secret? The current Worker stops working until you paste the new code."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="amber">Regenerate secret</button></form>
 {{end}}<p class="muted small">Ingest URL: <code>{{.DomainWorkerSetup.WebhookURL}}</code>. Saving a receiving configuration alone does not establish delivery; Email Routing and DNS setup happen in Cloudflare.</p>
-{{if .DomainWorkerSetup.Wizard}}<div class="dialog-actions"><a class="btn secondary" href="/">Close</a><span style="flex:1"></span><a class="btn secondary" href="{{.DomainWorkerSetup.NextURL}}">Skip</a><a class="btn" href="{{.DomainWorkerSetup.NextURL}}">Next</a></div>{{end}}
 </section>`
 
 const clientDeliveriesBody = `<div class="toolbar"><a href="/">← Clients</a></div>

@@ -227,11 +227,7 @@ func (s *Server) mxDomainAllowed(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func mxDomainDestination(r *http.Request) string {
-	q := url.Values{"domain": {r.PathValue("id")}, "kind": {"receiving"}, "provider": {"mx"}}
-	if domainWizardSubmission(r) {
-		q.Set("domain_wizard", "receiving")
-	}
-	return "/?" + q.Encode()
+	return "/?" + url.Values{"domain": {r.PathValue("id")}, "kind": {"receiving"}, "provider": {"mx"}}.Encode()
 }
 
 // mxAdminError maps a save/clear failure to the originating domain. A validation fault
