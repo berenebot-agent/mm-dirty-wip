@@ -88,6 +88,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Fixed
 
+- Adding a domain that already exists now reports **"a domain with that name
+  already exists"** in the dashboard and as a `409` with that message from
+  `POST /v1/admin/domains`, instead of the generic "Could not create it. Please
+  try again." / `conflict` response. A duplicate name was a SQLite `UNIQUE`
+  violation that the redaction layer classified as an engine fault; the store now
+  maps it to a deliberate `store.ErrDomainNameConflict`. The message does not
+  disclose which account owns the existing name.
+
 - Clearing **Domain send** on the Clients tab's edit-client screen now persists.
   The control submits an explicit `1`/`0` rather than relying on an unchecked
   checkbox, which submits nothing and was indistinguishable server-side from an

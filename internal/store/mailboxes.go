@@ -27,6 +27,14 @@ func (s *Store) GetAccount(ctx context.Context, accountID string) (model.Account
 	return a, nil
 }
 
+// ErrDomainNameConflict is returned when a domain cannot be created because its
+// name is already registered. The domains table is unique on (account_id, name)
+// and on name alone: the latter makes a name globally exclusive, so a collision
+// can be with the caller's own account or, in hosted mode, with another
+// account's domain. The message deliberately does not say which, so an existing
+// domain's owner is never disclosed.
+var ErrDomainNameConflict = errors.New("a domain with that name already exists")
+
 // DomainCreateOptions controls subdomain inheritance when a domain is created.
 // Inheritance only ever applies to a detected subdomain (a name that is a
 // proper label-suffix of an existing domain in the same account); a root domain
@@ -76,6 +84,13 @@ func (s *Store) CreateDomainWithOptions(ctx context.Context, accountID, name str
 	_, err := s.write.ExecContext(ctx, `INSERT INTO domains(id,account_id,name,parent_domain_id,inherit_receiving,inherit_sending,created_at) VALUES(?,?,?,?,?,?,?)`,
 		id, accountID, name, nullString(parentID), boolInt(inheritReceiving), boolInt(inheritSending), now)
 	if err != nil {
+		// The domains table is unique on (account_id, name) and on name, so a
+		// name collision is a deliberate conflict, not an engine fault. Surface
+		// it as such so the dashboard and API answer "already exists" rather
+		// than a generic failure.
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return model.Domain{}, ErrDomainNameConflict
+		}
 		return model.Domain{}, err
 	}
 	// Re-read through GetDomain so the returned view carries the effective
