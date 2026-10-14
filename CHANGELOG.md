@@ -15,6 +15,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Domain setup, domain sending/receiving settings, and inbox setup/settings now
+  share a responsive 1080px maximum modal width. Height fits the current content
+  instead of reserving a fixed 880px inbox-settings panel. Form controls stay at
+  a readable maximum width, while DNS tables and richer settings can use the
+  full shell. Overflow remains available when content exceeds the viewport or
+  browser zoom makes it necessary; confirmation and credential popups remain
+  compact.
+
 - **Add Domain** now guides users through Domain → Receiving → Sending →
   Summary, using the existing provider dropdowns and configuration forms.
   The first Next saves the domain; each provider step saves independently.
