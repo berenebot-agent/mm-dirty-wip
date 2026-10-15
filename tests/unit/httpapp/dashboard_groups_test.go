@@ -37,6 +37,8 @@ func TestDashboardLoadsGroupedSortableTablesForPrincipal(t *testing.T) {
 		"data-dashboard-group-edit",
 		"data-dashboard-group-head",
 		"data-dashboard-sort-key",
+		"mailmooseCombo",
+		"combo-list",
 	} {
 		if !strings.Contains(assetResponse.Body.String(), want) {
 			t.Fatalf("dashboard asset is missing grouping/sorting behavior %q", want)
