@@ -1075,9 +1075,9 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   connector.
 - `dns[]` — the watcher's shared published-record checks: `kind` (`mx`/`txt`),
   `name`, `expected`, bounded `found`, bounded `matched`, bounded `unexpected`
-  (published MX hostnames that are not Antler receivers), `state` (`ok`, `pending`,
-  `mismatch`, `unavailable`) and a short `reason`. The checks are computed by a
-  background watcher
+  (published MX hostnames that are not Antler receivers), `state` (`ok`,
+  `not_found`, `mismatch`, `dns_error`) and a short `reason`. The checks are
+  computed by a background watcher
   (bounded by a four-second timeout per lookup), so every read is an in-memory
   lookup and runs no DNS; a verdict change is pushed as the transient
   `mx.dns_changed` event. A resolver failure is reported as a check state, never an
@@ -1086,10 +1086,13 @@ configured slot adds the non-secret config, `updated_at`, and (receiving only)
   published (the receiver set is redundancy), and `mismatch` only when MX records
   exist but none belongs to a receiver. The TXT check remains exact, parsed by the
   same MM1 validator the receiver applies, so a matching verdict agrees with what
-  the receiver accepts. `pending` means the record is definitively absent (NODATA
-  or NXDOMAIN) and `unavailable` means the lookup could not be completed — the two
+  the receiver accepts. `not_found` means the record is definitively absent (NODATA
+  or NXDOMAIN) and `dns_error` means the lookup could not be completed — the two
   are distinct so a transient resolver fault is never presented as a missing
-  record. On an `unavailable` MX check the previously observed `unexpected` hosts
+  record. Only `ok` is a settled good verdict: on the receiving side `mismatch`,
+  `not_found` and `dns_error` are all rendered red, because the operator must not
+  proceed on a record that is wrong, absent, or unconfirmed. On a `dns_error` MX
+  check the previously observed `unexpected` hosts
   are carried forward, so a known extra-MX warning survives a resolver outage and
   is only cleared by a completed check. These checks
   are the local "has the record propagated yet?" feed behind the setup wizard's
