@@ -8092,6 +8092,15 @@ function hideInboxSubview(dlg) {
     keyField.focus();
   }
 
+  // A page opened with ?reconnect=1 (the retired One settings link, the dashboard
+  // flag, the bottom banner) asks for the dialog straight away, so a disconnected
+  // One inbox reconnects from wherever the operator arrived without a detour
+  // through the settings dialog. The inbox is the page's own mailbox sidebar.
+  if (new URLSearchParams(window.location.search).get('reconnect') === '1') {
+    var own = document.querySelector('[data-sidebar][data-inbox]');
+    if (own) { open(own.getAttribute('data-inbox') || ''); }
+  }
+
   // Any reconnect affordance for a One inbox (the Identity tab link/button, the
   // dashboard prompt) carries data-one-reconnect with the inbox id in the
   // closest row/button. Delegated so the dynamically built controls are covered.

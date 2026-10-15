@@ -222,6 +222,25 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 	if err != nil {
 		return nil, err
 	}
+	// An address already configured on any inbox of the account — including one
+	// configured as an alias — cannot be imported again. There is no migration
+	// path: the operator deletes the existing inbox and imports the address
+	// afresh, so the row states the exact remedy instead of a dead end. The check
+	// mirrors ImportOneInbox's own collision rule so a row can never promise an
+	// import the store would refuse.
+	taken := make(map[string]bool, len(boxes))
+	for _, box := range boxes {
+		taken[strings.ToLower(box.Address)] = true
+	}
+	aliases, err := m.Service.Store.ListInboxAliases(ctx, p.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	for _, list := range aliases {
+		for _, a := range list {
+			taken[strings.ToLower(a.Address)] = true
+		}
+	}
 	out := []OneMailboxChoice{}
 	for _, remote := range connections {
 		row := OneMailboxChoice{ID: remote.ID, Provider: remote.Platform, OneStatus: remote.State, Environment: remote.Environment, Status: "Not supported yet"}
@@ -245,15 +264,13 @@ func (m *RemoteMailboxService) DiscoverOne(ctx context.Context, p model.Principa
 		for _, b := range bindings {
 			if b.ConnectionID == row.ID {
 				row.InboxID, row.Email, row.Available = b.InboxID, b.GmailEmail, false
-				row.Status = "Imported (" + b.Status + ")"
+				// Already imported: the row is informational only. The key for this
+				// inbox is changed on the inbox itself, never from the import screen.
+				row.Status = "Already imported"
 			}
 		}
-		if row.Available {
-			for _, box := range boxes {
-				if strings.EqualFold(box.Address, row.Email) {
-					row.Status, row.Available = "Address already configured; explicit migration required", false
-				}
-			}
+		if row.Available && taken[strings.ToLower(row.Email)] {
+			row.Status, row.Available = "Address already configured — delete the existing inbox before importing", false
 		}
 		out = append(out, row)
 	}
@@ -458,7 +475,7 @@ func (m *RemoteMailboxService) SaveOneInboxKey(ctx context.Context, p model.Prin
 	}
 	row := findOne(rows, b.ConnectionID)
 	if row == nil {
-		return oneError(model.ErrKindAuth, "Key must expose this inbox's original One connection")
+		return oneError(model.ErrKindAuth, "This key does not expose this inbox's original One connection; delete the inbox and import the address again")
 	}
 	profile, err := c.Gmail(row.Key, nil, nil).Profile(ctx, "")
 	if err != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
@@ -477,24 +494,28 @@ func (m *RemoteMailboxService) SaveOneInboxKey(ctx context.Context, p model.Prin
 		return err
 	}
 	m.refreshOneDisplayName(ctx, c, row.Key, p.AccountID, inbox, b.GmailEmail)
-	m.oneMu.Lock()
-	delete(m.oneClients, p.AccountID+":"+inbox)
-	m.oneMu.Unlock()
+	m.forgetOneClient(p.AccountID, inbox)
 	m.ScheduleRefresh(p.AccountID, inbox)
 	return nil
 }
 
-func (m *RemoteMailboxService) DeleteOneConnection(ctx context.Context, p model.Principal, inbox string) error {
+func (m *RemoteMailboxService) DeleteOneInbox(ctx context.Context, p model.Principal, inbox string) error {
 	if err := onePermission(p); err != nil {
 		return err
 	}
-	if err := m.Service.Store.DeleteOneConnection(ctx, p.AccountID, inbox); err != nil {
+	if err := m.Service.Store.DeleteOneInbox(ctx, p.AccountID, inbox); err != nil {
 		return err
 	}
-	m.oneMu.Lock()
-	delete(m.oneClients, p.AccountID+":"+inbox)
-	m.oneMu.Unlock()
+	m.forgetOneClient(p.AccountID, inbox)
 	return nil
+}
+
+// forgetOneClient drops the cached One client for an inbox whose credentials
+// changed or whose inbox was removed, so the next use re-reads the binding.
+func (m *RemoteMailboxService) forgetOneClient(account, inbox string) {
+	m.oneMu.Lock()
+	delete(m.oneClients, account+":"+inbox)
+	m.oneMu.Unlock()
 }
 
 func (m *RemoteMailboxService) refreshOneDisplayName(ctx context.Context, c *one.Client, selector, account, inbox, email string) {
