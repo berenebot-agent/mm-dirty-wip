@@ -41,9 +41,9 @@ func (s *Server) dkimSendingLight(domainID string) (string, string) {
 	switch view.State {
 	case app.StateMismatch:
 		title = "DKIM: the published record does not match this signing key"
-	case app.StatePending:
+	case app.StateNotFound:
 		title = "DKIM: record not published yet"
-	case app.StateUnavailable:
+	case app.StateDNSError:
 		title = "DKIM: check could not be completed"
 	}
 	return dkimLight(&view), title

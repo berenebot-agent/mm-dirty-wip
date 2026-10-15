@@ -321,8 +321,8 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
 - `dns[]` — the watcher's shared published-record checks: the domain's MX
   hostnames against the expected receivers, and the `_mailmoose-mx` TXT record
   against the domain's exact key. `state` is `ok` (published and matching),
-  `pending` (definitively not published yet), `mismatch` (published but wrong) or
-  `unavailable` (the lookup could not be completed, so nothing is known). The MX
+  `not_found` (definitively not published yet), `mismatch` (published but wrong) or
+  `dns_error` (the lookup could not be completed, so nothing is known). The MX
   check is `ok` as soon as any one expected receiver hostname is
   published and lists those in `matched`; an operator who points MX at a single
   receiver is not failed by the others in the advertised set. It is `mismatch` only
@@ -336,14 +336,18 @@ The domain receiving API returns the live setup picture for a Dial MX domain:
   routing verdict, which is the receiver's. They are read from the watcher's cache,
   not resolved on a render.
 
-  `pending` and `unavailable` are deliberately distinct, and the fix prompts treat
-  them differently: a definitely-absent record is one the operator must publish,
-  while a lookup that could not be completed is something to retry, so an
-  `unavailable` check renders a retry notice instead of a publish instruction and
-  never claims the record is missing. On an `unavailable` MX check the watcher
-  carries forward the `unexpected` hosts a previous completed check observed, so a
-  known extra-MX warning cannot disappear merely because the resolver stopped
-  answering; only a completed check clears it.
+  A receiving check is a hard gate: only `ok` is green, and `not_found` and
+  `dns_error` are red alongside `mismatch`, because the operator must not proceed
+  on a record that is absent or unconfirmed any more than on one that is wrong.
+  `not_found` and `dns_error` remain deliberately distinct in the *reason* and in
+  the fix prompt — a definitely-absent record is one the operator must publish,
+  while a lookup that could not be completed is one to check and retry — and an
+  `dns_error` check never claims the record is missing. On a `dns_error` MX check the
+  watcher carries forward the `unexpected` hosts a previous completed check
+  observed, so a known extra-MX warning cannot disappear merely because the resolver
+  stopped answering; only a completed check clears it. The amber in this dialog
+  belongs to that extra-MX warning, which is a *correct* DNS config with ambiguous
+  routing, not to any per-record verdict.
 - `instructions` — the copy-ready MX and TXT records for an Antler MX setup. It is
   omitted for a domain with no copy-ready records.
 - `unexpected_mx[]` — a top-level field (independent of `instructions`) listing
@@ -412,8 +416,9 @@ screen, flipping green once the watcher sees the records land — no jump to a
 separate repair step. In the setup wizard each **MX row** carries its own light
 keyed off the check's `matched` list, so a domain that names several receivers does
 not paint every row "Matching" the moment one is published; an unpublished row reads
-amber "Not published yet". A check the resolver could not answer renders as
-**Unverified** with a retry notice, never a publish prompt. When the domain also
+red "Not found". A check the resolver could not answer renders as a red prompt to
+check DNS and retry, never silently green, because an unconfirmed record is not one
+the operator may proceed on. When the domain also
 publishes MX hostnames that are not
 Antler receivers, the dialog adds a separate warning listing those servers and
 suggesting their removal. In a redundant Antler set where MX names only some

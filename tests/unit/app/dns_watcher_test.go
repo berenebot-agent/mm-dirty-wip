@@ -293,8 +293,8 @@ func TestDNSWatcherKeepsWarningWhenLookupFails(t *testing.T) {
 		t.Fatalf("extra-MX after a failed lookup = %v (ok=%v), want the carried [old.example.test]", hosts, ok)
 	}
 	v, _ := core.svc.DNSState(core.domain.ID)
-	if v.MX == nil || v.MX.State != app.StateUnavailable {
-		t.Fatalf("MX check after a failed lookup = %+v, want unavailable", v.MX)
+	if v.MX == nil || v.MX.State != app.StateDNSError {
+		t.Fatalf("MX check after a failed lookup = %+v, want dns_error", v.MX)
 	}
 }
 

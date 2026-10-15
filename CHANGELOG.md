@@ -1,5 +1,16 @@
 # Changelog
 
+- The receiving published-record checks (Dial MX / Antler MX) now report one of
+  four honest states — `ok`, `not_found`, `mismatch`, `dns_error` — and only `ok`
+  is green. `pending` is gone (it implied work in progress that was not
+  happening); an absent record reads `not_found` and a failed lookup reads
+  `dns_error`, both red, because the operator must not proceed on a record that is
+  wrong, absent, or unconfirmed. The checks now query absolute DNS names, so a
+  brand-new domain's absent `_mailmoose-mx` record reads `not_found` reliably
+  instead of drifting to a permanent "could not verify". DKIM keeps its advisory
+  light: only a published-but-wrong record is red, an absent or unconfirmed one is
+  grey.
+
 - Remote-draft mode now just places the draft in the connected mailbox's Drafts
   folder. The web UI no longer shows any handoff surface (the "Draft handoffs"
   pane, per-draft handoff badges, and the cancel/retry controls are gone), no
@@ -14,6 +25,22 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 ## [Unreleased]
 
 ### Changed
+
+- The receiving published-record checks now use a four-state vocabulary that says
+  what each state means: `ok` (published and matching), `not_found` (definitively
+  not published), `mismatch` (published but wrong) and `dns_error` (the lookup
+  could not be completed). The old `pending` is renamed to `not_found` because it
+  implied work in progress, and `unavailable` to `dns_error` because it is a lookup
+  failure. On the receiving side only `ok` is green: `not_found`, `mismatch` and
+  `dns_error` are all red, since the operator must not proceed on a record that is
+  absent, wrong, or unconfirmed. The amber that remains is the receiver-level
+  extra-MX warning (a correct config with ambiguous routing) and the not-yet-run
+  "Waiting" cell. The checks now resolve **absolute** DNS names, matching the
+  receiver's own proofs, so an absent `_mailmoose-mx` record on a new domain reads
+  `not_found` rather than being masked as a permanent lookup error by the
+  resolver's search list. The DKIM sending-side light is unchanged in spirit: green
+  only when published and matching, red only when a published record does not match
+  the signing key, grey for absent or unconfirmed (mail still sends).
 
 - A standalone inbox's connected **Drafts** folder is now pulled into its cached
   index immediately after a remote-draft handoff is confirmed placed, and its
