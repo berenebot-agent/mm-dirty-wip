@@ -2,6 +2,7 @@ package httpapp_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,5 +62,74 @@ func TestDashboardConnectorLightRendersForDialMXOnly(t *testing.T) {
 	// rather than outside it.
 	if !strings.Contains(body, `data-kind="receiving" data-receiving-button><span class="dns-light danger"`) {
 		t.Fatalf("connector light must be inside the receiving button")
+	}
+}
+
+// TestDashboardConnectorLightAbsentWithoutReceivers proves the aggregate light is
+// gated on the domain actually naming a receiver target. An Antler MX setup whose
+// receiver set is empty — the manifest advertised none, or the operator started
+// setup and abandoned it after the config was saved — must render no dot at all,
+// rather than a red "no inbound connector is ready / mail delivery is blocked"
+// for a setup that was never finished. The phantom light is the bug: a red dot
+// asserts mail is blocked, which is not a fact about a domain with nothing to
+// deliver to.
+func TestDashboardConnectorLightAbsentWithoutReceivers(t *testing.T) {
+	t.Parallel()
+	svc, h, u, _, _ := httpFixture(t)
+	ctx := context.Background()
+	// A manifest that advertises no receivers is a real (if useless) state: the
+	// save path stores the empty snapshot, so the domain has a Dial MX receiving
+	// configuration that names nothing.
+	svc.AntlerEndpoints = fixedAntler{receivers: nil}
+	emptyDomain, err := svc.Store.CreateDomain(ctx, u.AccountID, "empty.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, u.AccountID, emptyDomain.ID, "dialmx", map[string]any{
+		"service": mxdial.ServiceAntler, "contact_email": "ops@example.test",
+	}, false); err != nil {
+		t.Fatalf("antler save with no receivers: %v", err)
+	}
+	// The provider is recorded, so the dialmx credential exists; the point is
+	// that no receiver target does.
+	if _, err := svc.Store.GetDialMXCredential(ctx, u.AccountID, emptyDomain.ID); err != nil {
+		t.Fatalf("dialmx provider without a credential: %v", err)
+	}
+
+	cookie, _ := uiSession(t, svc, u.ID)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET / = %d", rr.Code)
+	}
+	body := rr.Body.String()
+	// The empty-receiver domain must contribute no light at all. The only other
+	// domain in the fixture is the Mailgun one, which never carries a Dial MX
+	// light, so no "No inbound connector is ready" title may appear anywhere.
+	if strings.Contains(body, "No inbound connector is ready") {
+		t.Fatalf("dashboard rendered a phantom connector light for a domain with no receivers:\n%s", body)
+	}
+	if n := strings.Count(body, `data-receiving-light`); n != 0 {
+		t.Fatalf("dashboard rendered %d receiving light(s) for a domain set with no receiver targets", n)
+	}
+	// The live lights snapshot must agree: the empty-receiver domain reports no
+	// receiving light, so the client tick cannot reintroduce the dot.
+	stateReq := httptest.NewRequest(http.MethodGet, "/ui/state?page=dashboard&lights=1", nil)
+	stateReq.AddCookie(cookie)
+	stateRR := httptest.NewRecorder()
+	h.ServeHTTP(stateRR, stateReq)
+	if stateRR.Code != http.StatusOK {
+		t.Fatalf("GET /ui/state = %d", stateRR.Code)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(stateRR.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode /ui/state: %v", err)
+	}
+	if domains, ok := state["domains"].(map[string]any); ok {
+		if _, present := domains[emptyDomain.ID]; present {
+			t.Fatalf("live state reported a light for a domain with no receivers: %v", domains[emptyDomain.ID])
+		}
 	}
 }

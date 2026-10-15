@@ -182,10 +182,20 @@ func (s *Server) uiStateInbox(w http.ResponseWriter, r *http.Request, p model.Pr
 // shared "extra MX" verdict — the watcher's single value, not a fresh lookup — so
 // an amber light and the status dialog's warning always agree. It returns an
 // empty light for a domain that does not receive by Dial MX (those have no
-// dashboard light) or when no manager is wired. A rotated-away key's
-// authorization is excluded so a stale row cannot present as current readiness.
+// dashboard light), for a Dial MX domain that names no receiver target (an
+// abandoned setup has nothing to report), or when no manager is wired. A
+// rotated-away key's authorization is excluded so a stale row cannot present as
+// current readiness.
 func (s *Server) domainInboundLight(ctx context.Context, accountID, domainID, domainName, receivingProvider string) (string, string) {
 	if normalizeDomainProvider(receivingProvider) != "dialmx" || s.Service.DialMX == nil {
+		return "", ""
+	}
+	// A light only means something for a domain that actually names something to
+	// deliver to. A Dial MX domain whose Antler receiver set is empty — an Antler
+	// setup started and abandoned, or a manifest that advertised no receivers —
+	// must not be painted red "mail delivery is blocked" for a setup that was never
+	// finished.
+	if !s.dialMXHasReceiverTargets(ctx, accountID, domainID) {
 		return "", ""
 	}
 	keyID := ""
