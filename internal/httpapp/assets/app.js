@@ -3696,9 +3696,11 @@ function clearUrlParams(names) {
     var googleLink = dlg.querySelector('[data-google-reconnect]');
     if (!googleLink) {
       // The reconnect control lives under an "Advanced" disclosure so it does not
-      // read as a routine action, with a red prompt above it when the provider
-      // reports the account disconnected. One reconnects in place (an API-key
-      // dialog); Google and Microsoft follow their OAuth wizard flow.
+      // read as a routine action. When the provider reports the account
+      // disconnected, a red detail line sits inside the disclosure directly above
+      // that single control, and the disclosure is pre-opened so both are
+      // visible. One reconnects in place (an API-key dialog); Google and
+      // Microsoft follow their OAuth wizard flow.
       var prompt = document.createElement('div');
       prompt.className = 'banner danger';
       prompt.setAttribute('data-reconnect-prompt', '');
@@ -3714,10 +3716,11 @@ function clearUrlParams(names) {
       summary.textContent = 'Advanced';
       var body = document.createElement('div');
       body.className = 'remote-fields-body';
-      body.appendChild(googleLink);
+      // The red detail line precedes the reconnect button inside the disclosure.
+      body.append(prompt, googleLink);
       advanced.append(summary, body);
       var panel = dlg.querySelector('[data-inbox-panel=basic]');
-      panel.append(prompt, advanced);
+      panel.append(advanced);
     }
     var prompt = dlg.querySelector('[data-reconnect-prompt]');
     var advanced = dlg.querySelector('[data-advanced-reconnect]');
@@ -3738,21 +3741,9 @@ function clearUrlParams(names) {
       var conn = (cfg && cfg.connection) || null;
       var bad = !!(conn && conn.state === 'disconnected');
       prompt.hidden = !(google && bad);
-      if (!prompt.hidden) {
-        prompt.textContent = (conn && conn.detail) ? conn.detail : 'This account is disconnected. Reconnect to resume syncing.';
-        var cta = document.createElement('button');
-        cta.type = 'button';
-        cta.className = 'btn-sm danger';
-        cta.textContent = 'Reconnect';
-        if (one) {
-          cta.setAttribute('data-one-reconnect', '');
-          cta.setAttribute('data-inbox', inboxID);
-        } else {
-          cta.addEventListener('click', function () { window.location.href = googleLink.href; });
-        }
-        prompt.appendChild(document.createTextNode(' '));
-        prompt.appendChild(cta);
-      }
+      prompt.textContent = (conn && conn.detail) ? conn.detail : 'This account is disconnected. Reconnect to resume syncing.';
+      // A disconnected provider pre-opens the disclosure so the red line and the
+      // single reconnect control are visible without a click.
       if (bad && advanced) { advanced.open = true; }
     }
     var port = document.getElementById('inbox-remote-port');

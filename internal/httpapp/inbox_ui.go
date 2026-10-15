@@ -90,6 +90,15 @@ const syncViewFields = `{{if .StandaloneMode}}<input type="hidden" name="before"
 // background-only behind the header spinner.
 const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-sync-banner hidden role="status" aria-live="polite"></div>{{end}}`
 
+// reconnectBanner is the server-rendered per-inbox connection banner shown on a
+// standalone mailbox, folder or message page when the provider reports this
+// inbox's authorization revoked or expired. A disconnected provider connection
+// is a per-inbox problem, so it is surfaced in place rather than only on the
+// dashboard. One reconnects in place (an API-key dialog opened by app.js);
+// Google and Microsoft follow their OAuth wizard. It renders nothing for a
+// healthy connection, so it never nags or reads as a routine action.
+const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="btn-sm danger" data-one-reconnect data-inbox="{{$.Inbox.ID}}">Reconnect</button>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}">Reconnect</a>{{end}}</div>{{end}}{{end}}`
+
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
 // Labels section listing the inbox's labels one level in. It relies on
@@ -111,7 +120,7 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
 {{if .StandaloneMode}}{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
-{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}` + syncBanner + `
+{{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}` + syncBanner + reconnectBanner + `
 {{template "live-requests-card" .}}
 {{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`
@@ -754,6 +763,14 @@ func (s *Server) applyStandaloneMailbox(r *http.Request, p model.Principal, box 
 	data.StandaloneConfigured = box.RemoteConfigured && box.Remote != nil
 	data.StandalonePlain = box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain
 	data.RemoteConnectorURL = "/ui/inboxes/" + box.ID + "/remote"
+	// A revoked/expired provider authorization is a per-inbox problem, so the
+	// mailbox and folder pages surface it in place. Only a disconnected state
+	// (never a transient sync error) sets the detail, so a retryable failure does
+	// not read as a reconnect prompt.
+	if conn, ok := s.inboxConnectionState(r.Context(), p.AccountID, box); ok && conn.State == connectionStateDisconnected {
+		data.InboxConnDetail = conn.Detail
+		data.InboxConnReconnect = conn.Reconnect
+	}
 	if view, verr := s.remoteConfigView(r.Context(), p, box.ID); verr == nil {
 		data.RemoteConfig = view
 	}
