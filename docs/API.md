@@ -2,13 +2,12 @@
 
 This document defines the initial canonical interface. Exact field additions may evolve during implementation while preserving the semantics below.
 
-> **Route listings are generated.** The endpoint list is no longer maintained by
-> hand here. `internal/apispec` is the single source of truth; the served guide is
-> [`/agent`](/agent), the generated reference is
-> [`docs/API-REFERENCE.md`](API-REFERENCE.md), and
-> [`/openapi.json`](/openapi.json) is authoritative for the complete operation
-> list. This document keeps the rationale, provider schemas, and compatibility
-> notes that a route table cannot carry.
+> **Route listings are generated.** `internal/apispec` is the single source of
+> truth for the endpoint reference at the end of this document; run `make docs`
+> to update it. The served agent guide is [`/agent`](/agent), and
+> [`/openapi.json`](/openapi.json) is authoritative for the complete machine-
+> readable operation list. The contract sections below explain behavior,
+> provider schemas, and compatibility details that route tables cannot carry.
 
 ## 1. Authentication
 
@@ -152,7 +151,8 @@ surface below and [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
 ## 3a. Common mailbox surface
 
 Standalone Google/Gmail inboxes also use this surface (D098). Connect using the
-human wizard with a BYO Google OAuth Web client; see [Google setup](GOOGLE.md).
+human wizard with a BYO Google OAuth Web client; see
+[Google/Gmail setup](PROVIDERS.md#google-gmail).
 Google list views cache metadata and synchronize through the History API; body
 and attachment reads remain live. Folder locators are Gmail label IDs, with
 `ARCHIVE` a derived view. A message can occur in multiple label views with the
@@ -322,8 +322,9 @@ label is `folder:<id>`. It is always present and `[]` when the message carries n
 label, and it is the same projection on every inbox kind and route. The legacy
 `labels` array remains the additive-name view only (folder-backed labels are
 absent from it); new clients should read `label_ids` and filter with `label_id`.
-See [`UNIFIED_LABELS.md`](UNIFIED_LABELS.md) for the resolution and validation
-rules.
+The endpoint reference below lists the label routes. Filtering and membership
+semantics are described in this contract and in the served [`/agent`](/agent)
+guide.
 
 `snippet` is always a plain-text string, normalized to at most 200 Unicode
 characters. `"-"` means no usable preview is available: not yet generated,
@@ -359,7 +360,9 @@ body just to acknowledge an action.
 Messages can be filtered by label with `label` (legacy name) or `label_id`
 (catalogue id); repeated values AND together and both forms resolve identically
 on the inbox-scoped and account-wide routes. A folder-backed `label_id` requires
-an `inbox=` scope account-wide. See [`UNIFIED_LABELS.md`](UNIFIED_LABELS.md).
+an `inbox=` scope account-wide. Repeated filters AND together; `tag:<Name>` and
+a bare name are equivalent, and a `folder:<id>` filter is valid only for a folder
+in the scoped inbox.
 
 **Compatibility:** Clients that used list or thread responses to read local
 message bodies must now fetch a message detail. Clients that relied on empty
@@ -397,7 +400,8 @@ inboxes with unsettled metadata sync. Each entry has `inbox_id`, `name`, `addres
 safe `error`. Sync states are `queued`, `running`, `waiting`, `paused`, or `error`;
 phase is `initial` or `refresh`. `total: 0` means unknown: use the indexed count,
 not a percentage. Sync rows have no action ID and cannot be retried/dismissed via
-action endpoints. See [Live metadata sync](METADATA_SYNC.md).
+action endpoints. Metadata sync progress is safe state only; status reads do not
+fetch provider mail or expose credentials.
 
 Add `?wait=true` to wait up to 30 seconds. Successful PATCH/restore returns the
 updated message; delete/purge returns `204`; seen returns `{id,seen}`.
@@ -1290,3 +1294,231 @@ Compatibility should translate into the canonical model.
 MailMoose native resources remain authoritative for multi-inbox scopes, replayable event history, threads, search, domains, and Hermes Relay.
 
 Compatibility behaviour requires explicit contract tests.
+
+<!-- BEGIN GENERATED API REFERENCE -->
+
+## Endpoint reference
+
+Generated from `internal/apispec`; do not edit by hand.
+
+### Discovery
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/bootstrap | Discover key capabilities and accessible inboxes |  |
+| GET | /v1/limits | Get server pagination, size and rate limits | read |
+| GET | /v1/account/settings | Get account preferences (Admin) | admin |
+| PATCH | /v1/account/settings | Update account preferences (Admin) | admin |
+
+### Inboxes
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/inboxes | List inboxes | read |
+| POST | /v1/inboxes | Create an inbox (Admin) | admin |
+| GET | /v1/inboxes/{id} | Get an inbox | read |
+| PATCH | /v1/inboxes/{id} | Update an inbox (display_name, enabled, allowed_senders, sender_restricted, approver_email, aliases, alias_names, default_sender, trash_retention_days, storage_quota_bytes, auto_mark_read_on_delivery, auto_trash_after_delivery_hours, delivery_trigger) | owner |
+| DELETE | /v1/inboxes/{id} | Delete an inbox (Admin) | admin |
+| POST | /v1/inboxes/{id}/trash/empty | Empty an inbox's Trash (Assistant/Owner) | assistant |
+
+### Mailbox
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/inboxes/{id}/folders | List an inbox's folders (common) | read |
+| POST | /v1/inboxes/{id}/folders | Create a folder (Assistant/Owner) | assistant |
+| PATCH | /v1/inboxes/{id}/folders/{folderId} | Rename a folder (Assistant/Owner) | assistant |
+| DELETE | /v1/inboxes/{id}/folders/{folderId} | Delete a folder (Assistant/Owner) | assistant |
+| GET | /v1/inboxes/{id}/messages | List an inbox's messages (common envelope) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId} | Get a message (common) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId}/content | Download a message's raw MIME (common) | read |
+| GET | /v1/inboxes/{id}/messages/{messageId}/attachments/{part} | Download one message attachment (common) | read |
+| GET | /v1/inboxes/{id}/threads | List an inbox's threads (common envelope) | read |
+| GET | /v1/inboxes/{id}/threads/{threadId} | Get a thread (common) | read |
+| GET | /v1/inboxes/{id}/search | Search an inbox (common envelope) | read |
+| GET | /v1/inboxes/{id}/labels | List legacy flat labels | read |
+| GET | /v1/inboxes/{id}/remote | Get a standalone inbox's remote configuration | read |
+| PUT | /v1/inboxes/{id}/remote | Configure a standalone inbox's remote connector (Owner/Admin) | owner |
+| POST | /v1/inboxes/{id}/remote/test | Test a standalone inbox's remote connector | read |
+| POST | /v1/inboxes/{id}/remote/refresh | Reconcile a standalone inbox against its server (Assistant/Owner) | assistant |
+| POST | /v1/inboxes/{id}/remote/roles/{role} | Map or create a standalone inbox's special folder role (Assistant/Owner) | assistant |
+| GET | /v1/inboxes/{id}/authoring | Get an inbox's assistant authoring settings | read |
+| PUT | /v1/inboxes/{id}/authoring | Set an inbox's assistant authoring settings (Owner/Admin) | owner |
+| GET | /v1/inboxes/{id}/handoffs | List an inbox's RemoteDraft handoff history | read |
+
+### Identities
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/identities | List identities (openagent.email compat) | admin |
+| POST | /v1/identities | Create an identity (Admin) | admin |
+| DELETE | /v1/identities/{address} | Delete an identity (openagent.email compat) | admin |
+
+### Messages
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/messages | List messages with filters (inbox, thread, label, from, to, unread, has_attachment, before, trashed) | read |
+| GET | /v1/messages/wait | Long-poll for a new message | read |
+| POST | /v1/messages/wait | Long-poll for a new message (compat) | read |
+| GET | /v1/actions | List scoped mailbox action queue | read |
+| GET | /v1/actions/{id} | Get mailbox action status | read |
+| POST | /v1/actions/{id} | Retry or dismiss a mailbox action | assistant |
+| GET | /v1/messages/{id} | Get a message | read |
+| PATCH | /v1/messages/{id} | Update read/labels/spam state | assistant |
+| DELETE | /v1/messages/{id} | Queue a move to Trash (Assistant/Owner) | assistant |
+| POST | /v1/messages/{id}/restore | Restore a trashed message (Assistant/Owner) | assistant |
+| DELETE | /v1/messages/{id}/purge | Queue permanent deletion of a trashed message (Assistant/Owner) | assistant |
+| POST | /v1/messages/{id}/seen | Mark a message seen (compat) | assistant |
+
+### Attachments
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/messages/{id}/attachments | List message attachments | read |
+| GET | /v1/messages/{id}/attachments/{part} | Download one message attachment by MIME part path | read |
+| GET | /v1/messages/{id}/content | Download a message's raw MIME | read |
+| GET | /v1/attachments/{id} | Download an attachment | read |
+
+### Threads
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/threads | List threads | read |
+| GET | /v1/threads/{id} | Get a thread | read |
+| GET | /v1/threads/{id}/messages | List messages in a thread | read |
+
+### Search
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/search | Search messages (FTS5) | read |
+
+### Labels
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/labels | List distinct labels in use | read |
+| GET | /v1/inboxes/{id}/label-catalog | List provider-aware labels | read |
+| POST | /v1/inboxes/{id}/label-catalog | Create a label | assistant |
+| PATCH | /v1/inboxes/{id}/label-catalog/{labelId} | Rename a label if supported | assistant |
+| DELETE | /v1/inboxes/{id}/label-catalog/{labelId} | Delete a label if supported | assistant |
+| POST | /v1/inboxes/{id}/messages/{messageId}/labels | Apply or remove a message label | assistant |
+
+### Events
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/events | Incremental event history | read |
+| GET | /v1/events/wait | Long-poll for events | read |
+| GET | /v1/events/stream | SSE event stream | read |
+
+### Send
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| POST | /v1/send | Send email as an Owner | owner |
+| POST | /v1/messages/{id}/reply | Reply to a message (Owner); optional sender chooses the From identity | owner |
+
+### Drafts
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/drafts | List drafts (filter by inbox; supports before and limit) | assistant |
+| POST | /v1/drafts | Create a draft | assistant |
+| GET | /v1/drafts/{id} | Get a draft (includes attachments) | assistant |
+| PATCH | /v1/drafts/{id} | Update a draft (partial) | assistant |
+| DELETE | /v1/drafts/{id} | Delete a draft | assistant |
+| POST | /v1/drafts/{id}/send | Send a draft (Owner) | owner |
+| GET | /v1/drafts/{id}/attachments | List draft attachments | assistant |
+| POST | /v1/drafts/{id}/attachments | Upload draft attachments (multipart field 'attachments') | assistant |
+| GET | /v1/drafts/{id}/attachments/{attId} | Download a draft attachment | assistant |
+| DELETE | /v1/drafts/{id}/attachments/{attId} | Delete a draft attachment | assistant |
+
+### Send requests
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| POST | /v1/drafts/{id}/request-send | Request authorization to send a draft (Assistant) | assistant |
+| POST | /v1/drafts/{id}/cancel-send-request | Cancel a pending send request (Assistant) | assistant |
+| POST | /v1/drafts/{id}/approve | Approve and send a pending draft (Owner) | owner |
+| POST | /v1/drafts/{id}/reject | Reject a pending send request (Owner) | owner |
+| GET | /v1/drafts/{id}/send-request | Get the latest send request for a draft | assistant |
+| GET | /v1/send-requests | List draft send requests (filter by inbox and active) | assistant |
+
+### Outbox
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/outbox | List pending and failed outbound messages | read |
+| POST | /v1/outbox/{id}/retry | Re-queue a failed outbound message | owner |
+| DELETE | /v1/outbox/{id} | Cancel a pending send or discard a failed one | owner |
+
+### Admin: domains
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/domains | List domains (Admin) | admin |
+| POST | /v1/admin/domains | Create a domain (Admin) | admin |
+| PATCH | /v1/admin/domains/{id} | Update a domain (Admin) | admin |
+| DELETE | /v1/admin/domains/{id} | Delete a domain (Admin) | admin |
+| GET | /v1/admin/domains/{id}/sending | Get a domain's sending provider config (Admin) | admin |
+| PUT | /v1/admin/domains/{id}/sending | Set a domain's sending provider config (Admin) | admin |
+| DELETE | /v1/admin/domains/{id}/sending | Clear a domain's sending provider config (Admin) | admin |
+| GET | /v1/admin/domains/{id}/receiving | Get a domain's receiving provider config (Admin) | admin |
+| PUT | /v1/admin/domains/{id}/receiving | Set a domain's receiving provider config (Admin) | admin |
+| DELETE | /v1/admin/domains/{id}/receiving | Clear a domain's receiving provider config (Admin) | admin |
+| GET | /v1/admin/domains/{id}/sending/deliveries | List delivery attempts for a domain (Admin) | admin |
+| GET | /v1/admin/domains/{id}/receiving/deliveries | List receiving activity for a domain (Admin) | admin |
+
+### Admin: keys
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/keys | List API keys (Admin) | admin |
+| POST | /v1/admin/keys | Create an API key (Admin) | admin |
+| DELETE | /v1/admin/keys/{id} | Revoke an API key (Admin) | admin |
+
+### Admin: Hermes
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/hermes | List Hermes connections (Admin) | admin |
+| POST | /v1/admin/hermes/enroll | Enroll a Hermes Relay connection (Admin) | admin |
+| PUT | /v1/admin/hermes/{id} | Update a Hermes connection outbound role (Admin) | admin |
+| DELETE | /v1/admin/hermes/{id} | Delete a Hermes connection (Admin) | admin |
+
+### Admin: OpenClaw
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/openclaw | List OpenClaw connections (Admin) | admin |
+| POST | /v1/admin/openclaw/enroll | Create an OpenClaw relay connection (Admin) | admin |
+| POST | /v1/admin/openclaw/setup-code | Mint an OpenClaw one-time setup code (Admin) | admin |
+| PUT | /v1/admin/openclaw/{id} | Update an OpenClaw connection outbound role (Admin) | admin |
+| DELETE | /v1/admin/openclaw/{id} | Delete an OpenClaw connection (Admin) | admin |
+
+### Admin: MX
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/mx | Get the installation MX receiver settings and live status (System admin session) | admin |
+| PUT | /v1/admin/mx | Set the installation MX receiver settings (System admin session) | admin |
+| DELETE | /v1/admin/mx | Clear the installation MX receiver settings (System admin session) | admin |
+| GET | /v1/admin/account/mx | Get the account Remote MX receiver settings and live status (Admin) | admin |
+| PUT | /v1/admin/account/mx | Set the account Remote MX receiver settings (Admin) | admin |
+| DELETE | /v1/admin/account/mx | Clear the account Remote MX receiver settings (Admin) | admin |
+
+### Admin: clients
+
+| Method | Path | Summary | Role |
+| --- | --- | --- | --- |
+| GET | /v1/admin/clients | List clients (Admin) | admin |
+| GET | /v1/admin/clients/webhooks | List webhook clients (Admin) | admin |
+| POST | /v1/admin/clients/webhooks | Create a webhook client (Admin) | admin |
+| PUT | /v1/admin/clients/webhooks/{id} | Update a webhook client (Admin) | admin |
+| DELETE | /v1/admin/clients/webhooks/{id} | Delete a webhook client (Admin) | admin |
+| POST | /v1/admin/clients/webhooks/{id}/rotate | Rotate a webhook signing secret (Admin) | admin |
+| POST | /v1/admin/clients/webhooks/{id}/enabled | Enable or pause a webhook client (Admin) | admin |
+
+<!-- END GENERATED API REFERENCE -->

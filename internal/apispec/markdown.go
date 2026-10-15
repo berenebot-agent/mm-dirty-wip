@@ -2,14 +2,14 @@ package apispec
 
 import "strings"
 
-// RenderMarkdown renders docs/API-REFERENCE.md: a generated reference document
-// with one table per group.
+// RenderMarkdown renders the generated endpoint-reference section included in
+// docs/API.md, with one table per group.
 func RenderMarkdown(routes []Route) string {
 	var b strings.Builder
-	b.WriteString("# MailMoose API Reference\n\n")
+	b.WriteString("## Endpoint reference\n\n")
 	b.WriteString("Generated from `internal/apispec`; do not edit by hand.\n\n")
 	for _, group := range distinctGroups(routes) {
-		b.WriteString("## ")
+		b.WriteString("### ")
 		b.WriteString(group)
 		b.WriteString("\n\n")
 		b.WriteString("| Method | Path | Summary | Role |\n")

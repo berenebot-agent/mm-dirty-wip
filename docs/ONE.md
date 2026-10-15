@@ -147,7 +147,7 @@ separate from any optional, explicitly approved quota-exhaustion experiment.
 ## Fit to the existing architecture
 
 The current Gmail connector stores metadata locally and fetches bodies and
-attachments live (`GOOGLE.md`), not a durable full-email archive. Preserve that
+attachments live (`PROVIDERS.md#google-gmail`), not a durable full-email archive. Preserve that
 behaviour for One. Existing mailbox roles, search, local drafts, RemoteDraft
 handoff, events and approval/outbox flows remain authoritative.
 

@@ -1198,7 +1198,7 @@ that one table:
 - `/agent` — the served Markdown guide;
 - `/openapi.json` — an OpenAPI 3.0.3 document covering the complete operation
   list;
-- `docs/API-REFERENCE.md` — the generated reference, checked in and verified by
+- `docs/API.md` — the generated reference, checked in and verified by
   a staleness test;
 - `/examples/python`, `/examples/bash` and `/examples/curl` — the embedded
   Python client, Bash client and curl cookbook.
@@ -3318,7 +3318,7 @@ mailbox boundary preserves source-of-truth, permission and body-storage rules.
 bindings, one-time OAuth attempts, opaque ID/label membership mappings and
 independent detection cursors. Standard-library REST/OAuth, SQLite and the
 existing process-owned workers; no new dependency or runtime service. Background
-metadata work is coalesced and bounded. See `docs/GOOGLE.md`.
+metadata work is coalesced and bounded. See `docs/PROVIDERS.md#google-gmail`.
 
 ## D099 — Standalone IMAP quick sync, configurable cadence and manual refresh
 
@@ -3418,7 +3418,7 @@ for every connection. Shared delegated mailboxes remain delta-polled.
 transport, provider-specific app orchestration and wizard/settings integration.
 Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency,
 service or runtime. Separate Online Archive mailboxes are outside this release.
-See `docs/MICROSOFT.md` for setup and real-account rollout checks.
+See `docs/PROVIDERS.md#microsoft-outlook` for setup and real-account rollout checks.
 
 **Amendment (2026-10-11, human approved):** The wizard no longer asks for a
 mailbox type and shared address before sign-in. Two begin buttons choose
@@ -3468,7 +3468,7 @@ reflects active, unexpired subscriptions.
 row per eligible inbox, narrow Graph subscription methods, one shared callback,
 and one serialized process-owned worker loop with bounded per-inbox timeouts.
 Existing Go process, SQLite and polling; no new dependency or runtime service.
-See `docs/MICROSOFT.md` for operator routing and provider latency constraints.
+See `docs/PROVIDERS.md#microsoft-outlook` for operator routing and provider latency constraints.
 
 ## D102 — Remote metadata counts toward the storage quota
 
@@ -3619,7 +3619,7 @@ second, faster schedule — it should share the existing one.
 per-folder delta helper and a quick pass; a push-aware interval helper and a
 re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox`
 plus one test hook; a coarse SSE tick constant. See
-`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/MICROSOFT.md`.
+`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/PROVIDERS.md#microsoft-outlook`.
 
 ## D105 — Preserve and expose remote arrival source provenance
 
@@ -3650,7 +3650,7 @@ tokens. Remote arrivals are not added to the UI activity log in this change.
 **Complexity:** Migration 065 adds source provenance to remote arrivals and
 pending Microsoft push work. The pending-work marker carries push provenance
 across the asynchronous queue and restarts. No new dependency or service.
-See `docs/MICROSOFT.md`.
+See `docs/PROVIDERS.md#microsoft-outlook`.
 
 ## D106 — One import shows a message count and offers a bounded history window
 
@@ -3774,7 +3774,7 @@ unused source of truth for the same UI.
 saves an existing value via the existing `SaveMetadataSyncTotal`; `metadata_sync.go`
 normalises and stops emitting the waiting state; `app.js` gains a
 `Downloading metadata` line and an estimate marker and loses one dead code path.
-See `docs/METADATA_SYNC.md`.
+See `docs/API.md`.
 
 ## D109 — One native API message schema across inbox kinds and routes
 
@@ -3903,7 +3903,7 @@ unchanged.
 
 **Complexity/resource budget:** Deletion of one log call and one dead attribute
 computation in `internal/httpapp/microsoft_push.go`; no migration, dependency,
-service, or schema change. See `docs/MICROSOFT.md`.
+service, or schema change. See `docs/PROVIDERS.md#microsoft-outlook`.
 
 ## D111 — Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule
 

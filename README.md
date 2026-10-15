@@ -279,7 +279,7 @@ fastest way to shape it is to use it and tell us what's missing.
 | [docs/MAILBOX_SERVICE_CONTRACT.md](docs/MAILBOX_SERVICE_CONTRACT.md) | Standalone (remote IMAP/SMTP) mailboxes, folders/roles, the common local/remote mailbox boundary, and its honest index limits |
 | [docs/SELFHOSTING.md](docs/SELFHOSTING.md) | First-run admin, reverse proxy, MX modes and tuning, hardening, backup, upgrades |
 | [docs/MX.md](docs/MX.md) | Direct-SMTP edge: wire contract, auth policy, spam and retry semantics |
-| [docs/API-REFERENCE.md](docs/API-REFERENCE.md) | Generated REST API reference |
+| [docs/API.md](docs/API.md) | API contract and generated endpoint reference |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime topology, package boundaries, persistence model |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | The settled architectural decision register |
 
