@@ -297,6 +297,8 @@ func TestInboxConnectionScriptWiring(t *testing.T) {
 		"body.append(prompt, googleLink)",
 		// A disconnected provider pre-opens the disclosure.
 		"advanced.open = true",
+		// A One page opened with ?reconnect=1 opens the dialog straight away.
+		"get('reconnect') === '1'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing reconnect wiring %q", want)
@@ -306,6 +308,74 @@ func TestInboxConnectionScriptWiring(t *testing.T) {
 	// is built alongside the disclosure control.
 	if strings.Contains(script, "cta.textContent = 'Reconnect'") {
 		t.Fatal("app.js must not build a duplicate reconnect CTA outside the disclosure")
+	}
+}
+
+// TestDashboardOneFlagOpensReconnectDialog proves the dashboard's red connection
+// flag for a One inbox is a direct in-place reconnect affordance: it carries the
+// data-one-reconnect hook the dialog binds to, so a disconnected One inbox is
+// repaired from the dashboard without a detour through the settings dialog. A
+// non-One provider keeps the settings link, because its reconnect is the OAuth
+// wizard reached from there.
+func TestDashboardOneFlagOpensReconnectDialog(t *testing.T) {
+	t.Parallel()
+	h, svc, _, cookie, _, box := oneReconnectFixture(t)
+	ctx := context.Background()
+	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	body := uiGet(t, h, cookie, "/").Body.String()
+	if !strings.Contains(body, `data-one-reconnect data-inbox="`+box.ID+`"`) {
+		t.Fatalf("One dashboard flag is not an in-place reconnect: %s", body)
+	}
+}
+
+// TestInboxRemoteSettingsRedirectsProviderInbox proves /ui/inboxes/{id}/remote
+// never lands a provider-connected inbox on an IMAP connector form: it sends the
+// operator to the inbox itself, where the connection is managed.
+func TestInboxRemoteSettingsRedirectsProviderInbox(t *testing.T) {
+	t.Parallel()
+	h, _, _, cookie, _, box := oneReconnectFixture(t)
+	rr := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID+"/remote")
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("provider /remote = %d, want redirect: %s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/ui/inboxes/"+box.ID+"?inbox_tab=basic" {
+		t.Fatalf("provider /remote redirected to %q", loc)
+	}
+	if strings.Contains(rr.Body.String(), "Connection settings") {
+		t.Fatal("provider /remote rendered an IMAP connector page")
+	}
+}
+
+// TestNonAdminSeesConnectionDetailWithoutControl proves a mailbox user who
+// cannot repair a provider connection is told what is wrong without being offered
+// a control that would only fail for them: the banner carries the detail and a
+// pointer to an administrator, and renders no reconnect affordance.
+func TestNonAdminSeesConnectionDetailWithoutControl(t *testing.T) {
+	t.Parallel()
+	h, svc, _, _, _, box := oneReconnectFixture(t)
+	ctx := context.Background()
+	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// A non-admin mailbox user with read access to the inbox.
+	user := accessMember(t, svc, box.AccountID, box.AccountID, "reader@example.test", box.ID)
+	cookie, _ := uiSession(t, svc, user.ID)
+	body := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(body, "data-inbox-reconnect") || !strings.Contains(body, "Ask an account administrator") {
+		t.Fatalf("non-admin banner missing detail: %s", body)
+	}
+	if strings.Contains(body, "data-one-reconnect") {
+		t.Fatal("non-admin is offered a reconnect control that would fail")
 	}
 }
 

@@ -96,11 +96,24 @@ func TestOneMigration067FansOutExistingCredentials(t *testing.T) {
 		t.Fatal("global credential table retained", err)
 	}
 	db.Close()
-	if err := st.DeleteOneConnection(ctx, u.AccountID, a.ID); err != nil {
+	if err := st.DeleteOneInbox(ctx, u.AccountID, a.ID); err != nil {
 		t.Fatal(err)
+	}
+	// The deleted inbox and every row the import created for it are gone.
+	if _, err := st.GetInboxInternal(ctx, u.AccountID, a.ID); err == nil {
+		t.Fatal("deleted One inbox still readable")
+	}
+	if _, err := st.OneBinding(ctx, u.AccountID, a.ID); err == nil {
+		t.Fatal("deleted One binding retained")
+	}
+	if _, err := st.GmailSync(ctx, u.AccountID, a.ID); err == nil {
+		t.Fatal("deleted One sync progress retained")
 	}
 	remaining, err := st.OneBinding(ctx, u.AccountID, b.ID)
 	if err != nil || remaining.EncryptedKey != "legacy-key-ciphertext" || remaining.Revision != 7 {
 		t.Fatal("deleting migrated connection affected sibling", err)
+	}
+	if sync, err := st.GmailSync(ctx, u.AccountID, b.ID); err != nil || sync.HistoryID != "123" {
+		t.Fatal("deleting one inbox affected a sibling's cursor", err)
 	}
 }

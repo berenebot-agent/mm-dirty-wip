@@ -97,10 +97,11 @@ const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-s
 // dashboard. The reconnect control names the connection it repairs ("Reconnect
 // Gmail via One" / "Reconnect Google / Gmail" / "Reconnect Microsoft / Outlook")
 // and uses the ordinary secondary button: One reconnects in place (an API-key
-// dialog opened by app.js), the OAuth providers follow their wizard. It renders
-// nothing for a healthy connection, so it never nags or reads as a routine
-// action.
-const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="secondary btn-sm" data-one-reconnect data-inbox="{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</button>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</a>{{end}}</div>{{end}}{{end}}`
+// dialog opened by app.js), the OAuth providers follow their wizard. Only an
+// account administrator can repair a connection, so a mailbox user who cannot is
+// shown the detail without a control that would fail. It renders nothing for a
+// healthy connection, so it never nags or reads as a routine action.
+const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}{{if .StandaloneAdmin}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="secondary btn-sm" data-one-reconnect data-inbox="{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</button>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</a>{{end}}</div>{{else}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}} Ask an account administrator to reconnect it.</span></div>{{end}}{{end}}{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
@@ -122,7 +123,7 @@ const inboxBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.Displa
 <div class="inboxbar">{{if eq .Folder "trash"}}<form method="post" action="/ui/inboxes/{{.Inbox.ID}}/trash/empty" data-confirm="Permanently delete all messages in Trash? This cannot be undone."><input type="hidden" name="_csrf" value="{{.CSRF}}"><button class="secondary danger">Empty trash</button></form>{{end}}<form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="{{.Folder}}"><input type="hidden" name="label" value="{{.ActiveLabel}}"><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}{{if eq .Folder "trash"}}<button name="action" value="restore" class="secondary icon-btn" title="Restore" aria-label="Restore">` + iconRestore + `</button><button name="action" value="purge" class="secondary icon-btn danger" data-confirm-all="Delete all selected messages permanently? This cannot be undone." title="Delete forever" aria-label="Delete forever">` + iconDeleteFore + `</button>{{else}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button>{{end}}</form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
 {{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}
-{{if .StandaloneMode}}{{if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
+{{if .StandaloneMode}}{{if .StandaloneProvider}}{{else if not .StandaloneConfigured}}<div class="banner warn">This standalone inbox has no remote connector configured yet. <a href="{{.RemoteConnectorURL}}">Set up IMAP/SMTP</a>.</div>{{else if .StandalonePlain}}<div class="banner warn">This inbox connects to its remote server over plaintext (no transport security). <a href="{{.RemoteConnectorURL}}">Review connection settings</a>.</div>{{end}}{{else}}{{if not .OutboundReady}}<div class="banner warn">{{if .SendingPausedExternal}}Sending paused — configure the sending connector for the selected sender ({{.SendingPausedAddress}}). Mail will queue. <a href="{{.SendingPausedURL}}">Configure</a>.{{else}}Sending is paused until a provider is configured for this domain. Mail will queue. <a href="{{.DomainSendingSettingsURL}}">Add one</a>.{{end}}</div>{{end}}
 {{if not .InboundReady}}<div class="banner warn">Not receiving — no receive path is configured for this domain. <a href="{{.DomainReceivingSettingsURL}}">Add one</a>.</div>{{end}}{{end}}` + syncBanner + reconnectBanner + `
 {{template "live-requests-card" .}}
 {{template "select-banner" .}}
@@ -766,6 +767,13 @@ func (s *Server) applyStandaloneMailbox(r *http.Request, p model.Principal, box 
 	data.StandaloneConfigured = box.RemoteConfigured && box.Remote != nil
 	data.StandalonePlain = box.Remote != nil && box.Remote.Security == model.RemoteSecurityPlain
 	data.RemoteConnectorURL = "/ui/inboxes/" + box.ID + "/remote"
+	// A provider-connected inbox (One, Google, Microsoft) has no IMAP/SMTP
+	// connector to offer, so it must never be told to set one up: its own
+	// reconnect banner is the only connection prompt it shows.
+	data.StandaloneProvider = s.providerConnected(r.Context(), p.AccountID, box.ID)
+	// Only an account administrator can repair a provider connection, so a
+	// mailbox user who cannot is not offered a control that would fail.
+	data.StandaloneAdmin = p.Admin && p.UserID != ""
 	// A revoked/expired provider authorization is a per-inbox problem, so the
 	// mailbox and folder pages surface it in place. Only a disconnected state
 	// (never a transient sync error) sets the detail, so a retryable failure does

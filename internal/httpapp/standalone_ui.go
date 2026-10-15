@@ -933,16 +933,13 @@ func (s *Server) providerConnected(ctx context.Context, accountID, inboxID strin
 func (s *Server) uiInboxRemoteSettings(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
 	id := r.PathValue("id")
-	if s.Service.Store.IsOne(r.Context(), p.AccountID, id) {
-		http.Redirect(w, r, "/ui/connections/one?inbox="+url.QueryEscape(id), http.StatusSeeOther)
-		return
-	}
-	if s.remoteMailbox().IsMicrosoft(r.Context(), p.AccountID, id) {
-		http.Redirect(w, r, "/ui/inboxes/standalone/new?microsoft_inbox="+url.QueryEscape(id), 303)
-		return
-	}
-	if s.remoteMailbox().IsGoogle(r.Context(), p.AccountID, id) {
-		http.Redirect(w, r, "/ui/inboxes/standalone/new?google_inbox="+url.QueryEscape(id), 303)
+	// A provider-connected inbox has no editable IMAP/SMTP connector, and no
+	// separate settings page: its connection is managed on the inbox itself (One
+	// reconnects in place from the Identity tab; Google and Microsoft follow their
+	// OAuth wizard). Send the operator to the inbox rather than to a page that
+	// would only restate the same link.
+	if s.Service.Store.IsOne(r.Context(), p.AccountID, id) || s.providerConnected(r.Context(), p.AccountID, id) {
+		http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(id)+"?inbox_tab=basic", http.StatusSeeOther)
 		return
 	}
 	box, err := s.Service.Store.GetInbox(r.Context(), p, id)
