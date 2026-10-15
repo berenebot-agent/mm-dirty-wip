@@ -156,7 +156,10 @@ function harness(mode) {
   const form = new Element('FORM');
   form.dataset.antlerDomain = 'domain-1';
   form.dataset.antlerDomainName = mode === 'subdomain' ? 'mail.example.com' : 'example.com';
-  if (mode === 'subdomain') { form.dataset.antlerParent = 'example.com'; }
+  // A subdomain added standalone (not linked as an inherited child) carries no
+  // parent domain. The record-name logic must not depend on that link: it is
+  // exactly the case that used to render "@" on a subdomain.
+  if (mode === 'subdomain') { form.dataset.antlerParent = ''; }
   form.dataset.antlerConnectors = JSON.stringify(mxList);
   form.dataset.antlerStatus = JSON.stringify(seedStatus);
   form.closestMap = { dialog: dlg };
@@ -461,6 +464,17 @@ async function wizard(mode) {
   assert.match(table, /Name Type Priority Value Status/, 'the wizard uses the DNS record layout');
   assert.match(table, /mx\.example\.com/, 'the suggested MX record is listed');
 
+  // The MX "Name" column is the zone apex's "@" only for a two-label apex. A
+  // subdomain must spell out its fully-qualified name: "@" there would publish
+  // the MX on the parent zone and send mail to the wrong domain, which is what
+  // a subdomain added standalone (no parent link) used to show.
+  if (mode === 'subdomain') {
+    assert.match(table, /mail\.example\.com/, 'a subdomain shows its fully-qualified record name');
+    assert.doesNotMatch(table, /(^|\s)@(\s|$)/, 'a subdomain never shows "@" as its record name');
+  } else if (mode !== 'custom') {
+    assert.match(table, /(^|\s)@(\s|$)/, 'the apex shows "@" as its record name');
+  }
+
   // The wizard, unlike the status view, shows a live countdown while a data step
   // is open, so the operator can see the check is still running.
   if (HAVE.wizardCountdown) {
@@ -498,6 +512,10 @@ async function wizard(mode) {
   // Finishing saves the config once and lands on the status view.
   assert.equal(h.save.textContent, HAVE.statusSettings ? 'Save settings' : 'Save email', 'Finish returns to the saved status view');
   assert.match(h.collect(h.wizard.nodes['.antler-records']), /Connector Status/, 'the status table is shown after Finish');
+  // The footer's close control is relabelled as the wizard becomes the saved
+  // status view. It was only set once at init, so a freshly-finished setup left
+  // a stray "Cancel" beside an otherwise actionless status panel.
+  assert.equal(h.close.textContent, 'Close', 'Finish relabels the footer control from Cancel to Close');
   const expectConfig = mode === 'custom'
     ? { service: 'custom', enforcement: 'hard', receiver_urls: 'https://custom.example.com' }
     : { service: 'antler', enforcement: 'hard', contact_email: 'ops@example.com' };
