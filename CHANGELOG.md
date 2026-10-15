@@ -26,6 +26,13 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The Antler MX contact-email field now states its purpose in the label itself —
+  "used for important service messages only, no marketing" — and the separate
+  explanatory sentence was dropped from both the setup wizard and the saved status
+  view's settings panel, where it restated what the field labels already said. The
+  authentication-enforcement label now reads "(spam)" to name what the setting
+  acts on. The inherited-settings caveat is unchanged.
+
 - Consolidated inbound and standalone mailbox setup guidance in
   `docs/PROVIDERS.md`, kept agent connector setup in `docs/CONNECTORS.md`, and
   added the operator-focused `docs/REMOTE_MX.md`. Archived the MX/Dial MX

@@ -5785,7 +5785,7 @@ function hideInboxSubview(dlg) {
     var wizard = document.createElement('section');
     wizard.className = 'antler-wizard';
     wizard.innerHTML = '<p class="antler-progress" aria-live="polite"></p>' +
-      '<section data-antler-step="0"><h3>Contact email</h3><p class="muted small">Enter a contact email for your Antler MX setup.</p></section>' +
+      '<section data-antler-step="0"><h3>Contact email</h3></section>' +
       '<section data-antler-step="1" hidden><h3>Publish your DNS records</h3><p class="muted small">Add these records at your DNS provider. You can continue while DNS propagates.</p><div class="antler-records"></div></section>' +
       '<section data-antler-step="2" hidden><h3>Antler receivers</h3><p class="muted small">One ready receiver is enough to continue. Other receivers can connect later.</p><div class="antler-receivers"></div></section>' +
       '<section data-antler-step="3" hidden><h3>Receiver authentication enforcement</h3><p class="muted small">Moderate marks mail as spam when DMARC fails, or both SPF and DKIM fail. Hard marks mail as spam when any of SPF, DKIM, or DMARC fails. Missing or inconclusive results alone do not count as failures.</p></section>' +
@@ -5829,17 +5829,17 @@ function hideInboxSubview(dlg) {
     settings.setAttribute('data-antler-settings', '');
     var settingsHeading = document.createElement('h3');
     settingsHeading.textContent = 'Settings';
-    var settingsNote = document.createElement('p');
-    settingsNote.className = 'muted small';
     settings.appendChild(settingsHeading);
-    settings.appendChild(settingsNote);
     // The inherited setup is read-only: its settings belong to the owning domain.
+    // That caveat is the only note the section needs; the non-inherited view is
+    // self-explanatory from the field labels alone.
     var inherited = form.dataset.antlerInherited || '';
     if (inherited) {
       settingsHeading.textContent = 'Settings (inherited)';
+      var settingsNote = document.createElement('p');
+      settingsNote.className = 'muted small';
       settingsNote.textContent = 'Inherited from ' + inherited + ' — edit these on that domain.';
-    } else {
-      settingsNote.textContent = 'Update the contact email or the authentication enforcement for this domain.';
+      settings.appendChild(settingsNote);
     }
     wizard.appendChild(settings);
     var step0Panel = wizard.querySelector('[data-antler-step="0"]');
