@@ -21,6 +21,10 @@ import (
 type inboxConnectionState struct {
 	State    string `json:"state"`
 	Provider string `json:"provider,omitempty"`
+	// Label is the human provider name for this connection ("Gmail via One",
+	// "Google / Gmail", "Microsoft / Outlook"), used to label the reconnect
+	// control so it names the connection the operator is repairing.
+	Label string `json:"label,omitempty"`
 	// Detail is a short, safe operator description shown as the flag/prompt text.
 	Detail string `json:"detail,omitempty"`
 	// Reconnect is the reconnect affordance: "one" opens the in-place API-key
@@ -75,12 +79,12 @@ func (s *Server) inboxConnectionState(ctx context.Context, accountID string, box
 	snapshot, _ := s.Service.Store.MetadataSyncSnapshot(ctx, accountID, box.ID)
 	detail, disconnected := disconnectedReason(ctx, s.Service.Store, accountID, box.ID, snapshot)
 	if !disconnected {
-		return inboxConnectionState{State: connectionStateConnected, Provider: provider, Reconnect: reconnect}, true
+		return inboxConnectionState{State: connectionStateConnected, Provider: provider, Label: label, Reconnect: reconnect}, true
 	}
 	if detail == "" {
 		detail = label + " account disconnected. Reconnect to resume syncing."
 	}
-	return inboxConnectionState{State: connectionStateDisconnected, Provider: provider, Detail: detail, Reconnect: reconnect}, true
+	return inboxConnectionState{State: connectionStateDisconnected, Provider: provider, Label: label, Detail: detail, Reconnect: reconnect}, true
 }
 
 // disconnectedReason decides whether an inbox's durable state confirms a

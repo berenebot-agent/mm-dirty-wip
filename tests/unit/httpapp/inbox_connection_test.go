@@ -66,14 +66,14 @@ func TestDashboardConnectionFlagForDisconnectedOneInbox(t *testing.T) {
 		t.Fatal("healthy inbox must not render the connection flag")
 	}
 	// Flip the binding to attention: the flag appears, linked to Identity.
-	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "Reconnect the original Gmail connection", b.Revision); err != nil {
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
 		t.Fatal(err)
 	}
 	body = uiGet(t, h, cookie, "/").Body.String()
 	if !strings.Contains(body, `href="/?inbox=`+box.ID+`&inbox_tab=basic"`) {
 		t.Fatalf("disconnected inbox missing the connection flag: %s", body)
 	}
-	if !strings.Contains(body, "Reconnect the original Gmail connection") {
+	if !strings.Contains(body, "One connection revoked or expired") {
 		t.Fatal("connection flag must carry the operator reconnect detail")
 	}
 }
@@ -95,19 +95,27 @@ func TestInboxViewReconnectBannerForDisconnectedOneInbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "Reconnect the original Gmail connection", b.Revision); err != nil {
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "One connection revoked or expired", b.Revision); err != nil {
 		t.Fatal(err)
 	}
 	body = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
 	if !strings.Contains(body, "data-inbox-reconnect") {
 		t.Fatalf("disconnected inbox missing the inbox reconnect banner: %s", body)
 	}
-	if !strings.Contains(body, "Reconnect the original Gmail connection") {
+	if !strings.Contains(body, "One connection revoked or expired") {
 		t.Fatal("inbox reconnect banner must carry the operator detail")
 	}
-	// The banner's control is the in-place One reconnect bound to this inbox.
-	if !strings.Contains(body, `data-one-reconnect data-inbox="`+box.ID+`"`) {
-		t.Fatalf("inbox reconnect banner missing the One reconnect control: %s", body)
+	// The banner's control is the in-place One reconnect bound to this inbox,
+	// labelled with the connection name and rendered as an ordinary secondary
+	// button (never red-on-black).
+	if !strings.Contains(body, `class="secondary btn-sm" data-one-reconnect data-inbox="`+box.ID+`"`) {
+		t.Fatalf("inbox reconnect banner missing the labelled One reconnect control: %s", body)
+	}
+	if !strings.Contains(body, "Reconnect Gmail via One") {
+		t.Fatalf("inbox reconnect banner must name the connection on its control: %s", body)
+	}
+	if strings.Contains(body, "btn-sm danger\">Reconnect") {
+		t.Fatal("inbox reconnect banner must not use the red-on-black danger button")
 	}
 }
 
