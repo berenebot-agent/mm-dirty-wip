@@ -1983,20 +1983,24 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
 {{if $r.Configured}}<p class="muted small">This account's own receiver at <code>{{$r.URL}}</code> · <span class="pill{{if ne $r.State "active"}} amber{{end}}">{{mxStateLabel $r.State}}</span>{{if $r.Detail}} · {{$r.Detail}}{{end}}</p>
 <p class="muted small">Point this domain's MX record at your receiver's SMTP hostname. No DNS key record is needed: your receiver authenticates this core with its bearer key.</p>
 {{else}}<p class="muted small">No Remote MX receiver is configured for this account yet. Add your own receiver below, then select it here.</p>{{end}}
-{{if $.Principal.Admin}}<details class="remote-mx-editor"{{if or $r.Error (not $r.Configured)}} open{{end}}><summary>Account receiver settings</summary>
+{{if $.Principal.Admin}}<details class="remote-mx-editor" open><summary>Account receiver settings</summary>
 {{if $r.Error}}<div class="error">{{$r.Error}}</div>{{end}}
 <form method="post" action="/ui/account/mx" class="cfg-form" autocomplete="off" style="margin-top:8px">
 <input type="hidden" name="_csrf" value="{{$.CSRF}}">
 <input type="hidden" name="rx_revision" value="{{$r.Revision}}">
 <label>Receiver URL</label>
 <input name="rx_url" placeholder="https://mx.example.com" value="{{$r.URL}}">
-<p class="muted small">The HTTPS (or HTTP, if private) origin of your standalone Dial MX receiver, running with <code>DIALMX_MODE=single</code>.</p>
+<p class="muted small">The URL MailMoose connects to outbound. Use the origin of your standalone Dial MX receiver, running with <code>DIALMX_MODE=single</code>.</p>
 <label>Bearer key{{if $r.KeyConfigured}} <span class="muted small">(leave blank to keep the current value)</span>{{end}}</label>
 <input name="rx_bearer_key" type="password" autocomplete="off" placeholder="{{if $r.KeyConfigured}}unchanged{{else}}the receiver's DIALMX_CORE_KEY{{end}}">
+<p class="muted small">This must match <code>DIALMX_CORE_KEY</code> on the receiver. The saved key is never displayed.</p>
+<details class="remote-mx-advanced"><summary>Advanced network and TLS settings</summary>
 <label class="inherit-option"><input type="checkbox" name="rx_allow_private" value="1"{{if $r.AllowPrivate}} checked{{end}}> <span>Allow a private / LAN receiver (loopback or RFC1918 destination)</span></label>
 <p class="muted small">Only honoured when the operator allows private outbound (<code>ALLOW_PRIVATE_OUTBOUND=true</code>, the default).</p>
-<label>Private CA bundle (PEM, optional)</label>
+<label>Private CA certificate bundle (PEM, optional)</label>
 <textarea name="rx_ca" rows="3" placeholder="-----BEGIN CERTIFICATE-----">{{$r.CA}}</textarea>
+<p class="muted small">Only needed when the receiver's TLS certificate is signed by a CA this server does not already trust. This certificate verifies TLS; the bearer key authenticates the connection.</p>
+</details>
 <div class="dialog-actions"><button class="secondary" type="submit">Save receiver</button></div>
 </form>
 {{if $r.Configured}}<form method="post" action="/ui/account/mx/clear" data-confirm="Remove this account's Remote MX receiver? Domains using it will stop receiving until a receiver is set." style="margin-top:6px"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="rx_revision" value="{{$r.Revision}}"><button class="secondary danger" type="submit">Remove receiver</button></form>{{end}}

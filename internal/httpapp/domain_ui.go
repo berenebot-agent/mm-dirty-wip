@@ -1217,6 +1217,11 @@ func domainReceivingSteps(provider string) []string {
 			"Publish an SPF record for the domain; DKIM and DMARC are computed at the receiver.",
 			"Choose an enforcement mode below (moderate is the default), then save.",
 		}
+	case "remotemx":
+		return []string{
+			"MailMoose connects outbound to your account's receiver using its URL and bearer key below.",
+			"Point this domain's MX record at your receiver's SMTP hostname. No webhook, DNS proof, or per-domain key is needed.",
+		}
 	default:
 		return []string{"Register the webhook URL above with the provider, then fill in the fields below and save."}
 	}
