@@ -117,7 +117,7 @@ No change needed here; recorded so the plan reflects the verified split.
 - Regression: `GET /v1/search?inbox=<id>&label=<x>` and `.../inboxes/<id>/search?...` stay instant
   and complete (they must not regress to partial).
 
-**Docs:** `docs/API-REFERENCE.md` (generated) gets the budget/partial-completeness note; the labels
+**Docs:** `docs/API.md` (generated) gets the budget/partial-completeness note; the labels
 reference (`~/.hermes/skills/open-agent-inbox/references/labels-system.md`) is amended to drop the
 wrong "slow without `q=`" claim.
 
@@ -203,7 +203,7 @@ grammar.** New `POST /v1/messages/{id}/move` (and optionally
 - Reuses `submitMessageAction`/`EnqueueInboxAction`, so events (`message.folder_changed`) and the
   action-state polling (`?wait=true`) come for free.
 - Role: `assistant` (same tier as labels), documented in `internal/apispec/spec.go` so the generated
-  `docs/API-REFERENCE.md` picks it up.
+  `docs/API.md` picks it up.
 
 **1d. Make the 409 message actionable.** If 1b lands, the `"folder-backed labels cannot be removed;
 move the message instead"` string disappears from the labels path. If it does not land, append the
@@ -233,7 +233,7 @@ note it as follow-up.
   not make without a row-level SQL revert; after the fix the suite drops
   `labels_revert_folder_move.py` entirely.
 
-**Docs:** `docs/API-REFERENCE.md` (generated from apispec), `docs/UNIFIED_LABELS.md` and the
+**Docs:** `docs/API.md` (the generated endpoint reference and contract) and the
 labels-system reference both get the new move route plus a corrected "one location" note: a
 folder-backed label is entered by adding it and left by moving out, not by removing it.
 
@@ -401,7 +401,7 @@ at runtime. All must land with the code, in the same PR.
   message to the inbox root). Also amend the label schema note at schemas.go:214/226 so the
   `exclusive` membership description states that leaving a folder-backed label is a move, not a
   remove.
-- **`docs/API-REFERENCE.md`** — regenerate via `make docs` (`./mailmoose-go.sh run ./cmd/docsgen >`).
+- **`docs/API.md`** — regenerate via `make docs` (`./mailmoose-go.sh run ./cmd/docsgen >`).
   **CI fails on drift**: `.github/workflows/ci.yml:52–53` regenerates and `diff`s the file, and
   `tests/unit/apispec/markdown_test.go:27` asserts `RenderMarkdown` matches the table.
 - **`tests/unit/apispec/spec_test.go:14`** — `TestRoutesCount` **pins the table at 120 routes**.
@@ -411,7 +411,7 @@ at runtime. All must land with the code, in the same PR.
 ### Hand-maintained docs (must be corrected — they currently document the broken behaviour as
 design)
 
-- **`docs/UNIFIED_LABELS.md`** — lines 33–52. Two corrections and one addition:
+- **`docs/API.md`** — label filtering and membership contract. Two corrections and one addition:
   - Line 46–47 (`"Folder-backed labels create a move action; attempting to remove an exclusive
     folder label without another destination is rejected"`) — replace: removing a folder-backed
     label a message is inside now **moves it back to the inbox root**; the 409 survives only for
@@ -480,7 +480,7 @@ design)
 
 Regenerate-and-diff surfaces (`spec.go` → `route_io.go` → `schemas.go` → `make docs` → route-count
 test) first, because CI is red until they agree. Then the hand-maintained narrative docs
-(`UNIFIED_LABELS.md`, `API.md`, `DECISIONS.md`, `SPEC.md`), then `CHANGELOG.md` + `make changelog`,
+(`API.md`, `DECISIONS.md`, `SPEC.md`), then `CHANGELOG.md` + `make changelog`,
 then the Hermes skill reference. Per the repo's own convention (`docs/TESTING.md`, and the global
 AGENTS.md rule), launch the test run in the background as soon as the source is final and do the
 markdown edits while it runs — but never edit a file the build compiles during a run.

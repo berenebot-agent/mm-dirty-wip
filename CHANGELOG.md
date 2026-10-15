@@ -26,6 +26,12 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Consolidated the API contract and generated endpoint catalogue into
+  `docs/API.md`, and brought the Google/Gmail and Microsoft standalone inbox
+  setup guides together under `docs/PROVIDERS.md`. Removed the secondary
+  metadata-sync status note and unified-labels guide from the shipped docs; their
+  relevant API behavior remains described in `docs/API.md`.
+
 - The dashboard's aggregate receiving light is drawn only for a Dial MX domain
   that actually names a receiver target. An Antler MX setup whose receiver set is
   empty — a manifest that advertised no receivers, or a setup that was started and

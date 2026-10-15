@@ -49,8 +49,8 @@ jobs:
       # invisible to the Go suite. ubuntu-latest ships Node.
       - name: generated API reference
         run: |
-          go run ./cmd/docsgen > /tmp/mailmoose-API-REFERENCE.md
-          diff -u docs/API-REFERENCE.md /tmp/mailmoose-API-REFERENCE.md
+          go run ./cmd/docsgen > /tmp/mailmoose-API.md
+          diff -u docs/API.md /tmp/mailmoose-API.md
       - name: js
         run: node tests/antler-wizard-check.cjs 2>&1 | tee ci-logs/js.log
       # The default run skips the slow gated tests (see tests/support/smoke);
