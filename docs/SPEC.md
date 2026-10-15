@@ -345,7 +345,14 @@ services:
       - BASE_URL=https://mail.example.com
 ```
 
-The operator configures an optional receiving provider per domain (Mailgun, Cloudflare Worker, Resend, or the optional MailMoose MX direct-SMTP edge) and an optional sending provider (Mailgun, Brevo, Resend, or generic SMTP) in the Admin UI. Each domain's provider configuration is stored encrypted in the database rather than in the process environment, and there is no account-level connector pool or assignment step.
+For each domain, the operator can select an optional receiving provider and an
+optional sending provider in the Admin UI. Inbound options are Mailgun,
+Cloudflare Worker, Resend, Postmark, Direct MX, Antler MX, and Dial MX; sending
+options are Mailgun, Brevo, Resend, generic SMTP, and Direct MX. Account
+administrators can also configure a separate, single-mode Remote MX receiver for
+their account. Provider settings are stored encrypted in the database rather
+than in the process environment; there is no account-level connector pool or
+assignment step.
 
 The installation has one **system administrator**: the login named by `ADMIN_EMAIL` / `ADMIN_PASSWORD` (either may come from a `*_FILE` secret). While supplied, these credentials are authoritative — they create the login on first start (or adopt an existing user with that email, forcing it to account Admin and system Admin) and rotate its stored email/password on later starts (revoking its sessions); when absent the stored login is preserved. There is no unauthenticated setup form. The system administrator has an account of their own and an **Admin** page listing accounts, but no automatic access to other accounts' mail. Each account has one Admin; the **Account** page separates a user's personal settings (**Your settings**) from account-wide controls (**Account settings**: account name, default time zone, Trash retention) and account administration (**mailer** mailbox, mailbox users, invitations), the latter two visible and enforced for the account Admin only. Trash retention is account-wide by default and may be overridden per inbox. An invitation is either a new, separate account with its own Admin, or a mailbox user on an existing account; the invitee sets their password from a single-use, expiring link. Public account registration is configuration-controlled and defaults to closed for self-hosted deployments.
 
@@ -357,20 +364,22 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 ### Inbound
 
-V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as
-inbound transports, plus the optional MailMoose MX direct-SMTP edge (see
-[REMOTE_MX.md](REMOTE_MX.md)). Provider webhook mail never carries trusted authentication
-evidence; only the authenticated MX edge supplies SPF/DKIM/DMARC evidence, and
-its per-domain policy can classify a message as Spam. Spam is a computed view
-over `messages.is_spam`, counts toward quota, is excluded from ordinary reads
-and message waits, and is recoverable through an explicit Spam view with a
-release action and a durable `message.spam_state_changed` event.
+V1 supports Mailgun, Cloudflare Email Routing (via a Worker), Resend, and
+Postmark for webhook receiving, plus Direct MX, Antler MX, Dial MX, and account
+Remote MX for SMTP receiving (see [Remote SMTP receiving](REMOTE_MX.md)).
+SendGrid is not currently offered pending end-to-end verification. Webhook
+providers do not supply MailMoose-computed SPF/DKIM/DMARC evidence; only the SMTP
+receivers perform those checks. The receiver's per-domain policy can classify a
+message as Spam. Spam is a computed view over `messages.is_spam`, counts toward
+quota, is excluded from ordinary reads and message waits, and is recoverable
+through an explicit Spam view with a release action and a durable
+`message.spam_state_changed` event.
 
 ```text
 Internet SMTP
     ↓
-Mailgun, Cloudflare Email Routing, or Resend
-    ↓ HTTPS webhook
+Mailgun, Cloudflare, Resend, Postmark, or an SMTP receiver
+    ↓ webhook or SMTP receiver
 MailMoose
 ```
 
@@ -379,17 +388,16 @@ domain owns at most one optional receiving provider configuration, stored as an
 encrypted secret on that domain. A domain with no receiving configuration cannot
 accept mail. Inbound provider secrets are not read from the environment.
 
-Mailgun delivers raw MIME to `/internal/ingest/mailgun/raw-mime` (the suffix is
-protocol-significant) using its signed webhook fields. The Cloudflare Worker
-streams raw MIME to `/internal/ingest/cloudflare` with bearer authentication
-and envelope headers. Resend posts a Svix-signed metadata webhook to
-`/internal/ingest/resend`; the adapter verifies the signature and then fetches
-the raw MIME from the Resend API using the account key. SendGrid posts the raw
-MIME in a signed `multipart/form-data` payload to `/internal/ingest/sendgrid`,
-verified with the domain's ECDSA public key. Postmark posts a JSON webhook to
-`/internal/ingest/postmark` including the raw MIME, authenticated with generated
-HTTP Basic credentials. In all cases the adapter authenticates before MIME is
-parsed or persisted.
+Mailgun delivers raw MIME to `/internal/ingest/mailgun/raw-mime` using its
+signed webhook fields. The Cloudflare Worker streams raw MIME to
+`/internal/ingest/cloudflare` with bearer authentication. Resend posts a
+Svix-signed metadata webhook to `/internal/ingest/resend`; MailMoose verifies
+the signature and fetches the raw MIME from Resend. Postmark posts a JSON
+webhook containing the raw MIME to `/internal/ingest/postmark`, authenticated
+with credentials generated by MailMoose. SendGrid inbound is not currently
+offered. All enabled webhook integrations authenticate before MIME is parsed or
+persisted. Direct MX, Antler MX, Dial MX, and Remote MX receive mail through an
+SMTP receiver instead of a provider webhook.
 
 Delivery identity is scoped to the account, provider, canonical original
 envelope recipient, and provider delivery id, so retries are deduplicated even
