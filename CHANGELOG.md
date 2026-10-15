@@ -26,6 +26,15 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The dashboard's aggregate receiving light is drawn only for a Dial MX domain
+  that actually names a receiver target. An Antler MX setup whose receiver set is
+  empty — a manifest that advertised no receivers, or a setup that was started and
+  abandoned after its configuration was saved — now renders **no dot** instead of a
+  red "no inbound connector is ready / mail delivery is blocked". That red light was
+  a phantom: it asserted mail was blocked for a domain with nothing to deliver to
+  and nothing to fix. The live lights snapshot applies the same gate, so the
+  dashboard's client tick cannot reintroduce the dot.
+
 - The receiving published-record checks now use a four-state vocabulary that says
   what each state means: `ok` (published and matching), `not_found` (definitively
   not published), `mismatch` (published but wrong) and `dns_error` (the lookup
