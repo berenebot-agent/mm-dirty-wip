@@ -5380,6 +5380,22 @@ function bindInboxSettingsShell(dlg) {
 	}
 })();
 
+// The One setup page has no wizard step of its own, so its left-aligned Back
+// follows the browser history to the screen the user came from (the Add-inbox
+// dialog, the standalone wizard, or a direct link), falling back to the
+// dashboard when there is no history to return to.
+(function () {
+  var back = document.querySelector('[data-one-page] [data-one-back]');
+  if (!back) { return; }
+  back.addEventListener('click', function () {
+    if (window.history.length > 1 && document.referrer) {
+      window.history.back();
+      return;
+    }
+    window.location.assign('/');
+  });
+})();
+
 // showInboxSubview switches the whole panels area to a sub-view (the connector
 // editor or the external-alias sending editor) and marks its footer submit so
 // only one Save is ever shown.

@@ -23,6 +23,12 @@ const oneProviderTile = `<button type="button" class="provider-choice" data-stan
 // marker so One keeps a single definition.
 const oneAdvancedButton = `<button type="button" class="provider-choice provider-choice-advanced" data-google-advanced-one><span class="provider-logo" aria-hidden="true">One</span><span class="provider-text"><span class="provider-title">One (Easy Gmail Setup)</span><span class="provider-desc">Connect Gmail through your own One account instead. No Google Cloud app required. Email data passes through One.</span></span><svg class="provider-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>`
 
+// wizardBackNavOne is the One setup page's left-aligned Back control, matching
+// the wizard steps. The One page is reached from the Add-inbox dialog, the
+// wizard's One option, or a direct link, so Back follows the browser history to
+// return to whichever screen the user came from and falls back to the dashboard.
+const wizardBackNavOne = `<div class="wizard-step-nav"><button type="button" class="secondary wizard-back" data-one-back aria-label="Back">Back</button></div>`
+
 var dashboardBody = stringsReplaceOneTile(strings.Replace(dashboardBaseBody,
 	`<section class="card" style="grid-column:1/-1" data-open-inbox=`,
 	`<section class="card dashboard-inboxes-card" data-group-scope="{{.Principal.AccountID}}:{{.Principal.UserID}}" data-dashboard-csrf="{{.CSRF}}" style="grid-column:1/-1" data-open-inbox=`, 1))
@@ -274,7 +280,7 @@ func (s *Server) uiOneMailbox(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/connections/one?inbox="+url.QueryEscape(inbox)+"&notice=Inbox+connection+updated.+Other+inboxes+unchanged", 303)
 }
 
-const oneBody = `<section class="card"><h1>One (Easy Gmail Setup)</h1>
+const oneBody = `<section class="card" data-one-page>` + wizardBackNavOne + `<h1>One (Easy Gmail Setup)</h1>
 <p>Connect Gmail with your own One account. No Google Cloud app required. <b>Gmail content and API calls pass through One's cloud infrastructure.</b></p>
 {{if .Notice}}<div class="ok" role="status">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
 {{if not .OneInboxID}}{{if .OneSetupID}}<h2>Select mailboxes</h2><p>Only selected Gmail connections are supported at this time.</p>
