@@ -208,7 +208,7 @@ func TestUIDomainReceivingCloudflareWorkerFlashIsOneTime(t *testing.T) {
 		t.Fatalf("worker flash cache-control = %q", got)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{`id="cf-code"`, "WEBHOOK_URL = ", "http://example.test/internal/ingest/cloudflare"} {
+	for _, want := range []string{`id="cf-code"`, "WEBHOOK_URL = ", "http://example.test/internal/ingest/cloudflare", "In Cloudflare, open <b>Workers &amp; Pages</b>", "Under <b>Routing rules</b>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("worker flash missing %q", want)
 		}
@@ -505,6 +505,9 @@ func TestUIDomainCloudflareSelectableAfterConfigured(t *testing.T) {
 	if strings.Contains(body, "known-cf-secret") {
 		t.Fatalf("stored secret leaked on the dashboard")
 	}
+	if !strings.Contains(body, "Optional. Leave blank to keep the current shared secret, or enter a secret to replace it.") {
+		t.Fatalf("configured Cloudflare editor must explain blank-secret behavior")
+	}
 	cfg, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -557,6 +560,11 @@ func TestUIDomainCloudflarePresaveShowsOptionalSecret(t *testing.T) {
 
 	dialog := dialogHTML(t, body, "domain-receiving-dialog-"+d.ID)
 	group := providerGroupHTML(t, dialog, "cloudflare")
+	for _, unwanted := range []string{"setup-webhook-url", "setup-copy", "Register this webhook URL", "Save this form to generate a shared secret", "In Cloudflare, create a Worker", "Required secrets must be entered"} {
+		if strings.Contains(group, unwanted) {
+			t.Fatalf("Cloudflare pre-save editor unexpectedly contains %q", unwanted)
+		}
+	}
 	start := strings.Index(group, `name="cfg_cloudflare_webhook_secret"`)
 	if start < 0 {
 		t.Fatalf("overridable shared secret input missing before save")
@@ -567,6 +575,9 @@ func TestUIDomainCloudflarePresaveShowsOptionalSecret(t *testing.T) {
 	}
 	if strings.Contains(tag, "required") {
 		t.Fatalf("overridable secret must not be required (blank means generate): %s", tag)
+	}
+	if !strings.Contains(group, "Optional. Enter an existing shared secret to reuse a Worker across domains, or leave blank to generate one.") {
+		t.Fatalf("Cloudflare editor must explain the optional shared secret")
 	}
 	if _, err := svc.Store.GetDomainReceivingConfig(ctx, u.AccountID, d.ID); !errors.Is(err, store.ErrNoProvider) {
 		t.Fatalf("viewing setup must not persist a config: %v", err)
