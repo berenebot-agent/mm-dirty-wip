@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -170,8 +171,31 @@ func TestPostmarkGeneratedCredentialFlash(t *testing.T) {
 	if !strings.Contains(body, "domain-credential-url") || !strings.Contains(body, "/internal/ingest/postmark") {
 		t.Fatalf("credential dialog missing webhook URL")
 	}
+	const start = `<pre id="domain-credential-url">`
+	_, rest, ok := strings.Cut(body, start)
+	if !ok {
+		t.Fatal("credential URL missing")
+	}
+	raw, _, _ := strings.Cut(rest, "</pre>")
+	webhook, err := url.Parse(html.UnescapeString(raw))
+	if err != nil || webhook.User == nil || webhook.User.Username() == "" {
+		t.Fatal("authenticated webhook URL missing username")
+	}
+	if pass, ok := webhook.User.Password(); !ok || pass == "" {
+		t.Fatal("authenticated webhook URL missing password")
+	}
+	for _, want := range []string{"Set the Inbound Domain", "Include raw email content", "inbound.postmarkapp.com", `aria-label="Copy webhook URL"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Postmark continuation missing %q", want)
+		}
+	}
 	// A refresh no longer shows the credentials.
 	if again := domainGet(t, h, cookie, loc).Body.String(); strings.Contains(again, "domain-credential-url") {
 		t.Fatal("credentials shown after first view")
+	}
+	editor := domainGet(t, h, cookie, "/?domain="+d.ID+"&kind=receiving&provider=postmark").Body.String()
+	group := providerGroupHTML(t, dialogHTML(t, editor, "domain-receiving-dialog-"+d.ID), "postmark")
+	if !strings.Contains(group, "credentials are already saved") || strings.Contains(group, "setup-webhook-url") || strings.Contains(group, "Save in MailMoose first") {
+		t.Fatal("configured Postmark must explain one-time credentials without offering a bare URL")
 	}
 }
