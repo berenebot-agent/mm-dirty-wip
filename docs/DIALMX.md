@@ -390,6 +390,17 @@ check; a receiver that is connected but not routed by MX reports `rejected`
 (`not_mx`) and is not green. The amber case exists because a rogue MX record
 changes with no receiver event.
 
+The light is drawn **only for a domain that names a receiver target** — at least
+one Antler receiver, or a custom service's receiver URL. A Dial MX provider whose
+Antler receiver set is empty (a manifest that advertised none, or an Antler setup
+that was started and abandoned after its configuration was saved) gets **no dot at
+all**, rather than a red "no inbound connector is ready / mail delivery is blocked".
+A red light asserts mail is blocked, which is not a fact about a domain with
+nothing to deliver to, so the absent case renders nothing. This matches the MX
+check and the extra-MX verdict, both of which already require a configured receiver
+set. The live lights snapshot (`/ui/state?lights=1`) applies the same gate, so the
+dashboard's client tick cannot reintroduce a dot the server omitted.
+
 The published-record verdict — the `_mailmoose-mx` TXT check, the MX routing check
 and the extra-MX host list — is **one shared value owned by a background watcher**,
 not a per-render lookup. The watcher re-checks a domain **on demand and on a slow

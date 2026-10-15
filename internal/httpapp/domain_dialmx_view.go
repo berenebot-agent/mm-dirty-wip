@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -227,4 +228,33 @@ func statusExpiry(v mxdialStatusView) string {
 		return d.Round(time.Minute).String()
 	}
 	return d.Round(time.Second).String()
+}
+
+// dialMXHasReceiverTargets reports whether a domain's Dial MX receiving
+// configuration actually names something to deliver to: at least one Antler
+// receiver, or (for a custom service) at least one receiver URL. It is the gate
+// for the dashboard's aggregate inbound light. A Dial MX domain whose Antler
+// receiver set is empty — a setup that was started and abandoned, or a manifest
+// that advertised no receivers — has nothing to deliver to and nothing to fix,
+// so it must not be painted red "mail delivery is blocked" for a setup that was
+// never finished. A missing or undecryptable configuration is likewise no target.
+//
+// A custom-service config always carries at least one receiver URL (the save path
+// rejects an empty set), so in practice this reduces to "the Antler receiver set
+// is not empty", but it is expressed generally so a future custom shape cannot
+// slip a phantom light through.
+func (s *Server) dialMXHasReceiverTargets(ctx context.Context, accountID, domainID string) bool {
+	cfg, err := s.Service.Store.ResolveDomainReceivingConfig(ctx, accountID, domainID, "dialmx")
+	if err != nil {
+		return false
+	}
+	values, err := s.Service.DecryptDomainReceivingConfig(cfg)
+	if err != nil {
+		return false
+	}
+	if len(app.AntlerReceiversFromConfig(values)) > 0 {
+		return true
+	}
+	raw, _ := values["receiver_urls"].(string)
+	return strings.TrimSpace(raw) != ""
 }
