@@ -1051,7 +1051,10 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 	if !ok {
 		return nil, false
 	}
-	e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: t.ConfigFields(), WebhookURL: domainIngestURL(baseURL, t), Steps: domainReceivingSteps(provider)}
+	e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: t.ConfigFields(), Steps: domainReceivingSteps(provider)}
+	if provider != "cloudflare" {
+		e.WebhookURL = domainIngestURL(baseURL, t)
+	}
 	// A provider may supply a longer, descriptive picker label than its short
 	// Description(): Antler MX states its zero-config nature, Remote MX states
 	// that the receiver is the account's own.
@@ -1173,13 +1176,6 @@ func domainReceivingSteps(provider string) []string {
 			"Under events, tick email.received only.",
 			"Click Add, reopen the webhook, and copy its signing secret (whsec_...).",
 			"Paste the signing secret and a full-access Resend key below, then save.",
-		}
-	case "cloudflare":
-		return []string{
-			"Save this form to generate a shared secret and Worker code, or paste an existing shared secret to reuse one Worker across several of your domains.",
-			"In Cloudflare, create a Worker (Workers & Pages, Create application, Start with Hello World, Deploy).",
-			"Open the Worker, choose Edit code, replace the stub with the generated snippet, then Deploy.",
-			"Onboard Email Routing for this domain, edit the catch-all rule to Send to a Worker, select this Worker and enable it.",
 		}
 	case "mailgun":
 		return []string{
