@@ -185,7 +185,7 @@ This is DAC + separate-uid isolation, not namespaces.
 The edge runs from its own minimal image (`Dockerfile.mx`) in its own
 filesystem and network namespace. Recommended when you can run two containers:
 
-See [README.md](README.md) for the pull and compose examples.
+See the [README](../README.md) for the pull and compose examples.
 
 That is the whole required setup. Everything below is optional tuning.
 
