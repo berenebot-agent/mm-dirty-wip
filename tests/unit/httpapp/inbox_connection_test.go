@@ -78,6 +78,39 @@ func TestDashboardConnectionFlagForDisconnectedOneInbox(t *testing.T) {
 	}
 }
 
+// TestInboxViewReconnectBannerForDisconnectedOneInbox proves a disconnected
+// provider connection renders the per-inbox reconnect banner on the mailbox view
+// in place, with the detail and a single reconnect control bound to this inbox,
+// and that a healthy connection renders no such banner.
+func TestInboxViewReconnectBannerForDisconnectedOneInbox(t *testing.T) {
+	t.Parallel()
+	h, svc, _, cookie, _, box := oneReconnectFixture(t)
+	ctx := context.Background()
+	// Healthy connection: no inbox reconnect banner.
+	body := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if strings.Contains(body, "data-inbox-reconnect") {
+		t.Fatal("healthy inbox must not render the inbox reconnect banner")
+	}
+	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", "Reconnect the original Gmail connection", b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	body = uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	if !strings.Contains(body, "data-inbox-reconnect") {
+		t.Fatalf("disconnected inbox missing the inbox reconnect banner: %s", body)
+	}
+	if !strings.Contains(body, "Reconnect the original Gmail connection") {
+		t.Fatal("inbox reconnect banner must carry the operator detail")
+	}
+	// The banner's control is the in-place One reconnect bound to this inbox.
+	if !strings.Contains(body, `data-one-reconnect data-inbox="`+box.ID+`"`) {
+		t.Fatalf("inbox reconnect banner missing the One reconnect control: %s", body)
+	}
+}
+
 // TestRemoteConfigViewCarriesConnectionState proves the Identity tab's embedded
 // remote config reports the provider connection state, so the client can render
 // the reconnect prompt without a second request.
@@ -228,9 +261,11 @@ func TestOneReconnectEndpointRefusesNonOneInbox(t *testing.T) {
 }
 
 // TestInboxConnectionScriptWiring pins the client wiring: app.js must build the
-// reconnect control under an Advanced disclosure, render a red prompt when the
-// provider reports the account disconnected, and open the in-place One dialog
-// rather than leaving for the full wizard.
+// reconnect control under an Advanced disclosure, render the red detail line
+// inside that disclosure directly above the single reconnect control (no
+// duplicate prompt CTA), pre-open the disclosure when the provider reports the
+// account disconnected, and open the in-place One dialog rather than leaving for
+// the full wizard.
 func TestInboxConnectionScriptWiring(t *testing.T) {
 	t.Parallel()
 	_, h, _, _, _ := httpFixture(t)
@@ -249,10 +284,20 @@ func TestInboxConnectionScriptWiring(t *testing.T) {
 		"/ui/connections/one/reconnect",
 		"X-CSRF-Token",
 		"Save and check",
+		// The red detail line is appended inside the disclosure body, ahead of
+		// the single reconnect control.
+		"body.append(prompt, googleLink)",
+		// A disconnected provider pre-opens the disclosure.
+		"advanced.open = true",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing reconnect wiring %q", want)
 		}
+	}
+	// The duplicate prompt CTA is gone: no standalone danger "Reconnect" button
+	// is built alongside the disclosure control.
+	if strings.Contains(script, "cta.textContent = 'Reconnect'") {
+		t.Fatal("app.js must not build a duplicate reconnect CTA outside the disclosure")
 	}
 }
 
