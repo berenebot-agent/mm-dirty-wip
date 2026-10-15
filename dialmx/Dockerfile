@@ -10,7 +10,7 @@
 # Build from the repository root so the whole module is in context:
 #   docker build -f dialmx/Dockerfile -t mailmoose-dialmx .
 #
-# See docs/DIALMX.md.
+# See docs/REMOTE_MX.md for operator setup.
 
 FROM golang:1.27-bookworm AS build
 ARG GOPROXY=https://proxy.golang.org,direct

@@ -34,14 +34,14 @@
 The optional `mailmoose-mx` edge is built into the same image but runs as a
 separate, non-root process with no `/data` mount and no encryption key; it is
 an optional exception to the one-process topology (decision `D031`). See
-[MX.md](MX.md).
+[REMOTE_MX.md](REMOTE_MX.md).
 
 A second optional direct-SMTP path, **Dial MX**, inverts the direction: a
 standalone receiver terminates SMTP and the core **dials out** to it over
 verified HTTPS/2, so no inbound port is needed on the core. Like the MX edge it
 is a deliberate, operator-chosen optional component outside the default
 single-process topology; it does not introduce a hosted/account mode. See
-[DIALMX.md](DIALMX.md) and decision `D067`.
+[REMOTE_MX.md](REMOTE_MX.md) and decision `D067`.
 
 Production runtime:
 
@@ -406,7 +406,7 @@ The receiver holds no policy snapshot, database access
 or encryption key. Auth failure becomes a durable Spam delivery rather than an
 SMTP rejection. Durable per-recipient receipts (7 days) make sender retries
 idempotent, including after the original message is deleted. See
-[MX.md](MX.md).
+[REMOTE_MX.md](REMOTE_MX.md).
 
 ## 9. Authentication
 
@@ -518,6 +518,9 @@ Use small in-process rate limiters for login and outbound-send endpoints. Accoun
 
 ## 13. HTTP and TLS boundary
 
-The application listens on plain HTTP inside its deployment network. A reverse proxy such as Nginx Proxy Manager, Caddy, or Traefik terminates public TLS and forwards the original scheme/host using trusted proxy headers. For the Dial MX session listener specifically, the proxy must be able to forward **cleartext HTTP/2** to the upstream — see [MX.md](MX.md) for the per-proxy settings, including Traefik's `loadBalancer.server.scheme=h2c`.
+The application listens on plain HTTP inside its deployment network. A reverse
+proxy terminates public TLS and forwards the original scheme and host. Configure
+any proxy separately using its own documentation; MailMoose does not ship proxy
+configuration.
 
 A second HTTP listener defaults to `:8082` and serves only the inbound webhook connector and health checks. It can be disabled or assigned another port using `DEDICATED_RECEIVER_ENABLE` and `DEDICATED_RECEIVER_PORT`. Expose that listener through a reverse proxy with a provider-appropriate policy (TLS, IP allowlist, WAF) and keep the main listener on a private interface or firewall. The receiver can also terminate TLS using `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.
