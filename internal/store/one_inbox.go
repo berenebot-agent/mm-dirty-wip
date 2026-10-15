@@ -131,22 +131,36 @@ func (s *Store) SaveOneBinding(ctx context.Context, b OneBinding, expected int64
 	return tx.Commit()
 }
 
-// Clear only this inbox's credentials. Keep a non-secret routing tombstone so
-// cached data/drafts survive and sending cannot fall back to another provider.
-func (s *Store) DeleteOneConnection(ctx context.Context, account, inbox string) error {
+// DeleteOneInbox removes a One-bound standalone inbox and every row the One
+// import created for it, in one transaction. The binding, its Gmail sync
+// progress and the detection row are account-scoped by inbox id and are deleted
+// here so no credential or progress row outlives the inbox; the inbox row itself
+// goes last so the ON DELETE CASCADE children (messages, folders, credentials)
+// follow it.
+//
+// It deliberately does not touch anything in One or Gmail. Deleting the inbox is
+// the supported way to detach a One connection: with the connection gone, the
+// address is free to be imported again from the One setup screen.
+func (s *Store) DeleteOneInbox(ctx context.Context, account, inbox string) error {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE inbox_one_bindings SET encrypted_key='',encrypted_connection_key='',fingerprint='',key_aad='',status='disconnected',last_error='',revision=revision+1 WHERE account_id=? AND inbox_id=?`, account, inbox)
+	res, err := tx.ExecContext(ctx, `DELETE FROM inbox_one_bindings WHERE account_id=? AND inbox_id=?`, account, inbox)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return ErrNotFound
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE inboxes SET remote_configured=0 WHERE account_id=? AND id=?`, account, inbox); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_gmail_sync WHERE account_id=? AND inbox_id=?`, account, inbox); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM google_detection WHERE inbox_id=?`, inbox); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM inboxes WHERE account_id=? AND id=?`, account, inbox); err != nil {
 		return err
 	}
 	return tx.Commit()

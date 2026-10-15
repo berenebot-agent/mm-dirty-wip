@@ -152,27 +152,6 @@ func TestOneSelectiveImportMailboxAndDisconnect(t *testing.T) {
 			t.Errorf("ordinary outbox bypassed One: sends=%d", f.SendCalls)
 		}
 	})
-	if err := rm.DeleteOneConnection(ctx, p, inbox); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := rm.GoogleMailboxClient(ctx, u.AccountID, inbox); err == nil {
-		t.Fatal("disconnected mailbox usable")
-	}
-	if _, err := svc.Store.GoogleLocalID(ctx, u.AccountID, inbox, "message-one"); err != nil {
-		t.Fatal("disconnect purged metadata", err)
-	}
-	if err := rm.SaveOneInboxKey(ctx, p, inbox, onefixture.Key); err != nil {
-		t.Fatal(err)
-	}
-	if err := rm.DeleteOneConnection(ctx, p, inbox); err != nil {
-		t.Fatal(err)
-	}
-	if !svc.Store.IsOne(ctx, u.AccountID, inbox) || !svc.Store.IsGoogle(ctx, u.AccountID, inbox) {
-		t.Fatal("removed One binding can fall back to IMAP")
-	}
-	if _, _, err := rm.GoogleMailboxClient(ctx, u.AccountID, inbox); err == nil {
-		t.Fatal("removed credentials usable")
-	}
 	if _, err := rm.PrepareOneImport(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, onefixture.Key); err == nil {
 		t.Fatal("API principal manages human-owned key")
 	}
@@ -317,6 +296,143 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 		if strings.Contains(complete.Body.String(), extra) {
 			t.Fatalf("completion screen retains extra content: %s", extra)
 		}
+	}
+}
+
+// TestOneImportScreenIsAddOnlyWithNoDeadEnds proves the One setup screen carries
+// no account-wide mailbox list and no per-inbox management: an already-imported
+// connection is a plain "Already imported" row with no control, and every other
+// already-configured address is refused with the remedy that frees it. The whole
+// screen is key entry and selection; changing a key or re-importing an address is
+// done on the inbox (delete it first, for the latter).
+func TestOneImportScreenIsAddOnlyWithNoDeadEnds(t *testing.T) {
+	t.Parallel()
+	svc, _, u, _, _, _ := standaloneFixture(t)
+	ctx := context.Background()
+	f := onefixture.New(t)
+	rm := app.NewRemoteMailboxService(svc)
+	defer rm.Stop()
+	rm.OneHTTP, rm.OneInterval = f.Client(t), time.Nanosecond
+	srv := httpapp.New(svc, nil)
+	srv.SetRemoteMailbox(rm)
+	h := srv.Handler()
+	token, _, err := svc.Store.CreateSession(context.Background(), u.ID, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, path string, values url.Values) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(values.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.AddCookie(&http.Cookie{Name: "mmm_session", Value: token})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	p := model.Principal{AccountID: u.AccountID, UserID: u.ID, Admin: true}
+	setup, err := rm.PrepareOneImport(ctx, p, onefixture.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID}, nil)
+	if err != nil || len(results) != 1 || results[0].Error != "" {
+		t.Fatalf("import: %+v %v", results, err)
+	}
+
+	// A fresh setup's selection step shows only the key/selection flow: no
+	// imported-mailboxes list, no per-inbox settings link, no management forms.
+	setup2, err := rm.PrepareOneImport(ctx, p, onefixture.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := request("GET", "/ui/connections/one?setup="+setup2, nil)
+	if selection.Code != 200 {
+		t.Fatalf("selection = %d", selection.Code)
+	}
+	body := selection.Body.String()
+	for _, banned := range []string{`/ui/connections/one/mailbox`, `name="poll_minutes"`, "Connection settings", "Imported Gmail mailboxes", "Inbox connection", "Delete connection", `name="inbox_id"`} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("setup screen retains account/per-inbox management: %s", banned)
+		}
+	}
+	// The already-imported connection is a plain informational row: its checkbox
+	// and history select are disabled and it carries no action or link to the
+	// inbox it owns.
+	if !strings.Contains(body, ">Already imported</td>") {
+		t.Fatalf("already-imported row missing its plain label: %s", body)
+	}
+	if strings.Contains(body, "/ui/inboxes/"+results[0].InboxID) {
+		t.Fatal("already-imported row links to the inbox it owns")
+	}
+	binding, err := svc.Store.OneBinding(ctx, u.AccountID, results[0].InboxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, binding.InboxID) {
+		t.Fatalf("setup screen exposes an imported inbox id: %s", body)
+	}
+
+	// The key step is likewise list-free.
+	entry := request("GET", "/ui/connections/one", nil)
+	if entry.Code != 200 || !strings.Contains(entry.Body.String(), `name="api_key"`) {
+		t.Fatalf("key step = %d", entry.Code)
+	}
+	for _, banned := range []string{"Imported Gmail mailboxes", "Connection settings", "Delete connection"} {
+		if strings.Contains(entry.Body.String(), banned) {
+			t.Fatalf("key step retains account management: %s", banned)
+		}
+	}
+
+	// An address already used by another inbox is refused with the remedy, not a
+	// dead-end "migration required" note, and never offered as selectable. The
+	// address itself must be discovered before the setup is consumed by an import.
+	choices, err := rm.DiscoverOne(ctx, p, setup2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row *app.OneMailboxChoice
+	for i := range choices {
+		if choices[i].ID == onefixture.ConnectionID {
+			row = &choices[i]
+		}
+	}
+	if row == nil || row.Available || row.Status != "Already imported" {
+		t.Fatalf("bound connection row = %+v", row)
+	}
+	// A key that does not expose this inbox's original connection is refused with
+	// the action that unblocks it, never a silent failure. The key itself is valid
+	// (the fixture accepts an additional key); it simply no longer carries the
+	// connection this inbox was imported from.
+	f.Change(func(f *onefixture.Fixture) {
+		f.Keys = append(f.Keys, "fixture-rotated-key")
+		f.Connections = []map[string]any{
+			{"id": "fixture-other-connection", "key": "fixture-other-selector", "platform": "gmail", "active": true, "state": "operational", "environment": "live", "identity": "opaque-not-an-email"},
+		}
+	})
+	rm.OneHTTP = f.Client(t)
+	if err := rm.SaveOneInboxKey(ctx, p, results[0].InboxID, "fixture-rotated-key"); err == nil {
+		t.Fatal("key without this inbox's original connection accepted")
+	} else if !strings.Contains(err.Error(), "delete the inbox and import the address again") {
+		t.Fatalf("key refusal does not state the remedy: %v", err)
+	}
+}
+
+// TestOneRetiredInboxLinkRedirects proves a bookmarked /ui/connections/one?inbox=
+// link lands on the inbox it named and asks for the reconnect dialog in place,
+// rather than 404ing (the per-inbox One settings screen is gone).
+func TestOneRetiredInboxLinkRedirects(t *testing.T) {
+	t.Parallel()
+	h, _, _, cookie, _, box := oneReconnectFixture(t)
+	rr := uiGet(t, h, cookie, "/ui/connections/one?inbox="+box.ID)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("retired inbox link = %d, want a redirect: %s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/ui/inboxes/"+box.ID+"?reconnect=1" {
+		t.Fatalf("retired inbox link redirected to %q", loc)
+	}
+	// An id that does not exist falls back to the dashboard rather than 404ing.
+	rr = uiGet(t, h, cookie, "/ui/connections/one?inbox=missing-inbox")
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/" {
+		t.Fatalf("unknown inbox link = %d %q", rr.Code, rr.Header().Get("Location"))
 	}
 }
 

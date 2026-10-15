@@ -1,6 +1,7 @@
 package httpapp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/model"
@@ -41,9 +41,8 @@ func stringsReplaceOneTile(body string) string {
 }
 
 type oneMailboxStatus struct {
-	Name                                                 string
-	InboxID, Email, Status, Error, IndexStatus, LastSync string
-	PollMinutes                                          int
+	Name                          string
+	InboxID, Email, Status, Error string
 }
 
 func (s *Server) oneAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -72,95 +71,102 @@ func (s *Server) oneFailure(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	http.Redirect(w, r, "/ui/connections/one?"+q.Encode(), http.StatusSeeOther)
 }
+
+// uiOne is the add-only One import screen: enter a key, select Gmail mailboxes,
+// import. It deliberately carries no account-wide list of imported mailboxes and
+// no per-inbox management — a One inbox's key is changed on that inbox itself
+// (its Identity tab, which opens the reconnect dialog in place), and an address
+// can be imported again only after its existing inbox is deleted. The old
+// per-inbox settings view is therefore gone; a bookmarked ?inbox= link lands on
+// that inbox instead of a dead end.
 func (s *Server) uiOne(w http.ResponseWriter, r *http.Request) {
 	if !s.oneAdmin(w, r) {
 		return
 	}
 	p := principal(r)
-	d := pageData{Title: "One · Gmail connections", Principal: p, CSRF: csrf(r), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error"), OneSetupID: r.URL.Query().Get("setup"), OneInboxID: r.URL.Query().Get("inbox")}
-	complete := r.URL.Query().Get("imported") == "1"
-	bindings, err := s.Service.Store.ListOneBindings(r.Context(), p.AccountID)
-	if err != nil {
-		http.Error(w, "Cannot load One connections", 500)
-		return
-	}
-	found := d.OneInboxID == ""
-	for _, b := range bindings {
-		if complete {
-			selected := false
-			for _, id := range r.URL.Query()["inbox"] {
-				if id == b.InboxID {
-					selected = true
-					break
-				}
-			}
-			if !selected {
-				continue
-			}
+	d := pageData{Title: "One · Gmail connections", Principal: p, CSRF: csrf(r), Notice: r.URL.Query().Get("notice"), Error: r.URL.Query().Get("error"), OneSetupID: r.URL.Query().Get("setup")}
+	// The completion panel names its mailboxes with repeated `inbox` params, so
+	// the retired-link catch below must not treat that as a per-inbox link.
+	if r.URL.Query().Get("imported") == "1" {
+		selected := make(map[string]bool)
+		for _, id := range r.URL.Query()["inbox"] {
+			selected[id] = true
 		}
-		if !complete && d.OneInboxID != "" && b.InboxID != d.OneInboxID {
-			continue
+		for _, b := range s.oneImportSummary(r, p, selected) {
+			d.OneMailboxes = append(d.OneMailboxes, b)
 		}
-		found = true
-		v := oneMailboxStatus{InboxID: b.InboxID, Name: b.GmailEmail, Email: b.GmailEmail, Status: b.Status, Error: b.LastError, PollMinutes: 5}
-		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, b.InboxID); err == nil {
-			if box.DisplayName != "" {
-				v.Name = box.DisplayName
-			}
-			if box.RemotePollSeconds != nil {
-				v.PollMinutes = max(2, min(*box.RemotePollSeconds/60, 30))
-			}
-		}
-		if status, err := s.Service.Store.GetRemoteIndexStatus(r.Context(), p.AccountID, b.InboxID); err == nil {
-			v.IndexStatus = status.Status
-			if !status.IndexedAt.IsZero() {
-				v.LastSync = status.IndexedAt.UTC().Format(time.RFC3339)
-			}
-		}
-		d.OneMailboxes = append(d.OneMailboxes, v)
-	}
-	if complete {
 		d.Title = "One import complete"
-		d.OneInboxID = ""
 		s.render(w, r, oneCompleteBody, d)
 		return
 	}
-	if !found {
-		http.NotFound(w, r)
+	if inbox := strings.TrimSpace(r.URL.Query().Get("inbox")); inbox != "" {
+		s.redirectOneInboxLink(w, r, inbox)
 		return
 	}
-	if d.OneSetupID != "" && d.OneInboxID == "" {
-		d.OneChoices, err = s.remoteMailbox().DiscoverOne(r.Context(), p, d.OneSetupID)
+	if d.OneSetupID != "" {
+		choices, err := s.remoteMailbox().DiscoverOne(r.Context(), p, d.OneSetupID)
 		if err != nil {
 			d.Error = "Import setup expired or discovery failed; enter the key again"
 			d.OneSetupID = ""
-		} else if len(d.OneChoices) == 0 {
+		} else if len(choices) == 0 {
 			d.Notice = "No Gmail accounts found. Connect Gmail in One → Connected Apps, then refresh connections."
 		} else {
+			d.OneChoices = choices
 			d.OneHistoryWindows = app.OneHistoryWindowOptions()
 		}
 	}
 	s.render(w, r, oneBody, d)
 }
+
+// oneImportSummary builds the completion panel's per-mailbox cards for the
+// imported inbox ids, in the order the import reported them.
+func (s *Server) oneImportSummary(r *http.Request, p model.Principal, selected map[string]bool) []oneMailboxStatus {
+	out := []oneMailboxStatus{}
+	for _, b := range s.oneBindings(r.Context(), p) {
+		if !selected[b.InboxID] {
+			continue
+		}
+		v := oneMailboxStatus{InboxID: b.InboxID, Name: b.GmailEmail, Email: b.GmailEmail, Status: b.Status, Error: b.LastError}
+		if box, err := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, b.InboxID); err == nil && box.DisplayName != "" {
+			v.Name = box.DisplayName
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// oneBindings loads the account's One bindings, returning an empty list rather
+// than failing the page: a missing list only costs the completion cards.
+func (s *Server) oneBindings(ctx context.Context, p model.Principal) []store.OneBinding {
+	bindings, err := s.Service.Store.ListOneBindings(ctx, p.AccountID)
+	if err != nil {
+		return nil
+	}
+	return bindings
+}
+
 func (s *Server) uiOneSave(w http.ResponseWriter, r *http.Request) {
 	if !s.oneAdmin(w, r) {
 		return
 	}
-	p, inbox := principal(r), r.Form.Get("inbox_id")
-	if inbox != "" {
-		if err := s.remoteMailbox().SaveOneInboxKey(r.Context(), p, inbox, r.Form.Get("api_key")); err != nil {
-			s.oneFailure(w, r, err)
-			return
-		}
-		http.Redirect(w, r, "/ui/connections/one?inbox="+url.QueryEscape(inbox)+"&notice=Connection+saved", 303)
-		return
-	}
-	id, err := s.remoteMailbox().PrepareOneImport(r.Context(), p, r.Form.Get("api_key"))
+	id, err := s.remoteMailbox().PrepareOneImport(r.Context(), principal(r), r.Form.Get("api_key"))
 	if err != nil {
 		s.oneFailure(w, r, err)
 		return
 	}
 	http.Redirect(w, r, "/ui/connections/one?setup="+url.QueryEscape(id), 303)
+}
+
+// redirectOneInboxLink sends a retired /ui/connections/one?inbox=<id> link to the
+// inbox it named, asking the page to open the in-place reconnect dialog. An id
+// that no longer exists (the inbox was deleted) falls back to the dashboard
+// rather than a dead end.
+func (s *Server) redirectOneInboxLink(w http.ResponseWriter, r *http.Request, inbox string) {
+	if _, err := s.Service.Store.GetInboxInternal(r.Context(), principal(r).AccountID, inbox); err != nil {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/ui/inboxes/"+url.PathEscape(inbox)+"?reconnect=1", http.StatusSeeOther)
 }
 
 // uiOneReconnect is the in-place reconnect endpoint behind the Identity tab's
@@ -246,52 +252,15 @@ func (s *Server) uiOneImport(w http.ResponseWriter, r *http.Request) {
 	completion.Set("notice", notice)
 	http.Redirect(w, r, "/ui/connections/one?"+completion.Encode(), 303)
 }
-func (s *Server) uiOneMailbox(w http.ResponseWriter, r *http.Request) {
-	if !s.oneAdmin(w, r) {
-		return
-	}
-	p, inbox := principal(r), r.Form.Get("inbox_id")
-	var err error
-	switch r.Form.Get("action") {
-	case "delete":
-		err = s.remoteMailbox().DeleteOneConnection(r.Context(), p, inbox)
-	case "poll":
-		minutes, e := strconv.Atoi(r.Form.Get("poll_minutes"))
-		if e != nil || minutes < 2 || minutes > 30 {
-			err = model.NewMailboxError(model.ErrKindInvalid, "One polling must be between 2 and 30 minutes", false, nil)
-		} else if _, e := s.Service.Store.OneBinding(r.Context(), p.AccountID, inbox); e != nil {
-			err = e
-		} else {
-			seconds := minutes * 60
-			box, e := s.Service.Store.GetInboxInternal(r.Context(), p.AccountID, inbox)
-			if e != nil {
-				err = e
-			} else {
-				err = s.Service.Store.SetInboxRemoteSync(r.Context(), p.AccountID, inbox, &seconds, box.RemoteFullSyncMinutes)
-			}
-		}
-	default:
-		err = model.NewMailboxError(model.ErrKindInvalid, "Unknown One mailbox action", false, nil)
-	}
-	if err != nil {
-		s.oneFailure(w, r, err)
-		return
-	}
-	http.Redirect(w, r, "/ui/connections/one?inbox="+url.QueryEscape(inbox)+"&notice=Inbox+connection+updated.+Other+inboxes+unchanged", 303)
-}
 
 const oneBody = `<section class="card" data-one-page>` + wizardBackNavOne + `<h1>One (Easy Gmail Setup)</h1>
 <p>Connect Gmail with your own One account. No Google Cloud app required. <b>Gmail content and API calls pass through One's cloud infrastructure.</b></p>
 {{if .Notice}}<div class="ok" role="status">{{.Notice}}</div>{{end}}{{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
-{{if not .OneInboxID}}{{if .OneSetupID}}<h2>Select mailboxes</h2><p>Only selected Gmail connections are supported at this time.</p>
+{{if .OneSetupID}}<h2>Select mailboxes</h2><p>Only selected Gmail connections are supported at this time.</p>
 <div class="muted"><p>A full metadata import spends about one request per message, so a large mailbox can consume a big share of your monthly quota. If a count below looks high, choose a shorter history window for that mailbox.</p></div>
 <form method="post" action="/ui/connections/one/import"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="setup_id" value="{{.OneSetupID}}">{{if .OneChoices}}<div class="table-wrap"><table class="dense one-import-table"><thead><tr><th>Choose</th><th>Mailbox</th><th>Provider</th><th>One status</th><th>Import status</th><th>Messages</th><th>Index history</th></tr></thead><tbody>{{range .OneChoices}}<tr><td><input type="checkbox" name="connection_id" value="{{.ID}}" {{if not .Available}}disabled{{end}} aria-label="Import {{.Email}}"></td><td>{{if .Email}}{{.Email}}{{else}}Identity unavailable{{end}}</td><td>{{.Provider}}</td><td>{{.OneStatus}} · {{.Environment}}</td><td>{{.Status}}</td><td>{{if .MessagesTotal}}~{{.MessagesTotal}}{{else}}unknown{{end}}</td><td><select name="window_{{.ID}}" aria-label="History window for {{.Email}}" {{if not .Available}}disabled{{end}}><option value="" selected>None</option>{{range $.OneHistoryWindows}}<option value="{{.Key}}">{{.Label}}</option>{{end}}</select></td></tr>{{end}}</tbody></table></div>{{end}}<div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a><a class="btn secondary" style="margin-right:auto" href="/ui/connections/one?setup={{.OneSetupID}}">Refresh</a><button {{if not .OneChoices}}disabled{{end}}>Import selected</button></div></form>
 {{else}}<p>Connect Gmail in <a href="https://app.withone.ai/" target="_blank" rel="noopener noreferrer">One → Connected Apps</a>, then generate a REST key under <b>Developers → API Keys</b>.</p>
-<form method="post" action="/ui/connections/one/config" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>One API key</label><input name="api_key" type="text" required autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="4096"><div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a><button>Next</button></div></form>{{end}}{{end}}
-{{if and (not .OneSetupID) .OneMailboxes}}<h2>{{if .OneInboxID}}Inbox connection{{else}}Imported Gmail mailboxes{{end}}</h2>{{range .OneMailboxes}}<section class="card"><h3><a href="/ui/inboxes/{{.InboxID}}">{{.Name}}</a></h3><p class="muted">{{.Email}} · Gmail via One</p><p>Status: {{.Status}}. Index: {{.IndexStatus}}. Last sync: {{.LastSync}}</p>{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
-{{if $.OneInboxID}}<p>Save a key to replace or reconnect <b>this inbox only</b>. Its original Gmail identity is verified automatically.</p><form method="post" action="/ui/connections/one/config" autocomplete="off"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="inbox_id" value="{{.InboxID}}"><label>One API key</label><input name="api_key" type="text" required autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="4096"><button>Save</button></form>
-<form method="post" action="/ui/inboxes/{{.InboxID}}/sync"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><button>Sync now</button></form><form method="post" action="/ui/connections/one/mailbox"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="inbox_id" value="{{.InboxID}}"><label>Polling (minutes, 2–30)</label><input name="poll_minutes" type="number" min="2" max="30" value="{{.PollMinutes}}"><button name="action" value="poll">Save polling</button></form>
-<p>Deleting this connection clears only this inbox's credentials. Other inboxes, local metadata and drafts are retained. Nothing is revoked or deleted in One or Gmail.</p><form method="post" action="/ui/connections/one/mailbox"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="inbox_id" value="{{.InboxID}}"><button class="secondary" name="action" value="delete">Delete connection</button></form>
-{{else}}<a href="/ui/connections/one?inbox={{.InboxID}}">Connection settings</a>{{end}}</section>{{end}}{{end}}{{if .OneInboxID}}<div class="dialog-actions"><a class="btn secondary" href="/">Close</a></div>{{end}}</section>`
+<form method="post" action="/ui/connections/one/config" autocomplete="off"><input type="hidden" name="_csrf" value="{{.CSRF}}"><label>One API key</label><input name="api_key" type="text" required autocomplete="off" spellcheck="false" autocapitalize="off" maxlength="4096"><div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a><button>Next</button></div></form>{{end}}
+<p class="muted small">Changing the key for an inbox you already imported is done on that inbox: open it, then <b>Identity → Advanced → Reconnect Gmail via One</b>. To import an address again, delete its inbox first.</p></section>`
 const oneCompleteBody = `<section class="card wizard-box"><h1>Gmail inboxes connected</h1><div class="ok" role="status">{{.Notice}}</div><p>Your inboxes are ready. Messages will appear as the initial sync progresses.</p><div class="grid">{{range .OneMailboxes}}<section class="card"><h2>{{.Name}}</h2><p class="muted">{{.Email}}</p><p>Gmail via One · {{.Status}}</p><div class="dialog-actions"><a class="btn secondary" href="/ui/inboxes/{{.InboxID}}">Open inbox</a></div></section>{{end}}</div><div class="dialog-actions"><a class="btn" href="/">Close</a></div></section>`
 const oneImportBody = `<section class="card"><h1>One import results</h1><p>{{.Notice}}</p><ul>{{range .OneImportResults}}<li>{{.ConnectionID}}: {{if .Error}}{{.Error}}{{else}}Imported — <a href="/ui/inboxes/{{.InboxID}}">open mailbox</a>{{end}}</li>{{end}}</ul><a href="/ui/connections/one?setup={{.OneSetupID}}">Refresh connections and retry failed selections</a></section>`

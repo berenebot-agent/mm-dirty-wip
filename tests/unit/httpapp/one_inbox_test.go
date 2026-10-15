@@ -104,19 +104,26 @@ func TestOneMultiImportIndependentKeysAndSingleDeletion(t *testing.T) {
 	if _, err := secondClient.Profile(ctx, token); err != nil {
 		t.Fatal("sibling rotation invalidated queued client", err)
 	}
-	if err := rm.DeleteOneConnection(ctx, model.Principal{AccountID: "other-account", UserID: u.ID, Admin: true}, first); err == nil {
+	if err := rm.DeleteOneInbox(ctx, model.Principal{AccountID: "other-account", UserID: u.ID, Admin: true}, first); err == nil {
 		t.Fatal("cross-account deletion allowed")
 	}
 	draft, err := svc.Store.CreateDraft(ctx, p, model.Draft{InboxID: first, Subject: "Retained draft", Text: "Synthetic"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rm.DeleteOneConnection(ctx, p, first); err != nil {
+	if err := rm.DeleteOneInbox(ctx, p, first); err != nil {
 		t.Fatal(err)
 	}
-	deleted, err := svc.Store.OneBinding(ctx, u.AccountID, first)
-	if err != nil || deleted.EncryptedKey != "" || deleted.EncryptedConnectionKey != "" || deleted.Status != "disconnected" {
-		t.Fatal("first credentials not cleared", err)
+	// Deleting one One inbox takes its own inbox, binding and progress with it —
+	// and nothing of its sibling's.
+	if _, err := svc.Store.GetInboxInternal(ctx, u.AccountID, first); err == nil {
+		t.Fatal("deleted inbox still readable")
+	}
+	if _, err := svc.Store.OneBinding(ctx, u.AccountID, first); err == nil {
+		t.Fatal("deleted inbox retained a One binding")
+	}
+	if _, err := svc.Store.GetDraft(ctx, p, draft.ID); err == nil {
+		t.Fatal("deleted inbox retained a draft")
 	}
 	unchanged, err = svc.Store.OneBinding(ctx, u.AccountID, second)
 	if err != nil || unchanged.EncryptedKey != b.EncryptedKey || unchanged.Status != "active" || unchanged.Revision != b.Revision {
@@ -126,15 +133,16 @@ func TestOneMultiImportIndependentKeysAndSingleDeletion(t *testing.T) {
 		t.Fatal("sibling deletion invalidated client", err)
 	}
 	if _, _, err := rm.GoogleMailboxClient(ctx, u.AccountID, first); err == nil {
-		t.Fatal("deleted connection still works")
+		t.Fatal("deleted inbox still works")
 	}
-	if _, err := svc.Store.GoogleLocalID(ctx, u.AccountID, first, "message-one"); err != nil {
-		t.Fatal("connection deletion purged metadata", err)
+	// The freed address can be imported again, which is the documented way to
+	// detach and re-create a One connection.
+	setup, err = rm.PrepareOneImport(ctx, p, replacement)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := svc.Store.GetDraft(ctx, p, draft.ID); err != nil {
-		t.Fatal("connection deletion purged draft", err)
-	}
-	if err := rm.SaveOneInboxKey(ctx, p, first, onefixture.Key); err != nil {
-		t.Fatal("inbox cannot reconnect independently", err)
+	reimported, err := rm.ImportOne(ctx, p, setup, []string{onefixture.ConnectionID}, nil)
+	if err != nil || reimported[0].Error != "" || reimported[0].InboxID == "" {
+		t.Fatalf("address not importable after deletion: %+v %v", reimported, err)
 	}
 }

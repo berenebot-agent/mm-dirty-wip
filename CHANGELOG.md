@@ -26,6 +26,19 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The One / Gmail setup screen now only creates inboxes. It no longer lists
+  imported mailboxes or offers per-inbox connection management, and an
+  already-imported mailbox is a plain, non-selectable "Already imported" row. A
+  key is changed on the inbox that owns it: **Identity → Advanced → Reconnect
+  Gmail via One** (or the red connection flag, which now opens that reconnect
+  dialog immediately). An address that is already configured is refused with the
+  remedy — "delete the existing inbox before importing" — rather than a dead end,
+  and reconnecting with a key that no longer exposes this inbox's original One
+  connection says the same. "Delete connection" is gone: deleting the inbox is the
+  only way to remove a One connection, and a mailbox user who cannot repair a
+  connection is told to ask an administrator instead of being shown a control that
+  would fail for them.
+
 - The Antler MX contact-email field now states its purpose in the label itself —
   "used for important service messages only, no marketing" — and the separate
   explanatory sentence was dropped from both the setup wizard and the saved status

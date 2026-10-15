@@ -273,7 +273,6 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /ui/connections/one/config", s.withSession(s.withCSRF(s.uiOneSave)))
 	m.HandleFunc("POST /ui/connections/one/reconnect", s.withSession(s.withCSRF(s.uiOneReconnect)))
 	m.HandleFunc("POST /ui/connections/one/import", s.withSession(s.withCSRF(s.uiOneImport)))
-	m.HandleFunc("POST /ui/connections/one/mailbox", s.withSession(s.withCSRF(s.uiOneMailbox)))
 	m.HandleFunc("POST /ui/oauth/microsoft/begin", s.withSession(s.withCSRF(s.uiMicrosoftBegin)))
 	m.HandleFunc("POST /ui/oauth/microsoft/finish", s.withSession(s.withCSRF(s.uiMicrosoftFinish)))
 	m.HandleFunc("GET /ui/oauth/google/info", s.withSession(s.uiGoogleInfo))

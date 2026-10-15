@@ -301,10 +301,17 @@ account-wide request allowance. The key is not shown again after setup.
 
 MailMoose accesses Gmail through One's cloud service. Existing and new mail are
 synced on a schedule (One does not provide push notifications); the default poll
-interval is five minutes and can be changed in the inbox's connection settings.
+interval is five minutes and can be changed in the inbox's own sync schedule.
 The mailbox remains in Gmail, while MailMoose keeps a local metadata index and
-fetches message content when needed. Manage or reconnect the One connection from
-the inbox settings. Protect `APP_ENCRYPTION_KEY` as described in the
+fetches message content when needed.
+
+The setup screen only creates inboxes. Each imported inbox owns its own encrypted
+copy of the key: to replace or reconnect that key, open the inbox and use
+**Identity → Advanced → Reconnect Gmail via One**. A revoke or expiry in One flags
+every affected inbox, and each is reconnected on that inbox. An address that is
+already configured cannot be imported again — delete the existing inbox first,
+which is also the only way to remove a One connection (nothing is ever revoked or
+deleted in One or Gmail). Protect `APP_ENCRYPTION_KEY` as described in the
 [self-hosting guide](SELFHOSTING.md#backup).
 
 ## IMAP + SMTP

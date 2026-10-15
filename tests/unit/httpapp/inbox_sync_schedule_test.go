@@ -387,10 +387,18 @@ func TestInboxListingOutboundCapabilities(t *testing.T) {
 		}
 	}
 	check(true)
-	if err = svc.Store.DeleteOneConnection(ctx, u.AccountID, binding.InboxID); err != nil {
+	// Removing the One connection means deleting the inbox (there is no detach
+	// any more), so the address leaves the listing entirely.
+	if err = svc.Store.DeleteOneInbox(ctx, u.AccountID, binding.InboxID); err != nil {
 		t.Fatal(err)
 	}
-	check(false)
+	rr := apiGet(t, h, "/v1/inboxes", key)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list = %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), binding.InboxID) {
+		t.Fatal("deleted One inbox still listed")
+	}
 }
 
 // intPtr returns a pointer to v, for the optional per-inbox cadence overrides.
