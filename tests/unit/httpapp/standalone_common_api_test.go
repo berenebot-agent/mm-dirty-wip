@@ -875,6 +875,13 @@ func TestStandaloneUIAddAndBanner(t *testing.T) {
 			t.Fatalf("dashboard missing provider button %q", want)
 		}
 	}
+	// Choosing Google opens an advanced-setup warning step that steers less
+	// experienced users to One or IMAP while still offering to continue.
+	for _, want := range []string{`data-inbox-panel="sa-google-advanced"`, `data-google-advanced-continue`, `data-google-advanced-one`, `data-google-advanced-imap`, "advanced-user function"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing Google advanced-setup step %q", want)
+		}
+	}
 	if strings.Contains(body, "coming later") {
 		t.Fatal("dashboard still shows the stale Google/Microsoft 'coming later' buttons")
 	}

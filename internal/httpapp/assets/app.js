@@ -209,6 +209,191 @@
   window.mailmooseCopy = { text: copyText, wire: wire, announce: announce, select: select };
 })();
 
+// Combobox: a real, always-visible dropdown list attached to a text input,
+// replacing the native <input list> datalist popup (which browsers render as a
+// small autocomplete hint rather than a proper list). Typing filters the
+// options and free text is always allowed, so a group name can be picked from
+// the list or typed fresh. It is a light ARIA combobox: the input keeps
+// role="combobox" with aria-expanded/aria-controls/aria-activedescendant and the
+// popup is a role="listbox" of role="option" rows. wire attaches behaviour to
+// one input; setOptions replaces the option source.
+(function () {
+  'use strict';
+
+  var openCombo = null;
+  var uid = 0;
+
+  function closeOpen() {
+    if (openCombo) {
+      openCombo.close();
+    }
+  }
+
+  function wire(input, opts) {
+    if (!input || input._mailmooseCombo) {
+      return input && input._mailmooseCombo;
+    }
+    opts = opts || {};
+    var id = 'combo-' + (++uid);
+    var list = document.createElement('ul');
+    list.className = 'combo-list';
+    list.setAttribute('role', 'listbox');
+    list.id = id + '-list';
+    list.hidden = true;
+    var wrap = document.createElement('div');
+    wrap.className = 'combo-wrap';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+    wrap.appendChild(list);
+
+    var options = [];
+    var activeIndex = -1;
+    var api = {};
+
+    function optionValues() {
+      return typeof opts.options === 'function' ? opts.options() : (opts.options || []);
+    }
+
+    function filter(query) {
+      var all = optionValues();
+      var q = String(query || '').trim().toLowerCase();
+      if (!q) {
+        return all.slice();
+      }
+      return all.filter(function (name) { return String(name).toLowerCase().indexOf(q) >= 0; });
+    }
+
+    function render() {
+      var values = filter(input.value);
+      options = values;
+      list.textContent = '';
+      if (!values.length) {
+        var empty = document.createElement('li');
+        empty.className = 'combo-empty';
+        empty.textContent = input.value.trim() ? 'No matching group — press Enter to create it' : 'No groups yet — type a name';
+        empty.setAttribute('role', 'presentation');
+        list.appendChild(empty);
+        activeIndex = -1;
+        return;
+      }
+      values.forEach(function (name, index) {
+        var li = document.createElement('li');
+        li.className = 'combo-option';
+        li.setAttribute('role', 'option');
+        li.id = id + '-opt-' + index;
+        li.textContent = name;
+        li.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+        if (index === activeIndex) {
+          li.classList.add('active');
+        }
+        li.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          pick(name);
+        });
+        list.appendChild(li);
+      });
+    }
+
+    function open() {
+      if (openCombo && openCombo !== api) {
+        openCombo.close();
+      }
+      openCombo = api;
+      list.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+      render();
+    }
+
+    function close() {
+      if (list.hidden) {
+        return;
+      }
+      list.hidden = true;
+      activeIndex = -1;
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      if (openCombo === api) {
+        openCombo = null;
+      }
+    }
+
+    function highlight(index) {
+      options = filter(input.value);
+      if (!options.length) {
+        activeIndex = -1;
+        input.removeAttribute('aria-activedescendant');
+        return;
+      }
+      activeIndex = (index + options.length) % options.length;
+      render();
+      input.setAttribute('aria-activedescendant', id + '-opt-' + activeIndex);
+      var node = list.children[activeIndex];
+      if (node && node.scrollIntoView) {
+        node.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function pick(name) {
+      input.value = name;
+      close();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-controls', list.id);
+    input.setAttribute('aria-autocomplete', 'list');
+
+    input.addEventListener('focus', function () { open(); });
+    input.addEventListener('click', function () { open(); });
+    input.addEventListener('input', function () { open(); render(); });
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        open();
+        highlight(activeIndex + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        open();
+        highlight(activeIndex - 1);
+      } else if (event.key === 'Enter') {
+        if (!list.hidden && activeIndex >= 0 && options[activeIndex] != null) {
+          event.preventDefault();
+          pick(options[activeIndex]);
+        } else {
+          close();
+        }
+      } else if (event.key === 'Escape') {
+        close();
+      } else if (event.key === 'Tab') {
+        close();
+      }
+    });
+    input.addEventListener('blur', function () {
+      // Delay so a click on an option (mousedown) lands before the list closes.
+      window.setTimeout(close, 120);
+    });
+
+    api.setOptions = function () {
+      if (!list.hidden) {
+        render();
+      }
+    };
+    api.close = close;
+    input._mailmooseCombo = api;
+    return api;
+  }
+
+  function closeAll() { closeOpen(); }
+  document.addEventListener('click', function (event) {
+    if (openCombo && !event.target.closest('.combo-wrap')) {
+      closeOpen();
+    }
+  });
+
+  window.mailmooseCombo = { wire: wire, close: closeAll };
+})();
+
 // The existing header status flag is also the durable action queue entry point.
 (function () {
   'use strict';
@@ -1548,7 +1733,7 @@
   var groupDialog = null;
   var groupInput = null;
   var groupTarget = null;
-  var groupOptions = null;
+  var groupCombo = null;
   var groupRemove = null;
   var folderIcon = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h3l1.4 1.6h5.2A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8z"/></svg>';
 
@@ -1713,13 +1898,10 @@
     label.textContent = 'Group name';
     groupInput = document.createElement('input');
     groupInput.id = 'dashboard-group-input';
-    groupInput.setAttribute('list', 'dashboard-group-options');
     groupInput.setAttribute('autocomplete', 'off');
     groupInput.setAttribute('spellcheck', 'false');
     groupInput.setAttribute('maxlength', '64');
     groupInput.setAttribute('placeholder', 'e.g. Agents');
-    groupOptions = document.createElement('datalist');
-    groupOptions.id = 'dashboard-group-options';
     var hint = document.createElement('p');
     hint.className = 'muted small';
     hint.textContent = 'Type a new name or choose an existing group. Groups are labels only; they do not affect access, routing, or quota.';
@@ -1744,9 +1926,11 @@
     form.appendChild(groupTarget);
     form.appendChild(label);
     form.appendChild(groupInput);
-    form.appendChild(groupOptions);
     form.appendChild(hint);
     form.appendChild(actions);
+    // Wrap the input in the combobox only once it is in the tree, so wire() can
+    // insert its dropdown alongside it.
+    groupCombo = window.mailmooseCombo.wire(groupInput, { options: function () { return groupNamesFor(groupEdit ? groupEdit.table : 'inboxes'); } });
     groupDialog.appendChild(form);
     document.body.appendChild(groupDialog);
     form.addEventListener('submit', function (event) {
@@ -1778,13 +1962,17 @@
     });
   }
 
+  // groupNamesFor is the combobox option source: the groups already in use on
+  // that table. It is read on every open/keystroke so newly created groups appear
+  // without rebuilding the field.
+  function groupNamesFor(table) {
+    return sortedGroupNames(table || 'inboxes');
+  }
+
   function updateGroupOptions(table) {
-    groupOptions.textContent = '';
-    sortedGroupNames(table).forEach(function (name) {
-      var option = document.createElement('option');
-      option.value = name;
-      groupOptions.appendChild(option);
-    });
+    if (groupCombo) {
+      groupCombo.setOptions();
+    }
   }
 
   function updateGroupButton(table, row) {
@@ -3563,6 +3751,9 @@ function clearUrlParams(names) {
   var editPrimaryName = '';
   var editDefault = document.getElementById('inbox-default-sender');
   var editDesired = '';
+  // dashboardGroupNames backs the Identity tab's Dashboard group combobox: the
+  // distinct group names already used anywhere in the user's dashboard.
+  var dashboardGroupNames = [];
   // editExternal holds the secret-free external aliases for the open inbox, so
   // the default-sender select can include them and preserve an external default.
   var editExternal = [];
@@ -3605,40 +3796,42 @@ function clearUrlParams(names) {
 
   // loadDashboardGroup fills the Identity tab's Dashboard group field from the
   // signed-in user's dashboard preferences (a personal display preference, not
-  // inbox policy). A group is read from groups.inboxes[id]. The datalist is
-  // refreshed from the same payload so the field offers existing group names.
+  // inbox policy). A group is read from groups.inboxes[id]. The same payload
+  // feeds the field's dropdown so it offers every existing group name.
   function loadDashboardGroup(inboxID) {
     var field = document.getElementById('inbox-dashboard-group');
     var input = document.getElementById('inbox-dashboard-group-input');
-    var options = document.getElementById('inbox-dashboard-group-options');
     if (!field || !input) {
       return;
     }
     field.hidden = false;
     input.value = '';
+    dashboardGroupNames = [];
+    if (!input._mailmooseCombo) {
+      window.mailmooseCombo.wire(input, { options: function () { return dashboardGroupNames; } });
+    }
     fetch('/ui/dashboard/preferences', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { if (!r.ok) { throw new Error('preferences unavailable'); } return r.json(); })
       .then(function (prefs) {
         var groups = (prefs && prefs.groups && prefs.groups.inboxes) || {};
         input.value = groups[inboxID] || '';
-        if (options) {
-          options.textContent = '';
-          var seen = Object.create(null);
-          Object.keys(groups).forEach(function (key) {
-            var name = groups[key];
-            if (name && !seen[name]) {
-              seen[name] = true;
-              var opt = document.createElement('option');
-              opt.value = name;
-              options.appendChild(opt);
-            }
-          });
+        var seen = Object.create(null);
+        dashboardGroupNames = Object.keys(groups).map(function (key) { return groups[key]; }).filter(function (name) {
+          if (!name || seen[name]) {
+            return false;
+          }
+          seen[name] = true;
+          return true;
+        });
+        if (input._mailmooseCombo) {
+          input._mailmooseCombo.setOptions();
         }
       })
       .catch(function () {
         // Preferences are display-only here: a failure leaves the field empty and
         // the save simply writes whatever the admin typed.
         input.value = '';
+        dashboardGroupNames = [];
       });
   }
 
@@ -4804,6 +4997,9 @@ function bindInboxSettingsShell(dlg) {
     if (name === 'sa-provider') {
       return 'provider';
     }
+    if (name === 'sa-google-advanced') {
+      return 'google-advanced';
+    }
     if (name.indexOf('sa-') === 0) {
       return 'standalone';
     }
@@ -4817,9 +5013,10 @@ function bindInboxSettingsShell(dlg) {
       v.classList.remove('active');
     });
     var mode = modeFor(name);
-    // The two chooser steps carry no tabs and no footer submit; the provider
-    // step is the second half of the standalone flow.
-    var chooserStep = mode === 'choose' || mode === 'provider';
+    // The chooser steps carry no tabs and no footer submit; the provider step and
+    // the Google advanced-setup warning are both second halves of the standalone
+    // flow, so they share the chooser layout.
+    var chooserStep = mode === 'choose' || mode === 'provider' || mode === 'google-advanced';
     // The chooser steps carry no section navigation, so collapse the empty
     // left-hand column instead of leaving it blank beside the panel.
     dlg.classList.toggle('inbox-settings--chooser', chooserStep);
@@ -4839,7 +5036,7 @@ function bindInboxSettingsShell(dlg) {
     if (chooser) {
       var heading = dlg.querySelector('.inbox-settings-head h2');
       if (heading) {
-        heading.textContent = mode === 'provider' || mode === 'standalone' ? 'Add standalone inbox' : 'Add inbox';
+        heading.textContent = mode === 'provider' || mode === 'standalone' || mode === 'google-advanced' ? 'Add standalone inbox' : 'Add inbox';
       }
       if (backBtn) {
         backBtn.hidden = mode === 'choose';
@@ -4892,16 +5089,42 @@ function bindInboxSettingsShell(dlg) {
           activate('sa-basic');
           return;
         }
+        if (provider === 'google') {
+          // Google needs your own Google Cloud OAuth app: show an advanced-setup
+          // warning with easier alternatives before opening the wizard.
+          activate('sa-google-advanced');
+          return;
+        }
+        if (provider === 'one') {
+          window.location.assign('/ui/connections/one');
+          return;
+        }
         window.location.assign('/ui/inboxes/standalone/new?provider=' + encodeURIComponent(provider));
+      });
+    });
+    // The Google advanced-setup warning step.
+    dlg.querySelectorAll('[data-google-advanced-continue]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        window.location.assign('/ui/inboxes/standalone/new?provider=google');
+      });
+    });
+    dlg.querySelectorAll('[data-google-advanced-one]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        window.location.assign('/ui/connections/one');
+      });
+    });
+    dlg.querySelectorAll('[data-google-advanced-imap]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        activate('sa-basic');
       });
     });
     if (backBtn) {
       backBtn.addEventListener('click', function () {
-        // The IMAP form steps back to the provider list; anything else returns
-        // to the inbox-type chooser.
+        // The IMAP form and the Google advanced-setup warning step back to the
+        // provider list; anything else returns to the inbox-type chooser.
         var panel = dlg.querySelector('[data-inbox-panel]:not([hidden])');
         var current = panel ? panel.getAttribute('data-inbox-panel') : '';
-        activate(current === 'sa-basic' ? 'sa-provider' : 'choose');
+        activate(current === 'sa-basic' || current === 'sa-google-advanced' ? 'sa-provider' : 'choose');
       });
     }
   }
