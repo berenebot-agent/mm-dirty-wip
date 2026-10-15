@@ -268,10 +268,10 @@ func (c *Client) request(ctx context.Context, method, path, actionID, selector s
 			c.limiter.Backoff(time.Minute)
 		}
 		if resp.StatusCode == 401 {
-			return nil, safe(model.ErrKindAuth, "Gmail connection revoked or expired; reconnect the original account in One", false)
+			return nil, safe(model.ErrKindAuth, "One connection revoked or expired; reconnect the original account in One", false)
 		}
 		if resp.StatusCode == 403 {
-			return nil, safe(model.ErrKindForbidden, "Gmail permission missing; reconnect in One and grant the required mailbox permissions", false)
+			return nil, safe(model.ErrKindForbidden, "One permission missing; reconnect in One and grant the required mailbox permissions", false)
 		}
 		if resp.StatusCode >= 500 && method != "GET" && method != "DELETE" {
 			return nil, &transport.AmbiguousError{Err: safe(model.ErrKindUnavailable, "Gmail write outcome unknown; do not retry automatically", false)}
