@@ -53,9 +53,9 @@ func (Transport) ConfigFields() []transport.ConfigField {
 			{Value: ServiceAntler, Label: "Antler MX (Free SMTP Relay - no port forwards required)"},
 			{Value: ServiceCustom, Label: "Custom receiver URLs"},
 		}},
-		{Name: "contact_email", Label: "Contact email (Antler MX)", Type: "text", Placeholder: "you@example.com"},
+		{Name: "contact_email", Label: "Contact email — used for important service messages only, no marketing", Type: "text", Placeholder: "you@example.com"},
 		{Name: "receiver_urls", Label: "Receiver URLs (custom service only, comma separated HTTPS base URLs)", Type: "text"},
-		{Name: "enforcement", Label: "Receiver authentication enforcement", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
+		{Name: "enforcement", Label: "Receiver authentication enforcement (spam)", Type: "select", Default: "moderate", Options: []transport.ConfigOption{
 			{Value: "moderate", Label: "Moderate (Spam on definitive DMARC failure, or SPF and DKIM both failed)"},
 			{Value: "hard", Label: "Hard (Spam on any one of SPF, DKIM or definitive DMARC failure)"},
 		}},
