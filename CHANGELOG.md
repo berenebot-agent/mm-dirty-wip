@@ -26,6 +26,11 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- Consolidated inbound and standalone mailbox setup guidance in
+  `docs/PROVIDERS.md`, kept agent connector setup in `docs/CONNECTORS.md`, and
+  added the operator-focused `docs/REMOTE_MX.md`. Archived the MX/Dial MX
+  architecture material and One live-probe notes outside the repository.
+
 - The Antler MX receiving dialog now shows a subdomain's MX **Name** as its
   fully-qualified name (`mail.example.com`) and reserves `@` for a two-label zone
   apex. It previously keyed the record name off the account's parent-domain link,
@@ -657,7 +662,7 @@ standalone, and whether the approver is enabled for the effective mode. See
   **Postmark** is protected by HTTP Basic credentials MailMoose generates per
   domain and shows once as a ready-to-paste webhook URL, and it preserves binary
   `RawEmail` content byte-for-byte. Configure either under **Receiving** on the
-  domain page; setup guides are in `docs/SENDGRID.md` and `docs/POSTMARK.md`.
+  domain page; setup guides are in `docs/PROVIDERS.md#inbound-sendgrid` and `docs/PROVIDERS.md#inbound-postmark`.
   Postmark's unattested envelope sender is added to the accepted-risk note in
   `SECURITY.md`.
 - Dial MX / Antler MX receiving now shows one status light per receiver. Each

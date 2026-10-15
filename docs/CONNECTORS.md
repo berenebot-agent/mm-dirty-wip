@@ -6,16 +6,6 @@ per-domain **receiving and sending providers** in [PROVIDERS.md](PROVIDERS.md):
 a provider decides how mail enters and leaves a domain, while a connector
 decides who is allowed to *act on* the mail in one inbox.
 
-Every connector is a row in `clients`, scoped to one inbox of one account, and
-carries its own outbound authority and delivery log.
-
-| Kind | `clients.type` | Direction | Transport |
-|---|---|---|---|
-| API key | `api_key` | request/response | REST over HTTPS |
-| Hermes Relay | `hermes` | dial-out | WebSocket (`/relay`) |
-| OpenClaw | `openclaw` | dial-out | WebSocket (`/relay`) |
-| Webhook | `webhook` | push-out | HTTPS POST |
-
 Manage them in the inbox's **Connectors** tab, or from the dashboard **Clients**
 panel (**Add Client**). The API surface is under `/v1/admin/*`; see
 [API.md](API.md) §11–14.
@@ -167,33 +157,14 @@ block is returned by `POST /v1/admin/hermes/enroll` (`{"inbox_id","name"}`) as
 its `env` field, alongside `gateway_id`, `secret` and
 `connector_url`.
 
-### The wire contract
+### Receiving mail and replies
 
-Hermes opens an authenticated WebSocket to `wss://<host>/relay` and sends a
-`hello`. MailMoose replies with a descriptor, then pushes accepted mail as
-inbound events; Hermes acknowledges each one, and the acknowledgement is what
-advances the durable cursor. Replies go back over the same socket.
+Hermes connects out to MailMoose and receives new mail as events. Acknowledging
+an event lets the relay resume from that point after a disconnect; replies go
+back over the same connection.
 
 Because the cursor is durable and the ack is the receipt, a crash mid-turn
 replays the message rather than losing it.
-
-### One-time enrollment tokens (OpenClaw only)
-
-`POST /relay/enroll` redeems a single-use enrollment token. **Only the OpenClaw
-connector can mint one** — `CreateRelayEnrollCode` rejects every other kind, so
-there is no way to obtain a Hermes enrollment token and `hermes gateway enroll`
-cannot complete against this installation.
-
-The Hermes path is the **direct `.env` block** above:
-`POST /v1/admin/hermes/enroll` (or the Create key dialog) mints the credentials
-outright and returns them once. There is no token-exchange step.
-
-> An earlier revision of this document — and `D018`, `docs/API.md`,
-> `docs/ACCEPTANCE_TESTS.md` and the README — described a Hermes
-> enrollment-token flow via `hermes gateway enroll`. That flow is not wired up
-> in this codebase: `hermes_enroll_tokens` exists and is kind-aware, and the
-> store-level `CreateHermesEnrollToken` is exercised by tests, but nothing above
-> the store issues a Hermes token. Use the direct block.
 
 Relay is **reply-only**: it resolves a target to the latest inbound message in a
 thread, so it cannot initiate a brand-new outbound email. To send fresh mail,
@@ -264,10 +235,9 @@ generated block into the OpenClaw host's config:
 }
 ```
 
-Once connected, OpenClaw appears in the inbox's connector list with the same
-Settings, Log and delete actions as a Hermes connection. One email thread maps
-to one OpenClaw conversation; outbound targets use `thread:<mailmoose_thread_id>`.
-Deleting the connector closes its live socket immediately.
+Once connected, OpenClaw appears in the inbox's connector list. One email thread
+maps to one OpenClaw conversation; replies target
+`thread:<mailmoose_thread_id>`. Deleting the connector disconnects it.
 
 ---
 

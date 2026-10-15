@@ -1660,7 +1660,7 @@ and make subdomain `From:` impossible, so it was rejected.
   catch-all inbox must belong to the subdomain, not the parent.
 - Domain-ownership rules for subdomains and parent domains are out of scope
   here; this decision settles the Cloudflare subdomain inheritance behaviour only.
-- `docs/CLOUDFLARE_INBOUND.md` is corrected: catch-all is apex-only, each
+- `docs/PROVIDERS.md#inbound-cloudflare-email-routing` is corrected: catch-all is apex-only, each
   subdomain must be onboarded, and one connector serves the zone.
 
 **Amendment — linking a parent added after the subdomain.** Creation-time
@@ -3679,7 +3679,7 @@ Incremental history catch-up and new-mail detection are unaffected.
 
 **Complexity:** Migration 070 adds one nullable text column and one store
 getter/setter. `List` already accepts a Gmail query string, so no transport
-change is needed. No new dependency or service. See `docs/ONE.md`.
+change is needed. No new dependency or service. See `docs/PROVIDERS.md#one-gmail`.
 
 ## D107 — Dial MX published-record checks are one watcher-owned verdict, pushed over SSE
 
@@ -3737,7 +3737,7 @@ status and the Antler receiver snapshot) owns the verdict and publishes
 `mx.dns_changed`; `dialMXHealth` takes the verdict; `domainInboundLight` and the
 dashboard render read it via `Service.DNSState`/`ExtraMXState` (no DNS); the
 receiving response exposes `dns[]` and `unexpected_mx`; the dialog's JS renders the
-per-check prompts and updates live on the event. See `docs/DIALMX.md`.
+per-check prompts and updates live on the event. See `docs/REMOTE_MX.md`.
 
 ## D108 — One/Gmail metadata sync shows a normalised estimate and never a "waiting" state
 
@@ -3945,7 +3945,7 @@ construction rather than by keeping two edits in step.
 per-check rendering and the API docs; a `carriedUnexpected` read of the watcher's
 existing last-verdict map; and a net deletion of `txtMatches`/`parseMM1`. One
 imported helper (`mxwire.ParseDomainTXT`) already used by the receiver. No new
-dependency, service, table or migration. See `docs/DIALMX.md`, `docs/API.md`.
+dependency, service, table or migration. See `docs/REMOTE_MX.md`, `docs/API.md`.
 
 ## D112 — Antler setup keeps its receiver snapshot, and its settings are editable in place
 
@@ -3984,7 +3984,7 @@ read-only inherited view prevents a child domain from forking onto its own confi
 reused instead of a manifest fetch; the settings update and its handler replace the
 contact-email-only equivalents with no new table or migration; one `Settings`
 section in the dialog's markup and a small field-placement helper. No new
-dependency or service. See `docs/DIALMX.md`, `docs/API.md`.
+dependency or service. See `docs/REMOTE_MX.md`, `docs/API.md`.
 
 ## D069 — DKIM signing on the Direct MX outbound path
 
@@ -5011,5 +5011,5 @@ touches `internal/app/dns_check.go`, `internal/app/dns_watcher.go`,
 `internal/httpapp/ui.go` (the two light functions), `internal/httpapp/domain_dns.go`,
 and the wizard/JS in `internal/httpapp/assets/app.js`; the absolute-name fix is one
 small helper plus its call sites. Tests are updated in place, with new
-absolute-name assertions in `internal/app/dns_check_test.go`. See `docs/DIALMX.md`
+absolute-name assertions in `internal/app/dns_check_test.go`. See `docs/REMOTE_MX.md`
 and `docs/API.md`.

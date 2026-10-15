@@ -359,7 +359,7 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 V1 supports Mailgun, Cloudflare Email Routing (via a Worker), and Resend as
 inbound transports, plus the optional MailMoose MX direct-SMTP edge (see
-[MX.md](MX.md)). Provider webhook mail never carries trusted authentication
+[REMOTE_MX.md](REMOTE_MX.md)). Provider webhook mail never carries trusted authentication
 evidence; only the authenticated MX edge supplies SPF/DKIM/DMARC evidence, and
 its per-domain policy can classify a message as Spam. Spam is a computed view
 over `messages.is_spam`, counts toward quota, is excluded from ordinary reads
