@@ -26,6 +26,17 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- The Antler MX receiving dialog now shows a subdomain's MX **Name** as its
+  fully-qualified name (`mail.example.com`) and reserves `@` for a two-label zone
+  apex. It previously keyed the record name off the account's parent-domain link,
+  so a subdomain added standalone — with no parent link — rendered `@`, which
+  publishes the MX record on the parent zone and sends mail for the subdomain to
+  the wrong domain. The name is now derived from the domain's own shape, so the
+  wizard and the saved status view both get it right. Finishing the setup wizard
+  also relabels the footer's close control from "Cancel" to "Close" as it lands on
+  the saved status view, instead of leaving a stray "Cancel" beside an actionless
+  panel.
+
 - Consolidated the API contract and generated endpoint catalogue into
   `docs/API.md`, and brought the Google/Gmail and Microsoft standalone inbox
   setup guides together under `docs/PROVIDERS.md`. Removed the secondary

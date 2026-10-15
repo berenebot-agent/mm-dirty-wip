@@ -5779,7 +5779,6 @@ function hideInboxSubview(dlg) {
       });
     }
     var close = dlg.querySelector('[data-close-dialog]');
-    if (statusMode && close) { close.textContent = 'Close'; }
     var endpoint = '/ui/domains/' + encodeURIComponent(form.dataset.antlerDomain) + '/receiving/setup';
     var step = 0, busy = false, ready = false, rotating = false;
     var state = null, savedEmail = null, timer = null;
@@ -6132,10 +6131,23 @@ function hideInboxSubview(dlg) {
       records.appendChild(unexpectedMXBlock({ unexpected_mx: unexpected || [] }, domainName));
       records.appendChild(remediationBlock(dns || [], instructions || {}, mxName));
     }
+    // mxRecordName is the name column for the Antler MX rows. A two-label name
+    // is a zone apex and reads best as the provider's "@". A name with more
+    // labels is a subdomain of some zone, so it must never be "@": that would
+    // publish the MX on the parent zone and send mail to the wrong domain. Spell
+    // out the fully-qualified name instead, which every DNS provider accepts and
+    // which always lands on this exact domain. Deriving this from the name's own
+    // shape (not the account's parent-domain link) is deliberate: a subdomain
+    // added standalone has no parent link, and keying off that link is what made
+    // a subdomain render "@".
+    function mxRecordName(domainName) {
+      var labels = String(domainName || '').split('.').filter(Boolean);
+      return labels.length === 2 ? '@' : (domainName || '@');
+    }
     function renderSkeleton(connectors) {
       var instructions = initialInstructions || {};
-      var mxName = form.dataset.antlerParent ? (form.dataset.antlerDomainName || '') : '@';
-      renderStatusRecords(initialStatuses, instructions, initialDNS, initialUnexpected, form.dataset.antlerDomainName || '', mxName);
+      var domainName = form.dataset.antlerDomainName || '';
+      renderStatusRecords(initialStatuses, instructions, initialDNS, initialUnexpected, domainName, mxRecordName(domainName));
     }
     // renderReceivers fills the wizard's own receivers step (used while setting
     // up, not the saved status view) from the live status set.
@@ -6160,10 +6172,9 @@ function hideInboxSubview(dlg) {
       var records = wizard.querySelector('.antler-records');
       records.replaceChildren();
       var domainName = form.dataset.antlerDomainName || '';
-      var subdomain = !!form.dataset.antlerParent;
-      // For a subdomain, spell out the record name so it is unambiguous. The
-      // apex is the common case and reads best as the provider's "@".
-      var mxName = subdomain ? domainName : '@';
+      // A subdomain must publish its MX at its own fully-qualified name, never
+      // the parent zone's "@" (see mxRecordName).
+      var mxName = mxRecordName(domainName);
       var dnsByKind = {};
       (data.dns || []).forEach(function (entry) { dnsByKind[entry.kind] = entry; });
       // The status view has one light per receiver: the receiver proves both
@@ -6319,6 +6330,12 @@ function hideInboxSubview(dlg) {
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
       if (statusMode) { wizard.querySelector('[data-antler-step="1"] > p').hidden = true; }
+      // The footer's close control reads "Close" once the saved status view is
+      // showing and "Cancel" while the setup wizard is still running. It is
+      // relabelled here on every update, not once at init, because the wizard
+      // flips statusMode to true when it finishes: a one-time label left the
+      // freshly-finished status view with a stray "Cancel".
+      if (close) { close.textContent = statusMode ? 'Close' : 'Cancel'; }
       // Rotation's new-TXT step cannot go back to the pre-rotation state, but
       // its receiver step can.
       back.hidden = statusMode || (step === 0 && !entered) || (rotating && step === 1);
