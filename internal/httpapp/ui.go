@@ -553,13 +553,14 @@ type pageData struct {
 	// inbox with no provider binding (a domain inbox, or an IMAP-only standalone
 	// inbox) has no entry.
 	InboxConn map[string]inboxConnectionState
-	// InboxConnDetail and InboxConnReconnect drive the inbox page's own reconnect
-	// banner: a revoked/expired provider connection is a per-inbox problem, so the
-
-	// mailbox view surfaces it in place rather than only on the dashboard. They
-	// mirror the matching InboxConn entry for the inbox on screen; an empty
-	// detail means no banner renders.
+	// InboxConnDetail, InboxConnLabel and InboxConnReconnect drive the inbox
+	// page's own reconnect banner: a revoked/expired provider connection is a
+	// per-inbox problem, so the mailbox view surfaces it in place rather than
+	// only on the dashboard. They mirror the matching InboxConn entry for the
+	// inbox on screen; an empty detail means no banner renders, and Label names
+	// the connection on the reconnect control.
 	InboxConnDetail    string
+	InboxConnLabel     string
 	InboxConnReconnect string
 	// StandaloneInboxes lists the account's standalone inboxes, for the key-dialog
 	// role matrix (they have no managed domain to appear under).

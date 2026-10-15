@@ -413,13 +413,13 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 		}
 		selected := findOne(rows, b.ConnectionID)
 		if selected == nil || selected.Key != selector {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Reconnect the original Gmail connection in One, then save this inbox's key", b.Revision)
+			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "One connection revoked or expired; reconnect the original account in One, then save this inbox's key", b.Revision)
 			return nil, "", oneError(model.ErrKindAuth, "One connection requires attention")
 		}
 		profile, e := c.Gmail(selector, nil, nil).Profile(ctx, "")
 		if e != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "Gmail identity or permission changed; explicit reconnect required", b.Revision)
-			return nil, "", oneError(model.ErrKindAuth, "Gmail identity or permission changed")
+			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "One connection's account or permissions changed; reconnect the original account in One", b.Revision)
+			return nil, "", oneError(model.ErrKindAuth, "One connection's account or permissions changed")
 		}
 		_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "active", "", b.Revision)
 		m.refreshOneDisplayName(ctx, c, selector, account, inbox, b.GmailEmail)
@@ -458,11 +458,11 @@ func (m *RemoteMailboxService) SaveOneInboxKey(ctx context.Context, p model.Prin
 	}
 	row := findOne(rows, b.ConnectionID)
 	if row == nil {
-		return oneError(model.ErrKindAuth, "Key must expose this inbox's original Gmail connection")
+		return oneError(model.ErrKindAuth, "Key must expose this inbox's original One connection")
 	}
 	profile, err := c.Gmail(row.Key, nil, nil).Profile(ctx, "")
 	if err != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-		return oneError(model.ErrKindConflict, "Key would change this inbox's Gmail identity or permissions")
+		return oneError(model.ErrKindConflict, "Key would change this inbox's One connection account or permissions")
 	}
 	b.KeyAAD, b.Fingerprint = oneKeyAAD(p.AccountID, inbox), oneFingerprint(key)
 	b.EncryptedKey, err = m.Service.EncryptSecretAAD(b.KeyAAD, []byte(key))
