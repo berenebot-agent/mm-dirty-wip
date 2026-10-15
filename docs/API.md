@@ -882,7 +882,8 @@ Direct SMTP uses a core-established HTTP/2 session to the unified receiver.
 Private MX sessions use bearer authentication; shared Dial MX sessions use
 DNS-backed domain proofs. Recipient resolution and durable ingestion are framed
 session operations, not core HTTP endpoints. Duplicate delivery fingerprints
-return the recorded disposition. See [MX.md](MX.md) and [DIALMX.md](DIALMX.md).
+return the recorded disposition. For receiver choices and setup, see
+[Remote SMTP receiving](REMOTE_MX.md).
 
 ### Installation MX receiver (system administrator, session-authenticated)
 
@@ -1002,8 +1003,8 @@ verification, DNS resolver, timeouts and the `MX_TLS_CERT`/`MX_TLS_KEY` files),
 are imported once on first start when no row exists; thereafter the persisted
 settings are authoritative and the environment is ignored. The only MX
 environment that still belongs to the core deployment is the standalone receiver
-container's own configuration (see [MX.md](MX.md)); the core itself is
-configured here.
+container's own configuration (see [Remote SMTP receiving](REMOTE_MX.md)); the
+core itself is configured here.
 
 > **Legacy STARTTLS files.** The one-time import reads `MX_TLS_CERT` and
 > `MX_TLS_KEY` from disk. If only one path is set, or a file cannot be read, the

@@ -1,30 +1,25 @@
 # MailMoose — Receiving and Sending Providers
 
-Receiving and sending are configured **per domain**. Each domain owns at most
-one optional receiving configuration and one optional sending configuration;
-there is no account-level connector pool and no assignment step, so mail can
-only enter or leave through the provider configured on its domain.
+This guide covers domain receiving and sending providers, plus providers that
+connect an existing mailbox as a standalone inbox. Domain receiving and sending
+are configured in the domain's **Receiving** and **Sending** panels. Standalone
+mailbox connections are added from **Add inbox → Standalone inbox**.
 
-A subdomain can instead **inherit** its parent domain's receiving and/or sending
-configuration. When a domain is added that is a subdomain of an existing domain,
-MailMoose records the parent and, by default, reuses the parent's connectors, so
-one connector (for example one Cloudflare Worker and its shared secret) can
-serve every onboarded subdomain of a zone. The subdomain still owns its own
-inboxes, aliases and catch-all, and can be given its own configuration instead.
-See `docs/DECISIONS.md` D063 and `docs/CLOUDFLARE_INBOUND.md`.
+A subdomain can inherit its parent's receiving or sending configuration. One
+provider configuration can therefore serve several related domains; each domain
+still has its own inboxes, aliases and catch-all. Provider secrets are encrypted
+with `APP_ENCRYPTION_KEY`.
 
-If a subdomain is added **before** its parent domain, it is created as a root
-domain with no link. Adding the parent afterwards does not re-link it
-automatically; instead the subdomain's **Receiving** / **Sending** provider menu
-offers **Inherited (from <parent>)**, naming the nearest existing ancestor.
-Selecting it links the domain and inherits that direction. The Admin API can do
-the same by sending `parent_domain_id` on `PATCH /v1/admin/domains/{id}`; sending
-an empty `parent_domain_id` unlinks the domain and clears both inherit switches.
-Unlinking never touches the domain's own connectors.
+## At a glance
 
-Both directions are configured in the Admin UI (domain page → **Receiving** /
-**Sending**) or through the Admin API. Provider secrets are stored encrypted
-using `APP_ENCRYPTION_KEY`.
+- **Inbound:** Mailgun, Cloudflare Email Routing, Resend, Postmark, Direct MX,
+  Antler MX and Dial MX. SendGrid is documented as unavailable pending
+  end-to-end verification.
+- **Outbound:** Mailgun, Brevo, Resend, generic SMTP and Direct MX.
+- **Standalone inboxes:** Google/Gmail, Microsoft/Outlook, One/Gmail and IMAP.
+
+For receivers you run separately, including Dial MX, Antler MX and single-mode
+Remote MX, see [Remote SMTP receiving](REMOTE_MX.md).
 
 ---
 
@@ -51,175 +46,106 @@ MailMoose resolves the recipient to its logical inbox. A configured domain catch
 
 ## Inbound: Cloudflare Email Routing
 
-Inbound can be received via Cloudflare Email Routing through a Worker that
-streams the raw MIME to the generic webhook. Full dashboard navigation is in
-[docs/CLOUDFLARE_INBOUND.md](CLOUDFLARE_INBOUND.md).
+1. In MailMoose, open the domain's **Receiving** panel, choose **Cloudflare
+   Worker**, and save. MailMoose displays a ready-to-deploy Worker and its
+   one-time secret. Copy the code before closing the setup page; regenerate the
+   secret if needed.
+2. In Cloudflare, create a Worker from the Hello World template, replace its
+   code with the MailMoose-generated code, and deploy it.
+3. Enable Email Routing for the domain and apply the DNS records Cloudflare
+   provides.
+4. In **Email Routing → Routing rules**, configure the catch-all rule to send
+   mail to the Worker and enable it.
+5. Send a test message and verify it appears in the intended MailMoose inbox.
 
-High-level steps:
-
-1. On the dashboard, click **Receiving** for the domain and configure a **Receiving** provider of type **Cloudflare Worker**. MailMoose generates the shared secret, stores it encrypted on that domain, and shows the complete Worker code and Cloudflare steps in a one-time dialog. The generated secret is shown once; use **Regenerate secret** in the same dialog if you lose it (this replaces it, and the old Worker stops working until you paste the new code).
-2. In Cloudflare, create a Worker (**Workers & Pages** -> **Create application** -> **Start with Hello World** -> **Deploy**), then paste the generated code into **Edit code** (it already contains your ingest URL and secret) and deploy it.
-3. In Cloudflare, onboard **Email Routing** for your domain, adding the DNS records Cloudflare lists.
-4. Under Email Routing -> **Routing rules**, edit the **catch-all** rule to **Send to a Worker**, select your Worker as the action, and enable it.
-
-Cloudflare hands each message to the Worker, which streams the raw MIME to:
-
-```text
-https://your-host.example/internal/ingest/cloudflare
-```
-
-The server resolves the recipient to its logical inbox with the same behavior as Mailgun.
+A single Worker can serve an apex domain and its onboarded subdomains. Add each
+subdomain to Cloudflare Email Routing and to MailMoose; when offered, choose to
+inherit the parent provider configuration. The subdomain still has its own
+MailMoose inboxes and routing. For a private MailMoose instance, the Worker must
+be able to reach its public webhook URL; Cloudflare Workers cannot call private
+network addresses. See [Cloudflare's Email Routing guide](https://developers.cloudflare.com/email-routing/).
 
 ## Inbound: Resend
 
-Inbound can also be received via Resend. Resend posts a signed metadata webhook; MailMoose verifies it and then fetches the raw MIME from the Resend API. Full setup is in [docs/RESEND.md](RESEND.md).
+Resend sends a signed notification to MailMoose, which fetches the original
+message from Resend. Use an API key with **Full access**; a sending-only key
+cannot read received mail.
 
-The webhook URL to register in Resend is:
+1. Verify the domain in Resend and apply its inbound MX records.
+2. In MailMoose, open the domain's **Receiving** panel and choose **Resend**.
+   Copy the webhook URL shown there.
+3. In Resend, create a webhook for that URL and subscribe to **`email.received`**.
+   Copy the webhook signing secret.
+4. Return to MailMoose, enter the full-access API key and signing secret, then
+   save.
+5. Send a test message and confirm it appears in the intended inbox.
 
-```text
-https://your-host.example/internal/ingest/resend
-```
-
-1. In Resend, verify the domain (including the inbound MX record) and create a **full access** API key. A send-only key cannot read received mail.
-2. On the dashboard, click **Receiving** for that domain and choose **Resend**. The form shows the exact webhook URL before you save. Create the Resend webhook for that URL subscribed to **`email.received`**, copy its signing secret (`whsec_...`), then enter it with the API key and save.
-3. Each domain stores its own receiving configuration; if several domains share one Resend webhook, enter the same signing secret on each domain.
-
-Resend also works as a sending provider (see below).
+Each domain has its own receiving configuration. If several domains share one
+Resend webhook, configure the matching signing secret and API key on each.
+Resend can also be configured as a sending provider; see [Outbound](#outbound).
 
 ## Inbound: SendGrid
 
-> **Not currently offered.** The connector is implemented and unit-tested, but
-> it has **not been verified against the real provider** — Twilio declined to
-> activate a SendGrid account for testing (compliance refusal, ticket
-> `#29899115`). SendGrid is therefore **removed from the receiving provider
-> menu** until an end-to-end test passes. The setup below is retained as the
-> path to verifying it; see [docs/SENDGRID.md](SENDGRID.md) for how to
-> re-enable it.
-
-Inbound can be received via Twilio SendGrid Inbound Parse. SendGrid POSTs the raw MIME in a signed `multipart/form-data` payload. Full setup is in [docs/SENDGRID.md](SENDGRID.md).
-
-The webhook URL to register in SendGrid is:
-
-```text
-https://your-host.example/internal/ingest/sendgrid
-```
-
-1. Point the receiving domain's MX record at `mx.sendgrid.net` (priority 10).
-2. In SendGrid, open **Settings → Inbound Parse** and add a host: set the receiving domain and paste the webhook URL above, and tick **POST the raw, full MIME message**.
-3. Create a webhook **security policy** with signature verification, attach it to the parse setting, and copy the returned **public key**.
-4. On the dashboard, click **Receiving** for that domain, choose **SendGrid**, paste the public key, and save.
-
-Unlike Mailgun and Cloudflare, SendGrid's ECDSA signature covers the raw body (including the SMTP envelope), so its envelope sender is **provider-attested**.
+> **Not currently available.** SendGrid inbound is hidden from the provider
+> selector until it has been verified end to end against the real service. Do not
+> configure it for production deployments; this note will be updated if support
+> becomes available.
 
 ## Inbound: Postmark
 
-Inbound can be received via Postmark. Postmark POSTs the message as JSON (including the raw MIME) to a webhook protected by HTTP Basic authentication. Full setup is in [docs/POSTMARK.md](POSTMARK.md).
+1. In Postmark, point the receiving domain (a dedicated subdomain is
+   recommended) to `inbound.postmarkapp.com` with priority 10.
+2. Open the Server's **Inbound Message Stream → Settings** and enable **Include
+   raw email content in JSON payload**.
+3. In MailMoose, open the domain's **Receiving** panel, choose **Postmark**, and
+   save. MailMoose generates a webhook username and password and displays the
+   complete webhook URL once.
+4. Copy that URL into the Postmark Inbound Message Stream's webhook field and
+   save. Regenerate the credentials in MailMoose if the URL is lost or exposed,
+   then update Postmark with the replacement.
+5. Send a test message and confirm it appears in the intended inbox.
 
-The webhook URL to register in Postmark is:
-
-```text
-https://<generated-user>:<generated-password>@your-host.example/internal/ingest/postmark
-```
-
-1. On the dashboard, click **Receiving** for the domain, choose **Postmark**, and
-   save first. MailMoose generates the Basic-auth credentials and shows the
-   authenticated webhook URL once, with a copy button and remaining instructions.
-   The bare ingest URL is not sufficient.
-2. In Postmark, open **Server → Inbound Message Stream → Settings**, set the
-   **Inbound Domain**, enable **Include raw email content in JSON payload**,
-   paste the generated URL into **Webhook**, and save. Enable SMTP in the Server
-   settings as required for inbound domain forwarding.
-3. Point the receiving domain's MX record at `inbound.postmarkapp.com` (priority
-   10), taking care not to replace an existing mail service unintentionally.
-   Send a test email. Postmark supports one inbound domain per stream and one
-   inbound stream per Server.
-
-If the URL is lost, use **Regenerate secret** and update Postmark immediately;
-old credentials stop working as soon as they are regenerated.
-
-Postmark does not sign inbound webhooks, so the `From` envelope sender is **not provider-attested** (see [SECURITY.md](../SECURITY.md)).
+Postmark does not sign inbound webhooks. Its credentials authenticate the
+webhook caller, not the envelope sender; see the relevant note in
+[SECURITY.md](../SECURITY.md). Postmark is inbound-only; choose a separate
+sending provider.
 
 ## Inbound: Direct MX
 
-Instead of a webhook provider you can receive mail straight on port 25 with the
-optional MX edge. The installation receiver is configured by a system
-administrator under **Domain → Receiving → Direct MX**; the legacy `MX_ENABLE` environment
-variable selects the mode only on first import. The server binary defaults to
-`false` when the variable is unset; the shipped `docker-compose.yml` sets it to
-`true`.
+**Direct MX** receives email directly over SMTP using the receiver bundled with
+the standard MailMoose deployment. In the domain's **Receiving** panel, choose
+**Direct MX** and save. The setup panel shows the SMTP hostname; publish the
+domain's MX records to that hostname and publish SPF for your sending policy.
 
-- **`true`** (default `docker-compose.yml`) — receive on port 25 with the edge
-  embedded in the app container as a separate, unprivileged uid. The edge
-  credential is generated automatically.
-- **`false`** (server default) — no MX; receive via a webhook provider only. Set
-  this in `.env` for a webhook-only deployment.
-- **`remote`** — receive on port 25 with the edge in its own container/image
-  (`mailmoose-mx`, see README.md) or on another host. Needs
-  `MX_RECEIVER_URL` and a shared `DIALMX_CORE_KEY`.
+The standard Compose deployment includes the receiver, but you must explicitly
+publish host port 25 (`25:2525`) for public SMTP delivery. Then select **Direct
+MX** for each domain that should receive mail. Direct MX is not enabled for a
+domain merely by opening the port. A webhook-only deployment does not need the
+port-25 mapping.
 
-The edge holds no `/data` access and no `APP_ENCRYPTION_KEY`, and stages
-messages in memory only.
+A system administrator can use a separate receiver instead of the bundled one.
+That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
 
-Deployment modes, tuning, and the wire contract are covered in
-[docs/SELFHOSTING.md](SELFHOSTING.md) and [docs/MX.md](MX.md).
+## Inbound: Antler MX and Dial MX
 
-## Inbound: Dial MX
+- **Antler MX** is the hosted shared relay. Select it in the domain's
+  **Receiving** panel, enter a contact email, and publish the MX and TXT records
+  shown by MailMoose. No receiver needs to be installed and no inbound SMTP port
+  needs to be opened on your MailMoose host.
+- **Dial MX** is for a shared receiver you operate. Select it in **Receiving**,
+  enter its HTTPS URL, then publish the domain-specific TXT proof and MX records
+  shown in the setup panel.
 
-For a public shared receiver, receive direct SMTP with **Dial MX**. The core
-**dials out** to a standalone receiver the operator runs: the receiver
-terminates SMTP, verifies the core's right to speak for the domain with a
-DNS-anchored Ed25519 challenge, and hands accepted mail to the core over
-verified HTTPS/2. Set `DIALMX_MODE=shared` on the receiver. No shared bearer key
-or private MX mode is needed.
-
-A domain's receiving provider is either **Direct MX** (private bearer session
-backed by the installation receiver) or **Dial MX** (core dials receiver), never
-both. **Direct MX** is offered per domain in the receiving dialog to account
-admins only, and shows the installation receiver's live status and advertised
-SMTP hostname; it has no per-domain key. Configure **Dial MX** per domain under
-**Receiving → Dial MX**: enter one or more HTTPS receiver base URLs and publish
-the shown `_mailmoose-mx.<domain>` TXT record and the domain's MX record. The
-signing key is generated per exact domain and stored encrypted. Subdomains can
-inherit receiver URLs and enforcement but always have their own key and TXT
-proof. The receiver proves both the TXT authority and that it is named in the
-domain's MX before it reports ready, so each receiver shows one status light and
-any missing record is fixed inline in the dialog. Other domains may continue
-using local/remote MX or webhook providers.
-
-Full setup, the session protocol, and known limitations are in
-[docs/DIALMX.md](DIALMX.md).
+Both choices and the full operator setup for a separate receiver are covered in
+[Remote SMTP receiving](REMOTE_MX.md).
 
 ## Inbound: Remote MX
 
-**Remote MX** is the account-owned direct-SMTP receiver: an account admin runs
-their own standalone Dial MX receiver (in `DIALMX_MODE=single`, authenticated by
-a shared bearer key) and points any of the account's domains at it. It is the
-per-account counterpart of the installation **Direct MX** receiver, with the
-same "configure once, select per domain" flow.
-
-1. In the domain's **Receiving → Remote MX** panel, an account admin enters the
-   receiver's HTTPS (or `http`, if the private/LAN option is ticked) base URL and
-   the receiver's `DIALMX_CORE_KEY`. This is stored once for the account.
-2. Any domain in the account then selects **Receiving → Remote MX**.
-3. Point each domain's MX record at the receiver's advertised SMTP hostname.
-
-One physical single-mode receiver belongs to exactly one account; registering
-the same receiver URL under a second account is rejected. No DNS `_mailmoose-mx`
-record is needed — the receiver authenticates the core with its bearer key.
-Removing the account receiver is refused while a domain still routes to it. The
-same operations are available through the account API:
-
-```http
-GET    /v1/admin/account/mx
-PUT    /v1/admin/account/mx
-DELETE /v1/admin/account/mx
-```
-
-Full receiver deployment, the single-mode session contract, and limitations are
-in [docs/DIALMX.md](DIALMX.md); the receiving-provider overview is in
-[docs/MX.md](MX.md).
-
----
+**Remote MX** lets an account administrator use a private single-mode receiver
+for the account's domains. Configure the receiver once in the account's **Remote
+MX** settings, select **Remote MX** in each domain's **Receiving** panel, and
+point those domains' MX records at the receiver. See
+[Remote SMTP receiving](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
 
 ## Outbound
 
@@ -229,490 +155,170 @@ API key). Each domain owns its own configuration. A domain with no sending
 provider queues mail until one is configured, and removing a provider pauses
 sending for that domain only.
 
-The same operations are available through the Admin API, scoped to a domain:
+Each provider's configuration fields are shown in the domain's **Sending** panel.
+Use the API reference for programmatic configuration.
 
-```http
-GET    /v1/admin/domains/{id}/sending
-PUT    /v1/admin/domains/{id}/sending
-DELETE /v1/admin/domains/{id}/sending
-```
+### Provider requirements
 
-`PUT` accepts `{"provider":"...","config":{...}}`, and
-`GET /v1/admin/domains/{id}/sending/deliveries` lists the domain's send
-attempts newest first. The legacy `POST /v1/admin/outbound` endpoint, the
-account-level connector model, and the `/ui/outbound*` admin pages have been
-removed.
-
-### Provider configurations
-
-Mailgun:
-
-```json
-{"api_key":"key-...","domain":"mg.example.com"}
-```
-
-Brevo:
-
-```json
-{"api_key":"xkeysib-..."}
-```
-
-Brevo requires the inbox sender address to be a verified sender in Brevo.
-
-Resend:
-
-```json
-{"api_key":"re_..."}
-```
-
-The `from` domain must be a verified sending domain in Resend.
-
-Generic SMTP:
-
-```json
-{"host":"smtp.example.com","port":587,"username":"user","password":"secret","security":"starttls"}
-```
-
-Direct MX:
-
-```json
-{"helo":"mail.example.com"}
-```
-
-Direct MX resolves the recipient domain's MX records and connects directly to
-port 25 without credentials. It accepts one unique envelope recipient per
-message; send separate messages when delivering to multiple domains or
-recipients. The configured HELO hostname should have matching forward and PTR
-DNS where possible. Operators must provide port 25 egress and publish SPF for the
-sending IP. STARTTLS is used opportunistically when the receiving server
-advertises it. Direct MX requires the operator to control the network identity
-and reputation needed for direct Internet delivery.
+- **Mailgun:** enter the API key and sending domain shown in the Mailgun account.
+- **Brevo:** enter an API key and verify the sender address with Brevo.
+- **Resend:** enter an API key and verify the sending domain with Resend.
+- **SMTP:** enter the relay hostname, port, credentials and connection security
+  requested by the form.
+- **Direct MX:** no relay credentials are used. The operator must be able to
+  send directly to recipient mail servers on port 25.
 
 ### DKIM signing
 
-Direct MX has no upstream provider to sign on your behalf, so MailMoose signs each
-message itself. Signing is off by default; enable it in the domain's
-**Sending → Direct MX** tab.
-
-```json
-{"helo": "mail.example.com", "dkim_enabled": "on"}
-```
-
-- `dkim_enabled` — `"off"` (default) or `"on"`. That is the whole configuration.
-- `dkim_private_key` — generated by MailMoose (RSA-2048) when signing is switched
-  on, stored encrypted, and never returned by a read. It is not an input: a value
-  posted to it is ignored.
-- `dkim_selector` / `dkim_domain` / `dkim_public_key` — derived and stored, but
-  not settable. The selector is `mailmoose`; the signing domain is the domain mail
-  is sent from, which is what keeps the signature aligned for DMARC.
-
-The sending tab shows the record to publish as soon as signing is on:
-
-- Type: `TXT`
-- Name: `mailmoose._domainkey.<domain>` (for example
-  `mailmoose._domainkey.example.com`)
-- Value: `v=DKIM1; k=rsa; p=<public key>`
-
-The public key is part of that record. MailMoose derives both the displayed
-record and the signature from the same stored key, so they cannot disagree.
-
-Messages are signed once, when they are queued, so the stored message carries the
-signature that is actually transmitted. A retry after a failed attempt re-sends
-the identical signed bytes rather than adding a second signature.
-
-Turning signing off deletes the stored key. MailMoose does not check the published
-record for you: a key that is generated but not published results in mail that
-fails DKIM verification at the receiver.
-
-Signing happens when a message is queued, so mail already queued before signing was
-enabled keeps its existing (unsigned) stored message and is delivered unsigned.
-Only messages queued after you enable signing carry a signature.
-
-### Attachments
-
-Send, reply and draft write requests may include base64-encoded attachments:
-
-```json
-{"filename":"quote.pdf","content_type":"application/pdf","content":"<base64>"}
-```
-
-Use the object above in an `attachments` array. The application translates
-attachments to each provider's native format and stores sent attachment
-metadata with the raw MIME message. Draft writes also accept an `action` of
-`draft`, `request-send` or `send`, so a draft can be created, attached and
-submitted for approval in one request.
-
----
-
-## Dedicated inbound listener
-
-The server has a main listener and an optional dedicated webhook listener:
-
-- `LISTEN_ADDR` (default `:8081`) serves the API, web UI, Relay, and inbound webhooks.
-- The dedicated listener defaults to `:8082` and serves **only** inbound webhook
-  routes (`/internal/ingest/mailgun/raw-mime`, `/internal/ingest/{provider}`)
-  and health checks. Set `DEDICATED_RECEIVER_PORT` to change the port or
-  `DEDICATED_RECEIVER_ENABLE=false` to disable it. SMTP/MX is configured separately.
-
-To keep the API and UI off the public internet, expose only `:8082` to your
-reverse proxy and keep `LISTEN_ADDR` bound to a private interface or blocked by
-the firewall. Set `DEDICATED_RECEIVER_URL=https://inbound.example.com` to generate
-provider webhook URLs using that origin. Omitted or blank uses `BASE_URL`, even
-when enabled. Keep `BASE_URL` set to the UI origin for passkeys. Example URLs:
-
-```text
-https://inbound.example.com/internal/ingest/mailgun/raw-mime
-https://inbound.example.com/internal/ingest/cloudflare
-https://inbound.example.com/internal/ingest/resend
-https://inbound.example.com/internal/ingest/sendgrid
-https://inbound.example.com/internal/ingest/postmark
-```
-
-The ingest routes remain available on the main listener for backward
-compatibility. Usually terminate TLS at the reverse proxy; the dedicated listener
-can also serve TLS directly with `INBOUND_TLS_CERT_FILE` and `INBOUND_TLS_KEY_FILE`.
-
-
----
+For Direct MX, open the domain's **Sending → Direct MX** panel and enable DKIM
+signing. Publish the TXT record shown there at
+`mailmoose._domainkey.<domain>`. Receivers cannot validate the signature until
+DNS contains that record. Turning signing off removes the key; messages already
+queued are not changed.
 
 ## Standalone mailbox providers
 
-These connectors attach an existing Google or Microsoft mailbox to a MailMoose
-standalone inbox. The provider mailbox remains the source of truth; see the
-[mailbox service contract](MAILBOX_SERVICE_CONTRACT.md) for shared behavior.
+These options connect an existing mailbox to a MailMoose standalone inbox. The
+provider remains the source of truth for its mail. The setup steps below explain
+how each supported provider connects.
 
 ## Google / Gmail
 
-
 Use **Add inbox → Standalone inbox → Google / Gmail**. Each connected inbox
 uses your own Google Cloud OAuth client. The Google mailbox remains the source
-of truth. MailMoose caches headers, snippets, thread and label metadata, not a
-default full-message archive. Bodies and attachments are fetched when opened.
+of truth; MailMoose keeps a metadata index and fetches message bodies and
+attachments when opened.
 
 ### Create your Google app
 
-1. Open [Google Cloud Console](https://console.cloud.google.com/) and sign in
-   with the account you are connecting. Create a project (or select one) and
-   keep it selected.
-2. Enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
-3. Open [Google Auth Platform](https://console.cloud.google.com/auth/overview).
-   If you see **Get started**, click it, then set **App name** (any name, e.g.
-   MailMoose), **User support email** and **Contact email** (your Google
-   address), and **Audience**: choose **External** for a normal `@gmail.com`
-   account. **Internal** is only available to Google Workspace organisations.
-   Accept the policy and finish.
-4. Keep the app in **Testing** and add your Google account as a test user.
-   Open [Audience](https://console.cloud.google.com/auth/audience) and, under
-   **Test users**, click **Add users** and add the exact address you are
-   connecting. Do **not** click **Publish app** — for a restricted Gmail scope,
-   an unverified External app in production is hard-blocked (see
-   [Long-lived access](#long-lived-access-and-troubleshooting)).
-5. Open [Data Access](https://console.cloud.google.com/auth/scopes) → **Add or
-   remove scopes** and add `https://www.googleapis.com/auth/gmail.modify`,
-   `openid`, and `https://www.googleapis.com/auth/userinfo.profile` (use manual
-   scope entry if a scope is not listed), then save. The Gmail scope permits
-   reading, labels, read/unread, drafts and sending, including moving mail to
-   Trash. No separate `gmail.send` scope is needed, and MailMoose does not
-   request the broader permanent-delete scope.
-   The basic-profile scope lets MailMoose retrieve your Google account name for
-   the inbox label. The OAuth request uses `openid profile` for this access.
-6. Open [Clients](https://console.cloud.google.com/auth/clients) → **Create
-   client**, choosing **Web application**. Leave **Authorised JavaScript
-   origins** empty.
-7. Under **Authorised redirect URIs**, add the exact URL shown in the MailMoose
-   wizard. For example:
+1. In [Google Cloud Console](https://console.cloud.google.com/), create or
+   select a project and enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
+2. In [Google Auth Platform](https://console.cloud.google.com/auth/overview),
+   configure the app. Choose **External** for a personal Gmail account; choose
+   **Internal** only for accounts in your Google Workspace organisation.
+3. Keep the app in **Testing** and add the exact mailbox address as a test user.
+   Do not publish an unverified app that requests Gmail access.
+4. Under **Data Access**, add the Gmail `gmail.modify` scope and the `openid`
+   and `userinfo.profile` scopes, then save.
+5. Create a **Web application** OAuth client. Add the exact redirect URL shown
+   by the MailMoose setup wizard, for example:
 
    ```text
    https://mail.example.com/ui/oauth/google/callback
    ```
 
-   This is based on MailMoose's configured `BASE_URL`; spelling, scheme, port
-   and path must match. JavaScript origins are not needed for this server-side
-   authorization flow.
-8. Enter the client ID and client secret in the wizard. Click **Connect Google**,
-   select the mailbox account and approve access. Google will show a **"Google
-   hasn't verified this app"** screen; click **Advanced → Go to <app name>** to
-   continue.
+6. Enter the client ID and secret in the MailMoose wizard, connect the account,
+   and approve access. If Google shows an unverified-app warning, choose
+   **Advanced → Go to <app name>** while the app remains in Testing.
 
-Google's browser return goes to your installation. Google servers do not need
-inbound access: a private/VPN hostname works when your browser can reach it and
-the URL meets Google's redirect registration rules. A normal HTTPS hostname is
-required except for localhost/loopback HTTP when the browser and MailMoose share
-the computer. A raw LAN IP, `.local` hostname or arbitrary HTTP origin is not a
-registerable production callback. Set `BASE_URL` appropriately before setup.
+The callback is based on `BASE_URL`; use a hostname and scheme accepted by Google.
+Your browser must be able to reach the MailMoose callback. A raw LAN IP or
+`.local` hostname is not suitable for a registered production callback.
 
-### Inbox display name
+### Personal Gmail and troubleshooting
 
-For a new inbox, an optional display name entered in the wizard takes precedence
-over your Google account name. If Google does not supply a name, profile access
-is declined, or the profile lookup fails, the mailbox still connects and the
-email address is used as the fallback. This is the Google account profile name,
-not a Gmail “Send mail as” name.
+For personal Gmail, a Google OAuth app in Testing is the practical setup until
+Google's verification process is complete. Google expires Testing authorizations
+after seven days, so reconnect from the inbox settings when prompted. Publishing
+an unverified app does not remove that limit and can block access instead.
 
-Existing connections need to reconnect to grant the added basic-profile access;
-refreshing a token cannot add permission. On reconnect, a Google name replaces
-only a label that still equals the inbox email address. Custom names are preserved,
-and names are not continuously synchronized. This applies to direct Google OAuth,
-not Gmail via One.
-
-### If the callback page fails
-
-Keep the wizard tab open. After approving Google access, if the final MailMoose
-page cannot load, copy the **complete final URL** from that tab's address bar.
-Open **Callback failed? Paste the return URL** in the wizard and paste it.
-
-The URL must be the same registered callback and contain the one-time code and
-state. Connection attempts expire after ten minutes and are used once. A callback
-already completed cannot be pasted again. This fallback does not bypass Google's
-`redirect_uri_mismatch` checks and is not the discontinued Google OOB code flow.
-Do not share the return URL. Application logs omit it; configure your reverse
-proxy's access logs to omit callback query strings as well.
-
-### Long-lived access and troubleshooting
-
-#### Personal Gmail: stay in Testing
-
-For a normal `@gmail.com` account the OAuth app must be **External** (Internal is
-Workspace-only) and should be left in **Testing** with your address added as a
-test user. `gmail.modify` is a Google *restricted* scope, so:
-
-- Apps that request restricted scopes in production must complete Google's
-  verification (which includes a third-party security assessment). Until then,
-  Google shows the **"Google hasn't verified this app"** warning in Testing —
-  click **Advanced → Go to <app name>** to proceed.
-- In Testing, authorizations and their refresh tokens expire **seven days** after
-  consent. When MailMoose reports expired access, reconnect from the inbox
-  settings' **Google / Gmail — reconnect account** link; it preserves the inbox
-  and stable IDs.
-
-Publishing an unverified External app does **not** remove the seven-day limit —
-it replaces the click-through warning with a hard block (below). The only way to
-remove the limit is to complete Google's verification, so for personal use the
-seven-day reconnect is the intended trade-off.
-
-#### Access blocked: has not completed the Google verification process
-
-This error means the OAuth app is **In production** but has not completed
-verification, so Google refuses the restricted Gmail scope outright. Revert it:
-
-1. Open [Audience](https://console.cloud.google.com/auth/audience).
-2. Under **Publishing status**, click **Back to testing**.
-3. Ensure the address you sign in with is listed under **Test users**.
-4. Save, wait a few minutes for propagation, then retry **Connect Google** and
-   click through the **"Google hasn't verified this app"** screen.
-
-#### Other issues
-
-- `redirect_uri_mismatch`: register the exact URL shown in the wizard, and use
-  a Web application OAuth client.
-- `org_internal` / access blocked by Workspace: the app's audience is **Internal**
-  but the account is outside the project's organisation. Use **External** for a
-  personal `@gmail.com` account, or ask your organisation administrator to allow
-  the OAuth app and its requested Gmail permission.
-- Missing offline access, revoked access, expired tokens or changed passwords:
-  reconnect from the inbox settings' **Google / Gmail — reconnect account** link.
-  Choose the same mailbox account. Reconnection preserves the inbox and stable IDs.
-- Client secrets and tokens are encrypted with `APP_ENCRYPTION_KEY`. Back up the
-  key separately from `/data`, as for other provider credentials. Secret fields
-  and token values are never returned by configuration APIs.
+- For `redirect_uri_mismatch`, copy the exact URL shown in the MailMoose wizard
+  into the OAuth client's authorised redirect URIs.
+- For an access/verification block, return the app to **Testing** and check that
+  the mailbox address is listed as a test user.
+- If access expires or is revoked, reconnect the same Google account from the
+  inbox settings; the inbox itself is retained.
+- If the final callback page does not load, leave the wizard open and use its
+  **Callback failed? Paste the return URL** option. Do not share that URL.
 
 ### Mailbox behaviour
 
-- Gmail system labels drive Inbox, Sent, Drafts, Spam and Trash views. Archive
-  removes `INBOX` and preserves other labels. User-label views can overlap: one
-  message has one stable MailMoose cache ID, regardless of how many labels it has.
-- Label actions, read/star changes and other mutations are applied to Gmail.
-  Permanent deletion is unavailable through this connector; use Gmail itself.
-- Search executes against Gmail. List navigation uses cached metadata. Initial
-  indexing is progressive and reports partial completeness until backfill ends.
-  History API checks update external changes; an expired history cursor triggers
-  a metadata resynchronization.
-- Bodies and downloads are temporary, size-limited and removed after use. The
-  existing HTML sanitizer and attachment download protections apply.
-- Sending uses Gmail API and Gmail's own Sent copy. Assistant RemoteDraft handoff
-  creates a Gmail draft for the human to review. Unknown publication outcomes
-  are not blindly retried.
-- Notification detection has a cursor separate from browsing/backfill. Initial
-  connection establishes a baseline rather than notifying about existing mail.
-  Proactive connectors use bounded polling; Google Cloud Pub/Sub push is not
-  required for this connector. The mailbox therefore reports
-  `capabilities.realtime` as `false`: the poll interval is the delivery
-  mechanism, not a safety net.
-- Normal OAuth connects the signed-in mailbox. Gmail UI delegation, domain-wide
-  delegation and Google Groups require separate integrations.
+Gmail system labels supply Inbox, Sent, Drafts, Spam and Trash views. Archive
+removes the Inbox label; a message can appear in multiple user-label views.
+Search runs against Gmail, and new mail is detected by polling rather than push
+notifications. Bodies and attachments are fetched on demand rather than stored as
+a full-message archive. Permanent deletion is not available from this connector.
 
-References: [Web OAuth](https://developers.google.com/identity/protocols/oauth2/web-server),
-[Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes),
-[Gmail synchronization](https://developers.google.com/workspace/gmail/api/guides/sync).
+References: [Web OAuth](https://developers.google.com/identity/protocols/oauth2/web-server)
+and [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes).
+
 ## Microsoft / Outlook
 
+Connect a personal or shared Microsoft mailbox with **Add inbox → Standalone
+inbox → Microsoft / Outlook**. MailMoose connects through Microsoft Graph; the
+mailbox remains the source of truth.
 
-Microsoft Graph connects one whole personal or shared mailbox. The provider
-owns messages; MailMoose retains encrypted credentials, folder/message/thread
-metadata, stable provider identifiers, incremental cursors and delivery state.
-Bodies and attachments are fetched into bounded transient files on demand.
+### Set up Microsoft sign-in
 
-### Operator setup
+Self-hosters can register a Microsoft Entra public-client application and set
+`MICROSOFT_CLIENT_ID` and `MICROSOFT_TENANT_ID` on the MailMoose deployment. Use
+`common` for work/school and personal accounts, or a tenant ID/domain to restrict
+the app to one organisation. Add the `http://localhost` mobile/desktop redirect
+URI; no client secret is used. Required delegated permissions are
+`User.Read`, `Mail.ReadWrite`, `Mail.Send`, and `offline_access`.
 
-Create an Entra public-client app in the dedicated publisher tenant. For the
-shared Quick Connect registration, choose work/school accounts in any directory
-and personal Microsoft accounts. Add the **Mobile and desktop applications**
-redirect URI `http://localhost`. No client secret is used.
+For shared mailboxes, enable `Mail.ReadWrite.Shared`, `Mail.Send.Shared`, and
+`User.ReadBasic.All` in the app registration. Your organisation may require
+admin consent. The signed-in user must also have delegation to the shared mailbox;
+sending requires Send As or Send on Behalf permission.
 
-Configure the deployment:
+### Connect a mailbox
 
-```text
-MICROSOFT_CLIENT_ID=<application-client-id>
-MICROSOFT_TENANT_ID=common
-```
+1. Choose **Add inbox → Standalone inbox → Microsoft / Outlook**.
+2. Select **Personal Inbox only** or **Personal Inbox and Shared Inbox**. Shared
+   permissions must be selected before sign-in.
+3. Sign in and approve access. Microsoft redirects to `http://localhost`; this
+   is expected even though no local web server is running.
+4. Copy the complete final URL from the sign-in window and paste it into the
+   MailMoose wizard. The URL is sensitive; do not share it.
+5. For a shared connection, choose the mailbox from the picker or enter its
+   address if it is not listed.
 
-The production shared app ID can be supplied at rollout. Until configured, the
-wizard explains that Microsoft setup is unavailable. Self-hosters can use their
-own public-client registration through the same environment settings; use a
-tenant ID/domain instead of `common` when restricting to that tenant.
+Connections remain limited to the mailbox selected during setup. Reconnect from
+that inbox's settings if Microsoft access expires or is revoked.
 
-Delegated permissions: `User.Read`, `Mail.ReadWrite`, `Mail.Send`, and
-`offline_access`. Shared connections additionally request
-`Mail.ReadWrite.Shared`, `Mail.Send.Shared` and `User.ReadBasic.All` (the last
-only to enumerate candidate shared mailboxes in the wizard); all three must be
-added to the app registration or the shared consent request fails. Tenant
-consent policy may require administrator approval. Exchange mailbox delegation
-must also grant access to the selected shared mailbox; sending requires Send As
-or Send on Behalf rights.
+### Mailbox behaviour and new-mail delivery
 
-Existing connections retain their original client ID and tenant when defaults
-change. Keep their app registrations operational for refresh/reconnection.
+MailMoose presents Outlook folders and categories in the standalone inbox. Normal
+Inbox and Archive folders are supported; Microsoft's separate Online Archive
+mailbox is not. Outlook keeps its Sent Items copy. Some send or reply outcomes
+can be uncertain; do not repeat a send unless the inbox confirms it failed.
 
-### Connecting
+Personal Outlook.com and Microsoft 365 inboxes can receive near-real-time change
+notifications after initial setup. The MailMoose callback path
+`/internal/ingest/microsoft/notifications` must be reachable over HTTPS at the
+configured receiving URL (`DEDICATED_RECEIVER_URL`, or `BASE_URL` when unset).
+If notifications are unavailable, MailMoose polls instead. Shared mailboxes use
+polling; their sync schedule in inbox settings determines how quickly new mail is
+noticed.
 
-Choose **Add inbox → Standalone inbox → Microsoft / Outlook**, then pick
-**Connect Microsoft · Personal Inbox only** (signing in as the mailbox itself)
-or **Connect Microsoft · Personal Inbox and Shared Inbox** (the extra shared
-scopes are requested before sign-in, because Microsoft fixes granted scope in
-the authorization request). Sign in and approve delegated access.
-Microsoft redirects to `http://localhost`; a browser connection failure is
-expected because no local listener runs. The sign-in opens in a centred
-partial-screen window so this wizard stays visible behind it, and the wizard
-flashes its paste prompt above the completion field as soon as that window is
-open. Copy the complete final address-bar URL out of the sign-in window and
-paste it into that field. Use another desktop browser if the URL is hidden.
-The attempt expires after ten minutes and completion is single-use.
+## One / Gmail
 
-A shared connection then shows a **mailbox picker**: MailMoose lists candidate
-shared mailboxes by enumerating a bounded window of the tenant directory and
-probing each one's Inbox, so only mailboxes the account can actually open are
-offered. Manual address entry is the fallback when the directory is unavailable
-or the mailbox lies outside the enumerated window. The choice is validated
-before the connection is stored. The inbox label defaults to the provider
-display name (personal) or address (shared), and is editable from the inbox'
-Identity tab later.
+Choose **Add inbox → Standalone inbox → One (Easy Gmail Setup)**, enter your One
+REST API key, and select the Gmail mailbox or mailboxes to import. Choose the
+history window that suits each inbox; importing a large history uses One's
+account-wide request allowance. The key is not shown again after setup.
 
-The callback is sensitive. MailMoose validates the exact localhost destination,
-state and PKCE verifier and does not log or retain its code or pasted URL.
-Tokens are encrypted using `APP_ENCRYPTION_KEY` and bound to account/inbox. The
-exchanged token held between sign-in and mailbox choice is encrypted the same
-way and is single-use.
+MailMoose accesses Gmail through One's cloud service. Existing and new mail are
+synced on a schedule (One does not provide push notifications); the default poll
+interval is five minutes and can be changed in the inbox's connection settings.
+The mailbox remains in Gmail, while MailMoose keeps a local metadata index and
+fetches message content when needed. Manage or reconnect the One connection from
+the inbox settings. Protect `APP_ENCRYPTION_KEY` as described in the
+[self-hosting guide](SELFHOSTING.md#backup).
 
-Each connection is restricted to its selected mailbox. Shared delegated scopes
-can grant broader upstream access, but MailMoose never exposes another mailbox
-or a general Graph proxy. Existing per-inbox Read/Assistant/Owner roles apply;
-there is no folder permission subdivision. Reconnect uses the original identity
-and mailbox. Shared operations never fall back to the user's personal mailbox.
+## IMAP + SMTP
 
-### Operations and detection
+Choose **Add inbox → Standalone inbox → IMAP + SMTP** to connect a mailbox from
+another email host. Enter the email address, IMAP hostname, port, username,
+password (or app password), and the security mode required by your host. TLS is
+the default; use STARTTLS or plaintext only when your provider requires it and
+you understand the network-security implications. The sync root is optional and
+defaults to `INBOX`.
 
-Folders retain provider IDs and hierarchy; special roles use well-known Graph
-identifiers rather than translated names. Categories map to message labels.
-Immutable message IDs preserve local references through folder moves. The
-ordinary Archive folder is supported; the separate Online Archive mailbox is
-outside this release.
-
-Remote-draft handoff remains the default; approval/direct-send use the existing
-workflow. Replies use native Graph reply drafts when the original message can
-be resolved uniquely. Graph manages Sent Items; MailMoose does not append a
-duplicate copy. Microsoft may apply tenant-specific shared Sent Items rules.
-Send acceptance is not proof of delivery. Unknown send outcomes are ambiguous
-and must not be blindly retried.
-
-Graph MIME import is not trusted to preserve recipients. Before submission,
-MailMoose explicitly sets To/Cc/Bcc from the composed envelope and reads the
-draft back to verify all three lists. A mismatch stops submission. Bcc comes
-from the structured envelope for direct sends (the transmitted MIME intentionally
-omits it). Remote-draft handoffs similarly set and verify the reviewed MIME
-recipients before reporting the draft as published. Failures after draft creation
-are treated as ambiguous so an automatic retry cannot create duplicate drafts.
-
-Detection uses per-folder delta cursors for personal and shared
-mailboxes. Metadata backfill is resumable and does not emit historical arrivals.
-Live reads and on-demand detection use Graph; proactive delivery uses existing
-remote workers. Search uses Graph and explicitly reports partial completeness
-for provider search, which has a capped result set.
-
-#### Automatic push setup
-
-Own-mailbox connections (Outlook.com and Microsoft 365) automatically subscribe
-to Inbox changes once the initial metadata baseline completes. Existing eligible
-connections are provisioned by the worker too. The existing delegated permissions
-are sufficient; no client secret or additional service is required.
-
-The public HTTPS callback is `/internal/ingest/microsoft/notifications`, using
-`Config.ReceiverURL()`: `DEDICATED_RECEIVER_URL` when supplied, otherwise
-`BASE_URL`. It is registered on both the optional dedicated inbound listener and
-the core listener. Route this path through the reverse proxy to an active
-listener, permitting Microsoft's POST validation requests and notifications.
-URL selection is independent of listener enablement. Local HTTP-only deployments
-continue polling. The localhost OAuth redirect is unrelated to this public URL.
-
-Notifications contain change hints, not message bodies. A per-subscription
-random `clientState` is encrypted at rest; callbacks match its SHA-256 hash and
-the subscription ID before persisting a coalesced SQLite sync request. The
-callback acknowledges only after persistence, then wakes the existing worker.
-Delta sync and the normal durable arrival/event pipeline fetch and deliver mail;
-duplicate notifications cannot create duplicate arrival events. Microsoft
-controls notification latency, so delivery is near-real-time rather than a
-guaranteed instant SLA.
-
-An authenticated notification is a fetch hint, not an arrival, so it is not
-logged at INFO: it persists durable work and wakes the push worker, nothing more.
-A push-triggered delivery is visible as the worker's `remote sync` line with
-`trigger=push`, followed by the arrival's `remote received` line; its durable
-`message.received` event includes `provider=microsoft` and
-`source=microsoft push`. Poll-detected Microsoft arrivals use `source=microsoft`;
-IMAP and Gmail arrivals identify their own source. Unmatched notifications and
-validation challenges are Debug-only, and callback `clientState` and validation
-tokens are never logged. No UI activity-log entry is added for remote arrivals.
-
-Subscriptions last six days and renew with less than a day remaining. Lifecycle
-notifications trigger reauthorization, subscription recreation, or delta catch-up.
-Queued work survives restarts; lost subscription-create responses are reconciled
-against Graph's subscription list. Inbox deletion/disable retains only an
-encrypted cleanup grant until the subscription is removed or expires, then
-deletes that state.
-
-Detection is split into a cheap quick pass and a deep reconcile. The quick pass
-(the watcher poll and every on-demand read) applies only the Inbox folder's stored
-delta cursor and does not enumerate the folder tree. The deep reconcile (every
-folder, the folder tree, prune/backfill) runs on the inbox's own full-sync
-cadence. While a subscription is active, the quick poll is dropped: a notification
-wakes the quick pass immediately and only the full-sync safety-net remains, so a
-missed or expired notification is still caught. If push is unavailable
-(unconfigured receiver, shared mailboxes), ordinary quick delta polling applies.
-In all cases client-driven freshness is coalesced onto the inbox's quick interval,
-so several open tabs or polling clients cannot outpace the worker; a manual reload
-always runs.
-
-Connection settings show push setup/active/retrying status; the API realtime
-capability is true only while a recorded push subscription is active and unexpired.
-Shared delegated mailboxes retain polling: Graph does not support change
-subscriptions with delegated shared-mailbox permissions. Shared push would
-require a separately approved application-permission integration. The Identity
-tab's **sync schedule** is therefore how new mail arrives for one: nothing beats
-that poll, so the quick interval is the mailbox's real delivery latency.
-
-### Rollout acceptance
-
-Deterministic fixtures cover OAuth, mailbox boundaries, immutable IDs, provider
-continuations, mutations and ambiguous send handling. After registering the app,
-verify with real Outlook personal, Microsoft 365 personal and delegated shared
-mailboxes: connection, refresh, Outlook-originated changes, attachments, native
-reply drafts, shared sending rights and Sent Items behaviour.
+Outbound SMTP is optional. Add its hostname, port, username, password, and
+security mode if MailMoose should send mail through that mailbox. Without an
+outbound server, the inbox can still receive and read mail but cannot send from
+the connected account. Use the provider's documented server names and ports;
+MailMoose does not guess them. Connection credentials are encrypted with
+`APP_ENCRYPTION_KEY`.

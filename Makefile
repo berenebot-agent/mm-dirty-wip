@@ -1,7 +1,7 @@
 .PHONY: build test test-all smoke vet fmt-tests run fmt dist docs dialmx mx-fixture
 build:
 	./mailmoose-go.sh build ./cmd/server
-# dialmx builds the standalone Dial MX receiver (see docs/DIALMX.md).
+# dialmx builds the standalone SMTP receiver (see docs/REMOTE_MX.md).
 dialmx:
 	./mailmoose-go.sh build -buildvcs=false ./dialmx/cmd/receiver
 # mx-fixture builds the receiver binary the launcher RSS test measures. The
