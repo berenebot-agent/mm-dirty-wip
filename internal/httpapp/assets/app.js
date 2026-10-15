@@ -5953,31 +5953,27 @@ function hideInboxSubview(dlg) {
     // sees every record to publish at once. The records themselves come from the
     // copy-ready instructions.
     //
-    // An "unavailable" check is deliberately not a fix prompt: the lookup could
-    // not be completed, so nothing is known about the record and telling the
-    // operator to publish one would be a guess. It renders a retry line instead.
+    // A settled receiving record is a hard gate: anything that is not "ok" is
+    // shown, red, as a fix to make. "not_found" means nothing is published (publish
+    // it); "mismatch" means it is published but wrong (replace it); "dns_error"
+    // means the lookup failed and the record cannot be confirmed — that is not a
+    // licence to proceed either, so it renders a red prompt telling the operator to
+    // check DNS and retry, with the expected record to copy in case it is missing.
     function remediationBlock(dns, instructions, mxName) {
       var byKind = {};
       (dns || []).forEach(function (entry) { if (entry && entry.kind) { byKind[entry.kind] = entry; } });
       var txt = byKind.txt, mx = byKind.mx;
       var block = document.createElement('div');
-      var unverified = [txt, mx].filter(function (check) { return check && check.state === 'unavailable'; });
-      var needTXT = txt && txt.state !== 'ok' && txt.state !== 'unavailable';
-      var needMX = mx && mx.state !== 'ok' && mx.state !== 'unavailable';
-      if (!needTXT && !needMX && !unverified.length) { return block; }
+      var needTXT = txt && txt.state !== 'ok';
+      var needMX = mx && mx.state !== 'ok';
+      if (!needTXT && !needMX) { return block; }
       block.className = 'antler-dns-remediation';
-      if (unverified.length) {
-        var retry = document.createElement('p');
-        retry.className = 'antler-dns-unverified';
-        retry.textContent = 'Record check unavailable — retrying. The ' +
-          unverified.map(function (check) { return check.kind === 'mx' ? 'MX' : 'TXT'; }).join(' and ') +
-          ' record cannot be verified right now.';
-        block.appendChild(retry);
-      }
       if (needTXT && instructions.txt_value) {
-        var txtPrompt = txt.state === 'pending'
+        var txtPrompt = txt.state === 'not_found'
           ? 'Domain not authorized — no TXT record is published yet. Publish this TXT record:'
-          : 'Domain not authorized — the published TXT record does not match this domain\x27s key. Publish this TXT record:';
+          : txt.state === 'dns_error'
+            ? 'Domain not authorized — the TXT record could not be verified right now. Do not proceed until it is confirmed; check your DNS provider, then retry. If it is missing, publish this TXT record:'
+            : 'Domain not authorized — the published TXT record does not match this domain\x27s key. Publish this TXT record:';
         block.appendChild(remediationLine(txtPrompt, [
           ['Record name', instructions.txt_name, true],
           ['Record type', 'TXT', false],
@@ -5985,9 +5981,11 @@ function hideInboxSubview(dlg) {
         ]));
       }
       if (needMX && (instructions.mx || []).length) {
-        var mxPrompt = mx.state === 'pending'
+        var mxPrompt = mx.state === 'not_found'
           ? 'No MX records are published for this domain yet. Publish these MX records:'
-          : 'This domain\x27s MX records do not name an Antler receiver. Publish these MX records:';
+          : mx.state === 'dns_error'
+            ? 'This domain\x27s MX records could not be verified right now. Do not proceed until they are confirmed; check your DNS provider, then retry. The MX records to publish are:'
+            : 'This domain\x27s MX records do not name an Antler receiver. Publish these MX records:';
         var mxRecords = instructions.mx || [];
         if (mxRecords.length) { block.appendChild(remediationLine(mxPrompt, [])); }
         mxRecords.forEach(function (record, index) {
@@ -6175,18 +6173,22 @@ function hideInboxSubview(dlg) {
         return;
       }
       // light builds one traffic-light cell body: a coloured dot plus its label,
-      // sharing a tooltip. state is a DNS check state (or "pending" for a check
-      // that has not run yet).
+      // sharing a tooltip. state is a DNS check state, or null for a check that
+      // has not run yet. A settled receiving record is a hard gate — green only
+      // when it matches, red otherwise ("not_found" and "dns_error" included:
+      // the operator must not proceed on a record we cannot confirm). Amber is
+      // only the not-yet-run "Waiting" case.
       function light(state, title) {
         var span = document.createElement('span');
-        span.className = 'antler-light ' + (state === 'ok' ? 'green' : state === 'mismatch' ? 'red' : 'amber');
+        span.className = 'antler-light ' + (state === 'ok' ? 'green' : state === null ? 'amber' : 'red');
         span.title = title || '';
         var text = document.createElement('span');
         text.textContent = state === 'ok' ? 'Matching'
           : state === 'mismatch' ? 'Mismatch'
-          : state === 'unavailable' ? 'Unverified'
+          : state === 'not_found' ? 'Not found'
+          : state === 'dns_error' ? 'DNS error'
           : state === null ? 'Waiting'
-          : 'Pending';
+          : 'Not found';
         text.title = title || '';
         return { span: span, text: text };
       }
@@ -6204,7 +6206,7 @@ function hideInboxSubview(dlg) {
           var want = String(hostname || '').toLowerCase().replace(/\.$/, '');
           var matched = (entry.matched || []).some(function (h) { return String(h).toLowerCase().replace(/\.$/, '') === want; });
           if (!matched) {
-            return light('pending', 'Not published yet — publish this MX record');
+            return light('not_found', 'Not published yet — publish this MX record');
           }
         }
         return lightFor(entry);

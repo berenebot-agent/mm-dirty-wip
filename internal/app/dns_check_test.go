@@ -29,6 +29,28 @@ func (s staticResolver) LookupTXT(context.Context, string) ([]string, error) {
 	return s.txt, s.txtE
 }
 
+// recordingResolver captures the name a lookup was asked for, so the checks'
+// absolute-name rule is observable. The lookup answers are empty, which is all
+// the name tests need.
+type recordingResolver struct {
+	mx  func(name string)
+	txt func(name string)
+}
+
+func (r recordingResolver) LookupMX(_ context.Context, name string) ([]*net.MX, error) {
+	if r.mx != nil {
+		r.mx(name)
+	}
+	return nil, &net.DNSError{IsNotFound: true, Name: name}
+}
+
+func (r recordingResolver) LookupTXT(_ context.Context, name string) ([]string, error) {
+	if r.txt != nil {
+		r.txt(name)
+	}
+	return nil, &net.DNSError{IsNotFound: true, Name: name}
+}
+
 func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 	expected := []string{"antler1.example.test", "antler2.example.test"}
 	for _, tc := range []struct {
@@ -65,9 +87,9 @@ func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 			wantExtra: []string{"old.example.test"},
 		},
 		{
-			name:      "nothing published is pending",
+			name:      "nothing published is not found",
 			published: nil,
-			wantState: "pending",
+			wantState: StateNotFound,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,24 +110,51 @@ func TestCheckMXReportsUnexpectedHosts(t *testing.T) {
 	}
 }
 
-// TestCheckMXAbsentIsPendingNotUnavailable proves a definitive "no such records"
-// answer reads as pending (publish one), while a lookup that could not be
-// completed reads as unavailable (retry). Presenting the second as the first
-// would tell an operator to create a record they may already have published.
-func TestCheckMXAbsentIsPendingNotUnavailable(t *testing.T) {
+// TestCheckMXAbsentIsNotFoundNotDNSError proves a definitive "no such records"
+// answer reads as not_found (publish one), while a lookup that could not be
+// completed reads as dns_error. Presenting the second as the first would tell an
+// operator to create a record they may already have published.
+func TestCheckMXAbsentIsNotFoundNotDNSError(t *testing.T) {
 	expected := []string{"antler1.example.test"}
 
 	notFound := CheckMX(context.Background(), staticResolver{mxE: &net.DNSError{IsNotFound: true, Name: "example.test"}}, "example.test", expected)
-	if notFound.State != StatePending {
-		t.Fatalf("NXDOMAIN state = %q, want pending", notFound.State)
+	if notFound.State != StateNotFound {
+		t.Fatalf("NXDOMAIN state = %q, want not_found", notFound.State)
 	}
 
 	servfail := CheckMX(context.Background(), staticResolver{mxE: errors.New("SERVFAIL")}, "example.test", expected)
-	if servfail.State != StateUnavailable {
-		t.Fatalf("SERVFAIL state = %q, want unavailable", servfail.State)
+	if servfail.State != StateDNSError {
+		t.Fatalf("SERVFAIL state = %q, want dns_error", servfail.State)
 	}
 	if len(servfail.Found) != 0 || len(servfail.Matched) != 0 {
-		t.Fatalf("an unavailable check must claim nothing: %+v", servfail)
+		t.Fatalf("a dns_error check must claim nothing: %+v", servfail)
+	}
+}
+
+// TestCheckMXQueriesAbsoluteName proves the core's MX check asks for a fully
+// qualified name. A relative name is expanded through the resolver's search
+// list, and a search-suffix failure then masks a clean NODATA as IsTemporary —
+// which turns "nothing is published" into dns_error instead of not_found, the
+// exact "a brand new domain's check never settles" symptom. The receiver's own
+// proofs query absolute names for the same reason.
+func TestCheckMXQueriesAbsoluteName(t *testing.T) {
+	var got string
+	res := recordingResolver{mx: func(name string) { got = name }}
+	CheckMX(context.Background(), res, "example.test", []string{"antler1.example.test"})
+	if want := "example.test."; got != want {
+		t.Fatalf("MX lookup queried %q, want %q", got, want)
+	}
+}
+
+// TestCheckTXTQueriesAbsoluteName proves the same for the TXT check: the
+// _mailmoose-mx name must be qualified or a search-suffix failure can mask its
+// absent answer as dns_error.
+func TestCheckTXTQueriesAbsoluteName(t *testing.T) {
+	var got string
+	res := recordingResolver{txt: func(name string) { got = name }}
+	CheckTXT(context.Background(), res, "example.test", "id", []byte("x"), "v=MM1")
+	if want := "_mailmoose-mx.example.test."; got != want {
+		t.Fatalf("TXT lookup queried %q, want %q", got, want)
 	}
 }
 
@@ -150,19 +199,19 @@ func TestCheckTXTAgreesWithReceiverParser(t *testing.T) {
 
 	// An absent record and an unanswered lookup are different facts.
 	absent := CheckTXT(context.Background(), staticResolver{txtE: &net.DNSError{IsNotFound: true}}, "example.test", keyID, pub, expected)
-	if absent.State != StatePending {
-		t.Fatalf("NXDOMAIN state = %q, want pending", absent.State)
+	if absent.State != StateNotFound {
+		t.Fatalf("NXDOMAIN state = %q, want not_found", absent.State)
 	}
 	unavailable := CheckTXT(context.Background(), staticResolver{txtE: errors.New("timeout")}, "example.test", keyID, pub, expected)
-	if unavailable.State != StateUnavailable {
-		t.Fatalf("timeout state = %q, want unavailable", unavailable.State)
+	if unavailable.State != StateDNSError {
+		t.Fatalf("timeout state = %q, want dns_error", unavailable.State)
 	}
 }
 
 // TestCheckDKIM proves the Direct MX sending-side record check: green when the
-// published p= value equals the signing key, grey (pending) when nothing usable
-// is published, red (mismatch) when a different key is published, and
-// unavailable when the lookup cannot be completed.
+// published p= value equals the signing key, not_found when nothing usable is
+// published, red (mismatch) when a different key is published, and dns_error
+// when the lookup cannot be completed.
 func TestCheckDKIM(t *testing.T) {
 	const name = "mailmoose._domainkey.example.test"
 	const want = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A"
@@ -175,8 +224,8 @@ func TestCheckDKIM(t *testing.T) {
 		{"tags may be reordered", []string{"k=rsa; p=" + want + "; v=DKIM1"}, StateOK},
 		{"whitespace inside the key is ignored", []string{"v=DKIM1; k=rsa; p=" + want[:10] + " " + want[10:]}, StateOK},
 		{"a different key is a mismatch", []string{"v=DKIM1; k=rsa; p=DIFFERENTKEY"}, StateMismatch},
-		{"a record with no p= is pending", []string{"v=DKIM1; k=rsa"}, StatePending},
-		{"an unrelated TXT record is pending", []string{"v=spf1 -all"}, StatePending},
+		{"a record with no p= is not found", []string{"v=DKIM1; k=rsa"}, StateNotFound},
+		{"an unrelated TXT record is not found", []string{"v=spf1 -all"}, StateNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			view := CheckDKIM(context.Background(), staticResolver{txt: tc.records}, name, "v=DKIM1; k=rsa; p="+want, want)
@@ -191,11 +240,11 @@ func TestCheckDKIM(t *testing.T) {
 
 	// An absent record and an unanswered lookup are different facts.
 	absent := CheckDKIM(context.Background(), staticResolver{txtE: &net.DNSError{IsNotFound: true}}, name, "", want)
-	if absent.State != StatePending {
-		t.Fatalf("NXDOMAIN state = %q, want pending", absent.State)
+	if absent.State != StateNotFound {
+		t.Fatalf("NXDOMAIN state = %q, want not_found", absent.State)
 	}
 	unavailable := CheckDKIM(context.Background(), staticResolver{txtE: errors.New("timeout")}, name, "", want)
-	if unavailable.State != StateUnavailable {
-		t.Fatalf("timeout state = %q, want unavailable", unavailable.State)
+	if unavailable.State != StateDNSError {
+		t.Fatalf("timeout state = %q, want dns_error", unavailable.State)
 	}
 }

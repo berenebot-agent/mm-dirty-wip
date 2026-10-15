@@ -28,8 +28,8 @@ const dnsCheckTimeout = 4 * time.Second
 const dnsMaxFound = 4
 
 // DNSRecordView is one published-record check. State is "ok" (published and
-// matching), "pending" (definitively not published yet), "mismatch" (published
-// but wrong) or "unavailable" (the lookup could not be completed, so nothing is
+// matching), "not_found" (definitively not published yet), "mismatch" (published
+// but wrong) or "dns_error" (the lookup could not be completed, so nothing is
 // known). It is the shared shape the status view, the wizard and the API all
 // render.
 type DNSRecordView struct {
@@ -47,16 +47,22 @@ type DNSRecordView struct {
 	Reason     string   `json:"reason,omitempty"`
 }
 
-// Check states. "pending" and "unavailable" are deliberately distinct: a record
+// Check states. "not_found" and "dns_error" are deliberately distinct: a record
 // that is definitely absent is something the operator must publish, while a
-// lookup that could not be completed is something to retry. Presenting the
-// second as the first tells the operator to create a record they may already
+// lookup that could not be completed says nothing about the record. Presenting
+// the second as the first tells the operator to create a record they may already
 // have published correctly.
+//
+// A settled record state is a hard verdict — for the receiving checks, correct
+// or not correct, never "wait and see". "not_found" and "dns_error" are both
+// red there because the operator must not proceed on either. The amber used on
+// the dashboard belongs to the receiver's extra-MX warning, which is a *correct*
+// DNS config with ambiguous routing, not to any per-record verdict.
 const (
-	StateOK          = "ok"
-	StatePending     = "pending"
-	StateMismatch    = "mismatch"
-	StateUnavailable = "unavailable"
+	StateOK       = "ok"
+	StateNotFound = "not_found"
+	StateMismatch = "mismatch"
+	StateDNSError = "dns_error"
 )
 
 // DNSVerdict is the combined published-record picture for one domain. Either
@@ -110,15 +116,15 @@ func CheckMX(parent context.Context, resolver DNSResolver, domain string, expect
 	view := DNSRecordView{Kind: "mx", Name: domain, Expected: strings.Join(expected, ", ")}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
-	records, err := resolver.LookupMX(ctx, domain)
+	records, err := resolver.LookupMX(ctx, absoluteName(domain))
 	if err != nil && !dnsNotFound(err) {
-		view.State, view.Reason = StateUnavailable, "MX lookup failed; retrying"
+		view.State, view.Reason = StateDNSError, "MX lookup failed; retrying"
 		return view
 	}
 	// A definitive "no such records" answer and an empty record set are the same
 	// fact to the operator: nothing is published yet.
 	if len(records) == 0 {
-		view.State, view.Reason = StatePending, "no MX records published yet"
+		view.State, view.Reason = StateNotFound, "no MX records published yet"
 		return view
 	}
 	known := map[string]bool{}
@@ -173,13 +179,13 @@ func CheckTXT(parent context.Context, resolver DNSResolver, domain, keyID string
 	view := DNSRecordView{Kind: "txt", Name: name, Expected: expectedValue}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
-	records, err := resolver.LookupTXT(ctx, name)
+	records, err := resolver.LookupTXT(ctx, absoluteName(name))
 	if err != nil && !dnsNotFound(err) {
-		view.State, view.Reason = StateUnavailable, "TXT lookup failed; retrying"
+		view.State, view.Reason = StateDNSError, "TXT lookup failed; retrying"
 		return view
 	}
 	if len(records) == 0 {
-		view.State, view.Reason = StatePending, "TXT record not published yet"
+		view.State, view.Reason = StateNotFound, "TXT record not published yet"
 		return view
 	}
 	kept := records
@@ -209,13 +215,13 @@ func CheckDKIM(parent context.Context, resolver DNSResolver, recordName, expecte
 	view := DNSRecordView{Kind: "dkim", Name: recordName, Expected: expectedValue}
 	ctx, cancel := withTimeout(parent)
 	defer cancel()
-	records, err := resolver.LookupTXT(ctx, recordName)
+	records, err := resolver.LookupTXT(ctx, absoluteName(recordName))
 	if err != nil && !dnsNotFound(err) {
-		view.State, view.Reason = StateUnavailable, "DKIM TXT lookup failed; retrying"
+		view.State, view.Reason = StateDNSError, "DKIM TXT lookup failed; retrying"
 		return view
 	}
 	if len(records) == 0 {
-		view.State, view.Reason = StatePending, "DKIM record not published yet"
+		view.State, view.Reason = StateNotFound, "DKIM record not published yet"
 		return view
 	}
 	kept := records
@@ -225,7 +231,7 @@ func CheckDKIM(parent context.Context, resolver DNSResolver, recordName, expecte
 	view.Found = kept
 	published, ok := dkimsign.ParseTXTRecordValue(records)
 	if !ok {
-		view.State, view.Reason = StatePending, "DKIM record not published yet"
+		view.State, view.Reason = StateNotFound, "DKIM record not published yet"
 		return view
 	}
 	if published != strings.TrimSpace(wantBase64) {
@@ -241,6 +247,25 @@ func withTimeout(parent context.Context) (context.Context, context.CancelFunc) {
 		parent = context.Background()
 	}
 	return context.WithTimeout(parent, dnsCheckTimeout)
+}
+
+// absoluteName makes a DNS name fully qualified by ensuring the root label.
+//
+// Every published-record lookup must query an absolute name. A relative name is
+// subject to the resolver's search list (/etc/resolv.conf `search`), so Go tries
+// the name and then <name>.<suffix> for each entry. When the bare name
+// legitimately has no such record but a search suffix fails, the search-list
+// error is what survives: a clean NODATA comes back as IsTemporary rather than
+// IsNotFound, so dnsNotFound is false and an absent record reads as dns_error
+// instead of not_found. That is exactly the "a brand new domain's TXT check
+// never settles" symptom. The trailing dot skips search expansion and yields
+// the real answer. The receiver's own proofs use the same rule
+// (dialmx/receiver.absoluteName), so the local check and the receiver agree.
+func absoluteName(d string) string {
+	if d == "" || strings.HasSuffix(d, ".") {
+		return d
+	}
+	return d + "."
 }
 
 // dnsNotFound reports whether a lookup error is a definitive "this name has no

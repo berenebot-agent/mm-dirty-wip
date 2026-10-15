@@ -333,7 +333,7 @@ func (w *DNSWatcher) addReceivingChecks(ctx context.Context, verdict *DNSVerdict
 		// unexpected hosts a previous pass observed are carried forward and the
 		// light keeps its meaning until a real answer arrives. Only a completed
 		// check may clear them.
-		if mx.State == StateUnavailable {
+		if mx.State == StateDNSError {
 			mx.Unexpected = w.carriedUnexpected(domainID)
 		}
 		verdict.MX = &mx
@@ -446,11 +446,11 @@ func (w *DNSWatcher) setVerdict(domainID, accountID string, verdict DNSVerdict) 
 
 // verdictClean reports whether a verdict flags no problem the operator must act
 // on: both checks ok or absent. A check that could not be completed
-// ("unavailable") is also treated as nothing to announce — there is no record to
+// ("dns_error") is also treated as nothing to announce — there is no record to
 // publish and no answer to act on, only a retry the watcher already owns.
 func verdictClean(v DNSVerdict) bool {
 	for _, r := range []*DNSRecordView{v.TXT, v.MX} {
-		if r != nil && r.State != StateOK && r.State != StateUnavailable {
+		if r != nil && r.State != StateOK && r.State != StateDNSError {
 			return false
 		}
 	}

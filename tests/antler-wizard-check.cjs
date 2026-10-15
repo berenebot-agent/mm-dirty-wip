@@ -359,7 +359,7 @@ async function statusView() {
   // wrong shows both fixes at once — the receiver would stop at the first gate.
   h.world.dns = [
     { kind: 'txt', state: 'mismatch', reason: 'stale' },
-    { kind: 'mx', state: 'pending', reason: 'none' }
+    { kind: 'mx', state: 'not_found', reason: 'none' }
   ];
   h.world.statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }];
   await h.fireTimer(t => t.delay === 60000);
@@ -372,15 +372,17 @@ async function statusView() {
   await h.fireTimer(t => t.delay === 60000);
   assert.equal(remediation().children.length, 0, 'a healthy domain has no remediation');
 
-  // A check that could not be completed is not a fix prompt: nothing is known
-  // about the record, so the view says so and offers no publish instruction.
-  h.world.dns = [{ kind: 'txt', state: 'unavailable', reason: 'TXT lookup failed; retrying' }, { kind: 'mx', state: 'ok' }];
+  // A check that could not be completed is still a hard gate: the operator must
+  // not proceed on a record we cannot confirm, so it is a red prompt to check
+  // DNS and retry, with the expected record to copy in case it is missing — not
+  // a soft "retrying" note that leaves the way open.
+  h.world.dns = [{ kind: 'txt', state: 'dns_error', reason: 'TXT lookup failed; retrying' }, { kind: 'mx', state: 'ok' }];
   h.world.statuses = [{ state: 'rejected', reason: 'key_unavailable', smtp_hostname: 'mx.example.com' }];
   await h.fireTimer(t => t.delay === 60000);
   const unverified = h.collect(remediation());
-  assert.match(unverified, /Record check unavailable/, 'an unavailable check is reported as unverified');
-  assert.doesNotMatch(unverified, /Publish this TXT record/, 'an unavailable check prompts for no record');
-  assert.doesNotMatch(unverified, /Record value/, 'an unavailable check shows no record to copy');
+  assert.match(unverified, /could not be verified/, 'a dns_error check tells the operator it is unconfirmed');
+  assert.match(unverified, /Do not proceed until it is confirmed/, 'a dns_error check says not to proceed');
+  assert.match(unverified, /Record value/, 'a dns_error check still shows the record to copy');
 }
 
 // --- edit settings in place ---------------------------------------------

@@ -4945,3 +4945,71 @@ dependency, no schema change, no migration.
 `internal/httpapp/server.go` (`applyNoIndex`, `robotstxt`, the route), and
 `internal/httpapp/ui.go` (the `noindex` template func and the meta element in
 the two shells).
+
+## D124 — Receiving DNS checks are a hard gate: four states, and only `ok` is green
+
+**Date:** 2026-10-15. **Approved by:** Ben.
+
+**Requirement:** On a brand-new domain in Antler MX mode the MX check read
+`mismatch` while the TXT check reported `pending`, which the operator read as
+"the work is underway" — but nothing was pending. Two problems sat behind that.
+(1) The state vocabulary lied: `pending` is a temporally-loaded word that implies
+work in progress, and calling a never-created record `pending` told the operator
+to wait for something that was never going to happen. (2) Worse, on a brand-new
+domain the TXT check often did not even reach `pending`. `CheckMX`/`CheckTXT`
+queried the resolver with the **relative** name, so the resolver's search list
+(`/etc/resolv.conf` `search`) expanded `_mailmoose-mx.<domain>` to
+`_mailmoose-mx.<domain>.<suffix>`; a search-suffix failure then masked the clean
+NODATA as `IsTemporary`, `dnsNotFound` returned false, and the absent record read
+as `unavailable` ("retrying") forever. The receiver's own proofs already avoid
+exactly this by querying absolute names, with a test pinning it
+(`dialmx/receiver.absoluteName`); the core's checks did not, so the local verdict
+and the receiver disagreed about an absent record.
+
+**Decision:**
+
+- **Rename the two states to say what they mean.** `pending` → `not_found`
+  (definitively no record published) and `unavailable` → `dns_error` (the lookup
+  could not be completed). `ok` (`StateOK`) and `mismatch` (`StateMismatch`) keep
+  their names. The wire values are `"not_found"` and `"dns_error"`; this is a small
+  API-contract change (`docs/API.md`). Only the DNS-check constants are renamed —
+  the unrelated `unavailable` values (`mxdial.StatusUnavailable`,
+  `MXStateUnavailable`, `mailbox.ErrKindUnavailable`) are untouched.
+- **A receiving record check is a hard gate.** Only `ok` is green; `mismatch`,
+  `not_found` and `dns_error` are all red, because the operator must not proceed
+  on a record that is wrong, absent, or unconfirmed. There is no amber on an
+  individual receiving record. `not_found` and `dns_error` stay distinct in the
+  *reason* and in the fix prompt (publish it vs check DNS and retry; the latter
+  never claims the record is missing), and on a `dns_error` MX check the previously
+  observed `unexpected` hosts are still carried forward, so a known extra-MX
+  warning survives an outage. The amber that remains is the receiver-level
+  extra-MX warning — a *correct* DNS config with ambiguous routing — and the
+  not-yet-run "Waiting" cell for a check the watcher has not resolved.
+- **Query absolute names, matching the receiver.** `CheckMX`, `CheckTXT` and
+  `CheckDKIM` qualify the name with a trailing dot (`absoluteName`), so a clean
+  NODATA yields `IsNotFound` and reads as `not_found` rather than drifting to
+  `dns_error`. This is the actual fix for the "brand new domain's check never
+  settles" symptom.
+- **DKIM is deliberately different.** DKIM is a sending-side, advisory check: an
+  absent or unconfirmed record does not block mail, it only forgoes the
+  enforcement DKIM gives outbound mail. So for the DKIM light only `ok` is green
+  and only `mismatch` (a published record that does not match the signing key) is
+  red; `not_found` and `dns_error` are grey ("not confirmed"), distinct in wording
+  ("DNS not present" vs a check that failed).
+
+**Reason:** "Not found" and "wrong" are different operator facts with different
+actions, and neither is "wait". Making the four states orthogonal — one settled
+good, three settled bad, plus a genuinely-unknown error — lets the receiving
+checks express the only question that matters ("is this record correct?"), and
+lets the operator see that an unconfirmed record is a stop, not a reassurance. The
+absolute-name fix removes the drift between the core's local verdict and the
+receiver's own proof, so the two can no longer disagree about a record that simply
+is not there.
+
+**Complexity:** No dependency, service, schema or migration change. The rename
+touches `internal/app/dns_check.go`, `internal/app/dns_watcher.go`,
+`internal/httpapp/ui.go` (the two light functions), `internal/httpapp/domain_dns.go`,
+and the wizard/JS in `internal/httpapp/assets/app.js`; the absolute-name fix is one
+small helper plus its call sites. Tests are updated in place, with new
+absolute-name assertions in `internal/app/dns_check_test.go`. See `docs/DIALMX.md`
+and `docs/API.md`.
