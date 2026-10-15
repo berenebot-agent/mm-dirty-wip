@@ -31,12 +31,21 @@ using `APP_ENCRYPTION_KEY`.
 ## Inbound: Mailgun
 
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
-2. In the Admin UI, open the domain's page (**Dashboard → Settings → the domain**) and configure a **Receiving** provider of type **Mailgun**, entering the account's webhook signing key. The secret is stored encrypted on that domain; it is not read from the environment.
-3. Create a Mailgun catch-all route for the domain that forwards incoming mail to:
+2. On the dashboard, click **Receiving** for the domain and choose **Mailgun**.
+3. In Mailgun, open **Send → Receiving**, select the domain's region, and click
+   **Create route**. Choose **Match Recipient**, matching every address at this
+   domain only. Enable **Forward** and paste the URL shown at that step in
+   MailMoose (with its adjacent copy button), for example:
 
 ```text
 https://your-host.example/internal/ingest/mailgun/raw-mime
 ```
+
+4. Click **Create Route**. This is an inbound Route, not an event webhook.
+5. Open **API Security** from Mailgun's profile menu and copy the **HTTP webhook
+   signing key**, not an API key or domain sending key. Paste it into MailMoose
+   and save. The secret is stored encrypted on the domain, not read from the
+   environment. Send a test email to confirm delivery.
 
 MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
@@ -112,9 +121,21 @@ The webhook URL to register in Postmark is:
 https://<generated-user>:<generated-password>@your-host.example/internal/ingest/postmark
 ```
 
-1. Point the receiving domain's MX record at `inbound.postmarkapp.com` (priority 10).
-2. In Postmark, enable **Include raw email content in JSON payload** on the Server's Inbound Message Stream.
-3. On the dashboard, click **Receiving** for that domain and choose **Postmark**. MailMoose generates the Basic-auth username and password and shows the ready-to-paste webhook URL once; copy it into the stream's webhook field.
+1. On the dashboard, click **Receiving** for the domain, choose **Postmark**, and
+   save first. MailMoose generates the Basic-auth credentials and shows the
+   authenticated webhook URL once, with a copy button and remaining instructions.
+   The bare ingest URL is not sufficient.
+2. In Postmark, open **Server → Inbound Message Stream → Settings**, set the
+   **Inbound Domain**, enable **Include raw email content in JSON payload**,
+   paste the generated URL into **Webhook**, and save. Enable SMTP in the Server
+   settings as required for inbound domain forwarding.
+3. Point the receiving domain's MX record at `inbound.postmarkapp.com` (priority
+   10), taking care not to replace an existing mail service unintentionally.
+   Send a test email. Postmark supports one inbound domain per stream and one
+   inbound stream per Server.
+
+If the URL is lost, use **Regenerate secret** and update Postmark immediately;
+old credentials stop working as soon as they are regenerated.
 
 Postmark does not sign inbound webhooks, so the `From` envelope sender is **not provider-attested** (see [SECURITY.md](../SECURITY.md)).
 

@@ -29,7 +29,13 @@ Internet email -> Postmark MX -> Postmark inbound
 
 Add an MX record for the receiving host at `inbound.postmarkapp.com` with
 priority 10. A dedicated subdomain (for example `inbound.yourdomain.com`) is
-recommended over the root domain.
+recommended over the root domain. Changing MX records redirects incoming mail;
+do not replace an existing mail service unintentionally.
+
+In Postmark, select **Server → Inbound Message Stream → Settings** and set
+**Inbound Domain** to that receiving domain. Enable SMTP in the Server settings
+as required for inbound domain forwarding. MX records alone do not associate
+your domain with the stream.
 
 ```text
 HOST      TYPE  PRIORITY  VALUE
@@ -46,7 +52,8 @@ webhooks, so the endpoint is protected by Basic authentication instead.
 
 On the dashboard, click **Receiving** for the domain you receive on:
 
-1. Choose **Postmark**. The form shows the setup steps.
+1. Choose **Postmark**. The form explains that you must save first; it does not
+   offer the unauthenticated ingest endpoint as a usable webhook URL.
 2. Save. MailMoose generates a **username** and **password** and shows a
    one-time dialog with the Basic-auth **webhook URL**, for example:
 
@@ -61,9 +68,15 @@ On the dashboard, click **Receiving** for the domain you receive on:
 3. Copy the shown URL into the Inbound Message Stream's **webhook** field and
    save. Postmark embeds the credentials when posting to the URL.
 
-Repeat for each domain you receive on. Each domain stores its own credentials.
-If several domains share one Postmark stream, either use one domain's credentials
-for all of them or configure each domain separately.
+Each domain stores its own credentials. Postmark supports one Inbound Message
+Stream per Server and one inbound domain per stream; use separate Servers for
+separate inbound domains. See Postmark's [server configuration guide](https://postmarkapp.com/developer/user-guide/inbound/configure-an-inbound-server)
+and [domain forwarding guide](https://postmarkapp.com/developer/user-guide/inbound/inbound-domain-forwarding).
+
+On later visits, MailMoose explains that the URL was shown only once. Saving
+again does not reveal existing credentials. **Regenerate secret** creates a new
+authenticated URL and immediately invalidates the old credentials; update
+Postmark before expecting delivery to resume.
 
 You can also use the REST API (the response returns `generated` once):
 
