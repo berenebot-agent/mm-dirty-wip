@@ -127,7 +127,18 @@ TTY_FLAG=""
 if [ -t 1 ]; then TTY_FLAG="-it"; fi
 
 # Build/test parallelism follows the host core count (or MAILMOOSE_GO_PARALLEL).
-ENV_FLAGS="-e GOFLAGS=-p=${GO_PARALLEL} -e CGO_ENABLED=1 -e GOMAXPROCS=${GO_PARALLEL}"
+#
+# -trimpath lives in GOFLAGS, NOT on a command line: this wrapper is a
+# pass-through (`go "$@"`), so a build flag added at the call site would be
+# missed by every test/vet/gofmt invocation. GOFLAGS applies to all of them.
+#
+# Why it is here: without it an object's cache key includes its absolute build
+# path, so the same source built from a different mount point or workdir gets a
+# SEPARATE cache entry. Measured on this repo: adding -trimpath to a warm cache
+# created 1,322 new entries while rebuilding without it created 0 — two full
+# lineages of the same objects. This repo already builds from more than one
+# mount path (see the backup work), so the divergence is live, not theoretical.
+ENV_FLAGS=(-e "GOFLAGS=-p=${GO_PARALLEL} -trimpath" -e CGO_ENABLED=1 -e "GOMAXPROCS=${GO_PARALLEL}")
 
 # Optional contract-fixture passthrough: when BILLBOT_CONTRACT_FIXTURE names a
 # file, mount its parent directory at the identical container path and pass the
@@ -185,7 +196,7 @@ if [ "${1:-}" = "gofmt" ]; then
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
         $SCRATCH_FLAGS \
-        $ENV_FLAGS \
+        "${ENV_FLAGS[@]}" \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \
         $ONE_PROBE_FLAGS \
@@ -200,7 +211,7 @@ else
         --memory="$MEM_LIMIT" \
         --memory-swap="$MEM_LIMIT" \
         $SCRATCH_FLAGS \
-        $ENV_FLAGS \
+        "${ENV_FLAGS[@]}" \
         $FIXTURE_FLAGS \
         $SMOKE_FLAGS \
         $ONE_PROBE_FLAGS \
