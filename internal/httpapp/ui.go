@@ -45,6 +45,12 @@ dialog.inbox-settings .email-field,dialog.inbox-settings .inbox-schedule-grid,di
 .wizard-step-title{display:flex;align-items:center;gap:10px;margin:0 0 4px;font-size:1.5em}
 .wizard-step-title .wizard-logo{width:26px;height:26px;flex:0 0 26px;display:inline-flex;align-items:center;justify-content:center}
 .wizard-step-title .wizard-logo svg{width:100%;height:100%;display:block}
+/* A left-aligned Back control at the top of each wizard step, so the way back
+sits in the same place on every step and returns to the screen the user came
+from. */
+.wizard-step-nav{display:flex;align-items:center;margin:0 0 10px}
+.wizard-step-nav .wizard-back{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px}
+.wizard-step-nav .wizard-back:before{content:"\2190";font-size:15px;line-height:1}
 .wizard-box{border:1px solid #ddd;border-radius:10px;padding:16px;margin:14px 0;background:#fff}
 .wizard-box>.section-head:first-child,.wizard-box>h3:first-child{margin-top:0}
 .wizard-box .dialog-actions{margin-top:14px}

@@ -942,6 +942,10 @@ func TestStandaloneWizardProviderSteps(t *testing.T) {
 		`data-microsoft-paste-hint`,
 		"Paste the resulting URL here",
 		`@keyframes paste-hint-flash`,
+		// Every provider step carries the same left-aligned Back control so the
+		// way back sits in one place and returns to the screen the user came from.
+		`class="wizard-step-nav"`,
+		`class="secondary wizard-back" data-wizard-back`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("standalone wizard missing %q", want)

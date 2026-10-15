@@ -210,6 +210,11 @@ func TestOneFourthSelectorSettingsAndCSRF(t *testing.T) {
 	if entry.Code != 200 || !strings.Contains(entry.Body.String(), `name="api_key"`) || !strings.Contains(entry.Body.String(), `<div class="dialog-actions"><a class="btn secondary" href="/">Cancel</a><button>Next</button></div>`) {
 		t.Fatal("wizard key-entry step missing")
 	}
+	// The One page carries the same left-aligned Back control as the wizard
+	// steps, so the user can return to the provider list they came from.
+	if !strings.Contains(entry.Body.String(), `data-one-page`) || !strings.Contains(entry.Body.String(), `data-one-back`) {
+		t.Fatal("One setup page missing its Back control")
+	}
 	if strings.Contains(entry.Body.String(), "Imported Gmail mailboxes") || strings.Contains(entry.Body.String(), "No imported Gmail mailboxes.") {
 		t.Fatal("empty imported-mailboxes section shown under Save")
 	}
