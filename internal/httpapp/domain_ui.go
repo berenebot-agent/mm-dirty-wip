@@ -34,6 +34,7 @@ type domainEditorView struct {
 	SelectLabel string
 	Fields      []transport.ConfigField
 	WebhookURL  string
+	WebhookStep int // zero-based step after which the URL and copy button appear
 	Steps       []string
 	Generated   bool
 	// HasOverridable is true when the provider has a generated field the
@@ -1052,8 +1053,16 @@ func newDomainEditor(kind, provider, baseURL string) (*domainEditorView, bool) {
 		return nil, false
 	}
 	e := &domainEditorView{Kind: kind, Provider: provider, ProviderLabel: t.Description(), Fields: t.ConfigFields(), Steps: domainReceivingSteps(provider)}
-	if provider != "cloudflare" {
+	if provider != "cloudflare" && provider != "postmark" {
 		e.WebhookURL = domainIngestURL(baseURL, t)
+	}
+	switch provider {
+	case "resend":
+		e.WebhookStep = 1
+	case "mailgun":
+		e.WebhookStep = 3
+	case "sendgrid":
+		e.WebhookStep = 2
 	}
 	// A provider may supply a longer, descriptive picker label than its short
 	// Description(): Antler MX states its zero-config nature, Remote MX states
@@ -1166,7 +1175,7 @@ func domainIngestURL(baseURL string, t transport.InboundTransport) string {
 }
 
 // domainReceivingSteps returns the pre-save setup instructions for a receiving
-// provider. The exact webhook URL is rendered separately above the steps.
+// provider. The exact webhook URL is rendered inside its relevant step.
 func domainReceivingSteps(provider string) []string {
 	switch provider {
 	case "resend":
@@ -1175,12 +1184,16 @@ func domainReceivingSteps(provider string) []string {
 			"Paste the webhook URL shown here.",
 			"Under events, tick email.received only.",
 			"Click Add, reopen the webhook, and copy its signing secret (whsec_...).",
-			"Paste the signing secret and a full-access Resend key below, then save.",
+			"In Resend, open API Keys and create a key with Full access so MailMoose can retrieve received email content. Paste that key and the webhook signing secret below, then save in MailMoose.",
 		}
 	case "mailgun":
 		return []string{
-			"In Mailgun, add this URL as the inbound route for raw MIME delivery.",
-			"Paste the HTTP webhook signing key below, then save.",
+			"In Mailgun, configure this receiving domain and publish the MX records Mailgun supplies if you have not already done so.",
+			"Open Send → Receiving, select the domain's region, and click Create route. Use an inbound Route, not an event webhook.",
+			"Choose Match Recipient and match all addresses at this domain (not other domains).",
+			"Enable the Forward action and paste this webhook URL exactly as shown. Its raw-mime suffix tells Mailgun to deliver the full original email.",
+			"Click Create Route to save it. In Mailgun, open API Security from the profile menu and copy the HTTP webhook signing key (not an API key or domain sending key).",
+			"Paste the HTTP webhook signing key below, then save in MailMoose.",
 		}
 	case "sendgrid":
 		return []string{
@@ -1193,10 +1206,8 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "postmark":
 		return []string{
-			"Point the receiving domain's MX record at inbound.postmarkapp.com (priority 10).",
-			"In Postmark, open your Server's Inbound Message Stream settings and enable Include raw email content in JSON payload.",
-			"Save this form to generate the webhook username and password and to reveal the Basic-auth webhook URL.",
-			"Paste the shown URL (which contains the credentials) into the Stream's webhook field, then save.",
+			"Save in MailMoose first to generate a webhook username and password. The next dialog shows the authenticated webhook URL once, with the remaining Postmark setup steps.",
+			"Do not use the bare ingest URL: Postmark requires the generated username and password in the webhook URL.",
 		}
 	case "dialmx":
 		return []string{
@@ -1219,7 +1230,7 @@ func domainReceivingSteps(provider string) []string {
 			"Point this domain's MX record at your receiver's SMTP hostname. No webhook, DNS proof, or per-domain key is needed.",
 		}
 	default:
-		return []string{"Register the webhook URL above with the provider, then fill in the fields below and save."}
+		return []string{"Copy this webhook URL into the provider's receiving settings, then fill in the fields below and save."}
 	}
 }
 

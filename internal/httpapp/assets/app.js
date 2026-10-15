@@ -5452,7 +5452,12 @@ function hideInboxSubview(dlg) {
   var url = document.getElementById('domain-credential-url');
   window.mailmooseCopy.wire(btn, {
     text: function () { return url ? url.textContent : ''; },
-    select: url
+    select: url,
+    onSuccess: function () {
+      btn.classList.add('copied');
+      window.mailmooseCopy.announce('Webhook URL copied.');
+      window.setTimeout(function () { btn.classList.remove('copied'); }, 1500);
+    }
   });
 })();
 
@@ -5537,7 +5542,12 @@ function hideInboxSubview(dlg) {
     var url = scope.querySelector('.setup-webhook-url');
     window.mailmooseCopy.wire(btn, {
       text: function () { return url ? url.textContent : ''; },
-      select: url
+      select: url,
+      onSuccess: function () {
+        btn.classList.add('copied');
+        window.mailmooseCopy.announce('Webhook URL copied.');
+        window.setTimeout(function () { btn.classList.remove('copied'); }, 1500);
+      }
     });
   });
 })();

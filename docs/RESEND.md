@@ -37,15 +37,16 @@ parsed by the shared ingest core.
 
 On the dashboard, click **Receiving** for the domain you receive on:
 
-1. Choose **Resend**. The form shows the exact **Webhook
-   URL** to use before you save.
+1. Choose **Resend**. Follow the numbered setup instructions; the exact webhook
+   URL and a small adjacent copy button appear at the URL-pasting step, not above
+   the walkthrough.
 2. In Resend, open **Webhooks** → **Add Webhook**, paste that URL, tick
    **email.received** (leave the other events unchecked), and save. Open the
    webhook and copy its **signing secret** (`whsec_...`).
 3. Back in MailMoose, enter the **Resend API key** (full access) and the
    **Webhook signing secret**. Optionally set **API base URL** (default
    `https://api.resend.com`).
-4. Save. The remaining setup steps are shown in the dialog before you save.
+4. Save in MailMoose, then send a test email and confirm it arrives.
 
 Repeat for each domain you receive on. Each domain stores its own receiving
 configuration. If several domains share one Resend webhook, enter the same

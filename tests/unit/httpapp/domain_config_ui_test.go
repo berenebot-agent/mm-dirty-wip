@@ -900,7 +900,6 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 	for _, tc := range []struct{ provider, suffix string }{
 		{"mailgun", "/internal/ingest/mailgun/raw-mime"},
 		{"resend", "/internal/ingest/resend"},
-		{"postmark", "/internal/ingest/postmark"},
 	} {
 		group := providerGroupHTML(t, dlg, tc.provider)
 		if got := webhookURL(group); !strings.HasSuffix(got, tc.suffix) {
@@ -910,6 +909,23 @@ func TestUIDomainReceivingWebhookURLIsPerProvider(t *testing.T) {
 		if !strings.Contains(group, `secondary setup-copy`) {
 			t.Fatalf("%s group has no scoped copy button", tc.provider)
 		}
+	}
+	for _, tc := range []struct{ provider, before, after string }{
+		{"resend", "open Webhooks and click Add Webhook", "Under events"},
+		{"mailgun", "Enable the Forward action", "Click Create Route"},
+	} {
+		group := providerGroupHTML(t, dlg, tc.provider)
+		before, urlAt, after := strings.Index(group, tc.before), strings.Index(group, `class="setup-webhook-url"`), strings.Index(group, tc.after)
+		if before < 0 || urlAt <= before || after <= urlAt {
+			t.Fatalf("%s URL is not inside the relevant setup step", tc.provider)
+		}
+		if strings.Contains(group, "Register this webhook URL") || !strings.Contains(group, `aria-label="Copy webhook URL"`) {
+			t.Fatalf("%s has obsolete instructions or missing accessible copy button", tc.provider)
+		}
+	}
+	postmark := providerGroupHTML(t, dlg, "postmark")
+	if webhookURL(postmark) != "" || strings.Contains(postmark, "setup-copy") || !strings.Contains(postmark, "Save in MailMoose first") {
+		t.Fatal("Postmark must generate credentials before offering a webhook URL")
 	}
 	// SendGrid is intentionally hidden from the receiving menu until its adapter
 	// can be verified against the real provider (internal/app/service.go); the
