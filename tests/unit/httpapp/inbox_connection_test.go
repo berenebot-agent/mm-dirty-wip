@@ -106,13 +106,17 @@ func TestInboxViewReconnectBannerForDisconnectedOneInbox(t *testing.T) {
 		t.Fatal("inbox reconnect banner must carry the operator detail")
 	}
 	// The banner's control is the in-place One reconnect bound to this inbox,
-	// labelled with the connection name and rendered as an ordinary secondary
+	// labelled "Reconnect with One" — One is the connection being repaired, and
+	// the control does not tie it to Gmail — rendered as an ordinary secondary
 	// button (never red-on-black).
 	if !strings.Contains(body, `class="secondary btn-sm" data-one-reconnect data-inbox="`+box.ID+`"`) {
 		t.Fatalf("inbox reconnect banner missing the labelled One reconnect control: %s", body)
 	}
-	if !strings.Contains(body, "Reconnect Gmail via One") {
+	if !strings.Contains(body, ">Reconnect with One</button>") {
 		t.Fatalf("inbox reconnect banner must name the connection on its control: %s", body)
+	}
+	if strings.Contains(body, "Reconnect Gmail via One") {
+		t.Fatalf("inbox reconnect banner still ties the One control to Gmail: %s", body)
 	}
 	if strings.Contains(body, "btn-sm danger\">Reconnect") {
 		t.Fatal("inbox reconnect banner must not use the red-on-black danger button")
@@ -134,9 +138,11 @@ func TestRemoteConfigViewCarriesConnectionState(t *testing.T) {
 	var healthy struct {
 		Provider   string `json:"provider"`
 		Connection *struct {
-			State     string `json:"state"`
-			Provider  string `json:"provider"`
-			Reconnect string `json:"reconnect"`
+			State       string `json:"state"`
+			Provider    string `json:"provider"`
+			Reconnect   string `json:"reconnect"`
+			Label       string `json:"label"`
+			ActionLabel string `json:"action_label"`
 		} `json:"connection"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &healthy); err != nil {
@@ -144,6 +150,11 @@ func TestRemoteConfigViewCarriesConnectionState(t *testing.T) {
 	}
 	if healthy.Connection == nil || healthy.Connection.State != "connected" || healthy.Connection.Provider != "one" || healthy.Connection.Reconnect != "one" {
 		t.Fatalf("healthy connection = %+v", healthy.Connection)
+	}
+	// The reconnect control's text comes from the server, so the Identity tab and
+	// the banner agree; One is not tied to Gmail on the control.
+	if healthy.Connection.Label != "One" || healthy.Connection.ActionLabel != "Reconnect with One" {
+		t.Fatalf("One control text = %q / %q", healthy.Connection.Label, healthy.Connection.ActionLabel)
 	}
 	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
 	if err != nil {

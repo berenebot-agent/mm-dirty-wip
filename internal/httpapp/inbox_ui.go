@@ -94,14 +94,14 @@ const syncBanner = `{{if .StandaloneMode}}<div class="banner sync-banner" data-s
 // standalone mailbox, folder or message page when the provider reports this
 // inbox's authorization revoked or expired. A disconnected provider connection
 // is a per-inbox problem, so it is surfaced in place rather than only on the
-// dashboard. The reconnect control names the connection it repairs ("Reconnect
-// Gmail via One" / "Reconnect Google / Gmail" / "Reconnect Microsoft / Outlook")
-// and uses the ordinary secondary button: One reconnects in place (an API-key
-// dialog opened by app.js), the OAuth providers follow their wizard. Only an
-// account administrator can repair a connection, so a mailbox user who cannot is
-// shown the detail without a control that would fail. It renders nothing for a
+// dashboard. The reconnect control is named by the provider's own action text
+// ("Reconnect with One" / "Reconnect Google / Gmail" / "Reconnect Microsoft /
+// Outlook") and uses the ordinary secondary button: One reconnects in place (an
+// API-key dialog opened by app.js), the OAuth providers follow their wizard. Only
+// an account administrator can repair a connection, so a mailbox user who cannot
+// is shown the detail without a control that would fail. It renders nothing for a
 // healthy connection, so it never nags or reads as a routine action.
-const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}{{if .StandaloneAdmin}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="secondary btn-sm" data-one-reconnect data-inbox="{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</button>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}">Reconnect {{$.InboxConnLabel}}</a>{{end}}</div>{{else}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}} Ask an account administrator to reconnect it.</span></div>{{end}}{{end}}{{end}}`
+const reconnectBanner = `{{if .InboxConnDetail}}{{if .Inbox}}{{if .StandaloneAdmin}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}}</span> {{if eq $.InboxConnReconnect "one"}}<button type="button" class="secondary btn-sm" data-one-reconnect data-inbox="{{$.Inbox.ID}}">{{$.InboxConnLabel}}</button>{{else}}<a class="btn secondary btn-sm" href="/ui/inboxes/standalone/new?{{if eq $.InboxConnReconnect "microsoft"}}microsoft_inbox={{else}}google_inbox={{end}}{{$.Inbox.ID}}">{{$.InboxConnLabel}}</a>{{end}}</div>{{else}}<div class="banner danger" data-inbox-reconnect role="alert"><span>{{.InboxConnDetail}} Ask an account administrator to reconnect it.</span></div>{{end}}{{end}}{{end}}`
 
 // mailSidebar is the shared left-hand folder navigation for mailbox views.
 // Compose sits at the very top; folders follow with their counts, then a
@@ -780,7 +780,7 @@ func (s *Server) applyStandaloneMailbox(r *http.Request, p model.Principal, box 
 	// not read as a reconnect prompt.
 	if conn, ok := s.inboxConnectionState(r.Context(), p.AccountID, box); ok && conn.State == connectionStateDisconnected {
 		data.InboxConnDetail = conn.Detail
-		data.InboxConnLabel = conn.Label
+		data.InboxConnLabel = conn.ActionLabel
 		data.InboxConnReconnect = conn.Reconnect
 	}
 	if view, verr := s.remoteConfigView(r.Context(), p, box.ID); verr == nil {
