@@ -455,4 +455,15 @@ func TestDashboardRendersOneReconnectDialog(t *testing.T) {
 			t.Fatalf("dashboard missing %q", want)
 		}
 	}
+	// The dialog must point at where to obtain a One API key, so an operator can
+	// act on the prompt without leaving to hunt for the guide.
+	if !strings.Contains(body, `href="https://app.withone.ai/"`) || !strings.Contains(body, "Developers") {
+		t.Fatal("reconnect dialog must link to the One API key guide")
+	}
+	// The dialog is part of the page shell, so the settings entry point on the
+	// dashboard always has it — the same markup the mailbox page uses.
+	inboxBody := uiGet(t, h, cookie, "/").Body.String()
+	if strings.Count(inboxBody, `id="one-reconnect-dialog"`) != 1 {
+		t.Fatal("page shell must render exactly one reconnect dialog")
+	}
 }

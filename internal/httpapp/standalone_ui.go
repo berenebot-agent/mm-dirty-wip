@@ -354,24 +354,25 @@ func (s *Server) folderMailboxView(w http.ResponseWriter, r *http.Request) {
 	totalCount, _ := s.folderMessageCount(r, p, box, target)
 
 	data := pageData{
-		Title:          box.Address + " · " + target.Name,
-		Page:           "inbox",
-		Principal:      p,
-		CSRF:           csrf(r),
-		Account:        acc,
-		Inbox:          &box,
-		Messages:       msgs,
-		Folder:         "folder",
-		ActiveFolderID: target.ID,
-		Folders:        sidebar,
-		UnifiedLabels:  unifiedLabels,
-		UnreadCount:    unread[id],
-		SpamCount:      spamCount,
-		TrashCount:     trashCount,
-		DraftCount:     draftCount,
-		OutboxCount:    outboxCount,
-		HasMore:        hasMore,
-		Before:         cursor,
+		Title:            box.Address + " · " + target.Name,
+		Page:             "inbox",
+		ShowOneReconnect: true,
+		Principal:        p,
+		CSRF:             csrf(r),
+		Account:          acc,
+		Inbox:            &box,
+		Messages:         msgs,
+		Folder:           "folder",
+		ActiveFolderID:   target.ID,
+		Folders:          sidebar,
+		UnifiedLabels:    unifiedLabels,
+		UnreadCount:      unread[id],
+		SpamCount:        spamCount,
+		TrashCount:       trashCount,
+		DraftCount:       draftCount,
+		OutboxCount:      outboxCount,
+		HasMore:          hasMore,
+		Before:           cursor,
 		// CurrentPageBefore is the incoming `before` this custom-folder page was
 		// requested with; the reload control preserves that page.
 		CurrentPageBefore: before,
@@ -498,7 +499,7 @@ func remoteTimestamp(value *string) *time.Time {
 const folderBody = `<div class="inboxhead"><h1 class="inboxtitle">{{.Inbox.DisplayName}} <span class="inboxaddr" data-copy="{{.Inbox.Address}}" role="button" tabindex="0" title="Click to copy">{{.Inbox.Address}}</span></h1></div>
 <div class="inboxbar"><form id="bulk-form" class="bulkbar" method="post" action="/ui/inboxes/{{.Inbox.ID}}/bulk"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="folder" value="folder"><input type="hidden" name="folder_id" value="{{.ActiveFolderID}}"><input type="hidden" name="label" value=""><input type="hidden" name="scope" value="page">` + syncViewFields + syncButton + `{{if .Principal.Admin}}<a class="btn secondary icon-btn" href="/?inbox={{.Inbox.ID}}" title="Inbox settings" aria-label="Inbox settings">` + iconSettingsSvg + `</a>{{end}}<button name="action" value="read" class="secondary icon-btn" title="Mark read" aria-label="Mark read">` + iconMarkRead + `</button><button name="action" value="unread" class="secondary icon-btn" title="Mark unread" aria-label="Mark unread">` + iconMarkUnread + `</button><button name="action" value="delete" class="secondary icon-btn danger" data-confirm-all="Move all selected messages to trash?" title="Move to trash" aria-label="Move to trash">` + iconTrash + `</button></form></div>
 <div class="mail-layout">` + mailSidebar + `<div class="mailcontent">
-{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}` + syncBanner + reconnectBanner + `{{template "one-reconnect-dialog" .}}
+{{if .Notice}}<div class="ok notice" role="status" aria-live="polite">{{.Notice}}</div>{{end}}` + syncBanner + reconnectBanner + `
 {{template "select-banner" .}}
 {{template "live-list-card" .}}</div></div>`
 
@@ -581,30 +582,31 @@ func (s *Server) renderRemoteMessage(w http.ResponseWriter, r *http.Request, p m
 		title = "(no subject)"
 	}
 	data := pageData{
-		Title:          title,
-		Page:           "inbox",
-		Principal:      p,
-		CSRF:           csrf(r),
-		Account:        acc,
-		Message:        &m,
-		Inbox:          &box,
-		Folder:         folder,
-		Folders:        folderSidebar,
-		UnifiedLabels:  unifiedLabels,
-		MessageLabels:  unifiedLabels,
-		Labels:         inboxLabels,
-		LabelUnread:    labelUnread,
-		UnreadCount:    unread[box.ID],
-		SpamCount:      spamCount,
-		TrashCount:     trashCount,
-		DraftCount:     draftCount,
-		OutboxCount:    outboxCount,
-		ThreadMessages: thread,
-		RemoteBody:     true,
-		RemoteBodyURL:  "/ui/messages/" + view.ID + "/body",
-		RemoteHTMLURL:  "/ui/messages/" + view.ID + "/html",
-		RemoteReadURL:  "/ui/messages/" + view.ID + "/read",
-		Notice:         r.URL.Query().Get("notice"),
+		Title:            title,
+		Page:             "inbox",
+		ShowOneReconnect: true,
+		Principal:        p,
+		CSRF:             csrf(r),
+		Account:          acc,
+		Message:          &m,
+		Inbox:            &box,
+		Folder:           folder,
+		Folders:          folderSidebar,
+		UnifiedLabels:    unifiedLabels,
+		MessageLabels:    unifiedLabels,
+		Labels:           inboxLabels,
+		LabelUnread:      labelUnread,
+		UnreadCount:      unread[box.ID],
+		SpamCount:        spamCount,
+		TrashCount:       trashCount,
+		DraftCount:       draftCount,
+		OutboxCount:      outboxCount,
+		ThreadMessages:   thread,
+		RemoteBody:       true,
+		RemoteBodyURL:    "/ui/messages/" + view.ID + "/body",
+		RemoteHTMLURL:    "/ui/messages/" + view.ID + "/html",
+		RemoteReadURL:    "/ui/messages/" + view.ID + "/read",
+		Notice:           r.URL.Query().Get("notice"),
 	}
 	s.applyStandaloneMailbox(r, p, box, &data)
 	s.render(w, r, messageBody, data)

@@ -61,7 +61,7 @@ func TestInboxAliasUIRoundTrip(t *testing.T) {
 	if !strings.Contains(body, `id="inbox-alias-editor"`) || !strings.Contains(body, `data-alias-names="Acme Billing,Acme Sales"`) {
 		t.Fatalf("dashboard missing inline alias editor or names")
 	}
-	if !strings.Contains(body, `class="section-head">Managed aliases<`) || !strings.Contains(body, `class="section-head">Primary / Default Address<`) {
+	if !strings.Contains(body, `class="section-head">Alias<`) || !strings.Contains(body, `class="section-head">Primary / Default Address<`) {
 		t.Fatalf("dashboard missing aliases/primary section headers")
 	}
 	if i, j := strings.Index(body, `id="inbox-alias-add"`), strings.Index(body, `id="inbox-alias-list"`); i < 0 || j < 0 || i > j {
