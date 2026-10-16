@@ -3559,7 +3559,7 @@ function clearUrlParams(names) {
       }
       var descD = document.getElementById('inbox-authoring-desc');
       if (descD) {
-        descD.textContent = 'Approvals for this inbox use the MailMoose approval workflow: a request to send keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).';
+        descD.textContent = '';
       }
       var controls = document.getElementById('inbox-authoring-controls');
       if (controls) {
@@ -3570,8 +3570,18 @@ function clearUrlParams(names) {
     // Effective mode: the explicit selection, else the kind default.
     var effective = (authoringMode && authoringMode.value) ? authoringMode.value : authDefaultMode;
     var approval = effective === 'mailmoose_approval';
+    var desc = document.getElementById('inbox-authoring-desc');
+    if (desc) {
+      desc.textContent = approval
+        ? 'MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).'
+        : 'When a client with Assistant permission requests to send, the draft will be placed in the connected mailbox\'s Drafts folder.';
+    }
     var approverInput = document.getElementById('inbox-edit-approver-email');
     var approverNote = document.getElementById('inbox-approver-note');
+    var approverFields = document.getElementById('inbox-approver-fields');
+    if (approverFields) {
+      approverFields.hidden = !approval;
+    }
     if (approverInput) {
       approverInput.disabled = !approval;
       // A remote-draft inbox has no approver: clear the field so a stale value is
@@ -3604,7 +3614,7 @@ function clearUrlParams(names) {
     if (desc) {
       desc.textContent = authStandalone
         ? 'How this inbox handles a request to send. MailMoose approval keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email). Create draft places the draft in the connected mailbox\'s Drafts folder and never sends it.'
-        : 'Approvals for this inbox use the MailMoose approval workflow: a request to send keeps the draft in MailMoose for an in-app decision (and, if an approver is set, a tokenized email).';
+        : '';
     }
     if (controls) {
       // The mode selector exists only for a standalone inbox; a domain inbox is
@@ -3616,7 +3626,7 @@ function clearUrlParams(names) {
     // clears) the approver and a create-draft job never shows approval controls.
     var tab = document.querySelector('[data-inbox-tab="approver"]');
     if (tab) {
-      tab.textContent = data.standalone ? 'Approvals' : 'Approver';
+      tab.textContent = 'Assistant Approver';
     }
     syncAuthoringControls();
   }
