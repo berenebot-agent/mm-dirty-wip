@@ -2708,7 +2708,9 @@ func TestApproverToggleScriptPresent(t *testing.T) {
 	for _, want := range []string{
 		"function syncAuthoringControls",
 		"approverInput.disabled = !approval",
-		"data.standalone ? 'Approvals' : 'Approver'",
+		"tab.textContent = 'Assistant Approver'",
+		"approverFields.hidden = !approval",
+		"When a client with Assistant permission requests to send, the draft will be placed in the connected mailbox",
 		"effective === 'mailmoose_approval'",
 		// A domain inbox is preset to MailMoose approval: the mode selector is
 		// hidden, never offered.
