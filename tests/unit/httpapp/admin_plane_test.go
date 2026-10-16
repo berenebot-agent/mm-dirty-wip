@@ -174,6 +174,9 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 	t.Parallel()
 	svc, h, root, mailerBox := systemAdminFixture(t)
 	ctx := context.Background()
+	if _, _, err := svc.SaveDomainReceivingConfig(ctx, root.AccountID, mailerBox.DomainID, "mailgun", map[string]any{"signing_key": "test-key"}, false); err != nil {
+		t.Fatal(err)
+	}
 	d, err := svc.Store.GetDomain(ctx, root.AccountID, mailerBox.DomainID)
 	if err != nil {
 		t.Fatal(err)
@@ -208,6 +211,9 @@ func TestOperatorInviteGrantsSelectedMailboxOnly(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("operator dashboard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "No Receiver Configured for Domain") {
+		t.Fatal("operator dashboard incorrectly reports no receiver for a configured domain")
 	}
 	if strings.Contains(body, other.Address) {
 		t.Fatalf("operator dashboard leaked unassigned mailbox %q", other.Address)
