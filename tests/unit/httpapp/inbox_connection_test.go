@@ -88,6 +88,11 @@ func TestInboxViewReconnectBannerForDisconnectedOneInbox(t *testing.T) {
 	ctx := context.Background()
 	// Healthy connection: no inbox reconnect banner.
 	body := uiGet(t, h, cookie, "/ui/inboxes/"+box.ID).Body.String()
+	for _, want := range []string{`id="one-reconnect-dialog"`, `id="one-reconnect-form"`, `id="one-reconnect-key"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("inbox page missing reconnect dialog markup %q", want)
+		}
+	}
 	if strings.Contains(body, "data-inbox-reconnect") {
 		t.Fatal("healthy inbox must not render the inbox reconnect banner")
 	}
@@ -310,6 +315,11 @@ func TestInboxConnectionScriptWiring(t *testing.T) {
 		"advanced.open = true",
 		// A One page opened with ?reconnect=1 opens the dialog straight away.
 		"get('reconnect') === '1'",
+		// Settings is modal too: close it before showing reconnect and restore it
+		// when reconnect is dismissed.
+		"restoreEditDialog = !!(editDlg && editDlg.open)",
+		"if (restoreEditDialog) { editDlg.close(); }",
+		"editDlg.showModal();",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("app.js missing reconnect wiring %q", want)
