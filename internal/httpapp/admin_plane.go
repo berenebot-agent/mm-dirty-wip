@@ -800,7 +800,7 @@ func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	domains, _ := s.Service.Store.ListDomains(ctx, p.AccountID)
-	_, receivingReady, inboxSendingReady, _ := inboxReadiness(domains, inboxes)
+	_, receivingReady, inboxSendingReady, inboxReceivingReady := inboxReadiness(domains, inboxes)
 	unread := s.inboxUnreadCounts(ctx, p)
 	draftCounts, _ := s.Service.Store.PendingDraftCountsByInbox(ctx, p)
 	if draftCounts == nil {
@@ -821,6 +821,7 @@ func (s *Server) operatorDashboard(w http.ResponseWriter, r *http.Request) {
 		DraftCounts:          draftCounts,
 		MailboxSizes:         mailboxSizes,
 		InboxSendingReady:    inboxSendingReady,
+		InboxReceivingReady:  inboxReceivingReady,
 		DomainReceivingReady: receivingReady,
 	})
 }
