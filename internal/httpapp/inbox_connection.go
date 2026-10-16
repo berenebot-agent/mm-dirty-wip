@@ -21,10 +21,14 @@ import (
 type inboxConnectionState struct {
 	State    string `json:"state"`
 	Provider string `json:"provider,omitempty"`
-	// Label is the human provider name for this connection ("Gmail via One",
-	// "Google / Gmail", "Microsoft / Outlook"), used to label the reconnect
-	// control so it names the connection the operator is repairing.
+	// Label is the human provider name for this connection ("One",
+	// "Google / Gmail", "Microsoft / Outlook"). It names the connection in the
+	// prompt text, not on the reconnect control.
 	Label string `json:"label,omitempty"`
+	// ActionLabel is the exact text of the reconnect control ("Reconnect with
+	// One" / "Reconnect Google / Gmail" / "Reconnect Microsoft / Outlook"),
+	// rendered verbatim so each provider can name its own action.
+	ActionLabel string `json:"action_label,omitempty"`
 	// Detail is a short, safe operator description shown as the flag/prompt text.
 	Detail string `json:"detail,omitempty"`
 	// Reconnect is the reconnect affordance: "one" opens the in-place API-key
@@ -63,14 +67,14 @@ func (s *Server) inboxConnectionState(ctx context.Context, accountID string, box
 		return inboxConnectionState{}, false
 	}
 	rm := s.remoteMailbox()
-	provider, label, reconnect := "", "", ""
+	provider, label, action, reconnect := "", "", "", ""
 	switch {
 	case s.Service.Store.IsOne(ctx, accountID, box.ID):
-		provider, label, reconnect = "one", "Gmail via One", "one"
+		provider, label, action, reconnect = "one", "One", "Reconnect with One", "one"
 	case rm.IsGoogle(ctx, accountID, box.ID):
-		provider, label, reconnect = "google", "Google / Gmail", "oauth"
+		provider, label, action, reconnect = "google", "Google / Gmail", "Reconnect Google / Gmail", "oauth"
 	case rm.IsMicrosoft(ctx, accountID, box.ID):
-		provider, label, reconnect = "microsoft", "Microsoft / Outlook", "oauth"
+		provider, label, action, reconnect = "microsoft", "Microsoft / Outlook", "Reconnect Microsoft / Outlook", "oauth"
 	default:
 		// A hand-configured IMAP connector is not an OAuth grant; there is no
 		// reauthorize flow to offer, so it reports no connection light.
@@ -79,12 +83,12 @@ func (s *Server) inboxConnectionState(ctx context.Context, accountID string, box
 	snapshot, _ := s.Service.Store.MetadataSyncSnapshot(ctx, accountID, box.ID)
 	detail, disconnected := disconnectedReason(ctx, s.Service.Store, accountID, box.ID, snapshot)
 	if !disconnected {
-		return inboxConnectionState{State: connectionStateConnected, Provider: provider, Label: label, Reconnect: reconnect}, true
+		return inboxConnectionState{State: connectionStateConnected, Provider: provider, Label: label, ActionLabel: action, Reconnect: reconnect}, true
 	}
 	if detail == "" {
 		detail = label + " account disconnected. Reconnect to resume syncing."
 	}
-	return inboxConnectionState{State: connectionStateDisconnected, Provider: provider, Label: label, Detail: detail, Reconnect: reconnect}, true
+	return inboxConnectionState{State: connectionStateDisconnected, Provider: provider, Label: label, ActionLabel: action, Detail: detail, Reconnect: reconnect}, true
 }
 
 // disconnectedReason decides whether an inbox's durable state confirms a

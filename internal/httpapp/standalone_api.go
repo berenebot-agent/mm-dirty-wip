@@ -862,7 +862,7 @@ func (s *Server) remoteConfigView(ctx context.Context, p model.Principal, inboxI
 			if inbox.RemotePollSeconds != nil && *inbox.RemotePollSeconds > 0 {
 				poll = max(120, min(*inbox.RemotePollSeconds, 1800))
 			}
-			return remoteConfigResponse{Provider: "one", Configured: inbox.RemoteConfigured, Host: "Gmail via One", PollSeconds: poll, FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes), Capabilities: caps, Connection: conn}, nil
+			return remoteConfigResponse{Provider: "one", Configured: inbox.RemoteConfigured, Host: "One", PollSeconds: poll, FullSyncMinutes: model.NormalizeRemoteFullSyncMinutes(inbox.RemoteFullSyncMinutes), Capabilities: caps, Connection: conn}, nil
 		}
 		return remoteConfigResponse{
 			Provider:        "google",

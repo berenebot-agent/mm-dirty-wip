@@ -3918,8 +3918,8 @@ function clearUrlParams(names) {
     var prompt = dlg.querySelector('[data-reconnect-prompt]');
     var advanced = dlg.querySelector('[data-advanced-reconnect]');
     advanced.hidden = !google;    googleLink.hidden = !google;
-    googleLink.textContent = one ? 'Gmail via One — reconnect account' : (microsoft ? 'Microsoft / Outlook — reconnect account' : 'Google / Gmail — reconnect account');
-    googleLink.href = one ? '/ui/connections/one?inbox=' + encodeURIComponent(inboxID) : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
+    googleLink.textContent = (cfg && cfg.connection && cfg.connection.action_label) ? cfg.connection.action_label : (one ? 'Reconnect with One' : (microsoft ? 'Reconnect Microsoft / Outlook' : 'Reconnect Google / Gmail'));
+    googleLink.href = one ? '#' : '/ui/inboxes/standalone/new?' + (microsoft ? 'microsoft_inbox=' : 'google_inbox=') + encodeURIComponent(inboxID);
     // The One reconnect opens the in-place API-key dialog rather than leaving
     // for the full import wizard. The OAuth providers still follow their wizard.
     if (one) {
