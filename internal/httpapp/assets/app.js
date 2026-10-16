@@ -8082,7 +8082,9 @@ function hideInboxSubview(dlg) {
   var keyField = dlg.querySelector('#one-reconnect-key');
   var status = dlg.querySelector('#one-reconnect-status');
   var submit = dlg.querySelector('#one-reconnect-submit');
+  var editDlg = document.getElementById('inbox-edit-dialog');
   var busy = false;
+  var restoreEditDialog = false;
 
   function setStatus(text, isError) {
     if (!status) { return; }
@@ -8092,6 +8094,10 @@ function hideInboxSubview(dlg) {
 
   function open(inboxID) {
     if (!inboxID || typeof dlg.showModal !== 'function') { return; }
+    // The inbox settings dialog is itself modal. Close it before opening this
+    // dialog, then restore it if the operator cancels or presses Escape.
+    restoreEditDialog = !!(editDlg && editDlg.open);
+    if (restoreEditDialog) { editDlg.close(); }
     inboxField.value = inboxID;
     keyField.value = '';
     keyField.disabled = false;
@@ -8101,6 +8107,12 @@ function hideInboxSubview(dlg) {
     dlg.showModal();
     keyField.focus();
   }
+
+  dlg.addEventListener('close', function () {
+    if (!restoreEditDialog || !editDlg || typeof editDlg.showModal !== 'function') { return; }
+    restoreEditDialog = false;
+    editDlg.showModal();
+  });
 
   // A page opened with ?reconnect=1 (the retired One settings link, the dashboard
   // flag, the bottom banner) asks for the dialog straight away, so a disconnected
@@ -8169,6 +8181,7 @@ function hideInboxSubview(dlg) {
         // reload.
         var prompt = document.querySelector('[data-reconnect-prompt]');
         if (prompt) { prompt.hidden = true; }
+        restoreEditDialog = false;
         window.setTimeout(function () { dlg.close(); window.location.reload(); }, 600);
         return;
       }
