@@ -43,6 +43,16 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	if !strings.Contains(body, "Direct MX receiver") {
 		t.Fatalf("admin receiving dialog missing Direct MX status panel:\n%s", body)
 	}
+	// The Direct MX steps must not promise an unconditionally-displayed hostname
+	// (the panel only names it once the receiver is live) and must steer the
+	// operator away from the receiver's SMTP greeting name, which is not the MX
+	// target.
+	if strings.Contains(body, "advertised SMTP hostname (shown below)") {
+		t.Fatal("Direct MX steps still promise the SMTP hostname is always shown below")
+	}
+	if !strings.Contains(body, "do not use the SMTP greeting hostname") {
+		t.Fatalf("Direct MX steps must distinguish the MX target from the greeting hostname:\n%s", body)
+	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
 		t.Fatal("account admin must see status only, not receiver controls")
 	}

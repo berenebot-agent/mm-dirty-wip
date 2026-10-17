@@ -146,6 +146,38 @@ func TestOperatorsHiddenFromNonAdmin(t *testing.T) {
 	}
 }
 
+// TestOperatorInviteRedirectKeepsFlashOnAccountTab pins the redirect target from
+// creating an operator invitation. It already carries ?tab=account, so the
+// one-time flash token must be appended with "&". Appending "?" folds the token
+// into the tab value, which deselects the Account tab and loses the setup link
+// (it then only comes back via Reissue link).
+func TestOperatorInviteRedirectKeepsFlashOnAccountTab(t *testing.T) {
+	t.Parallel()
+	svc, h, root, mailerBox := systemAdminFixture(t)
+	cookie, csrf := uiSession(t, svc, root.ID)
+	rr := domainPost(t, h, cookie, "/ui/account/operators/invites", url.Values{"_csrf": {csrf}, "email": {"op@example.com"}, "inboxes": {mailerBox.ID}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("create invite status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("redirect %q is not a URL: %v", loc, err)
+	}
+	if got := u.Query().Get("tab"); got != "account" {
+		t.Fatalf("redirect %q: tab = %q, want account (the flash token folded into the tab value)", loc, got)
+	}
+	if u.Query().Get("_flash") == "" {
+		t.Fatalf("redirect %q carries no _flash token", loc)
+	}
+	// Fetching exactly the redirect target must render the one-time setup link.
+	page := uiGet(t, h, cookie, loc)
+	if page.Code != http.StatusOK {
+		t.Fatalf("redirect target %s = %d", loc, page.Code)
+	}
+	_ = inviteToken(t, page.Body.String())
+}
+
 func TestSystemAdminInvitesNewAccount(t *testing.T) {
 	t.Parallel()
 	svc, h, root, _ := systemAdminFixture(t)
@@ -251,6 +283,16 @@ func TestAccountMailerSendsOperatorInvite(t *testing.T) {
 	rr := domainPost(t, h, cookie, "/ui/account/operators/invites/"+invites[0].ID+"/send", url.Values{"_csrf": {csrf}})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("send operator invite = %d body=%s", rr.Code, rr.Body.String())
+	}
+	// The send redirects to the settings page with a notice; the same
+	// concatenation trap applies as on create, so the notice must survive.
+	if loc := rr.Header().Get("Location"); loc != "" {
+		u, err := url.Parse(loc)
+		if err != nil || u.Query().Get("tab") != "account" || u.Query().Get("notice") != "Invitation queued" {
+			t.Fatalf("send redirect = %q, want tab=account and the queued notice", loc)
+		}
+	} else {
+		t.Fatal("send operator invite returned no redirect target")
 	}
 	admin := model.Principal{AccountID: root.AccountID, Admin: true}
 	outbox, err := svc.Store.ListOutbox(ctx, admin, mailerBox.ID, 10)
