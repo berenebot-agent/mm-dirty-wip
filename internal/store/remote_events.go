@@ -162,6 +162,24 @@ func (s *Store) RecordRemoteArrival(ctx context.Context, accountID, inboxID stri
 		return RemoteArrival{}, false, err
 	}
 	defer tx.Rollback()
+	row, inserted, err := recordRemoteArrivalTx(ctx, tx, accountID, inboxID, in)
+	if err != nil {
+		return RemoteArrival{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return RemoteArrival{}, false, err
+	}
+	return row, inserted, nil
+}
+
+// recordRemoteArrivalTx is the transaction-scoped body of RecordRemoteArrival, so
+// a caller that already owns a write transaction (a Microsoft delta page, whose
+// every effect must commit or roll back as one generation-guarded unit) can fold
+// the arrival into that same transaction. RecordRemoteArrival checks the inbox
+// kind first and owns the commit; a caller entering here directly is responsible
+// for the same standalone-inbox scope (the Microsoft page path is standalone-only,
+// since a connection row cannot exist otherwise).
+func recordRemoteArrivalTx(ctx context.Context, tx *sql.Tx, accountID, inboxID string, in RemoteArrivalInput) (RemoteArrival, bool, error) {
 	now := nowText()
 	id := idgen.New("rar")
 	res, err := tx.ExecContext(ctx, `INSERT INTO inbox_remote_arrivals(id,account_id,inbox_id,folder_path,remote_uid_validity,remote_uid,rfc_message_id,from_name,from_address,subject,size_bytes,internal_date,delivery_state,delivery_attempts,next_attempt_at,claim_owner,claim_expires_at,last_error,control,created_at,detected_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'','','','',?,?,?,?)
@@ -173,9 +191,6 @@ func (s *Store) RecordRemoteArrival(ctx context.Context, accountID, inboxID stri
 	n, _ := res.RowsAffected()
 	row, err := scanRemoteArrival(tx.QueryRowContext(ctx, remoteArrivalSelect+` WHERE account_id=? AND inbox_id=? AND folder_path=? AND remote_uid_validity=? AND remote_uid=?`, accountID, inboxID, in.FolderPath, in.UIDValidity, in.UID))
 	if err != nil {
-		return RemoteArrival{}, false, err
-	}
-	if err = tx.Commit(); err != nil {
 		return RemoteArrival{}, false, err
 	}
 	return row, n > 0, nil

@@ -157,25 +157,15 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	if e != nil {
 		return RemoteMessage{}, e
 	}
-	id := "ms_" + provider + "_" + inbox
-	var existing int
-	if e = tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_remote_messages WHERE id=? AND account_id=? AND inbox_id=?`, id, account, inbox).Scan(&existing); e != nil {
+	id := microsoftMessageID(provider, inbox)
+	exists, e := microsoftMessageRowExistsTx(ctx, tx, account, inbox, id)
+	if e != nil {
 		return RemoteMessage{}, e
 	}
-	if existing == 0 && (accountLimited || inboxLimited) && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
+	if !exists && (accountLimited || inboxLimited) && !roomForRemoteMetadata(accountRoom, accountLimited, inboxRoom, inboxLimited, remoteMessageInputBytes(in)) {
 		return RemoteMessage{}, ErrRemoteMetadataQuota
 	}
-	_, e = tx.ExecContext(ctx, `INSERT OR IGNORE INTO inbox_remote_messages(id,account_id,inbox_id,folder_path,remote_uid,created_at,updated_at) SELECT ?,account_id,inbox_id,?,0,?,? FROM inbox_microsoft_connections WHERE account_id=? AND inbox_id=?`, id, "microsoft:"+provider, nowText(), nowText(), account, inbox)
-	if e != nil {
-		return RemoteMessage{}, e
-	}
-	now := nowText()
-	_, e = tx.ExecContext(ctx, `UPDATE inbox_remote_messages SET rfc_message_id=?,in_reply_to=?,references_json=?,thread_key=?,from_name=?,from_address=?,to_json=?,cc_json=?,subject=?,snippet=?,size_bytes=?,has_attachments=?,is_read=?,is_flagged=?,is_draft=?,received_at=?,internal_date=?,indexed_at=?,updated_at=? WHERE id=? AND account_id=? AND inbox_id=?`, in.RFCMessageID, in.InReplyTo, jsonString(in.References), "microsoft:"+inbox+":"+thread, in.FromName, in.FromAddress, jsonString(in.To), jsonString(in.CC), in.Subject, in.Snippet, in.SizeBytes, in.HasAttach, in.Read, in.Flagged, in.Draft, nullStringPtr(in.ReceivedAt), nullStringPtr(in.InternalDate), now, now, id, account, inbox)
-	if e != nil {
-		return RemoteMessage{}, e
-	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO microsoft_message_ids(inbox_id,message_id,provider_id,folder_id,generation) VALUES(?,?,?,?,COALESCE((SELECT generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?),'')) ON CONFLICT(inbox_id,provider_id) DO UPDATE SET folder_id=excluded.folder_id,generation=excluded.generation`, inbox, id, provider, folder, inbox, folder)
-	if e != nil {
+	if e = upsertMicrosoftMessageTx(ctx, tx, account, inbox, &MicrosoftDeltaCache{ProviderID: provider, Thread: thread, FolderID: folder, Input: in}); e != nil {
 		return RemoteMessage{}, e
 	}
 	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
@@ -207,71 +197,32 @@ var ErrStaleCursor = errors.New("provider cursor superseded by a resync")
 // generation bump) makes the caller's page part of a superseded sweep, and
 // saving its cursor would corrupt the new sweep's baseline. It returns
 // ErrStaleCursor in that case; the caller drops the page without advancing.
+//
+// A page with local effects (metadata, deletions, arrivals) must go through
+// ApplyMicrosoftDeltaPage instead: only that path writes the effects and the
+// cursor in one guarded transaction, so a stale page can never leave a partial
+// sweep behind. This cursor-only form exists for a caller with nothing to write.
 func (s *Store) SaveMicrosoftDelta(ctx context.Context, inbox, folder, cursor string, initialized bool, generation string) error {
-	tx, e := s.write.BeginTx(ctx, nil)
+	account, e := s.inboxAccount(ctx, inbox)
 	if e != nil {
 		return e
 	}
-	defer tx.Rollback()
-	var gen sql.NullString
-	rowExists := true
-	e = tx.QueryRowContext(ctx, `SELECT generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?`, inbox, folder).Scan(&gen)
-	if e == sql.ErrNoRows {
-		rowExists = false
-		e = nil
+	_, e = s.ApplyMicrosoftDeltaPage(ctx, MicrosoftDeltaPage{AccountID: account, InboxID: inbox, FolderID: folder, Cursor: cursor, Initialized: initialized, Generation: generation})
+	return e
+}
+
+// inboxAccount resolves an inbox's owning account. It is used by cursor-only
+// callers that have no other reason to already know the account.
+func (s *Store) inboxAccount(ctx context.Context, inboxID string) (string, error) {
+	var account string
+	err := s.read.QueryRowContext(ctx, `SELECT account_id FROM inboxes WHERE id=?`, inboxID).Scan(&account)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
 	}
-	if e != nil {
-		return e
-	}
-	if !rowExists && generation != "" {
-		return ErrStaleCursor
-	}
-	if rowExists && gen.String != generation {
-		return ErrStaleCursor
-	}
-	if !rowExists {
-		_, e = tx.ExecContext(ctx, `INSERT INTO microsoft_delta(inbox_id,folder_id,cursor,initialized,generation) VALUES(?,?,?,?,'')`, inbox, folder, cursor, initialized)
-	} else {
-		_, e = tx.ExecContext(ctx, `UPDATE microsoft_delta SET cursor=?,initialized=? WHERE inbox_id=? AND folder_id=?`, cursor, initialized, inbox, folder)
-	}
-	if e != nil {
-		return e
-	}
-	return tx.Commit()
+	return account, err
 }
 
 func (s *Store) StartMicrosoftResync(ctx context.Context, inbox, folder string) error {
 	_, e := s.write.ExecContext(ctx, `INSERT INTO microsoft_delta VALUES(?,?,'',0,?) ON CONFLICT(inbox_id,folder_id) DO UPDATE SET cursor='',initialized=0,generation=excluded.generation`, inbox, folder, nowText())
 	return e
-}
-
-func (s *Store) MicrosoftDetected(ctx context.Context, inbox, provider string) (bool, error) {
-	var detected bool
-	e := s.read.QueryRowContext(ctx, `SELECT detected FROM microsoft_message_ids WHERE inbox_id=? AND provider_id=?`, inbox, provider).Scan(&detected)
-	if e == sql.ErrNoRows {
-		e = nil
-	}
-	return detected, e
-}
-func (s *Store) MarkMicrosoftDetected(ctx context.Context, inbox, provider string) error {
-	_, e := s.write.ExecContext(ctx, `UPDATE microsoft_message_ids SET detected=1 WHERE inbox_id=? AND provider_id=?`, inbox, provider)
-	return e
-}
-func (s *Store) PruneMicrosoftResync(ctx context.Context, account, inbox, folder string) error {
-	tx, e := s.write.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
-	metaBefore, e := remoteMetadataBytesTx(ctx, tx, account, inbox)
-	if e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id IN (SELECT m.message_id FROM microsoft_message_ids m JOIN microsoft_delta d ON d.inbox_id=m.inbox_id AND d.folder_id=m.folder_id WHERE m.inbox_id=? AND m.folder_id=? AND d.generation<>'' AND m.generation<>d.generation)`, account, inbox, inbox, folder); e != nil {
-		return e
-	}
-	if e = syncRemoteMetadataStorageTx(ctx, tx, account, inbox, metaBefore); e != nil {
-		return e
-	}
-	return tx.Commit()
 }

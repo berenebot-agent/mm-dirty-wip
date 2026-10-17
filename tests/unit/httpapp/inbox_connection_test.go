@@ -44,6 +44,12 @@ func oneReconnectFixture(t *testing.T) (http.Handler, *app.Service, model.User, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Finish initial indexing before testing presentation. Otherwise the healthy
+	// GET schedules a background refresh that races the health state installed by
+	// the test; request-feedback races are covered separately at the store layer.
+	if _, err := rm.ReconcileRemote(context.Background(), box.AccountID, box.ID); err != nil {
+		t.Fatal(err)
+	}
 	cookie, csrf := uiSession(t, svc, u.ID)
 	return h, svc, u, cookie, csrf, box
 }
@@ -75,6 +81,29 @@ func TestDashboardConnectionFlagForDisconnectedOneInbox(t *testing.T) {
 	}
 	if !strings.Contains(body, "One connection revoked or expired") {
 		t.Fatal("connection flag must carry the operator reconnect detail")
+	}
+}
+
+func TestOneStaleRequestCannotReplaceDisconnectDetail(t *testing.T) {
+	t.Parallel()
+	_, svc, _, _, _, box := oneReconnectFixture(t)
+	ctx := context.Background()
+	b, err := svc.Store.OneBinding(ctx, box.AccountID, box.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const detail = "One connection revoked or expired"
+	if err := svc.Store.SetOneHealth(ctx, box.AccountID, box.ID, "attention", detail, b.Revision); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"active", "attention"} {
+		if err := svc.Store.SetOneRequestHealth(ctx, box.AccountID, box.ID, status, "stale request detail", b.Revision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b, err = svc.Store.OneBinding(ctx, box.AccountID, box.ID)
+	if err != nil || b.Status != "attention" || b.LastError != detail {
+		t.Fatalf("stale feedback changed disconnect: %+v %v", b, err)
 	}
 }
 
