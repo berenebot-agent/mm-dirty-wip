@@ -81,7 +81,6 @@ type Server struct {
 	// rotating source addresses (an IPv6 /64, or a trusted XFF it can vary)
 	// cannot spray attempts at one account behind the per-IP limiter.
 	accountLoginLimiter *limiter
-	unroutedLim         *limiter
 	passwordLimiter     *limiter
 	registerLimiter     *limiter
 	// setupLimiter bounds first-run setup claim attempts per source address,
@@ -143,7 +142,6 @@ func New(svc *app.Service, log *slog.Logger) *Server {
 		loginLimiter:         newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		keyLoginLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		accountLoginLimiter:  newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
-		unroutedLim:          newLimiter(1, time.Minute),
 		passwordLimiter:      newLimiter(svc.Config.LoginLimitPerMinute, time.Minute),
 		registerLimiter:      newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
 		setupLimiter:         newLimiter(svc.Config.RegisterLimitPerMinute, time.Minute),
@@ -738,6 +736,12 @@ func withTimezone(ctx context.Context, p model.Principal) context.Context {
 // preAuthCSRFCookie carries the pre-auth double-submit CSRF token.
 const preAuthCSRFCookie = "mmm_csrf"
 
+// defaultBodyLimit caps a session POST body when no configured message size is
+// available (zero-value config in tests). It matches the default
+// MaxMessageBytes class so legitimate compose traffic is never rejected while
+// unbounded bodies remain impossible.
+const defaultBodyLimit = 26 << 20
+
 // signPreAuthCSRF returns raw with an HMAC signature appended. The pre-auth
 // flow is a double-submit check, so the cookie value is echoed in the form.
 // Signing it stops an attacker who controls a sibling subdomain from planting a
@@ -943,6 +947,16 @@ func (s *Server) preserveComposeOnExpiry(w http.ResponseWriter, r *http.Request)
 }
 func (s *Server) withCSRF(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Bound the body before any read, so every session POST — including ones
+		// whose handlers never read the body — has a hard cap on both the memory
+		// ParseForm buffers and the multipart temp files the decorators parse.
+		// The budget matches the compose handlers: a message body plus
+		// attachments, headroom included.
+		var bodyLimit int64 = defaultBodyLimit
+		if s.Service != nil && s.Service.Config.MaxMessageBytes > 0 {
+			bodyLimit = s.Service.Config.MaxMessageBytes + 1<<20
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		_ = r.ParseForm()
 		got := r.Form.Get("_csrf")
 		// ParseForm does not read multipart/form-data bodies, so a compose or

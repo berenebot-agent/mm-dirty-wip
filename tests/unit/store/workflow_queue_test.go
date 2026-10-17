@@ -44,11 +44,11 @@ func TestWorkflowQueueLifecycleAndRedaction(t *testing.T) {
 	}
 
 	// Claim and mark sent, which starts the expiry clock.
-	id, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
+	id, claim, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
 	if err != nil || id == "" {
 		t.Fatalf("claim = %q err=%v", id, err)
 	}
-	events, err := s.MarkWorkflowSent(ctx, u.AccountID, id, "<provider@x>", "smtp", 48*time.Hour)
+	events, err := s.MarkWorkflowSent(ctx, u.AccountID, id, "<provider@x>", "smtp", 48*time.Hour, claim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,11 +103,11 @@ func TestWorkflowTerminalFailureNotifiesRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	id, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
+	id, claim, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
 	if err != nil || id == "" {
 		t.Fatalf("claim = %q err=%v", id, err)
 	}
-	events, err := s.MarkWorkflowFailed(ctx, u.AccountID, id, "permanent rejection", time.Time{}, 1, "smtp")
+	events, err := s.MarkWorkflowFailed(ctx, u.AccountID, id, "permanent rejection", time.Time{}, 1, "smtp", claim)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,5 +153,47 @@ func TestRecoverStaleIdempotency(t *testing.T) {
 	claimed, mid, err := s.IdempotencyReserve(ctx, u.AccountID, "done-key", box.ID)
 	if err != nil || claimed || mid == "" {
 		t.Fatalf("done key reclaimed: claimed=%v mid=%q err=%v", claimed, mid, err)
+	}
+}
+
+// TestStaleWorkflowClaimCannotRecordOutcome is the workflow-queue counterpart
+// of the outbox claim-token guard: a job whose send outlived its claim lease
+// cannot have its outcome recorded over a live re-claim, for either outcome.
+func TestStaleWorkflowClaimCannotRecordOutcome(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, u, _, b := testStore(t)
+	box := b[0]
+	if _, _, err := s.CommitWorkflow(ctx, store.WorkflowRecord{
+		Inbox: box, Kind: model.WorkflowKindApprovalRequest,
+		From: model.Address{Address: box.Address}, To: []string{"approver@outside.test"},
+		Subject: "Approval required", Text: "x", RawPath: "workflow/f.eml", SizeBytes: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Attempt 1 claims with a one-minute lease; the send runs longer than that.
+	id, claim1, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "w1", time.Minute)
+	if err != nil || id == "" {
+		t.Fatalf("claim = %q err=%v", id, err)
+	}
+	// Attempt 2 re-claims after the lease lapsed.
+	_, claim2, err := s.ClaimNextWorkflow(ctx, time.Now().UTC().Add(2*time.Minute), "w2", time.Hour)
+	if err != nil || claim2 == "" {
+		t.Fatalf("re-claim = %q err=%v", claim2, err)
+	}
+	// Attempt 1's outcomes must both be rejected, and attempt 2's live claim is
+	// untouched.
+	if _, err = s.MarkWorkflowSent(ctx, u.AccountID, id, "<prov>", "smtp", time.Hour, claim1); !errors.Is(err, store.ErrClaimTaken) {
+		t.Fatalf("stale sent = %v, want ErrClaimTaken", err)
+	}
+	if _, err = s.MarkWorkflowFailed(ctx, u.AccountID, id, "down", time.Now().UTC().Add(time.Hour), 6, "smtp", claim1); !errors.Is(err, store.ErrClaimTaken) {
+		t.Fatalf("stale failed = %v, want ErrClaimTaken", err)
+	}
+	w, err := s.GetWorkflowInternal(ctx, u.AccountID, id)
+	if err != nil || w.ClaimOwner != claim2 {
+		t.Fatalf("after stale attempts: claim=%q err=%v", w.ClaimOwner, err)
+	}
+	if _, err = s.MarkWorkflowFailed(ctx, u.AccountID, id, "down", time.Now().UTC().Add(time.Hour), 6, "smtp", claim2); err != nil {
+		t.Fatalf("live attempt's MarkWorkflowFailed = %v", err)
 	}
 }

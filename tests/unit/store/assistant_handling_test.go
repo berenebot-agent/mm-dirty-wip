@@ -248,7 +248,7 @@ func TestHandoffNeverQueuesNotification(t *testing.T) {
 	}
 	// A handoff places the draft and does nothing else: no outbound_workflow job
 	// is ever queued for it, so no notification email can be sent.
-	jobID, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "wk", time.Minute)
+	jobID, _, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "wk", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

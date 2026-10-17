@@ -34,6 +34,18 @@ type fakeServerOpts struct {
 	// bodyDelay is slept after the terminating dot is seen and before the 250
 	// verdict is sent, simulating a slow upload/large message.
 	bodyDelay time.Duration
+	// verdict replaces the post-DATA "250 ok" (an authoritative reply, e.g.
+	// "550 no" or "451 try later").
+	verdict string
+	// dropBeforeVerdict closes the connection immediately after the
+	// terminating dot, with no verdict sent: the remote's decision is lost.
+	dropBeforeVerdict bool
+	// dropMidBody closes the connection while the message body is still being
+	// uploaded, before the terminating dot.
+	dropMidBody bool
+	// onConn is called with the connection count after each accepted
+	// connection, so tests can observe how many addresses were tried.
+	onConn func(int)
 }
 
 // fakeServer starts a single-connection SMTP server on loopback. It returns the
@@ -45,61 +57,82 @@ func fakeServer(t *testing.T, opts fakeServerOpts) (host string, port int, got <
 		t.Fatal(err)
 	}
 	ch := make(chan string, 1)
+	cons := 0
 	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer c.Close()
-		r := bufio.NewReader(c)
-		w := bufio.NewWriter(c)
-		fmt.Fprint(w, "220 test ESMTP\r\n")
-		w.Flush()
-		data := false
-		var body strings.Builder
 		for {
-			line, err := r.ReadString('\n')
+			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			if data {
-				if line == ".\r\n" {
-					if opts.bodyDelay > 0 {
-						time.Sleep(opts.bodyDelay)
-					}
-					ch <- body.String()
-					fmt.Fprint(w, "250 ok\r\n")
-					w.Flush()
-					if opts.dropBeforeQuit {
-						return
-					}
-					data = false
-					continue
-				}
-				body.WriteString(line)
-				continue
+			cons++
+			if opts.onConn != nil {
+				opts.onConn(cons)
 			}
-			upper := strings.ToUpper(line)
-			switch {
-			case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
-				fmt.Fprint(w, "250-test\r\n250 OK\r\n")
-			case strings.HasPrefix(upper, "MAIL FROM"), strings.HasPrefix(upper, "RCPT TO"):
-				fmt.Fprint(w, "250 ok\r\n")
-			case strings.HasPrefix(upper, "DATA"):
-				fmt.Fprint(w, "354 end\r\n")
-				data = true
-			case strings.HasPrefix(upper, "QUIT"):
-				fmt.Fprint(w, "221 bye\r\n")
-				w.Flush()
-				return
-			default:
-				fmt.Fprint(w, "250 ok\r\n")
-			}
-			w.Flush()
+			go serveFakeConn(c, opts, ch)
 		}
 	}()
 	a := ln.Addr().(*net.TCPAddr)
 	return "localhost", a.Port, ch, func() { ln.Close() }
+}
+
+func serveFakeConn(c net.Conn, opts fakeServerOpts, ch chan<- string) {
+	defer c.Close()
+	r := bufio.NewReader(c)
+	w := bufio.NewWriter(c)
+	fmt.Fprint(w, "220 test ESMTP\r\n")
+	w.Flush()
+	data := false
+	var body strings.Builder
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		if data {
+			if line == ".\r\n" {
+				if opts.bodyDelay > 0 {
+					time.Sleep(opts.bodyDelay)
+				}
+				ch <- body.String()
+				if opts.dropBeforeVerdict {
+					return
+				}
+				verdict := opts.verdict
+				if verdict == "" {
+					verdict = "250 ok"
+				}
+				fmt.Fprint(w, verdict+"\r\n")
+				w.Flush()
+				if opts.dropBeforeQuit {
+					return
+				}
+				data = false
+				continue
+			}
+			body.WriteString(line)
+			if opts.dropMidBody {
+				return
+			}
+			continue
+		}
+		upper := strings.ToUpper(line)
+		switch {
+		case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
+			fmt.Fprint(w, "250-test\r\n250 OK\r\n")
+		case strings.HasPrefix(upper, "MAIL FROM"), strings.HasPrefix(upper, "RCPT TO"):
+			fmt.Fprint(w, "250 ok\r\n")
+		case strings.HasPrefix(upper, "DATA"):
+			fmt.Fprint(w, "354 end\r\n")
+			data = true
+		case strings.HasPrefix(upper, "QUIT"):
+			fmt.Fprint(w, "221 bye\r\n")
+			w.Flush()
+			return
+		default:
+			fmt.Fprint(w, "250 ok\r\n")
+		}
+		w.Flush()
+	}
 }
 
 // loopbackResolver resolves any host to loopback so a fake SMTP server can be
@@ -205,5 +238,118 @@ func TestDirectMXSlowBodyNotCutByPhaseTimer(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		_ = host
 		t.Fatal("server did not receive the message")
+	}
+}
+
+// --- post-DATA outcome classification ---
+
+// The post-DATA fixture tests below intentionally run serially because they
+// mutate the package-global SMTP port override through SetPortForTest.
+// ambiguousSend drives a Send attempt and asserts the outcome classification:
+// an ambiguous result means the remote's decision was lost (no retry, possible
+// duplicate); a definitive post-body reply (4xx/5xx) is authoritative.
+func ambiguousSend(t *testing.T, opts fakeServerOpts, cfg mx.OutboundConfig, rl mx.MXResolver) error {
+	t.Helper()
+	_, port, _, closeFn := fakeServer(t, opts)
+	defer closeFn()
+	mx.SetPortForTest(port)
+	t.Cleanup(func() { mx.SetPortForTest(25) })
+	msg := transport.OutboundMessage{
+		FromAddress: "sender@example.com",
+		To:          []string{"dest@example.net"},
+		RawMIME:     []byte("Subject: x\r\n\r\nbody\r\n"),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return mx.Send(ctx, cfg, msg, false, rl)
+}
+
+// TestDirectMXLostVerdictIsAmbiguous covers the connection dying after the
+// terminating dot but before any verdict: the remote may have accepted the
+// message, so the outcome is unknown. The send must be reported as ambiguous,
+// not retryable.
+func TestDirectMXLostVerdictIsAmbiguous(t *testing.T) {
+	err := ambiguousSend(t, fakeServerOpts{dropBeforeVerdict: true}, mx.OutboundConfig{HELO: "mail.example.com"}, loopbackResolver{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !transport.AsAmbiguous(err) {
+		t.Fatalf("lost verdict = %v, want ambiguous", err)
+	}
+	if transport.IsPermanent(err) {
+		t.Fatalf("lost verdict = %v, must not be permanent", err)
+	}
+}
+
+// TestDirectMXMidBodyDropIsAmbiguous covers the connection dying while the
+// body is still uploading. The mailmoose convention treats any failure from
+// the start of the body upload as ambiguous so the two transports (Direct MX
+// and SMTP) behave identically.
+func TestDirectMXMidBodyDropIsAmbiguous(t *testing.T) {
+	err := ambiguousSend(t, fakeServerOpts{dropMidBody: true}, mx.OutboundConfig{HELO: "mail.example.com"}, loopbackResolver{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !transport.AsAmbiguous(err) {
+		t.Fatalf("mid-body drop = %v, want ambiguous", err)
+	}
+}
+
+// TestDirectMXDefinitivePostBodyReplyIsNotAmbiguous covers the remote actually
+// answering after the body: a definitive SMTP reply decides the message's
+// fate, so it is not ambiguous. 5xx is permanent; 4xx stays retryable.
+func TestDirectMXDefinitivePostBodyReplyIsNotAmbiguous(t *testing.T) {
+	err := ambiguousSend(t, fakeServerOpts{verdict: "550 recipient rejected"}, mx.OutboundConfig{HELO: "mail.example.com"}, loopbackResolver{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if transport.AsAmbiguous(err) {
+		t.Fatalf("definitive reply = %v, must not be ambiguous", err)
+	}
+	if !transport.IsPermanent(err) {
+		t.Fatalf("550 reply = %v, want permanent", err)
+	}
+	err = ambiguousSend(t, fakeServerOpts{verdict: "451 try later"}, mx.OutboundConfig{HELO: "mail.example.com"}, loopbackResolver{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if transport.AsAmbiguous(err) || transport.IsPermanent(err) {
+		t.Fatalf("451 reply = %v, want plain retryable", err)
+	}
+}
+
+// TestDirectMXAmbiguousOutcomeIsNotRetriedOnAnotherIP proves the Send loop
+// stops the whole attempt at the first ambiguous outcome: retrying the message
+// on any other address could deliver a duplicate.
+func TestDirectMXAmbiguousOutcomeIsNotRetriedOnAnotherIP(t *testing.T) {
+	conns := make(chan int, 8)
+	rl := resolver{
+		mx: []*net.MX{{Host: "localhost.", Pref: 10}},
+		ips: map[string][]net.IP{
+			"localhost": {net.ParseIP("127.0.0.1"), net.ParseIP("127.0.0.1")},
+		},
+	}
+	err := ambiguousSend(t, fakeServerOpts{
+		dropBeforeVerdict: true,
+		onConn:            func(n int) { conns <- n },
+	}, mx.OutboundConfig{HELO: "mail.example.com"}, rl)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !transport.AsAmbiguous(err) {
+		t.Fatalf("lost verdict = %v, want ambiguous", err)
+	}
+	select {
+	case n := <-conns:
+		if n != 1 {
+			t.Fatalf("connections tried = %d, want exactly 1", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server saw no connection")
+	}
+	select {
+	case n := <-conns:
+		t.Fatalf("unexpected retry connection #%d", n)
+	default:
 	}
 }
