@@ -137,5 +137,5 @@ select **Direct MX**.
 - Send a test message and confirm it appears in the intended inbox.
 
 The receiver does not replace MailMoose storage: messages are retained by the
-core. Back up the core's `/data` and `APP_ENCRYPTION_KEY` as described in the
-[self-hosting guide](SELFHOSTING.md#backup).
+core. Back up the core's `/data` (and `APP_ENCRYPTION_KEY` if the core was given
+one) as described in the [self-hosting guide](SELFHOSTING.md#backup).
