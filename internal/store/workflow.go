@@ -350,7 +350,7 @@ func (s *Store) MarkWorkflowUncertain(ctx context.Context, accountID, id, reason
 		reason = "approval notification outcome could not be verified"
 	}
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',attempts=attempts+1,last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
 		WHERE id=? AND account_id=? AND status='pending'`, quarantinedReasonPrefix+reason, now, id, accountID); err != nil {
 		return nil, err
 	}
