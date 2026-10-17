@@ -22,23 +22,32 @@ The system administrator's password is managed through the Compose settings, not
 
 ## HTTPS and receiving ports
 
-MailMoose serves HTTP on port `8081`. Put an HTTPS reverse proxy in front of it for external access and set `BASE_URL` to the public HTTPS origin.
-
-Set `TRUSTED_PROXIES` to your reverse proxy's IP or CIDR if you want MailMoose to honor forwarded client information. The proxy must overwrite incoming `X-Forwarded-For` values. `FORCE_HTTPS=true` enables redirection to the configured HTTPS origin.
-
-Only publish additional ports when needed:
+MailMoose serves the web UI and API on port `8081`. Put an HTTPS reverse proxy in front of it when accessed over a network, and set `BASE_URL` to the address users will open.
 
 | Port | Purpose |
 | --- | --- |
-| `8081` | Web interface and API, preferably behind the HTTPS proxy |
-| `8082` | Optional separate receiving listener for provider webhooks |
-| `25:2525` | Direct SMTP receiving with the included MX receiver |
+| `8081` | Web interface, REST API and agent connections |
+| `8082` | Separate listener for incoming provider webhooks and health checks |
+| `25:2525` | Optional direct SMTP receiving with the included MX receiver |
 
-Select the receiver in the application's settings as well. Publishing port 25 alone does not configure a domain to accept mail. Antler MX and most connected-mailbox setups do not need it.
+### Keep the web interface private
 
-For a separate webhook hostname, set `DEDICATED_RECEIVER_URL` to that HTTPS origin, and configure your reverse proxy to reach the receiving listener. Its port is set by `DEDICATED_RECEIVER_PORT` (default `8082`); disable the separate listener with `DEDICATED_RECEIVER_ENABLE=false` when not needed.
+**Port `8082` is useful when you want MailMoose's UI and API to stay on your LAN or VPN, but still need internet-based email providers to deliver messages.** It accepts the inbound provider webhook requests (including Microsoft mail-change notifications) without making the web interface, REST API or agent connections available on that port.
 
-See [Email providers](EMAIL_PROVIDERS.md) for provider setup or [Remote SMTP receiving](REMOTE_MX.md) for dedicated receivers.
+For example:
+
+- Keep `https://mail.example.com` (port `8081`) accessible only through your LAN or VPN.
+- Expose `https://inbound.example.com` through your reverse proxy to container port `8082`, allowing providers such as Mailgun, Cloudflare, Resend and Postmark to reach their authenticated webhook endpoints.
+
+Set `DEDICATED_RECEIVER_URL=https://inbound.example.com`. The listener defaults to port `8082`; `DEDICATED_RECEIVER_PORT` changes it and `DEDICATED_RECEIVER_ENABLE=false` disables it.
+
+**This does not automatically secure port `8081`.** Restrict that port with your firewall and reverse proxy, and do not publish it directly to the internet if you want private-only access. The main listener also has inbound webhook routes for compatible setups.
+
+You do **not** need a publicly accessible webhook listener for Antler MX. MailMoose connects outbound to Antler instead. For Direct MX receiving, publish host port `25:2525` and select Direct MX in the relevant domain; publishing a port alone does not enable receiving.
+
+Set `TRUSTED_PROXIES` to the reverse proxy's IP or CIDR if you need forwarded client information. The proxy must overwrite incoming `X-Forwarded-For`. Set `FORCE_HTTPS=true` when using a public HTTPS origin.
+
+See [Email providers](EMAIL_PROVIDERS.md) or [Remote SMTP receiving](REMOTE_MX.md).
 
 ## Data and backups
 
