@@ -492,6 +492,7 @@ func (s *Server) templateFuncs(loc *time.Location) template.FuncMap {
 		"copyIcon":             func() template.HTML { return template.HTML(iconCopy) },
 		"catchAllIcon":         func() template.HTML { return template.HTML(catchAllTag) },
 		"deliveryStatus":       deliveryStatus,
+		"uncertainDelivery":    store.IsUncertainDelivery,
 		"dialmxReady":          dialMXReady,
 		"dialmxUnreachable":    dialMXUnreachable,
 		"dialmxStatusClass":    dialMXStatusClass,

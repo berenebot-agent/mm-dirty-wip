@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
@@ -330,6 +331,48 @@ func (s *Store) ResolveQuarantinedWorkflowSend(ctx context.Context, accountID, i
 	return tx.Commit()
 }
 
+// MarkWorkflowUncertain records an unresolved approval notification without
+// claiming the approver did not receive it.
+func (s *Store) MarkWorkflowUncertain(ctx context.Context, accountID, id, reason, claim string) ([]model.Event, error) {
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	job, err := getWorkflowTx(ctx, tx, accountID, id)
+	if err != nil {
+		return nil, err
+	}
+	if job.Status != model.WorkflowPending || job.SendAttemptState != claim || claimTaken(job.ClaimOwner, claim) {
+		return nil, ErrConflict
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "approval notification outcome could not be verified"
+	}
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+		WHERE id=? AND account_id=? AND status='pending'`, quarantinedReasonPrefix+reason, now, id, accountID); err != nil {
+		return nil, err
+	}
+	var events []model.Event
+	if job.RequestID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE draft_send_requests SET notification_status=?,updated_at=? WHERE id=? AND account_id=? AND status='pending'`,
+			model.NotificationUncertain, now, job.RequestID, accountID); err != nil {
+			return nil, err
+		}
+		ev, eerr := insertEventTx(ctx, tx, accountID, job.InboxID, model.EventDraftNotificationFailed, job.RequestID,
+			map[string]any{"request_id": job.RequestID, "workflow_id": id, "notification_status": model.NotificationUncertain})
+		if eerr != nil {
+			return nil, eerr
+		}
+		events = append(events, ev)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 // BeginWorkflowSend durably records that this attempt is about to hand the
 // workflow job to the provider, mirroring BeginMessageSend. See migration077.
 func (s *Store) BeginWorkflowSend(ctx context.Context, accountID, id, claim string) error {
@@ -459,6 +502,9 @@ func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText s
 	// outcome). A sent job must not be dragged back into the failure path.
 	if w.Status != model.WorkflowPending && w.Status != model.WorkflowFailed {
 		return nil, ErrConflict
+	}
+	if w.Status == model.WorkflowFailed {
+		return nil, nil
 	}
 	// A stale attempt's failure must not clear another attempt's live claim;
 	// that attempt owns the outcome now, so this write is skipped entirely.

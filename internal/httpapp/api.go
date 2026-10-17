@@ -1840,7 +1840,8 @@ func (s *Server) apiOutbox(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiOutboxRetry(w http.ResponseWriter, r *http.Request) {
 	p := principal(r)
-	if err := s.Service.Store.RequeueFailed(r.Context(), p, r.PathValue("id")); err != nil {
+	confirmed := r.URL.Query().Get("confirm_duplicate_risk") == "true"
+	if _, err := s.Service.Store.RequeueFailedConfirmed(r.Context(), p, r.PathValue("id"), confirmed); err != nil {
 		mapStoreError(w, err)
 		return
 	}
