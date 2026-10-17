@@ -60,7 +60,7 @@ func TestInternalWorkflowMailHiddenFromReads(t *testing.T) {
 
 	// Delivering workflow mail emits no message.sent event, so realtime and
 	// replay surfaces do not reveal it.
-	_, events, err := s.MarkSent(ctx, u.AccountID, m.ID, "provider-1", "")
+	_, events, err := s.MarkSent(ctx, u.AccountID, m.ID, "provider-1", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestInternalWorkflowMailDoesNotSuppressNormalEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, events, err := s.MarkSent(ctx, u.AccountID, m.ID, "provider-2", "smtp")
+	_, events, err := s.MarkSent(ctx, u.AccountID, m.ID, "provider-2", "smtp", "")
 	if err != nil {
 		t.Fatal(err)
 	}

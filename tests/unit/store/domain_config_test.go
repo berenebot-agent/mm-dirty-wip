@@ -138,7 +138,7 @@ func TestDeliveryHistorySurvivesConfigAndDomainDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<pid>", "brevo"); err != nil {
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<pid>", "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 

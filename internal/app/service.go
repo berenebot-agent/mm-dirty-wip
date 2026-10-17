@@ -2043,9 +2043,11 @@ func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 }
 
 // Deliver performs the actual provider send for a pending outbound message and
-// marks it sent or failed. It is called by the outbox worker with the owner of
-// the claim so a stale worker cannot deliver a message re-claimed elsewhere.
-func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) error {
+// marks it sent or failed. It is called by the outbox worker with the claim
+// token minted by ClaimNextPending, so a stale attempt cannot deliver (or
+// record an outcome for) a message re-claimed elsewhere; an empty claim skips
+// the verification and is used by tests and callers outside the worker.
+func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) error {
 	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
 	if err != nil {
 		return err
@@ -2053,12 +2055,12 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if m.Direction != "outbound" || m.Status != "pending" {
 		return nil
 	}
-	if owner != "" {
+	if claim != "" {
 		current, err := s.Store.MessageClaimOwner(ctx, accountID, msgID)
 		if err != nil {
 			return err
 		}
-		if current != owner {
+		if store.ClaimTaken(current, claim) {
 			return fmt.Errorf("message %s is claimed by another worker", msgID)
 		}
 	}
@@ -2069,24 +2071,24 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 		if errors.Is(err, store.ErrNoProvider) {
 			outcomeCtx, cancelOutcome := outcomeContext(ctx)
 			defer cancelOutcome()
-			return s.Store.HoldPending(outcomeCtx, m.AccountID, m.ID, "sending paused: selected sender has no connector", time.Now().UTC().Add(5*time.Minute))
+			return s.Store.HoldPending(outcomeCtx, m.AccountID, m.ID, "sending paused: selected sender has no connector", time.Now().UTC().Add(5*time.Minute), claim)
 		}
-		return s.failDetached(ctx, m, err, "")
+		return s.failDetached(ctx, m, err, "", claim)
 	}
 	cfg, err := s.DecryptDomainSendingConfig(sending)
 	if err != nil {
-		return s.failDetached(ctx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider, claim)
 	}
 	rawPath, err := s.dataPath(m.RawPath)
 	if err != nil {
-		return s.failDetached(ctx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider, claim)
 	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
-		return s.failDetached(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+		return s.failDetached(ctx, m, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider, claim)
 	}
 	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(m.To, m.CC, m.BCC)) > limit {
-		return s.failDetached(ctx, m, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
+		return s.failDetached(ctx, m, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider, claim)
 	}
 	outbound := transport.OutboundMessage{
 		FromName:       m.From.Name,
@@ -2109,13 +2111,13 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	if prefersRawMIME(provider) {
 		raw, rerr := os.ReadFile(rawPath)
 		if rerr != nil {
-			return s.failDetached(ctx, m, rerr, sending.Provider)
+			return s.failDetached(ctx, m, rerr, sending.Provider, claim)
 		}
 		outbound.RawMIME = raw
 	} else {
 		atts, aerr := s.deliveryAttachments(m)
 		if aerr != nil {
-			return s.failDetached(ctx, m, aerr, sending.Provider)
+			return s.failDetached(ctx, m, aerr, sending.Provider, claim)
 		}
 		outbound.Attachments = atts
 	}
@@ -2132,15 +2134,15 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 	// The provider send uses the delivery context only; recording the outcome
 	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
 	if err := s.bindGmailSend(ctx, m.AccountID, m.InboxID, cfg); err != nil {
-		return s.failDetached(ctx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider, claim)
 	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
-		return s.failDetached(ctx, m, err, sending.Provider)
+		return s.failDetached(ctx, m, err, sending.Provider, claim)
 	}
 	outcomeCtx, cancelOutcome := outcomeContext(ctx)
 	defer cancelOutcome()
-	_, events, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider)
+	_, events, err := s.Store.MarkSent(outcomeCtx, m.AccountID, m.ID, providerResult.ProviderMessageID, sending.Provider, claim)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			// The queued message was cancelled (deleted) while the provider
@@ -2151,6 +2153,21 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, owner string) e
 			s.Log.Warn("outbound message cancelled during delivery; provider may still have accepted it", "message_id", m.ID, "to", m.To)
 			return nil
 		}
+		if errors.Is(err, store.ErrClaimTaken) {
+			// The claim lease lapsed mid-send and another attempt re-claimed
+			// the message. This send may have been accepted by the provider,
+			// but the outcome now belongs to the re-claiming attempt: recording
+			// it here would race that attempt's own send. The message stays
+			// pending under the other attempt's claim, which resolves it.
+			s.Log.Warn("outbox claim taken over during send; send outcome unknown", "message_id", m.ID, "to", m.To)
+			return nil
+		}
+		// The outcome write failed outright: release the claim so the message
+		// is retried after the normal backoff instead of idling until the
+		// lease expires with the claim still attached.
+		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
+		defer cancelRelease()
+		_ = s.Store.ReleaseMessageClaim(releaseCtx, m.ID, claim)
 		return err
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2229,10 +2246,12 @@ func (s *Service) freezeSentCopyRaw(ctx context.Context, accountID, rawRel strin
 }
 
 // failMessagePanic records a delivery panic as a failed attempt so a poison
-// message backs off rather than being reclaimed and re-panicking. It fails
-// closed: any error reading the message or writing the outcome is returned to
-// the caller, never raised, so it cannot escape the worker's own recovery.
-func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID string, cause error) error {
+// message backs off rather than being reclaimed and re-panicking. The claim is
+// the token the panicking attempt held, so a stale recovery cannot clobber
+// another attempt's live claim. It fails closed: any error reading the message
+// or writing the outcome is returned to the caller, never raised, so it cannot
+// escape the worker's own recovery.
+func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID, claim string, cause error) error {
 	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
 	if err != nil {
 		return err
@@ -2242,23 +2261,25 @@ func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID string,
 	if m.Direction != "outbound" || m.Status != "pending" {
 		return nil
 	}
-	return s.fail(ctx, m, cause, m.Provider)
+	return s.fail(ctx, m, cause, m.Provider, claim)
 }
 
 // fail records a failed delivery attempt with exponential backoff, returning
 // the error so the worker can log it. provider attributes the attempt to the
 // provider snapshot actually used; it is empty when no config was available.
+// claim is the token the attempt holds, so the outcome write is rejected when
+// a re-claiming attempt owns the message (store.ErrClaimTaken).
 // The attempt's domain is derived inside the store from the message and inbox,
 // so the config may be deleted while a send is in flight without losing the
 // outcome.
-func (s *Service) fail(ctx context.Context, m model.Message, err error, provider string) error {
+func (s *Service) fail(ctx context.Context, m model.Message, err error, provider, claim string) error {
 	// A permanent provider error will never succeed on retry, so fail the
 	// message immediately instead of retrying with backoff. An ambiguous send
 	// (a client timeout that may follow a provider-accepted request) is also
 	// terminal: retrying a provider without an idempotency key could deliver
 	// twice.
 	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
-		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider)
+		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider, claim)
 		if ferr != nil {
 			return ferr
 		}
@@ -2273,7 +2294,7 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 		attempt = len(backoff) - 1
 	}
 	next := time.Now().UTC().Add(backoff[attempt])
-	_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1, provider)
+	_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), next, len(backoff)+1, provider, claim)
 	if ferr != nil {
 		return ferr
 	}
@@ -2288,10 +2309,10 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 // took. It is the form used by Deliver/DeliverWorkflow for every failure on the
 // send path; fail itself keeps taking the caller's context so the panic
 // recovery path (which already supplies a bounded context) is unchanged.
-func (s *Service) failDetached(ctx context.Context, m model.Message, err error, provider string) error {
+func (s *Service) failDetached(ctx context.Context, m model.Message, err error, provider, claim string) error {
 	outcomeCtx, cancelOutcome := outcomeContext(ctx)
 	defer cancelOutcome()
-	return s.fail(outcomeCtx, m, err, provider)
+	return s.fail(outcomeCtx, m, err, provider, claim)
 }
 
 // AccountIDForWorkflow resolves the account id for a workflow job id. The
@@ -2304,9 +2325,11 @@ func (s *Service) AccountIDForWorkflow(ctx context.Context, workflowID string) (
 // DeliverWorkflow performs the provider send for a pending workflow job. It is
 // the workflow-queue analogue of Deliver: the job is not mailbox content, so
 // success only marks the job sent (starting the approval expiry clock) and
-// failure updates the request's notification state. Attachments are
-// reconstructed from the retained raw MIME for HTTP adapters.
-func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, owner string) error {
+// failure updates the request's notification state. claim is the token minted
+// by ClaimNextWorkflow; an empty claim skips verification (tests and callers
+// outside the worker). Attachments are reconstructed from the retained raw MIME
+// for HTTP adapters.
+func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, claim string) error {
 	w, err := s.Store.GetWorkflowInternal(ctx, accountID, workflowID)
 	if err != nil {
 		return err
@@ -2314,12 +2337,12 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if w.Status != model.WorkflowPending {
 		return nil
 	}
-	if owner != "" {
+	if claim != "" {
 		current, err := s.Store.WorkflowClaimOwner(ctx, accountID, workflowID)
 		if err != nil {
 			return err
 		}
-		if current != owner {
+		if store.ClaimTaken(current, claim) {
 			return fmt.Errorf("workflow %s is claimed by another worker", workflowID)
 		}
 	}
@@ -2330,24 +2353,24 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 		if errors.Is(err, store.ErrNoProvider) {
 			outcomeCtx, cancelOutcome := outcomeContext(ctx)
 			defer cancelOutcome()
-			return s.Store.HoldWorkflow(outcomeCtx, accountID, workflowID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute))
+			return s.Store.HoldWorkflow(outcomeCtx, accountID, workflowID, "no outbound provider configured for this domain", time.Now().UTC().Add(5*time.Minute), claim)
 		}
-		return s.failWorkflowDetached(ctx, w, err, "")
+		return s.failWorkflowDetached(ctx, w, err, "", claim)
 	}
 	cfg, err := s.DecryptDomainSendingConfig(sending)
 	if err != nil {
-		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider, claim)
 	}
 	rawPath, err := s.dataPath(w.RawPath)
 	if err != nil {
-		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider, claim)
 	}
 	provider, ok := transport.LookupOutbound(sending.Provider)
 	if !ok {
-		return s.failWorkflowDetached(ctx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider)
+		return s.failWorkflowDetached(ctx, w, fmt.Errorf("%w: %s", transport.ErrUnknownProvider, sending.Provider), sending.Provider, claim)
 	}
 	if limit := transport.MaxEnvelopeRecipients(provider); limit > 0 && len(uniqueEnvelopeRecipients(w.To, w.CC, w.BCC)) > limit {
-		return s.failWorkflowDetached(ctx, w, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, &transport.PermanentError{Err: fmt.Errorf("provider supports at most %d envelope recipient", limit)}, sending.Provider, claim)
 	}
 	outbound := transport.OutboundMessage{
 		FromName:    w.From.Name,
@@ -2364,13 +2387,13 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	if prefersRawMIME(provider) {
 		raw, rerr := os.ReadFile(rawPath)
 		if rerr != nil {
-			return s.failWorkflowDetached(ctx, w, rerr, sending.Provider)
+			return s.failWorkflowDetached(ctx, w, rerr, sending.Provider, claim)
 		}
 		outbound.RawMIME = raw
 	} else {
 		atts, aerr := s.workflowAttachments(w)
 		if aerr != nil {
-			return s.failWorkflowDetached(ctx, w, aerr, sending.Provider)
+			return s.failWorkflowDetached(ctx, w, aerr, sending.Provider, claim)
 		}
 		outbound.Attachments = atts
 	}
@@ -2386,17 +2409,30 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 	// The provider send uses the delivery context only; recording the outcome
 	// afterwards gets a fresh, bounded context so a slow send cannot exhaust it.
 	if err := s.bindGmailSend(ctx, accountID, w.InboxID, cfg); err != nil {
-		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider, claim)
 	}
 	providerResult, err := provider.Send(ctx, cfg, outbound)
 	if err != nil {
-		return s.failWorkflowDetached(ctx, w, err, sending.Provider)
+		return s.failWorkflowDetached(ctx, w, err, sending.Provider, claim)
 	}
 	tokenExpiry := time.Duration(s.Config.ApprovalExpiryHours) * time.Hour
 	outcomeCtx, cancelOutcome := outcomeContext(ctx)
 	defer cancelOutcome()
-	events, err := s.Store.MarkWorkflowSent(outcomeCtx, accountID, workflowID, providerResult.ProviderMessageID, sending.Provider, tokenExpiry)
+	events, err := s.Store.MarkWorkflowSent(outcomeCtx, accountID, workflowID, providerResult.ProviderMessageID, sending.Provider, tokenExpiry, claim)
 	if err != nil {
+		if errors.Is(err, store.ErrClaimTaken) {
+			// The claim lease lapsed mid-send and another attempt re-claimed
+			// the job; the outcome now belongs to that attempt. The send may
+			// still have been accepted by the provider.
+			s.Log.Warn("workflow claim taken over during send; send outcome unknown", "workflow_id", workflowID)
+			return nil
+		}
+		// The outcome write failed outright: release the claim so the job is
+		// retried after the normal backoff instead of idling until the lease
+		// expires with the claim still attached.
+		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
+		defer cancelRelease()
+		_ = s.Store.ReleaseWorkflowClaim(releaseCtx, workflowID, claim)
 		return err
 	}
 	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2408,10 +2444,11 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, ow
 
 // failWorkflow records a failed workflow handoff with exponential backoff. A
 // permanent provider error is terminal immediately, as is an ambiguous send
-// (see fail).
-func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error, provider string) error {
+// (see fail). claim is the token the failed attempt held, so the outcome write
+// is rejected when a re-claiming attempt owns the job.
+func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error, provider, claim string) error {
 	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
-		events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), time.Time{}, 1, provider)
+		events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), time.Time{}, 1, provider, claim)
 		if ferr != nil {
 			return ferr
 		}
@@ -2426,7 +2463,7 @@ func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error,
 		attempt = len(backoff) - 1
 	}
 	next := time.Now().UTC().Add(backoff[attempt])
-	events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), next, len(backoff)+1, provider)
+	events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), next, len(backoff)+1, provider, claim)
 	if ferr != nil {
 		return ferr
 	}
@@ -2439,16 +2476,18 @@ func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error,
 // failWorkflowDetached records a failed workflow handoff with a fresh, bounded
 // outcome context so it is always persisted regardless of how long the delivery
 // took. See failDetached.
-func (s *Service) failWorkflowDetached(ctx context.Context, w store.Workflow, err error, provider string) error {
+func (s *Service) failWorkflowDetached(ctx context.Context, w store.Workflow, err error, provider, claim string) error {
 	outcomeCtx, cancelOutcome := outcomeContext(ctx)
 	defer cancelOutcome()
-	return s.failWorkflow(outcomeCtx, w, err, provider)
+	return s.failWorkflow(outcomeCtx, w, err, provider, claim)
 }
 
 // failWorkflowPanic records a workflow delivery panic as a failed attempt so a
-// poison job backs off instead of re-panicking. It fails closed: errors are
-// returned, never raised, so nothing escapes the worker's own recovery.
-func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID string, cause error) error {
+// poison job backs off instead of re-panicking. claim is the token the
+// panicking attempt held, so a stale recovery cannot clobber another attempt's
+// live claim. It fails closed: errors are returned, never raised, so nothing
+// escapes the worker's own recovery.
+func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID, claim string, cause error) error {
 	w, err := s.Store.GetWorkflowInternal(ctx, accountID, workflowID)
 	if err != nil {
 		return err
@@ -2456,7 +2495,7 @@ func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID s
 	if w.Status != model.WorkflowPending {
 		return nil
 	}
-	return s.failWorkflow(ctx, w, cause, w.Provider)
+	return s.failWorkflow(ctx, w, cause, w.Provider, claim)
 }
 
 // redactWorkflow removes approval control tokens from a terminal workflow

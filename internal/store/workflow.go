@@ -171,33 +171,40 @@ func (s *Store) DomainSendingConfigForWorkflow(ctx context.Context, accountID, w
 }
 
 // ClaimNextWorkflow atomically claims the next due pending workflow job. It
-// returns the job id, or "" if none is due.
-func (s *Store) ClaimNextWorkflow(ctx context.Context, now time.Time, owner string, lease time.Duration) (string, error) {
+// returns the job id and the claim token minted for this claim (the same
+// per-claim uniqueness as ClaimNextPending), or "" when none is due.
+func (s *Store) ClaimNextWorkflow(ctx context.Context, now time.Time, owner string, lease time.Duration) (string, string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer tx.Rollback()
 	var id string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM outbound_workflow WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner=?,claim_expires_at=? WHERE id=?`, owner, timeText(now.Add(lease)), id); err != nil {
-		return "", err
+	claim := owner + ":" + idgen.New("clm")
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner=?,claim_expires_at=? WHERE id=?`, claim, timeText(now.Add(lease)), id); err != nil {
+		return "", "", err
 	}
 	if err = tx.Commit(); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return id, nil
+	return id, claim, nil
 }
 
-// ReleaseWorkflowClaim clears a claim held by owner so the job can be retried
-// immediately instead of waiting for the lease to expire.
+// ReleaseWorkflowClaim clears a claim held by the given claim token so the job
+// can be retried immediately instead of waiting for the lease to expire. owner
+// is the claim token minted by ClaimNextWorkflow (an empty owner releases
+// nothing).
 func (s *Store) ReleaseWorkflowClaim(ctx context.Context, id, owner string) error {
+	if owner == "" {
+		return nil
+	}
 	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
 	return err
 }
@@ -219,9 +226,11 @@ func (s *Store) RecoverAbandonedWorkflowClaims(ctx context.Context) error {
 }
 
 // HoldWorkflow defers a pending workflow job without counting a retry. It is
-// used when a domain has no outbound provider yet.
-func (s *Store) HoldWorkflow(ctx context.Context, accountID, id, reason string, next time.Time) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending'`, reason, timeText(next), id, accountID)
+// used when a domain has no outbound provider yet. claim guards against a
+// stale attempt holding an expired claim; an empty token can update only an
+// unclaimed workflow, never bypass a live claim.
+func (s *Store) HoldWorkflow(ctx context.Context, accountID, id, reason string, next time.Time, claim string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND (claim_owner=? OR claim_owner='')`, reason, timeText(next), id, accountID, claim)
 	if err != nil {
 		return err
 	}
@@ -234,7 +243,7 @@ func (s *Store) HoldWorkflow(ctx context.Context, accountID, id, reason string, 
 // MarkWorkflowSent records a successful handoff. When tokenExpiry > 0 it starts
 // the approval expiry clock, so the token is only time-bounded once the
 // approver has actually been notified. It returns the draft events to publish.
-func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMessageID, provider string, tokenExpiry time.Duration) ([]model.Event, error) {
+func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMessageID, provider string, tokenExpiry time.Duration, claim string) ([]model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -246,6 +255,12 @@ func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMes
 	}
 	if w.Status != model.WorkflowPending {
 		return nil, ErrConflict
+	}
+	// A send that outlived its lease must not record its outcome over a live
+	// re-claim; the re-claiming attempt owns the outcome now. An empty owner
+	// (the claim was released without a replacement) is still ours to resolve.
+	if claimTaken(w.ClaimOwner, claim) {
+		return nil, ErrClaimTaken
 	}
 	now := nowText()
 	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='sent',provider=?,provider_message_id=?,sent_at=?,terminal_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, now, id, accountID); err != nil {
@@ -274,7 +289,7 @@ func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMes
 // MarkWorkflowFailed records a failed handoff. If attempts remain the job is
 // returned to pending with a next_attempt_at; otherwise it is terminal and the
 // request notification status becomes 'failed' so the UI can surface it.
-func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider string) ([]model.Event, error) {
+func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider, claim string) ([]model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -283,6 +298,11 @@ func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText s
 	w, err := getWorkflowTx(ctx, tx, accountID, id)
 	if err != nil {
 		return nil, err
+	}
+	// A stale attempt's failure must not clear another attempt's live claim;
+	// that attempt owns the outcome now, so this write is skipped entirely.
+	if claimTaken(w.ClaimOwner, claim) {
+		return nil, ErrClaimTaken
 	}
 	attempts := w.Attempts + 1
 	status := model.WorkflowPending

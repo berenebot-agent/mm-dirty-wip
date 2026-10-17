@@ -131,7 +131,7 @@ func TestSendAsMessageRecordsSendingDomain(t *testing.T) {
 		t.Fatalf("config after alias-domain save = %q err=%v", got.ID, err)
 	}
 	// The outbound delivery log attributes the attempt to the alias domain.
-	if _, _, err := s.MarkSent(ctx, u.AccountID, msg.ID, "<prov>", "brevo"); err != nil {
+	if _, _, err := s.MarkSent(ctx, u.AccountID, msg.ID, "<prov>", "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	attempts, err := s.ListDomainDeliveryAttempts(ctx, u.AccountID, d2.ID, 10, 0)
@@ -185,7 +185,7 @@ func TestRequeuePendingForSendingDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "down", time.Now().UTC().Add(time.Hour), 6, "brevo"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "down", time.Now().UTC().Add(time.Hour), 6, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := s.RequeuePendingForDomain(ctx, u.AccountID, d2.ID); err != nil || n != 1 {

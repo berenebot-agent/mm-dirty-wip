@@ -57,7 +57,7 @@ func TestStandaloneWorkflowDeliveryStartedSucceeds(t *testing.T) {
 	}
 	// CommitWorkflow returns the send request, not the job id; claim the queued
 	// job the way the outbox worker does.
-	jobID, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
+	jobID, _, err := s.ClaimNextWorkflow(ctx, time.Now().UTC(), "owner", time.Minute)
 	if err != nil || jobID == "" {
 		t.Fatalf("claim = %q err=%v", jobID, err)
 	}

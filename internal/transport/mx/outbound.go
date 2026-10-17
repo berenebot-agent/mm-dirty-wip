@@ -110,6 +110,14 @@ func Send(ctx context.Context, c OutboundConfig, m transport.OutboundMessage, re
 				return nil
 			} else {
 				last = err
+				// An ambiguous outcome (the message's fate is unknown: the
+				// verdict may have been lost after the remote already accepted
+				// it) is never retried on another address or IP, because that
+				// would deliver a duplicate. Like a permanent rejection, the
+				// outbox records it terminally.
+				if transport.AsAmbiguous(err) {
+					return err
+				}
 				if transport.IsPermanent(err) {
 					return err
 				}
@@ -249,7 +257,8 @@ func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, re
 		return classifySMTPError(err)
 	}
 	// The body upload runs with no command deadline; it is bounded only by the
-	// caller's context (the worker's delivery deadline).
+	// caller's context (the worker's delivery deadline). From this point the
+	// message may be accepted, so any failure is ambiguous.
 	clearDeadline()
 	bw := bufio.NewWriter(w)
 	if _, err = bw.Write(raw); err == nil {
@@ -257,7 +266,7 @@ func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, re
 	}
 	if err != nil {
 		_ = w.Close()
-		return err
+		return ambiguousDataError(err)
 	}
 	// w.Close() sends the terminating dot and reads the server's verdict on the
 	// message. That verdict is the delivery outcome: once it is a 2xx the remote
@@ -265,7 +274,17 @@ func smtpTransaction(ctx context.Context, helo, host string, ip net.IP, from, re
 	// must not be reported as a delivery failure (it would trigger a duplicate).
 	closeErr := w.Close()
 	if closeErr != nil {
-		return classifySMTPError(closeErr)
+		if isSMTPReply(closeErr) {
+			// The server returned a definitive reply after the body: it either
+			// rejected the message (4xx transient or 5xx permanent) or is
+			// reporting the success path's own post-DATA state. That reply is
+			// authoritative and the message was NOT accepted, so this is a
+			// clean, non-ambiguous outcome: a 5xx is permanent, a 4xx is
+			// retryable. Only a lost reply (connection dropped or timed out
+			// before any code arrived) is genuinely ambiguous.
+			return classifySMTPError(closeErr)
+		}
+		return ambiguousDataError(closeErr)
 	}
 	// A failed QUIT is ignored: the message was already accepted above.
 	setPhaseDeadline()
@@ -278,4 +297,23 @@ func classifySMTPError(err error) error {
 		return &transport.PermanentError{Err: err}
 	}
 	return err
+}
+
+// isSMTPReply reports whether err is a definitive SMTP protocol reply (a
+// *textproto.Error carries a numeric code). A reply is authoritative: the
+// server decided the message's fate, so the outcome is not ambiguous. A raw
+// transport error (EOF, timeout, connection reset) has no code and is the
+// genuinely unknown case.
+func isSMTPReply(err error) bool {
+	_, ok := err.(*textproto.Error)
+	return ok
+}
+
+// ambiguousDataError wraps a failure that occurred at or after the message body
+// upload began (a DATA write/close timeout or a dropped connection while
+// awaiting the server's verdict, which may have been lost after the remote
+// already accepted the message). The outbox records the ambiguity terminally
+// instead of retrying, which could deliver a duplicate.
+func ambiguousDataError(err error) error {
+	return &transport.AmbiguousError{Err: fmt.Errorf("mx: outcome unknown after the message body was sent: %w", err)}
 }

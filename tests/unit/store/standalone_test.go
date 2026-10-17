@@ -390,7 +390,7 @@ func TestStandaloneOutboundOutcomeNoDomain(t *testing.T) {
 
 	// Success path.
 	sent := commit("sent-1")
-	if _, _, err := st.MarkSent(ctx, acct, sent.ID, "<provider-1>", "smtp"); err != nil {
+	if _, _, err := st.MarkSent(ctx, acct, sent.ID, "<provider-1>", "smtp", ""); err != nil {
 		t.Fatalf("MarkSent on a standalone message: %v", err)
 	}
 	after, err := st.GetMessageByID(ctx, acct, sent.ID)
@@ -403,7 +403,7 @@ func TestStandaloneOutboundOutcomeNoDomain(t *testing.T) {
 
 	// Failure path.
 	failed := commit("failed-1")
-	if _, _, err := st.MarkFailed(ctx, acct, failed.ID, "transient", time.Now().UTC(), 5, "smtp"); err != nil {
+	if _, _, err := st.MarkFailed(ctx, acct, failed.ID, "transient", time.Now().UTC(), 5, "smtp", ""); err != nil {
 		t.Fatalf("MarkFailed on a standalone message: %v", err)
 	}
 	after, err = st.GetMessageByID(ctx, acct, failed.ID)

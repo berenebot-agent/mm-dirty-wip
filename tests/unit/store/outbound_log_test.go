@@ -21,10 +21,10 @@ func TestDeliveryLogRecordListAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Record a failed then a sent attempt.
-	if _, _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "brevo"); err != nil {
+	if _, _, err = s.MarkFailed(ctx, u.AccountID, m.ID, "provider down", time.Now().UTC().Add(time.Minute), 6, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<provider-id>", "brevo"); err != nil {
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<provider-id>", "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	// List scoped to the domain, newest first; the domain is derived from the
@@ -82,7 +82,7 @@ func TestDeliveryLogPruneKeepsNewestAndRecent(t *testing.T) {
 	}
 	// Insert more than the cap so the oldest rows are pruned.
 	for i := 0; i < cap+10; i++ {
-		if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo"); err != nil {
+		if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo", ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -91,7 +91,7 @@ func TestDeliveryLogPruneKeepsNewestAndRecent(t *testing.T) {
 	}
 	// A further insert still keeps the count at the cap (the oldest row is
 	// pruned even though it is recent, because the count bound applies).
-	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo"); err != nil {
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	if n := deliveryLogCount(t, s, u.AccountID); n != cap {
@@ -151,7 +151,7 @@ func TestDeliveryStartedRecordsInFlightAndInterruptsStale(t *testing.T) {
 		t.Fatalf("newest %q oldest %q", attempts[0].Status, attempts[1].Status)
 	}
 	// A resolved outcome still records normally after the in-flight row.
-	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "mx"); err != nil {
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "mx", ""); err != nil {
 		t.Fatal(err)
 	}
 	attempts, err = s.ListDomainDeliveryAttempts(ctx, u.AccountID, d.ID, 10, 0)
@@ -207,7 +207,7 @@ func TestDeliveryLogMessageDeleteNullsLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo"); err != nil {
+	if _, _, err = s.MarkSent(ctx, u.AccountID, m.ID, "<id>", "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	p := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
