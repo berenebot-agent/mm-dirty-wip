@@ -93,8 +93,11 @@ type dkimInlineView struct {
 }
 
 // domainSendingEditor builds the prefilled sending editor for one provider,
-// returning false for an unknown provider.
-func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, provider string) (*domainEditorView, bool) {
+// returning false for an unknown provider. domainName is the editor's own
+// domain name; it is used to default the Direct MX HELO hostname when the
+// domain has no stored value, so a freshly added Direct MX sender can simply
+// be saved without any typing.
+func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, domainName, provider string) (*domainEditorView, bool) {
 	if _, ok := transport.LookupOutbound(provider); !ok {
 		return nil, false
 	}
@@ -103,6 +106,20 @@ func (s *Server) domainSendingEditor(ctx context.Context, accountID, domainID, p
 		return nil, false
 	}
 	e.Values, e.KeepSecrets = s.sendingEditorState(ctx, accountID, domainID, provider, e.Fields)
+	// Direct MX HELO defaults to the domain itself for first-time setup. Keep
+	// the schema's required marker and put the default in the editable value so
+	// Save succeeds without typing. An existing explicit value takes precedence.
+	if provider == mx.Provider {
+		if _, set := e.Values["helo"]; !set && domainName != "" {
+			e.Values["helo"] = domainName
+		}
+		for i, f := range e.Fields {
+			if f.Name == "helo" {
+				e.Fields[i].Placeholder = domainName
+				break
+			}
+		}
+	}
 	e.OverridableHint = sendingOverridableHint(provider)
 	e.DKIM = s.dkimInlineView(ctx, accountID, domainID, provider)
 	return e, true
@@ -194,10 +211,10 @@ func (s *Server) domainReceivingEditor(ctx context.Context, accountID, domainID,
 // domainSendingEditors builds one editor per outbound provider so the dialog can
 // switch between them client-side without a round trip. The primary providers
 // lead in a fixed order; the rest follow alphabetically by display label.
-func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID string) []*domainEditorView {
+func (s *Server) domainSendingEditors(ctx context.Context, accountID, domainID, domainName string) []*domainEditorView {
 	out := []*domainEditorView{}
 	for _, t := range transport.ListOutbound() {
-		if e, ok := s.domainSendingEditor(ctx, accountID, domainID, t.Name()); ok {
+		if e, ok := s.domainSendingEditor(ctx, accountID, domainID, domainName, t.Name()); ok {
 			out = append(out, e)
 		}
 	}
@@ -363,6 +380,13 @@ func (s *Server) uiDomainSending(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.domainEditorError(w, r, d.ID, "sending", provider, err.Error())
 		return
+	}
+	// The UI defaults a blank Direct MX HELO to the selected domain. Keep this
+	// fallback in the UI handler; the JSON API still requires an explicit value.
+	if provider == mx.Provider {
+		if helo, _ := cfg["helo"].(string); strings.TrimSpace(helo) == "" {
+			cfg["helo"] = d.Name
+		}
 	}
 	if _, err := s.Service.SaveDomainSendingConfig(ctx, p.AccountID, d.ID, provider, cfg); err != nil {
 		s.domainSaveError(w, r, d.ID, "sending", provider, err)
