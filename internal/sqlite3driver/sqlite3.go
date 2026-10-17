@@ -58,6 +58,10 @@ func (result result) RowsAffected() (int64, error) { return result.affected, nil
 func (d *Driver) Open(name string) (driver.Conn, error) {
 	path := name
 	if i := strings.IndexByte(path, '?'); i >= 0 {
+		// URI query parameters are discarded, not passed to sqlite3_open_v2.
+		// Connection options are currently set by the explicit PRAGMAs below;
+		// callers must not assume driver DSN options (for example busy_timeout)
+		// take effect until this parser is deliberately implemented.
 		path = path[:i]
 	}
 	path = strings.TrimPrefix(path, "file:")
@@ -303,6 +307,9 @@ func bind(st *C.sqlite3_stmt, idx int, v driver.Value) error {
 		C.free(unsafe.Pointer(p))
 	case []byte:
 		if len(x) == 0 {
+			// SQLite treats a NULL pointer with length zero as SQL NULL, not as
+			// a zero-length BLOB. Current NOT NULL blob writes are non-empty; if
+			// empty BLOBs become valid data, bind zeroblob(0) instead.
 			rc = C.bind_blob_transient(st, ci, nil, 0)
 		} else {
 			rc = C.bind_blob_transient(st, ci, unsafe.Pointer(&x[0]), C.int(len(x)))
@@ -361,6 +368,12 @@ func (s *stmt) Query(args []driver.Value) (driver.Rows, error) {
 	if s.st == nil {
 		return nil, driver.ErrBadConn
 	}
+	// The legacy driver.Stmt.Query surface has no context. It prepares a
+	// per-query statement through conn.query (whose rows finalize it) rather
+	// than resetting s.st, and cannot interrupt sqlite3_step mid-row. Store
+	// call sites use Conn.QueryContext today; if explicit prepared statements
+	// become a hot path, add the context-aware driver interfaces and reuse s.st
+	// with connection-level serialization.
 	return s.c.query(context.Background(), s.q, args)
 }
 

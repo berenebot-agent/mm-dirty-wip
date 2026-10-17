@@ -51,6 +51,14 @@ func SetOutboundHTTPTimeout(d time.Duration) {
 		shared.CloseIdleConnections()
 		shared = nil
 	}
+	// The long-timeout client derives from the same configured timeout, so it
+	// is rebuilt with it: otherwise an operator raising (or lowering) the
+	// outbound HTTP timeout leaves the Resend raw-MIME client pinned to its old
+	// hard-coded value.
+	if sharedLong != nil {
+		sharedLong.CloseIdleConnections()
+		sharedLong = nil
+	}
 	clientMu.Unlock()
 }
 

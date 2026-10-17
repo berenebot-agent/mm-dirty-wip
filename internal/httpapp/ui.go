@@ -4146,15 +4146,18 @@ func domainNameOf(address string) string {
 }
 
 // shortTooltipURL keeps connector tooltips compact while preserving both ends
-// of a long webhook URL.
+// of a long webhook URL. It slices by rune: a URL can contain non-ASCII
+// (IDN hosts, percent-decoded paths), and byte slicing would cut a rune in
+// half and render a corrupt character in the tooltip.
 func shortTooltipURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	const max = 56
-	if len(raw) <= max {
+	r := []rune(raw)
+	if len(r) <= max {
 		return raw
 	}
 	const tail = 14
-	return raw[:max-tail-4] + "...." + raw[len(raw)-tail:]
+	return string(r[:len(r)-tail-4]) + "...." + string(r[len(r)-tail:])
 }
 
 func snippetText(v string, n int) string {

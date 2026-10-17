@@ -1514,6 +1514,12 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, inline 
 	path, perr := s.dataPath(m.RawPath)
 	if perr != nil {
 		s.Log.Error("attachment path rejected", "error", perr)
+		// Headers (Content-Disposition/Type) are already set; clear them so the
+		// error below cannot be mistaken for an empty-but-successful download
+		// and nosniff cannot mark an error page as binary content.
+		w.Header().Del("Content-Disposition")
+		w.Header().Del("Content-Type")
+		http.Error(w, "attachment data unavailable", http.StatusNotFound)
 		return
 	}
 	if err := mailparse.ExtractAttachment(path, a.PartIndex, w); err != nil {

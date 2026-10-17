@@ -211,6 +211,16 @@ type Adapter struct {
 	caps              Capabilities
 }
 
+// connRef snapshots the current connection under the same mutex Close holds,
+// so a concurrent Close (which nils a.conn and then logs out) cannot race an
+// in-flight command's field read. Callers must use the snapshot rather than the
+// field directly; a nil snapshot means the adapter is closed or not connected.
+func (a *Adapter) connRef() *imapclient.Client {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.conn
+}
+
 // Dial connects to the configured server and authenticates. The returned
 // Adapter owns the connection and must be closed with Close.
 func Dial(ctx context.Context, cfg Config) (*Adapter, error) {

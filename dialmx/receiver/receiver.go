@@ -325,6 +325,7 @@ type Receiver struct {
 	lastSummaryReject    atomic.Int64
 	summaryStarted       atomic.Bool
 	summaryRun           atomic.Bool
+	summaryOnce          sync.Once
 	summaryDone          chan struct{}
 }
 
@@ -2027,14 +2028,12 @@ func (r *Receiver) Start() {
 }
 
 // Stop signals shutdown: it refuses new sessions and ends the heartbeat.
+// It is idempotent: the summary channel close is once-guarded so two
+// concurrent Stops cannot panic on close-of-closed-channel.
 func (r *Receiver) Stop() {
 	r.stopping.Store(true)
 	if r.summaryRun.Load() {
-		select {
-		case <-r.summaryDone:
-		default:
-			close(r.summaryDone)
-		}
+		r.summaryOnce.Do(func() { close(r.summaryDone) })
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
