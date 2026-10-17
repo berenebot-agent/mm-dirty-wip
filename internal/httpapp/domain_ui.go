@@ -1244,7 +1244,7 @@ func domainReceivingSteps(provider string) []string {
 		}
 	case "mx":
 		return []string{
-			"Point this domain's MX record at the receiver's advertised SMTP hostname. The Direct MX receiver panel below names it once the receiver is running; do not use the SMTP greeting hostname.",
+			"Point this domain's MX record at the receiver's advertised SMTP hostname; the Direct MX receiver panel below names it. Do not use the SMTP greeting hostname.",
 			"Publish an SPF record for the domain; DKIM and DMARC are computed at the receiver.",
 			"Choose an enforcement mode below (moderate is the default), then save.",
 		}
