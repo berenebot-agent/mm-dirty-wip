@@ -44,7 +44,7 @@ MailMoose makes an **outbound connection** to the hosted Antler receivers. Antle
 
 1. Add your domain in MailMoose and create an inbox.
 2. Open the domain's **Receiving** settings and select **Antler MX**.
-3. Enter a contact email and save. This is for receiver operations, not a mailbox login.
+3. Enter a contact email and save. This is for service updates only, not a mailbox login.
 4. Copy the **MX** and `_mailmoose-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by MailMoose.
 5. Wait for the **DNS** and **receiver** status indicators to show ready.
 6. Send a test email to an address on your domain.
