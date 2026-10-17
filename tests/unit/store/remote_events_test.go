@@ -159,11 +159,11 @@ func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
 	if err := st.EstablishRemoteBaseline(ctx, acct, in.ID, "INBOX", 5, 0); err != nil {
 		t.Fatal(err)
 	}
-	a, _, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 5, UID: 1, RFCMessageID: "<e1@remote>", FromAddress: "alice@example.test", Subject: "Hi", Source: "imap"})
+	arrival, _, err := st.RecordRemoteArrival(ctx, acct, in.ID, store.RemoteArrivalInput{FolderPath: "INBOX", UIDValidity: 5, UID: 1, RFCMessageID: "<e1@remote>", FromAddress: "alice@example.test", Subject: "Hi", Source: "imap"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev, emitted, err := st.RecordRemoteArrivalEvent(ctx, acct, in.ID, a)
+	ev, emitted, err := st.RecordRemoteArrivalEvent(ctx, acct, in.ID, arrival)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,11 +179,11 @@ func TestRemoteArrivalEventAndNotifyBaseline(t *testing.T) {
 	if ev.Payload["provider"] != "imap" || ev.Payload["source"] != "imap" {
 		t.Fatalf("provider/source payload = %#v, want imap/imap", ev.Payload)
 	}
-	if ev.EntityID != a.ID {
-		t.Fatalf("event entity = %q want arrival id %q", ev.EntityID, a.ID)
+	if ev.EntityID != arrival.ID {
+		t.Fatalf("event entity = %q want arrival id %q", ev.EntityID, arrival.ID)
 	}
 	// A second call is idempotent: no second event is emitted.
-	if _, emitted2, err := st.RecordRemoteArrivalEvent(ctx, acct, in.ID, a); err != nil || emitted2 {
+	if _, emitted2, err := st.RecordRemoteArrivalEvent(ctx, acct, in.ID, arrival); err != nil || emitted2 {
 		t.Fatalf("duplicate event emitted: emitted=%v err=%v", emitted2, err)
 	}
 	// Notification baseline is independent and idempotent.

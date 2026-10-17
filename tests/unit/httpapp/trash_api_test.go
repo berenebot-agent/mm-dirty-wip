@@ -3,11 +3,15 @@ package httpapp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/dellarb/mailmoose/internal/httpapp"
 	"github.com/dellarb/mailmoose/internal/model"
+	"github.com/dellarb/mailmoose/internal/store"
 )
 
 // TestAPIMessageTrashLifecycle exercises the message trash/restore/purge API:
@@ -106,6 +110,56 @@ func TestAPIInboxTrashEmpty(t *testing.T) {
 	}
 	if _, err := svc.Store.GetMessageByID(ctx, u.AccountID, a.ID); err == nil {
 		t.Fatal("trashed message not purged")
+	}
+}
+
+func TestAPIEmptyTrashSingleOperationOverBatchLimit(t *testing.T) {
+	t.Parallel()
+	svc, _, u, _, box := httpFixture(t)
+	h := httpapp.New(svc, nil).Handler()
+	ctx := context.Background()
+	p := model.Principal{AccountID: u.AccountID, Admin: true}
+	for i := 0; i < 501; i++ {
+		id := fmt.Sprintf("bulk-trash-%d", i)
+		m := seedInbound(t, svc, box, id, "<"+id+"@test>", "Trash", "body")
+		if _, _, err := svc.Store.TrashMessage(ctx, p, m.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, key, err := svc.Store.CreateAPIKey(ctx, u.AccountID, "admin", true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", path, nil)
+		r.Header.Set("Authorization", "Bearer "+key)
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, r)
+		return response
+	}
+	path := "/v1/inboxes/" + box.ID + "/trash/empty"
+	rr := request(path)
+	if rr.Code != 202 || strings.Contains(rr.Body.String(), "truncated") {
+		t.Fatalf("async operation: %d %s", rr.Code, rr.Body.String())
+	}
+	var result struct{ Action store.MessageAction }
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Action.Input.Kind != "empty_trash" || rr.Header().Get("Location") != "/v1/actions/"+result.Action.ID {
+		t.Fatalf("missing parent handle: %s", rr.Body.String())
+	}
+	// wait=true must wait for the SAME complete operation, including >500 targets.
+	rr = request(path + "?wait=true")
+	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"purged":501`) {
+		t.Fatalf("wait for whole operation: %d %s", rr.Code, rr.Body.String())
+	}
+	got, err := svc.WaitForInboxAction(ctx, p, result.Action.ID, time.Second)
+	if err != nil || got.State != "done" || got.EmptyTrash.Purged != 501 {
+		t.Fatalf("parent completion: %+v %v", got, err)
+	}
+	if count, err := svc.Store.CountTrash(ctx, p, box.ID); err != nil || count != 0 {
+		t.Fatalf("trash remains: %d %v", count, err)
 	}
 }
 

@@ -5039,3 +5039,71 @@ buffers. Adding immediate re-polling would change load and wakeup semantics acro
 consumers without improving correctness; their established polling/replay loops
 already heal a dropped hint. Timestamp-format migration is likewise deferred
 until the small ordering skew is shown to affect a product behavior.
+
+## D126 — A provider-accepted send is never resent automatically
+
+**Context:** The outbox worker records an attempt as in flight in
+`outbound_delivery_log` (`status='sending'`) and claims a message with a
+leased claim token before the provider call. Neither of those gated the queue
+on their own. If the process crashed, the lease lapsed, or the outcome write
+failed *after* the provider had accepted the request, the message was still an
+ordinary `pending` row: startup recovery cleared the claim, the queue re-claimed
+it, and the mail was delivered a second time. `ReleaseMessageClaim` and the
+domain-config requeue could also clear a *live* claim mid-send, and the
+`MarkSent`/`MarkFailed` commit-error fallback returned *any* existing row for the
+id as a success, masking the ambiguity entirely.
+
+**Decision:** A durable pre-send marker, `send_attempt_state`, is added to both
+outbound queues (`messages` and `outbound_workflow`) by migration `077`. Empty
+means "no provider send in flight (or the last one reached a definitive
+outcome)"; a non-empty value is the claim token of the attempt that started the
+send. The store writes it immediately before the provider call and enforces it
+everywhere the queue could otherwise resend:
+
+- `ClaimNextPending` / `ClaimNextWorkflow` only select rows with an empty marker.
+- `RecoverAbandonedClaims` / `RecoverAbandonedWorkflowClaims` (including the
+  startup recovery the worker runs) never clear the claim of a marked row.
+- `RequeuePendingForDomain` / `RequeuePendingWorkflowForDomain` skip rows that
+  have a live claim or a marker, so a config save lets the in-flight send finish
+  under the config it started with; the new config applies to the next attempt.
+- `ReleaseMessageClaim` / `ReleaseWorkflowClaim` and the `Hold*` paths are
+  no-ops for a marked row, so there is no window in which the row becomes
+  claimable while its provider outcome is unknown.
+- `MarkSent`/`MarkWorkflowSent` and `MarkFailed`/`MarkWorkflowFailed` are the
+  only automatic resolvers, and only for the attempt that owns the marker.
+- On a failed outcome write the worker leaves the marker in place instead of
+  releasing the claim; a panic during the provider call is likewise treated as
+  unresolved.
+
+Unresolved rows are therefore **quarantined**, not retried. `ListQuarantinedSends`
+/ `ListQuarantinedWorkflowSends` surface them for operator review; an operator
+either resends explicitly (`ResolveQuarantinedSend(...resend=true)`, which warns
+that the provider may already have accepted the mail) or discards it terminally.
+`RequeueFailedWithWarning` carries the same duplicate warning for the ordinary
+"retry a failed message" action when a marker is present.
+
+**Corrections to the outcome writes:** an empty claim token now means "this
+caller does not participate in the claim protocol" (tests, non-worker callers)
+and does not arm or enforce a marker, so those callers keep their previous
+behaviour. The `MarkSent`/`MarkFailed` commit-error fallback no longer returns an
+arbitrary existing row: it re-reads and returns success only when the committed
+row actually reflects this attempt (status/provider-message-id for sent,
+attempts/status/last-error for failed); `MarkSent` additionally refuses to flip a
+`failed` or trashed message back to `sent`.
+
+**Accepted risk:** migration `077` backfills every existing row as "no send in
+flight", because a pre-upgrade row cannot have a send started by the new code.
+A send that was in flight across the upgrade is therefore not detected; it
+degrades to the pre-existing behaviour for exactly those rows and no worse.
+
+**Reason:** Email is not idempotent at the provider for the transports MailMoose
+speaks, so "maybe already delivered" must fail closed. Making the in-flight
+marker part of the queued row — written before the provider call and cleared only
+by a definitive outcome or an explicit operator action — is the smallest change
+that closes the crash, lease-expiry, requeue and failed-outcome-write paths at
+once, and it gives operators a review surface instead of a silent resend.
+
+**Complexity:** One additive migration (`077`), the marker column on the two
+queue tables, and local changes in `internal/store/{outbound,workflow,outbound_log}.go`,
+`internal/app/service.go` (arm before send; hold unresolved rows) and a
+test-only fault hook. No new dependency, service or transport.

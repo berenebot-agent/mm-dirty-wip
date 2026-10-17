@@ -114,11 +114,11 @@ func TestEventReplayOmitsLegacyIMAPIdentifiers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _, err := s.RecordRemoteArrival(ctx, u.AccountID, box.ID, store.RemoteArrivalInput{FolderPath: "INBOX", Source: "imap", UIDValidity: 100, UID: 1, RFCMessageID: "<event@example.test>"})
+	arrival, _, err := s.RecordRemoteArrival(ctx, u.AccountID, box.ID, store.RemoteArrivalInput{FolderPath: "INBOX", Source: "imap", UIDValidity: 100, UID: 1, RFCMessageID: "<event@example.test>"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev, inserted, err := s.RecordRemoteArrivalEvent(ctx, u.AccountID, box.ID, a)
+	ev, inserted, err := s.RecordRemoteArrivalEvent(ctx, u.AccountID, box.ID, arrival)
 	if err != nil || !inserted {
 		t.Fatalf("event: %+v %v", ev, err)
 	}
@@ -150,7 +150,7 @@ func TestEventReplayOmitsLegacyIMAPIdentifiers(t *testing.T) {
 			t.Errorf("legacy replay exposes %s", key)
 		}
 	}
-	if replayed.EntityID != a.ID || replayed.Payload["remote"] != true {
+	if replayed.EntityID != arrival.ID || replayed.Payload["remote"] != true {
 		t.Fatal("removing locators changed canonical event identity")
 	}
 }

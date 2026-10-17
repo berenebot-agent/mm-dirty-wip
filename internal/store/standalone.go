@@ -809,6 +809,21 @@ func (s *Store) DeleteRemoteMessage(ctx context.Context, accountID, inboxID, id 
 	if err != nil {
 		return err
 	}
+	if err = deleteRemoteMessageTx(ctx, tx, accountID, inboxID, id); err != nil {
+		return err
+	}
+	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// deleteRemoteMessageTx is the transaction-scoped body of DeleteRemoteMessage, so
+// a caller that already owns a write transaction (a Microsoft delta page, whose
+// every effect must commit or roll back as one generation-guarded unit) can fold
+// the deletion into that same transaction. It never reconciles the storage
+// counters, which the owning transaction does once for the whole page.
+func deleteRemoteMessageTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, id string) error {
 	res, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, id)
 	if err != nil {
 		return err
@@ -816,10 +831,7 @@ func (s *Store) DeleteRemoteMessage(ctx context.Context, accountID, inboxID, id 
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func nullStringPtr(v *string) any {

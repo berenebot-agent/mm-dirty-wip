@@ -2047,6 +2047,13 @@ func outcomeContext(ctx context.Context) (context.Context, context.CancelFunc) {
 // token minted by ClaimNextPending, so a stale attempt cannot deliver (or
 // record an outcome for) a message re-claimed elsewhere; an empty claim skips
 // the verification and is used by tests and callers outside the worker.
+//
+// Safety contract: a message whose provider send was started but never resolved
+// is never resent automatically. The store's durable pre-send marker (see
+// migration077) is armed before the provider call and is cleared only by a
+// definitive outcome (MarkSent/MarkFailed) or by an explicit operator action, so
+// a crash, a lease expiry or a failed outcome write leaves the message held for
+// operator review rather than requeued.
 func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) error {
 	m, err := s.Store.GetMessageByID(ctx, accountID, msgID)
 	if err != nil {
@@ -2121,6 +2128,19 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) e
 		}
 		outbound.Attachments = atts
 	}
+	// Arm the durable pre-send marker first: from this commit onward the queue
+	// refuses to claim the message, so a crash or a failed outcome write cannot
+	// let the provider-accepted sends be resent. The marker is written in its own
+	// short transaction (it must be durable before the provider call, not merely
+	// pending in a transaction that the provider send would hold open). A marker
+	// that belongs to another attempt means the claim was lost mid-flight: the
+	// message is not ours and must not be sent.
+	armCtx, cancelArm := outcomeContext(ctx)
+	err = s.Store.BeginMessageSend(armCtx, m.AccountID, m.ID, claim)
+	cancelArm()
+	if err != nil {
+		return err
+	}
 	// Record the attempt as in flight before the provider call, so an
 	// interrupted send (restart, crash or dropped connection) leaves a durable
 	// trace instead of looping as pending with an empty sending log. This is a
@@ -2129,6 +2149,9 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) e
 	err = s.Store.RecordDeliveryStarted(startedCtx, m.AccountID, m.ID, sending.Provider)
 	cancelStarted()
 	if err != nil {
+		// The marker is already durable, so the message is safely parked for
+		// operator review; return the error rather than sending without the
+		// in-flight trace.
 		return err
 	}
 	// The provider send uses the delivery context only; recording the outcome
@@ -2162,12 +2185,12 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) e
 			s.Log.Warn("outbox claim taken over during send; send outcome unknown", "message_id", m.ID, "to", m.To)
 			return nil
 		}
-		// The outcome write failed outright: release the claim so the message
-		// is retried after the normal backoff instead of idling until the
-		// lease expires with the claim still attached.
-		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
-		defer cancelRelease()
-		_ = s.Store.ReleaseMessageClaim(releaseCtx, m.ID, claim)
+		// The outcome write failed outright. The durable pre-send marker keeps
+		// the message out of the claim pool, so it can never be resent
+		// automatically; ReleaseMessageClaim is deliberately a no-op for a row
+		// that still carries a marker, so there is no window in which the
+		// message becomes claimable again. The row waits for operator review
+		// (ListQuarantinedSends) instead.
 		return err
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2259,6 +2282,16 @@ func (s *Service) failMessagePanic(ctx context.Context, accountID, msgID, claim 
 	// Only a still-pending message is ours to fail; a concurrent delivery may
 	// have already resolved it.
 	if m.Direction != "outbound" || m.Status != "pending" {
+		return nil
+	}
+	// A panic during the provider call is an unresolved send: the provider may
+	// already have accepted the mail, so it must not be recorded as a known
+	// failure (which would clear the pre-send marker and reschedule a resend).
+	// Leave the marker in place for operator review instead.
+	if inFlight, ferr := s.Store.MessageSendInFlight(ctx, accountID, msgID); ferr != nil {
+		return ferr
+	} else if inFlight {
+		s.Log.Warn("outbox delivery panicked with a send in flight; outcome unknown", "message_id", msgID)
 		return nil
 	}
 	return s.fail(ctx, m, cause, m.Provider, claim)
@@ -2397,6 +2430,14 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, cl
 		}
 		outbound.Attachments = atts
 	}
+	// Arm the durable pre-send marker first so a crash or a failed outcome
+	// write cannot let a provider-accepted handoff be resent. See Deliver.
+	armCtx, cancelArm := outcomeContext(ctx)
+	err = s.Store.BeginWorkflowSend(armCtx, accountID, workflowID, claim)
+	cancelArm()
+	if err != nil {
+		return err
+	}
 	// Record the handoff as in flight before the provider call, so an
 	// interrupted send leaves a durable trace in the domain log. This is a fast
 	// pre-send write, so it gets its own bounded context.
@@ -2427,12 +2468,10 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, cl
 			s.Log.Warn("workflow claim taken over during send; send outcome unknown", "workflow_id", workflowID)
 			return nil
 		}
-		// The outcome write failed outright: release the claim so the job is
-		// retried after the normal backoff instead of idling until the lease
-		// expires with the claim still attached.
-		releaseCtx, cancelRelease := context.WithTimeout(context.WithoutCancel(ctx), outcomeTimeout)
-		defer cancelRelease()
-		_ = s.Store.ReleaseWorkflowClaim(releaseCtx, workflowID, claim)
+		// The outcome write failed outright. The durable pre-send marker keeps
+		// the job out of the claim pool (ReleaseWorkflowClaim is a no-op while
+		// a marker is present), so it can never be resent automatically; it
+		// waits for operator review.
 		return err
 	}
 	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2495,7 +2534,43 @@ func (s *Service) failWorkflowPanic(ctx context.Context, accountID, workflowID, 
 	if w.Status != model.WorkflowPending {
 		return nil
 	}
+	// A panic during the provider call is an unresolved send; see
+	// failMessagePanic.
+	if inFlight, ferr := s.Store.WorkflowSendInFlight(ctx, accountID, workflowID); ferr != nil {
+		return ferr
+	} else if inFlight {
+		s.Log.Warn("workflow delivery panicked with a send in flight; outcome unknown", "workflow_id", workflowID)
+		return nil
+	}
 	return s.failWorkflow(ctx, w, cause, w.Provider, claim)
+}
+
+// QuarantinedSends returns the account's outbound messages whose provider send
+// was started but never reached a definitive outcome. They are held out of the
+// queue (never resent automatically) and surfaced to an operator for explicit
+// resolution. See ResolveQuarantinedSend.
+func (s *Service) QuarantinedSends(ctx context.Context, accountID string, limit int) ([]store.QuarantinedSend, error) {
+	return s.Store.ListQuarantinedSends(ctx, accountID, limit)
+}
+
+// QuarantinedWorkflowSends is QuarantinedSends for the workflow queue.
+func (s *Service) QuarantinedWorkflowSends(ctx context.Context, accountID string, limit int) ([]store.QuarantinedWorkflowSend, error) {
+	return s.Store.ListQuarantinedWorkflowSends(ctx, accountID, limit)
+}
+
+// ResolveQuarantinedSend is the operator's explicit resolution of a quarantined
+// send: resend=true clears the marker and requeues the message (the provider may
+// already have accepted it, so the returned warning must be surfaced);
+// resend=false discards the unresolved send as a terminal failure with reason.
+func (s *Service) ResolveQuarantinedSend(ctx context.Context, p model.Principal, messageID, reason string, resend bool) (string, error) {
+	if err := s.Store.ResolveQuarantinedSend(ctx, p, messageID, reason, resend); err != nil {
+		return "", err
+	}
+	if !resend {
+		return "", nil
+	}
+	s.wakeOutbox()
+	return "the provider may already have accepted this message; resending it can deliver a duplicate", nil
 }
 
 // redactWorkflow removes approval control tokens from a terminal workflow

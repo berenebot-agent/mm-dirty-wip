@@ -111,6 +111,9 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		// stays pending keeps the short per-attempt backoff instead, which the
 		// claim query honours directly.
 		next := time.Now().Add(time.Duration(a.Attempts) * time.Second)
+		if a.Input.Kind == "empty_trash" {
+			next = time.Now().Add(emptyTrashTurnDelay)
+		}
 		if state == "failed" {
 			next = time.Now().Add(recheckInterval)
 		}
@@ -121,6 +124,13 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 		}
 		w.svc.Hub.Publish(model.Event{AccountID: a.AccountID, InboxID: a.InboxID, Type: "actions.changed", Transient: true})
 	}()
+	if a.Input.Kind == "empty_trash" {
+		state, reason = w.advanceEmptyTrash(ctx, a)
+		if state == "pending" || state == "done" {
+			reason = ""
+		}
+		return
+	}
 	err := w.apply(ctx, a)
 	if err == nil {
 		return
@@ -163,6 +173,9 @@ func (w *ActionWorker) execute(ctx context.Context, a store.MessageAction) {
 }
 
 func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
+	if a.Input.TrashTarget != nil {
+		return w.purgeTrashTarget(ctx, a)
+	}
 	p := model.Principal{AccountID: a.AccountID, Admin: true}
 	box, err := w.svc.Store.GetInbox(ctx, p, a.InboxID)
 	if err != nil {
@@ -296,6 +309,9 @@ func (w *ActionWorker) apply(ctx context.Context, a store.MessageAction) error {
 
 // EnqueueInboxAction is the single submission surface shared by REST and UI.
 func (s *Service) EnqueueInboxAction(ctx context.Context, p model.Principal, inboxID, messageID string, in store.MessageActionInput) (store.MessageAction, error) {
+	if in.TrashTarget != nil {
+		return store.MessageAction{}, store.ErrConflict
+	}
 	if !p.CanAssist(inboxID) {
 		return store.MessageAction{}, store.ErrForbidden
 	}
@@ -441,6 +457,11 @@ func (w *ActionWorker) recheckFailed(ctx context.Context) {
 // action should be requeued. An error means the state could not be determined and
 // the action's next recheck should be deferred.
 func (w *ActionWorker) recheckOne(ctx context.Context, a store.MessageAction) (bool, error) {
+	// Bulk purge locators can exist without any cache row. Cache absence must
+	// never be mistaken for provider-confirmed deletion; leave these for review.
+	if a.Input.Kind == "empty_trash" || a.Input.TrashTarget != nil {
+		return false, nil
+	}
 	// A patch that only sets a flag is absolute state: repeating it cannot
 	// duplicate an effect and is safe to retry once no newer action supersedes
 	// it. A spam patch is the exception — against a standalone mailbox it is a

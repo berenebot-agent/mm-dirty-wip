@@ -430,15 +430,15 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 		}
 		selected := findOne(rows, b.ConnectionID)
 		if selected == nil || selected.Key != selector {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "One connection revoked or expired; reconnect the original account in One, then save this inbox's key", b.Revision)
+			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", "One connection revoked or expired; reconnect the original account in One, then save this inbox's key", b.Revision)
 			return nil, "", oneError(model.ErrKindAuth, "One connection requires attention")
 		}
 		profile, e := c.Gmail(selector, nil, nil).Profile(ctx, "")
 		if e != nil || !strings.EqualFold(profile.EmailAddress, b.GmailEmail) {
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "attention", "One connection's account or permissions changed; reconnect the original account in One", b.Revision)
+			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", "One connection's account or permissions changed; reconnect the original account in One", b.Revision)
 			return nil, "", oneError(model.ErrKindAuth, "One connection's account or permissions changed")
 		}
-		_ = m.Service.Store.SetOneHealth(ctx, account, inbox, "active", "", b.Revision)
+		_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "active", "", b.Revision)
 		m.refreshOneDisplayName(ctx, c, selector, account, inbox, b.GmailEmail)
 	}
 	check := func(ctx context.Context) error {
@@ -455,7 +455,7 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 			if mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden || mb.Kind == model.ErrKindUnsupported {
 				state = "attention"
 			}
-			_ = m.Service.Store.SetOneHealth(ctx, account, inbox, state, mb.Message, b.Revision)
+			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, state, mb.Message, b.Revision)
 		}
 	}
 	return c.Gmail(selector, check, status), "", nil

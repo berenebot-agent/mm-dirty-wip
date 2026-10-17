@@ -119,7 +119,7 @@ var routeIOByKey = map[string]routeIO{
 	"POST /v1/messages/{id}/seen":       {Request: "SeenBody", Response: "MessageActionResult", Query: []Param{qWait}},
 	"POST /v1/messages/{id}/restore":    {Response: "Message", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
 	"DELETE /v1/messages/{id}/purge":    {Response: "MessageActionResult", Query: []Param{qWait}},
-	"POST /v1/inboxes/{id}/trash/empty": {Query: []Param{qWait}},
+	"POST /v1/inboxes/{id}/trash/empty": {Response: "EmptyTrashResult", Query: []Param{qWait}, Alternates: []AlternateResponse{queuedAction}},
 
 	// Attachments.
 	"GET /v1/actions":                          {},

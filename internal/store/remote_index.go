@@ -957,17 +957,8 @@ func (s *Store) SetRemoteMessageLabels(ctx context.Context, accountID, inboxID, 
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id=?`, accountID, inboxID, messageID); err != nil {
+	if err = setRemoteMessageLabelsTx(ctx, tx, accountID, inboxID, messageID, clean); err != nil {
 		return nil, err
-	}
-	now := nowText()
-	for _, label := range clean {
-		// A label is shared across the account's remote mailboxes only when the
-		// same account/inbox pair is used; the unique key is per message+label.
-		if _, err = tx.ExecContext(ctx, `INSERT INTO inbox_remote_labels(id,account_id,inbox_id,remote_message_id,label,created_at) VALUES(?,?,?,?,?,?)`,
-			idgen.New("rlb"), accountID, inboxID, messageID, label, now); err != nil {
-			return nil, err
-		}
 	}
 	if err = syncRemoteMetadataStorageTx(ctx, tx, accountID, inboxID, metaBefore); err != nil {
 		return nil, err
@@ -976,6 +967,34 @@ func (s *Store) SetRemoteMessageLabels(ctx context.Context, accountID, inboxID, 
 		return nil, err
 	}
 	return clean, nil
+}
+
+// setRemoteMessageLabelsTx is the transaction-scoped body of
+// SetRemoteMessageLabels: it replaces a cached remote message's labels, reporting
+// ErrNotFound when the message row is absent. The labels must already be
+// normalized. It never reconciles the storage counters, which the owning
+// transaction does once for the whole unit of work.
+func setRemoteMessageLabelsTx(ctx context.Context, tx *sql.Tx, accountID, inboxID, messageID string, clean []string) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM inbox_remote_messages WHERE account_id=? AND inbox_id=? AND id=?`, accountID, inboxID, messageID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM inbox_remote_labels WHERE account_id=? AND inbox_id=? AND remote_message_id=?`, accountID, inboxID, messageID); err != nil {
+		return err
+	}
+	now := nowText()
+	for _, label := range clean {
+		// A label is shared across the account's remote mailboxes only when the
+		// same account/inbox pair is used; the unique key is per message+label.
+		if _, err := tx.ExecContext(ctx, `INSERT INTO inbox_remote_labels(id,account_id,inbox_id,remote_message_id,label,created_at) VALUES(?,?,?,?,?,?)`,
+			idgen.New("rlb"), accountID, inboxID, messageID, label, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // AddRemoteMessageLabels merges labels onto a cached remote message.

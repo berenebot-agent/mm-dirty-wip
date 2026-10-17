@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -281,13 +280,6 @@ func (s *Server) pendingMessageOverlay(r *http.Request, data *pageData) {
 	}
 }
 
-// emptyTrashBatch bounds how many purge jobs a single empty-trash request
-// queues. Every job is its own write transaction against the single write
-// connection, so an inbox with a large trash folder would otherwise pin the
-// connection (and the UI POST) for minutes. The extra trash beyond the cap
-// drains on later empty-trash calls, so nothing is lost, only deferred.
-const emptyTrashBatch = 500
-
 func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bool) {
 	p := principal(r)
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
@@ -299,78 +291,42 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 		writeError(w, 403, "forbidden")
 		return
 	}
-	// Fetch one beyond the work cap so the response can accurately tell the
-	// caller whether another batch remains, without materializing the whole
-	// trash folder in memory.
-	ids := []string{}
-	if box.Kind == model.InboxKindStandalone {
-		folder, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash)
-		if !ok {
-			writeError(w, 409, "no Trash folder mapped")
-			return
-		}
-		msgs, e := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, box.ID, store.RemoteMessageFilter{
-			FolderPath: folder.Path,
-			Limit:      emptyTrashBatch + 1,
-		})
-		if e != nil {
-			mapStoreError(w, e)
-			return
-		}
-		for _, m := range msgs {
-			ids = append(ids, m.ID)
-		}
-	} else {
-		ids, err = s.Service.Store.AllMessageIDsLimit(r.Context(), p, store.MessageFilter{InboxID: box.ID, Trashed: true, IncludeSpam: true}, emptyTrashBatch+1)
-		if err != nil {
-			mapStoreError(w, err)
-			return
-		}
+	// The parent owns discovery and batching; the request never enumerates an
+	// entire mailbox or waits for provider calls merely to submit the operation.
+	a, err := s.Service.Store.EnqueueEmptyTrash(r.Context(), p, box.ID)
+	if err != nil {
+		mapStoreError(w, err)
+		return
 	}
-	truncated := false
-	if len(ids) > emptyTrashBatch {
-		ids = ids[:emptyTrashBatch]
-		truncated = true
-	}
-	jobs := []store.MessageAction{}
-	for _, id := range ids {
-		a, e := s.Service.EnqueueInboxAction(r.Context(), p, box.ID, id, store.MessageActionInput{Kind: "purge"})
-		if e != nil {
-			mapStoreError(w, e)
-			return
-		}
-		jobs = append(jobs, a)
-	}
-	if truncated {
-		s.Service.Log.Info("empty trash batch truncated", "inbox_id", box.ID, "queued", len(jobs))
+	if s.Service.ActionWaker != nil {
+		s.Service.ActionWaker.Wake()
 	}
 	if ui {
-		notice := queuedNotice("purge", len(jobs), "")
-		if truncated {
-			notice += " Batch capped at " + strconv.Itoa(emptyTrashBatch) + ": after this batch finishes, empty trash again to continue."
+		notice := "Empty Trash queued. Finding messages, then deleting them in background batches; check Queue for progress."
+		if a.State == "failed" || a.State == "ambiguous" {
+			notice = "Empty Trash needs attention. Check Queue before retrying or starting another operation."
 		}
 		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape(notice), 303)
 		return
 	}
-	if truncated {
-		writeJSON(w, 202, map[string]any{"queued": true, "actions": jobs, "truncated": true, "remaining": true})
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Location", "/v1/actions/"+a.ID)
+	if a.State == "failed" || a.State == "ambiguous" {
+		writeJSON(w, 409, map[string]any{"action": a})
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {
-		deadline := time.Now().Add(30 * time.Second)
-		for _, a := range jobs {
-			settled, e := s.Service.WaitForInboxAction(r.Context(), p, a.ID, time.Until(deadline))
-			if e != nil {
-				writeJSON(w, 504, map[string]any{"actions": jobs})
-				return
-			}
-			if settled.State != "done" {
-				writeJSON(w, 409, map[string]any{"action": settled})
-				return
-			}
+		settled, e := s.Service.WaitForInboxAction(r.Context(), p, a.ID, 30*time.Second)
+		if e != nil {
+			writeJSON(w, 504, map[string]any{"action": settled, "actions": []store.MessageAction{settled}})
+			return
 		}
-		writeJSON(w, 200, map[string]int{"purged": len(jobs)})
+		if settled.State != "done" {
+			writeJSON(w, 409, map[string]any{"action": settled})
+			return
+		}
+		writeJSON(w, 200, map[string]any{"purged": settled.EmptyTrash.Purged, "action": settled})
 		return
 	}
-	writeJSON(w, 202, map[string]any{"queued": true, "actions": jobs})
+	writeJSON(w, 202, map[string]any{"queued": true, "action": a, "actions": []store.MessageAction{a}})
 }

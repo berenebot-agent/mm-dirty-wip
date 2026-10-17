@@ -77,6 +77,14 @@ func (s *Store) SetOneHealth(ctx context.Context, account, inbox, status, messag
 	return err
 }
 
+// SetOneRequestHealth records request feedback only while the binding is still
+// active. A request queued before a disconnect must not replace its authoritative
+// operator detail (or mark it healthy again).
+func (s *Store) SetOneRequestHealth(ctx context.Context, account, inbox, status, message string, revision int64) error {
+	_, err := s.write.ExecContext(ctx, `UPDATE inbox_one_bindings SET status=?,last_error=?,last_checked_at=? WHERE account_id=? AND inbox_id=? AND revision=? AND status='active'`, status, message, nowText(), account, inbox, revision)
+	return err
+}
+
 func (s *Store) GmailSync(ctx context.Context, account, inbox string) (GoogleConnection, error) {
 	var c GoogleConnection
 	err := s.read.QueryRowContext(ctx, `SELECT inbox_id,account_id,history_id,backfill_page,backfill_done,backfill_offset,backfill_snapshot FROM inbox_gmail_sync WHERE account_id=? AND inbox_id=?`, account, inbox).Scan(&c.InboxID, &c.AccountID, &c.HistoryID, &c.BackfillPage, &c.BackfillDone, &c.BackfillOffset, &c.BackfillSnapshot)

@@ -259,6 +259,11 @@ func migrations(dataDir string) []migration {
 		// notification jobs), so it has no schema state to detect: an
 		// interrupted run is simply repeated, and the UPDATE is idempotent.
 		{version: "076", sql: migration076},
+		{version: "077", sql: migration077, detect: allOf(
+			columnAdded("messages", "send_attempt_state"),
+			columnAdded("outbound_workflow", "send_attempt_state"),
+		)},
+		{version: "078", sql: migration078, detect: allOf(tableExists("empty_trash_operations"), tableExists("empty_trash_targets"))},
 	}
 }
 

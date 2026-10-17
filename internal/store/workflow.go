@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/idgen"
+	"github.com/dellarb/mailmoose/internal/limits"
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
@@ -42,6 +43,11 @@ type Workflow struct {
 	CreatedAt         time.Time
 	SentAt            *time.Time
 	TerminalAt        *time.Time
+	// SendAttemptState is the durable pre-send marker: empty means no provider
+	// send is in flight (or the last one reached a definitive outcome), and a
+	// non-empty value is the claim token of the attempt that started the send.
+	// See migration077.
+	SendAttemptState string
 }
 
 // WorkflowRecord is the durable content of a new workflow job. NewSendRequest,
@@ -61,14 +67,14 @@ type WorkflowRecord struct {
 	NewSendRequest *SendRequestInsert
 }
 
-const workflowSelect = `SELECT id,account_id,inbox_id,request_id,kind,provider,from_name,from_address,to_json,cc_json,bcc_json,subject,text_body,html_body,raw_path,size_bytes,status,attempts,last_error,next_attempt_at,claim_owner,claim_expires_at,provider_message_id,redacted,created_at,sent_at,terminal_at FROM outbound_workflow`
+const workflowSelect = `SELECT id,account_id,inbox_id,request_id,kind,provider,from_name,from_address,to_json,cc_json,bcc_json,subject,text_body,html_body,raw_path,size_bytes,status,attempts,last_error,next_attempt_at,claim_owner,claim_expires_at,provider_message_id,redacted,created_at,sent_at,terminal_at,send_attempt_state FROM outbound_workflow`
 
 func scanWorkflow(row interface{ Scan(...any) error }) (Workflow, error) {
 	var w Workflow
 	var to, cc, bcc, next, claimExp, created string
 	var sent, terminal sql.NullString
 	var redacted int
-	err := row.Scan(&w.ID, &w.AccountID, &w.InboxID, &w.RequestID, &w.Kind, &w.Provider, &w.From.Name, &w.From.Address, &to, &cc, &bcc, &w.Subject, &w.Text, &w.HTML, &w.RawPath, &w.SizeBytes, &w.Status, &w.Attempts, &w.LastError, &next, &w.ClaimOwner, &claimExp, &w.ProviderMessageID, &redacted, &created, &sent, &terminal)
+	err := row.Scan(&w.ID, &w.AccountID, &w.InboxID, &w.RequestID, &w.Kind, &w.Provider, &w.From.Name, &w.From.Address, &to, &cc, &bcc, &w.Subject, &w.Text, &w.HTML, &w.RawPath, &w.SizeBytes, &w.Status, &w.Attempts, &w.LastError, &next, &w.ClaimOwner, &claimExp, &w.ProviderMessageID, &redacted, &created, &sent, &terminal, &w.SendAttemptState)
 	if err != nil {
 		return w, err
 	}
@@ -180,7 +186,7 @@ func (s *Store) ClaimNextWorkflow(ctx context.Context, now time.Time, owner stri
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM outbound_workflow WHERE status='pending' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM outbound_workflow WHERE status='pending' AND send_attempt_state='' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", "", nil
 	}
@@ -200,12 +206,13 @@ func (s *Store) ClaimNextWorkflow(ctx context.Context, now time.Time, owner stri
 // ReleaseWorkflowClaim clears a claim held by the given claim token so the job
 // can be retried immediately instead of waiting for the lease to expire. owner
 // is the claim token minted by ClaimNextWorkflow (an empty owner releases
-// nothing).
+// nothing). A job carrying a durable pre-send marker is a no-op: its claim is
+// the record of the unresolved in-flight send and must not be dropped.
 func (s *Store) ReleaseWorkflowClaim(ctx context.Context, id, owner string) error {
 	if owner == "" {
 		return nil
 	}
-	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
+	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending' AND send_attempt_state=''`, id, owner)
 	return err
 }
 
@@ -219,18 +226,155 @@ func (s *Store) WorkflowClaimOwner(ctx context.Context, accountID, id string) (s
 	return owner, err
 }
 
-// RecoverAbandonedWorkflowClaims clears claims left by a previous process.
+// WorkflowSendInFlight reports whether a workflow job currently carries an
+// unresolved pre-send marker.
+func (s *Store) WorkflowSendInFlight(ctx context.Context, accountID, id string) (bool, error) {
+	var state string
+	err := s.read.QueryRowContext(ctx, `SELECT send_attempt_state FROM outbound_workflow WHERE id=? AND account_id=?`, id, accountID).Scan(&state)
+	if err == sql.ErrNoRows {
+		return false, ErrNotFound
+	}
+	return state != "", err
+}
+
+// LatestWorkflowForInbox returns the most recently created workflow job for an
+// inbox without a principal. It exists for tests and internal callers that need
+// to locate the job a commit just enqueued. Ordering is by rowid: created_at is
+// stored to second precision, so several jobs committed in the same second tie
+// and the insertion order is the only reliable recency signal.
+func (s *Store) LatestWorkflowForInbox(ctx context.Context, accountID, inboxID string) (Workflow, error) {
+	w, err := scanWorkflow(s.read.QueryRowContext(ctx, workflowSelect+` WHERE account_id=? AND inbox_id=? ORDER BY rowid DESC LIMIT 1`, accountID, inboxID))
+	if err == sql.ErrNoRows {
+		return w, ErrNotFound
+	}
+	return w, err
+}
+
+// QuarantinedWorkflowSend is a pending workflow job whose provider handoff
+// started but never reached a definitive outcome. See QuarantinedSend.
+type QuarantinedWorkflowSend struct {
+	WorkflowID  string
+	InboxID     string
+	RequestID   string
+	Kind        string
+	Subject     string
+	Provider    string
+	Attempts    int
+	LastError   string
+	ClaimOwner  string
+	ClaimExpire time.Time
+	CreatedAt   time.Time
+}
+
+// ListQuarantinedWorkflowSends returns the account's pending workflow jobs with
+// an unresolved pre-send marker, for operator review.
+func (s *Store) ListQuarantinedWorkflowSends(ctx context.Context, accountID string, limit int) ([]QuarantinedWorkflowSend, error) {
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT id,inbox_id,request_id,kind,subject,provider,attempts,last_error,claim_owner,claim_expires_at,created_at FROM outbound_workflow WHERE account_id=? AND status='pending' AND send_attempt_state<>'' ORDER BY created_at ASC LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []QuarantinedWorkflowSend{}
+	for rows.Next() {
+		var q QuarantinedWorkflowSend
+		var claimExp, created string
+		if err = rows.Scan(&q.WorkflowID, &q.InboxID, &q.RequestID, &q.Kind, &q.Subject, &q.Provider, &q.Attempts, &q.LastError, &q.ClaimOwner, &claimExp, &created); err != nil {
+			return nil, err
+		}
+		q.ClaimExpire = parseTime(claimExp)
+		q.CreatedAt = parseTime(created)
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// ResolveQuarantinedWorkflowSend is the operator's explicit resolution of a
+// quarantined workflow handoff: allowResend true clears the marker and returns
+// the job to the queue (the provider may already have accepted it); false marks
+// it terminally failed with reason, resolving the linked request notification.
+func (s *Store) ResolveQuarantinedWorkflowSend(ctx context.Context, accountID, id, reason string, allowResend bool) error {
+	if allowResend {
+		res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET send_attempt_state='',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state<>''`, id, accountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	w, err := getWorkflowTx(ctx, tx, accountID, id)
+	if err != nil {
+		return err
+	}
+	if w.Status != model.WorkflowPending || w.SendAttemptState == "" {
+		return ErrConflict
+	}
+	now := nowText()
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error=?,next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='',terminal_at=? WHERE id=? AND account_id=?`, reason, now, id, accountID); err != nil {
+		return err
+	}
+	if w.RequestID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE draft_send_requests SET notification_status=?,updated_at=? WHERE id=? AND account_id=?`, model.NotificationFailed, now, w.RequestID, accountID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// BeginWorkflowSend durably records that this attempt is about to hand the
+// workflow job to the provider, mirroring BeginMessageSend. See migration077.
+func (s *Store) BeginWorkflowSend(ctx context.Context, accountID, id, claim string) error {
+	if claim == "" {
+		return nil
+	}
+	if err := consumeOutboundWriteFault("BeginWorkflowSend", id); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET send_attempt_state=? WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state='' AND `+sendClaimClause, claim, id, accountID, claim)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	var owner, state, status string
+	if err := s.read.QueryRowContext(ctx, `SELECT claim_owner,send_attempt_state,status FROM outbound_workflow WHERE id=? AND account_id=?`, id, accountID).Scan(&owner, &state, &status); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if claimTaken(owner, claim) || (state != "" && state != claim) {
+		return ErrClaimTaken
+	}
+	return ErrNotFound
+}
+
+// RecoverAbandonedWorkflowClaims clears claims left by a previous process. A job
+// carrying a durable pre-send marker is deliberately excluded, so an unresolved
+// provider send is never made claimable (and resent) by startup recovery.
 func (s *Store) RecoverAbandonedWorkflowClaims(ctx context.Context) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!=''`)
+	_, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!='' AND send_attempt_state=''`)
 	return err
 }
 
 // HoldWorkflow defers a pending workflow job without counting a retry. It is
 // used when a domain has no outbound provider yet. claim guards against a
 // stale attempt holding an expired claim; an empty token can update only an
-// unclaimed workflow, never bypass a live claim.
+// unclaimed workflow, never bypass a live claim. A job carrying a durable
+// pre-send marker is never held: its claim is left attached so ownership is not
+// dropped on a job whose provider outcome is unknown.
 func (s *Store) HoldWorkflow(ctx context.Context, accountID, id, reason string, next time.Time, claim string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND (claim_owner=? OR claim_owner='')`, reason, timeText(next), id, accountID, claim)
+	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state='' AND `+sendClaimClause, reason, timeText(next), id, accountID, claim)
 	if err != nil {
 		return err
 	}
@@ -244,6 +388,9 @@ func (s *Store) HoldWorkflow(ctx context.Context, accountID, id, reason string, 
 // the approval expiry clock, so the token is only time-bounded once the
 // approver has actually been notified. It returns the draft events to publish.
 func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMessageID, provider string, tokenExpiry time.Duration, claim string) ([]model.Event, error) {
+	if err := consumeOutboundWriteFault("MarkWorkflowSent", id); err != nil {
+		return nil, err
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -262,8 +409,13 @@ func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMes
 	if claimTaken(w.ClaimOwner, claim) {
 		return nil, ErrClaimTaken
 	}
+	// The pre-send marker, when present, must belong to this attempt; a marker
+	// left by a different, later attempt means this outcome is stale.
+	if w.SendAttemptState != "" && w.SendAttemptState != claim {
+		return nil, ErrClaimTaken
+	}
 	now := nowText()
-	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='sent',provider=?,provider_message_id=?,sent_at=?,terminal_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, provider, providerMessageID, now, now, id, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='sent',provider=?,provider_message_id=?,sent_at=?,terminal_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='' WHERE id=? AND account_id=? AND status='pending'`, provider, providerMessageID, now, now, id, accountID); err != nil {
 		return nil, err
 	}
 	if err = s.insertWorkflowAttemptTx(ctx, tx, accountID, w.InboxID, provider, id, "sent", providerMessageID, ""); err != nil {
@@ -290,6 +442,9 @@ func (s *Store) MarkWorkflowSent(ctx context.Context, accountID, id, providerMes
 // returned to pending with a next_attempt_at; otherwise it is terminal and the
 // request notification status becomes 'failed' so the UI can surface it.
 func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider, claim string) ([]model.Event, error) {
+	if err := consumeOutboundWriteFault("MarkWorkflowFailed", id); err != nil {
+		return nil, err
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -299,9 +454,19 @@ func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText s
 	if err != nil {
 		return nil, err
 	}
+	// A failure may be recorded for a pending job (a retry or a terminal
+	// failure) or re-recorded for an already-failed one (an inert duplicate
+	// outcome). A sent job must not be dragged back into the failure path.
+	if w.Status != model.WorkflowPending && w.Status != model.WorkflowFailed {
+		return nil, ErrConflict
+	}
 	// A stale attempt's failure must not clear another attempt's live claim;
 	// that attempt owns the outcome now, so this write is skipped entirely.
 	if claimTaken(w.ClaimOwner, claim) {
+		return nil, ErrClaimTaken
+	}
+	// The pre-send marker, when present, must belong to this attempt.
+	if w.SendAttemptState != "" && w.SendAttemptState != claim {
 		return nil, ErrClaimTaken
 	}
 	attempts := w.Attempts + 1
@@ -316,11 +481,11 @@ func (s *Store) MarkWorkflowFailed(ctx context.Context, accountID, id, errText s
 	}
 	now := nowText()
 	if terminal {
-		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status=?,attempts=?,last_error=?,next_attempt_at='',claim_owner='',claim_expires_at='',terminal_at=? WHERE id=? AND account_id=?`, status, attempts, errText, now, id, accountID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status=?,attempts=?,last_error=?,next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='',terminal_at=? WHERE id=? AND account_id=?`, status, attempts, errText, now, id, accountID); err != nil {
 			return nil, err
 		}
 	} else {
-		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='',send_attempt_state='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
 			return nil, err
 		}
 	}
@@ -412,8 +577,11 @@ func (s *Store) SweepWorkflows(ctx context.Context, cutoff time.Time) ([]string,
 
 // RequeuePendingWorkflowForDomain resets every pending workflow job for a domain
 // so it retries immediately after the domain's sending configuration is saved.
+// A job with a send in flight (a live claim or a durable pre-send marker) is
+// never touched: the active send finishes under the configuration it started
+// with, and the new configuration applies to a later attempt.
 func (s *Store) RequeuePendingWorkflowForDomain(ctx context.Context, accountID, domainID string) (int64, error) {
-	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND status='pending' AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)`, accountID, domainID, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE outbound_workflow SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND status='pending' AND send_attempt_state='' AND claim_owner='' AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)`, accountID, domainID, accountID)
 	if err != nil {
 		return 0, err
 	}

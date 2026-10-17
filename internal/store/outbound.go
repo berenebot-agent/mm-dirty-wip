@@ -19,6 +19,14 @@ import (
 // ambiguous.
 var ErrClaimTaken = errors.New("outbox claim taken over by another attempt")
 
+// quarantinedReasonPrefix marks a terminal failure that a quarantined send was
+// resolved with: the provider may already have accepted the message, so a later
+// manual retry is only offered with an explicit duplicate warning. It is a plain
+// message rather than an exported state because the durable "was this ever
+// attempted" fact is the send_attempt_state marker; the prefix survives the
+// marker's own clearing so an operator retry can still be warned.
+const quarantinedReasonPrefix = "uncertain delivery: "
+
 // claimTaken reports whether the stored claim owner invalidates the caller's
 // claim. An exact match, or an empty owner (the claim was released without a
 // replacement attempt taking over, for example by a requeue or a startup
@@ -35,13 +43,22 @@ func ClaimTaken(owner, claim string) bool {
 	return owner != "" && (claim == "" || owner != claim)
 }
 
+// sendClaimClause is the ownership predicate shared by the pre-send marker
+// write and the outcome writes. An exact match, or an empty stored owner (the
+// claim was released without a replacement attempt), is owned by the caller;
+// any other non-empty owner means a live re-claim. It mirrors ClaimTaken.
+const sendClaimClause = `(claim_owner=? OR claim_owner='')`
+
 // HoldPending records why a pending message is not being delivered and defers
 // its next attempt without counting a retry. It is used when a domain has no
 // outbound provider yet: the message stays queued and delivers once a provider
 // is assigned. claim guards against a stale attempt holding an expired claim;
 // an empty token can update only an unclaimed message, never bypass a live claim.
+// A message carrying a durable pre-send marker is never held: its claim is left
+// attached so ownership is not silently dropped on a row whose provider outcome
+// is unknown (it waits for operator review instead).
 func (s *Store) HoldPending(ctx context.Context, accountID, id, reason string, next time.Time, claim string) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND (claim_owner=? OR claim_owner='')`, reason, timeText(next), id, accountID, claim)
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state='' AND `+sendClaimClause, reason, timeText(next), id, accountID, claim)
 	if err != nil {
 		return err
 	}
@@ -182,7 +199,15 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 		return model.Message{}, model.Event{}, err
 	}
 	if err = tx.Commit(); err != nil {
-		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), r.Inbox.AccountID, id); gerr == nil {
+		// A commit error does not mean the transaction rolled back: SQLite can
+		// report an error after the write was durably applied. The enqueue is
+		// keyed on a freshly minted id, so an existing row with that id is
+		// necessarily this enqueue's own committed row and may be returned. The
+		// send request / draft event is not reconstructed from a post-commit
+		// read (a second read cannot prove it was committed), so callers that
+		// supplied a request or draft must treat the empty event as a lost
+		// notification rather than a duplicate write.
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), r.Inbox.AccountID, id); gerr == nil && existing.IdemKey == r.IdemKey && existing.CreatedAt.Equal(parseTime(now)) {
 			return existing, model.Event{}, nil
 		}
 		return model.Message{}, model.Event{}, err
@@ -197,6 +222,9 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 // derived from the message's inbox in the same transaction, so deleting the
 // domain config during an in-flight send cannot break outcome persistence.
 func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider, claim string) (model.Message, []model.Event, error) {
+	if err := consumeOutboundWriteFault("MarkSent", id); err != nil {
+		return model.Message{}, nil, err
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -206,11 +234,19 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	var domainNull sql.NullString
 	var internal int
 	var owner string
-	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal,m.claim_owner FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainNull, &internal, &owner); err != nil {
+	var status, marker string
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal,m.claim_owner,m.status,m.send_attempt_state FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainNull, &internal, &owner, &status, &marker); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
+	}
+	// A definitive "sent" is recorded for a message that has not been cancelled
+	// (a trashed message must not be flipped back to sent); the deletion case is
+	// reported as ErrNotFound below so it stays distinguishable from a send
+	// error. An already-resolved message keeps its previous outcome semantics.
+	if status != "pending" && status != "sent" {
+		return model.Message{}, nil, ErrConflict
 	}
 	// The provider send belonging to this outcome may have outlived its claim
 	// lease: if another attempt has re-claimed the message while this send was
@@ -219,6 +255,13 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	// outcome from here on. An empty owner means the claim was released without
 	// a replacement attempt, which is still ours to resolve.
 	if claimTaken(owner, claim) {
+		return model.Message{}, nil, ErrClaimTaken
+	}
+	// The pre-send marker, when present, must belong to this attempt. A marker
+	// that belongs to a different, later attempt means this send is stale even
+	// though the claim predicate passed (a requeue clears the claim but keeps
+	// the marker); recording it here would resolve the later attempt's marker.
+	if marker != "" && marker != claim {
 		return model.Message{}, nil, ErrClaimTaken
 	}
 	// A standalone inbox has no managed domain, so sending_domain_id and
@@ -231,7 +274,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	// send succeeded or failed. A provider that assigns its own wire id is
 	// recorded in provider_message_id, and reply matching already looks in both
 	// columns (see findThreadTx), so threading still works.
-	update := `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at=''`
+	update := `UPDATE messages SET status='sent',provider=?,provider_message_id=?,sent_at=?,attempts=attempts+1,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state=''`
 	args := []any{provider, providerMessageID, now}
 	update += ` WHERE id=? AND account_id=?`
 	args = append(args, id, accountID)
@@ -267,7 +310,12 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 		return model.Message{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
-		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
+		// A commit error may still have durably applied this transaction. The
+		// outcome is only "sent" if the committed row actually says so: an
+		// unconditional re-read would silently report success for a row that a
+		// later attempt had already failed, or for one whose status is no longer
+		// sent. Anything else leaves the outcome genuinely unknown.
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil && existing.Status == "sent" && existing.SentAt != nil && existing.ProviderMessageID == providerMessageID {
 			return existing, events, nil
 		}
 		return model.Message{}, nil, err
@@ -281,6 +329,9 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 // The domain is derived from the message's inbox in the same transaction, so a
 // config deletion during an in-flight send cannot break outcome persistence.
 func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider, claim string) (model.Message, []model.Event, error) {
+	if err := consumeOutboundWriteFault("MarkFailed", id); err != nil {
+		return model.Message{}, nil, err
+	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -288,28 +339,41 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	defer tx.Rollback()
 	var attempts int
 	var domainNull sql.NullString
-	var inboxID, fromAddress, subject, toJSON, owner string
-	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id),m.inbox_id,m.from_address,m.subject,m.to_json,m.claim_owner FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull, &inboxID, &fromAddress, &subject, &toJSON, &owner); err != nil {
+	var inboxID, fromAddress, subject, toJSON, owner, status, marker string
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id),m.inbox_id,m.from_address,m.subject,m.to_json,m.claim_owner,m.status,m.send_attempt_state FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull, &inboxID, &fromAddress, &subject, &toJSON, &owner, &status, &marker); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
+	}
+	// A failure may be recorded for a pending message (a retry or a terminal
+	// failure), or re-recorded for an already-failed one (an inert duplicate
+	// outcome, which must not write a second notice). A sent or cancelled
+	// message must not be dragged back into the failure path; the cancelled
+	// (trashed) case is reported by the existence check below as ErrNotFound.
+	if status != "pending" && status != "failed" {
+		return model.Message{}, nil, ErrConflict
 	}
 	// A stale attempt's failure must not clear another attempt's live claim:
 	// that attempt owns the outcome now, so this write is skipped entirely.
 	if claimTaken(owner, claim) {
 		return model.Message{}, nil, ErrClaimTaken
 	}
+	// The pre-send marker, when present, must belong to this attempt; a marker
+	// left by a different, later attempt means this failure is stale.
+	if marker != "" && marker != claim {
+		return model.Message{}, nil, ErrClaimTaken
+	}
 	domainID := domainNull.String
 	attempts++
-	status := "pending"
+	status = "pending"
 	next := ""
 	if attempts >= maxAttempts {
 		status = "failed"
 	} else {
 		next = timeText(nextAttemptAt)
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=?`, status, attempts, errText, next, id, accountID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET status=?,attempts=?,last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='',send_attempt_state='' WHERE id=? AND account_id=? AND status='pending'`, status, attempts, errText, next, id, accountID); err != nil {
 		return model.Message{}, nil, err
 	}
 	// A message cancelled (deleted) between the initial read and this write is
@@ -355,7 +419,12 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 		return model.Message{}, nil, err
 	}
 	if err = tx.Commit(); err != nil {
-		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil {
+		// A commit error may still have durably applied this transaction. The
+		// failure is only resolved if the committed row actually carries this
+		// attempt: an unconditional re-read would report a stale or unrelated
+		// row as this outcome. Anything else leaves the outcome unknown, and the
+		// durable pre-send marker keeps the row from being resent.
+		if existing, gerr := s.GetMessageByID(context.WithoutCancel(ctx), accountID, id); gerr == nil && existing.Attempts == attempts && existing.Status == status && existing.LastError == errText {
 			return existing, events, nil
 		}
 		return model.Message{}, nil, err
@@ -382,7 +451,7 @@ func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner strin
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND deleted_at IS NULL AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
+	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND deleted_at IS NULL AND send_attempt_state='' AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", "", nil
 	}
@@ -400,9 +469,16 @@ func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner strin
 }
 
 // RecoverAbandonedClaims clears claims left by a previous process. Under the
-// single-process model every outstanding claim at startup is abandoned.
+// single-process model every outstanding claim at startup is abandoned, so the
+// row becomes claimable again.
+//
+// A row carrying a durable pre-send marker is deliberately excluded: its
+// provider send was started but never resolved, so the mail may already have
+// been accepted. Clearing its claim here (or letting startup recovery make it
+// claimable) would resend it. Such rows are left with their claim and marker
+// attached until an operator resolves them; see ListQuarantinedSends.
 func (s *Store) RecoverAbandonedClaims(ctx context.Context) error {
-	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!=''`)
+	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE status='pending' AND claim_owner!='' AND send_attempt_state=''`)
 	return err
 }
 
@@ -411,11 +487,15 @@ func (s *Store) RecoverAbandonedClaims(ctx context.Context) error {
 // expire. The token and ownership guard make it a no-op for a re-claimed or
 // resolved message. owner is the claim token minted by ClaimNextPending (an
 // empty owner releases nothing).
+//
+// A row carrying a durable pre-send marker is a no-op as well: its claim is the
+// record of the unresolved send in flight and must not be dropped on the way to
+// a retry.
 func (s *Store) ReleaseMessageClaim(ctx context.Context, id, owner string) error {
 	if owner == "" {
 		return nil
 	}
-	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
+	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending' AND send_attempt_state=''`, id, owner)
 	return err
 }
 
@@ -429,15 +509,172 @@ func (s *Store) MessageClaimOwner(ctx context.Context, accountID, id string) (st
 	return owner, err
 }
 
+// BeginMessageSend durably records that this attempt is about to hand the
+// message to the provider. It is written immediately before the provider call,
+// so there is no window in which a send is in flight with no marker: from this
+// write onward the queue refuses to claim the row and outcome resolution is the
+// only way the marker is cleared.
+//
+// The claim must still be owned by the caller (the same predicate the outcome
+// writes use), so an attempt whose lease lapsed mid-flight cannot arm a marker
+// over a live re-claim. A non-empty claim token is required: the marker IS the
+// claim token, so an empty token cannot be stored and the empty-claim callers
+// (tests and non-worker callers that skip claim scoping) do not participate in
+// the pre-send safety protocol. The production worker always passes the token
+// minted by ClaimNextPending. It returns ErrClaimTaken when the claim no longer
+// owns the message and ErrNotFound when the message is no longer pending or does
+// not exist.
+func (s *Store) BeginMessageSend(ctx context.Context, accountID, id, claim string) error {
+	if claim == "" {
+		// A caller without a claim token (a direct, non-worker invocation) has no
+		// competing attempt to fence off, so there is no marker to arm. The
+		// guarantee applies to the worker path, which always holds a claim.
+		return nil
+	}
+	if err := consumeOutboundWriteFault("BeginMessageSend", id); err != nil {
+		return err
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET send_attempt_state=? WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state='' AND `+sendClaimClause, claim, id, accountID, claim)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	// Nothing matched: distinguish a taken/mismatched claim from a message that
+	// is gone or no longer pending, so the caller can tell an ambiguous send
+	// from a cancelled one.
+	var owner, state, status string
+	if err := s.read.QueryRowContext(ctx, `SELECT claim_owner,send_attempt_state,status FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&owner, &state, &status); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+	if claimTaken(owner, claim) || (state != "" && state != claim) {
+		return ErrClaimTaken
+	}
+	// The claim still matches but the marker is already set: the message was
+	// armed by an earlier attempt of this token. Treat it as taken so a second
+	// provider send is never started under the same claim.
+	if state != "" {
+		return ErrClaimTaken
+	}
+	return ErrNotFound
+}
+
+// MessageSendInFlight reports whether a message currently carries an unresolved
+// pre-send marker. It is the read surface for the guard that stops a message
+// with a provider send in flight from being automatically resent.
+func (s *Store) MessageSendInFlight(ctx context.Context, accountID, id string) (bool, error) {
+	var state string
+	err := s.read.QueryRowContext(ctx, `SELECT send_attempt_state FROM messages WHERE id=? AND account_id=?`, id, accountID).Scan(&state)
+	if err == sql.ErrNoRows {
+		return false, ErrNotFound
+	}
+	return state != "", err
+}
+
+// QuarantinedSend is a queued outbound message whose provider send started but
+// never reached a definitive outcome. The provider may already have accepted the
+// mail, so it is never resent automatically; it waits for an operator to retry
+// it explicitly (with a duplicate warning) or discard it.
+type QuarantinedSend struct {
+	MessageID   string
+	InboxID     string
+	To          []string
+	Subject     string
+	Provider    string
+	Attempts    int
+	LastError   string
+	ClaimOwner  string
+	ClaimExpire time.Time
+	CreatedAt   time.Time
+}
+
+// ListQuarantinedSends returns queued outbound messages with an unresolved
+// pre-send marker, so an operator can review the sends that are holding for
+// explicit resolution rather than delivering or retrying. It is account-scoped
+// and ordered oldest first, matching the order an operator would work them.
+func (s *Store) ListQuarantinedSends(ctx context.Context, accountID string, limit int) ([]QuarantinedSend, error) {
+	if limit <= 0 || limit > limits.PageSizeMaxList {
+		limit = limits.PageSizeDefault
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT id,inbox_id,to_json,subject,provider,attempts,last_error,claim_owner,claim_expires_at,created_at FROM messages WHERE account_id=? AND direction='outbound' AND status='pending' AND send_attempt_state<>'' ORDER BY created_at ASC LIMIT ?`, accountID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []QuarantinedSend{}
+	for rows.Next() {
+		var q QuarantinedSend
+		var to, claimExp, created string
+		if err = rows.Scan(&q.MessageID, &q.InboxID, &to, &q.Subject, &q.Provider, &q.Attempts, &q.LastError, &q.ClaimOwner, &claimExp, &created); err != nil {
+			return nil, err
+		}
+		q.To = decodeStrings(to)
+		q.ClaimExpire = parseTime(claimExp)
+		q.CreatedAt = parseTime(created)
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// ResolveQuarantinedSend is the operator's explicit resolution of a quarantined
+// send. allowResend true clears the marker and returns the message to the queue
+// (an explicit "send it anyway"; the provider may already have accepted it, so
+// the caller must surface the duplicate risk). allowResend false discards the
+// unresolved send by marking it failed with the given reason, clearing the
+// marker and claim without scheduling a retry. It returns ErrConflict when the
+// message is not a pending quarantined send.
+func (s *Store) ResolveQuarantinedSend(ctx context.Context, p model.Principal, id, reason string, allowResend bool) error {
+	m, err := s.GetMessage(ctx, p, id)
+	if err != nil {
+		return err
+	}
+	if m.Direction != "outbound" || m.Status != "pending" {
+		return ErrConflict
+	}
+	if !p.CanOwn(m.InboxID) {
+		return ErrForbidden
+	}
+	if !allowResend {
+		res, err := s.write.ExecContext(ctx, `UPDATE messages SET status='failed',send_attempt_state='',claim_owner='',claim_expires_at='',next_attempt_at='',last_error=? WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state<>''`, quarantinedReasonPrefix+reason, id, p.AccountID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	}
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET send_attempt_state='',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND send_attempt_state<>''`, id, p.AccountID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // RequeuePendingForDomain resets every pending outbound message for a domain so
 // it retries immediately after the domain's sending configuration is saved.
 // This covers both messages whose inbox is on the domain and send-as-alias
 // messages that chose the domain's config. Attempts, retry backoff, the
-// no-provider hold and any claim lease are all cleared, restoring the full
+// no-provider hold and the claim lease are all cleared, restoring the full
 // retry budget. Sent and failed messages are untouched; failed messages still
 // require an explicit retry.
+//
+// A message with an active send in flight is never touched: either its
+// claim_owner is still set (an attempt holds it) or it carries a durable
+// pre-send marker (an attempt started the provider call). In both cases the
+// in-flight attempt finishes under the configuration it started with, and the
+// new configuration applies to the next attempt if that one fails and is
+// rescheduled. Without this guard the requeue would clear a live claim or its
+// marker mid-send and let the message be delivered twice.
 func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID string) (int64, error) {
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND direction='outbound' AND status='pending' AND (sending_domain_id=? OR (sending_domain_id IS NULL AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)))`, accountID, domainID, domainID, accountID)
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='' WHERE account_id=? AND direction='outbound' AND status='pending' AND send_attempt_state='' AND claim_owner='' AND (sending_domain_id=? OR (sending_domain_id IS NULL AND inbox_id IN (SELECT id FROM inboxes WHERE domain_id=? AND account_id=?)))`, accountID, domainID, domainID, accountID)
 	if err != nil {
 		return 0, err
 	}
@@ -448,20 +685,48 @@ func (s *Store) RequeuePendingForDomain(ctx context.Context, accountID, domainID
 // RequeueFailed resets a failed message to pending for a manual retry. A
 // terminal failure is trashed as part of writing its delivery-failure notice, so
 // the retry also restores the message to the mailbox (clearing deleted_at) and
-// lets it rejoin the outbox queue.
+// lets it rejoin the outbox queue. See RequeueFailedWithWarning for the
+// operator-facing form that surfaces the duplicate risk of retrying a message
+// whose send was never resolved.
 func (s *Store) RequeueFailed(ctx context.Context, p model.Principal, id string) error {
+	_, err := s.RequeueFailedWithWarning(ctx, p, id)
+	return err
+}
+
+// RequeueFailedWithWarning is RequeueFailed with an operator warning. Retrying a
+// message quarantined by an unresolved in-flight send (a durable pre-send
+// marker) is the one way a marker is dropped without a definitive provider
+// outcome, so it can resend mail a provider may already have accepted. The
+// warning is non-empty in that case and the caller must surface it to the
+// operator; it is empty for an ordinary retry.
+func (s *Store) RequeueFailedWithWarning(ctx context.Context, p model.Principal, id string) (string, error) {
 	m, err := s.GetMessage(ctx, p, id)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if m.Direction != "outbound" || m.Status != "failed" {
-		return ErrConflict
+		return "", ErrConflict
 	}
 	if !p.CanOwn(m.InboxID) {
-		return ErrForbidden
+		return "", ErrForbidden
 	}
-	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID)
-	return err
+	var marker string
+	if err := s.read.QueryRowContext(ctx, `SELECT send_attempt_state FROM messages WHERE id=? AND account_id=?`, id, p.AccountID).Scan(&marker); err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	// A quarantined send is one resolved as a discard: its provider outcome is
+	// unknown, so the retry must warn about a possible duplicate. The marker
+	// itself is cleared by that resolution, so the terminal failure reason is
+	// what distinguishes it from an ordinary provider failure.
+	quarantined := marker != "" || strings.HasPrefix(m.LastError, quarantinedReasonPrefix)
+	_, err = s.write.ExecContext(ctx, `UPDATE messages SET status='pending',attempts=0,last_error='',next_attempt_at='',claim_owner='',claim_expires_at='',send_attempt_state='',deleted_at=NULL WHERE id=? AND account_id=?`, id, p.AccountID)
+	if err != nil {
+		return "", err
+	}
+	if quarantined {
+		return "a previous attempt may already have been accepted by the provider; retrying this message can deliver a duplicate", nil
+	}
+	return "", nil
 }
 
 // ListOutbox lists pending and failed outbound messages for an account,

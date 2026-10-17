@@ -116,7 +116,9 @@ var attachmentSchema = obj(map[string]any{
 
 var schemas = map[string]any{
 	"MessageActionControl": obj(map[string]any{"action": str("retry or dismiss")}, "action"),
-	"MessageActionResult":  obj(map[string]any{"queued": boolean("Whether the durable action is still pending."), "action": obj(map[string]any{"id": str("Action handle."), "inbox_id": str(""), "message_id": str(""), "state": str("pending, running, done, failed or ambiguous"), "error": str("Public failure detail."), "attempts": integer("Attempts made.")})}),
+	"MessageActionResult":  obj(map[string]any{"queued": boolean("Whether the durable action is still pending."), "action": obj(map[string]any{"id": str("Action handle."), "inbox_id": str(""), "message_id": str(""), "state": str("pending, running, done, failed or ambiguous"), "error": str("Public failure detail."), "attempts": integer("Attempts made."), "empty_trash": Ref("EmptyTrashProgress")})}),
+	"EmptyTrashProgress":   obj(map[string]any{"phase": str("discovering or purging; total is only final once discovery ends."), "total": integer("Targets discovered."), "purged": integer("Targets confirmed gone."), "queued": integer("Targets linked to purge actions."), "failed": integer("Failed purge actions."), "ambiguous": integer("Uncertain purge actions requiring verification.")}),
+	"EmptyTrashResult":     obj(map[string]any{"purged": integer("Total confirmed purged after the entire operation completes."), "action": obj(map[string]any{"id": str("Parent action handle."), "state": str("Action state."), "empty_trash": Ref("EmptyTrashProgress")})}),
 	"Error": obj(map[string]any{
 		"error": str("Human-readable error message."),
 		"code":  str("Stable machine-readable error code."),
