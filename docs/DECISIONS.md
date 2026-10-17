@@ -3780,7 +3780,7 @@ with inbox, event type and subscription ID; unmatched notifications and
 validation challenges are Debug-only. Never log `clientState` or validation
 tokens. Remote arrivals are not added to the UI activity log in this change.
 
-> **Amended** by D107: the per-callback INFO line described in the paragraph above
+> **Amended** by D130: the per-callback INFO line described in the paragraph above
 > was removed. An authenticated callback is a fetch hint, not an arrival; the
 > `remote sync` line with `trigger=push` and the `remote received` line with
 > `source=microsoft push` already prove delivery, so the callback line was
