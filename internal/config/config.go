@@ -361,9 +361,6 @@ func Load() (Config, error) {
 		DialMXCAFile:            strings.TrimSpace(os.Getenv("DIALMX_CA_FILE")),
 		DNSFallbackServers:      dnsFallbackServers,
 	}
-	if cfg.AppEncryptionKey == "" {
-		return Config{}, fmt.Errorf("APP_ENCRYPTION_KEY is required")
-	}
 	if cfg.Mode != "selfhosted" {
 		return Config{}, fmt.Errorf("MODE must be selfhosted")
 	}

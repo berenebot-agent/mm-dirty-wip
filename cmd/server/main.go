@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/dellarb/mailmoose/internal/admincli"
 	"github.com/dellarb/mailmoose/internal/app"
 	"github.com/dellarb/mailmoose/internal/config"
+	"github.com/dellarb/mailmoose/internal/cryptox"
 	"github.com/dellarb/mailmoose/internal/dnsfallback"
 	"github.com/dellarb/mailmoose/internal/events"
 	"github.com/dellarb/mailmoose/internal/httpapp"
@@ -94,6 +96,27 @@ func main() {
 	}
 	defer st.Close()
 	hub := events.NewHub()
+
+	// The encryption key is optional to supply: APP_ENCRYPTION_KEY wins when
+	// set, otherwise a key is read from (or generated into) the data directory.
+	// An operator who supplies their own key keeps it out of a /data backup; a
+	// generated one always has a key to work with, so a fresh deployment is
+	// usable without first running openssl.
+	if cfg.AppEncryptionKey == "" {
+		keyPath := filepath.Join(cfg.DataDir, cryptox.KeyFileName)
+		key, generated, kerr := cryptox.LoadOrCreateKeyFile(keyPath)
+		if kerr != nil {
+			log.Error("encryption key unavailable", "error", kerr)
+			os.Exit(2)
+		}
+		cfg.AppEncryptionKey = key
+		if generated {
+			log.Warn("generated an encryption key; back it up separately from /data, or set APP_ENCRYPTION_KEY to supply your own", "path", keyPath)
+		} else {
+			log.Info("using encryption key from file", "path", keyPath)
+		}
+	}
+
 	svc, err := app.New(cfg, st, hub)
 	if err != nil {
 		log.Error("application init failed", "error", err)

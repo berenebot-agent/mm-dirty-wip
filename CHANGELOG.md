@@ -36,6 +36,14 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 ### Changed
 
+- `APP_ENCRYPTION_KEY` is no longer required to start. When it is unset,
+  MailMoose reads `<DATA_DIR>/encryption_key` and generates it (0600, 64 hex
+  characters) on first start, logging the path so the operator can back it up.
+  A supplied key always wins and no file is written; an existing key file is
+  never replaced. Set your own key before connecting providers if you want the
+  key kept out of a `/data` backup — changing it later leaves stored provider
+  credentials unreadable. See `docs/DECISIONS.md` `D128`.
+
 - The One / Gmail setup screen now only creates inboxes. It no longer lists
   imported mailboxes or offers per-inbox connection management, and an
   already-imported mailbox is a plain, non-selectable "Already imported" row. A

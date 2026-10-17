@@ -195,6 +195,15 @@ snapshot of `/data` backed up separately, as described in the README's backup
 section. See `docs/DECISIONS.md` for the security model and the
 decisions behind it.
 
+The root encryption key is optional to supply. When `APP_ENCRYPTION_KEY` is
+unset, MailMoose generates one into `<DATA_DIR>/encryption_key` (mode 0600) on
+first start and logs the path. Setting your own key is what keeps the key out of
+a `/data` backup, so a backup that leaks cannot decrypt stored provider
+credentials; a generated key lives in `/data` and a `/data` backup is therefore
+self-decrypting. Either way, changing the key on a deployment that already has
+stored credentials leaves those credentials unreadable and they must be entered
+again.
+
 System-administrator credentials (`ADMIN_EMAIL`, `ADMIN_PASSWORD`, and their
 `*_FILE` variants) are the source of truth for the installation's system
 administrator login. When present they create that user on first start and
