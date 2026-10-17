@@ -289,11 +289,31 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 // page. It returns the newly-recorded INBOX arrivals, whether the folder fully
 // drained (no NextLink), whether a metadata quota stopped it, and any error. A
 // folder the store does not own (origin != remote) is skipped.
+//
+// Concurrent syncs of the same inbox+folder are coalesced by an in-flight
+// guard: a role-folder refresh (scheduled on a confirmed remote write) and a
+// whole-mailbox reconcile can otherwise apply the same delta page at once and
+// interleave their cursor writes. A call that finds the folder already being
+// synced is a no-op; the live pass owns the folder and the caller's next pass
+// re-derives the state.
 func (m *RemoteMailboxService) syncMicrosoftFolderDelta(ctx context.Context, t string, c store.MicrosoftConnection, account, inbox string, f model.Folder) (arrived int, complete bool, quotaHit bool, err error) {
 	if f.Origin != "remote" {
 		return 0, true, false, nil
 	}
-	cursor, initialized, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
+	guard := inbox + ":" + f.ID
+	m.refreshMu.Lock()
+	if m.deltaSyncing[guard] {
+		m.refreshMu.Unlock()
+		return 0, false, false, nil
+	}
+	m.deltaSyncing[guard] = true
+	m.refreshMu.Unlock()
+	defer func() {
+		m.refreshMu.Lock()
+		delete(m.deltaSyncing, guard)
+		m.refreshMu.Unlock()
+	}()
+	cursor, initialized, generation, e := m.Service.Store.MicrosoftDelta(ctx, inbox, f.Path)
 	if e != nil {
 		return 0, false, false, e
 	}
@@ -367,7 +387,14 @@ func (m *RemoteMailboxService) syncMicrosoftFolderDelta(ctx context.Context, t s
 	} else {
 		initialized = true
 	}
-	if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized); e != nil {
+	if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized, generation); e != nil {
+		if errors.Is(e, store.ErrStaleCursor) {
+			// A resync reset the folder while this page was in flight: the
+			// cursor advanced here belongs to a superseded sweep, so the page
+			// is dropped without advancing. The new sweep replays the folder
+			// from the empty cursor and re-derives everything.
+			return arrived, complete, false, nil
+		}
 		return arrived, complete, false, e
 	}
 	if page.NextLink == "" {

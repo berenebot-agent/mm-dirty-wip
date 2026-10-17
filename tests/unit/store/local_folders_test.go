@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/dellarb/mailmoose/internal/model"
@@ -248,6 +249,30 @@ func TestSentAndInboxNotConflated(t *testing.T) {
 	inbox, err := s.ListMessages(ctx, p, store.MessageFilter{InboxID: box.ID, Direction: "inbound", FolderScoped: true, InboxRole: model.FolderRoleInbox})
 	if err != nil || len(inbox) != 0 {
 		t.Fatalf("inbox must not show outbound mail: %d %v", len(inbox), err)
+	}
+}
+
+func TestAllMessageIDsLimitBoundsResult(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, p, box := localFolderStore(t)
+	for i, rfcID := range []string{"<limit-1@test>", "<limit-2@test>"} {
+		if _, _, err := s.CommitOutbound(ctx, store.OutboundRecord{
+			Inbox: box, Provider: "smtp", RFCMessageID: rfcID,
+			From: model.Address{Address: box.Address}, To: []string{"x@y.test"},
+			Subject: "s", Text: "t", RawPath: fmt.Sprintf("messages/limit-%d.eml", i), SizeBytes: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := store.MessageFilter{InboxID: box.ID, Direction: "outbound"}
+	limited, err := s.AllMessageIDsLimit(ctx, p, f, 1)
+	if err != nil || len(limited) != 1 {
+		t.Fatalf("limited ids = %d, err=%v; want 1", len(limited), err)
+	}
+	all, err := s.AllMessageIDs(ctx, p, f)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("all ids = %d, err=%v; want 2", len(all), err)
 	}
 }
 

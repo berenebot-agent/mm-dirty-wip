@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -185,18 +186,58 @@ func (s *Store) UpsertMicrosoftMessage(ctx context.Context, account, inbox, prov
 	}
 	return s.GetRemoteMessage(ctx, account, inbox, id)
 }
-func (s *Store) MicrosoftDelta(ctx context.Context, inbox, folder string) (string, bool, error) {
+func (s *Store) MicrosoftDelta(ctx context.Context, inbox, folder string) (string, bool, string, error) {
 	var cursor string
 	var initialized bool
-	e := s.read.QueryRowContext(ctx, `SELECT cursor,initialized FROM microsoft_delta WHERE inbox_id=? AND folder_id=?`, inbox, folder).Scan(&cursor, &initialized)
+	var generation string
+	e := s.read.QueryRowContext(ctx, `SELECT cursor,initialized,generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?`, inbox, folder).Scan(&cursor, &initialized, &generation)
 	if e == sql.ErrNoRows {
 		e = nil
 	}
-	return cursor, initialized, e
+	return cursor, initialized, generation, e
 }
-func (s *Store) SaveMicrosoftDelta(ctx context.Context, inbox, folder, cursor string, initialized bool) error {
-	_, e := s.write.ExecContext(ctx, `INSERT INTO microsoft_delta(inbox_id,folder_id,cursor,initialized) VALUES(?,?,?,?) ON CONFLICT(inbox_id,folder_id) DO UPDATE SET cursor=excluded.cursor,initialized=excluded.initialized`, inbox, folder, cursor, initialized)
-	return e
+
+// ErrStaleCursor reports that a persisted provider cursor no longer matches the
+// generation a caller read it from: a resync reset the folder while the
+// caller's page was in flight.
+var ErrStaleCursor = errors.New("provider cursor superseded by a resync")
+
+// SaveMicrosoftDelta advances a folder's delta cursor, but only when the row's
+// generation still matches what the caller read: a concurrent resync (a
+// generation bump) makes the caller's page part of a superseded sweep, and
+// saving its cursor would corrupt the new sweep's baseline. It returns
+// ErrStaleCursor in that case; the caller drops the page without advancing.
+func (s *Store) SaveMicrosoftDelta(ctx context.Context, inbox, folder, cursor string, initialized bool, generation string) error {
+	tx, e := s.write.BeginTx(ctx, nil)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	var gen sql.NullString
+	rowExists := true
+	e = tx.QueryRowContext(ctx, `SELECT generation FROM microsoft_delta WHERE inbox_id=? AND folder_id=?`, inbox, folder).Scan(&gen)
+	if e == sql.ErrNoRows {
+		rowExists = false
+		e = nil
+	}
+	if e != nil {
+		return e
+	}
+	if !rowExists && generation != "" {
+		return ErrStaleCursor
+	}
+	if rowExists && gen.String != generation {
+		return ErrStaleCursor
+	}
+	if !rowExists {
+		_, e = tx.ExecContext(ctx, `INSERT INTO microsoft_delta(inbox_id,folder_id,cursor,initialized,generation) VALUES(?,?,?,?,'')`, inbox, folder, cursor, initialized)
+	} else {
+		_, e = tx.ExecContext(ctx, `UPDATE microsoft_delta SET cursor=?,initialized=? WHERE inbox_id=? AND folder_id=?`, cursor, initialized, inbox, folder)
+	}
+	if e != nil {
+		return e
+	}
+	return tx.Commit()
 }
 
 func (s *Store) StartMicrosoftResync(ctx context.Context, inbox, folder string) error {
