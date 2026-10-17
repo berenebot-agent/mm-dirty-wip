@@ -54,6 +54,11 @@ type OutboxWorker struct {
 	// sendConcurrency is the number of sender goroutines per delivery pass. It
 	// is set before Start (from the config) and never changed concurrently.
 	sendConcurrency int
+	// claimLease is the claim lifetime used by both delivery loops. It must
+	// cover a full provider attempt: a lease shorter than an in-flight send
+	// lets a second claim (and a second send) happen while the first is still
+	// transmitting.
+	claimLease time.Duration
 	// lastOrphanSweep gates the raw-MIME orphan sweep so the filesystem walk
 	// runs once a day rather than on every maintenance pass. It is touched only
 	// from the worker goroutine.
@@ -74,8 +79,25 @@ func NewOutboxWorker(svc *Service, log *slog.Logger) *OutboxWorker {
 	if concurrency > maxSendConcurrency {
 		concurrency = maxSendConcurrency
 	}
-	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), wake: make(chan struct{}, 1), period: 5 * time.Second, owner: idgen.New("wrk"), sendConcurrency: concurrency}
+	// The claim lease must be at least one attempt long plus headroom, so a
+	// normal attempt can never be re-claimed while it is mid-send.
+	lease := minOutboxClaimLease
+	if svc != nil {
+		if timeout := svc.Config.OutboundDeliveryAttemptTimeout(); lease < timeout+outboxClaimLeaseMargin {
+			lease = timeout + outboxClaimLeaseMargin
+			log.Info("outbox claim lease extended to cover the delivery attempt timeout", "lease", lease.String())
+		}
+	}
+	return &OutboxWorker{svc: svc, log: log, stop: make(chan struct{}), done: make(chan struct{}), wake: make(chan struct{}, 1), period: 5 * time.Second, owner: idgen.New("wrk"), sendConcurrency: concurrency, claimLease: lease}
 }
+
+// The lease constants: the default mirrors the long-standing 15-minute lease;
+// the margin sits on top of the per-attempt timeout when that timeout is
+// configured larger than the default.
+const (
+	minOutboxClaimLease    = 15 * time.Minute
+	outboxClaimLeaseMargin = time.Minute
+)
 
 // Start launches the worker loop. It returns immediately.
 func (w *OutboxWorker) Start() {
@@ -497,7 +519,7 @@ func (w *OutboxWorker) deliverWorkflowsLoop() {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), w.svc.Config.OutboundDeliveryAttemptTimeout())
-		workflowID, err := w.svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
+		workflowID, claim, err := w.svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC(), w.owner, w.claimLease)
 		if err != nil {
 			cancel()
 			w.log.Error("workflow claim", "error", err)
@@ -509,12 +531,12 @@ func (w *OutboxWorker) deliverWorkflowsLoop() {
 		}
 		accountID, err := w.svc.AccountIDForWorkflow(ctx, workflowID)
 		if err != nil {
-			_ = w.svc.Store.ReleaseWorkflowClaim(ctx, workflowID, w.owner)
+			_ = w.svc.Store.ReleaseWorkflowClaim(ctx, workflowID, claim)
 			cancel()
 			w.log.Error("workflow account lookup", "workflow_id", workflowID, "error", err)
 			continue
 		}
-		w.deliverOneWorkflow(ctx, accountID, workflowID)
+		w.deliverOneWorkflow(ctx, accountID, workflowID, claim)
 		cancel()
 	}
 }
@@ -522,18 +544,18 @@ func (w *OutboxWorker) deliverWorkflowsLoop() {
 // deliverOneWorkflow delivers a single claimed workflow job. A panic is caught
 // per job and recorded as a failed attempt, so a poison job backs off instead
 // of exiting the process or being reclaimed and re-panicking in a tight loop.
-func (w *OutboxWorker) deliverOneWorkflow(ctx context.Context, accountID, workflowID string) {
+func (w *OutboxWorker) deliverOneWorkflow(ctx context.Context, accountID, workflowID, claim string) {
 	defer func() {
 		if x := recover(); x != nil {
 			w.log.Error("workflow delivery panic recovered", "workflow_id", workflowID, "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
 			// Recording the outcome must never itself escape: it runs inside an
 			// active recover, and a second panic here would still exit.
 			w.safeFail("workflow delivery", func(outcomeCtx context.Context) {
-				_ = w.svc.failWorkflowPanic(outcomeCtx, accountID, workflowID, fmt.Errorf("panic during workflow delivery: %T", x))
+				_ = w.svc.failWorkflowPanic(outcomeCtx, accountID, workflowID, claim, fmt.Errorf("panic during workflow delivery: %T", x))
 			})
 		}
 	}()
-	if err := w.svc.DeliverWorkflow(ctx, accountID, workflowID, w.owner); err != nil {
+	if err := w.svc.DeliverWorkflow(ctx, accountID, workflowID, claim); err != nil {
 		w.log.Warn("workflow delivery failed", "workflow_id", workflowID, "error", err)
 	}
 }
@@ -583,7 +605,7 @@ func (w *OutboxWorker) deliverMessagesLoop() {
 		// the client's own timeout fires first, making an ambiguous send a
 		// client timeout rather than a context cancellation.
 		ctx, cancel := context.WithTimeout(context.Background(), w.svc.Config.OutboundDeliveryAttemptTimeout())
-		msgID, err := w.svc.Store.ClaimNextPending(ctx, time.Now().UTC(), w.owner, 15*time.Minute)
+		msgID, claim, err := w.svc.Store.ClaimNextPending(ctx, time.Now().UTC(), w.owner, w.claimLease)
 		if err != nil {
 			cancel()
 			w.log.Error("outbox claim", "error", err)
@@ -597,12 +619,12 @@ func (w *OutboxWorker) deliverMessagesLoop() {
 		if err != nil {
 			// Release the claim so the message is retried immediately rather
 			// than idling until the lease expires.
-			_ = w.svc.Store.ReleaseMessageClaim(ctx, msgID, w.owner)
+			_ = w.svc.Store.ReleaseMessageClaim(ctx, msgID, claim)
 			cancel()
 			w.log.Error("outbox account lookup", "message_id", msgID, "error", err)
 			continue
 		}
-		w.deliverOneMessage(ctx, accountID, msgID)
+		w.deliverOneMessage(ctx, accountID, msgID, claim)
 		cancel()
 	}
 }
@@ -610,18 +632,18 @@ func (w *OutboxWorker) deliverMessagesLoop() {
 // deliverOneMessage delivers a single claimed message. A panic is caught per
 // message and recorded as a failed attempt so a poison message backs off
 // instead of exiting the process or being reclaimed and re-panicking hot.
-func (w *OutboxWorker) deliverOneMessage(ctx context.Context, accountID, msgID string) {
+func (w *OutboxWorker) deliverOneMessage(ctx context.Context, accountID, msgID, claim string) {
 	defer func() {
 		if x := recover(); x != nil {
 			w.log.Error("outbox delivery panic recovered", "message_id", msgID, "type", fmt.Sprintf("%T", x), "stack", string(debug.Stack()))
 			// Recording the outcome must never itself escape: it runs inside an
 			// active recover, and a second panic here would still exit.
 			w.safeFail("outbox delivery", func(outcomeCtx context.Context) {
-				_ = w.svc.failMessagePanic(outcomeCtx, accountID, msgID, fmt.Errorf("panic during delivery: %T", x))
+				_ = w.svc.failMessagePanic(outcomeCtx, accountID, msgID, claim, fmt.Errorf("panic during delivery: %T", x))
 			})
 		}
 	}()
-	if err := w.svc.Deliver(ctx, accountID, msgID, w.owner); err != nil {
+	if err := w.svc.Deliver(ctx, accountID, msgID, claim); err != nil {
 		w.log.Warn("outbox delivery failed", "message_id", msgID, "error", err)
 	}
 }

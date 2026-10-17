@@ -160,7 +160,7 @@ func TestSendRequestApproveClaimsAndSurvivesConsumption(t *testing.T) {
 	}
 
 	// Delivery success updates the request and emits draft.sent.
-	_, evs, err := s.MarkSent(ctx, u.AccountID, m.ID, "<provider>", "brevo")
+	_, evs, err := s.MarkSent(ctx, u.AccountID, m.ID, "<provider>", "brevo", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestSendRequestDeliveryFailureAndSingleWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Terminal failure emits draft.send_failed and records delivery_status.
-	_, evs, err := s.MarkFailed(ctx, u.AccountID, m.ID, "permanent", time.Time{}, 1, "brevo")
+	_, evs, err := s.MarkFailed(ctx, u.AccountID, m.ID, "permanent", time.Time{}, 1, "brevo", "")
 	if err != nil {
 		t.Fatal(err)
 	}

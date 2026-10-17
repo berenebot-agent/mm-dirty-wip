@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -11,12 +12,36 @@ import (
 	"github.com/dellarb/mailmoose/internal/model"
 )
 
+// ErrClaimTaken reports that the claim under which an outcome is being recorded
+// no longer owns the job: another attempt re-claimed it after the lease lapsed
+// mid-send. The caller must not record its outcome (the job belongs to the new
+// attempt now) and the send that produced the outcome must be treated as
+// ambiguous.
+var ErrClaimTaken = errors.New("outbox claim taken over by another attempt")
+
+// claimTaken reports whether the stored claim owner invalidates the caller's
+// claim. An exact match, or an empty owner (the claim was released without a
+// replacement attempt taking over, for example by a requeue or a startup
+// recovery), still allows the outcome through. Any other non-empty owner means
+// a live re-claim and blocks the stale attempt's outcome.
+func claimTaken(owner, claim string) bool {
+	return ClaimTaken(owner, claim)
+}
+
+// ClaimTaken reports whether a stored (non-empty) claim owner invalidates the
+// caller's claim token. It is the shared predicate between the store's outcome
+// guards and the app layer's pre-send ownership verification.
+func ClaimTaken(owner, claim string) bool {
+	return owner != "" && (claim == "" || owner != claim)
+}
+
 // HoldPending records why a pending message is not being delivered and defers
 // its next attempt without counting a retry. It is used when a domain has no
 // outbound provider yet: the message stays queued and delivers once a provider
-// is assigned.
-func (s *Store) HoldPending(ctx context.Context, accountID, id, reason string, next time.Time) error {
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending'`, reason, timeText(next), id, accountID)
+// is assigned. claim guards against a stale attempt holding an expired claim;
+// an empty token can update only an unclaimed message, never bypass a live claim.
+func (s *Store) HoldPending(ctx context.Context, accountID, id, reason string, next time.Time, claim string) error {
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET last_error=?,next_attempt_at=?,claim_owner='',claim_expires_at='' WHERE id=? AND account_id=? AND status='pending' AND (claim_owner=? OR claim_owner='')`, reason, timeText(next), id, accountID, claim)
 	if err != nil {
 		return err
 	}
@@ -171,7 +196,7 @@ func (s *Store) CommitOutbound(ctx context.Context, r OutboundRecord) (model.Mes
 // is appended to the per-domain log in the same transaction. The domain is
 // derived from the message's inbox in the same transaction, so deleting the
 // domain config during an in-flight send cannot break outcome persistence.
-func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider string) (model.Message, []model.Event, error) {
+func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, provider, claim string) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -180,11 +205,21 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 	var inboxID, threadID string
 	var domainNull sql.NullString
 	var internal int
-	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainNull, &internal); err != nil {
+	var owner string
+	if err = tx.QueryRowContext(ctx, `SELECT m.inbox_id,m.thread_id,COALESCE(m.sending_domain_id,i.domain_id),m.internal,m.claim_owner FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&inboxID, &threadID, &domainNull, &internal, &owner); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
+	}
+	// The provider send belonging to this outcome may have outlived its claim
+	// lease: if another attempt has re-claimed the message while this send was
+	// in flight, recording "sent" here would race that attempt's own send. The
+	// caller logs the ambiguity instead; the re-claiming attempt owns the
+	// outcome from here on. An empty owner means the claim was released without
+	// a replacement attempt, which is still ours to resolve.
+	if claimTaken(owner, claim) {
+		return model.Message{}, nil, ErrClaimTaken
 	}
 	// A standalone inbox has no managed domain, so sending_domain_id and
 	// domain_id are both NULL; the delivery-log row is then keyed on an empty
@@ -245,7 +280,7 @@ func (s *Store) MarkSent(ctx context.Context, accountID, id, providerMessageID, 
 // The failed attempt is appended to the per-domain log in the same transaction.
 // The domain is derived from the message's inbox in the same transaction, so a
 // config deletion during an in-flight send cannot break outcome persistence.
-func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider string) (model.Message, []model.Event, error) {
+func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, nextAttemptAt time.Time, maxAttempts int, provider, claim string) (model.Message, []model.Event, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Message{}, nil, err
@@ -253,12 +288,17 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 	defer tx.Rollback()
 	var attempts int
 	var domainNull sql.NullString
-	var inboxID, fromAddress, subject, toJSON string
-	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id),m.inbox_id,m.from_address,m.subject,m.to_json FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull, &inboxID, &fromAddress, &subject, &toJSON); err != nil {
+	var inboxID, fromAddress, subject, toJSON, owner string
+	if err = tx.QueryRowContext(ctx, `SELECT m.attempts,COALESCE(m.sending_domain_id,i.domain_id),m.inbox_id,m.from_address,m.subject,m.to_json,m.claim_owner FROM messages m JOIN inboxes i ON i.id=m.inbox_id WHERE m.id=? AND m.account_id=?`, id, accountID).Scan(&attempts, &domainNull, &inboxID, &fromAddress, &subject, &toJSON, &owner); err != nil {
 		if err == sql.ErrNoRows {
 			return model.Message{}, nil, ErrNotFound
 		}
 		return model.Message{}, nil, err
+	}
+	// A stale attempt's failure must not clear another attempt's live claim:
+	// that attempt owns the outcome now, so this write is skipped entirely.
+	if claimTaken(owner, claim) {
+		return model.Message{}, nil, ErrClaimTaken
 	}
 	domainID := domainNull.String
 	attempts++
@@ -324,30 +364,39 @@ func (s *Store) MarkFailed(ctx context.Context, accountID, id, errText string, n
 }
 
 // ClaimNextPending atomically claims the next due pending message for delivery.
-// It returns the message id, or "" if none is due. The claim is separate from
-// retry scheduling: next_attempt_at is left untouched and only the claim lease
-// is recorded, so a crash can be recovered without waiting 24 hours.
-func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner string, lease time.Duration) (string, error) {
+// It returns the message id and the claim token minted for this claim, or ""
+// credentials when none is due. The claim uses a unique token (owner prefix plus
+// a fresh random suffix) rather than the worker's process-wide identity, so two
+// senders of the same worker are distinguishable: a stale attempt whose lease
+// lapsed mid-send cannot pass the ownership check of the attempt that
+// re-claimed the message, and the outcome writes can reject the stale attempt
+// outright (ErrClaimTaken). The claim is separate from retry scheduling:
+// next_attempt_at is left untouched and only the claim lease is recorded, so a
+// crash can be recovered as soon as the lease lapses (bounded to the worker's
+// delivery attempt timeout plus margin by NewOutboxWorker) rather than waiting
+// out the message's full retry schedule.
+func (s *Store) ClaimNextPending(ctx context.Context, now time.Time, owner string, lease time.Duration) (string, string, error) {
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer tx.Rollback()
 	var id string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM messages WHERE status='pending' AND deleted_at IS NULL AND (next_attempt_at='' OR next_attempt_at<=?) AND (claim_owner='' OR claim_expires_at<=?) ORDER BY created_at ASC LIMIT 1`, timeText(now), timeText(now)).Scan(&id)
 	if err == sql.ErrNoRows {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE messages SET claim_owner=?,claim_expires_at=? WHERE id=?`, owner, timeText(now.Add(lease)), id); err != nil {
-		return "", err
+	claim := owner + ":" + idgen.New("clm")
+	if _, err = tx.ExecContext(ctx, `UPDATE messages SET claim_owner=?,claim_expires_at=? WHERE id=?`, claim, timeText(now.Add(lease)), id); err != nil {
+		return "", "", err
 	}
 	if err = tx.Commit(); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return id, nil
+	return id, claim, nil
 }
 
 // RecoverAbandonedClaims clears claims left by a previous process. Under the
@@ -357,10 +406,15 @@ func (s *Store) RecoverAbandonedClaims(ctx context.Context) error {
 	return err
 }
 
-// ReleaseMessageClaim clears a claim held by owner so the message can be
-// retried immediately instead of waiting for the lease to expire. The status
-// and ownership guard make it a no-op for a re-claimed or resolved message.
+// ReleaseMessageClaim clears a claim held by the given claim token so the
+// message can be retried immediately instead of waiting for the lease to
+// expire. The token and ownership guard make it a no-op for a re-claimed or
+// resolved message. owner is the claim token minted by ClaimNextPending (an
+// empty owner releases nothing).
 func (s *Store) ReleaseMessageClaim(ctx context.Context, id, owner string) error {
+	if owner == "" {
+		return nil
+	}
 	_, err := s.write.ExecContext(ctx, `UPDATE messages SET claim_owner='',claim_expires_at='' WHERE id=? AND claim_owner=? AND status='pending'`, id, owner)
 	return err
 }

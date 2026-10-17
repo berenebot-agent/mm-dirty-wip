@@ -173,7 +173,7 @@ func TestSaveSendingConfigRequeuesPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = svc.Store.MarkFailed(ctx, u.AccountID, backingOff.Message.ID, "down", time.Now().UTC().Add(time.Hour), 6, "brevo"); err != nil {
+	if _, _, err = svc.Store.MarkFailed(ctx, u.AccountID, backingOff.Message.ID, "down", time.Now().UTC().Add(time.Hour), 6, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	// A message held because the domain has no sending provider.
@@ -181,7 +181,7 @@ func TestSaveSendingConfigRequeuesPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = svc.Store.HoldPending(ctx, u.AccountID, held.Message.ID, "no provider", time.Now().UTC().Add(5*time.Minute)); err != nil {
+	if err = svc.Store.HoldPending(ctx, u.AccountID, held.Message.ID, "no provider", time.Now().UTC().Add(5*time.Minute), ""); err != nil {
 		t.Fatal(err)
 	}
 

@@ -55,7 +55,7 @@ func TestDomainSendingConfigAndHold(t *testing.T) {
 	}
 
 	// store.HoldPending defers without counting an attempt.
-	if err = s.HoldPending(ctx, u.AccountID, msg.ID, "no sending provider configured", time.Now().Add(5*time.Minute)); err != nil {
+	if err = s.HoldPending(ctx, u.AccountID, msg.ID, "no sending provider configured", time.Now().Add(5*time.Minute), ""); err != nil {
 		t.Fatal(err)
 	}
 	held, err := s.GetMessageByID(ctx, u.AccountID, msg.ID)
@@ -65,7 +65,7 @@ func TestDomainSendingConfigAndHold(t *testing.T) {
 	if held.Status != "pending" || held.Attempts != 0 || held.LastError == "" {
 		t.Fatalf("held message: status=%q attempts=%d err=%q", held.Status, held.Attempts, held.LastError)
 	}
-	if err = s.HoldPending(ctx, u.AccountID, "msg_missing", "x", time.Now()); !errors.Is(err, store.ErrNotFound) {
+	if err = s.HoldPending(ctx, u.AccountID, "msg_missing", "x", time.Now(), ""); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("hold unknown: %v", err)
 	}
 }
@@ -92,17 +92,17 @@ func TestRequeuePendingForDomain(t *testing.T) {
 
 	// A pending message with a consumed retry and a future backoff.
 	backingOff := commit(box, "<backoff@test>")
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, backingOff.ID, "provider down", time.Now().UTC().Add(time.Hour), 6, "brevo"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, backingOff.ID, "provider down", time.Now().UTC().Add(time.Hour), 6, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	// A message held for lack of a provider.
 	held := commit(box, "<held@test>")
-	if err := s.HoldPending(ctx, u.AccountID, held.ID, "no provider", time.Now().UTC().Add(5*time.Minute)); err != nil {
+	if err := s.HoldPending(ctx, u.AccountID, held.ID, "no provider", time.Now().UTC().Add(5*time.Minute), ""); err != nil {
 		t.Fatal(err)
 	}
 	// A permanently failed message must not be resurrected.
 	failed := commit(box, "<failed@test>")
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, failed.ID, "permanent", time.Time{}, 1, "brevo"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, failed.ID, "permanent", time.Time{}, 1, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 	// A pending message on another domain must be left alone.
@@ -115,7 +115,7 @@ func TestRequeuePendingForDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherPending := commit(otherBox, "<other@test>")
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, otherPending.ID, "other down", time.Now().UTC().Add(time.Hour), 6, "brevo"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, otherPending.ID, "other down", time.Now().UTC().Add(time.Hour), 6, "brevo", ""); err != nil {
 		t.Fatal(err)
 	}
 

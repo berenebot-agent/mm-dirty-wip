@@ -47,7 +47,7 @@ func TestTerminalFailureWritesNoticeAndClearsOutbox(t *testing.T) {
 
 	// maxAttempts 1 makes the first failure terminal, exactly as a permanent MX
 	// 5xx does on the send path.
-	failed, events, err := s.MarkFailed(ctx, u.AccountID, m.ID, "Direct MX returned SMTP 550: recipient rejected", time.Time{}, 1, "mx")
+	failed, events, err := s.MarkFailed(ctx, u.AccountID, m.ID, "Direct MX returned SMTP 550: recipient rejected", time.Time{}, 1, "mx", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestRetryableFailureWritesNoNotice(t *testing.T) {
 	m := outboundForFailure(t, s, box)
 
 	// Attempt 1 of 6 -> rescheduled, not terminal.
-	failed, events, err := s.MarkFailed(ctx, u.AccountID, m.ID, "temporary MX failure", time.Now().UTC().Add(time.Minute), 6, "mx")
+	failed, events, err := s.MarkFailed(ctx, u.AccountID, m.ID, "temporary MX failure", time.Now().UTC().Add(time.Minute), 6, "mx", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,11 +165,11 @@ func TestTerminalFailureNoticeIsNotDuplicated(t *testing.T) {
 	box := b[0]
 	m := outboundForFailure(t, s, box)
 
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx", ""); err != nil {
 		t.Fatal(err)
 	}
 	// A second terminal mark (e.g. a duplicated worker outcome) must be inert.
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 rejected", time.Time{}, 1, "mx", ""); err != nil {
 		t.Fatal(err)
 	}
 	msgs, err := s.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "inbound"})
@@ -203,7 +203,7 @@ func TestTerminalFailureNoticeFallbackSenderDomain(t *testing.T) {
 	}
 	m := outboundForFailure(t, s, box)
 
-	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 blocked", time.Time{}, 1, "mx"); err != nil {
+	if _, _, err := s.MarkFailed(ctx, u.AccountID, m.ID, "550 blocked", time.Time{}, 1, "mx", ""); err != nil {
 		t.Fatal(err)
 	}
 	msgs, err := s.ListMessages(ctx, model.Principal{AccountID: u.AccountID, Admin: true}, store.MessageFilter{InboxID: box.ID, Direction: "inbound"})
