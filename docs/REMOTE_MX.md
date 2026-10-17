@@ -1,6 +1,10 @@
 # Remote SMTP receiving
 
-This is for **receivers you operate separately** from MailMoose. For the included Direct MX receiver and the hosted Antler MX option, see [Email providers](EMAIL_PROVIDERS.md).
+**Advanced users only. Not required for typical installations.**
+
+This guide covers separate SMTP receivers that you operate yourself. For easy SMTP receiving configuration without running another receiver or opening inbound SMTP ports, use [Antler MX](EMAIL_PROVIDERS.md#inbound-antler-mx).
+
+For the receiver included with MailMoose, see [Direct MX](EMAIL_PROVIDERS.md#inbound-direct-mx).
 
 | Option | When to use it |
 | --- | --- |
