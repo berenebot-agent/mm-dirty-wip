@@ -169,8 +169,8 @@
   // wire gives a control the standard copy behaviour. opts.text is a string or a
   // function returning one; opts.select is an element, selector or function
   // identifying what to highlight when a copy is not possible; opts.onSuccess
-  // overrides the default "Copied!" label flash; opts.label overrides the label
-  // restored after the flash.
+  // overrides the default "Copied!" label flash and success notice; opts.label
+  // overrides the label restored after the flash.
   function wire(btn, opts) {
     if (!btn) {
       return;
@@ -188,6 +188,7 @@
           return;
         }
         btn.textContent = 'Copied!';
+        announce('Copied to clipboard', 'ok');
         window.setTimeout(function () { btn.textContent = label; }, 1500);
       }).catch(function () {
         announce(select(opts.select) ? SELECTED_MESSAGE : PLAIN_MESSAGE);
@@ -207,6 +208,32 @@
   }
 
   window.mailmooseCopy = { text: copyText, wire: wire, announce: announce, select: select };
+})();
+
+(function () {
+  // These controls are server-rendered. Bind them immediately after the shared
+  // helper so an error in a later, unrelated page module cannot leave inbox and
+  // delete-dialog copy controls inert. Values are read on click because the
+  // delete dialogs populate their data-copy attributes when they open.
+  document.querySelectorAll('[data-copy]').forEach(function (el) {
+    window.mailmooseCopy.wire(el, {
+      text: function () { return el.getAttribute('data-copy') || ''; },
+      select: function () {
+        // The delete-dialog icon buttons have no text of their own; the nearby
+        // name/address is the selectable value.
+        if ((el.tagName || '').toLowerCase() === 'button') {
+          var scope = el.closest('p');
+          return scope ? scope.querySelector('.confirm-name') : null;
+        }
+        return el;
+      },
+      onSuccess: function () {
+        el.classList.add('copied');
+        window.setTimeout(function () { el.classList.remove('copied'); }, 1200);
+        window.mailmooseCopy.announce('Copied to clipboard', 'ok');
+      }
+    });
+  });
 })();
 
 // Combobox: a real, always-visible dropdown list attached to a text input,
@@ -6565,7 +6592,8 @@ function hideInboxSubview(dlg) {
       advancedLabel.hidden = statusMode;
       if (statusMode) {
         wizard.querySelector('[data-antler-step="0"] h3').hidden = true;
-        wizard.querySelector('[data-antler-step="0"] p').hidden = true;
+        var contactDescription = wizard.querySelector('[data-antler-step="0"] p');
+        if (contactDescription) { contactDescription.hidden = true; }
         wizard.querySelector('[data-antler-step="1"] h3').textContent = 'Antler MX status';
         wizard.querySelector('[data-antler-step="2"] p').hidden = true;
       }
@@ -7084,32 +7112,6 @@ function hideInboxSubview(dlg) {
 
   dlg.querySelectorAll('[data-close-dialog]').forEach(function (b) {
     b.addEventListener('click', function () { dlg.close(); });
-  });
-})();
-
-(function () {
-  // Copy controls that carry their value in a data-copy attribute: the inbox
-  // address heading and the delete-dialog name/address copy buttons. A successful
-  // copy flashes the green highlight; on a plain-HTTP page the value is selected
-  // and the shared HTTPS message is shown instead.
-  document.querySelectorAll('[data-copy]').forEach(function (el) {
-    window.mailmooseCopy.wire(el, {
-      text: function () { return el.getAttribute('data-copy') || ''; },
-      select: function () {
-        // The delete-dialog icon buttons have no text of their own; the nearby
-        // name/address is the selectable value.
-        if ((el.tagName || '').toLowerCase() === 'button') {
-          var scope = el.closest('p');
-          return scope ? scope.querySelector('.confirm-name') : null;
-        }
-        return el;
-      },
-      onSuccess: function () {
-        el.classList.add('copied');
-        window.setTimeout(function () { el.classList.remove('copied'); }, 1200);
-        window.mailmooseCopy.announce('Copied to clipboard', 'ok');
-      }
-    });
   });
 })();
 

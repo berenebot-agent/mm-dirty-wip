@@ -104,12 +104,17 @@ class Element {
     this.headings = [];
     this.panels.forEach((panel, i) => {
       panel.nodes['h3'] = new Element('H3');
-      panel.nodes['p'] = new Element('P');
       this.nodes['[data-antler-step="' + i + '"]'] = panel;
       this.nodes['[data-antler-step="' + i + '"] h3'] = panel.nodes['h3'];
-      this.nodes['[data-antler-step="' + i + '"] p'] = panel.nodes['p'];
-      this.nodes['[data-antler-step="' + i + '"] > p'] = panel.nodes['p'];
-      this.headings.push(panel.nodes['h3'], panel.nodes['p']);
+      this.headings.push(panel.nodes['h3']);
+      // The contact step has no description paragraph in the real wizard
+      // markup. Saved-status initialization must tolerate that optional node.
+      if (i !== 0) {
+        panel.nodes['p'] = new Element('P');
+        this.nodes['[data-antler-step="' + i + '"] p'] = panel.nodes['p'];
+        this.nodes['[data-antler-step="' + i + '"] > p'] = panel.nodes['p'];
+        this.headings.push(panel.nodes['p']);
+      }
     });
     this.nodes['.antler-custom-urls'] = new Element('INPUT');
     for (const name of ['progress', 'records', 'receivers', 'error']) {
