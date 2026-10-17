@@ -341,6 +341,7 @@ services:
     volumes:
       - ./data:/data
     environment:
+      # Optional; generated into /data on first start when omitted.
       - APP_ENCRYPTION_KEY=...
       - BASE_URL=https://mail.example.com
 ```
@@ -486,7 +487,7 @@ Persistent self-hosted state lives under:
 └── config/
 ```
 
-A consistent, quiesced or filesystem-snapshot copy of `/data` is sufficient for ordinary self-host recovery. `APP_ENCRYPTION_KEY` is backed up separately as a root secret.
+A consistent, quiesced or filesystem-snapshot copy of `/data` is sufficient for ordinary self-host recovery. A root secret the operator supplied via `APP_ENCRYPTION_KEY` is backed up separately; one MailMoose generated is `/data/encryption_key` and is already in that snapshot.
 
 ## 9. V1 success experience
 

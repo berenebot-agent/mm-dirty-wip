@@ -155,7 +155,7 @@ Verify it can discover:
 ## M. Backup and restore
 
 1. Quiesce writes or take a filesystem-consistent snapshot.
-2. Back up `/data` and the separately stored `APP_ENCRYPTION_KEY`.
+2. Back up `/data` (and `APP_ENCRYPTION_KEY`, if the deployment supplied one).
 3. Restore onto a clean instance.
 4. Start application.
 5. Verify accounts, inboxes, messages, search, event cursor history, and credentials/config required for recovery.

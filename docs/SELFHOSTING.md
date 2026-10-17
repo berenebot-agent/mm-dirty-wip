@@ -172,9 +172,12 @@ automatically; the draft send request shows **Notification uncertain**.
 
 ## Backup
 
-Back up a filesystem-consistent snapshot of `./data` and separately retain
-`APP_ENCRYPTION_KEY`. Both are required to restore encrypted provider
-configurations.
+Back up a filesystem-consistent snapshot of `./data`. The root encryption key
+lives in one of two places: a key you supplied as `APP_ENCRYPTION_KEY`, which is
+kept outside `/data` and must be retained separately, or the generated
+`./data/encryption_key`, which a `/data` snapshot already contains. A deployment
+that supplied its own key therefore has two things to restore; one that let
+MailMoose generate the key has one.
 
 ## Upgrading
 

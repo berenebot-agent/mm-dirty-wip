@@ -67,21 +67,27 @@ services:
 
 **2. Create** `.env`:
 
+`APP_ENCRYPTION_KEY` is optional. On first start MailMoose generates one and
+keeps it at `./data/encryption_key` (mode 0600), so a fresh deployment is usable
+without any extra step. To keep the key *out* of a `./data` backup instead,
+supply your own — Compose does NOT run shell commands inside `.env`, so the
+value must already exist before you paste it in:
+
 ```bash
-# Generate the key separately — Compose does NOT run shell commands inside .env,
-# so the value must already be generated before you paste it in:
 openssl rand -hex 32
 ```
 
-Paste that output as the value of `APP_ENCRYPTION_KEY` (back it up — it decrypts
-provider secrets), alongside the rest:
-
 ```bash
-APP_ENCRYPTION_KEY=<paste the 64-character hex value from above>
+# Optional — omit it and the key is generated at ./data/encryption_key:
+#APP_ENCRYPTION_KEY=<paste the 64-character hex value from above>
 BASE_URL=https://mail.example.com            # where you'll reach this instance
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=a-long-random-password
 ```
+
+Set the key before you connect any provider: changing it later (or setting one
+after letting MailMoose generate a key) leaves stored provider credentials
+unreadable, and they must be entered again.
 
 **3. Run it:**
 

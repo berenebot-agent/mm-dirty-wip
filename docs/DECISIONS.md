@@ -158,6 +158,8 @@ Admin can create/delete inboxes, manage domains, keys/users, outbound providers,
 
 **Reason:** Restoring encrypted credentials requires both application data and the root secret.
 
+**Status note:** the "operator supplies it" half is superseded by `D128`, which generates a key into `<DATA_DIR>/encryption_key` when `APP_ENCRYPTION_KEY` is unset. A supplied key still wins and is still kept out of `/data`; the separate-backup requirement applies to it, not to a generated key.
+
 ## D018 — Direct relay credential issuance
 
 **Decision:** The admin UI and REST API issue Hermes relay credentials directly: generate the gateway id, secret, and delivery key, store the encrypted connection, and return a ready-to-paste `.env` block.
@@ -5147,3 +5149,35 @@ the operator is no longer asked to re-enter a key that still works. A genuine
 `internal/app/one.go`, the connection verdict added to the body-failure payload in
 `internal/httpapp/standalone_ui.go`, and the corresponding reader fallback in
 `internal/httpapp/assets/app.js`. No schema, dependency or transport change.
+
+## D128 — The root encryption key is generated when the operator does not supply one
+
+**Decision:** `APP_ENCRYPTION_KEY` is optional. When it is unset, startup uses
+`<DATA_DIR>/encryption_key`; when that file does not exist, MailMoose generates
+32 random bytes, writes them as 64 lowercase hex characters (the
+`openssl rand -hex 32` shape) with mode 0600, and logs the path at WARN so the
+operator can back it up or supply their own. A supplied `APP_ENCRYPTION_KEY`
+always wins and no file is written. An existing key file is never overwritten
+and never regenerated: a file that does not parse is a startup error, because a
+replaced key orphans every stored ciphertext. This supersedes the
+"operator supplies it" half of `D017`.
+
+**Reason:** Requiring a hand-generated root secret before the process will start
+is unusual for self-hosted software, and it makes the first run of a mail server
+a shell exercise before anything can be evaluated. Nothing is encrypted before
+an operator connects a provider, so generating the key on first start costs
+nothing and removes the wall.
+
+**Consequences:** A `/data` backup of a deployment that did not supply its own
+key is self-decrypting, which weakens the separation `D017` protected. Operators
+who want that separation still get it by setting `APP_ENCRYPTION_KEY`.
+Changing the key on a deployment with stored credentials leaves those
+credentials unreadable and they must be re-entered; that is pre-existing
+behaviour, now easier to trigger because both supply paths exist, and
+`README.md`, `.env.example` and `SECURITY.md` say so next to the setting. The
+standalone MX receiver is unaffected: it never receives the key or the data
+directory.
+
+**Complexity:** `cryptox.LoadOrCreateKeyFile`, one call site in
+`cmd/server/main.go`, and the removal of the config requirement. No schema,
+dependency, transport or protocol change.
