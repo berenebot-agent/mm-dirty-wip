@@ -38,7 +38,7 @@ func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
 			return
 		}
 		write := func(fr mxwire.Frame) { _ = mxwire.WriteFrame(w, fr) }
-		ready, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test", MaxMessageBytes: 1 << 20})
+		ready, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V1Protocol, ReceiverID: "r", ConnectionID: "c", SMTPHostname: "mx.test", MaxMessageBytes: 1 << 20})
 		write(ready)
 		w.(http.Flusher).Flush()
 		channels := map[string]uint64{}
@@ -72,7 +72,7 @@ func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
 				// RCPTs within one transaction are resolved sequentially: send
 				// the first resolve only once both domains are authenticated.
 				if len(authed) >= 2 && resolved == 0 {
-					rq, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channels["a.test"], mxwire.V2Resolve{Domain: "a.test", Recipient: "user@a.test"})
+					rq, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channels["a.test"], mxwire.ResolveRequest{Domain: "a.test", Recipient: "user@a.test"})
 					write(rq)
 					w.(http.Flusher).Flush()
 				}
@@ -81,7 +81,7 @@ func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
 				// After the first result, issue the next recipient's resolve;
 				// SMTP resolves recipients one at a time per transaction.
 				if resolved == 1 {
-					rq, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channels["b.test"], mxwire.V2Resolve{Domain: "b.test", Recipient: "user@b.test"})
+					rq, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channels["b.test"], mxwire.ResolveRequest{Domain: "b.test", Recipient: "user@b.test"})
 					write(rq)
 					w.(http.Flusher).Flush()
 					continue
@@ -91,10 +91,10 @@ func TestGroupedTwoDomainsAndCancelWhileBusy(t *testing.T) {
 				if resolved >= 2 && !ingestSent {
 					ingestSent = true
 					meta := mxwire.IngestMetadata{Recipients: []string{"user@a.test", "user@b.test"}, ContentDigest: digest, Size: int64(len(payload))}
-					st, _ := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.V2IngestStart{Domains: []string{"a.test", "b.test"}, Metadata: meta})
+					st, _ := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.IngestStart{Domains: []string{"a.test", "b.test"}, Metadata: meta})
 					write(st)
 					write(mxwire.ChunkFrame(1, 0, 0, payload))
-					en, _ := mxwire.JSONFrame(mxwire.FrameIngestEnd, 1, 0, mxwire.V2IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
+					en, _ := mxwire.JSONFrame(mxwire.FrameIngestEnd, 1, 0, mxwire.IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
 					write(en)
 					w.(http.Flusher).Flush()
 				}

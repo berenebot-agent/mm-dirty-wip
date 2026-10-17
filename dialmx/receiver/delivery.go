@@ -64,7 +64,7 @@ func (t *transaction) group(b *binding) (*pending, error) {
 func (t *transaction) Resolve(ctx context.Context, addresses []string) (mxwire.ResolveResponse, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := mxwire.ResolveResponse{Version: mxwire.V2Protocol}
+	out := mxwire.ResolveResponse{Version: mxwire.V1Protocol}
 	if t.closed || t.failed {
 		return out, fmt.Errorf("transaction closed")
 	}
@@ -119,7 +119,7 @@ func (t *transaction) resolveOne(ctx context.Context, address string, out *mxwir
 	p.ch = b.channel
 	t.r.mu.Unlock()
 	rc.wireTxID, rc.channel = p.tx, b.channel
-	if e = t.r.send(b.c, mxwire.FrameResolve, p.tx, b.channel, mxwire.V2Resolve{Domain: d, Recipient: address}); e != nil {
+	if e = t.r.send(b.c, mxwire.FrameResolve, p.tx, b.channel, mxwire.ResolveRequest{Domain: d, Recipient: address}); e != nil {
 		rc.reason = "send_failed"
 		t.failed = true
 		return e
@@ -281,7 +281,7 @@ func (t *transaction) live(b *binding) bool {
 func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, body io.Reader, size int64, digest string) (mxwire.IngestResponse, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := mxwire.IngestResponse{Version: mxwire.V2Protocol}
+	out := mxwire.IngestResponse{Version: mxwire.V1Protocol}
 	if t.closed || t.failed {
 		return out, fmt.Errorf("transaction closed")
 	}
@@ -361,7 +361,7 @@ func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, bo
 			md.Recipients = recips
 			md.Size = size
 			md.ContentDigest = digest
-			if e := t.r.send(c, mxwire.FrameIngestStart, p.tx, 0, mxwire.V2IngestStart{Domains: domains[c], Metadata: md}); e != nil {
+			if e := t.r.send(c, mxwire.FrameIngestStart, p.tx, 0, mxwire.IngestStart{Domains: domains[c], Metadata: md}); e != nil {
 				t.failed = true
 				t.r.release(c, p)
 				hc.phase, hc.outcome, hc.reason = "start", "fail", "start_send_failed"
@@ -376,7 +376,7 @@ func (t *transaction) Ingest(ctx context.Context, meta mxwire.IngestMetadata, bo
 				hc.phase, hc.outcome, hc.reason = "stream", "fail", boundedReason(e)
 				return e
 			}
-			if e := t.r.send(c, mxwire.FrameIngestEnd, p.tx, 0, mxwire.V2IngestEnd{Size: size, ContentDigest: digest}); e != nil {
+			if e := t.r.send(c, mxwire.FrameIngestEnd, p.tx, 0, mxwire.IngestEnd{Size: size, ContentDigest: digest}); e != nil {
 				t.failed = true
 				t.r.release(c, p)
 				hc.phase, hc.outcome, hc.reason = "end", "unknown", "end_send_failed"

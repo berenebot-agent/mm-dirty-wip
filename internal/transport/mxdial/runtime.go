@@ -1199,7 +1199,7 @@ func (s *session) connect() error {
 		done <- doResult{resp, e}
 	}()
 
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "gatehouse"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "gatehouse"})
 	if err = s.write(hello); err != nil {
 		// The transport may already have failed the dial, in which case it
 		// closed the request body and the write reports only "closed pipe".
@@ -1379,7 +1379,7 @@ func (s *session) readReady(body io.Reader) (mxwire.Ready, error) {
 			return mxwire.Ready{}, errors.New("invalid ready")
 		}
 		var ready mxwire.Ready
-		if mxwire.DecodeFrame(r.f, &ready) != nil || ready.Version != mxwire.V2Protocol || ready.ReceiverID == "" || ready.ConnectionID == "" || ready.MaxMessageBytes <= 0 {
+		if mxwire.DecodeFrame(r.f, &ready) != nil || ready.Version != mxwire.V1Protocol || ready.ReceiverID == "" || ready.ConnectionID == "" || ready.MaxMessageBytes <= 0 {
 			return mxwire.Ready{}, errors.New("invalid ready")
 		}
 		if len(ready.ReceiverID) > 128 || len(ready.ConnectionID) > 128 {
@@ -1750,7 +1750,7 @@ func (s *session) resolve(f mxwire.Frame) error {
 	if f.TxID == 0 || f.ChannelID == 0 {
 		return errors.New("invalid resolve ids")
 	}
-	var q mxwire.V2Resolve
+	var q mxwire.ResolveRequest
 	if mxwire.DecodeFrame(f, &q) != nil {
 		return errors.New("invalid resolve")
 	}
@@ -1920,7 +1920,7 @@ func (s *session) ingestStart(f mxwire.Frame) error {
 	if f.ChannelID != 0 {
 		return errors.New("invalid ingest start channel")
 	}
-	var start mxwire.V2IngestStart
+	var start mxwire.IngestStart
 	if mxwire.DecodeFrame(f, &start) != nil {
 		return errors.New("invalid ingest start")
 	}
@@ -1999,7 +1999,7 @@ func (s *session) ingestStart(f mxwire.Frame) error {
 func encodedMetadataLen(m mxwire.IngestMetadata) (int, error) {
 	// JSONFrame requires a non-zero transaction id; a dummy id is used because
 	// only the encoded payload length is measured.
-	f, err := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.V2IngestStart{Domains: []string{"x.test"}, Metadata: m})
+	f, err := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.IngestStart{Domains: []string{"x.test"}, Metadata: m})
 	if err != nil {
 		return 0, err
 	}
@@ -2038,7 +2038,7 @@ func (s *session) ingestEnd(f mxwire.Frame) error {
 	if t == nil {
 		return errors.New("unknown transaction")
 	}
-	var end mxwire.V2IngestEnd
+	var end mxwire.IngestEnd
 	if mxwire.DecodeFrame(f, &end) != nil {
 		return errors.New("invalid ingest end")
 	}
@@ -2201,7 +2201,7 @@ func tempFailResolve(domain, recipient string) mxwire.ResolveResponse {
 // permanent and never upgraded to a temporary failure.
 func normalizeResolve(res mxwire.ResolveResponse, domain, recipient string) mxwire.ResolveResponse {
 	var out mxwire.ResolveResponse
-	out.Version = mxwire.V2Protocol
+	out.Version = mxwire.V1Protocol
 	out.MachineCode = res.MachineCode
 	for _, r := range res.Results {
 		if !strings.EqualFold(strings.TrimSpace(r.Recipient), recipient) {
@@ -2237,7 +2237,7 @@ func normalizeIngest(res mxwire.IngestResponse, recipients []string) mxwire.Inge
 			byRecipient[k] = r
 		}
 	}
-	out := mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: res.MachineCode, MessageID: res.MessageID}
+	out := mxwire.IngestResponse{Version: mxwire.V1Protocol, MachineCode: res.MachineCode, MessageID: res.MessageID}
 	for _, r := range want {
 		rr, ok := byRecipient[r]
 		if !ok {

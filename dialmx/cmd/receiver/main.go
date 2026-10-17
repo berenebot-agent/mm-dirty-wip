@@ -38,6 +38,7 @@ import (
 	receiverruntime "github.com/dellarb/mailmoose/dialmx/runtime"
 	"github.com/dellarb/mailmoose/internal/dnsfallback"
 	"github.com/dellarb/mailmoose/internal/mxagent"
+	"github.com/dellarb/mailmoose/internal/mxwire"
 )
 
 // buildVersion is stamped at build time with -ldflags. It defaults to "dev".
@@ -239,7 +240,7 @@ func runStandalone(log *slog.Logger) {
 // mxwireProtocol is the wire protocol the process speaks. It is referenced from
 // the logging envelope rather than from the receiver package so the startup
 // record can state the protocol before any session exists.
-func mxwireProtocol() string { return "mx-v2" }
+func mxwireProtocol() string { return mxwire.V1Protocol }
 
 // logSettings emits the effective startup settings once: build and protocol,
 // listener addresses, message/staging/connection/recipient limits, the

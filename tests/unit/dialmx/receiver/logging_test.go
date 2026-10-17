@@ -304,8 +304,8 @@ func TestSessionTransportRecordsAreDebug(t *testing.T) {
 		}
 	}
 	if hello, ok := findRecord(recs, "dialmx session hello"); ok {
-		if hello["version"] != mxwire.V2Protocol {
-			t.Fatalf("hello version=%v want %s", hello["version"], mxwire.V2Protocol)
+		if hello["version"] != mxwire.V1Protocol {
+			t.Fatalf("hello version=%v want %s", hello["version"], mxwire.V1Protocol)
 		}
 		if hello["core_label"] == nil {
 			t.Fatalf("hello missing core_label: %v", hello)

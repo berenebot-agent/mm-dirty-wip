@@ -44,7 +44,7 @@ func TestSessionAuthResolveAndIngest(t *testing.T) {
 				t.Errorf("write: %v", e)
 			}
 		}
-		ready, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V2Protocol, ReceiverID: "receiver", ConnectionID: "connection", SMTPHostname: "mx.example.com", MaxMessageBytes: 1 << 20})
+		ready, _ := mxwire.JSONFrame(mxwire.FrameReady, 0, 0, mxwire.Ready{Version: mxwire.V1Protocol, ReceiverID: "receiver", ConnectionID: "connection", SMTPHostname: "mx.example.com", MaxMessageBytes: 1 << 20})
 		write(ready)
 		w.(http.Flusher).Flush()
 		f, e = mxwire.ReadFrame(r.Body)
@@ -72,7 +72,7 @@ func TestSessionAuthResolveAndIngest(t *testing.T) {
 		}
 		af, _ := mxwire.JSONFrame(mxwire.FrameAuthResult, 0, channel, mxwire.AuthResult{Domain: auth.Domain, KeyID: auth.KeyID, Accepted: true, ExpiresAt: time.Now().Add(4 * time.Minute)})
 		write(af)
-		request, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channel, mxwire.V2Resolve{Domain: auth.Domain, Recipient: "alice@example.com"})
+		request, _ := mxwire.JSONFrame(mxwire.FrameResolve, 1, channel, mxwire.ResolveRequest{Domain: auth.Domain, Recipient: "alice@example.com"})
 		write(request)
 		w.(http.Flusher).Flush()
 		f, e = mxwire.ReadFrame(r.Body)
@@ -85,10 +85,10 @@ func TestSessionAuthResolveAndIngest(t *testing.T) {
 			t.Error("resolve failed")
 		}
 		meta := mxwire.IngestMetadata{Recipients: []string{"alice@example.com"}, ContentDigest: digest, Size: int64(len(payload))}
-		start, _ := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.V2IngestStart{Domains: []string{auth.Domain}, Metadata: meta})
+		start, _ := mxwire.JSONFrame(mxwire.FrameIngestStart, 1, 0, mxwire.IngestStart{Domains: []string{auth.Domain}, Metadata: meta})
 		write(start)
 		write(mxwire.ChunkFrame(1, 0, 0, payload))
-		end, _ := mxwire.JSONFrame(mxwire.FrameIngestEnd, 1, 0, mxwire.V2IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
+		end, _ := mxwire.JSONFrame(mxwire.FrameIngestEnd, 1, 0, mxwire.IngestEnd{Size: int64(len(payload)), ContentDigest: digest})
 		write(end)
 		w.(http.Flusher).Flush()
 		f, e = mxwire.ReadFrame(r.Body)

@@ -605,7 +605,7 @@ func newFakeDialer(t *testing.T, base string, client *tls.Config, priv ed25519.P
 		resp, _ := httpClient.Do(req)
 		done <- resp
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "fake"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "fake"})
 	if e := mxwire.WriteFrame(pw, hello); e != nil {
 		t.Fatal(e)
 	}
@@ -656,11 +656,11 @@ func (d *fakeDialer) run() {
 				close(d.ready)
 			}
 		case mxwire.FrameResolve:
-			var q mxwire.V2Resolve
+			var q mxwire.ResolveRequest
 			if mxwire.DecodeFrame(f, &q) != nil {
 				return
 			}
-			resp := mxwire.ResolveResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK}
+			resp := mxwire.ResolveResponse{Version: mxwire.V1Protocol, MachineCode: mxwire.CodeOK}
 			if d.reject[strings.ToLower(q.Recipient)] {
 				resp.Results = []mxwire.ResolveRecipient{{Recipient: q.Recipient, Domain: q.Domain}}
 			} else {
@@ -669,7 +669,7 @@ func (d *fakeDialer) run() {
 			out, _ := mxwire.JSONFrame(mxwire.FrameResolveResult, f.TxID, f.ChannelID, resp)
 			_ = mxwire.WriteFrame(d.pw, out)
 		case mxwire.FrameIngestStart:
-			var st mxwire.V2IngestStart
+			var st mxwire.IngestStart
 			if mxwire.DecodeFrame(f, &st) == nil {
 				d.mu.Lock()
 				d.ingestRecipients = append([]string(nil), st.Metadata.Recipients...)
@@ -684,7 +684,7 @@ func (d *fakeDialer) run() {
 			d.mu.Lock()
 			recips := append([]string(nil), d.ingestRecipients...)
 			d.mu.Unlock()
-			resp := mxwire.IngestResponse{Version: mxwire.V2Protocol, MachineCode: mxwire.CodeOK}
+			resp := mxwire.IngestResponse{Version: mxwire.V1Protocol, MachineCode: mxwire.CodeOK}
 			for i, r := range recips {
 				rr := mxwire.RecipientIngestResult{Recipient: r, MachineCode: mxwire.CodeOK, Disposition: mxwire.DispositionStored, MessageID: fmt.Sprintf("msg-%d", i)}
 				if d.transient[strings.ToLower(r)] {
@@ -752,7 +752,7 @@ func newRawSession(t *testing.T, client *http.Client, base string) *rawSession {
 		resp, _ := client.Do(req)
 		done <- resp
 	}()
-	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V2Protocol, Instance: "raw"})
+	hello, _ := mxwire.JSONFrame(mxwire.FrameHello, 0, 0, mxwire.Hello{Version: mxwire.V1Protocol, Instance: "raw"})
 	if e := mxwire.WriteFrame(pw, hello); e != nil {
 		t.Fatal(e)
 	}

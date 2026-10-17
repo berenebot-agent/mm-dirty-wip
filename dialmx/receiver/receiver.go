@@ -749,7 +749,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 		return
 	}
 	var h mxwire.Hello
-	if mxwire.DecodeFrame(f, &h) != nil || h.Version != mxwire.V2Protocol {
+	if mxwire.DecodeFrame(f, &h) != nil || h.Version != mxwire.V1Protocol {
 		closeReason = "protocol_mismatch"
 		return
 	}
@@ -764,7 +764,7 @@ func (r *Receiver) serve(w http.ResponseWriter, q *http.Request) {
 	r.mu.Unlock()
 	_ = r.send(c, mxwire.FrameReady, 0, 0, mxwire.Ready{
 		Mode:              r.cfg.Mode,
-		Version:           mxwire.V2Protocol,
+		Version:           mxwire.V1Protocol,
 		ReceiverID:        c.receiver,
 		ConnectionID:      c.id,
 		SMTPHostname:      r.cfg.SMTP.Hostname,
