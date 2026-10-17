@@ -83,12 +83,9 @@ secret, or the domain's Postmark Basic-auth credentials — can set the approver
 address and obtain an approval. Exploitation also requires the 128-bit single-use
 approval token, so the practical bar is high.
 
-**Not affected:** the **Resend** adapter takes its envelope sender from the
-Svix-signed webhook payload, and the **SendGrid** adapter takes it from the
-`envelope` field of the ECDSA-signed raw body
-(`internal/transport/sendgrid/inbound.go`). On both, the verified signature
-covers the value the adapter reports, so the envelope sender is genuinely
-attested.
+**Not affected:** the **Resend** adapter takes its envelope sender from its
+Svix-signed webhook payload. The verified signature covers the reported
+envelope sender, so the value is attested.
 
 **Why it is retained:** failing closed on an unattested envelope sender breaks
 email-based draft approvals for the providers that pass one through, which are
