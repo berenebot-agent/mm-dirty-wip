@@ -152,7 +152,7 @@ surface below and [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
 
 Standalone Google/Gmail inboxes also use this surface (D098). Connect using the
 human wizard with a BYO Google OAuth Web client; see
-[Google/Gmail setup](PROVIDERS.md#google-gmail).
+[Google/Gmail setup](EMAIL_PROVIDERS.md#google-gmail).
 Google list views cache metadata and synchronize through the History API; body
 and attachment reads remain live. Folder locators are Gmail label IDs, with
 `ARCHIVE` a derived view. A message can occur in multiple label views with the

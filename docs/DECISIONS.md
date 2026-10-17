@@ -1662,7 +1662,7 @@ and make subdomain `From:` impossible, so it was rejected.
   catch-all inbox must belong to the subdomain, not the parent.
 - Domain-ownership rules for subdomains and parent domains are out of scope
   here; this decision settles the Cloudflare subdomain inheritance behaviour only.
-- `docs/PROVIDERS.md#inbound-cloudflare-email-routing` is corrected: catch-all is apex-only, each
+- `docs/EMAIL_PROVIDERS.md#inbound-cloudflare-email-routing` is corrected: catch-all is apex-only, each
   subdomain must be onboarded, and one connector serves the zone.
 
 **Amendment — linking a parent added after the subdomain.** Creation-time
@@ -3320,7 +3320,7 @@ mailbox boundary preserves source-of-truth, permission and body-storage rules.
 bindings, one-time OAuth attempts, opaque ID/label membership mappings and
 independent detection cursors. Standard-library REST/OAuth, SQLite and the
 existing process-owned workers; no new dependency or runtime service. Background
-metadata work is coalesced and bounded. See `docs/PROVIDERS.md#google-gmail`.
+metadata work is coalesced and bounded. See `docs/EMAIL_PROVIDERS.md#google-gmail`.
 
 ## D099 — Standalone IMAP quick sync, configurable cadence and manual refresh
 
@@ -3420,7 +3420,7 @@ for every connection. Shared delegated mailboxes remain delta-polled.
 transport, provider-specific app orchestration and wizard/settings integration.
 Per-folder bounded metadata pages and on-demand streamed MIME; no new dependency,
 service or runtime. Separate Online Archive mailboxes are outside this release.
-See `docs/PROVIDERS.md#microsoft-outlook` for setup and real-account rollout checks.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook` for setup and real-account rollout checks.
 
 **Amendment (2026-10-11, human approved):** The wizard no longer asks for a
 mailbox type and shared address before sign-in. Two begin buttons choose
@@ -3470,7 +3470,7 @@ reflects active, unexpired subscriptions.
 row per eligible inbox, narrow Graph subscription methods, one shared callback,
 and one serialized process-owned worker loop with bounded per-inbox timeouts.
 Existing Go process, SQLite and polling; no new dependency or runtime service.
-See `docs/PROVIDERS.md#microsoft-outlook` for operator routing and provider latency constraints.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook` for operator routing and provider latency constraints.
 
 ## D102 — Remote metadata counts toward the storage quota
 
@@ -3621,7 +3621,7 @@ second, faster schedule — it should share the existing one.
 per-folder delta helper and a quick pass; a push-aware interval helper and a
 re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox`
 plus one test hook; a coarse SSE tick constant. See
-`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/PROVIDERS.md#microsoft-outlook`.
+`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
 
 ## D105 — Preserve and expose remote arrival source provenance
 
@@ -3652,7 +3652,7 @@ tokens. Remote arrivals are not added to the UI activity log in this change.
 **Complexity:** Migration 065 adds source provenance to remote arrivals and
 pending Microsoft push work. The pending-work marker carries push provenance
 across the asynchronous queue and restarts. No new dependency or service.
-See `docs/PROVIDERS.md#microsoft-outlook`.
+See `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
 
 ## D106 — One import shows a message count and offers a bounded history window
 
@@ -3681,7 +3681,7 @@ Incremental history catch-up and new-mail detection are unaffected.
 
 **Complexity:** Migration 070 adds one nullable text column and one store
 getter/setter. `List` already accepts a Gmail query string, so no transport
-change is needed. No new dependency or service. See `docs/PROVIDERS.md#one-gmail`.
+change is needed. No new dependency or service. See `docs/EMAIL_PROVIDERS.md#one-gmail`.
 
 ## D107 — Dial MX published-record checks are one watcher-owned verdict, pushed over SSE
 
@@ -3905,7 +3905,7 @@ unchanged.
 
 **Complexity/resource budget:** Deletion of one log call and one dead attribute
 computation in `internal/httpapp/microsoft_push.go`; no migration, dependency,
-service, or schema change. See `docs/PROVIDERS.md#microsoft-outlook`.
+service, or schema change. See `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
 
 ## D111 — Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule
 
@@ -4028,7 +4028,7 @@ single-use flash; it is never rendered on the page.
 
 **Reason:** Direct MX has no upstream provider to sign on the domain's behalf, so
 without this every Direct MX operator had to arrange signing out of band —
-`D057` recorded signing as a deliberate future extension and `docs/PROVIDERS.md`
+`D057` recorded signing as a deliberate future extension and `docs/EMAIL_PROVIDERS.md`
 told operators to "arrange DKIM signing separately". DMARC alignment for a domain
 that publishes `p=quarantine` or `p=reject` is effectively unachievable without an
 aligned signature, so the gap made Direct MX unusable for many domains.
@@ -4062,7 +4062,7 @@ operator's responsibility.
 existing provider, one hook in `SendMessage`, and one provider-specific step in
 `SaveDomainSendingConfig`. No new dependency, no new table, no migration, and no
 new service: the key rides in the existing encrypted per-domain sending config
-blob under `APP_ENCRYPTION_KEY`. See `docs/PROVIDERS.md`, `CHANGELOG.md`.
+blob under `APP_ENCRYPTION_KEY`. See `docs/EMAIL_PROVIDERS.md`, `CHANGELOG.md`.
 
 ## D113 — DKIM published-record indicator on the Direct MX sending side
 

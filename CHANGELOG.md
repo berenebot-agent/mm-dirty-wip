@@ -66,7 +66,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   acts on. The inherited-settings caveat is unchanged.
 
 - Consolidated inbound and standalone mailbox setup guidance in
-  `docs/PROVIDERS.md`, kept agent connector setup in `docs/CONNECTORS.md`, and
+  `docs/EMAIL_PROVIDERS.md`, kept agent connector setup in `docs/CONNECTORS.md`, and
   added the operator-focused `docs/REMOTE_MX.md`. Archived the MX/Dial MX
   architecture material and One live-probe notes outside the repository.
 
@@ -83,7 +83,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
 - Consolidated the API contract and generated endpoint catalogue into
   `docs/API.md`, and brought the Google/Gmail and Microsoft standalone inbox
-  setup guides together under `docs/PROVIDERS.md`. Removed the secondary
+  setup guides together under `docs/EMAIL_PROVIDERS.md`. Removed the secondary
   metadata-sync status note and unified-labels guide from the shipped docs; their
   relevant API behavior remains described in `docs/API.md`.
 
@@ -701,7 +701,7 @@ standalone, and whether the approver is enabled for the effective mode. See
   **Postmark** is protected by HTTP Basic credentials MailMoose generates per
   domain and shows once as a ready-to-paste webhook URL, and it preserves binary
   `RawEmail` content byte-for-byte. Configure either under **Receiving** on the
-  domain page; setup guides are in `docs/PROVIDERS.md#inbound-sendgrid` and `docs/PROVIDERS.md#inbound-postmark`.
+  domain page; setup guides are in `docs/EMAIL_PROVIDERS.md#inbound-sendgrid` and `docs/EMAIL_PROVIDERS.md#inbound-postmark`.
   Postmark's unattested envelope sender is added to the accepted-risk note in
   `SECURITY.md`.
 - Dial MX / Antler MX receiving now shows one status light per receiver. Each
