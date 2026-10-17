@@ -60,6 +60,19 @@ func TestDashboardRendersKeyDialog(t *testing.T) {
 			t.Fatalf("dashboard missing %q", want)
 		}
 	}
+	// The Add-client dialog and its ids must appear exactly once. A duplicated
+	// copy makes the ids ambiguous for getElementById and the labels for/for
+	// associations, so a regression that renders it twice is caught here.
+	for _, id := range []string{"key-dialog", "key-form", "key-matrix", "key-type", "key-copy"} {
+		if n := strings.Count(body, `id="`+id+`"`); n != 1 {
+			t.Fatalf("dashboard has %d %q elements, want 1", n, id)
+		}
+	}
+	// The per-dialog copy note was replaced by the shared JS copy helper; the
+	// obsolete paragraph must not render.
+	if strings.Contains(body, "key-copy-note") {
+		t.Fatal("dashboard still renders the obsolete key-copy-note paragraph")
+	}
 	if !strings.Contains(body, `id="inbox-auto-trash"`) || !strings.Contains(body, `id="inbox-connectors-form"`) {
 		t.Fatal("inbox-level delivery settings are missing from inbox settings")
 	}

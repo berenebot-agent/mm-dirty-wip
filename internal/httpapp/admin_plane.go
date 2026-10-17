@@ -19,6 +19,19 @@ import (
 // inviteTTL is how long an account or operator setup link remains valid.
 const inviteTTL = 7 * 24 * time.Hour
 
+// withQuery appends a query parameter to a redirect target, choosing "?" or "&"
+// as the separator so a destination that already carries a query string (for
+// example "/account?tab=account") stays well-formed. Appending a bare
+// "?param=value" folds the parameter into the previous value, which silently
+// drops a one-time setup link or notice when the target is the settings page.
+func withQuery(dest, key, value string) string {
+	sep := "?"
+	if strings.Contains(dest, "?") {
+		sep = "&"
+	}
+	return dest + sep + url.Values{key: {value}}.Encode()
+}
+
 // inviteView is the rendered shape of an invitation: the stored record plus a
 // human-readable kind label and lifecycle status.
 type inviteView struct {
@@ -161,11 +174,11 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request, accountID,
 	}
 	s.Service.Store.Audit(r.Context(), inv.AccountID, "invite.created", inv.Email)
 	if token == "" {
-		http.Redirect(w, r, redirect+"?notice=Invitation+created", 303)
+		http.Redirect(w, r, withQuery(redirect, "notice", "Invitation created"), 303)
 		return
 	}
 	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
-		redirect += "?_flash=" + tok
+		redirect = withQuery(redirect, "_flash", tok)
 	}
 	http.Redirect(w, r, redirect, 303)
 }
@@ -207,7 +220,7 @@ func (s *Server) uiAdminReissueInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	dest := "/admin"
 	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
-		dest += "?_flash=" + tok
+		dest = withQuery(dest, "_flash", tok)
 	}
 	http.Redirect(w, r, dest, 303)
 }
@@ -362,7 +375,7 @@ func (s *Server) uiOperatorReissueInvite(w http.ResponseWriter, r *http.Request)
 	}
 	dest := "/account?tab=account"
 	if tok := s.putFlash(w, r, inviteFlash{Link: s.inviteLink(token)}, len(token)+64); tok != "" {
-		dest += "&_flash=" + tok
+		dest = withQuery(dest, "_flash", tok)
 	}
 	http.Redirect(w, r, dest, 303)
 }
@@ -785,7 +798,7 @@ func (s *Server) sendInviteEmail(w http.ResponseWriter, r *http.Request, p model
 		return
 	}
 	s.Service.Store.Audit(r.Context(), inv.AccountID, "invite.sent", inv.Email)
-	http.Redirect(w, r, redirect+"?notice=Invitation+queued", 303)
+	http.Redirect(w, r, withQuery(redirect, "notice", "Invitation queued"), 303)
 }
 
 // htmlEscape is a tiny helper for the invitation body; the values are all
