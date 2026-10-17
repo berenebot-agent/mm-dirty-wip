@@ -290,6 +290,14 @@ func (m *RemoteMailboxService) reconcileMicrosoftPass(ctx context.Context, accou
 // drained (no NextLink), whether a metadata quota stopped it, and any error. A
 // folder the store does not own (origin != remote) is skipped.
 //
+// Provider I/O (the delta fetch, and the live-message lookup a removal needs) is
+// done first, outside any database transaction. The page's writes — arrivals,
+// metadata, deletions, detected marks, the cursor advance and the final prune —
+// then go to the store as ONE generation-guarded transaction. A resync that
+// lands while the page is in flight therefore drops the whole page: no metadata,
+// no deletion, no arrival, no cursor and no prune from a superseded sweep, and
+// the pass reports the folder incomplete rather than complete.
+//
 // Concurrent syncs of the same inbox+folder are coalesced by an in-flight
 // guard: a role-folder refresh (scheduled on a confirmed remote write) and a
 // whole-mailbox reconcile can otherwise apply the same delta page at once and
@@ -329,80 +337,82 @@ func (m *RemoteMailboxService) syncMicrosoftFolderDelta(ctx context.Context, t s
 		return 0, false, false, e
 	}
 	complete = true
+	detectable := initialized && f.Role == model.FolderRoleInbox
+	source := ""
+	if detectable {
+		source = m.microsoftArrivalSource(ctx, account, inbox)
+	}
+	effects := make([]store.MicrosoftDeltaEffect, 0, len(page.Messages))
 	for _, g := range page.Messages {
 		if g.Removed != nil {
+			// A removal is resolved against the provider before any write: the
+			// message may have moved (still served) or be gone for good.
 			live, ge := m.Microsoft.Message(ctx, t, c.Mailbox, g.ID)
 			if ge == nil {
-				if _, ge = m.cacheMicrosoft(ctx, account, inbox, live); errors.Is(ge, store.ErrRemoteMetadataQuota) {
-					return arrived, false, true, nil
-				} else if ge != nil {
-					return arrived, false, false, ge
-				}
-			} else {
-				var mb *model.MailboxError
-				if !errors.As(ge, &mb) || mb.Kind != model.ErrKindNotFound {
-					return arrived, false, false, ge
-				}
-				if id, ie := m.Service.Store.MicrosoftLocalID(ctx, account, inbox, g.ID); ie == nil {
-					if ie = m.Service.Store.DeleteRemoteMessage(ctx, account, inbox, id); ie != nil {
-						return arrived, false, false, ie
-					}
-				}
+				in := microsoftInput(live)
+				effects = append(effects, store.MicrosoftDeltaEffect{ProviderID: g.ID, Cache: &store.MicrosoftDeltaCache{ProviderID: g.ID, Thread: live.ConversationID, FolderID: live.ParentFolderID, Input: in, Labels: live.Categories}})
+				continue
 			}
+			var mb *model.MailboxError
+			if !errors.As(ge, &mb) || mb.Kind != model.ErrKindNotFound {
+				return 0, false, false, ge
+			}
+			// Gone at the provider: drop the local row. An unknown id is not an
+			// error — the page may name a message this inbox never cached.
+			if _, le := m.Service.Store.MicrosoftLocalID(ctx, account, inbox, g.ID); errors.Is(le, store.ErrNotFound) {
+				continue
+			} else if le != nil {
+				return 0, false, false, le
+			}
+			effects = append(effects, store.MicrosoftDeltaEffect{ProviderID: g.ID, Delete: true})
 			continue
 		}
-		detected, de := m.Service.Store.MicrosoftDetected(ctx, inbox, g.ID)
-		if de != nil {
-			return arrived, false, false, de
-		}
-		if initialized && !detected && f.Role == model.FolderRoleInbox && !g.IsDraft {
-			in := microsoftInput(g)
+		in := microsoftInput(g)
+		effect := store.MicrosoftDeltaEffect{ProviderID: g.ID, Cache: &store.MicrosoftDeltaCache{ProviderID: g.ID, Thread: g.ConversationID, FolderID: g.ParentFolderID, Input: in, Labels: g.Categories}}
+		if detectable && !g.IsDraft {
 			date := parseStoreTime(g.ReceivedDateTime)
-			_, inserted, ae := m.Service.Store.RecordRemoteArrival(ctx, account, inbox, store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date, Source: m.microsoftArrivalSource(ctx, account, inbox)})
-			if ae != nil {
-				return arrived, false, false, ae
-			}
-			if inserted {
-				arrived++
-			}
+			effect.Detect = true
+			effect.Arrival = store.RemoteArrivalInput{FolderPath: "microsoft:" + g.ID, RFCMessageID: in.RFCMessageID, FromName: in.FromName, FromAddress: in.FromAddress, Subject: in.Subject, InternalDate: &date, Source: source}
 		}
-		if _, e = m.cacheMicrosoft(ctx, account, inbox, g); errors.Is(e, store.ErrRemoteMetadataQuota) {
-			return arrived, false, true, nil
-		} else if e != nil {
-			return arrived, false, false, e
-		}
-		if e = m.Service.Store.MarkMicrosoftDetected(ctx, inbox, g.ID); e != nil {
-			return arrived, false, false, e
-		}
+		effects = append(effects, effect)
 	}
 	next := page.NextLink
 	if next == "" {
 		next = page.DeltaLink
 	}
 	if next == "" {
-		return arrived, false, false, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
+		return 0, false, false, model.NewMailboxError(model.ErrKindUnavailable, "Microsoft delta cursor missing", true, nil)
 	}
 	if page.NextLink != "" {
 		complete = false
 	} else {
 		initialized = true
 	}
-	if e = m.Service.Store.SaveMicrosoftDelta(ctx, inbox, f.Path, next, initialized, generation); e != nil {
-		if errors.Is(e, store.ErrStaleCursor) {
-			// A resync reset the folder while this page was in flight: the
-			// cursor advanced here belongs to a superseded sweep, so the page
-			// is dropped without advancing. The new sweep replays the folder
-			// from the empty cursor and re-derives everything.
-			return arrived, complete, false, nil
+	result, e := m.Service.Store.ApplyMicrosoftDeltaPage(ctx, store.MicrosoftDeltaPage{
+		AccountID: account, InboxID: inbox, FolderID: f.Path, Generation: generation,
+		Initialized: initialized, Cursor: next, Effects: effects, Prune: page.NextLink == "",
+	})
+	if e != nil {
+		switch {
+		case errors.Is(e, store.ErrStaleCursor):
+			// A resync reset the folder while this page was in flight: the whole
+			// page belongs to a superseded sweep, so nothing it carried was
+			// written. The new sweep replays the folder from the empty cursor and
+			// re-derives everything; reporting the folder complete here would
+			// claim an index the new sweep has not built yet.
+			return 0, false, false, nil
+		case errors.Is(e, store.ErrRemoteMetadataQuota):
+			// The page rolled back whole, so no cursor advance and no arrivals:
+			// the next pass replays it and re-detects from the same cursor.
+			return 0, false, true, nil
 		}
-		return arrived, complete, false, e
+		return 0, complete, false, e
 	}
-	if page.NextLink == "" {
-		if e = m.Service.Store.PruneMicrosoftResync(ctx, account, inbox, f.Path); e != nil {
-			return arrived, complete, false, e
-		}
-	}
-	return arrived, complete, false, nil
+	// Arrivals are deliberately NOT published here. The remote worker drains
+	// them and publishes through RecordRemoteArrivalEvent, which is also what
+	// logs the "remote received" line and settles the proactive fan-out; emitting
+	// here would consume the one-shot marker and silently starve that path.
+	return result.Arrived, complete, false, nil
 }
 func (m *RemoteMailboxService) getMicrosoft(ctx context.Context, p model.Principal, inbox, id string) (RemoteMessageView, error) {
 	if _, e := m.authorizeRead(ctx, p, inbox); e != nil {

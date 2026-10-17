@@ -82,13 +82,32 @@ func TestOutboxWorkerSurvivesDeliveryPanic(t *testing.T) {
 			t.Fatal(err)
 		}
 		if h.Status == "sent" {
-			// The poison message was recorded as a failed attempt, not lost.
+			// The panicking send is an unresolved handoff: the provider may have
+			// accepted the mail, so the poison message is quarantined for operator
+			// review rather than recorded as a known failure (which would clear
+			// its pre-send marker and reschedule a resend).
 			poisonMsg, err := svc.Store.GetMessageByID(ctx, u.AccountID, poison.Message.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if poisonMsg.Attempts < 1 {
-				t.Fatalf("poison attempts = %d, want >= 1", poisonMsg.Attempts)
+			if poisonMsg.Status != "pending" {
+				t.Fatalf("poison status = %q, want pending (quarantined, not resent)", poisonMsg.Status)
+			}
+			if inFlight, err := svc.Store.MessageSendInFlight(ctx, u.AccountID, poison.Message.ID); err != nil || !inFlight {
+				t.Fatalf("poison marker = %v (%v), want an unresolved send in flight", inFlight, err)
+			}
+			held, err := svc.Store.ListQuarantinedSends(ctx, u.AccountID, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, q := range held {
+				if q.MessageID == poison.Message.ID {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("poison message missing from the quarantine review list")
 			}
 			return
 		}

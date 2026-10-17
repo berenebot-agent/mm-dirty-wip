@@ -481,6 +481,8 @@
     '.aq-row[data-state=waiting] .aq-dot{background:#9aa0a6}',
     '.aq-row[data-state=paused] .aq-dot{background:#b88700}',
     '.aq-row[data-state=paused] .aq-state{color:#8a6d00}',
+    '.aq-row[data-state=done] .aq-dot{background:#188038}',
+    '.aq-row[data-state=done] .aq-state{color:#188038}',
     '.aq-row[data-state=error] .aq-dot{background:#b3261e}',
     '.aq-row[data-state=error] .aq-state{color:#b3261e}',
     '.sync-banner{display:block;background:#e8f0fe;border-color:#c6dafc;color:#174ea6}',
@@ -499,7 +501,7 @@
 
   var MAX_ROWS = 6;
   var RANK = { ambiguous: 0, failed: 1, running: 2, pending: 3 };
-  var STATE_TEXT = { pending: 'Queued', running: 'Working…', failed: 'Failed', ambiguous: 'Check provider' };
+  var STATE_TEXT = { pending: 'Queued', running: 'Working…', failed: 'Failed', ambiguous: 'Check provider', done: 'Complete' };
   // Live metadata-sync rows share the popup with message actions but carry their
   // own state vocabulary (queued/running/waiting/error, plus "paused" when a
   // provider stops for storage capacity) and never render a retry control: a
@@ -546,6 +548,7 @@
     }
     if (input.kind === 'delete') { return 'Move to trash'; }
     if (input.kind === 'purge') { return 'Delete permanently'; }
+    if (input.kind === 'empty_trash') { return 'Empty Trash'; }
     if (input.kind === 'restore') { return 'Restore'; }
     if (input.kind === 'move') { return 'Move'; }
     return input.kind || 'Action';
@@ -610,6 +613,11 @@
     var meta = document.createElement('span');
     meta.className = 'aq-meta';
     meta.textContent = a.error || shortID(a.message_id);
+    if (!a.error && a.empty_trash) {
+      meta.textContent = a.empty_trash.phase === 'discovering'
+        ? 'Finding messages… (' + fmtCount(a.empty_trash.total) + ' found)'
+        : fmtCount(a.empty_trash.purged) + ' of ' + fmtCount(a.empty_trash.total) + ' purged';
+    }
     if (!meta.textContent) { meta.hidden = true; }
     main.append(kind, meta);
     var state = document.createElement('span');
@@ -624,7 +632,7 @@
     var acts = document.createElement('div');
     acts.className = 'aq-acts';
     if (a.state === 'failed') { acts.appendChild(control(a, 'Retry', 'retry', showError)); }
-    if (a.state === 'failed' || a.state === 'ambiguous') {
+    if (a.state === 'failed' || a.state === 'ambiguous' || (a.state === 'done' && a.input && a.input.kind === 'empty_trash')) {
       acts.appendChild(control(a, 'Dismiss', 'dismiss', showError));
     }
     if (acts.childNodes.length) { row.appendChild(acts); }
@@ -757,6 +765,9 @@
       return (SYNC_RANK[a.state] === undefined ? 4 : SYNC_RANK[a.state]) - (SYNC_RANK[b.state] === undefined ? 4 : SYNC_RANK[b.state]);
     });
     var actionOrder = items.slice().sort(function (a, b) {
+      var ap = a.input && a.input.kind === 'empty_trash' ? 0 : 1;
+      var bp = b.input && b.input.kind === 'empty_trash' ? 0 : 1;
+      if (ap !== bp) { return ap - bp; }
       return (RANK[a.state] === undefined ? 3 : RANK[a.state]) - (RANK[b.state] === undefined ? 3 : RANK[b.state]);
     });
     var shownSync = syncOrder;
@@ -783,7 +794,7 @@
     csrf = data.csrf || csrf;
     // Successful actions stay in durable history briefly, but leave the status
     // popup as soon as the worker confirms completion.
-    items = (data.items || []).filter(function (a) { return a.state !== 'done'; });
+    items = (data.items || []).filter(function (a) { return a.state !== 'done' || (a.input && a.input.kind === 'empty_trash'); });
     syncs = data.syncs || [];
     displaySyncs = syncs.filter(shouldDisplaySync);
     // The header spinner reads every status, so routine refreshes still show
@@ -868,6 +879,8 @@
   });
   window.addEventListener('resize', function () { if (bubble.open) { place(); } });
   window.mailmooseRefreshActions = refresh;
+  // Test-only seam: the harness needs to drive one poll with a fixed payload.
+  window.mailmooseActionUpdateForTest = update;
   window.setInterval(refresh, 10000);
   document.addEventListener('visibilitychange', refresh);
   refresh();

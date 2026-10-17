@@ -219,6 +219,7 @@ else
         -v "$BUILD_CACHE:/root/.cache/go-build" \
         -v "$REPO_ROOT:/src" \
         -w /src \
+        -e "GIT_CONFIG_COUNT=1" -e "GIT_CONFIG_KEY_0=safe.directory" -e "GIT_CONFIG_VALUE_0=/src" \
         "$GO_IMAGE" \
         go "$@" 2>&1 | tee "$LOG_FILE"
 fi
