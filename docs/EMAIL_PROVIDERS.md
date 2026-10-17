@@ -4,9 +4,9 @@ MailMoose supports a wide range of options for receiving and sending email, or c
 
 | | Providers |
 | --- | --- |
-| **Inbound** | [Direct MX](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) |
-| **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
-| **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
+| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) ([website](https://www.mailgun.com/)) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) ([website](https://developers.cloudflare.com/email-routing/)) · [Resend](#inbound-resend) ([website](https://resend.com/)) · [Postmark](#inbound-postmark) ([website](https://postmarkapp.com/)) |
+| **Outbound** | [Mailgun](#outbound-mailgun) ([website](https://www.mailgun.com/)) · [Brevo](#outbound-brevo) ([website](https://www.brevo.com/)) · [Resend](#outbound-resend) ([website](https://resend.com/)) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
+| **Existing mailboxes** | [Google / Gmail](#google--gmail) ([website](https://mail.google.com/)) · [Microsoft / Outlook](#microsoft--outlook) ([website](https://www.microsoft.com/microsoft-365/outlook/email-and-calendar-software-microsoft-outlook)) · [One / Gmail](#one--gmail) ([website](https://www.withone.ai/)) · [IMAP + SMTP](#imap--smtp) |
 
 Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
 
@@ -16,19 +16,19 @@ For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](RE
 
 ## Inbound: Direct MX
 
-**Direct MX** receives email directly over SMTP using the receiver bundled with
-the standard MailMoose deployment. In the domain's **Receiving** panel, choose
-**Direct MX** and save. The setup panel shows the SMTP hostname; publish the
-domain's MX records to that hostname and publish SPF for your sending policy.
+**Direct MX (SMTP delivery)** receives email directly from other mail servers using the SMTP receiver bundled with MailMoose.
 
-The standard Compose deployment includes the receiver, but you must
-publish host port 25 (`25:2525`) for public SMTP delivery. Then select **Direct
-MX** for each domain that should receive mail. Direct MX is not enabled for a
-domain merely by opening the port. A webhook-only deployment does not need the
-port-25 mapping.
+**You must expose TCP port 25 to the public internet** for incoming SMTP delivery. Publish the Docker port mapping `25:2525` and allow incoming TCP 25 through your host firewall and router (including port forwarding if hosted on your LAN). Check that your hosting provider or ISP permits inbound SMTP on port 25.
 
-A system administrator can use a separate receiver instead of the bundled one.
-That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
+You also need the correct **public DNS records**:
+
+1. Create an **A** record (and **AAAA**, if using IPv6) for your mail server hostname pointing to its public address.
+2. Set your domain's **MX** record to that hostname, not an IP address. Use the hostname shown in the MailMoose receiving setup.
+3. Configure **SPF** and other sender-authentication records separately if you also send mail from this domain.
+
+In MailMoose, open **Domains → Receiving**, select **Direct MX**, and save for each domain that should receive mail. Opening the port or publishing DNS records alone does not enable the receiver for a domain.
+
+Direct MX is not needed for Antler MX or provider-webhook receiving. Advanced setups can use a [separate SMTP receiver](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
 
 ## Inbound: Antler MX
 
