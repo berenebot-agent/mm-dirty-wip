@@ -1,16 +1,8 @@
-# Mailbox service contract
+# Mailbox behavior
 
-Status: **implemented.** This document is the interface contract the common
-mailbox surface (local/domain and remote/standalone) implements and that the
-workflow, HTTP/API and UI layers depend on. It records the shared model, the
-per-backend ownership, and the honest limits of the remote index. SQLite's exact
-schema is described by the migrations; this file describes behaviour.
+This guide describes how MailMoose presents a consistent API for domain inboxes and connected Gmail, Microsoft, One and IMAP mailboxes. It covers which operations are supported, which data is stored locally and which is retrieved from the provider.
 
-The `MailboxRouter`/`StandaloneMailboxService`/`MailboxBackend` seam that §3
-originally specified was removed as unreachable code (see §3); the live boundary
-is `RemoteMailboxService` plus `internal/httpapp/mailbox_access.go`.
-
-Authoritative tree: `repo/`. Every path below is relative to `repo/`.
+It is a **maintainer reference**, not a setup guide. For configuration, see [Email providers](EMAIL_PROVIDERS.md). Database migrations define the schema; the current code defines the implementation.
 
 ### Google extension (D098)
 
@@ -187,20 +179,7 @@ External aliases are removed, so sending has one target shape per kind:
 - `mapStoreError` normalizes store errors to `*model.MailboxError`.
 - `ErrRemoteNotBound` — a remote operation on a standalone inbox with no
   configured remote connector.
-- The router seam this section originally specified (`MailboxRoute`,
-  `MailboxRouter`, `StandaloneMailboxService`, the `MailboxBackend` interface and
-  its `LocalBackend`/`RemoteBackend` scaffolds) was removed as unreachable code:
-  no workflow, HTTP or UI path ever constructed it. Production dispatch happens
-  in `internal/httpapp/mailbox_access.go`, which resolves an inbox to its backend
-  once and routes every read/mutation; the live remote implementation is
-  `RemoteMailboxService` below. Inbox **Admin**-only creation is enforced at the
-  two live entry points: `adminOnly` in `internal/httpapp/api.go` and the
-  `p.Admin` check in `uiCreateStandalone`.
-
-### Live remote surface (`internal/app/remote_mailbox.go`,
-`remote_mailbox_ops.go`, `remote_mailbox_more.go`)
-`RemoteMailboxService` opens a bounded IMAP session per operation, caches only
-header/thread/folder metadata, and answers the live operations:
+- Older router interfaces were removed; the active entry points are described above.
 - **Configuration:** `ConfigureStandaloneRemote` (non-secret fields plus
   encrypted secrets; a blank secret retains the stored one), `TestStandaloneRemote`
   (authenticate + resolve folder scope + optional SMTP AUTH check, no mailbox
@@ -232,7 +211,7 @@ header/thread/folder metadata, and answers the live operations:
   trashing and purging the outbound message before the copy settles cannot make a
   pending/ambiguous copy unverifiable.
 
-### Remote index completeness (honest limits)
+### Remote mailbox indexing limits
 `ReconcileRemote` refreshes the folder tree and each selectable folder's header
 index **progressively**. Every pass refreshes the newest `remoteNewestRefresh`
 (500) messages so recent mail and flag changes are current, and advances a
@@ -483,7 +462,7 @@ transient scope/`LIST` shortfall or a generation flip.
   The external-alias UI/API/routes/schemas are removed with no compatibility
   shim.
 
-## 5. Known limits (report, do not paper over)
+## 5. Known limitations
 
 - **Progressive backfill, with a 500k UID snapshot ceiling.** Ordinary large
   folders are backfilled to `complete` over successive passes via the persisted

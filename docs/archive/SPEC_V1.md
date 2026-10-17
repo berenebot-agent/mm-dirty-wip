@@ -1,7 +1,10 @@
-# MailMoose — V1 Product Specification
+# Original V1 product specification
 
-**Status:** Implementation-ready V1  
-**Working description:** Open email infrastructure for AI agents: unlimited logical inbox identities, realtime delivery, BYO outbound sending, self-hosted.
+**Historical document.** This was the early implementation plan for MailMoose and is not maintained as a description of the current product. For current information, see the [README](../../README.md), [Architecture](../ARCHITECTURE.md), and [Email providers](../EMAIL_PROVIDERS.md).
+
+The content below is preserved for development history.
+
+## Original proposal
 
 ## 1. Pitch
 
@@ -367,7 +370,7 @@ The application serves HTTP behind the operator's reverse proxy, which provides 
 
 V1 supports Mailgun, Cloudflare Email Routing (via a Worker), Resend, and
 Postmark for webhook receiving, plus Direct MX, Antler MX, Dial MX, and account
-Remote MX for SMTP receiving (see [Remote SMTP receiving](REMOTE_MX.md)).
+Remote MX for SMTP receiving (see [Remote SMTP receiving](../REMOTE_MX.md)).
 SendGrid is not currently offered pending end-to-end verification. Webhook
 providers do not supply MailMoose-computed SPF/DKIM/DMARC evidence; only the SMTP
 receivers perform those checks. The receiver's per-domain policy can classify a

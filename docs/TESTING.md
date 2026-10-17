@@ -2,13 +2,13 @@
 
 This document describes how tests are run, how output is captured, and where to
 find logs. The short version: **run everything through `./tests/run.sh`, and
-never re-run a test just to see the full output — it is always on disk.**
+the complete output is saved for each run.**
 
 ## The unified runner
 
 `./tests/run.sh` is the single entry point. Every invocation writes a complete,
 self-contained run folder under `tests/logs/runs/<run-id>/` and prints only a
-one-line-per-tier summary to stdout (cheap for agents and CI).
+one-line-per-tier summary to stdout.
 
 ```bash
 ./tests/run.sh                      # default preset: unit + vet + fmt (CI parity)
@@ -68,7 +68,7 @@ tests/logs/runs/20261004T043014-1613210-unit,vet,fmt/
 
 - **L1** is what reaches stdout / the terminal. It is deliberately terse.
 - **L2** ranks tests by elapsed time so the slowest are obvious.
-- **L3** is the full captured stream — the thing to read instead of re-running.
+- **L3** is the full captured stream.
 
 ## Reading logs without re-running
 
@@ -154,3 +154,34 @@ downloadable without re-running.
   behaviour or need a genuinely fresh database.
 - Deliberately slow tests belong behind `tests/support/smoke.Require` so they
   run only in the `smoke` tier.
+
+## Release checks
+
+These are manual and end-to-end checks to run before a release. Automated unit, integration and smoke tests remain the normal development gate. Record any external-provider checks that could not be completed.
+
+### Accounts and permissions
+
+- Create an administrator and multiple inboxes. Verify Read, Assistant and Owner keys have the expected access and cannot reach unrelated inboxes.
+- Verify CSRF, secure cookies and session revocation. Create a mailbox user with restricted inbox access.
+- Request a send as Assistant, then approve and reject drafts. Verify a request cannot be approved twice and remote-draft mode puts the draft in the connected provider's Drafts folder.
+
+### Receiving and connected mailboxes
+
+- Receive test mail through Direct MX and Antler MX. Confirm DNS setup, status, inbox routing and unknown-recipient handling.
+- Exercise at least one authenticated webhook receiving provider (Mailgun, Cloudflare, Resend or Postmark), including a duplicate delivery.
+- Connect Gmail, Microsoft and a generic IMAP mailbox. Check initial sync, later arrivals, folders, labels, attachments and disconnect/reconnect behavior. Test One/Gmail if available.
+
+### Sending and integrations
+
+- Send using configured outbound providers and an attachment. Check sent history and idempotency.
+- Verify uncertain outbound delivery is not automatically retried.
+- Connect Hermes and OpenClaw, deliver email, reply and reconnect after an interruption.
+- Verify webhook notification and raw MIME forward modes, authentication, duplicate handling and skipped messages.
+- Give an API client only the base URL and key; verify it can discover permitted operations.
+
+### Recovery and release
+
+- Back up and restore `/data` and any separately supplied encryption key.
+- Check the basic resource profile under idle and ingest load, and investigate unexpected memory or CPU growth.
+- Record the commit tested, test results and any skipped provider checks in the release notes.
+

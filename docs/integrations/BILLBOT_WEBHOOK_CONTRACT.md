@@ -1,9 +1,7 @@
-# MailMoose → Billbot inbound webhook contract
+# Billbot webhook contract
 
-This document is the shared source of truth for the wire contract between
-MailMoose (producer) and Billbot (consumer). Both repositories maintain an
-identical copy of the committed fixture and this format description; keep them
-in sync by hand when the contract changes.
+This documents the webhook request format between
+MailMoose (producer) and Billbot (consumer). Both repositories keep an identical test fixture; update them together if the format changes.
 
 Canonical direction:
 
@@ -45,7 +43,7 @@ X-MailMoose-Cursor:        <event cursor>
   header or the payload.
 - The envelope sender is **relay-supplied**, not provider-attested: it is
   metadata a receiver may record, not authority it should trust without its own
-  provenance check (see `SECURITY.md`).
+  provenance check (see [SECURITY.md](../../SECURITY.md)).
 
 ## Responses
 

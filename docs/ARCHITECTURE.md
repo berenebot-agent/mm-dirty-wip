@@ -1,79 +1,35 @@
-# MailMoose — V1 Architecture
+# Architecture
 
-## 1. Runtime topology
+## 1. System overview
 
-```text
-                         INTERNET EMAIL
-                               │
-                     ┌─────────┴─────────┐
-                  Mailgun/CF/Resend   optional mailmoose-mx
-                   SMTP / MX edge       direct SMTP :25 edge
-                     │                      │ HTTP/2 session
-                  HTTPS webhook              │
-                     └───────────┬────────────┘
-                               ▼
-                  ┌────────────────────────┐
-                  │   MailMoose       │
-                  │                        │
-                  │ Go HTTP server         │
-                  │ auth                   │
-                  │ mailbox core           │
-                  │ MIME ingest/parser     │
-                  │ SQLite + FTS5          │
-                  │ filesystem MIME store  │
-                  │ replayable event history      │
-                  │ SSE / long-poll        │
-                  │ Hermes Relay           │
-                  │ outbound adapters      │
-                  │ embedded web UI        │
-                  └──────────┬─────────────┘
-                             │
-                           /data
-```
-
-The optional `mailmoose-mx` edge is built into the same image but runs as a
-separate, non-root process with no `/data` mount and no encryption key; it is
-an optional exception to the one-process topology (decision `D031`). See
-[REMOTE_MX.md](REMOTE_MX.md).
-
-A second optional direct-SMTP path, **Dial MX**, inverts the direction: a
-standalone receiver terminates SMTP and the core **dials out** to it over
-verified HTTPS/2, so no inbound port is needed on the core. Like the MX edge it
-is a deliberate, operator-chosen optional component outside the default
-single-process topology; it does not introduce a hosted/account mode. See
-[REMOTE_MX.md](REMOTE_MX.md) and decision `D067`.
-
-Production runtime:
+MailMoose is a self-hosted Go application with a web interface, REST API, SQLite database and message storage under `/data`. It supports mailboxes hosted on your domains and existing mailboxes connected through Gmail, Microsoft, One or IMAP.
 
 ```text
-1 binary
-1 process
-1 container
-1 SQLite DB
-1 filesystem data root
-1 main HTTP listener + optional dedicated inbound webhook listener
+Incoming mail                         Existing mailboxes
+├── Direct MX (SMTP)                  ├── Gmail / Google
+├── Antler MX (hosted receiver)       ├── Microsoft / Outlook
+├── Mailgun / Resend / Postmark       ├── One / Gmail
+└── Cloudflare Email Routing         └── IMAP + SMTP
+             │                                   │
+             ▼                                   ▼
+      ┌─────────────────────────────────────────────┐
+      │                 MailMoose                   │
+      │ Domain inboxes    Connected mailbox index  │
+      │ REST API          Web UI                    │
+      │ Permissions       Drafts and approvals     │
+      │ Events            Outbox                    │
+      │ SQLite and local MIME files in /data        │
+      └─────────────────────┬───────────────────────┘
+                            │
+               Agents, webhooks and applications
+               (Hermes, OpenClaw, REST)
 ```
 
-The second listener defaults to `:8082`; `DEDICATED_RECEIVER_ENABLE=false`
-disables it and `DEDICATED_RECEIVER_PORT` changes its port. It serves only the authenticated
-inbound webhook routes and `/healthz`, so an operator can expose a dedicated
-port to mail providers while keeping the main API/UI listener private. Both
-listeners run in the same process and share the same store. Webhook routes remain
-available on the main listener. `DEDICATED_RECEIVER_URL` controls generated
-receiver URLs and falls back to `BASE_URL`; the latter remains the UI/API origin.
+Direct MX can use the SMTP receiver included with MailMoose. Antler MX receives SMTP on a hosted receiver while MailMoose connects outbound to it over encrypted HTTP/2. Other providers deliver through authenticated webhooks. Connected mailboxes remain hosted by their original providers: MailMoose indexes metadata and retrieves bodies when required.
 
-An inbox has a `kind`: `domain` (the classic managed-domain mailbox) or
-`standalone`. A standalone inbox owns an address independent of any managed
-domain and is reached through an optional per-inbox remote IMAP/SMTP connector
-(decision `D097`). Both kinds are first-class mailboxes with folders, labels,
-threads, events and API keys; only their transport differs. A standalone inbox's
-message and thread **metadata** is cached locally while bodies and attachments
-stay live on the provider and are never archived. The common mailbox boundary is
-`internal/app`'s `RemoteMailboxService` plus
-`internal/httpapp/mailbox_access.go`; see
-[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
+The standard deployment uses one application container. A separate SMTP receiver is optional for more advanced deployments. The optional dedicated receiver HTTP listener runs in the same application process. See [Self-hosting](SELFHOSTING.md) and [Email providers](EMAIL_PROVIDERS.md).
 
-## 2. Suggested Go packages
+## 2. Code structure
 
 ```text
 /cmd/server
@@ -115,7 +71,7 @@ The remote IMAP/SMTP adapter lives entirely in `/internal/transport/imap` and
 `/internal/transport/smtp`; `/internal/app` maps the shared mailbox model onto it
 and never speaks IMAP itself.
 
-## 3. Canonical inbound boundary
+## 3. Incoming email
 
 Transport adapters authenticate their own webhook, stage raw MIME to a bounded
 temp file, and return both a normalized message and the explicit binding they
@@ -151,7 +107,7 @@ configuration (`CredentialID` is the config row's id). Provider auth material
 stays inside the adapter. The mailbox core is transport-neutral beyond this
 boundary.
 
-## 4. Inbound transaction
+## 4. Saving incoming mail
 
 ```text
 receive provider request
@@ -297,7 +253,7 @@ Read attachment bytes from the canonical MIME blob on demand in V1.
 
 Serve attachment content as a download with `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. Any future inline preview uses a separately sanitized rendering path.
 
-## 6. Replayable event history
+## 6. Events and reconnection
 
 Mailbox events are persistent SQLite rows:
 
@@ -383,7 +339,7 @@ inbox's remote Sent folder (toggle-able and independently retried; it never
 re-sends, and it owns an independent frozen copy of the raw MIME so a purge of
 the outbound message cannot strand a pending copy). A RemoteDraft handoff is a
 distinct, token-free path handled by the outbox worker — see
-[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) §3.
+[MAILBOX_BEHAVIOR.md](MAILBOX_BEHAVIOR.md) §3.
 
 Account-wide listings that span the local store and several remote inboxes are
 merged into one globally date-sorted stream by

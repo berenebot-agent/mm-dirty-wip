@@ -1,6 +1,143 @@
-# MailMoose — V1 Decision Register
+# Design decisions
 
-This file records architectural decisions the implementation should treat as settled unless a concrete requirement justifies revision. It is the single decision register for the project: the former root `DECISIONS.md` implementation notes were merged here as D038–D051.
+This is a record of technical decisions made during development, including approaches that have since changed. It is **not** a description of the current implementation. Start with [Architecture](ARCHITECTURE.md) for that.
+
+Earlier decisions are left in place for context. Where a decision has been superseded, follow the later decision or the current code. In October 2026, duplicate IDs for three later entries were corrected: D101 → **D129** (delivery-failure notice), D107 → **D130** (Microsoft callback logging), and D119 → **D131** (label projection). The earlier D101, D107 and D119 keep their IDs.
+
+## Decision index
+
+- [D001: One codebase for hosted and self-hosted](#d001-one-codebase-for-hosted-and-self-hosted)
+- [D002: Go runtime](#d002-go-runtime)
+- [D003: Single-container runtime](#d003-single-container-runtime)
+- [D004: SQLite + FTS5](#d004-sqlite-fts5)
+- [D005: Local filesystem MIME store](#d005-local-filesystem-mime-store)
+- [D006: Mailgun reference inbound transport](#d006-mailgun-reference-inbound-transport)
+- [D007: BYO outbound](#d007-byo-outbound)
+- [D008: Replayable event history](#d008-replayable-event-history)
+- [D009: Hermes Relay integration](#d009-hermes-relay-integration)
+- [D010: REST is canonical](#d010-rest-is-canonical)
+- [D011: openagent.email compatibility](#d011-openagentemail-compatibility)
+- [D012: Lightweight web UI](#d012-lightweight-web-ui)
+- [D013: Account storage as hosted capacity control](#d013-account-storage-as-hosted-capacity-control)
+- [D014: Mailbox roles plus account Admin](#d014-mailbox-roles-plus-account-admin)
+- [D015: SQLite concurrency](#d015-sqlite-concurrency)
+- [D016: Mail integrity boundaries](#d016-mail-integrity-boundaries)
+- [D017: Root encryption key](#d017-root-encryption-key)
+- [D018: Direct relay credential issuance](#d018-direct-relay-credential-issuance)
+- [D019: Dedicated inbound webhook listener](#d019-dedicated-inbound-webhook-listener)
+- [D020: Account-owned inbound credentials, domain assignments](#d020-account-owned-inbound-credentials-domain-assignments)
+- [D021: HTML sanitization with bluemonday](#d021-html-sanitization-with-bluemonday)
+- [D022: Resend adapter and webhook-triggered pull inbound](#d022-resend-adapter-and-webhook-triggered-pull-inbound)
+- [D023: Same-origin sandbox for the HTML mail frame](#d023-same-origin-sandbox-for-the-html-mail-frame)
+- [D024: Domain-owned sending and receiving configuration](#d024-domain-owned-sending-and-receiving-configuration)
+- [D025: Draft send requests with human approval](#d025-draft-send-requests-with-human-approval)
+- [D026: External email approval for draft sends](#d026-external-email-approval-for-draft-sends)
+- [D027: Explicit sender restriction toggle (migration 016)](#d027-explicit-sender-restriction-toggle-migration-016)
+- [D028: Public-routable outbound destinations](#d028-public-routable-outbound-destinations)
+- [D029: Approval sender bound to the provider envelope sender](#d029-approval-sender-bound-to-the-provider-envelope-sender)
+- [D030: Inbox aliases: inbound address routing (migration 021)](#d030-inbox-aliases-inbound-address-routing-migration-021)
+- [D031: Optional Go SMTP (MX) edge with signed core handoff](#d031-optional-go-smtp-mx-edge-with-signed-core-handoff)
+- [D032: Send-as-alias: outbound identity (migration 024)](#d032-send-as-alias-outbound-identity-migration-024)
+- [D033: Outbox worker panic containment](#d033-outbox-worker-panic-containment)
+- [D034: Alias sender display names (migration 025)](#d034-alias-sender-display-names-migration-025)
+- [D035: External review remediation (security, correctness, UX)](#d035-external-review-remediation-security-correctness-ux)
+- [D036: One-shot draft writes and consistent draft API](#d036-one-shot-draft-writes-and-consistent-draft-api)
+- [D037: External sending aliases (migration 028)](#d037-external-sending-aliases-migration-028)
+- [D038: Embedded MX: single-container mode with a separate-uid child](#d038-embedded-mx-single-container-mode-with-a-separate-uid-child)
+- [D039: Minimal default Compose enables embedded MX; webhook-only is the opt-out](#d039-minimal-default-compose-enables-embedded-mx-webhook-only-is-the-opt-out)
+- [D040: Separate edge image for remote MX (Dockerfile.mx)](#d040-separate-edge-image-for-remote-mx-dockerfilemx)
+- [D041: Workflow mail has its own outbound queue (migration 022)](#d041-workflow-mail-has-its-own-outbound-queue-migration-022)
+- [D042: In-process privilege drop (no gosu, bind-mounted ./data)](#d042-in-process-privilege-drop-no-gosu-bind-mounted-data)
+- [D043: Free-text message labels (migration 020)](#d043-free-text-message-labels-migration-020)
+- [D044: Control-message log label (migration 019)](#d044-control-message-log-label-migration-019)
+- [D045: Message client attribution (migration 017)](#d045-message-client-attribution-migration-017)
+- [D046: Atomic migration runner (BUG-04)](#d046-atomic-migration-runner-bug-04)
+- [D047: Draft storage accounting (SEC-04)](#d047-draft-storage-accounting-sec-04)
+- [D048: Idempotency semantics (SEC-03, SIMP-05)](#d048-idempotency-semantics-sec-03-simp-05)
+- [D049: Outbound claim lease (BUG-05)](#d049-outbound-claim-lease-bug-05)
+- [D050: Revocation cancels live connections (SEC-05)](#d050-revocation-cancels-live-connections-sec-05)
+- [D051: In-transaction hydration (BUG-02)](#d051-in-transaction-hydration-bug-02)
+- [D052: One source of truth for API discovery](#d052-one-source-of-truth-for-api-discovery)
+- [D053: Proxy-chain trust and canonical HTTPS redirect](#d053-proxy-chain-trust-and-canonical-https-redirect)
+- [D054: Operator MX edge secrets require 256 bits](#d054-operator-mx-edge-secrets-require-256-bits)
+- [D055: Operator password reset (superseded in part by D060)](#d055-operator-password-reset-superseded-in-part-by-d060)
+- [D056: Product rename to MailMoose](#d056-product-rename-to-mailmoose)
+- [D057: Self-hosted Direct MX outbound delivery](#d057-self-hosted-direct-mx-outbound-delivery)
+- [D058: Strix security review remediation](#d058-strix-security-review-remediation)
+- [D059: Unattested inbound envelope senders: extended acceptance and containment](#d059-unattested-inbound-envelope-senders-extended-acceptance-and-containment)
+- [D060: System administrator, account Admins, and mailbox operators](#d060-system-administrator-account-admins-and-mailbox-operators)
+- [D061: The trusted-proxy per-request WARN is removed (D059 correction)](#d061-the-trusted-proxy-per-request-warn-is-removed-d059-correction)
+- [D062: Unified clients and webhook delivery](#d062-unified-clients-and-webhook-delivery)
+- [D063: Subdomains inherit their parent domain's receiver and sender](#d063-subdomains-inherit-their-parent-domains-receiver-and-sender)
+- [D064: Self-hosted-only product; hosted mode removed](#d064-self-hosted-only-product-hosted-mode-removed)
+- [D065: In-flight delivery attempts are durably recorded](#d065-in-flight-delivery-attempts-are-durably-recorded)
+- [D066: Persist the transport envelope sender; forward envelope metadata; terminal webhook skips](#d066-persist-the-transport-envelope-sender-forward-envelope-metadata-terminal-webhook-skips)
+- [D067: Dial MX: an outbound-dialing standalone receiver](#d067-dial-mx-an-outbound-dialing-standalone-receiver)
+- [D070: One MX receiver transport, private single-core and public shared modes](#d070-one-mx-receiver-transport-private-single-core-and-public-shared-modes)
+- [D071: MX receiver configuration is persisted and reconciled at runtime](#d071-mx-receiver-configuration-is-persisted-and-reconciled-at-runtime)
+- [D072: Bounded shared MX shards and dial-time destination policy](#d072-bounded-shared-mx-shards-and-dial-time-destination-policy)
+- [D073: Trash: soft-delete, restore, configurable retention](#d073-trash-soft-delete-restore-configurable-retention)
+- [D074: OpenClaw is a second relay connector kind over the same transport](#d074-openclaw-is-a-second-relay-connector-kind-over-the-same-transport)
+- [D075: Passkey backup flags, sysadmin break-glass, and atomic auth-method changes](#d075-passkey-backup-flags-sysadmin-break-glass-and-atomic-auth-method-changes)
+- [D076: Account-admin settings separation and per-inbox Trash retention](#d076-account-admin-settings-separation-and-per-inbox-trash-retention)
+- [D077: Sign in to the web UI with a non-admin mailbox API key](#d077-sign-in-to-the-web-ui-with-a-non-admin-mailbox-api-key)
+- [D078: Delivery-triggered per-inbox auto-actions for agent connectors](#d078-delivery-triggered-per-inbox-auto-actions-for-agent-connectors)
+- [D079: Per-inbox storage quotas](#d079-per-inbox-storage-quotas)
+- [D080: Configurable HTTP receiver listener and public origin](#d080-configurable-http-receiver-listener-and-public-origin)
+- [D081: Delivery auto-actions default to the `all` trigger](#d081-delivery-auto-actions-default-to-the-all-trigger)
+- [D082: Antler MX: a named shared receiver service with live endpoint discovery](#d082-antler-mx-a-named-shared-receiver-service-with-live-endpoint-discovery)
+- [D083: Cleartext shared-mode sessions from a trusted TLS-terminating proxy](#d083-cleartext-shared-mode-sessions-from-a-trusted-tls-terminating-proxy)
+- [D084: Remote MX: an account-owned single-mode receiver](#d084-remote-mx-an-account-owned-single-mode-receiver)
+- [D085: First-run HTTP setup wizard (supersedes D055 in part)](#d085-first-run-http-setup-wizard-supersedes-d055-in-part)
+- [D086: Private outbound is allowed by default (amends D028)](#d086-private-outbound-is-allowed-by-default-amends-d028)
+- [D087: Receiver cleartext and remote-MX URLs default to allow, with a warning](#d087-receiver-cleartext-and-remote-mx-urls-default-to-allow-with-a-warning)
+- [D088: Release follow-up: delivery bounds, safe diagnostics and approval limits](#d088-release-follow-up-delivery-bounds-safe-diagnostics-and-approval-limits)
+- [D089: Per-inbox Clients & Access tab](#d089-per-inbox-clients-access-tab)
+- [D090: Activity-log source names the receiving receiver](#d090-activity-log-source-names-the-receiving-receiver)
+- [D091: Domain-scoped failure cooldown on the Dial MX receiver](#d091-domain-scoped-failure-cooldown-on-the-dial-mx-receiver)
+- [D092: Configurable outbound provider HTTP timeout](#d092-configurable-outbound-provider-http-timeout)
+- [D093: Concurrent outbox senders](#d093-concurrent-outbox-senders)
+- [D094: Live web-UI updates: session SSE stream, state snapshot, and read-state events](#d094-live-web-ui-updates-session-sse-stream-state-snapshot-and-read-state-events)
+- [D095: Dial MX receiver owns MX-routing verification (gate 2), replacing the core's separate MX cross-check](#d095-dial-mx-receiver-owns-mx-routing-verification-gate-2-replacing-the-cores-separate-mx-cross-check)
+- [D096: SendGrid and Postmark inbound connectors](#d096-sendgrid-and-postmark-inbound-connectors)
+- [D097: Standalone mailboxes and the common mailbox service boundary](#d097-standalone-mailboxes-and-the-common-mailbox-service-boundary)
+- [D098: BYO Google connected inboxes](#d098-byo-google-connected-inboxes)
+- [D099: Standalone IMAP quick sync, configurable cadence and manual refresh](#d099-standalone-imap-quick-sync-configurable-cadence-and-manual-refresh)
+- [D100: Microsoft connected mailboxes with public-client OAuth and delta polling](#d100-microsoft-connected-mailboxes-with-public-client-oauth-and-delta-polling)
+- [D101: Microsoft own-mailbox push with durable delta catch-up](#d101-microsoft-own-mailbox-push-with-durable-delta-catch-up)
+- [D102: Remote metadata counts toward the storage quota](#d102-remote-metadata-counts-toward-the-storage-quota)
+- [D103: Shared durable inbox action queue](#d103-shared-durable-inbox-action-queue)
+- [D104: Demand-coalesced standalone detection with a Microsoft quick pass and push-aware polling](#d104-demand-coalesced-standalone-detection-with-a-microsoft-quick-pass-and-push-aware-polling)
+- [D105: Preserve and expose remote arrival source provenance](#d105-preserve-and-expose-remote-arrival-source-provenance)
+- [D106: One import shows a message count and offers a bounded history window](#d106-one-import-shows-a-message-count-and-offers-a-bounded-history-window)
+- [D107: Dial MX published-record checks are one watcher-owned verdict, pushed over SSE](#d107-dial-mx-published-record-checks-are-one-watcher-owned-verdict-pushed-over-sse)
+- [D108: One/Gmail metadata sync shows a normalised estimate and never a "waiting" state](#d108-onegmail-metadata-sync-shows-a-normalised-estimate-and-never-a-waiting-state)
+- [D109: One native API message schema across inbox kinds and routes](#d109-one-native-api-message-schema-across-inbox-kinds-and-routes)
+- [D110: Useful common message metadata, internal-only IMAP locators, and safe direction inference](#d110-useful-common-message-metadata-internal-only-imap-locators-and-safe-direction-inference)
+- [D130: Microsoft push callbacks are silent fetch hints](#d130-microsoft-push-callbacks-are-silent-fetch-hints)
+- [D111: Local DNS checks distinguish "absent" from "unknown", and share the receiver's MM1 rule](#d111-local-dns-checks-distinguish-absent-from-unknown-and-share-the-receivers-mm1-rule)
+- [D112: Antler setup keeps its receiver snapshot, and its settings are editable in place](#d112-antler-setup-keeps-its-receiver-snapshot-and-its-settings-are-editable-in-place)
+- [D069: DKIM signing on the Direct MX outbound path](#d069-dkim-signing-on-the-direct-mx-outbound-path)
+- [D113: DKIM published-record indicator on the Direct MX sending side](#d113-dkim-published-record-indicator-on-the-direct-mx-sending-side)
+- [D114: Review remediation: partial fan-out acknowledgement, account-settings scope, and config honesty](#d114-review-remediation-partial-fan-out-acknowledgement-account-settings-scope-and-config-honesty)
+- [D129: Terminal outbound failures are surfaced as a local delivery-failure notice](#d129-terminal-outbound-failures-are-surfaced-as-a-local-delivery-failure-notice)
+- [D115: Domain-wide sending: a per-key grant anchored on the catch-all inbox](#d115-domain-wide-sending-a-per-key-grant-anchored-on-the-catch-all-inbox)
+- [D116: Second review remediation: redirect, cookie, CSRF, flash, throttle, Argon admission and inbound fairness](#d116-second-review-remediation-redirect-cookie-csrf-flash-throttle-argon-admission-and-inbound-fairness)
+- [D117: Low/edge security review round: parameter bounds, CSP, cache and pre-auth CSRF](#d117-lowedge-security-review-round-parameter-bounds-csp-cache-and-pre-auth-csrf)
+- [D118: Stored secrets always carry an AAD binding; the PBKDF2 password path is removed](#d118-stored-secrets-always-carry-an-aad-binding-the-pbkdf2-password-path-is-removed)
+- [D119: Standalone workflow delivery no longer fails on a NULL inbox domain, and a failed action reports its real cause](#d119-standalone-workflow-delivery-no-longer-fails-on-a-null-inbox-domain-and-a-failed-action-reports-its-real-cause)
+- [D120: A move destination may be a folder id or a folder path](#d120-a-move-destination-may-be-a-folder-id-or-a-folder-path)
+- [D131: One label membership projection, one filter resolution, and catalogue capabilities](#d131-one-label-membership-projection-one-filter-resolution-and-catalogue-capabilities)
+- [D121: Remote-draft mode just places the draft: no notification, no approver, no handoff UI](#d121-remote-draft-mode-just-places-the-draft-no-notification-no-approver-no-handoff-ui)
+- [D122: Immediate, folder-scoped pull after a confirmed remote write](#d122-immediate-folder-scoped-pull-after-a-confirmed-remote-write)
+- [D123: `NOINDEX` asks crawlers to skip the human UI](#d123-noindex-asks-crawlers-to-skip-the-human-ui)
+- [D124: Receiving DNS checks are a hard gate: four states, and only `ok` is green](#d124-receiving-dns-checks-are-a-hard-gate-four-states-and-only-ok-is-green)
+- [D125: Transient hub notifications are wake hints; SQLite remains event truth](#d125-transient-hub-notifications-are-wake-hints-sqlite-remains-event-truth)
+- [D126: A provider-accepted send is never resent automatically](#d126-a-provider-accepted-send-is-never-resent-automatically)
+- [D127: `attention` is an authorization verdict, not any provider error](#d127-attention-is-an-authorization-verdict-not-any-provider-error)
+- [D128: The root encryption key is generated when the operator does not supply one](#d128-the-root-encryption-key-is-generated-when-the-operator-does-not-supply-one)
+
+---
 
 ## D001 — One codebase for hosted and self-hosted
 
@@ -1837,7 +1974,7 @@ safe and prevents a crafted relay value from being echoed as authority.
 - No backward-compatibility alias is needed for a capability that has not yet
   shipped.
 - The joint wire contract with the consuming agent (Billbot) is documented in
-  `docs/MAILMOOSE_CONTRACT.md`, with a byte-identical fixture committed at
+  `docs/integrations/BILLBOT_WEBHOOK_CONTRACT.md`, with a byte-identical fixture committed at
   `tests/fixtures/mailmoose-webhook-contract.json` in both repositories. Both
   are maintained by hand; the generating worker test is
   `TestWebhookForwardContractFixture`.
@@ -3255,7 +3392,7 @@ a deployment policy may refuse), one migration rebuild of `inboxes`, the router
 plus a `MailboxBackend` interface and its local/remote scaffolds, standalone
 store CRUD, a removal migration with post-commit file retirement, and the
 deletion of the external-alias surface across store/app/httpapp/apispec. See
-`docs/MAILBOX_SERVICE_CONTRACT.md` for the frozen per-type/per-method ownership
+`docs/MAILBOX_BEHAVIOR.md` for the frozen per-type/per-method ownership
 that the next waves implement against.
 
 **Status update (implementation complete):** The adapter wave has landed and the
@@ -3280,7 +3417,7 @@ exceeds it is indexed newest-window-only, prune is skipped, and it stays
 `partial`, never falsely `complete`. The scope is the server's personal namespace
 as discovered by `NAMESPACE` (`Other`/`Shared` always excluded); when `NAMESPACE`
 is unsupported the scope is deliberately conservative (the explicit root,
-default `INBOX`, and its children). See `docs/MAILBOX_SERVICE_CONTRACT.md`
+default `INBOX`, and its children). See `docs/MAILBOX_BEHAVIOR.md`
 §1/§3/§5.
 
 **Status update (dead-code removal, 2026-10-13):** The `MailboxRouter` /
@@ -3292,7 +3429,7 @@ test did) — so it was removed with that test. The surviving declarations
 moved to `internal/app/mailbox_boundary.go`. The live boundary is unchanged:
 `internal/httpapp/mailbox_access.go` for dispatch and `RemoteMailboxService` for
 remote operations, with Admin-only standalone creation still enforced at both
-live entry points. `docs/MAILBOX_SERVICE_CONTRACT.md` §3 was updated to match;
+live entry points. `docs/MAILBOX_BEHAVIOR.md` §3 was updated to match;
 the rest of this entry stands.
 
 ## D098 — BYO Google connected inboxes
@@ -3392,7 +3529,7 @@ this aligns the save path with the connector path.
 setter; a worker cadence helper and quick-index step; an adapter `Status` method
 and capability flags; one HTTP route plus a toolbar button and two settings
 fields. No new dependency or runtime service. See
-`docs/MAILBOX_SERVICE_CONTRACT.md` §5.
+`docs/MAILBOX_BEHAVIOR.md` §5.
 
 ## D100 — Microsoft connected mailboxes with public-client OAuth and delta polling
 
@@ -3524,7 +3661,7 @@ keeps the charge about our footprint, not the remote mailbox's body volume.
 **Complexity/resource budget:** No migration; a storage helper set (byte SQL,
 Go mirror, headroom/room check, delta apply, per-mutation sync), instrumentation
 of the existing remote write paths, sentinel mapping, one new unit-test file.
-No new dependency or runtime service. See `docs/MAILBOX_SERVICE_CONTRACT.md` §5.
+No new dependency or runtime service. See `docs/MAILBOX_BEHAVIOR.md` §5.
 
 ## D103 — Shared durable inbox action queue
 
@@ -3621,7 +3758,7 @@ second, faster schedule — it should share the existing one.
 per-folder delta helper and a quick pass; a push-aware interval helper and a
 re-resolved watcher timer; a per-inbox demand timestamp and gate on `DetectInbox`
 plus one test hook; a coarse SSE tick constant. See
-`docs/MAILBOX_SERVICE_CONTRACT.md` §5 and `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
+`docs/MAILBOX_BEHAVIOR.md` §5 and `docs/EMAIL_PROVIDERS.md#microsoft-outlook`.
 
 ## D105 — Preserve and expose remote arrival source provenance
 
@@ -3880,7 +4017,7 @@ processor in the existing worker, one shared direction classifier, explicit API
 projection changes, and deterministic migration/MIME/protocol/HTTP tests. No new
 module dependency, service, runtime, or historical body storage.
 
-## D107 — Microsoft push callbacks are silent fetch hints
+## D130 — Microsoft push callbacks are silent fetch hints
 
 **Date:** 2026-10-12. **Approved by:** Ben.
 
@@ -4205,7 +4342,7 @@ decision.
 `Principal` and its two call sites, comment/doc/Compose edits. No new
 dependency, table or migration.
 
-## D101 — Terminal outbound failures are surfaced as a local delivery-failure notice
+## D129 — Terminal outbound failures are surfaced as a local delivery-failure notice
 
 **Requirement:** A direct-MX send that fails terminally (for example a Microsoft
 `550 5.7.1 ... blocked using Spamhaus`) was recorded only as a failed row in the
@@ -4734,7 +4871,7 @@ Gmail label ids, which a path-based destination would not satisfy). No API surfa
 (the destination resolution), `internal/app/message_actions.go` (the error reasons) and one
 store-level regression test. No new dependency, table or migration.
 
-## D119 — One label membership projection, one filter resolution, and catalogue capabilities
+## D131 — One label membership projection, one filter resolution, and catalogue capabilities
 
 **Date:** 2026-10-13. **Approved by:** Ben.
 
