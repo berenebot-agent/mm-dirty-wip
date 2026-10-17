@@ -60,14 +60,14 @@ func TestAcceptedSendOutcomeWriteFailureNeverResends(t *testing.T) {
 		t.Fatalf("provider called %d times, want 1", calls.Load())
 	}
 
-	// The message is quarantined: pending, marker set, not claimable — even far
-	// past the lease and after a restart recovery.
+	// The uncertain handoff is now visible as a failed Outbox row, with its
+	// original pre-send marker retained to prevent automatic duplicate delivery.
 	m, err := svc.Store.GetMessageByID(ctx, u.AccountID, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Status != "pending" {
-		t.Fatalf("status = %q, want pending (held)", m.Status)
+	if m.Status != "failed" || !store.IsUncertainDelivery(m.LastError) {
+		t.Fatalf("status = %q error = %q, want delivery uncertain", m.Status, m.LastError)
 	}
 	if inFlight, _ := svc.Store.MessageSendInFlight(ctx, u.AccountID, id); !inFlight {
 		t.Fatal("no pre-send marker after a failed outcome write")
@@ -78,10 +78,13 @@ func TestAcceptedSendOutcomeWriteFailureNeverResends(t *testing.T) {
 	if again, _, err := svc.Store.ClaimNextPending(ctx, time.Now().UTC().Add(72*time.Hour), "w2", time.Hour); err != nil || again != "" {
 		t.Fatalf("quarantined message became claimable: %q err=%v", again, err)
 	}
-	// It is surfaced for operator review.
-	q, err := svc.QuarantinedSends(ctx, u.AccountID, 10)
-	if err != nil || len(q) != 1 || q[0].MessageID != id {
-		t.Fatalf("quarantined = %+v err=%v, want the held message", q, err)
+	// It is surfaced through the ordinary failed Outbox.
+	rows, err := svc.Store.ListOutbox(ctx, p, box.ID, 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != id {
+		t.Fatalf("outbox = %+v err=%v, want uncertain message", rows, err)
+	}
+	if err = svc.Store.RequeueFailed(ctx, p, id); !errors.Is(err, store.ErrUncertainDelivery) {
+		t.Fatalf("retry without duplicate-risk confirmation = %v", err)
 	}
 	// No automatic resend: the provider is still called exactly once.
 	if calls.Load() != 1 {
@@ -181,8 +184,14 @@ func TestWorkflowAcceptedSendOutcomeWriteFailureNeverResends(t *testing.T) {
 	if id, _, err := svc.Store.ClaimNextWorkflow(ctx, time.Now().UTC().Add(72*time.Hour), "w2", time.Hour); err != nil || id != "" {
 		t.Fatalf("quarantined workflow became claimable: %q err=%v", id, err)
 	}
-	q, err := svc.QuarantinedWorkflowSends(ctx, u.AccountID, 10)
-	if err != nil || len(q) != 1 || q[0].WorkflowID != w.ID {
-		t.Fatalf("quarantined workflows = %+v err=%v", q, err)
+	// The approval-notification state distinguishes ambiguity from rejection.
+	job, err := svc.Store.GetWorkflowInternal(ctx, u.AccountID, w.ID)
+	if err != nil || job.Status != model.WorkflowFailed || !store.IsUncertainDelivery(job.LastError) {
+		t.Fatalf("uncertain workflow = %+v err=%v", job, err)
+	}
+	principal := model.Principal{AccountID: u.AccountID, Admin: true, MailboxRoles: map[string]string{box.ID: "owner"}}
+	request, err := svc.Store.GetSendRequestByDraft(ctx, principal, d.ID)
+	if err != nil || request.NotificationStatus != model.NotificationUncertain {
+		t.Fatalf("notification status = %+v err=%v", request, err)
 	}
 }
