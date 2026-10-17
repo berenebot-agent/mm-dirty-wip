@@ -2189,8 +2189,11 @@ func (s *Service) Deliver(ctx context.Context, accountID, msgID, claim string) e
 		// the message out of the claim pool, so it can never be resent
 		// automatically; ReleaseMessageClaim is deliberately a no-op for a row
 		// that still carries a marker, so there is no window in which the
-		// message becomes claimable again. The row waits for operator review
-		// (ListQuarantinedSends) instead.
+		// message becomes claimable again. Show it as uncertain in the failed
+		// Outbox instead of implying a definitive provider rejection.
+		if uerr := s.Store.MarkMessageUncertain(outcomeCtx, m.AccountID, m.ID, "could not record provider acceptance", claim); uerr != nil {
+			s.Log.Warn("park unresolved outbound send", "message_id", m.ID, "error", uerr)
+		}
 		return err
 	}
 	s.Log.Info("outbound sent", "message_id", m.ID, "from", m.From.Address, "to", m.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2311,7 +2314,13 @@ func (s *Service) fail(ctx context.Context, m model.Message, err error, provider
 	// (a client timeout that may follow a provider-accepted request) is also
 	// terminal: retrying a provider without an idempotency key could deliver
 	// twice.
-	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
+	if transport.AsAmbiguous(err) {
+		if ferr := s.Store.MarkMessageUncertain(ctx, m.AccountID, m.ID, err.Error(), claim); ferr != nil {
+			return ferr
+		}
+		return err
+	}
+	if transport.IsPermanent(err) {
 		_, events, ferr := s.Store.MarkFailed(ctx, m.AccountID, m.ID, err.Error(), time.Time{}, 1, provider, claim)
 		if ferr != nil {
 			return ferr
@@ -2471,7 +2480,14 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, cl
 		// The outcome write failed outright. The durable pre-send marker keeps
 		// the job out of the claim pool (ReleaseWorkflowClaim is a no-op while
 		// a marker is present), so it can never be resent automatically; it
-		// waits for operator review.
+		// now appears as an uncertain approval notification for review.
+		if events, uerr := s.Store.MarkWorkflowUncertain(outcomeCtx, accountID, workflowID, "could not record provider acceptance", claim); uerr != nil {
+			s.Log.Warn("park unresolved approval notification", "workflow_id", workflowID, "error", uerr)
+		} else {
+			for _, ev := range events {
+				s.Hub.Publish(ev)
+			}
+		}
 		return err
 	}
 	s.Log.Info("workflow sent", "workflow_id", workflowID, "from", w.From.Address, "to", w.To, "provider", outboundProviderLabel(sending.Provider))
@@ -2486,7 +2502,17 @@ func (s *Service) DeliverWorkflow(ctx context.Context, accountID, workflowID, cl
 // (see fail). claim is the token the failed attempt held, so the outcome write
 // is rejected when a re-claiming attempt owns the job.
 func (s *Service) failWorkflow(ctx context.Context, w store.Workflow, err error, provider, claim string) error {
-	if transport.IsPermanent(err) || transport.AsAmbiguous(err) {
+	if transport.AsAmbiguous(err) {
+		events, ferr := s.Store.MarkWorkflowUncertain(ctx, w.AccountID, w.ID, err.Error(), claim)
+		if ferr != nil {
+			return ferr
+		}
+		for _, ev := range events {
+			s.Hub.Publish(ev)
+		}
+		return err
+	}
+	if transport.IsPermanent(err) {
 		events, ferr := s.Store.MarkWorkflowFailed(ctx, w.AccountID, w.ID, err.Error(), time.Time{}, 1, provider, claim)
 		if ferr != nil {
 			return ferr

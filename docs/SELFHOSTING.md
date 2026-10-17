@@ -151,6 +151,25 @@ webhook listener to the container port configured by `DEDICATED_RECEIVER_PORT`
 `BASE_URL` remains the address for the UI and sign-in links. Set
 `DEDICATED_RECEIVER_ENABLE=false` to disable the separate listener.
 
+## Uncertain outbound deliveries
+
+If a provider call has started but MailMoose cannot verify its outcome
+(for example, a network timeout or a failed database outcome write),
+MailMoose leaves the message in the **Outbox** with **Delivery uncertain**.
+It does not automatically retry or claim that the recipient definitely
+did not receive the message. A restart or an expired in-flight claim
+reconciles any such pending messages into that visible failed state.
+
+An operator may delete the message or select **Retry**. Retrying requires
+acknowledging that the first attempt could already have delivered a copy.
+For API clients, use `POST /v1/outbox/{id}/retry?confirm_duplicate_risk=true`
+only after the user has explicitly acknowledged that risk; without the
+parameter the endpoint returns `409` for an uncertain send. Ordinary failed
+messages remain retryable without this parameter.
+
+An ambiguous approval-notification send is likewise not retried
+automatically; the draft send request shows **Notification uncertain**.
+
 ## Backup
 
 Back up a filesystem-consistent snapshot of `./data` and separately retain

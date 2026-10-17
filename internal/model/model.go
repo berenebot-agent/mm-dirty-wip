@@ -585,6 +585,7 @@ const (
 	NotificationQueued = "queued"
 	NotificationSent   = "sent"
 	NotificationFailed = "failed"
+	NotificationUncertain = "uncertain"
 )
 
 // Outbound workflow job states stored on outbound_workflow.status.
@@ -717,7 +718,7 @@ type DraftSendRequest struct {
 	// opaque non-secret id, exposed so a client can correlate the notification.
 	ApprovalWorkflowID string `json:"approval_workflow_id,omitempty"`
 	// NotificationStatus reports whether the approval-request email was queued,
-	// handed to the outbound path, or failed (NotificationNone|Queued|Sent|Failed).
+	// handed to the outbound path, failed or uncertain (None|Queued|Sent|Failed|Uncertain).
 	NotificationStatus string     `json:"notification_status,omitempty"`
 	DecidedAt          *time.Time `json:"decided_at,omitempty"`
 	DecisionActor      string     `json:"decision_actor,omitempty"`
