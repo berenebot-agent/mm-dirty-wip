@@ -448,14 +448,20 @@ func (m *RemoteMailboxService) GoogleMailboxClient(ctx context.Context, account,
 		}
 		return nil
 	}
+	// status records only a confirmed authorization verdict. A retryable,
+	// unavailable, rate-limited or connector-level (ErrKindUnsupported) outcome
+	// is never evidence that the stored credential is invalid, so it must not
+	// mark the binding as needing attention. SetOneRequestHealth already stops
+	// request feedback from replacing an authoritative verdict, but treating a
+	// connector action-mapping problem as attention still stranded the inbox on
+	// a state only a manual reconnect could clear.
 	status := func(ctx context.Context, e error) {
 		var mb *model.MailboxError
-		if errors.As(e, &mb) {
-			state := "active"
-			if mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden || mb.Kind == model.ErrKindUnsupported {
-				state = "attention"
-			}
-			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, state, mb.Message, b.Revision)
+		if !errors.As(e, &mb) {
+			return
+		}
+		if mb.Kind == model.ErrKindAuth || mb.Kind == model.ErrKindForbidden {
+			_ = m.Service.Store.SetOneRequestHealth(ctx, account, inbox, "attention", mb.Message, b.Revision)
 		}
 	}
 	return c.Gmail(selector, check, status), "", nil
