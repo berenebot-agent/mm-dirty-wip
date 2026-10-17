@@ -262,6 +262,18 @@ func descriptor() map[string]any {
 }
 
 func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) error {
+	// The read loop spawns outbound goroutines that touch SQLite and the socket.
+	// Wait for them to settle before returning, so a late outbound write never
+	// races the connection teardown and an in-flight send is never silently
+	// abandoned mid-unwind. Their context is cancelled by the loop's teardown,
+	// so the join is bounded by individual op unwinding only.
+	var outboundWG sync.WaitGroup
+	err := s.runLoop(ctx, c, h, &outboundWG)
+	outboundWG.Wait()
+	return err
+}
+
+func (s *Server) runLoop(ctx context.Context, c *ws.Conn, h store.HermesConnection, outboundWG *sync.WaitGroup) error {
 	// Deleting the connection cancels this socket immediately.
 	scopeCtx, unregister := s.Hub.RegisterScope("hrm:" + h.ID)
 	defer unregister()
@@ -270,7 +282,10 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 	stop := context.AfterFunc(scopeCtx, cancel)
 	defer stop()
 	wr := &socketWriter{c: c}
-	ackCh := make(chan int64, 8)
+	// ackCh buffers gateway acknowledgements for the delivery loop. 64 covers a
+	// burst of acks (one per delivered event) without the read loop stalling or
+	// dropping them silently; the durable cursor remains the safety net.
+	ackCh := make(chan int64, 64)
 	helloCh := make(chan struct{}, 1)
 	errCh := make(chan error, 1)
 	// Bound concurrent outbound operations per socket. Each outbound op spawns a
@@ -326,8 +341,12 @@ func (s *Server) run(ctx context.Context, c *ws.Conn, h store.HermesConnection) 
 				// instead of spawning another goroutine.
 				select {
 				case outboundSem <- struct{}{}:
+					outboundWG.Add(1)
 					go func() {
-						defer func() { <-outboundSem }()
+						defer func() {
+							<-outboundSem
+							outboundWG.Done()
+						}()
 						s.handleOutbound(ctx, wr, h, f.RequestID, a)
 					}()
 				default:

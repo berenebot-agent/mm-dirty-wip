@@ -409,9 +409,12 @@ A wait timeout returns `504` with the action handle; it does not cancel the job.
 Failed or uncertain actions return `409` with their action record. Submission
 checks mailbox scope and roles before enqueueing; purge still requires Trash.
 Clients that previously depended on immediate mutation must add `?wait=true`.
-Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) queues one purge per cached
-trashed message and returns `202` with `actions`; `?wait=true` returns the
-completed `purged` count. Standalone enumeration covers the cached Trash index.
+Empty Trash (`POST /v1/inboxes/{id}/trash/empty`) queues up to 500 purges per
+request and returns `202` with `actions`; `?wait=true` returns the completed
+`purged` count when the entire Trash fits in that batch. If more than 500 cached
+messages are trashed, the response includes `truncated: true` and `remaining: true`
+(and does not wait), so call the endpoint again after the queued batch is
+processed. Standalone enumeration covers the cached Trash index.
 
 Actions execute in submission order per message. Transient absolute-state patches
 have bounded retries; moves and purge with uncertain remote outcomes are never

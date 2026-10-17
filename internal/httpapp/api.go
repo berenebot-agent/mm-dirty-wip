@@ -1933,12 +1933,16 @@ func (s *Server) demandEventDetectionCtx(ctx context.Context, r *http.Request) {
 }
 func (s *Server) waitEvents(r *http.Request, after int64, inbox string, timeout time.Duration) ([]model.Event, error) {
 	p := principal(r)
+	// Subscribe before the first query so an event published between the query
+	// and the subscription cannot be missed: the subscription captures it and
+	// the loop re-queries, while a query result already available returns
+	// immediately.
+	_, ch, cancel := s.Service.Hub.Subscribe(16)
+	defer cancel()
 	items, err := s.Service.Store.ListEvents(r.Context(), p, after, inbox, 100)
 	if err != nil || len(items) > 0 {
 		return items, err
 	}
-	_, ch, cancel := s.Service.Hub.Subscribe(16)
-	defer cancel()
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	for {

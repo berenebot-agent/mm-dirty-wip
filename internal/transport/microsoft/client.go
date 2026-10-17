@@ -59,8 +59,13 @@ type MessagePage struct {
 type Client struct {
 	HTTP                 *http.Client
 	BaseURL, AuthBaseURL string
-	mu                   sync.Mutex
-	retryAt              time.Time
+	// backoff defers further mailbox requests after a 429/503 until the
+	// Retry-After moment. It is scoped per mailbox (the /users/<mb> prefix,
+	// falling back to the route path): a shared Client instance serves every
+	// connected mailbox, so one mailbox's throttle must not stall the others.
+	backoff map[string]time.Time
+	// backoffMu guards backoff.
+	mu sync.Mutex
 }
 
 func NewClient(h *http.Client) *Client {
@@ -80,7 +85,7 @@ func NewClient(h *http.Client) *Client {
 		copy.Timeout = 45 * time.Second
 	}
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{HTTP: &copy, BaseURL: "https://graph.microsoft.com/v1.0", AuthBaseURL: "https://login.microsoftonline.com"}
+	return &Client{HTTP: &copy, BaseURL: "https://graph.microsoft.com/v1.0", AuthBaseURL: "https://login.microsoftonline.com", backoff: make(map[string]time.Time)}
 }
 func Scope(shared bool) string {
 	s := "offline_access User.Read Mail.ReadWrite Mail.Send"
@@ -135,6 +140,26 @@ func (c *Client) Refresh(ctx context.Context, tenant, id, refresh string) (Token
 }
 func mailboxPath(mailbox string) string { return "/users/" + url.PathEscape(mailbox) }
 
+// retryKey scopes shared-client provider backoff to one mailbox. Graph mailbox
+// routes carry the mailbox as the /users/<mb> prefix (a path-escaped
+// key/UPN), so the prefix, not the whole path, identifies the mailbox being
+// throttled; the local part (folder, message id, cursor) must not widen the
+// blast radius of one mailbox's 429. Routes without /users (the /me identity
+// call, directory probes) key on the route path itself.
+func retryKey(path string) string {
+	rest, ok := strings.CutPrefix(path, "/users/")
+	if !ok {
+		if q := strings.IndexByte(path, '?'); q >= 0 {
+			return path[:q]
+		}
+		return path
+	}
+	if s := strings.IndexByte(rest, '/'); s >= 0 {
+		rest = rest[:s]
+	}
+	return "/users/" + rest
+}
+
 // continuation retains Microsoft's opaque query but never permits a different
 // origin, mailbox, operation, or query-supplied bearer destination.
 func (c *Client) continuation(raw, path string) (string, error) {
@@ -152,7 +177,7 @@ func (c *Client) continuation(raw, path string) (string, error) {
 }
 func (c *Client) request(ctx context.Context, t, method, path, cursor string, body io.Reader, ct string, out any, stream io.Writer, ambiguous bool) error {
 	c.mu.Lock()
-	blocked := time.Now().Before(c.retryAt)
+	blocked := time.Now().Before(c.backoff[retryKey(path)])
 	c.mu.Unlock()
 	if blocked {
 		return failure(model.ErrKindRetryable, "provider backoff in progress", true)
@@ -192,7 +217,7 @@ func (c *Client) request(ctx context.Context, t, method, path, cursor string, bo
 				delay = time.Until(date)
 			}
 			c.mu.Lock()
-			c.retryAt = time.Now().Add(delay)
+			c.backoff[retryKey(path)] = time.Now().Add(delay)
 			c.mu.Unlock()
 		}
 		kind, retry := model.ErrKindInvalid, false

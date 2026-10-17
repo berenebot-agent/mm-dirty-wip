@@ -185,3 +185,50 @@ func TestFreshDraftRecipientRepairAndMismatchStopsSend(t *testing.T) {
 		})
 	}
 }
+
+// TestBackoffIsPerMailbox proves one mailbox's 429 does not stall others: a
+// 429/Retry-After response for mailbox A defers A's follow-up requests without
+// touching the server again, while mailbox B continues immediately.
+func TestBackoffIsPerMailbox(t *testing.T) {
+	var mu sync.Mutex
+	aCalls, bCalls := 0, 0
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/users/a@outlook.test/"):
+			aCalls++
+			if aCalls == 1 {
+				w.Header().Set("Retry-After", "60")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+		case strings.HasPrefix(r.URL.Path, "/users/b@outlook.test/"):
+			bCalls++
+		}
+		w.Write([]byte(`{"value":[]}`))
+	}))
+	defer s.Close()
+	c := microsoft.NewClient(s.Client())
+	c.BaseURL = s.URL
+	ctx := context.Background()
+	if _, err := c.Messages(ctx, "token", "a@outlook.test", "", "", "", 10); err == nil {
+		t.Fatal("expected the 429 to surface as an error")
+	}
+	// Mailbox A is deferred: the retry fails without another server request.
+	if _, err := c.Messages(ctx, "token", "a@outlook.test", "", "", "", 10); err == nil || !strings.Contains(err.Error(), "backoff in progress") {
+		t.Fatalf("mailbox A after 429 = %v, want backoff error without a server call", err)
+	}
+	// Mailbox B continues immediately.
+	if _, err := c.Messages(ctx, "token", "b@outlook.test", "", "", "", 10); err != nil {
+		t.Fatalf("mailbox B blocked by A's backoff: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if aCalls != 1 {
+		t.Fatalf("mailbox A server hits = %d, want 1 (the 429)", aCalls)
+	}
+	if bCalls != 1 {
+		t.Fatalf("mailbox B server hits = %d, want 1", bCalls)
+	}
+}
