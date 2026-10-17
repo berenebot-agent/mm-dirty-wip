@@ -852,3 +852,18 @@ func lookupReceiver(t *testing.T, baseURL string) *receiver.Receiver {
 	}
 	return r
 }
+
+func TestStopConcurrentCallsAreIdempotent(t *testing.T) {
+	t.Parallel()
+	r := newReceiver(t, receiver.Config{SummaryInterval: time.Hour})
+	r.Start()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Stop()
+		}()
+	}
+	wg.Wait()
+}

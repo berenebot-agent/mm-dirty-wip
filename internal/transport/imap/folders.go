@@ -27,7 +27,11 @@ func (a *Adapter) resolveScope(ctx context.Context, explicitRoot string) (RootSc
 	personalKnown := false
 	var excludes []string
 	if a.caps.Namespace {
-		ns, err := a.conn.Namespace().Wait()
+		conn := a.connRef()
+		if conn == nil {
+			return RootScope{}, wrapErr(ErrNotConnected)
+		}
+		ns, err := conn.Namespace().Wait()
 		if err == nil && ns != nil {
 			for _, d := range ns.Other {
 				if p := strings.TrimSpace(d.Prefix); p != "" {
@@ -98,7 +102,11 @@ func isDelimiterDescendant(path, root string, delim rune) bool {
 
 // discoverDelimiter lists the root hierarchy to learn the server's delimiter.
 func (a *Adapter) discoverDelimiter() rune {
-	cmd := a.conn.List("", "*", nil)
+	conn := a.connRef()
+	if conn == nil {
+		return 0
+	}
+	cmd := conn.List("", "*", nil)
 	var delim rune
 	for {
 		data := cmd.Next()
@@ -136,7 +144,11 @@ func (a *Adapter) DiscoverFolders(ctx context.Context, explicitRoot string) ([]R
 		options.ReturnChildren = true
 	}
 
-	cmd := a.conn.List("", "*", options)
+	conn := a.connRef()
+	if conn == nil {
+		return nil, RootScope{}, wrapErr(ErrNotConnected)
+	}
+	cmd := conn.List("", "*", options)
 	var listed []*imap.ListData
 	for {
 		data := cmd.Next()

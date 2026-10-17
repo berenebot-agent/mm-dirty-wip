@@ -10,9 +10,11 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -90,9 +92,39 @@ func (s *Server) bashExample(w http.ResponseWriter, r *http.Request) {
 // the caller reached, so a client downloaded from an instance talks to that
 // instance by default instead of localhost. The source keeps its localhost
 // default for running the file directly on the host.
+//
+// The replacement lands inside a double-quoted string literal in a shell
+// script, so the origin is validated before interpolation: Go's host header
+// rules permit `$(`/`${}` (command substitution), which would embed executable
+// shell in the served script. Only a plain HTTP(S) origin with a DNS name or IP
+// literal and an optional numeric port is accepted; anything else keeps the
+// localhost default.
 func clientWithBase(src []byte, base string) []byte {
 	if base == "" {
 		return src
+	}
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return src
+	}
+	host := u.Host
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '-' || c == ':' || c == '[' || c == ']') {
+			return src
+		}
+	}
+	if u.Hostname() == "" {
+		return src
+	}
+	if net.ParseIP(u.Hostname()) == nil && strings.ContainsAny(u.Hostname(), ":[]") {
+		return src
+	}
+	if port := u.Port(); port != "" {
+		p, err := strconv.Atoi(port)
+		if err != nil || p < 1 || p > 65535 {
+			return src
+		}
 	}
 	out := bytes.ReplaceAll(src, []byte(`DEFAULT_BASE_URL = "http://localhost:8081"`), []byte(`DEFAULT_BASE_URL = "`+base+`"`))
 	return bytes.ReplaceAll(out, []byte(`DEFAULT_BASE_URL="http://localhost:8081"`), []byte(`DEFAULT_BASE_URL="`+base+`"`))

@@ -198,8 +198,10 @@ func (b *SMTPBackend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 		default:
 		}
 		atomic.AddInt64(&b.s.active, -1)
+		// Log the effective limiter limit, not the default constant, so the
+		// record matches what actually rejected this connection.
 		b.s.log.Warn("mx connection rejected: too many from source",
-			AttrConnectionID, connID, "reason", "source_cap", "peer", ipKey, "limit", defaultMaxPerIP)
+			AttrConnectionID, connID, "reason", "source_cap", "peer", ipKey, "limit", b.s.iplim.limit)
 		return nil, &smtp.SMTPError{Code: 421, EnhancedCode: smtp.EnhancedCode{4, 3, 2}, Message: "Too many connections from your address"}
 	}
 	sess := &session{
