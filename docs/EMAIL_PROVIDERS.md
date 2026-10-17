@@ -1,16 +1,18 @@
 # Email providers
 
-Use this guide to set up receiving, sending, or an existing mailbox in MailMoose.
+MailMoose supports a wide range of options for receiving and sending email, or connecting an existing mailbox. Select a provider to jump to its setup.
 
-| Setup | Where to configure it |
+| | Providers |
 | --- | --- |
-| Receive mail on your domain | **Domains → Receiving** |
-| Send mail from your domain | **Domains → Sending** |
-| Connect an existing mailbox | **Add inbox → Standalone inbox** |
+| **Inbound** | [Direct MX](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) |
+| **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
+| **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
+
+Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
 
 Domains can inherit their parent's sending and receiving settings. Provider credentials are encrypted using `APP_ENCRYPTION_KEY`.
 
-To run a separate SMTP receiver yourself, see [Remote SMTP receiving](REMOTE_MX.md).
+For separate SMTP receivers you operate yourself, see [Remote SMTP receiving](REMOTE_MX.md).
 
 ## Inbound: Direct MX
 
@@ -145,13 +147,25 @@ sending for that domain only.
 
 ### Provider requirements
 
-- **Mailgun:** enter the API key and sending domain shown in the Mailgun account.
-- **Brevo:** enter an API key and verify the sender address with Brevo.
-- **Resend:** enter an API key and verify the sending domain with Resend.
-- **SMTP:** enter the relay hostname, port, credentials and connection security
-  requested by the form.
-- **Direct MX:** no relay credentials are used. The operator must be able to
-  send directly to recipient mail servers on port 25.
+#### Outbound: Mailgun
+
+Enter the API key and sending domain shown in the Mailgun account.
+
+#### Outbound: Brevo
+
+Enter an API key and verify the sender address with Brevo.
+
+#### Outbound: Resend
+
+Enter an API key and verify the sending domain with Resend.
+
+#### Outbound: SMTP
+
+Enter the relay hostname, port, credentials and connection security requested by the form.
+
+#### Outbound: Direct MX
+
+No relay credentials are used. The operator must be able to send directly to recipient mail servers on port 25.
 
 ### DKIM signing
 
