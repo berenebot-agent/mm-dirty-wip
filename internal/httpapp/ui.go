@@ -2287,7 +2287,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		sendingSelected[d.ID] = sendProvider
-		editors := s.domainSendingEditors(ctx, p.AccountID, d.ID)
+		editors := s.domainSendingEditors(ctx, p.AccountID, d.ID, d.Name)
 		for _, e := range editors {
 			if e.Provider == sendProvider {
 				e.Selected = true
