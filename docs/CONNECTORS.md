@@ -107,7 +107,7 @@ Authentication is either a generated bearer token or an HMAC-SHA256 signature in
 
 A 2xx response acknowledges the event. Other responses are retried for the configured window (seven days by default). **Deduplicate on `X-MailMoose-Delivery`**, because retries can repeat an event. Spam, internal, and deleted mail is skipped.
 
-For exact header encoding and the request contract, see [the webhook contract](MAILMOOSE_CONTRACT.md) and [API.md](API.md).
+For exact header encoding and the request contract, see [the webhook contract](integrations/BILLBOT_WEBHOOK_CONTRACT.md) and [API.md](API.md).
 
 ## Troubleshooting
 
