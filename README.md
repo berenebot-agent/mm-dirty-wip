@@ -10,7 +10,7 @@ MailMoose is an open-source, single-container email platform. Create inboxes on 
 
 Bring your own email providers, connect AI agents or applications, and control exactly what they can access and do. No complicated mail server stack required.
 
-[Get started](#get-started) · [Receiving providers](#receive-email-your-way) · [Agent connectors](#connect-your-agent) · [Documentation](#documentation)
+[Quickstart](#quickstart) · [Receiving providers](#receive-email-your-way) · [Agent connectors](#connect-your-agent) · [Documentation](#documentation)
 
 **Public beta** · Open source · Self-hosted
 
@@ -47,17 +47,6 @@ Choose how you review and send agent-generated emails:
 
 Simply configure your DNS records and start receiving. Or use your own MX receiver or third-party provider.
 
-## Get started
-
-Choose the setup that suits you.
-
-| I want to… | Start here |
-| --- | --- |
-| **Receive email on my own domain** | [Receiving providers](docs/PROVIDERS.md) |
-| **Connect an existing mailbox** | [Standalone mailbox setup](docs/PROVIDERS.md#standalone-mailbox-providers) |
-| **Connect an AI agent** | [Agent connectors](docs/CONNECTORS.md) |
-| **Deploy MailMoose** | [Self-hosting guide](docs/SELFHOSTING.md) |
-
 ## Receive email your way
 
 MailMoose supports multiple receiving methods, giving you the flexibility to use existing infrastructure or start from scratch.
@@ -72,7 +61,7 @@ MailMoose supports multiple receiving methods, giving you the flexibility to use
 
 For outbound email, bring your own Mailgun, Brevo, Resend, SMTP relay, or direct sending configuration.
 
-See the [receiving and sending providers guide](docs/PROVIDERS.md).
+See the [email providers guide](docs/EMAIL_PROVIDERS.md).
 
 ## Quickstart
 
@@ -136,27 +125,12 @@ Give your agent a MailMoose URL and API key. MailMoose provides built-in discove
 
 See the [agent connector guide](docs/CONNECTORS.md).
 
-## More than an inbox
-
-MailMoose includes the functionality you need to run email for agents, applications, and everyday use.
-
-| Feature | Description |
-| --- | --- |
-| **Multiple inboxes** | Create lightweight inboxes with independent access permissions |
-| **Custom domains** | Manage your own addresses, aliases and catch-all routing |
-| **Standalone mailboxes** | Connect Gmail, Outlook and IMAP mailboxes |
-| **Agent permissions** | Control inbox access, drafting, approvals, and direct sending |
-| **Message search** | Search messages, conversations, and attachments |
-| **Event delivery** | Replay missed events and recover after agent disconnections |
-| **Sending providers** | Configure outbound providers with an outbox and delivery logs |
-| **Simple deployment** | Single Go application, SQLite database, and persistent data directory |
-
 ## Documentation
 
 | Guide | Covers |
 | --- | --- |
-| [Providers](docs/PROVIDERS.md) | Inbound, outbound and standalone mailbox configuration |
-| [Connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
+| [Email providers](docs/EMAIL_PROVIDERS.md) | Inbound, outbound and standalone mailbox configuration |
+| [Agent connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
 | [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
 | [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
 | [API](docs/API.md) | Endpoints, permissions, drafts and events |

@@ -1,27 +1,16 @@
-# MailMoose — Receiving and Sending Providers
+# Email providers
 
-This guide covers domain receiving and sending providers, plus providers that
-connect an existing mailbox as a standalone inbox. Domain receiving and sending
-are configured in the domain's **Receiving** and **Sending** panels. Standalone
-mailbox connections are added from **Add inbox → Standalone inbox**.
+Use this guide to set up receiving, sending, or an existing mailbox in MailMoose.
 
-A subdomain can inherit its parent's receiving or sending configuration. One
-provider configuration can therefore serve several related domains; each domain
-still has its own inboxes, aliases and catch-all. Provider secrets are encrypted
-with `APP_ENCRYPTION_KEY`.
+| Setup | Where to configure it |
+| --- | --- |
+| Receive mail on your domain | **Domains → Receiving** |
+| Send mail from your domain | **Domains → Sending** |
+| Connect an existing mailbox | **Add inbox → Standalone inbox** |
 
-## At a glance
+Domains can inherit their parent's sending and receiving settings. Provider credentials are encrypted using `APP_ENCRYPTION_KEY`.
 
-- **Inbound:** Mailgun, Cloudflare Email Routing, Resend, Postmark, Direct MX,
-  Antler MX and Dial MX. SendGrid is documented as unavailable pending
-  end-to-end verification.
-- **Outbound:** Mailgun, Brevo, Resend, generic SMTP and Direct MX.
-- **Standalone inboxes:** Google/Gmail, Microsoft/Outlook, One/Gmail and IMAP.
-
-For receivers you run separately, including Dial MX, Antler MX and single-mode
-Remote MX, see [Remote SMTP receiving](REMOTE_MX.md).
-
----
+For Antler MX, Dial MX, and receivers you run separately, see [Remote SMTP receiving](REMOTE_MX.md).
 
 ## Inbound: Mailgun
 
@@ -80,16 +69,11 @@ cannot read received mail.
    save.
 5. Send a test message and confirm it appears in the intended inbox.
 
-Each domain has its own receiving configuration. If several domains share one
-Resend webhook, configure the matching signing secret and API key on each.
-Resend can also be configured as a sending provider; see [Outbound](#outbound).
+If several domains use the same Resend webhook, configure its signing secret and API key for each domain.
 
 ## Inbound: SendGrid
 
-> **Not currently available.** SendGrid inbound is hidden from the provider
-> selector until it has been verified end to end against the real service. Do not
-> configure it for production deployments; this note will be updated if support
-> becomes available.
+SendGrid inbound is not available pending end-to-end testing. It is not offered in the provider selector.
 
 ## Inbound: Postmark
 
@@ -126,26 +110,11 @@ port-25 mapping.
 A system administrator can use a separate receiver instead of the bundled one.
 That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
 
-## Inbound: Antler MX and Dial MX
+## Inbound: Antler MX, Dial MX and Remote MX
 
-- **Antler MX** is the hosted shared relay. Select it in the domain's
-  **Receiving** panel, enter a contact email, and publish the MX and TXT records
-  shown by MailMoose. No receiver needs to be installed and no inbound SMTP port
-  needs to be opened on your MailMoose host.
-- **Dial MX** is for a shared receiver you operate. Select it in **Receiving**,
-  enter its HTTPS URL, then publish the domain-specific TXT proof and MX records
-  shown in the setup panel.
+**Antler MX** is a shared receiver. Choose it under **Receiving**, enter a contact email, then publish the MX and TXT records shown. It needs no inbound port on the MailMoose host.
 
-Both choices and the full operator setup for a separate receiver are covered in
-[Remote SMTP receiving](REMOTE_MX.md).
-
-## Inbound: Remote MX
-
-**Remote MX** lets an account administrator use a private single-mode receiver
-for the account's domains. Configure the receiver once in the account's **Remote
-MX** settings, select **Remote MX** in each domain's **Receiving** panel, and
-point those domains' MX records at the receiver. See
-[Remote SMTP receiving](REMOTE_MX.md#remote-mx-one-receiver-for-an-account).
+**Dial MX** connects to a shared receiver you operate. **Remote MX** connects to a private receiver configured for your account. Both use the receiver URL and DNS settings described in [Remote SMTP receiving](REMOTE_MX.md).
 
 ## Outbound
 
@@ -154,9 +123,6 @@ provider, and fill in the fields it asks for (for example Brevo only needs an
 API key). Each domain owns its own configuration. A domain with no sending
 provider queues mail until one is configured, and removing a provider pauses
 sending for that domain only.
-
-Each provider's configuration fields are shown in the domain's **Sending** panel.
-Use the API reference for programmatic configuration.
 
 ### Provider requirements
 

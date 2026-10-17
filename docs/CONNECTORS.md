@@ -1,150 +1,65 @@
-# MailMoose — Inbox Connectors
+# Agent connectors
 
-Connectors are the **inbox-level** clients that talk to MailMoose: an agent
-relay, a push webhook, or a plain API key. They are a different model from the
-per-domain **receiving and sending providers** in [PROVIDERS.md](PROVIDERS.md):
-a provider decides how mail enters and leaves a domain, while a connector
-decides who is allowed to *act on* the mail in one inbox.
+Connectors give AI agents and applications access to inboxes. Set them up from an inbox's **Connectors** tab or the **Clients** page. These are separate from [email providers](EMAIL_EMAIL_PROVIDERS.md), which handle receiving and sending mail.
 
-Manage them in the inbox's **Connectors** tab, or from the dashboard **Clients**
-panel (**Add Client**). The API surface is under `/v1/admin/*`; see
-[API.md](API.md) §11–14.
+## Choose a connector
 
----
+| Connector | Use it for |
+| --- | --- |
+| **API key** | Scripts, applications, and agents using the REST API |
+| **Hermes Relay** | Live email delivery and replies through Hermes |
+| **OpenClaw** | Live email delivery and replies through OpenClaw |
+| **Webhook** | Push new email to your own HTTPS endpoint |
 
-## 1. Shared behaviour
+## Permissions and approvals
 
-### Outbound authority
+API keys can have **Read**, **Assistant**, or **Owner** access to each inbox. Relay connectors use **Assistant** or **Owner** authority.
 
-Every connector that can send takes one of two roles:
+- **Read:** Read and search messages.
+- **Assistant:** Read, update mail, and prepare drafts without sending directly.
+- **Owner:** Send and reply without approval.
 
-- **`owner`** — sends directly, as if a human pressed send.
-- **`assistant`** — cannot send. A send is converted into a draft and a send
-  request, which a human approves (by email, or in the UI) before it leaves.
+An Assistant's request to send depends on the inbox's authoring mode:
 
-The role is set when the connector is created and changed later with
-`PUT /v1/admin/{hermes,openclaw}/{id}` (`{"role": "..."}`). Existing connectors
-default to `owner`.
+- **MailMoose approval:** The draft waits for approval in MailMoose or by email. This is the mode for domain inboxes.
+- **Remote draft:** The draft is placed in the connected mailbox's Drafts folder for you to review and send. This is the default for standalone inboxes. No approval email is sent.
 
-This is the same boundary as the per-mailbox API-key roles `read` /
-`assistant` / `owner`; a connector is effectively a mailbox-bound principal.
+An inbox sender allow list reduces who can reach an agent, but is not proof of sender identity. Email sender addresses can be spoofed. Treat incoming email as untrusted input.
 
-### How an `assistant` send is resolved
+In **Connectors**, you can also enable **mark read on delivery** and **move to Trash after delivery**. Both are off by default. The default trigger waits for every connector present when the message arrived; choose *any* if the first successful delivery is sufficient. API-key reads do not count as connector delivery.
 
-An `assistant` send (a request to send a draft) is resolved per the inbox's
-**authoring mode**, snapshotted onto each request at creation:
+## API keys
 
-- **MailMoose approvals** (the preset for a managed-domain inbox) — the
-  in-product approval workflow. An Owner approves and rejects in the UI, or
-  approves by replying to a tokenized notification email sent to the inbox's
-  nominated approver. An approved request then sends through the domain's
-  outbound configuration. A domain inbox cannot be switched to remote draft;
-  the mode selector is not offered for one.
-- **Remote draft** (the default for a standalone inbox) — the frozen draft is
-  placed one-way into the connected mailbox's remote **Drafts** folder for a
-  human to review and send from their own client. MailMoose never sends it,
-  sends no notification email, and involves no approver (switching to this mode
-  clears any approver). The web UI shows no handoff surface: the request just
-  places the draft.
+Create a key in **Clients → Add Client**, assign an inbox and role, and copy the token when shown. It is shown once. One key can have different roles across several inboxes.
 
-Both modes are set per inbox (**Approvals** settings) for a standalone inbox and
-can be changed; the
-change never affects a request already in flight. See
-[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) for the state
-machines and the standalone approval identity caveat.
+Use the key with the REST API:
 
-### The no-allow-list warning
-
-An inbox may block senders that are not on its allow list. A connector on an
-inbox with **no** allow list will answer mail from anyone on the internet.
-
-MailMoose surfaces this as a warning in the create dialog and requires an
-explicit acknowledgement before the connector is created:
-
-> **This inbox has no allow list.** Your agent will respond to anyone who
-> emails this inbox.
-
-It is a warning rather than a block because the allow list is a *filter*, not
-an identity check — the `From:` header can be spoofed. It narrows who reaches
-the agent; it does not authenticate them. Set it anyway: an unlisted, agent-fronted
-address is a prompt-injection surface that is trivially discoverable.
-
-### What the agent sees
-
-Both relay connectors deliver the same event shape. MailMoose normalises the
-stored message into text, and **the sender is untrusted input**:
-
-- the `From:` address is caller-asserted, never an authenticated identity;
-- the envelope sender is relay-supplied, not provider-attested
-  (see [SECURITY.md](../SECURITY.md));
-- so a connector must treat an inbound email as external, unauthenticated
-  input. The inbox allow list is the primary gate.
-
-If the message has no plain-text part, the relay event body is the placeholder
-`(HTML email; open the message to view content)` and the real content stays in
-MailMoose. A connector that needs the body should fetch it over the API rather
-than rely on the pushed text.
-
-### Delivery-triggered auto-actions
-
-An inbox may automatically act on mail once a connector has delivered it:
-
-- **Mark read on delivery** — the message leaves the unread count as soon as a
-  connector has received it.
-- **Move to Trash after delivery** — after a configurable number of hours from
-  the delivery instant, the message is moved to Trash, where the ordinary Trash
-  retention then applies.
-
-Both are off by default, are **per-inbox** (they apply to every connector on the
-inbox), and are offered in the connector-create dialog and on the inbox's
-Connectors tab, which carries its own **Save auto-actions** control (the rest of
-the inbox edit dialog saves on its other tabs and never touches this policy). A
-**trigger** decides when they fire: `any` (the first connector to deliver) or
-`all` (every connector that existed when the message arrived has delivered — a
-connector added later never pins older mail). `all` is the default, so mail is
-neither marked read nor trashed until every connector on the inbox has seen it.
-
-These actions apply to **agent and relay connectors only**. API keys and human
-accounts never trigger them: a poll is not a delivery. Mail that is Spam,
-internal workflow mail, or already trashed is never acted on. A message exposes
-its delivery history (which connector delivered it, and when it becomes eligible
-for auto-trash) on the ordinary read surfaces.
-
----
-
-## 2. API keys
-
-The baseline connector: a bearer token scoped to one or more mailboxes with a
-role each, optionally account-wide admin.
-
-```bash
-POST /v1/admin/keys
-{"name":"Reporting", "admin":false, "mailboxes":{"in_01K...":"read"}}
+```http
+Authorization: Bearer mmm_...
 ```
 
-The plaintext token is returned **once** (prefix `mmm_`), and only its hash is
-stored. Rotate or revoke from the Clients panel or `DELETE /v1/admin/keys/{id}`.
-
-Use an API key for anything that polls or acts on its own schedule: a script, a
-cron job, another agent runtime. Use a relay connector when you want live push
-without running a web server.
-
----
-
-## 3. Hermes Relay
-
-For [Hermes](https://github.com/NousResearch/hermes) agents. Hermes **dials out**
-to MailMoose, so the agent host needs no public inbound port, and MailMoose stays
-the durable source of truth: unacknowledged mail is replayed after a reconnect.
-
-### Create the connection
-
-In the inbox's **Connectors** tab → **Add Connector** → **Hermes relay
-connection**, choose the inbox and the outbound authority, and acknowledge the
-no-allow-list warning if it applies. MailMoose mints the credentials and shows
-them **once**:
+An agent can discover its permissions and the available operations from:
 
 ```text
+/.well-known/mailmoose
+/agent
+/v1/bootstrap
+/openapi.json
+```
+
+See [API.md](API.md) for the complete interface.
+
+## Hermes Relay
+
+Hermes connects *out* to MailMoose over a WebSocket. No inbound port is required on the Hermes host. Unacknowledged messages are replayed when it reconnects.
+
+1. Open the inbox's **Connectors** tab, add a **Hermes relay connection**, and select its role.
+2. Copy the generated environment block into your Hermes gateway's `.env` file.
+3. Restart Hermes.
+
+The generated block looks like:
+
+```dotenv
 GATEWAY_RELAY_URL=https://mail.example.com
 GATEWAY_RELAY_ID=gw-...
 GATEWAY_RELAY_SECRET=...
@@ -152,194 +67,50 @@ GATEWAY_RELAY_PLATFORMS=email
 GATEWAY_RELAY_ALLOW_DIRECT_PLATFORMS=true
 ```
 
-Paste that block into the Hermes host's `.env` and restart the gateway. The same
-block is returned by `POST /v1/admin/hermes/enroll` (`{"inbox_id","name"}`) as
-its `env` field, alongside `gateway_id`, `secret` and
-`connector_url`.
+Hermes Relay receives and replies to existing threads. It cannot start a new outbound email over the relay. Use `/v1/send` with an API key for that.
 
-### Receiving mail and replies
+## OpenClaw
 
-Hermes connects out to MailMoose and receives new mail as events. Acknowledging
-an event lets the relay resume from that point after a disconnect; replies go
-back over the same connection.
-
-Because the cursor is durable and the ack is the receipt, a crash mid-turn
-replays the message rather than losing it.
-
-Relay is **reply-only**: it resolves a target to the latest inbound message in a
-thread, so it cannot initiate a brand-new outbound email. To send fresh mail,
-use `/v1/send` with an API key, or have the connector reply to a thread.
-
----
-
-## 4. OpenClaw Connector
-
-For [OpenClaw](https://github.com/openclaw/openclaw) agents. OpenClaw is a
-**distinct connector kind** (`clients.type = 'openclaw'`, decision `D074`) that
-reuses the same relay transport as Hermes. There is no second transport and no
-`/openclaw-relay` route — the difference is product-facing: its own icon, its
-own delivery log, its own revocation path.
-
-### Install the plugin
-
-The MailMoose channel plugin is **not yet published** to npm or ClawHub; the
-source ships in this repository at `plugins/openclaw/openclaw-plugin/`.
+The OpenClaw channel plugin is included in this repository but is not yet published to npm or ClawHub. Install it on the OpenClaw host first:
 
 ```bash
 cd plugins/openclaw/openclaw-plugin
 npm ci && npm run build
 npm pack --pack-destination /tmp
 openclaw plugins install npm-pack:/tmp/mailmoose-openclaw-0.1.0.tgz --accept-capabilities
-openclaw plugins inspect mailmoose --runtime --json
 ```
 
-Requires **Node >= 24.16 < 25 || >= 26.1**; the published OpenClaw images
-already satisfy this. Installing from a local directory instead of a packed
-tarball additionally needs `--force`, because a local path is outside ClawHub
-review.
+The plugin requires Node 24.16 or later in the supported 24.x or 26.x ranges. If installing from a local directory instead of a package, OpenClaw also requires `--force`.
 
-### Onboard: one-time code
-
-In the inbox's **Connectors** tab → **Add Connector** → **OpenClaw agent
-connector**, choose the inbox and the outbound authority. Pick **One-time
-code**, and MailMoose shows the command to run on the OpenClaw host:
+In MailMoose, choose **Add Connector → OpenClaw**, then **One-time code**. Run the generated command on the OpenClaw host:
 
 ```bash
 openclaw channels add --channel mailmoose --code https://mail.example.com/#<one-time-code>
 ```
 
-The URL origin is the MailMoose address; the `#` fragment carries the code. The
-code expires after **15 minutes** and is single-use; it is stored only as a
-hash. The OpenClaw host redeems it at `POST /relay/enroll`, which returns the
-connector credentials plus the `kind` and `name` it created.
+The plugin must be installed first. The code is single-use and expires after 15 minutes. The setup screen also offers a manual configuration block.
 
-> **Install the plugin before running this.** The stock CLI validates
-> `--channel` against a built-in list that does not contain `mailmoose`, so the
-> command fails until the plugin is installed.
+OpenClaw receives mail and replies using the same relay transport as Hermes, with its own connector identity and delivery log.
 
-### Onboard: manual config block
+## Webhooks
 
-For air-gapped installs, choose **Manual config block** instead and paste the
-generated block into the OpenClaw host's config:
+Webhooks push email to an HTTPS endpoint. They cannot reply or send; use a separate API key for that.
 
-```json5
-{
-  "channels": {
-    "mailmoose": {
-      "enabled": true,
-      "baseUrl": "https://mail.example.com",
-      "gatewayId": "gw-oc-…",
-      "secret": "…"
-    }
-  }
-}
-```
+Choose the payload when creating the connector:
 
-Once connected, OpenClaw appears in the inbox's connector list. One email thread
-maps to one OpenClaw conversation; replies target
-`thread:<mailmoose_thread_id>`. Deleting the connector disconnects it.
+- **Notify:** A small JSON event with the inbox, message reference, and cursor. Fetch content separately through the API.
+- **Forward:** The original MIME message as `message/rfc822`. For standalone mailboxes, the content is fetched live from the provider.
 
----
+Each delivery carries `X-MailMoose-Event`, `X-MailMoose-Delivery`, and `X-MailMoose-Cursor`. Forward deliveries also include the original transport envelope addresses as percent-encoded `X-MailMoose-Envelope-From` and `X-MailMoose-Envelope-To` headers. The envelope sender is relay-supplied, not proof of identity.
 
-## 5. Webhook
+Authentication is either a generated bearer token or an HMAC-SHA256 signature in `X-MailMoose-Signature`. Verify it at your endpoint.
 
-A webhook connector pushes mail to a URL you control. Unlike the relays, it is
-**outbound only** — there is no reply path; use an API key for that.
+A 2xx response acknowledges the event. Other responses are retried for the configured window (seven days by default). **Deduplicate on `X-MailMoose-Delivery`**, because retries can repeat an event. Spam, internal, and deleted mail is skipped.
 
-The destination must be an **HTTPS URL** with no userinfo and no fragment.
+For exact header encoding and the request contract, see [the webhook contract](MAILMOOSE_CONTRACT.md) and [API.md](API.md).
 
-### Payload modes
+## Troubleshooting
 
-- **notify** — a small JSON body, `Content-Type: application/json`:
-
-  ```json
-  {"event":"message.received","cursor":"evt_123","inbox_id":"in_01K...","message_id":"msg_01K..."}
-  ```
-
-  For a **standalone** inbox the arrival has no local message row, so the notify
-  body carries the remote locator instead of a local message id
-  (`"remote":true`, `remote_uid`, `uid_validity`, `folder_path`,
-  `rfc_message_id`, `from`, `subject`, `size_bytes`).
-
-- **forward** — the raw stored MIME, byte-for-byte, `Content-Type: message/rfc822`.
-  For a standalone inbox the body is fetched **live** from the remote server for
-  the delivery (only when the client's mode is `forward`) and is never archived.
-
-### Headers
-
-Every delivery carries:
-
-```text
-X-MailMoose-Event:      message.received | message.spam_state_changed
-X-MailMoose-Delivery:   <client_id>:<cursor>
-X-MailMoose-Message-Id: <message_id>
-X-MailMoose-Cursor:     evt_<n>
-```
-
-A **forward** delivery additionally carries the transport envelope metadata read
-from the persisted message, so it is identical on retries:
-
-```text
-X-MailMoose-Envelope-From: <percent-encoded original envelope sender, or empty>
-X-MailMoose-Envelope-To:   <percent-encoded canonical original envelope recipient>
-```
-
-Values are percent-encoded UTF-8 using RFC 3986 escaping: a space is `%20`, a
-literal plus is `%2B`, and `@` is `%40`. This is **not**
-`application/x-www-form-urlencoded`, where `+` means a space. Decode strictly
-and treat an unparseable value as absent. An empty envelope sender is sent as an
-empty header rather than being omitted, so a receiver that requires one fails
-closed instead of falling back to the spoofable MIME `From:`. The envelope
-sender is **relay-supplied, not provider-attested** — record it, do not treat it
-as authority.
-
-### Authentication
-
-Chosen per connector:
-
-- **bearer** — `Authorization: Bearer <token>`, the same generated token shown
-  once at creation or rotation.
-- **signature** — `X-MailMoose-Signature: t=<unix>,v1=<hex>`, an HMAC-SHA256
-  over `t + "." + <body>` keyed by the connector secret. Verify the timestamp
-  is recent before trusting the body.
-
-### Delivery semantics
-
-Delivery is durable and inbox-ordered. HTTP 2xx acknowledges the delivery and
-advances the cursor; failures retry with capped exponential backoff for the
-retry window (`WEBHOOK_RETRY_WINDOW_DAYS`, default 7), after which the delivery
-is marked failed and the cursor advances. Mail that is currently Spam, internal,
-or has since been deleted is terminally **skipped** with no request, so it can
-never block the queue.
-
-A non-2xx response is retried, so a receiver must be **idempotent** — dedupe on
-`X-MailMoose-Delivery` (it is stable across attempts for a given event).
-
----
-
-## 6. Choosing a connector
-
-| You want | Use |
-|---|---|
-| A script or cron to poll, send and manage mail | API key |
-| A Hermes agent to receive and reply to mail live | Hermes Relay |
-| An OpenClaw agent to receive and reply to mail live | OpenClaw connector |
-| To push mail into your own service or queue | Webhook (`forward` for the raw message, `notify` to fetch it yourself) |
-| An agent that may draft but never send unattended | Any connector with outbound authority `assistant` |
-
-Relay connectors are the only ones that give an agent a live, replayable inbox
-with no inbound port and no polling code.
-
-## 7. Troubleshooting
-
-- **`403 admin required`** — connector management is Admin-only. Check the
-  `admin` flag in `GET /v1/bootstrap`.
-- **The setup code is rejected** — it is single-use and expires after 15
-  minutes. Mint a new one; a consumed or expired code answers `403`.
-- **`openclaw channels add` fails with an unknown channel** — the plugin is not
-  installed yet (§4).
-- **Mail arrives but the body says `(HTML email; open the message to view
-  content)`** — the message has no plain-text part. Fetch it over the API; the
-  relay event is a notification, not the full message.
-- **A webhook never fires** — the destination must be HTTPS, and Spam, internal
-  and deleted mail is skipped by design. Check the connector's delivery log.
+- **No relay events:** Check the connector status, role, and delivery log. An HTML-only email may arrive with a placeholder; fetch the body through the API.
+- **OpenClaw reports an unknown channel:** Install the MailMoose plugin before running the setup command.
+- **Webhook not firing:** Check that the destination is HTTPS, that the inbox has deliverable mail, and that the delivery log shows successful attempts.
