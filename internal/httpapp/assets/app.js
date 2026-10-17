@@ -5593,6 +5593,37 @@ function hideInboxSubview(dlg) {
     fetch(host.dataset.readUrl, { method: 'POST', credentials: 'same-origin', body: form }).catch(function () {});
     host.dataset.unread = '';
   }
+  // reconnectBanner mirrors the server-rendered per-inbox reconnect banner for a
+  // failure the client only discovers after the page has painted. The One control
+  // opens the shared in-place dialog (its handler is delegated on document), so a
+  // dynamically built button behaves exactly like the static one.
+  function reconnectBanner(conn) {
+    var banner = document.createElement('div');
+    banner.className = 'banner danger';
+    banner.setAttribute('role', 'alert');
+    banner.setAttribute('data-inbox-reconnect', '');
+    var text = document.createElement('span');
+    text.textContent = conn.detail || 'This connection needs to be reconnected.';
+    banner.appendChild(text);
+    var inboxID = document.body.getAttribute('data-inbox') || '';
+    if (conn.reconnect === 'one') {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'secondary btn-sm';
+      button.setAttribute('data-one-reconnect', '');
+      button.setAttribute('data-inbox', inboxID);
+      button.textContent = conn.action_label || 'Reconnect with One';
+      banner.appendChild(button);
+    } else if (conn.reconnect) {
+      var link = document.createElement('a');
+      link.className = 'btn secondary btn-sm';
+      var field = conn.reconnect === 'microsoft' ? 'microsoft_inbox' : 'google_inbox';
+      link.href = '/ui/inboxes/standalone/new?' + field + '=' + encodeURIComponent(inboxID);
+      link.textContent = conn.action_label || 'Reconnect';
+      banner.appendChild(link);
+    }
+    return banner;
+  }
   function load() {
     if (active) { return; }
     active = true;
@@ -5607,8 +5638,12 @@ function hideInboxSubview(dlg) {
     var controller = new AbortController();
     var timeout = window.setTimeout(function () { controller.abort(); }, 60000);
     fetch(host.dataset.bodyUrl, { credentials: 'same-origin', signal: controller.signal }).then(function (response) {
-      if (!response.ok) { throw new Error('body unavailable'); }
-      return response.json();
+      // A failure payload can carry the inbox's durable connection verdict, so
+      // read it on a non-2xx response instead of discarding it as "unavailable".
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) { throw data || {}; }
+        return data;
+      });
     }).then(function (body) {
       host.replaceChildren();
       if (body.html) {
@@ -5678,7 +5713,15 @@ function hideInboxSubview(dlg) {
         host.appendChild(heading);
         host.appendChild(list);
       }
-    }).catch(function () {
+    }).catch(function (failure) {
+      // A revoked connection discovered here is a reconnect prompt, not a
+      // transient load failure: show the reconnect control in place and drop the
+      // Retry that could only fail again.
+      var conn = failure && failure.connection;
+      if (conn && conn.state === 'disconnected') {
+        host.replaceChildren(reconnectBanner(conn));
+        return;
+      }
       host.replaceChildren(status);
       status.classList.remove('pending');
       status.setAttribute('aria-busy', 'false');
