@@ -27,7 +27,7 @@ reads and native draft creation. Metadata backfill is progressive and History AP
 updates catch up external changes; API list reads synchronize, UI navigation
 schedules synchronization. Search uses string continuation tokens (including
 within-page position) rather than the IMAP UID continuation. Permanent deletion
-and remapping Google's system roles return unsupported. See `docs/PROVIDERS.md#google-gmail`.
+and remapping Google's system roles return unsupported. See `docs/EMAIL_PROVIDERS.md#google-gmail`.
 
 ## 1. Domain model (`internal/model`)
 

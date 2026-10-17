@@ -2,8 +2,7 @@
 
 This guide covers SMTP receivers that run separately from the MailMoose core.
 Choose one when you want to operate the SMTP receiver yourself, or when using
-the shared Antler MX relay. For the out-of-the-box receiver bundled with
-MailMoose, see [Direct MX in Providers](PROVIDERS.md#inbound-direct-mx).
+the shared Antler MX relay. For the receiver bundled with MailMoose, see [Direct MX in Email providers](EMAIL_PROVIDERS.md#inbound-direct-mx).
 
 ## Choose a receiving option
 

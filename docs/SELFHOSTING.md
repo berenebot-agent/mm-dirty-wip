@@ -1,229 +1,69 @@
-# MailMoose — Self-Hosting Guide
+# Self-hosting
 
-Operator guide for self-hosted deployments: first-run configuration, deployment,
-hardening, backup, and upgrades. For receiving/sending provider setup see
-[docs/PROVIDERS.md](PROVIDERS.md).
+Use the [README quickstart](../README.md#quickstart) to run MailMoose with one Docker Compose file. This guide covers the operational settings that are not part of the initial setup.
 
-## System administrator
+## Administrator account
 
-The installation has one **system administrator**: the login named by
-`ADMIN_EMAIL` with the password in `ADMIN_PASSWORD`. Both values may instead be
-read from files with `ADMIN_EMAIL_FILE` / `ADMIN_PASSWORD_FILE` (intended for
-Docker secrets); set only one form per setting, and set both the email and the
-password together. `ADMIN_ACCOUNT_NAME` optionally sets the display name of the
-system administrator's own account (default `MailMoose`).
+Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` together in your Compose environment. They create the system administrator at startup and remain authoritative while configured. Changing them and restarting updates the login and signs out existing sessions.
 
-The configured credentials are **authoritative while present**. On first start
-they create the system administrator; on every later start they rotate its
-stored login to match, so changing the secret changes the login (existing
-sessions are signed out). If `ADMIN_EMAIL` already belongs to an existing user,
-that user is **adopted in place** — it keeps its account and is forced to
-account Admin and system Admin — so pointing the secret at an existing login
-does not fail startup. When **both** settings are absent the stored login is
-left untouched, so a deployment may drop them once provisioned. A
-half-configured pair, or an `*_FILE` path that cannot be read, is a startup
-error. If no system administrator exists and no credentials are supplied,
-MailMoose still starts and serves a page explaining that it is not configured;
-there is no unauthenticated setup form.
+Alternatively, leave both unset on a new installation and complete the one-time browser setup at `/setup`. Once an account exists, that page is no longer available. Do not expose an unclaimed installation publicly.
 
-The system administrator can manage the installation and use their own account
-normally, but does **not** automatically get access to other accounts' mail.
-Because the deployment secret owns this login, the account settings page does
-not let the system administrator change its email or password; update the
-secret and restart instead.
+The system administrator manages installation settings and other accounts but does not automatically have access to their mail. Account administrators manage users and inbox access within their own account.
 
-From the **Admin** page the system administrator sees the list of accounts and
-invites a new person as a **separate account Admin** (each account has one
-Admin). The invitation is emailed from the **mailer** selected on the system
-administrator's own Account page, or its one-time link can be copied.
+For Docker secrets, use `ADMIN_EMAIL_FILE` and `ADMIN_PASSWORD_FILE` instead. Never configure only one of the pair.
 
-Each **account Admin** manages their account's **mailbox operators** (non-admin
-users who are Owner of selected inboxes) and the account's own **mailer** from
-the **Account** page. An operator signs in with their own login and only sees
-the mailboxes assigned to them.
-
-## Password recovery
-
-If an ordinary account Admin loses access, reset the password from the server:
+To reset an ordinary account user's password:
 
 ```bash
 docker compose exec mailmoose mailmoose admin reset-password admin@example.com
 ```
 
-The command prompts for the new password without echoing it (or reads it from
-`--password-file` for automation), applies the normal password rules, and
-revokes every existing browser session. API keys are left untouched; revoke
-them separately with `mailmoose admin revoke-api-keys admin@example.com`.
+The system administrator's password is managed through the Compose settings, not this command.
 
-The system administrator's login is owned by `ADMIN_EMAIL` / `ADMIN_PASSWORD`,
-so `reset-password` refuses it and tells you to update the deployment secret
-and restart instead.
+## HTTPS and receiving ports
 
-## Inbox lifecycle logs
+MailMoose serves HTTP on port `8081`. Put an HTTPS reverse proxy in front of it for external access and set `BASE_URL` to the public HTTPS origin.
 
-The application emits `INFO inbox.created` and `INFO inbox.deleted` records to
-its existing `[Core]` terminal/container log stream. Watch them with:
+Set `TRUSTED_PROXIES` to your reverse proxy's IP or CIDR if you want MailMoose to honor forwarded client information. The proxy must overwrite incoming `X-Forwarded-For` values. `FORCE_HTTPS=true` enables redirection to the configured HTTPS origin.
 
-```bash
-docker compose logs -f mailmoose | grep -E 'inbox\.(created|deleted)'
-```
+Only publish additional ports when needed:
 
-Each record includes the account ID, inbox ID, address, inbox kind, source
-(`ui`, `api`, or `internal`), operation, and actor type. User/API-key IDs and
-domain IDs are included when applicable. Provider connections identify the
-operation as `google_connect`, `microsoft_connect`, or `one_import`.
+| Port | Purpose |
+| --- | --- |
+| `8081` | Web interface and API, preferably behind the HTTPS proxy |
+| `8082` | Optional separate receiving listener for provider webhooks |
+| `25:2525` | Direct SMTP receiving with the included MX receiver |
 
-Deletion includes a reason: `direct_delete`, `domain_delete`, or
-`setup_rollback`. Deleting a domain produces one record per deleted inbox.
-If connector setup creates an inbox and then removes it, both changes are
-logged. Reconnection and idempotent imports do not log a new creation.
+Select the receiver in the application's settings as well. Publishing port 25 alone does not configure a domain to accept mail. Antler MX and most connected-mailbox setups do not need it.
 
-Records describe persisted database changes, not completion of filesystem
-cleanup. Transactional changes are logged only after commit. The standalone
-inbox insert is independently committed before its subsequent connector setup,
-so its creation is logged even if that later setup fails. Logs are operational
-output, not a durable audit trail: a crash between commit and emission can lose
-a record, and retention follows the container/operator log policy.
+For a separate webhook hostname, set `DEDICATED_RECEIVER_URL` to that HTTPS origin, and configure your reverse proxy to reach the receiving listener. Its port is set by `DEDICATED_RECEIVER_PORT` (default `8082`); disable the separate listener with `DEDICATED_RECEIVER_ENABLE=false` when not needed.
 
-Lifecycle records do not include credentials, tokens, request bodies, client
-IPs, user-agents, or remote connection settings. They do include inbox addresses
-and stable identity IDs; restrict access to logs accordingly.
+See [Email providers](EMAIL_EMAIL_PROVIDERS.md) for provider setup or [Remote SMTP receiving](REMOTE_MX.md) for dedicated receivers.
 
-## Reverse proxy and TLS
+## Data and backups
 
-Set `TRUSTED_PROXIES` to your proxy's address so its `X-Forwarded-*` headers
-are believed (the proxy should overwrite `X-Forwarded-For`, not append to a
-client-supplied value), and set `FORCE_HTTPS=true` to redirect any plaintext
-request to `https://<BASE_URL host>` and advertise HTTPS in discovery
-documents. `/health`, `/healthz` and the `/internal/*` webhook endpoints are
-never redirected.
+Everything persists in `./data`. Back up that directory with a consistent filesystem snapshot or while the container is stopped.
 
-The application never terminates TLS itself. Put a reverse proxy (Nginx Proxy
-Manager, Caddy, Traefik, …) in front and forward the original scheme/host.
+If `APP_ENCRYPTION_KEY` is **not** supplied, MailMoose generates `./data/encryption_key`. It is included in your data backup. If you provide the key through Compose or a secret, **back it up separately**. Keep the original key: replacing it makes encrypted credentials unreadable.
 
-## Deployment topologies
+For a more restricted container configuration, the repository provides `docker-compose.advanced.yml` with a read-only root filesystem and other hardening settings. The regular single-container setup is the simplest starting point.
 
-### Build-from-source example (repo default)
+## Updates and recovery
 
-`docker-compose.yml` in the repository root builds the image locally and is the
-reference deployment. Host port 25 is commented out by default. For Included
-MX receiving, uncomment `0.0.0.0:25:2525` before running Compose, then select
-Included in the domain's Direct MX settings. Selecting Included in the UI cannot
-publish a Docker port. Webhook-only deployments need no port-25 mapping.
-
-**Upgrading an existing Included-MX deployment:** retain/uncomment that mapping
-before recreating the container with the updated Compose file. Otherwise public
-SMTP receiving stops even though the Included receiver remains configured.
-
-### Minimal pull-and-run
-
-The README quickstart shows the minimal compose file: one service running
-`ghcr.io/dellarb/mailmoose:latest`, all persistent state in a `./data` bind
-mount, no uid/gid configuration — the image drops privileges itself.
-
-### Hardened stack
-
-For a hardened stack (read-only root filesystem, a /tmp tmpfs, dropped
-capabilities), use `docker-compose.advanced.yml`:
+Before upgrading, back up `./data` and your external encryption key if used. Update the image and recreate the container:
 
 ```bash
-docker compose -f docker-compose.advanced.yml up -d
+docker compose pull
+docker compose up -d
+docker compose logs --tail 100 mailmoose
 ```
 
-## Direct MX and remote receivers
+Database migrations run at startup. If startup reports a failed or partial migration, restore from a consistent backup rather than deleting the database. If you use Direct MX, keep the host port 25 mapping across upgrades.
 
-The default Compose deployment includes the Direct MX receiver. To receive
-public SMTP, publish host port `25:2525`, start the deployment, and select
-**Direct MX** in each domain's **Receiving** settings. Opening port 25 alone does
-not change a domain's receiving provider.
+## Uncertain deliveries
 
-For Antler MX, shared Dial MX, or a separate single-mode receiver, follow the
-operator guide for [Remote SMTP receiving](REMOTE_MX.md). The setup panels show
-the DNS records and connection status for each domain.
+When an outbound provider may have accepted an email but MailMoose cannot confirm the result, the message is shown as **Delivery uncertain**. It is not automatically sent again, avoiding duplicate email.
 
-## Separate webhook hostname
+Check the provider or recipient before choosing **Retry**. Retrying an uncertain send requires acknowledging that a copy may already have arrived. The API uses `POST /v1/outbox/{id}/retry?confirm_duplicate_risk=true` for that explicit action.
 
-By default, provider webhooks use `BASE_URL`. To receive webhooks on a separate
-public hostname, set `DEDICATED_RECEIVER_URL` to that HTTPS origin and route the
-webhook listener to the container port configured by `DEDICATED_RECEIVER_PORT`
-(default `8082`). In Compose, publish the port with a mapping such as
-`8082:8082`; update the provider's webhook URL after changing the hostname.
-`BASE_URL` remains the address for the UI and sign-in links. Set
-`DEDICATED_RECEIVER_ENABLE=false` to disable the separate listener.
-
-## Uncertain outbound deliveries
-
-If a provider call has started but MailMoose cannot verify its outcome
-(for example, a network timeout or a failed database outcome write),
-MailMoose leaves the message in the **Outbox** with **Delivery uncertain**.
-It does not automatically retry or claim that the recipient definitely
-did not receive the message. A restart or an expired in-flight claim
-reconciles any such pending messages into that visible failed state.
-
-An operator may delete the message or select **Retry**. Retrying requires
-acknowledging that the first attempt could already have delivered a copy.
-For API clients, use `POST /v1/outbox/{id}/retry?confirm_duplicate_risk=true`
-only after the user has explicitly acknowledged that risk; without the
-parameter the endpoint returns `409` for an uncertain send. Ordinary failed
-messages remain retryable without this parameter.
-
-An ambiguous approval-notification send is likewise not retried
-automatically; the draft send request shows **Notification uncertain**.
-
-## Backup
-
-Back up a filesystem-consistent snapshot of `./data`. The root encryption key
-lives in one of two places: a key you supplied as `APP_ENCRYPTION_KEY`, which is
-kept outside `/data` and must be retained separately, or the generated
-`./data/encryption_key`, which a `/data` snapshot already contains. A deployment
-that supplied its own key therefore has two things to restore; one that let
-MailMoose generate the key has one.
-
-## Upgrading
-
-The current release replaces account-level, named provider connectors with one
-optional sending and one optional receiving configuration owned by each domain.
-It is a single-install breaking change: the old connector APIs
-(`/v1/admin/outbound*`, `/v1/admin/inbound*`), the domain credential-assignment
-fields, and the standalone connector UI are removed.
-
-Migration 013 runs automatically the first time the new binary opens the
-database. It:
-
-- copies each domain's assigned connector into a private per-domain config,
-  preserving the encrypted bytes (a connector shared by several domains becomes
-  independent copies, and no re-key is needed because `APP_ENCRYPTION_KEY` is
-  unchanged);
-- drops connectors not assigned to any domain;
-- preserves mailbox, auth, message, storage, and account data;
-- preserves delivery-log history, attributing each attempt to a domain where it
-  can be derived from the attempt's message and inbox (attempts that cannot be
-  attributed keep an unattributed entry instead of being dropped).
-
-There is no full database wipe. Back up `/data` and `APP_ENCRYPTION_KEY` before
-running the new binary. If startup reports a partially applied schema, restore
-from backup and retry rather than deleting the database.
-
-### This release: standalone mailboxes and external-alias removal
-
-This release adds migrations **052–058** (the standalone mailbox foundation and
-the shared folder/remote model; see
-[MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md)) and **removes
-external sending aliases** (migration 053). Both are additive/non-destructive
-except the deliberate alias removal:
-
-- Standalone mailboxes are new; no existing inbox changes kind. A standalone
-  inbox connects to an existing mailbox over IMAP/SMTP and is configured per
-  inbox (its connector secrets are encrypted and require `APP_ENCRYPTION_KEY`,
-  which is unchanged). Remote message metadata is cached in new tables; no
-  message body is archived.
-- External sending aliases (send-only identities on domains MailMoose does not
-  manage) are deleted with no compatibility shim. Migration 053 discards their
-  unsent drafts, attachments and queued sends/jobs and refunds the account and
-  inbox storage counters, keeps sent history and its `from_address` attribution,
-  removes orphaned threads, and preserves ordinary mail and managed-domain
-  aliases. Raw files are retired after the migration commits via a durable
-  cleanup queue.
-
-No manual database edit is required. Back up `/data` and `APP_ENCRYPTION_KEY`
-before upgrading, as above.
+For diagnostics, use `docker compose logs -f mailmoose`. Inbox lifecycle events are logged there, along with delivery and connection errors.
