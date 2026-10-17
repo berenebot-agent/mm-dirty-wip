@@ -31,45 +31,23 @@ The standard deployment uses one application container. A separate SMTP receiver
 
 ## 2. Code structure
 
+The current code is organized around a small set of packages:
+
 ```text
-/cmd/server
-
-/internal
-  /app
-  /auth
-  /accounts
-  /domains
-  /inboxes
-  /messages
-  /threads
-  /attachments
-  /events
-  /search
-  /quota
-
-  /transport
-      /mailgun
-      /cloudflare
-      /resend
-      /smtp
-      /imap
-      /mx
-
-  /integrations
-      /hermesrelay
-
-  /store
-      /sqlite
-
-  /web
-  /config
-/web
+cmd/server/                 Application entry point
+internal/httpapp/           Web interface and HTTP handlers
+internal/apispec/           API route definitions and documentation
+internal/app/               Mailbox operations, workflows and background jobs
+internal/model/             Shared data types
+internal/store/             SQLite persistence
+internal/transport/         Email providers, IMAP, SMTP and MX integration
+internal/hermesrelay/       Agent relay
+internal/auth/              Authentication and authorization
+internal/config/            Runtime configuration
+dialmx/                     Optional standalone SMTP receiver
 ```
 
-Packages should follow capability boundaries rather than generic framework layers.
-The remote IMAP/SMTP adapter lives entirely in `/internal/transport/imap` and
-`/internal/transport/smtp`; `/internal/app` maps the shared mailbox model onto it
-and never speaks IMAP itself.
+Connected providers are implemented under `internal/transport/`. The application layer handles the shared mailbox operations without implementing provider protocols itself. See [Mailbox behavior](MAILBOX_BEHAVIOR.md) for the differences between local and connected mailboxes.
 
 ## 3. Incoming email
 
