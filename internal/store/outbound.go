@@ -678,7 +678,7 @@ func (s *Store) MarkMessageUncertain(ctx context.Context, accountID, id, reason,
 	if strings.TrimSpace(reason) == "" {
 		reason = "the provider outcome could not be verified"
 	}
-	res, err := s.write.ExecContext(ctx, `UPDATE messages SET status='failed',last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+	res, err := s.write.ExecContext(ctx, `UPDATE messages SET status='failed',attempts=attempts+1,last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
 		WHERE id=? AND account_id=? AND direction='outbound' AND status='pending'
 		AND send_attempt_state=? AND (claim_owner=? OR claim_owner='')`, quarantinedReasonPrefix+reason, id, accountID, claim, claim)
 	if err != nil {
@@ -706,7 +706,7 @@ func (s *Store) ReconcileUncertainSends(ctx context.Context, now time.Time, afte
 	} else {
 		args = append(args, timeText(now))
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE messages SET status='failed',last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+	res, err := tx.ExecContext(ctx, `UPDATE messages SET status='failed',attempts=attempts+1,last_error=?,next_attempt_at='',claim_owner='',claim_expires_at=''
 		WHERE direction='outbound' AND status='pending' AND send_attempt_state<>''`+guard, args...)
 	if err != nil {
 		return 0, 0, err
@@ -716,7 +716,7 @@ func (s *Store) ReconcileUncertainSends(ctx context.Context, now time.Time, afte
 	if !afterRestart {
 		workflowArgs = append(workflowArgs, timeText(now))
 	}
-	res, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
+	res, err = tx.ExecContext(ctx, `UPDATE outbound_workflow SET status='failed',attempts=attempts+1,last_error=?,terminal_at=?,next_attempt_at='',claim_owner='',claim_expires_at=''
 		WHERE status='pending' AND send_attempt_state<>''`+guard, workflowArgs...)
 	if err != nil {
 		return 0, 0, err
