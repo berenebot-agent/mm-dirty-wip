@@ -1,140 +1,61 @@
 # Remote SMTP receiving
 
-This guide covers SMTP receivers that run separately from the MailMoose core.
-Choose one when you want to operate the SMTP receiver yourself, or when using
-the shared Antler MX relay. For the receiver bundled with MailMoose, see [Direct MX in Email providers](EMAIL_PROVIDERS.md#inbound-direct-mx).
+This is for **receivers you operate separately** from MailMoose. For the included Direct MX receiver and the hosted Antler MX option, see [Email providers](EMAIL_PROVIDERS.md).
 
-## Choose a receiving option
+| Option | When to use it |
+| --- | --- |
+| **Dial MX** | One public receiver you run for multiple independent domains or installations |
+| **Remote MX** | A private receiver dedicated to one MailMoose account |
+| **Direct MX with remote receiver** | One receiver for your whole MailMoose installation, managed by the system administrator |
 
-| Option | Who runs the receiver? | Setup in MailMoose | Domain proof |
-|---|---|---|---|
-| **Antler MX** | MailMoose-hosted shared relay | Choose **Antler MX** for the domain | Publish the TXT and MX records shown in the UI |
-| **Dial MX** | You run a shared receiver for one or more domains | Choose **Dial MX** for each domain and enter its receiver URL | MailMoose provides a per-domain TXT record; publish it and the shown MX records |
-| **Remote MX** | You run one private receiver for one account | Configure the account's receiver once, then choose **Remote MX** for its domains | No TXT proof; the core and receiver share a bearer key |
-| **Direct MX — Remote receiver** | You run a private receiver for the whole installation | A system administrator selects **Remote** in the installation's Direct MX settings | No TXT proof; the core and receiver share a bearer key |
+All three need an SMTP hostname reachable on **port 25**. Your MailMoose core opens a connection **outbound** to the receiver; it does not need an incoming SMTP port. The receiver passes mail to the core, which stores it in `/data`.
 
-Antler MX needs no receiver installation or inbound port on your server. The
-other choices require an SMTP hostname reachable by sending mail servers on
-port 25. For private single-mode receivers, the core must also be able to reach
-the receiver's session URL.
+## Dial MX: shared receiver
 
-## Antler MX
+Run a public receiver with an HTTPS session endpoint and a valid TLS certificate.
 
-1. Open the domain's **Receiving** settings and choose **Antler MX (Free SMTP
-   Relay - no port forwards required)**.
-2. Enter a contact email and save.
-3. Publish the exact MX and `_mailmoose-mx.<domain>` TXT records shown in the
-   setup panel. The contact email is service-operator metadata; it is not an
-   account credential.
-4. Wait for the receiver and DNS status indicators to turn ready.
-
-The receiver checks both that the TXT record authorizes the domain and that its
-SMTP hostname appears in the domain's MX records. MailMoose displays missing or
-incorrect records in the setup panel. Antler MX receives and forwards mail to
-your MailMoose instance; it does not host a mailbox or retain delivered mail.
-
-## Dial MX: operate a shared receiver
-
-Use this for a public receiver you operate that can serve multiple domains. The
-receiver must have a public SMTP hostname, port 25 open to sending mail servers,
-a public HTTPS session URL, and a TLS certificate valid for that URL.
-Point the session URL hostname and advertised SMTP hostname at the receiver's
-public IP before configuring domains.
-
-From the repository root, prepare a certificate and set the receiver environment
-in the shell or a `.env` file used by Compose:
+1. Point its SMTP and session hostnames at the receiver server.
+2. Set the following environment for `dialmx/compose.yml` and put the certificate files in `dialmx/certs/`:
 
 ```dotenv
 DIALMX_MODE=shared
+MX_HOSTNAME=mx.example.com
 DIALMX_TLS_CERT=/certs/fullchain.pem
 DIALMX_TLS_KEY=/certs/privkey.pem
-MX_HOSTNAME=mx.example.com
 ```
 
-Place the certificate files in `dialmx/certs/`, then start the receiver:
+3. Start the receiver from the repository root:
 
 ```bash
 docker compose -f dialmx/compose.yml up -d --build
 ```
 
-The Compose file publishes SMTP on host port 25 and the secure session listener
-on host port 443. Keep the SMTP listener directly reachable by sending mail
-servers; any TLS or network front for the session listener is a hosting-platform
-choice. Do not place SMTP behind a proxy that hides the sending server's IP.
+4. For each domain, choose **Receiving → Dial MX** in MailMoose, enter the receiver's HTTPS URL, and publish the MX and `_mailmoose-mx.<domain>` TXT records shown.
 
-For each domain in MailMoose:
-
-1. Open **Receiving** and choose **Dial MX**.
-2. Enter the receiver's HTTPS base URL. Multiple receiver URLs may be entered
-   when using a redundant set.
-3. Save and copy the generated `_mailmoose-mx.<domain>` TXT record and MX
-   records from the setup panel.
-4. Publish those records in DNS. Each exact domain, including a subdomain, needs
-   its own TXT proof. Inherited receiver settings do not share domain keys.
-5. Wait for the receiver and DNS status indicators in MailMoose to report ready.
-
-Choose the domain's authentication enforcement setting in its **Receiving**
-panel. If a receiver becomes unavailable, senders retry temporary failures;
-check the receiver status and DNS records before changing configuration.
+Each domain, including subdomains, needs its own TXT proof. You can configure multiple receiver URLs for redundancy. Keep public SMTP traffic directly reachable on port 25; a proxy that hides the sending server's IP can interfere with sender checks.
 
 ## Remote MX: one receiver for an account
 
-Use this for a private, single-account receiver. The receiver runs in
-`single` mode and authenticates the MailMoose core with a shared key. It does
-not require per-domain TXT records.
-
-Generate a long random key and keep it private:
-
-```bash
-openssl rand -hex 32
-```
-
-Configure a separate receiver with:
+Use `single` mode with a shared key. Generate one with `openssl rand -hex 32` and configure the remote receiver:
 
 ```dotenv
 DIALMX_MODE=single
-DIALMX_CORE_KEY=<same-random-key>
+DIALMX_CORE_KEY=<generated-secret>
 MX_HOSTNAME=mx.example.com
 DIALMX_TLS_CERT=/certs/fullchain.pem
 DIALMX_TLS_KEY=/certs/privkey.pem
 ```
 
-For public session traffic, configure a TLS certificate and key for the session
-listener and place the files under `dialmx/certs/` for the included Compose
-setup. Plain HTTP/2 may be used only on a private network that you control.
-Publish SMTP port 25 to the internet and keep the session listener reachable
-from the MailMoose core. A receiver container can be built from this repository
-with:
+Start the receiver with the same Compose command above. Publish its SMTP port 25 and make its session URL reachable from MailMoose. Use a valid TLS certificate if the session crosses a public network; unencrypted HTTP/2 is only suitable on a network you control.
 
-```bash
-docker compose -f dialmx/compose.yml up -d --build
-```
-
-In MailMoose, an account administrator configures the account's **Remote MX**
-receiver with the session URL and the same key, then selects **Remote MX** in
-each domain's **Receiving** settings. Point each domain's MX records at the
-receiver's SMTP hostname. One receiver URL can belong to only one account, and
-it cannot be removed while a domain still uses it.
+In MailMoose, configure the receiver's session URL and key under the account's **Remote MX** settings. Then choose **Remote MX** for each domain and point its MX records to your receiver's hostname. No per-domain TXT proof is needed in this mode. A receiver URL can belong to only one account.
 
 ## Direct MX with a separate receiver
 
-If you are configuring a receiver for the whole installation instead, a system
-administrator selects **Remote** in the installation's **Direct MX** settings.
-The receiver still uses `single` mode and the same URL/key pairing; domains then
-select **Direct MX**.
+For an installation-wide receiver, configure the same `single` mode and key above. As system administrator, select **Remote** in the installation's **Direct MX** settings, then select **Direct MX** on each receiving domain.
 
 ## Check delivery
 
-- Confirm the domain's MX records point to the receiver's advertised SMTP
-  hostname and that inbound port 25 is reachable.
-- For Antler MX and shared Dial MX, confirm the `_mailmoose-mx.<domain>` TXT
-  record matches what MailMoose displays.
-- For a single-mode receiver, confirm its URL and bearer key match the values
-  configured in MailMoose. Keep the key private and regenerate it if exposed.
-- Check the receiver's container status/logs and the domain's Receiving panel
-  for connection or DNS errors.
-- Send a test message and confirm it appears in the intended inbox.
+Check the receiving domain's DNS records and MailMoose receiver status. For Dial MX, both the MX and domain TXT proof must match. For single-mode receivers, confirm the shared key and session URL.
 
-The receiver does not replace MailMoose storage: messages are retained by the
-core. Back up the core's `/data` (and `APP_ENCRYPTION_KEY` if the core was given
-one) as described in the [self-hosting guide](SELFHOSTING.md#backup).
+Send a test email. If it does not arrive, check the receiver's container logs, the SMTP port and the domain's **Receiving** panel. Receiver containers do not store mailbox history; back up the MailMoose core's `/data` as described in [Self-hosting](SELFHOSTING.md#data-and-backups).

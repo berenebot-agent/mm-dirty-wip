@@ -10,7 +10,54 @@ Use this guide to set up receiving, sending, or an existing mailbox in MailMoose
 
 Domains can inherit their parent's sending and receiving settings. Provider credentials are encrypted using `APP_ENCRYPTION_KEY`.
 
-For Antler MX, Dial MX, and receivers you run separately, see [Remote SMTP receiving](REMOTE_MX.md).
+To run a separate SMTP receiver yourself, see [Remote SMTP receiving](REMOTE_MX.md).
+
+## Inbound: Direct MX
+
+**Direct MX** receives email directly over SMTP using the receiver bundled with
+the standard MailMoose deployment. In the domain's **Receiving** panel, choose
+**Direct MX** and save. The setup panel shows the SMTP hostname; publish the
+domain's MX records to that hostname and publish SPF for your sending policy.
+
+The standard Compose deployment includes the receiver, but you must
+publish host port 25 (`25:2525`) for public SMTP delivery. Then select **Direct
+MX** for each domain that should receive mail. Direct MX is not enabled for a
+domain merely by opening the port. A webhook-only deployment does not need the
+port-25 mapping.
+
+A system administrator can use a separate receiver instead of the bundled one.
+That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
+
+## Inbound: Antler MX
+
+**Antler MX is a hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet.
+
+### How it works
+
+```mermaid
+flowchart TB
+    Sender["Internet email sender"] -->|"SMTP on port 25"| Antler["Antler MX (hosted)<br/>Receives mail and checks domain authorization"]
+    Core["Your self-hosted MailMoose<br/>LAN, home server or VPS<br/>Stores messages in ./data"] -->|"Opens outbound encrypted HTTPS/2 session on port 443"| Antler
+    Antler -->|"Streams incoming mail over that existing session"| Core
+    Core --> Inbox["Inboxes · Web UI · Agent API"]
+```
+
+MailMoose makes an **outbound connection** to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to MailMoose over that connection. MailMoose handles the inbox and stores the messages locally. Antler is a receiving relay, not a hosted mailbox or an outbound sending service.
+
+### Set it up
+
+1. Add your domain in MailMoose and create an inbox.
+2. Open the domain's **Receiving** settings and select **Antler MX**.
+3. Enter a contact email and save. This is for receiver operations, not a mailbox login.
+4. Copy the **MX** and `_mailmoose-mx.<domain>` **TXT** records shown in the setup panel into your domain's DNS. Use the actual values provided by MailMoose.
+5. Wait for the **DNS** and **receiver** status indicators to show ready.
+6. Send a test email to an address on your domain.
+
+The TXT record proves that you authorized this MailMoose installation to receive mail for the domain. Antler also checks that your domain's MX records point to its receiver. The setup panel identifies missing or incorrect DNS records.
+
+**No inbound ports are needed on your MailMoose host for Antler MX.** The host does need outbound HTTPS access to Antler. If your instance is offline, Antler cannot deliver into it and the sending mail server must retry; Antler is not a mailbox or a durable mail queue.
+
+To send outbound mail, configure a separate provider under the domain's **Sending** settings.
 
 ## Inbound: Mailgun
 
@@ -93,28 +140,6 @@ Postmark does not sign inbound webhooks. Its credentials authenticate the
 webhook caller, not the envelope sender; see the relevant note in
 [SECURITY.md](../SECURITY.md). Postmark is inbound-only; choose a separate
 sending provider.
-
-## Inbound: Direct MX
-
-**Direct MX** receives email directly over SMTP using the receiver bundled with
-the standard MailMoose deployment. In the domain's **Receiving** panel, choose
-**Direct MX** and save. The setup panel shows the SMTP hostname; publish the
-domain's MX records to that hostname and publish SPF for your sending policy.
-
-The standard Compose deployment includes the receiver, but you must explicitly
-publish host port 25 (`25:2525`) for public SMTP delivery. Then select **Direct
-MX** for each domain that should receive mail. Direct MX is not enabled for a
-domain merely by opening the port. A webhook-only deployment does not need the
-port-25 mapping.
-
-A system administrator can use a separate receiver instead of the bundled one.
-That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-with-a-separate-receiver).
-
-## Inbound: Antler MX, Dial MX and Remote MX
-
-**Antler MX** is a shared receiver. Choose it under **Receiving**, enter a contact email, then publish the MX and TXT records shown. It needs no inbound port on the MailMoose host.
-
-**Dial MX** connects to a shared receiver you operate. **Remote MX** connects to a private receiver configured for your account. Both use the receiver URL and DNS settings described in [Remote SMTP receiving](REMOTE_MX.md).
 
 ## Outbound
 
