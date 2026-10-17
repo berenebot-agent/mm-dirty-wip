@@ -5107,3 +5107,43 @@ once, and it gives operators a review surface instead of a silent resend.
 queue tables, and local changes in `internal/store/{outbound,workflow,outbound_log}.go`,
 `internal/app/service.go` (arm before send; hold unresolved rows) and a
 test-only fault hook. No new dependency, service or transport.
+
+## D127 — `attention` is an authorization verdict, not any provider error
+
+**Context:** A One-backed inbox's connection health is one `status` on
+`inbox_one_bindings` (`active` / `attention` / `disconnected`), and both the
+dashboard red flag and the in-mailbox reconnect banner derive from it
+(`internal/httpapp/inbox_connection.go`). The per-request health callback treated
+*any* `*model.MailboxError` as a fresh verdict: `auth`, `forbidden` **and**
+`unsupported` wrote `attention`, and every other kind wrote `active`.
+`unsupported` is what `ValidateActions` returns when One no longer exposes a
+mandatory Gmail action — an integration problem, not a rejected credential. Once
+`attention` was written, `GoogleMailboxClient` returned early for that revision,
+so the 15-minute re-validation never ran and only a manual key re-save cleared
+it. A transient action-mapping hiccup therefore read as a permanent disconnect,
+stranding a working key on a reconnect prompt. Separately, the reader painted the
+reconnect banner before the live message body was fetched, so an authorization
+failure discovered only by that fetch surfaced as a bare "Could not load the
+message body" with no route to repair it.
+
+**Decision:** Only `auth` and `forbidden` mark the binding `attention`. Every
+other outcome — retryable, unavailable, quota, invalid, unsupported, internal —
+leaves the recorded status untouched, so it neither invents a disconnect nor
+clears a real one. `SetOneRequestHealth` continues to restrict request feedback to
+a currently-`active` binding, so a late outcome from an in-flight request cannot
+overwrite an authoritative verdict; `active` is written only by the 15-minute
+re-validation or by a successful key re-save. A live body fetch that fails now
+returns the same durable connection verdict the banner uses, and the reader turns
+it into the in-place reconnect control instead of a generic load error.
+
+**Consequences:** An inbox is flagged for reconnection only for a confirmed
+authorization rejection, matching the conservative contract already documented
+for `inboxConnectionState`. A connector with an incomplete action catalogue
+surfaces as a sync/operation error (amber) rather than a reconnect prompt, and
+the operator is no longer asked to re-enter a key that still works. A genuine
+`attention` state still requires an explicit re-save, which is unchanged.
+
+**Complexity:** A narrowing of the classification in the status callback in
+`internal/app/one.go`, the connection verdict added to the body-failure payload in
+`internal/httpapp/standalone_ui.go`, and the corresponding reader fallback in
+`internal/httpapp/assets/app.js`. No schema, dependency or transport change.

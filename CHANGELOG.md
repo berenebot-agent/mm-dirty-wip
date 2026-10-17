@@ -1,5 +1,15 @@
 # Changelog
 
+- A One / Gmail connection is flagged as needing the operator only for a
+  confirmed authorization rejection. A connector-level problem — One no longer
+  exposing a mandatory Gmail action — is no longer recorded as needing attention,
+  so a transient action-mapping hiccup can no longer strand a working key on a
+  reconnect prompt that only a manual re-save could clear. A live message-body
+  fetch that fails because the connection was revoked now returns the same
+  reconnect verdict the banner uses, so the reader offers the in-place reconnect
+  control instead of a bare "Could not load the message body" with no route to
+  repair.
+
 - The receiving published-record checks (Dial MX / Antler MX) now report one of
   four honest states — `ok`, `not_found`, `mismatch`, `dns_error` — and only `ok`
   is green. `pending` is gone (it implied work in progress that was not

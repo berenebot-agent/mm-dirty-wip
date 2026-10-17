@@ -636,13 +636,13 @@ func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
 	mb := mailboxBackend{srv: s, inbox: box, remote: s.remoteMailbox(), routed: true, p: p}
 	path, _, ferr := mb.remote.FetchRemoteRaw(r.Context(), p, box.ID, id)
 	if ferr != nil {
-		http.Error(w, "Message body is unavailable. Please retry.", http.StatusServiceUnavailable)
+		s.writeRemoteBodyError(w, r, p, box)
 		return
 	}
 	defer mb.remote.CleanupRemoteRaw(path)
 	parsed, perr := mailparse.ParseFile(path)
 	if perr != nil {
-		http.Error(w, "Message body is unavailable. Please retry.", http.StatusServiceUnavailable)
+		s.writeRemoteBodyError(w, r, p, box)
 		return
 	}
 	atts := make([]remoteAttachmentView, 0, len(parsed.Attachments))
@@ -660,6 +660,22 @@ func (s *Server) uiRemoteMessageBody(w http.ResponseWriter, r *http.Request) {
 		"remote_images": htmlsanitize.HasRemoteImages(html),
 		"attachments":   atts,
 	})
+}
+
+// writeRemoteBodyError answers a failed live body fetch. The reader paints the
+// server-rendered connection banner before the body is requested, so an
+// authorization failure discovered only by that fetch — a revoked One
+// connection, say — left the operator with a bare "Could not load the message
+// body" and no route to repair it. The payload therefore carries the same
+// durable connection verdict the banner uses, and the reader turns it into the
+// in-place reconnect prompt.
+func (s *Server) writeRemoteBodyError(w http.ResponseWriter, r *http.Request, p model.Principal, box model.Inbox) {
+	w.Header().Set("Cache-Control", "no-store")
+	payload := map[string]any{"error": "Message body is unavailable. Please retry."}
+	if conn, ok := s.inboxConnectionState(r.Context(), p.AccountID, box); ok && conn.State == connectionStateDisconnected {
+		payload["connection"] = conn
+	}
+	writeJSON(w, http.StatusServiceUnavailable, payload)
 }
 
 // remoteMessageActionBox finds the standalone inbox that owns a cached remote
