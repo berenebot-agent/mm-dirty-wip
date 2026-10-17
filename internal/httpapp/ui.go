@@ -427,6 +427,11 @@ func (s *Server) renderExtra(w http.ResponseWriter, r *http.Request, extra, body
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Session pages carry mailbox content: never let them land in any cache
+	// (shared, disk, or back/forward cache), and vary on the session cookie so
+	// a cache cannot collapse two users' views to one entry.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Add("Vary", "Cookie")
 	if err = t.Execute(w, data); err != nil {
 		s.Log.Error("render", "error", err)
 	}

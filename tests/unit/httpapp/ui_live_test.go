@@ -40,6 +40,19 @@ func TestUIStateDashboardScopedToPrincipal(t *testing.T) {
 	if cc := rr.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("snapshot Cache-Control = %q, want no-store", cc)
 	}
+	pageReq := httptest.NewRequest(http.MethodGet, "/ui/inboxes/"+box.ID, nil)
+	pageReq.AddCookie(cookie)
+	page := httptest.NewRecorder()
+	h.ServeHTTP(page, pageReq)
+	if page.Code != http.StatusOK {
+		t.Fatalf("inbox page = %d body=%s", page.Code, page.Body.String())
+	}
+	if got := page.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("inbox page Cache-Control = %q, want no-store", got)
+	}
+	if got := page.Header().Get("Vary"); got != "Cookie" {
+		t.Fatalf("inbox page Vary = %q, want Cookie", got)
+	}
 	var out struct {
 		Page    string `json:"page"`
 		Inboxes map[string]struct {

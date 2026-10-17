@@ -588,12 +588,25 @@ func (s *Store) CountMessages(ctx context.Context, p model.Principal, f MessageF
 // bulk operation would silently skip messages beyond the cap. Callers apply the
 // action one id at a time and enforce the write role themselves.
 func (s *Store) AllMessageIDs(ctx context.Context, p model.Principal, f MessageFilter) ([]string, error) {
+	return s.AllMessageIDsLimit(ctx, p, f, 0)
+}
+
+// AllMessageIDsLimit returns at most limit matching message IDs when limit is
+// positive; zero preserves AllMessageIDs' uncapped behavior. It supports
+// bounded bulk operations that need to detect whether more work remains by
+// asking for cap+1 rows.
+func (s *Store) AllMessageIDsLimit(ctx context.Context, p model.Principal, f MessageFilter, limit int) ([]string, error) {
 	where, fargs, err := s.messageFilterWhere(ctx, p, f)
 	if err != nil {
 		return nil, err
 	}
 	args := append([]any{p.AccountID}, fargs...)
-	rows, err := s.read.QueryContext(ctx, `SELECT m.id FROM messages m WHERE m.account_id=?`+where+` ORDER BY m.created_at DESC, m.rowid DESC`, args...)
+	query := `SELECT m.id FROM messages m WHERE m.account_id=?` + where + ` ORDER BY m.created_at DESC, m.rowid DESC`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.read.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -111,6 +111,10 @@ type RemoteMailboxService struct {
 	refreshSlots   chan struct{}
 	syncSlots      chan struct{}
 	reconciling    map[string]*remoteReconcileCall
+	// deltaSyncing coalesces Microsoft folder-delta syncs per inbox+folder, so
+	// a role-folder refresh and a whole-mailbox reconcile do not apply the same
+	// delta page concurrently. Guarded by refreshMu.
+	deltaSyncing map[string]bool
 	// roleRefreshing coalesces folder-scoped pulls (a Drafts/Sent pull scheduled
 	// right after a remote write lands) per inbox+role, independent of the
 	// whole-inbox refresh coalescing so one never suppresses the other.
@@ -132,7 +136,7 @@ func NewRemoteMailboxService(s *Service) *RemoteMailboxService {
 	if concurrency < 1 {
 		concurrency = 2
 	}
-	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), roleRefreshing: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
+	return &RemoteMailboxService{Service: s, Google: gmail.NewClient(nil), Microsoft: microsoft.NewClient(nil), pushWake: make(chan struct{}, 1), dial: defaultRemoteDialer, refreshing: make(map[string]bool), reconciling: make(map[string]*remoteReconcileCall), deltaSyncing: make(map[string]bool), roleRefreshing: make(map[string]bool), refreshContext: ctx, refreshCancel: cancel, refreshSlots: make(chan struct{}, concurrency), syncSlots: make(chan struct{}, concurrency)}
 }
 
 // ScheduleRefresh coalesces background index work per inbox. Its lifetime belongs

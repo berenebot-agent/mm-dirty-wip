@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -280,6 +281,13 @@ func (s *Server) pendingMessageOverlay(r *http.Request, data *pageData) {
 	}
 }
 
+// emptyTrashBatch bounds how many purge jobs a single empty-trash request
+// queues. Every job is its own write transaction against the single write
+// connection, so an inbox with a large trash folder would otherwise pin the
+// connection (and the UI POST) for minutes. The extra trash beyond the cap
+// drains on later empty-trash calls, so nothing is lost, only deferred.
+const emptyTrashBatch = 500
+
 func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bool) {
 	p := principal(r)
 	box, err := s.Service.Store.GetInbox(r.Context(), p, r.PathValue("id"))
@@ -291,6 +299,9 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 		writeError(w, 403, "forbidden")
 		return
 	}
+	// Fetch one beyond the work cap so the response can accurately tell the
+	// caller whether another batch remains, without materializing the whole
+	// trash folder in memory.
 	ids := []string{}
 	if box.Kind == model.InboxKindStandalone {
 		folder, ok := s.remoteRoleFolder(r.Context(), p.AccountID, box.ID, model.FolderRoleTrash)
@@ -298,7 +309,10 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 			writeError(w, 409, "no Trash folder mapped")
 			return
 		}
-		msgs, e := s.Service.Store.ListRemoteMessages(r.Context(), p.AccountID, box.ID, folder.Path)
+		msgs, e := s.Service.Store.ListRemoteMessagesFiltered(r.Context(), p.AccountID, box.ID, store.RemoteMessageFilter{
+			FolderPath: folder.Path,
+			Limit:      emptyTrashBatch + 1,
+		})
 		if e != nil {
 			mapStoreError(w, e)
 			return
@@ -307,11 +321,16 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 			ids = append(ids, m.ID)
 		}
 	} else {
-		ids, err = s.Service.Store.AllMessageIDs(r.Context(), p, store.MessageFilter{InboxID: box.ID, Trashed: true, IncludeSpam: true})
+		ids, err = s.Service.Store.AllMessageIDsLimit(r.Context(), p, store.MessageFilter{InboxID: box.ID, Trashed: true, IncludeSpam: true}, emptyTrashBatch+1)
 		if err != nil {
 			mapStoreError(w, err)
 			return
 		}
+	}
+	truncated := false
+	if len(ids) > emptyTrashBatch {
+		ids = ids[:emptyTrashBatch]
+		truncated = true
 	}
 	jobs := []store.MessageAction{}
 	for _, id := range ids {
@@ -322,9 +341,19 @@ func (s *Server) enqueueEmptyTrash(w http.ResponseWriter, r *http.Request, ui bo
 		}
 		jobs = append(jobs, a)
 	}
+	if truncated {
+		s.Service.Log.Info("empty trash batch truncated", "inbox_id", box.ID, "queued", len(jobs))
+	}
 	if ui {
 		notice := queuedNotice("purge", len(jobs), "")
+		if truncated {
+			notice += " Batch capped at " + strconv.Itoa(emptyTrashBatch) + ": after this batch finishes, empty trash again to continue."
+		}
 		http.Redirect(w, r, "/ui/inboxes/"+box.ID+"/trash?notice="+url.QueryEscape(notice), 303)
+		return
+	}
+	if truncated {
+		writeJSON(w, 202, map[string]any{"queued": true, "actions": jobs, "truncated": true, "remaining": true})
 		return
 	}
 	if r.URL.Query().Get("wait") == "true" {
