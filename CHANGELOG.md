@@ -250,7 +250,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   outcome, or exhausted retries) now lands in the inbox as a locally generated
   delivery-failure notice from `MAILER-DAEMON@<domain>` (`Undeliverable: …`) and
   is cleared from the outbox, instead of only appearing as a failed outbox row.
-  Retryable failures are unchanged. See `D101`.
+  Retryable failures are unchanged. See `D129`.
 
 - Message metadata now has required `provider` (mailbox implementation) and
   `message_transport` fields; connected inboxes return the same connector name
@@ -658,7 +658,7 @@ project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0/).
   indexed newest-window-only, un-pruned and reported `partial`, never falsely
   complete. Account-wide listings merge the local store and remote inboxes into
   one globally ordered stream. See `docs/DECISIONS.md` D097 and
-  `docs/MAILBOX_SERVICE_CONTRACT.md`.
+  `docs/MAILBOX_BEHAVIOR.md`.
 - **Assistant authoring modes.** A request to send a draft is resolved per the
   inbox's authoring mode, snapshotted onto each request. **MailMoose approvals**
   (the domain inbox's preset) is the in-product approval workflow with
@@ -677,7 +677,7 @@ local draft is cleaned up) and can be explicitly cancelled while still pending
 or explicitly re-requested; an ambiguous append is never retried automatically.
 The authoring settings report the effective mode, whether the inbox is
 standalone, and whether the approver is enabled for the effective mode. See
-`docs/MAILBOX_SERVICE_CONTRACT.md`.
+`docs/MAILBOX_BEHAVIOR.md`.
 - **A common folder tree and labels for every inbox.** Both inbox kinds now use
   one hierarchical folder model with well-known roles (Inbox, Sent, Drafts,
   Archive, Outbox, Spam, Trash) and a single-folder message membership

@@ -146,7 +146,7 @@ an address independent of any managed domain and is reached through a per-inbox
 remote IMAP/SMTP connector; it is otherwise a first-class mailbox with the same
 folder, label, thread, event and API-key model. The kind is immutable after
 creation. Managed `aliases` apply to domain inboxes only. See the common mailbox
-surface below and [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md).
+surface below and [MAILBOX_BEHAVIOR.md](MAILBOX_BEHAVIOR.md).
 
 ## 3a. Common mailbox surface
 
@@ -184,7 +184,7 @@ server) alike. Every listing returns the shared **envelope**:
   successive passes, so completeness is `partial` only while a folder's backfill
   has not yet reached the bottom (or a pass was interrupted / a folder exceeds
   the 500k-UID snapshot ceiling). A client must not present a `partial` listing
-  as complete. See [MAILBOX_SERVICE_CONTRACT.md](MAILBOX_SERVICE_CONTRACT.md) §3/§5.
+  as complete. See [MAILBOX_BEHAVIOR.md](MAILBOX_BEHAVIOR.md) §3/§5.
 - `errors` carries per-inbox failures (`{inbox_id, code, message, retryable}`)
   when an account-wide listing spans several inboxes, so one unreachable mailbox
   does not fail the whole request. Only a stable `code` and a short safe message

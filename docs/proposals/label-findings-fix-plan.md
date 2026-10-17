@@ -423,14 +423,14 @@ design)
   behaviour documented: a broad search fans out over every authorized remote inbox, is bounded by
   a budget, and reports `completeness: partial` with `errors[]` entries for inboxes that did not
   answer in time. Optionally add the move route to section 4.
-- **`docs/DECISIONS.md`** — add an entry as **D120** (D119 is now used by the standalone
+- **`docs/DECISIONS.md`** — add a new decision ID (the original D119 covers the standalone
   workflow-delivery fix; the file's highest number before that was D118; the labels block at
   lines 1071–1090 is D044-adjacent and only documents the older label design).
   Record: (a) the move-to-root sentinel and why an explicit flag beat overloading an empty
   destination; (b) that a folder label's `remove` contracts to a move-out; (c) the search budget
   value and that exhaustion is reported as partial, not an error. Match the existing bullet style
   at lines 1071–1090.
-- **`docs/SPEC.md`** — line 461 lists `/v1/search`. No change needed to the path list; if the
+- **`docs/archive/SPEC_V1.md`** — line 461 lists `/v1/search`. No change needed to the path list; if the
   direction section (453–468) is treated as normative, add one line that cross-inbox search is
   best-effort/partial by design. Low priority — flag for Ben.
 
