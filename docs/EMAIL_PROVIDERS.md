@@ -32,7 +32,7 @@ That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-
 
 ## Inbound: Antler MX
 
-**Antler MX is a hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet.
+**Antler MX is a free hosted SMTP receiver for your domain.** It is included as a receiving option in MailMoose. You do not need to run another container, open inbound SMTP ports, or expose MailMoose's web interface to the internet.
 
 ### How it works
 
@@ -114,10 +114,6 @@ cannot read received mail.
 
 If several domains use the same Resend webhook, configure its signing secret and API key for each domain.
 
-## Inbound: SendGrid
-
-SendGrid inbound is not available pending end-to-end testing. It is not offered in the provider selector.
-
 ## Inbound: Postmark
 
 1. In Postmark, point the receiving domain (a dedicated subdomain is
@@ -187,6 +183,9 @@ Use **Add inbox → Standalone inbox → Google / Gmail**. Each connected inbox
 uses your own Google Cloud OAuth client. The Google mailbox remains the source
 of truth; MailMoose keeps a metadata index and fetches message bodies and
 attachments when opened.
+
+> [!WARNING]
+> Direct Gmail connection works, but creating and maintaining your own Google OAuth app can be complicated. For personal use, [One / Gmail](#one--gmail) is usually easier. Its free plan includes unlimited connections and generous API usage.
 
 ### Create your Google app
 
@@ -292,6 +291,8 @@ polling; their sync schedule in inbox settings determines how quickly new mail i
 noticed.
 
 ## One / Gmail
+
+**One offers a free plan** with unlimited connections and generous API usage for personal use. See [One's pricing](https://www.withone.ai/pricing) for current limits.
 
 Choose **Add inbox → Standalone inbox → One (Easy Gmail Setup)**, enter your One
 REST API key, and select the Gmail mailbox or mailboxes to import. Choose the
