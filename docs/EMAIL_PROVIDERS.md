@@ -34,13 +34,7 @@ That deployment is documented in [Remote SMTP receiving](REMOTE_MX.md#direct-mx-
 
 ### How it works
 
-```mermaid
-flowchart TB
-    Sender["Internet email sender"] -->|"SMTP on port 25"| Antler["Antler MX (hosted)<br/>Receives mail and checks domain authorization"]
-    Core["Your self-hosted MailMoose<br/>LAN, home server or VPS<br/>Stores messages in ./data"] -->|"Opens outbound encrypted HTTPS/2 session on port 443"| Antler
-    Antler -->|"Streams incoming mail over that existing session"| Core
-    Core --> Inbox["Inboxes · Web UI · Agent API"]
-```
+![Antler MX mail flow: public senders deliver through the hosted relay over an outbound connection initiated by your self-hosted MailMoose instance. No inbound port forwarding is needed.](../assets/antler-mx-diagram.svg)
 
 MailMoose makes an **outbound connection** to the hosted Antler receivers. Antler accepts incoming SMTP and passes messages to MailMoose over that connection. MailMoose handles the inbox and stores the messages locally. Antler is a receiving relay, not a hosted mailbox or an outbound sending service.
 
