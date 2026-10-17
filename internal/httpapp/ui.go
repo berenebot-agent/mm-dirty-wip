@@ -141,7 +141,11 @@ type mxSetupView struct {
 	Configured bool
 	Mode       string
 	State      string
-	SMTPAddr   string
+	// TargetHost is the hostname to publish in the domain's MX record. For the
+	// included receiver it is the configured (or public-URL) hostname, known
+	// before the receiver is live; for a separately hosted receiver it is only
+	// known from the live handshake.
+	TargetHost string
 }
 
 // remoteMXSetupView is the account's Remote MX receiver panel: the redacted
@@ -193,6 +197,30 @@ func mxStateLabel(state string) string {
 	default:
 		return "unknown"
 	}
+}
+
+// mxTargetHost resolves the SMTP hostname an operator should publish in a Direct
+// MX domain's MX records. The included receiver advertises its configured
+// hostname, so the panel can name the target before the receiver is live, just
+// as the receiver editor prefills it; an unset hostname falls back to the public
+// receiver URL host. A separately hosted receiver's hostname is not part of the
+// core's configuration, so it is only known from the live handshake.
+func (s *Server) mxTargetHost(ctx context.Context, st app.MXReceiverStatus) string {
+	if st.Mode != app.MXModeIncluded {
+		return st.SMTPAddr
+	}
+	settings, err := s.Service.GetMXReceiverSettings(ctx)
+	if err != nil {
+		s.Log.Error("cannot read MX receiver settings", "error", err)
+		return ""
+	}
+	if settings.Hostname != "" {
+		return settings.Hostname
+	}
+	if publicURL, err := url.Parse(s.Service.Config.ReceiverURL()); err == nil {
+		return publicURL.Hostname()
+	}
+	return ""
 }
 
 // decodePublicKey decodes the canonical base64url public key stored for a Dial
@@ -2004,7 +2032,7 @@ const dashboardBaseBody = `{{if .Notice}}<div class="ok notice" role="status" ar
 {{end}}{{end}}
 {{if $.MXSetup}}{{$m := $.MXSetup}}<section class="mx-setup" data-mx-panel{{if ne $sel "mx"}} hidden{{end}}>
 <h3 class="section-head">Direct MX receiver</h3>
-{{if $m.SMTPAddr}}<p class="muted small">Point this domain's MX record at <code>{{$m.SMTPAddr}}</code>.</p>{{end}}
+{{if $m.TargetHost}}<p class="muted small">Point this domain's MX record at <code>{{$m.TargetHost}}</code>.</p>{{end}}
 {{if and (not $m.Configured) (not $.Principal.SystemAdmin)}}<p class="muted small">A system administrator must set up the Included receiver before this domain can receive mail.</p>{{end}}
 <p class="muted small">Shared receiver · all Direct MX domains.</p>
 {{if $.Principal.SystemAdmin}}{{with index $m.Editors $d.ID}}{{template "mx-editor" .}}{{end}}{{end}}
@@ -2372,13 +2400,17 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		if !hasMX {
 			continue
 		}
-		if st, err := s.Service.MXReceiverStatus(ctx); err == nil {
-			mxSetup = &mxSetupView{
-				Configured: st.Configured,
-				Mode:       st.Mode,
-				State:      st.State,
-				SMTPAddr:   st.SMTPAddr,
-			}
+		st, err := s.Service.MXReceiverStatus(ctx)
+		if err != nil {
+			break
+		}
+		mxSetup = &mxSetupView{
+			Configured: st.Configured,
+			Mode:       st.Mode,
+			State:      st.State,
+		}
+		if st.Configured {
+			mxSetup.TargetHost = s.mxTargetHost(ctx, st)
 		}
 		break
 	}

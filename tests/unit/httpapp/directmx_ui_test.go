@@ -43,15 +43,18 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	if !strings.Contains(body, "Direct MX receiver") {
 		t.Fatalf("admin receiving dialog missing Direct MX status panel:\n%s", body)
 	}
-	// The Direct MX steps must not promise an unconditionally-displayed hostname
-	// (the panel only names it once the receiver is live) and must steer the
-	// operator away from the receiver's SMTP greeting name, which is not the MX
-	// target.
+	// The steps must steer the operator to the Direct MX panel and away from the
+	// receiver's SMTP greeting name, which is not the MX target.
 	if strings.Contains(body, "advertised SMTP hostname (shown below)") {
 		t.Fatal("Direct MX steps still promise the SMTP hostname is always shown below")
 	}
-	if !strings.Contains(body, "do not use the SMTP greeting hostname") {
+	if !strings.Contains(body, "Do not use the SMTP greeting hostname") {
 		t.Fatalf("Direct MX steps must distinguish the MX target from the greeting hostname:\n%s", body)
+	}
+	// The panel names the MX target from the configured hostname even with no
+	// live runtime, rather than showing nothing.
+	if !strings.Contains(body, `Point this domain's MX record at <code>mx.test</code>`) {
+		t.Fatalf("Direct MX panel must name the configured MX target:\n%s", body)
 	}
 	if strings.Contains(body, "Edit receiver settings") || strings.Contains(body, "Save receiver settings") {
 		t.Fatal("account admin must see status only, not receiver controls")
@@ -66,6 +69,25 @@ func TestDirectMXUIVisibleToAdminAndShowsReceiverStatus(t *testing.T) {
 	// that the receiver exists.
 	if strings.Contains(body, "Admin → MX receiver") {
 		t.Fatalf("configured receiver must not tell the admin to configure it elsewhere:\n%s", body)
+	}
+}
+
+// TestDirectMXPanelFallsBackToReceiverURL pins that when the included receiver
+// has no explicit hostname, the panel names the public receiver URL host rather
+// than showing nothing, matching the receiver editor's own default.
+func TestDirectMXPanelFallsBackToReceiverURL(t *testing.T) {
+	t.Parallel()
+	svc, h, u, domain, _ := httpFixture(t)
+	// Included receiver with no configured hostname; the fixture's BaseURL is
+	// http://example.test.
+	if _, err := svc.SaveMXReceiverSettings(context.Background(), model.Principal{SystemAdmin: true}, app.MXReceiverInput{Mode: app.MXModeIncluded}); err != nil {
+		t.Fatalf("seed MX receiver: %v", err)
+	}
+	cookie, _ := uiSession(t, svc, u.ID)
+	page := domainGet(t, h, cookie, "/?domain="+domain.ID+"&kind=receiving&provider=mx")
+	body := dialogHTML(t, page.Body.String(), "domain-receiving-dialog-"+domain.ID)
+	if !strings.Contains(body, `Point this domain's MX record at <code>example.test</code>`) {
+		t.Fatalf("Direct MX panel must fall back to the public receiver URL host:\n%s", body)
 	}
 }
 
