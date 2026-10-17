@@ -1,180 +1,172 @@
 <div align="center">
 
-<img src="assets/mailmoose-logo-horizontal-1200x400.png" alt="MailMoose" width="600">
+<img src="assets/mailmoose-logo-horizontal-1200x400.png" alt="MailMoose logo" width="500">
 
 # MailMoose
 
-**Open email infrastructure for AI agents.**
+**Self-hosted email for AI agents, automations, and anything else you build.**
 
-Unlimited logical inbox identities, realtime replayable events, BYO outbound delivery — self-hosted in one container.
+MailMoose is an open-source, single-container email platform. Create inboxes on your own domain or connect existing mailboxes, with a simple web interface and flexible receiving and sending options.
 
-[![ci](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+Bring your own email providers, connect AI agents or applications, and control exactly what they can access and do. No complicated mail server stack required.
+
+[Get started](#get-started) · [Receiving providers](#receive-email-your-way) · [Agent connectors](#connect-your-agent) · [Documentation](#documentation)
+
+**Public beta** · Open source · Self-hosted
+
+[![CI](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml/badge.svg)](https://github.com/dellarb/mailmoose/actions/workflows/ci.yml) [![AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
 </div>
 
-> [!WARNING]
-> **MailMoose is in active development and is not yet production-ready.**
-> APIs, configuration, and on-disk formats may change without notice before
-> the first stable release. Kick the tyres, break things, and tell us what's
-> missing — but don't point it at anything you depend on yet.
+## Why MailMoose?
 
----
+### 1. Your email, your infrastructure, your way
 
-## The 5-Second Hook
+Run a complete email platform in a **single self-hosted container**, with a built-in web interface and no complicated mail server stack.
 
-Your agents need email. Not an API wrapper around someone else's inbox — real
-addresses that receive mail, hold history, and send through providers you
-control.
+Create inboxes on **your own domain** or connect **existing mailboxes**. Choose from a wide range of receiving and sending providers, or run your own.
 
-Today the options are bad: SaaS mail APIs give you one shared inbox per
-provider and lock your agent's identity to their platform. DIY Postfix gives
-you an ops project, not a feature.
+One platform for email, whether it's for AI agents, automations, applications, or everyday use.
 
-MailMoose gives every agent its own address — `research@yourdomain.com`,
-`task-8291@yourdomain.com`, as many as you want — with full-text search,
-durable event streams, scoped API keys, and sending through Mailgun, Brevo,
-Resend, Direct MX, or any SMTP relay you already pay for. Self-host the
-whole thing in a single container.
+### 2. Give agents email access, with sending permissions you control
 
-## Why MailMoose vs Alternatives
+Create an **assistant API key** that lets agents read messages, search email, and prepare drafts without permission to send directly.
 
-| | **MailMoose** | SaaS mail APIs | DIY Postfix + IMAP |
-|---|---|---|---|
-| **Speed** | Events delivered in-process the moment the webhook lands; agents catch up after downtime by replaying a cursor | Webhook per provider, each with its own retry/dedup semantics to babysit | Poll-only unless you build IMAP IDLE handling yourself |
-| **Developer experience** | One bearer key, agent self-discovery (`/.well-known`, `/agent`, OpenAPI), scoped roles per inbox | One SDK per provider; permission models built for humans, not agents | You own TLS, spam, auth, parsing, and a stateful daemon forever |
-| **Footprint** | 1 binary · 1 process · 1 SQLite DB · 1 `./data` directory | Zero (your data lives on their servers) | Multiple daemons, mail queues, and config files to back up and secure |
+Keep sending subject to your approval, or give trusted agents direct sending permissions.
+
+### 3. Review agent-written drafts wherever you work
+
+Choose how you review and send agent-generated emails:
+
+- **Drafts folder:** Agents place drafts in your mailbox, ready for you to review, edit, and send.
+- **Email approval:** Receive an approval request by email. Approve or reject, and MailMoose automatically sends approved messages.
+
+### 4. Receive email on your own domain, without opening ports
+
+**Antler MX** receives email for your domain and forwards it to MailMoose without opening inbound SMTP ports.
+
+Simply configure your DNS records and start receiving. Or use your own MX receiver or third-party provider.
+
+## Get started
+
+Choose the setup that suits you.
+
+| I want to… | Start here |
+| --- | --- |
+| **Receive email on my own domain** | [Receiving providers](docs/PROVIDERS.md) |
+| **Connect an existing mailbox** | [Standalone mailbox setup](docs/PROVIDERS.md#standalone-mailbox-providers) |
+| **Connect an AI agent** | [Agent connectors](docs/CONNECTORS.md) |
+| **Deploy MailMoose** | [Self-hosting guide](docs/SELFHOSTING.md) |
+
+## Receive email your way
+
+MailMoose supports multiple receiving methods, giving you the flexibility to use existing infrastructure or start from scratch.
+
+| Receiving option | Best for |
+| --- | --- |
+| **Antler MX** | Receive email for your own domain without opening inbound SMTP ports |
+| **Mailgun, Cloudflare Email Routing, Resend, Postmark** | Connect existing inbound email providers |
+| **Direct MX** | Receive email directly into MailMoose over SMTP |
+| **Remote MX / Dial MX** | Run your own separate or shared receiving server |
+| **Gmail, Outlook, IMAP** | Connect existing mailboxes without moving your email |
+
+For outbound email, bring your own Mailgun, Brevo, Resend, SMTP relay, or direct sending configuration.
+
+See the [receiving and sending providers guide](docs/PROVIDERS.md).
 
 ## Quickstart
 
-Running in under two minutes — no clone, no build:
+Run MailMoose with **one Docker Compose file**. No repository checkout or separate `.env` file required.
 
-**1. Create a folder** with `docker-compose.yml`:
+**1. Create `docker-compose.yml`:**
 
 ```yaml
 services:
   mailmoose:
     image: ghcr.io/dellarb/mailmoose:latest
     restart: unless-stopped
-    env_file: .env
+    environment:
+      ADMIN_EMAIL: "admin@example.com"
+      ADMIN_PASSWORD: "replace-with-a-strong-password"
+
+      # Optional but strongly recommended: run `openssl rand -hex 32`
+      # and uncomment the next line, pasting the generated key.
+      # APP_ENCRYPTION_KEY: "paste-generated-key-here"
+
+      BASE_URL: "https://mail.example.com"
     volumes:
-      - ./data:/data        # all persistent state lives here
+      - ./data:/data
     ports:
-      - "8081:8081"         # API + web UI (webhook ingest also works here)
-                            # expose publicly only behind an HTTPS reverse proxy
+      - "8081:8081"
 ```
 
-**2. Create** `.env`:
+Set your administrator credentials and change `BASE_URL` to the address you'll use. For local-only testing without a reverse proxy, use `http://localhost:8081`.
 
-`APP_ENCRYPTION_KEY` is optional. On first start MailMoose generates one and
-keeps it at `./data/encryption_key` (mode 0600), so a fresh deployment is usable
-without any extra step. To keep the key *out* of a `./data` backup instead,
-supply your own — Compose does NOT run shell commands inside `.env`, so the
-value must already exist before you paste it in:
+`APP_ENCRYPTION_KEY` is optional: when omitted, MailMoose creates one automatically at `./data/encryption_key`. If you supply a key, **back it up separately from `./data`** and keep it unchanged after connecting providers. Whichever key is in use must be retained to decrypt saved provider credentials.
 
-```bash
-openssl rand -hex 32
-```
-
-```bash
-# Optional — omit it and the key is generated at ./data/encryption_key:
-#APP_ENCRYPTION_KEY=<paste the 64-character hex value from above>
-BASE_URL=https://mail.example.com            # where you'll reach this instance
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=a-long-random-password
-```
-
-Set the key before you connect any provider: changing it later (or setting one
-after letting MailMoose generate a key) leaves stored provider credentials
-unreadable, and they must be entered again.
-
-**3. Run it:**
+**2. Start MailMoose:**
 
 ```bash
 docker compose up -d
 ```
 
-Open `BASE_URL`, sign in with the system administrator credentials, and add your domain. From the **Admin** page you can invite other people, each as their own separate account. Then:
+Open your configured URL and sign in. Add your domain or connect an existing mailbox, configure receiving and sending, create inboxes, and connect your agent.
 
-- Choose how to **receive email** → options below
-- Configure **outbound providers** → [docs/PROVIDERS.md](docs/PROVIDERS.md)
-- Connect an **agent or service to an inbox** (Hermes Relay, OpenClaw, webhook, API key) → [docs/CONNECTORS.md](docs/CONNECTORS.md)
-- Add a **standalone inbox** that reads and sends through an existing mailbox over IMAP/SMTP, alongside your managed-domain inboxes → inbox settings (**Add standalone inbox**), or [standalone provider setup](docs/PROVIDERS.md#standalone-mailbox-providers)
-- Direct MX uses the bundled receiver; publish host port 25 (`25:2525`) and select it under **Domain → Receiving → Direct MX**. For remote receivers → [docs/REMOTE_MX.md](docs/REMOTE_MX.md); for deployment hardening → [docs/SELFHOSTING.md](docs/SELFHOSTING.md)
-- Build from source → the repo's [`docker-compose.yml`](docker-compose.yml) + [CONTRIBUTING.md](CONTRIBUTING.md)
+For external access, place MailMoose behind an **HTTPS reverse proxy**. Direct SMTP receiving requires an additional port mapping (`25:2525`) and setup; a separate provider webhook hostname may require port `8082`. See the [self-hosting guide](docs/SELFHOSTING.md).
 
-## Ways to receive email
+## Connect your agent
 
-Choose a receiving option for each domain. Antler MX is the easiest way to get
-direct SMTP receiving without opening an inbound port; the other options let
-you bring an existing provider or run your own receiver.
+MailMoose works with AI agents, automations, and applications through multiple integration methods.
 
-- **[Antler MX — free hosted relay](docs/REMOTE_MX.md#antler-mx).** MailMoose connects outward to the shared relay, so there’s no SMTP port to open and no receiver to install or maintain. Publish the MX and domain-specific TXT records MailMoose provides. The TXT proof authorizes the relay for your domain, and the relay also verifies its hostname is listed in your MX records before accepting mail. Antler MX delivers to your MailMoose instance; it doesn’t host a mailbox or retain delivered messages.
-- **Provider integrations.** Receive through Mailgun, Cloudflare Email Routing, Resend, or Postmark, using each provider’s inbound webhook integration with MailMoose. See [inbound provider setup](docs/PROVIDERS.md).
-- **Your own SMTP receiver.** Use **Direct MX** with the included receiver or a separate receiver, **Remote MX** with an account-owned receiver, or **Dial MX** with a receiver you operate. These options give you control over the SMTP edge; a receiver still needs to be reachable by sending mail servers on port 25. See [Remote SMTP receiving](docs/REMOTE_MX.md).
-- **An existing mailbox.** Connect an inbox you already use over IMAP/SMTP with a [standalone inbox](docs/PROVIDERS.md#standalone-mailbox-providers). This connects to that mailbox rather than receiving mail for a managed domain.
+- **Hermes Relay:** Connect Hermes agents through an authenticated, outbound WebSocket connection. Receive events in real time without exposing the agent to the internet.
+- **OpenClaw:** Connect OpenClaw using the included relay-based channel plugin.
+- **Webhooks:** Deliver incoming messages and mailbox events to your own service.
+- **REST API:** Read messages, search history, manage drafts, request approvals, and send email with appropriate permissions.
 
-## Key Features
+### Agent-friendly by design
 
-- **Give every agent its own identity.** Inboxes are lightweight database rows — spin up per-role, per-project, or per-task addresses instantly, with aliases, catch-all routing, and API keys scoped to exactly the mailboxes each agent should touch (`read` / `assistant` / `owner`). A **standalone** inbox can instead connect to an existing mailbox you already own over IMAP/SMTP, so MailMoose fronts a mailbox it does not host.
-- **Never miss a message, never process one twice.** Every event is a durable SQLite row with a cursor; agents reconnect after a crash and replay the backlog, and inbound webhooks are deduplicated on the provider's authenticated delivery token.
-- **Ship mail through providers you already trust.** Bring your own Mailgun, Brevo, Resend, or SMTP credentials — configured per domain, encrypted at rest, with the full delivery log visible for every attempt.
-- **Own the whole stack without operating it.** One Go binary, one SQLite database, raw MIME on disk under `./data` — backup is copying one directory plus one key.
-
-## API
-
-Give an agent the origin (`BASE_URL`) and an API key — that's the whole onboarding. Keys are sent as `Authorization: Bearer mmm_...`, and a capable agent can discover everything else itself, starting from:
+Give your agent a MailMoose URL and API key. MailMoose provides built-in discovery, setup instructions, permission information, and a machine-readable API.
 
 ```text
-$BASE/.well-known/mailmoose   # discovery document
-$BASE/agent                   # markdown agent guide
-$BASE/v1/bootstrap            # key-specific capabilities
-$BASE/openapi.json            # full OpenAPI spec
+/.well-known/mailmoose   Agent discovery
+/agent                   Agent setup guide
+/v1/bootstrap            API key permissions
+/openapi.json            OpenAPI specification
 ```
 
-Permissions are assigned **per inbox**, so one key can hold different roles on different mailboxes:
+See the [agent connector guide](docs/CONNECTORS.md).
 
-| Role | Access |
-|---|---|
-| `read` | messages, threads, search, attachments |
-| `assistant` | read + delete + drafts |
-| `owner` | assistant + send/reply + mailbox settings |
-| `admin` | account-wide administration |
+## More than an inbox
 
-## Hermes Relay
+MailMoose includes the functionality you need to run email for agents, applications, and everyday use.
 
-For [Hermes](https://github.com/NousResearch/hermes) agents, no polling code is needed: in the Admin UI, **Create key → Hermes relay connection**, choose an inbox, and paste the generated `.env` block into the Hermes host. Email delivered to that inbox is replayed to the agent over an authenticated WebSocket, and replies egress through the sending provider configured on the inbox's domain.
-
-Full setup is in [docs/CONNECTORS.md](docs/CONNECTORS.md).
-
-For setup instructions for Hermes, OpenClaw, webhooks, and API keys, see
-[docs/CONNECTORS.md](docs/CONNECTORS.md).
-
-## Contributing
-
-MailMoose is V1 with a deliberately small scope, and that's an invitation: the
-fastest way to shape it is to use it and tell us what's missing.
-
-- ⭐ **Star the repo** if agent-native email is a problem you care about.
-- 🐛 **Open issues** for bugs and API gaps.
-- 🔧 **Send PRs** — see [CONTRIBUTING.md](CONTRIBUTING.md) for the Docker-based
-  toolchain, test expectations, and the formatting gate.
-- 🔒 **Security issues**: never open a public issue — follow
-  [SECURITY.md](SECURITY.md).
+| Feature | Description |
+| --- | --- |
+| **Multiple inboxes** | Create lightweight inboxes with independent access permissions |
+| **Custom domains** | Manage your own addresses, aliases and catch-all routing |
+| **Standalone mailboxes** | Connect Gmail, Outlook and IMAP mailboxes |
+| **Agent permissions** | Control inbox access, drafting, approvals, and direct sending |
+| **Message search** | Search messages, conversations, and attachments |
+| **Event delivery** | Replay missed events and recover after agent disconnections |
+| **Sending providers** | Configure outbound providers with an outbox and delivery logs |
+| **Simple deployment** | Single Go application, SQLite database, and persistent data directory |
 
 ## Documentation
 
-| Doc | Contents |
-|---|---|
-| [docs/PROVIDERS.md](docs/PROVIDERS.md) | Inbound, outbound, and standalone mailbox providers |
-| [docs/CONNECTORS.md](docs/CONNECTORS.md) | Inbox-level connectors: Hermes Relay, OpenClaw, webhooks and API keys |
-| [docs/SELFHOSTING.md](docs/SELFHOSTING.md) | First-run admin, deployment, backup, and upgrades |
-| [docs/REMOTE_MX.md](docs/REMOTE_MX.md) | Antler MX, shared Dial MX and private single-mode receivers |
-| [docs/API.md](docs/API.md) | API contract and generated endpoint reference |
+| Guide | Covers |
+| --- | --- |
+| [Providers](docs/PROVIDERS.md) | Inbound, outbound and standalone mailbox configuration |
+| [Connectors](docs/CONNECTORS.md) | Hermes, OpenClaw, webhooks and API integration |
+| [Self-hosting](docs/SELFHOSTING.md) | Deployment, TLS, backups, security and upgrades |
+| [Remote MX](docs/REMOTE_MX.md) | Antler MX, Dial MX and separate receivers |
+| [API](docs/API.md) | Endpoints, permissions, drafts and events |
+
+## Contributing
+
+MailMoose is open source. Contributions, bug reports and documentation improvements are welcome.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
-MailMoose is licensed under the GNU Affero General Public License v3.0
-([AGPL-3.0](LICENSE)). Third-party components and their licences are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MailMoose is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
