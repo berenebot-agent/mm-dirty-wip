@@ -4,9 +4,9 @@ MailMoose supports a wide range of options for receiving and sending email, or c
 
 | | Providers |
 | --- | --- |
-| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) ([website](https://www.mailgun.com/)) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) ([website](https://developers.cloudflare.com/email-routing/)) · [Resend](#inbound-resend) ([website](https://resend.com/)) · [Postmark](#inbound-postmark) ([website](https://postmarkapp.com/)) |
-| **Outbound** | [Mailgun](#outbound-mailgun) ([website](https://www.mailgun.com/)) · [Brevo](#outbound-brevo) ([website](https://www.brevo.com/)) · [Resend](#outbound-resend) ([website](https://resend.com/)) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
-| **Existing mailboxes** | [Google / Gmail](#google--gmail) ([website](https://mail.google.com/)) · [Microsoft / Outlook](#microsoft--outlook) ([website](https://www.microsoft.com/microsoft-365/outlook/email-and-calendar-software-microsoft-outlook)) · [One / Gmail](#one--gmail) ([website](https://www.withone.ai/)) · [IMAP + SMTP](#imap--smtp) |
+| **Inbound** | [Direct MX (SMTP delivery)](#inbound-direct-mx) · [Antler MX](#inbound-antler-mx) · [Mailgun](#inbound-mailgun) · [Cloudflare Email Routing](#inbound-cloudflare-email-routing) · [Resend](#inbound-resend) · [Postmark](#inbound-postmark) |
+| **Outbound** | [Mailgun](#outbound-mailgun) · [Brevo](#outbound-brevo) · [Resend](#outbound-resend) · [SMTP](#outbound-smtp) · [Direct MX](#outbound-direct-mx) |
+| **Existing mailboxes** | [Google / Gmail](#google--gmail) · [Microsoft / Outlook](#microsoft--outlook) · [One / Gmail](#one--gmail) · [IMAP + SMTP](#imap--smtp) |
 
 Configure receiving under **Domains → Receiving**, sending under **Domains → Sending**, or connect an existing mailbox through **Add inbox → Standalone inbox**.
 
@@ -57,6 +57,8 @@ To send outbound mail, configure a separate provider under the domain's **Sendin
 
 ## Inbound: Mailgun
 
+**Website:** [www.mailgun.com](https://www.mailgun.com/)
+
 1. Add and verify the receiving domain in Mailgun, including the MX records Mailgun provides.
 2. On the dashboard, click **Receiving** for the domain and choose **Mailgun**.
 3. In Mailgun, open **Send → Receiving**, select the domain's region, and click
@@ -77,6 +79,8 @@ https://your-host.example/internal/ingest/mailgun/raw-mime
 MailMoose resolves the recipient to its logical inbox. A configured domain catch-all handles unmatched local parts. The `raw-mime` suffix is protocol-significant: it selects raw MIME delivery. The legacy `/internal/ingest/mailgun` alias has been removed.
 
 ## Inbound: Cloudflare Email Routing
+
+**Website:** [developers.cloudflare.com](https://developers.cloudflare.com/email-routing/)
 
 1. In MailMoose, open the domain's **Receiving** panel, choose **Cloudflare
    Worker**, and save. MailMoose displays a ready-to-deploy Worker and its
@@ -99,6 +103,8 @@ network addresses. See [Cloudflare's Email Routing guide](https://developers.clo
 
 ## Inbound: Resend
 
+**Website:** [resend.com](https://resend.com/)
+
 Resend sends a signed notification to MailMoose, which fetches the original
 message from Resend. Use an API key with **Full access**; a sending-only key
 cannot read received mail.
@@ -115,6 +121,8 @@ cannot read received mail.
 If several domains use the same Resend webhook, configure its signing secret and API key for each domain.
 
 ## Inbound: Postmark
+
+**Website:** [postmarkapp.com](https://postmarkapp.com/)
 
 1. In Postmark, point the receiving domain (a dedicated subdomain is
    recommended) to `inbound.postmarkapp.com` with priority 10.
@@ -145,13 +153,19 @@ sending for that domain only.
 
 #### Outbound: Mailgun
 
+**Website:** [www.mailgun.com](https://www.mailgun.com/)
+
 Enter the API key and sending domain shown in the Mailgun account.
 
 #### Outbound: Brevo
 
+**Website:** [www.brevo.com](https://www.brevo.com/)
+
 Enter an API key and verify the sender address with Brevo.
 
 #### Outbound: Resend
+
+**Website:** [resend.com](https://resend.com/)
 
 Enter an API key and verify the sending domain with Resend.
 
@@ -178,6 +192,8 @@ provider remains the source of truth for its mail. The setup steps below explain
 how each supported provider connects.
 
 ## Google / Gmail
+
+**Website:** [mail.google.com](https://mail.google.com/)
 
 Use **Add inbox → Standalone inbox → Google / Gmail**. Each connected inbox
 uses your own Google Cloud OAuth client. The Google mailbox remains the source
@@ -242,6 +258,8 @@ and [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes
 
 ## Microsoft / Outlook
 
+**Website:** [www.microsoft.com](https://www.microsoft.com/microsoft-365/outlook/email-and-calendar-software-microsoft-outlook)
+
 Connect a personal or shared Microsoft mailbox with **Add inbox → Standalone
 inbox → Microsoft / Outlook**. MailMoose connects through Microsoft Graph; the
 mailbox remains the source of truth.
@@ -291,6 +309,8 @@ polling; their sync schedule in inbox settings determines how quickly new mail i
 noticed.
 
 ## One / Gmail
+
+**Website:** [www.withone.ai](https://www.withone.ai/)
 
 **One offers a free plan** with unlimited connections and generous API usage for personal use. See [One's pricing](https://www.withone.ai/pricing) for current limits.
 
