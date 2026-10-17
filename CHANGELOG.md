@@ -694,16 +694,12 @@ standalone, and whether the approver is enabled for the effective mode. See
   operation covers exactly what the banner promised, and a destructive bulk action
   over the whole folder names the full count in its confirmation. The Drafts list
   is now keyset-paginated like the other folders.
-- SendGrid and Postmark can now receive mail (D096). Both deliver full raw MIME
-  into the existing inbound pipeline, so no sending adapter is added. **SendGrid**
-  verifies the Inbound Parse ECDSA webhook signature with the domain's public key
-  before staging the raw `email` part; its envelope sender is signature-attested.
-  **Postmark** is protected by HTTP Basic credentials MailMoose generates per
-  domain and shows once as a ready-to-paste webhook URL, and it preserves binary
-  `RawEmail` content byte-for-byte. Configure either under **Receiving** on the
-  domain page; setup guides are in `docs/EMAIL_PROVIDERS.md#inbound-sendgrid` and `docs/EMAIL_PROVIDERS.md#inbound-postmark`.
-  Postmark's unattested envelope sender is added to the accepted-risk note in
-  `SECURITY.md`.
+- Postmark can receive mail (D096) through the existing inbound pipeline.
+  MailMoose generates HTTP Basic credentials per domain and shows the webhook
+  URL once. The adapter preserves binary `RawEmail` content byte-for-byte.
+  Configure it under **Receiving** on the domain page; see
+  `docs/EMAIL_PROVIDERS.md#inbound-postmark`. Postmark's unattested envelope
+  sender is recorded in the accepted-risk note in `SECURITY.md`.
 - Dial MX / Antler MX receiving now shows one status light per receiver. Each
   receiver proves both your domain's `_mailmoose-mx` TXT authority and that it is
   named in your MX records, so a receiver that is authorized but not routed
